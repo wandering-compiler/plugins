@@ -1,0 +1,322 @@
+package llm
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/openai/openai-go/v2"
+	"github.com/openai/openai-go/v2/responses"
+	"golang.org/x/sync/errgroup"
+)
+
+// ErrTurnsExhausted ends a run whose model kept asking for tools and never
+// produced an answer.
+var ErrTurnsExhausted = errors.New("agent: the model did not finish within the turn limit")
+
+// RunEvent is something that happened during a run. Exactly one field is set.
+type RunEvent struct {
+	// Delta is a fragment of the answer.
+	Delta string
+
+	// ToolStarted / ToolFinished bracket one tool call, for whoever is
+	// watching. Never required for correctness.
+	ToolStarted  *ToolEvent
+	ToolFinished *ToolEvent
+}
+
+// ToolEvent describes one tool call in flight.
+type ToolEvent struct {
+	CallID string
+	Name   string
+	// Arguments is what the model asked for, verbatim. Telemetry only — it is
+	// model output and must not be displayed.
+	Arguments string
+	// Result is what went back to the model. Telemetry only, same reason.
+	Result string
+	// Err is set on a finished call that failed. Display-safe text is the
+	// caller's business; this is for diagnosis.
+	Err error
+}
+
+// Run drives the tool-calling loop: model, tools, model again, until the model
+// answers or a limit stops it.
+//
+// The caller supplies the tools, and their Call is where the work happens. The
+// loop decides WHEN and IN WHAT ORDER, never what.
+func Run(
+	ctx context.Context,
+	client StreamCompleter,
+	m Model,
+	instructions string,
+	history []Message,
+	tools []Tool,
+	limits Limits,
+	sink func(RunEvent) error,
+) (*Completion, error) {
+	if client == nil {
+		return nil, errors.New("agent: no model client")
+	}
+	if sink == nil {
+		return nil, errors.New("agent: no event sink")
+	}
+	byName := make(map[string]Tool, len(tools))
+	for _, t := range tools {
+		if t == nil || t.Name() == "" {
+			return nil, errors.New("agent: a tool has no name")
+		}
+		if _, dup := byName[t.Name()]; dup {
+			// Two tools under one name means the model's choice is decided by
+			// map iteration order. Refused rather than resolved, because
+			// whichever rule we picked would be invisible to whoever wrote the
+			// second one.
+			return nil, fmt.Errorf("agent: two tools named %q", t.Name())
+		}
+		byName[t.Name()] = t
+	}
+
+	b := &budget{maxToolCalls: limits.maxToolCalls()}
+	input := inputFrom(history)
+	declared := toolParams(tools)
+	var last *Completion
+
+	for turn := 0; turn < limits.maxTurns(); turn++ {
+		// The LAST permitted turn runs with no tools offered. Dispatching on it
+		// would apply writes whose results the model never gets to read — the
+		// run ends immediately after — so the model is asked to answer with
+		// what it already has instead.
+		offer := declared
+		if turn == limits.maxTurns()-1 {
+			offer = nil
+		}
+
+		res, calls, err := completeTurn(ctx, client, m, instructions, input, offer, sink)
+		if err != nil {
+			return nil, err
+		}
+		last = res
+
+		if len(calls) == 0 {
+			return res, nil
+		}
+
+		// Everything the model produced this turn goes back into the input, or
+		// the next turn re-asks for the same tools having forgotten it called
+		// them.
+		input = append(input, assistantToolCalls(calls)...)
+
+		out, err := dispatch(ctx, calls, byName, b, limits.maxParallel(), sink)
+		if err != nil {
+			return nil, err
+		}
+		for i, tc := range calls {
+			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(tc.ID, out[i]))
+		}
+	}
+
+	// Out of turns with the model still asking. Returning the last completion
+	// alongside the error would invite a caller to show it: it is a tool
+	// request, not an answer.
+	_ = last
+	return nil, ErrTurnsExhausted
+}
+
+// dispatch runs one round of tool calls.
+func dispatch(
+	ctx context.Context,
+	calls []toolCall,
+	byName map[string]Tool,
+	b *budget,
+	maxParallel int,
+	sink func(RunEvent) error,
+) ([]string, error) {
+	// The whole round is reserved up front — see budget.reserve.
+	if err := b.reserve(len(calls)); err != nil {
+		return nil, err
+	}
+	res := newResults(len(calls))
+
+	run := func(rctx context.Context, idx int, tc toolCall) error {
+		if err := sink(RunEvent{ToolStarted: &ToolEvent{
+			CallID: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
+		}}); err != nil {
+			return Fatal(err)
+		}
+		out, toolErr := execTool(rctx, tc, byName)
+		res.set(idx, out, toolErr)
+		if err := sink(RunEvent{ToolFinished: &ToolEvent{
+			CallID: tc.ID, Name: tc.Name, Result: out, Err: toolErr,
+		}}); err != nil {
+			return Fatal(err)
+		}
+		// A tool error stays a tool RESULT — the model sees it and reacts.
+		// Only the loop's own failures travel up.
+		if isFatal(toolErr) {
+			return toolErr
+		}
+		return nil
+	}
+
+	type indexed struct {
+		idx int
+		tc  toolCall
+	}
+	var mutating, readOnly []indexed
+	for i, tc := range calls {
+		if t := byName[tc.Name]; t != nil && t.Mutating() {
+			mutating = append(mutating, indexed{i, tc})
+		} else {
+			readOnly = append(readOnly, indexed{i, tc})
+		}
+	}
+
+	// Mutating first and serially, so a read in the same round never observes a
+	// half-applied write.
+	for _, mu := range mutating {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := run(ctx, mu.idx, mu.tc); err != nil {
+			return nil, err
+		}
+	}
+	if len(readOnly) > 0 {
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(maxParallel)
+		for _, r := range readOnly {
+			g.Go(func() error {
+				if err := gctx.Err(); err != nil {
+					return err
+				}
+				return run(gctx, r.idx, r.tc)
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+	}
+	return res.out, nil
+}
+
+// execTool runs a single tool. A tool error comes back twice: as the result
+// text, so the model sees it and can react, and as the error, so the activity
+// says it failed. The run continues either way — a tool failing is information,
+// not a crash.
+func execTool(ctx context.Context, tc toolCall, byName map[string]Tool) (string, error) {
+	t, ok := byName[tc.Name]
+	if !ok {
+		// The model invented a tool. Told plainly rather than failed: it
+		// usually corrects itself on the next turn, and failing the run would
+		// discard everything it had got right so far.
+		return fmt.Sprintf("There is no tool named %q.", tc.Name), nil
+	}
+	out, err := t.Call(ctx, tc.Arguments)
+	if err != nil {
+		if isFatal(err) {
+			return "", err
+		}
+		return "The tool failed: " + err.Error(), err
+	}
+	return out, nil
+}
+
+// completeTurn runs one model call, streaming its text, and returns whatever
+// tool calls it asked for.
+func completeTurn(
+	ctx context.Context,
+	client StreamCompleter,
+	m Model,
+	instructions string,
+	input []responses.ResponseInputItemUnionParam,
+	tools []responses.ToolUnionParam,
+	sink func(RunEvent) error,
+) (*Completion, []toolCall, error) {
+	params, err := paramsForInput(m, instructions, input)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(tools) > 0 {
+		params.Tools = tools
+		params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+		}
+	}
+	res, calls, err := streamTurn(ctx, client, *params, func(text string) error {
+		return sink(RunEvent{Delta: text})
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return res, calls, nil
+}
+
+// toolCall is one function call the model asked for. Arguments is the raw JSON
+// it produced and may be invalid — validating it is the tool's job, and its
+// complaint goes back to the model as the result.
+type toolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+// toolParams turns the caller's tools into what the provider expects.
+func toolParams(tools []Tool) []responses.ToolUnionParam {
+	out := make([]responses.ToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		schema := map[string]any{"type": "object"}
+		if raw := t.Params(); len(raw) > 0 {
+			var parsed map[string]any
+			if json.Unmarshal(raw, &parsed) == nil {
+				schema = parsed
+			}
+		}
+		out = append(out, responses.ToolParamOfFunction(t.Name(), schema, false))
+	}
+	for i, t := range tools {
+		if fn := out[i].OfFunction; fn != nil {
+			fn.Description = openai.String(t.Purpose())
+		}
+	}
+	return out
+}
+
+// assistantToolCalls records what the model asked for, so the next turn's input
+// shows that it asked.
+func assistantToolCalls(calls []toolCall) []responses.ResponseInputItemUnionParam {
+	out := make([]responses.ResponseInputItemUnionParam, 0, len(calls))
+	for _, tc := range calls {
+		out = append(out, responses.ResponseInputItemUnionParam{
+			OfFunctionCall: &responses.ResponseFunctionToolCallParam{
+				CallID:    tc.ID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			},
+		})
+	}
+	return out
+}
+
+// paramsForInput is paramsFor with the input already built, for the loop, which
+// accumulates rather than converting a history each turn.
+func paramsForInput(m Model, instructions string, input []responses.ResponseInputItemUnionParam) (*responses.ResponseNewParams, error) {
+	if strings.TrimSpace(m.ID) == "" {
+		return nil, errors.New("agent: no model id")
+	}
+	// Zero is "unstated" and is the caller's to resolve before reaching here;
+	// negative is a deliberate "no cap" and passes through.
+	if m.MaxTokens == 0 {
+		return nil, errors.New("agent: model has no token budget")
+	}
+	params := responses.ResponseNewParams{
+		Model: m.ID,
+		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
+		Store: openai.Bool(false),
+	}
+	if instructions != "" {
+		params.Instructions = openai.String(instructions)
+	}
+	applyModelParams(&params, m)
+	return &params, nil
+}

@@ -1,0 +1,90 @@
+package handlers
+
+import (
+	"errors"
+	"log"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+)
+
+// CompleteStream runs one model call and sends the text as it arrives.
+func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.ServerStreamingServer[pb.CompleteEvent]) error {
+	if req == nil {
+		return status.Error(codes.InvalidArgument, "agent: empty request")
+	}
+	if h.StreamClient == nil {
+		return status.Error(codes.Unimplemented, "agent: this deployment has no streaming client")
+	}
+
+	// Same cap as Complete, for the same reason: a stream spends tokens the
+	// moment it starts.
+	if h.Limits != nil {
+		if d := h.Limits.Allow(srv.Context(), req.GetUsageScope()); !d.Allowed {
+			return status.Error(codes.ResourceExhausted, d.Reason)
+		}
+	}
+
+	m := h.modelFor(req)
+
+	startedAt := time.Now()
+	out, err := llm.CompleteStream(srv.Context(), h.StreamClient, m,
+		req.GetInstructions(), messagesFrom(req.GetMessages()),
+		func(text string) error {
+			// A send failure is the client going away, and it is returned so
+			// the call ABORTS: continuing would keep paying the provider for
+			// tokens with nowhere to put them.
+			return srv.Send(&pb.CompleteEvent{
+				Event: &pb.CompleteEvent_Delta{Delta: &pb.TextDelta{Text: text}},
+			})
+		})
+	if err != nil {
+		// Recorded before the error is shaped: a stream that died mid-flight
+		// has already paid for whatever the provider produced, and a runaway
+		// guard stopping it does not make those tokens free.
+		h.recordUsage(req, m.ID, out, OutcomeFailed, startedAt)
+		// A send failure travelling back out of onDelta is not ours to
+		// re-wrap: the client is gone and there is nobody to tell.
+		if errors.Is(err, llm.ErrRunawayOutput) {
+			return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")
+		}
+		// As in Complete: the provider's own text renders the deployment URL
+		// and can quote the prompt, so it stops here.
+		// Same reasoning as the unary path: the whole error to the log, the
+		// provider's classification to the caller. A stream that dies with an
+		// unexplained Unavailable is if anything worse, because the caller has
+		// already consumed part of an answer.
+		log.Printf("agent: model stream failed (model %q): %v", m.ID, err)
+		return status.Error(codes.Unavailable, modelCallFailure(err))
+	}
+
+	// The guard stopped the stream: no terminal event arrived, so there is no
+	// status and no usage. Saying so explicitly is the point — a consumer that
+	// read this row as a completed free call would understate both the answer's
+	// reliability and its own token spend.
+	stopped := out.Status == ""
+
+	// A stream the runaway guard stopped has no terminal event, so no status
+	// and no usage — which is exactly the "we do not know what it cost" row
+	// rather than a free one.
+	outcome := OutcomeOK
+	if stopped {
+		outcome = OutcomeUnknown
+	}
+	h.recordUsage(req, m.ID, out, outcome, startedAt)
+
+	return srv.Send(&pb.CompleteEvent{
+		Event: &pb.CompleteEvent_Finished{Finished: &pb.Finished{
+			Text:             out.Text,
+			Status:           statusOf(out.Status),
+			IncompleteReason: reasonOf(out.IncompleteReason),
+			Usage:            usageOf(out.Usage),
+			StoppedRepeating: stopped,
+		}},
+	})
+}

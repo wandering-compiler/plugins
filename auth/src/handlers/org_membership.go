@@ -1,0 +1,409 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
+)
+
+// This file implements the `org_membership` feature — GitHub-style
+// multi-org membership (one identity belongs to MANY Organizations via
+// OrgMembership), the generalization of single-tenant tenant_scope.
+// Staged into a bundle only when the activation enables `org_membership`
+// (plugin.yaml maps the feature to this file via go_files). With the
+// feature off it is not staged, so the decorator below never registers and
+// Authenticate stamps no org scope. Standalone (`go test`) always compiles
+// it. See docs/specs/plugins/auth-cli-login-and-orgs.md.
+
+// orgScopeMetadataKey is the gRPC metadata key the gateway threads the
+// request's ACTIVE-org selector under (the W17-Org header → w17-org). It is
+// deliberately NOT in the reserved x-w17-* namespace: that namespace carries
+// only VERIFIED auth/scope metadata the gateway sets from its auth response,
+// and forwarding a client-controlled header into it would let a caller forge
+// their org scope. The CLIENT chooses which org context to act in (a slug),
+// but the plugin VALIDATES membership before stamping the trusted
+// scopes[org_id] — see resolveOrgScope.
+// The literal lives in the SDK: the REST gateway has to advertise this same
+// header in its CORS preflight, and a second copy of the string is a second
+// thing to forget. See principal.OrgScopeHeader.
+const orgScopeMetadataKey = principal.OrgScopeHeader
+
+// errOrgNotMember fails Authenticate closed when the request asks to act in
+// an org the principal is not a member of (so a client can never scope into
+// another org's data by setting the header).
+var errOrgNotMember = errors.New("active org: caller is not a member of the requested organization")
+
+// init wires the org-scope decorator on package load. The bundle imports
+// this package (alias-imported under the activation name), so the init runs
+// once during server bring-up.
+func init() {
+	// WhoAmI answers "who am I and where am I", not just "who".
+	//
+	// Before this, every screen rebuilt the org half from further calls and
+	// none of them could say which organization an answer belonged to: the
+	// active org travels in a HEADER, so a response carries no trace of it.
+	// The UI therefore answered "which org is this" from its own memory — the
+	// module-level state whose staleness produced a reported data-leak scare
+	// and a 401-on-every-screen bug in one day.
+	//
+	// Installed here rather than written into the base handler because both
+	// the fields and the queries behind them exist only under org_membership.
+	whoAmIEnrich = func(ctx context.Context, h *AuthServiceHandler, userID string, resp *pb.WhoAmIResp) {
+		// Best-effort, deliberately. WhoAmI's job is to answer WHO the caller
+		// is; the org half is enrichment, and failing the whole call because a
+		// second query was unavailable would take down sign-in checks and
+		// session probes with it. A caller that gets identity and no orgs is
+		// in a worse state than usual, not a broken one.
+		if list, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID}); err == nil {
+			resp.Orgs = list.GetOrgs()
+		}
+		// The org the REQUEST resolved to, read from the same verified scope
+		// the handlers act under — not re-derived from the header, which is
+		// client-supplied and may name an org the caller does not belong to.
+		// So this field says what the server DID, which is the only version
+		// worth reporting.
+		if orgID, err := activeOrgID(ctx); err == nil {
+			resp.ActiveOrgId = orgID
+		}
+	}
+
+	scopeDecorators = append(scopeDecorators, resolveOrgScope)
+	grantNarrowers = append(grantNarrowers, narrowGrantsToActiveOrg)
+}
+
+// narrowGrantsToActiveOrg restricts the principal to what applies IN THE
+// ACTIVE ORGANIZATION, and lets OWNERSHIP widen it.
+//
+// Without the narrowing the two halves of this plugin disagree: scopes[org_id]
+// isolates the caller's ROWS to one company while the grants stay the union of
+// every role they hold in every company. An accountant in company A who owns
+// company B would carry the owner's permissions into A — the data would be A's,
+// the rights B's.
+//
+// The intersection is over ROLE IDS, not permission ids, and that is what lets
+// this run alongside api_token at all. Intersecting sets of permissions is only
+// sound when one answer is a subset of the other, and neither query can see the
+// other's axis: a permission reachable through a session-realm role scoped to
+// org X *and* through an api-realm realm-wide role passed both filters for a
+// session token acting in org Y, where neither role applies. Intersecting on
+// roles removes the possibility — a permission survives only when ONE role
+// grants it and that role passed every axis.
+//
+// Two cases for the narrowing, both subtractive:
+//
+//   - an active org — realm-wide roles plus those assigned inside that org.
+//   - no active org (member of none, or of several with no `W17-Org` header)
+//     — realm-wide roles alone. Falling back to the unfiltered set here would
+//     reopen the leak on precisely the request that failed to name a company.
+//
+// ⚠️ And then OWNERSHIP, which WIDENS — the one place in this plugin where a
+// narrower adds. It is deliberate and bounded:
+//
+//   - ownership is not a permission anybody granted; it is root authority over
+//     the organization, read off the organization row;
+//   - it applies to a SESSION principal only. An API token's ceiling stays its
+//     holder's api-realm roles, so a stolen CI token is not an owner login even
+//     when the person who minted it owns the company;
+//   - and it is scoped to the ACTIVE org, so owning one company grants nothing
+//     in another.
+//
+// Before this, ownership was folded into the same `all_permissions` bool as a
+// wildcard ROLE and therefore arrived inside the narrowing — where it could
+// only subtract. An owner holding no role intersected "everything" with
+// "nothing" and got nothing (verified live 2026-09-10), so owners needed seeded
+// grants like anyone else. See docs/todos/owner-autopass.md.
+func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
+	orgID := scopes["org_id"]
+
+	var eligible []*pb.RoleGrant
+	if orgID != "" {
+		resp, err := h.Query.GetUserOrgPermissions(ctx, &pb.GetUserOrgPermissionsReq{
+			UserId: p.userID,
+			OrgId:  orgID,
+		})
+		if err != nil {
+			return err
+		}
+		eligible = resp.GetGrants()
+	} else {
+		resp, err := h.Query.GetUserRealmWidePermissions(ctx, &pb.GetUserRealmWidePermissionsReq{UserId: p.userID})
+		if err != nil {
+			return err
+		}
+		eligible = resp.GetGrants()
+	}
+
+	keep := make(map[string]struct{}, len(eligible))
+	for _, g := range eligible {
+		keep[g.GetRoleId()] = struct{}{}
+	}
+	survivors := make([]*pb.RoleGrant, 0, len(p.grants))
+	for _, g := range p.grants {
+		if _, ok := keep[g.GetRoleId()]; ok {
+			survivors = append(survivors, g)
+		}
+	}
+	p.grants = survivors
+
+	// Ownership last, and only for a session. Appended as a synthetic
+	// wildcard grant rather than by rewriting the survivors, so it stays
+	// visible as its own thing to anything that inspects the principal.
+	if orgID == "" || p.realm != pb.TokenType_TOKEN_TYPE_SESSION {
+		return nil
+	}
+	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: p.userID, OrgId: orgID})
+	if err != nil {
+		return err
+	}
+	if owns.GetOwner() {
+		p.grants = append(p.grants, &pb.RoleGrant{AllPermissions: true})
+	}
+	return nil
+}
+
+// resolveOrgScope stamps scopes[org_id] for the request's ACTIVE org. The
+// active org is a client-selected slug (w17-org metadata), but it is
+// validated against the principal's membership here, so a caller can only
+// ever scope into an org they belong to:
+//
+//   - a slug the caller IS a member of → scopes[org_id] = that org's id.
+//   - a slug the caller is NOT a member of → fail closed (Authenticate
+//     returns the same opaque Unauthenticated as every other failure).
+//   - no header, and the caller belongs to exactly ONE org → that org.
+//     Unambiguous: there is no second org the request could have meant, and
+//     the value is still read from OrgMembership, never from the request.
+//   - no header, and the caller belongs to none or to several → no org
+//     scope. Zero orgs has nothing to stamp; several is genuinely ambiguous
+//     and guessing would pick which org a write lands in. Both leave the
+//     scope unset, so a scoped model answers PermissionDenied ("missing
+//     required scope: org_id") rather than quietly serving the wrong rows —
+//     the caller resends with the header (`w17ctl` sends it from the org
+//     chosen at `init`).
+//
+// The single-org inference exists because the alternative is worse than
+// verbose: without it every request that omits the header fails on a scoped
+// model, which on a one-org install is every request but `init`. It cannot
+// widen access — one membership row means one reachable org either way.
+//
+// org_id is the data-scope key: a project scoping its rows by
+// name: "org_id" then gets per-org isolation (auto-WHERE / owner-stamp)
+// with no hand-written facade, exactly like tenant_scope's tenant_id.
+func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
+	slug := orgSlugFromHeaders(headers)
+	if slug == "" {
+		slug = orgSlugFromContext(ctx)
+	}
+	if slug == "" {
+		return inferSoleOrgScope(ctx, h, userID, scopes, labels)
+	}
+	resp, err := h.Query.GetUserOrgBySlug(ctx, &pb.GetUserOrgBySlugReq{UserId: userID, Slug: slug})
+	if err != nil {
+		return err
+	}
+	orgID := resp.GetOrgId()
+	if orgID == "" {
+		// Not a member — but ownership is its own claim on an organization,
+		// and it is the one claim membership management cannot take away.
+		// Without this an owner whose membership row is missing cannot scope
+		// into the org they own at all: resolveOrgScope fails closed, the
+		// refusal is the opaque Unauthenticated every other auth failure
+		// returns, and there is no add-membership action anywhere to undo it.
+		// DeleteOrgMembership would therefore lock an owner out permanently.
+		//
+		// It also decides what owner_id MEANS. GetUserOwnsAnyOrg widens an
+		// owner's permissions, but permissions are checked after a scope is
+		// resolved, so ownership that cannot resolve a scope is ownership
+		// that grants nothing — the column would be decorative for exactly
+		// the case it exists to serve.
+		owned, oerr := h.Query.GetOwnedOrgBySlug(ctx, &pb.GetOwnedOrgBySlugReq{UserId: userID, Slug: slug})
+		if oerr != nil {
+			return oerr
+		}
+		orgID = owned.GetOrgId()
+	}
+	if orgID == "" {
+		return errOrgNotMember
+	}
+	stampOrg(scopes, labels, orgID, slug)
+	return nil
+}
+
+// stampOrg writes the resolved org to BOTH keys it owns.
+//
+// scopes[org_id] filters the caller's ROWS. labels[org_id] decides which
+// connected clients an event reaches — and until it was written here, the
+// console's data was per-org while its event stream was not: unlabelled
+// events go to every authenticated client, so one org's activity was
+// announced to all of them. The isolation was real in the database and
+// absent one surface over.
+//
+// org_id is a legitimate audience key in a way most scopes are not: it
+// partitions WHO may see a thing, not merely which rows belong to whom.
+// scopes[user_id] deliberately gets no label — an event stream keyed by the
+// acting user would deliver each public event to exactly one person.
+func stampOrg(scopes, labels map[string]string, orgID, slug string) {
+	scopes["org_id"] = orgID
+	labels["org_id"] = orgID
+	// The slug rides along as a scope so a consumer can RENDER the
+	// organization without a second lookup. It is verified by construction:
+	// the org was resolved BY this slug (or read off the membership row), so
+	// the pair cannot disagree.
+	//
+	// A scope and not a label. Labels decide which connected clients an event
+	// reaches, and an audience keyed by a display name is the same audience
+	// keyed by its id — a second key for one thing, which is how two ways to
+	// name the same audience drift apart.
+	//
+	// Its consumer today is the console stamping org_slug into a project's
+	// lock: org_id is a UUID, and a UUID in a diff tells a reviewer nothing
+	// about which organization a project just moved to.
+	if slug != "" {
+		scopes["org_slug"] = slug
+	}
+}
+
+// inferSoleOrgScope stamps the caller's org when they have exactly one, and
+// stamps nothing otherwise. A lookup failure is NOT fatal: the caller simply
+// gets no org scope, which a scoped model then refuses — the same outcome as
+// having several orgs, and it keeps an unrelated query error from turning
+// every unscoped request (login, `org list`) into an auth failure.
+func inferSoleOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, scopes, labels map[string]string) error {
+	resp, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
+	if err != nil {
+		return nil
+	}
+	orgs := resp.GetOrgs()
+	if len(orgs) != 1 {
+		return nil
+	}
+	if id := orgs[0].GetOrgId(); id != "" {
+		stampOrg(scopes, labels, id, orgs[0].GetSlug())
+	}
+	return nil
+}
+
+// orgSlugFromHeaders reads the active-org selector out of the AuthReq
+// header map — the SAME channel the bearer token arrives on, and the one
+// every transport fills.
+//
+// This is the primary source, and the context read below is the fallback,
+// because the context does NOT carry it on a public gRPC surface: the rpc
+// gateway sanitizes the incoming metadata, passes it as AuthReq.Headers,
+// and then calls Authenticate with the raw incoming context — which has no
+// OUTGOING metadata, and the internal dialer installs no forwarding
+// interceptor. REST worked only because its MetadataPropagation middleware
+// stamps outgoing metadata before the handler runs.
+//
+// Nobody noticed because the one deployment with organizations has users
+// who belong to exactly ONE of them, so inferSoleOrgScope quietly supplied
+// the right answer and the selector never had to work.
+//
+// Both gateways lowercase what they collect (REST from HTTP headers, rpc
+// from metadata keys, which are lowercase by protocol), so one lookup
+// covers both; the defensive scan handles a hand-built caller.
+func orgSlugFromHeaders(headers map[string]string) string {
+	if v := headers[orgScopeMetadataKey]; v != "" {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, orgScopeMetadataKey) {
+			return v
+		}
+	}
+	return ""
+}
+
+// orgSlugFromContext reads the gateway-forwarded active-org slug from the
+// incoming gRPC metadata. Empty when absent.
+func orgSlugFromContext(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	if v := md.Get(orgScopeMetadataKey); len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+// ListMyOrgs returns the organizations the bearer-authenticated caller is a
+// member of — for the CLI's `org list`, the login-time membership cache,
+// and the init org picker. The caller is the gateway-resolved principal
+// (callerUserID — same source as WhoAmI), never a client-sent user_id.
+func (h *AuthServiceHandler) ListMyOrgs(ctx context.Context, _ *pb.ListMyOrgsReq) (*pb.ListMyOrgsResp, error) {
+	userID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	resp, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ListMyOrgsResp{Orgs: resp.GetOrgs()}, nil
+}
+
+// errNoActiveOrg fires when an org-scoped RPC is called without a resolved
+// active org. Authenticate stamps scopes[org_id] only after VALIDATING
+// membership, so its absence means the caller named no org (no W17-Org
+// header, and no sole org to infer) or is not a member of the one they
+// named.
+var errNoActiveOrg = status.Error(codes.FailedPrecondition,
+	"no active organization for this request (send the W17-Org header naming an org you belong to)")
+
+// activeOrgID returns the organization this request acts in — the one
+// Authenticate resolved from the W17-Org header (or inferred, when the
+// caller belongs to exactly one) and VALIDATED against membership.
+//
+// Read from the trusted scope, never from the request body. Every
+// org-scoped RPC could have taken an org_id parameter and every one of them
+// would then have had to remember to distrust it; the value that is already
+// proven is right here, and a handler cannot forget to use the only org it
+// is given.
+func activeOrgID(ctx context.Context) (string, error) {
+	orgID, ok := principal.Scope(ctx, "org_id")
+	if !ok || orgID == "" {
+		return "", errNoActiveOrg
+	}
+	return orgID, nil
+}
+
+// ListOrgMembers returns everyone in the caller's active organization.
+//
+// It lives HERE and not with the invitations, even though the two screens
+// that use it are the same screen: the rpc is gated `org_membership`, and a
+// handler staged under a different feature would leave an activation that
+// enables membership WITHOUT invites holding an interface method nothing
+// implements. That is not hypothetical — e2e-project's admin_auth
+// activation is exactly that combination, and it is what caught this.
+func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, _ *pb.ListOrgMembersReq) (*pb.ListOrgMembersResp, error) {
+	if _, err := callerUserID(ctx); err != nil {
+		return nil, Unauthenticated(err)
+	}
+	orgID, err := activeOrgID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := h.Query.ListOrgMembersByOrg(ctx, &pb.ListOrgMembersByOrgReq{OrgId: orgID})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pb.OrgMember, 0, len(resp.GetMembers()))
+	for _, m := range resp.GetMembers() {
+		out = append(out, &pb.OrgMember{
+			UserId:   m.GetUserId(),
+			Email:    m.GetEmail(),
+			Role:     m.GetRole(),
+			Owner:    m.GetOwner(),
+			JoinedAt: m.GetJoinedAt(),
+		})
+	}
+	return &pb.ListOrgMembersResp{Members: out}, nil
+}

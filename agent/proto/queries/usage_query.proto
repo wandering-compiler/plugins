@@ -1,0 +1,323 @@
+syntax = "proto3";
+
+// Agent plugin — reading the usage layer.
+//
+// Cost is COMPUTED, never stored. A usage row holds tokens; the money comes
+// from joining the price that was in force when the call ran. That is the
+// whole reason `valid_from` exists, and it is what makes "changing the price
+// list does not move a finished call's cost" true by construction rather than
+// by discipline.
+
+package w17.contrib.agent;
+
+import "google/protobuf/timestamp.proto";
+import "@self/types/usage.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message GetScopeSpendReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 scope_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+  // Half-open [from, to): a period boundary belongs to exactly one period.
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to   = 3;
+}
+
+// One line per model. Absent costs are ABSENT, never zero: a model nobody
+// priced must not read as free, or an incomplete bill looks like a cheap one.
+message ScopeSpendLine {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  string model = 1;
+  int64  calls = 2;
+  // How many of those calls had a price to charge them at.
+  //
+  // `priced_calls < calls` means `cost_minor` is REAL MONEY AND SHORT — SUM
+  // skips a NULL rather than poisoning the group, so a line mixing priced and
+  // unpriced calls reports the priced part and says nothing about the rest.
+  // That is the one shape an absent cost cannot warn about: absent means
+  // "nothing here was priced", and this is "some of it was".
+  //
+  // The consumer's metering carries a bool on the whole bill for this and
+  // calls it property #5 — "tokens nobody priced are not free". A count is
+  // what this compiler can express (see the service comment) and it is
+  // strictly more: it says how short, and which line is short.
+  int64  priced_calls = 9;
+  int64  input_tokens        = 3;
+  int64  output_tokens       = 4;
+  int64  cached_input_tokens = 5;
+  int64  reasoning_tokens    = 6;
+  optional int64  cost_minor = 7;
+  optional string currency   = 8;
+}
+
+message GetScopeSpendResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  repeated ScopeSpendLine lines = 1;
+}
+
+message GetLabelSpendReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 scope_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+  // Which attribution axis to group on — `run_id`, `customer`, whatever
+  // the caller interned. One key per call, because a line per (key, value)
+  // pair across every key would mix axes that do not add up together.
+  string label_key = 2 [(w17.field) = { type: CHAR, max_len: 64, min_len: 1 }];
+  // Half-open [from, to): a period boundary belongs to exactly one period.
+  google.protobuf.Timestamp from = 3;
+  google.protobuf.Timestamp to   = 4;
+}
+
+// One line per distinct VALUE of the requested key. Same absent-cost rule as
+// ScopeSpendLine, for the same reason.
+//
+// These lines do NOT partition the scope's spend, and the difference is not
+// rounding. A call carries as many labels as the caller sent, so a call
+// labelled with two values of the same key is counted under BOTH — summing
+// the lines then exceeds the scope total. Attributing a shared call to every
+// subject that used it is the intended reading ("aggregating later is always
+// possible, splitting back never is"); reading the sum as a bill is not.
+//
+// Calls carrying no label of this key appear in NO line. A caller who needs
+// "everything, attributed or not" asks GetScopeSpend for the total and reads
+// the difference.
+message LabelSpendLine {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  string label_value = 1;
+  int64  calls = 2;
+  // See ScopeSpendLine.priced_calls. A run whose calls are split across a
+  // priced and an unpriced model is exactly the case: its cost is real and
+  // short, and nothing else in the line says so.
+  int64  priced_calls = 9;
+  int64  input_tokens        = 3;
+  int64  output_tokens       = 4;
+  int64  cached_input_tokens = 5;
+  int64  reasoning_tokens    = 6;
+  optional int64  cost_minor = 7;
+  optional string currency   = 8;
+}
+
+message GetLabelSpendResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  repeated LabelSpendLine lines = 1;
+}
+
+message GetScopeLimitReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 scope_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+  LimitWindow window = 2 [(w17.field) = { type: ENUM }];
+  // The instant the limit is asked about — the one in force THEN, for the same
+  // reason prices work that way.
+  google.protobuf.Timestamp at = 3;
+}
+
+message GetScopeLimitResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64  limit_minor = 1;
+  string currency    = 2;
+}
+
+message ListModelPricesReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 model_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+}
+
+// ModelPriceLine — one row of a model's price history.
+//
+// `recorded_at` is carried beside `valid_from` on purpose, and it is what
+// makes a BACKDATED price visible. The table is append-only: a correction is
+// a new row at a new `valid_from`, never an edit, because a past call has to
+// keep the price that was in force when it ran. Nothing stops an operator
+// recording a price whose `valid_from` is older than the newest one — that is
+// legal and occasionally intended (a rate that applied from last month,
+// entered today). The pair of timestamps is how a reader tells the two apart:
+// ordered newest-`valid_from` first, a row whose `recorded_at` is LATER than
+// the row above it was written after the period it prices.
+message ModelPriceLine {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64                     id          = 1;
+  google.protobuf.Timestamp valid_from  = 2;
+  optional int64            input_per_million_minor        = 3;
+  optional int64            output_per_million_minor       = 4;
+  optional int64            cached_input_per_million_minor = 5;
+  string                    currency    = 6;
+  google.protobuf.Timestamp recorded_at = 7;
+}
+
+message ListModelPricesResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  // The repeated field and nothing else. A list-shaped response carries one
+  // repeated field (`generate.detectListItem` refuses any other), which is
+  // the same wall `GetScopeSpend`'s summary-beside-a-list met — see the note
+  // on `priced_calls` in the service below.
+  repeated ModelPriceLine prices = 1;
+}
+
+service UsageQuery {
+  option (w17.contrib.plugin_feature_svc) = "usage_persistence";
+
+  // On `priced_calls`, and why it is not the whole-bill bool the consumer
+  // described: a response of `{ repeated Line lines; bool priced; }` is not a
+  // shape this compiler can plan. A list-shaped response carries the repeated
+  // field and nothing else (`generate.detectListItem` refuses any other), and
+  // `BOOL_AND` is not in the function whitelist, so the per-line bool has no
+  // spelling either. `COUNT(<nullable>)` counts non-NULLs on every dialect,
+  // which is why the count is what ships.
+  //
+  // A caller wanting the bool computes it: every line with
+  // `priced_calls == calls`. Recorded rather than worked around, because the
+  // missing piece is a RESPONSE SHAPE and the next feature that wants a
+  // summary beside a list will meet the same wall.
+
+  // Spend for one scope over a period, per model.
+  //
+  // The price is joined per USAGE ROW, at that row's `started_at`, and only
+  // then summed — not joined once for the period. A period spanning a price
+  // change would otherwise bill all of it at one rate, and which rate would
+  // depend on where the join happened to land.
+  rpc GetScopeSpend(GetScopeSpendReq) returns (GetScopeSpendResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT m.name AS model, "
+          "       COUNT(u.id) AS calls, "
+          "       COUNT(p.line_minor) AS priced_calls, "
+          "       SUM(u.input_tokens) AS input_tokens, "
+          "       SUM(u.output_tokens) AS output_tokens, "
+          "       SUM(u.cached_input_tokens) AS cached_input_tokens, "
+          "       SUM(u.reasoning_tokens) AS reasoning_tokens, "
+          "       SUM(p.line_minor) AS cost_minor, "
+          "       MAX(p.currency) AS currency "
+          "FROM @module.Usage u "
+          "JOIN @module.Model m ON m.id = u.model_id "
+          "LEFT JOIN LATERAL ("
+          "  SELECT ROUND("
+          "           ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
+          "            + u.cached_input_tokens * pr.cached_input_per_million_minor "
+          "            + u.output_tokens * pr.output_per_million_minor) / 1000000.0"
+          "         ) AS line_minor, "
+          "         pr.currency AS currency "
+          "  FROM @module.ModelPrice pr "
+          "  WHERE pr.model_id = u.model_id AND pr.valid_from <= u.started_at "
+          "  ORDER BY pr.valid_from DESC LIMIT 1"
+          ") p ON TRUE "
+          "WHERE u.scope_id = :scope_id AND u.started_at >= :from AND u.started_at < :to "
+          "GROUP BY m.name "
+          "ORDER BY m.name"
+      }
+    };
+  }
+
+  // Spend for one scope over a period, per LABEL VALUE of one key.
+  //
+  // The question GetScopeSpend cannot answer. "What did this tenant spend,
+  // per model" is a bill; "what did THIS RUN cost, and who is it charged to"
+  // is attribution, and a consumer who cannot ask it keeps a second set of
+  // books beside this one. Two sets of books drift, and nobody notices for
+  // months.
+  //
+  // Identical pricing to GetScopeSpend, deliberately: the same LATERAL, per
+  // usage ROW, at that row's own `started_at`. Two aggregates over the same
+  // rows that priced them differently would be worse than not having the
+  // second one.
+  rpc GetLabelSpend(GetLabelSpendReq) returns (GetLabelSpendResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT lb.value AS label_value, "
+          "       COUNT(u.id) AS calls, "
+          "       COUNT(p.line_minor) AS priced_calls, "
+          "       SUM(u.input_tokens) AS input_tokens, "
+          "       SUM(u.output_tokens) AS output_tokens, "
+          "       SUM(u.cached_input_tokens) AS cached_input_tokens, "
+          "       SUM(u.reasoning_tokens) AS reasoning_tokens, "
+          "       SUM(p.line_minor) AS cost_minor, "
+          "       MAX(p.currency) AS currency "
+          "FROM @module.Usage u "
+          "JOIN @module.UsageLabel ul ON ul.usage_id = u.id "
+          "JOIN @module.Label lb ON lb.id = ul.label_id "
+          "LEFT JOIN LATERAL ("
+          "  SELECT ROUND("
+          "           ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
+          "            + u.cached_input_tokens * pr.cached_input_per_million_minor "
+          "            + u.output_tokens * pr.output_per_million_minor) / 1000000.0"
+          "         ) AS line_minor, "
+          "         pr.currency AS currency "
+          "  FROM @module.ModelPrice pr "
+          "  WHERE pr.model_id = u.model_id AND pr.valid_from <= u.started_at "
+          "  ORDER BY pr.valid_from DESC LIMIT 1"
+          ") p ON TRUE "
+          "WHERE u.scope_id = :scope_id AND lb.key = :label_key "
+          "  AND u.started_at >= :from AND u.started_at < :to "
+          "GROUP BY lb.value "
+          "ORDER BY lb.value"
+      }
+    };
+  }
+
+  // The limit in force at an instant. Newest `valid_from` not after it —
+  // the same rule as a price, because a limit changed today must not
+  // retroactively make yesterday an overspend.
+  // Every price ever recorded for one model, newest `valid_from` first.
+  //
+  // The convenience surface over an append-only table. `RecordModelPrice`
+  // writes and says nothing about what was already there, so before this
+  // there was no way to ask "what does this model cost, and since when" —
+  // an operator had to reach into the database.
+  //
+  // ⚠️ There is still no GUARD against recording a price that backdates the
+  // newest one, and that is deliberate rather than pending: it is legal and
+  // occasionally intended, so a refusal would be wrong. A warning is not
+  // expressible either — a DQL mutation has no channel to emit one, and
+  // adding a hand-written handler to carry a maybe-warning would put
+  // behaviour in the plugin for a condition the caller can see. So this
+  // query is the detector instead: `valid_from` DESC with `recorded_at`
+  // beside it makes a backdated row self-evident. Same shape as the
+  // `priced_calls` decision below — the missing piece is a response/emit
+  // capability, and saying so is worth more than working around it.
+  rpc ListModelPrices(ListModelPricesReq) returns (ListModelPricesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS id, p.valid_from AS valid_from, "
+          "       p.input_per_million_minor AS input_per_million_minor, "
+          "       p.output_per_million_minor AS output_per_million_minor, "
+          "       p.cached_input_per_million_minor AS cached_input_per_million_minor, "
+          "       p.currency AS currency, p.recorded_at AS recorded_at "
+          "FROM @module.ModelPrice p "
+          "WHERE p.model_id = :model_id "
+          "ORDER BY p.valid_from DESC"
+      }
+    };
+  }
+
+  rpc GetScopeLimit(GetScopeLimitReq) returns (GetScopeLimitResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT l.limit_minor AS limit_minor, l.currency AS currency "
+          "FROM @module.ScopeLimit l "
+          "WHERE l.scope_id = :scope_id AND l.window = :window "
+          "  AND l.valid_from <= :at "
+          "ORDER BY l.valid_from DESC LIMIT 1"
+      }
+    };
+  }
+}

@@ -1,0 +1,617 @@
+name: auth
+version: 0.1.0-rc.1
+requires_w17: ">=1.5"
+
+# v3 — explicit Go module anchor. Staging text-rewrites every
+# occurrence of this prefix in handlers/ + lib/ source to the
+# per-activation pb path (see docs/specs/plugins/business-handlers.md
+# §"Staging — how compose-time works").
+go_module: github.com/wandering-compiler/platform/plugins/auth
+
+description: "Email + password authentication primitives + bearer tokens + RBAC. v3 plugin — proto + DQL primitives + authored Go business handlers (Authenticate, SignIn)."
+license: "Apache-2.0"
+
+channels:
+  - events
+
+# Plugin-author env-var contract. Each entry becomes one
+# PascalCase field on the codegen-emitted EnvConfig the plugin's
+# RegisterPlugin receives. Bundle main.go reads
+# `<DOMAIN>_<PLUGIN>_<NAME>` from os.Getenv at boot, coerces to
+# the declared type, and populates the struct before invoking
+# RegisterPlugin. Consumers set the env var via their deploy
+# manifest; the plugin author treats the value as the typed knob
+# for that activation.
+env:
+  - name: password_hash_algo
+    type: string
+    default: argon2id
+    description: "Password-hash algorithm used by SignIn / SignUp. One of: argon2id (default, recommended), bcrypt, scrypt, pbkdf2. Algo-specific params follow each algo's library defaults; production deployments that need tuned cost knobs swap in a custom RegisterPlugin or extend this env: surface with per-algo tunables."
+  - name: two_factor_totp
+    type: bool
+    default: "true"
+    description: "Built-in TOTP second factor (two_factor feature). false = the plugin never verifies TOTP; every challenge goes out via MfaChallengeRequested for a hand-written delivery channel (SMS/e-mail)."
+  - name: two_factor_scope
+    type: string
+    default: all_logins
+    description: "When 2FA fires: all_logins (every password sign-in) | new_devices (only an untrusted device). new_devices requires the `devices` feature — codegen rejects the activation otherwise."
+  - name: mfa_code_ttl_seconds
+    type: int
+    default: "300"
+    description: "Lifetime of an event-flow MfaChallenge code (the SMS/e-mail path). TOTP windows are governed by RFC 6238, not this knob. Also bounds the VerifyMfa window for the TOTP path."
+  - name: session_token_ttl_seconds
+    type: int
+    default: "2592000"
+    description: "Absolute lifetime (seconds) of a browser session bearer token, stamped into UserToken.expires_at at mint time (SignIn / SignUp / VerifyMfa). Default 2592000 = 30 days. The token-validation queries reject an expired token (expires_at > NOW()), so a leaked session token stops working after the TTL even without an explicit logout (OWASP session-timeout baseline). <= 0 falls back to the 30-day default. API tokens are minted with NULL expires_at (never-expiring) and are unaffected."
+  - name: totp_issuer
+    type: string
+    default: ""
+    description: "Issuer label shown in the authenticator app (the otpauth:// issuer). Empty = the account label carries no issuer prefix."
+  - name: two_factor_secret_key
+    type: string
+    default: ""
+    description: "base64-encoded 32-byte key encrypting TOTP seeds at rest (AES-256-GCM). REQUIRED to use the built-in TOTP authenticator — EnrollTotp/ConfirmTotp/VerifyMfa error clearly when unset, so a deployment never ships plaintext seeds. The event/fallback path (two_factor_totp=false) needs no key."
+  - name: oauth_redirect_base
+    type: string
+    default: ""
+    description: "Public base URL the OAuth callback is reachable at (e.g. https://app.example.com), used to build redirect_uri (oauth feature). Empty = derived from the request host."
+  - name: invite_only
+    type: bool
+    default: "true"
+    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ With `email_verification` off, this gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first. That window closes when email verification is enabled."
+  - name: org_invite_ttl_hours
+    type: int
+    default: "168"
+    description: "How long an org invitation stays acceptable, in hours (org_invite). Default 168 = 7 days. Expiry is checked at acceptance AND at sign-up, so a stale invitation stops being a way in without anything having to sweep the table."
+  - name: password_reset_ttl_seconds
+    type: int
+    default: "3600"
+    description: "Lifetime (seconds) of a password-reset token (password_reset feature). Default 3600 = 1 hour. <= 0 falls back to the 1-hour default. The token is single-use and the expiry is enforced atomically at ResetPassword time."
+  - name: email_verification_ttl_seconds
+    type: int
+    default: "86400"
+    description: "Lifetime (seconds) of an e-mail verification token (email_verification feature). Default 86400 = 24 hours. <= 0 falls back to the 24-hour default. Single-use; expiry enforced atomically at VerifyEmail time."
+
+features:
+  - name: rbac
+    description: "Role / Permission / UserRole / RolePermission tables + their CRUD mutations (incl. UpdateRole, which edits a role's name/description only — the privilege flags stay declarative) + their lifecycle events. Required when the project's gateway has ACL annotations + uses role-based assignment. Also stages the turnkey declarative signup role assignment (first_user / default -> UserRole)."
+    default: true
+    go_files:
+      - handlers/signup_roles.go
+  - name: authenticate_turnkey
+    description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids."
+    default: true
+  - name: sign_up_turnkey
+    description: "AuthService.SignUp — authored Go handler composing PasswordHash.Hash + CreateUser + IssueToken. Project's REST endpoint points directly at SignUp — no business glue. Disable for custom register flows (rate limit, captcha, email confirmation, invite codes). Staged from handlers/signup.go so the pb.SignUpReq/Resp reference vanishes with the feature (an admin auth realm omits it and seeds accounts instead)."
+    default: true
+    go_files:
+      - handlers/signup.go
+  - name: sign_in_turnkey
+    description: "AuthService.SignIn — authored Go handler chaining GetUserByEmail + passwordhash.VerifyAndRotate + IssueToken. Emits opaque Unauthenticated on every failure (anti-enumeration). Disable for custom sign-in flows (MFA, rate limit, lockout, federated identity)."
+    default: true
+  - name: tenant_scope
+    description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth`: handlers/oauth.go creates users through the baseline CreateUser and has no tenant to resolve, so the pair is unsupported (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Off by default — opt in for multi-tenant deployments."
+    default: false
+    go_files:
+      - handlers/tenant.go
+  - name: api_token
+    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. This used to `conflicts_with: org_membership`, because two narrowings over bare permission-id SETS cannot compose. Lifted 2026-09-20: both axes now resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (deinvo asked 2026-09-06; the anonymous case with NO permissions is a custom auth method, as in a public-link view). See docs/specs/plugins/auth-tokens-and-roles.md."
+    default: false
+    go_files:
+      - handlers/apitoken.go
+  - name: devices
+    description: "Device/session tracking + log-out endpoints (ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices). Adds the Device table + a UserToken.device_id column; each session links to a Device so 'log out a device' is 'delete its tokens'. New vs. trusted devices are distinguished by a client-sent X-Device-Id header (falling back to a UA+IP fingerprint), and trusted_at supplies the trusted-device signal two_factor new-device mode reads. The project must forward X-Device-Id / User-Agent / X-Forwarded-For via (w17.rest_api).metadata_propagation for full-fidelity detection. Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
+    default: false
+    go_files:
+      - handlers/devices.go
+  - name: oauth
+    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client_secret PASSWORD-typed) + OAuthIdentity (User↔external-subject link) tables and the authorize/callback handlers. Providers are configured at runtime via the generated admin CRUD; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
+    default: false
+    go_files:
+      - handlers/oauth.go
+    # ⚠️ REQUIRED, and the reason is a takeover rather than a compile error.
+    #
+    # OAuth auto-links an incoming identity to an existing account with the
+    # same address. Q36-auth-1 made that conditional on the IdP asserting
+    # the address is verified — one half of the question. The other half is
+    # whether the LOCAL account ever verified it, and without this feature
+    # there is no field in which that answer could be recorded
+    # (`User.email_verified_at` is gated on it).
+    #
+    # With no such field, a verified assertion is bound to a claim nobody
+    # checked: an attacker signs in through a provider that does not verify,
+    # with the victim's address in its profile, and the create branch makes
+    # an account for that address; the victim signs in later through a
+    # provider that does verify, and is handed a session inside it.
+    #
+    # Requiring verification in the create branch instead does NOT close it —
+    # password sign-up is a second door to the same squat. The property is
+    # about the account being linked into, so the field has to exist
+    # (T3-7 pass #14, B14-2).
+    requires:
+      - email_verification
+  - name: two_factor
+    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (secret encrypted at rest) + MfaChallenge tables, the EnrollTotp/ConfirmTotp/DisableTotp/GetMfaStatus enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (new_devices requires `devices`). Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
+    default: false
+    go_files:
+      - handlers/mfa.go
+  - name: password_reset
+    description: "Self-service password reset (E1). Adds the PasswordResetToken table + the RequestPasswordReset / ResetPassword RPCs (both unauthenticated, REST-exposed). RequestPasswordReset always returns success regardless of whether the email exists (anti-enumeration) and emits PasswordResetRequested carrying a single-use, time-bounded plaintext token (only its hash is stored) for a hand-written e-mail delivery channel. ResetPassword consumes the token atomically (single-use + expiry), sets the new password, and revokes every existing token (sessions + API). TTL via env (password_reset_ttl_seconds, default 1h). Off by default."
+    default: false
+    go_files:
+      - handlers/reset.go
+  - name: email_verification
+    description: "E-mail ownership verification (E1). Adds the EmailVerificationToken table + a nullable User.email_verified_at column + the RequestEmailVerification (bearer-authenticated) / VerifyEmail (unauthenticated link click) RPCs. RequestEmailVerification emits EmailVerificationRequested with a single-use plaintext token (hash stored) for a hand-written delivery channel; VerifyEmail consumes it and stamps email_verified_at. Non-blocking by default (SignIn does not reject unverified users; a project can layer that policy). TTL via env (email_verification_ttl_seconds, default 24h). Off by default."
+    default: false
+    go_files:
+      - handlers/emailverify.go
+  - name: cli_login
+    description: "First-party CLI login — the console acts as an OAuth authorization server for CLIs (e.g. w17ctl) via the loopback + PKCE flow (the same UX as `claude login`). Adds the CliAuthCode table + CliAuthorize (bearer-authenticated: mint a single-use, PKCE-bound authorization code for the signed-in principal) and CliToken (unauthenticated: verify the PKCE code_verifier, consume the code single-use, mint a bearer) RPCs. The human authenticates through the project's existing surface (password sign-in or the `oauth` providers); cli_login only issues + redeems the CLI's code. Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
+    default: false
+    go_files:
+      - handlers/cli_login.go
+  - name: org_membership
+    description: "GitHub-style multi-org membership — one identity belongs to MANY Organizations via OrgMembership (the generalization of single-tenant tenant_scope). Adds the Organization + OrgMembership tables + AuthQuery.ListUserOrgs / GetUserOrgBySlug, the ListMyOrgs business RPC (the caller's orgs, for a CLI's `org list` + login cache + init org picker), and an Authenticate decorator that stamps scopes[org_id] for the request's ACTIVE org (a client-selected slug in the W17-Org header, VALIDATED against membership — a caller can only ever scope into an org they belong to). A project scoping rows by name: org_id then gets per-org isolation. Coexists with tenant_scope (a project picks one model). Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
+    default: false
+    # api_token narrows permissions by REALM (inside resolvePrincipal);
+    # org_membership narrows them by ORGANIZATION (a grant narrower that
+    # runs after). Sequencing two narrowings is sound only when each
+    # answer is a subset of the previous one, and neither query can see
+    # the other's axis: a permission reachable through BOTH a
+    # session-realm role scoped to org X and an api-realm realm-wide role
+    # survives both filters for a session token acting in org Y, where
+    # neither role applies. Refused until the queries resolve grants
+    # per ROLE — see docs/specs/plugins/auth-org-scoped-roles.md §A3b.
+    go_files:
+      - handlers/org_membership.go
+  - name: org_invite
+    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / MarkOrgInviteAccepted / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default. See docs/specs/plugins/auth-org-invites.md."
+    default: false
+    # Built ON org_membership, not merely alongside it: the invite writes an
+    # OrgMembership row and an org-scoped UserRole, both of which are types
+    # that feature owns. Without the requirement the failure is an
+    # "undefined: pb.AddOrgMembershipReq" inside generated code, in a file the
+    # project neither wrote nor may edit.
+    requires:
+      # org_membership owns the OrgMembership row an acceptance writes;
+      # rbac owns the Role catalogue the invited role names and the
+      # UserRole grant that makes it mean anything. Without EITHER, the
+      # staged Go references types that were filtered out.
+      - org_membership
+      - rbac
+    go_files:
+      - handlers/org_invite.go
+  - name: password_change
+    description: "Authenticated password change — the signed-in principal supplies its current password and a new one. Distinct from `password_reset`, which is the FORGOTTEN-password flow and needs a mail channel to deliver a token; this one needs no channel at all, because the proof is the current password. A deployment that cannot send mail can still let people rotate their own credentials. Adds the ChangePassword business RPC over the existing AuthMutation.UpdateUserPassword primitive. Off by default."
+    default: false
+    go_files:
+      - handlers/password_change.go
+  - name: service_account
+    description: "Machine accounts — a BOT user that cannot sign in with a password and acts only through an API token an admin minted for it. Adds User.kind, the admin mint/revoke endpoints, and the SignIn refusal that makes the distinction enforceable rather than descriptive. Requires api_token (the token machinery) — without it there is no credential for a bot to hold."
+    default: false
+    requires:
+      - api_token
+      - user_admin
+    go_files:
+      - handlers/service_account.go
+  - name: user_admin
+    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / delete of accounts. Adds a nullable User.disabled_at column (SignIn rejects a disabled account before issuing a token; existing tokens survive until expiry/revocation), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated), AuthMutation.DeleteUser (hard-delete + token purge in one tx, emits UserDeleted for downstream cleanup of feature-owned rows), and AuthMutation.DisableUsers / EnableUsers (bulk). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateUser + delete DeleteUser; bulk actions Disable/Enable). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
+    default: false
+    go_files:
+      - handlers/user_admin.go
+
+# Preset surfaces this plugin injects into a consuming project's
+# gateway at activation time. On by default when the gating feature
+# is active; the project's activation block (`(w17.domain).plugins[]
+# .presets`) controls enable / mount per surface. Refs are plugin-
+# relative (`<Service>.<Method>`); codegen rewrites them to the
+# activation's `registered_as` name. Spec: docs/specs/plugins/presets.md.
+presets:
+  rest:
+    # Headers the gateway must thread into backend gRPC metadata for the
+    # `devices` feature to resolve a device (client-sent id, else a UA+IP
+    # fingerprint). Activation merges these into the domain's
+    # metadata_propagation (extend_defaults preserves W3C tracing), so a
+    # consuming project doesn't hand-wire forwarding for headers the
+    # plugin owns. Gated `devices`.
+    forward_headers:
+      - { name: X-Device-Id, feature: devices }
+      - { name: X-Device-Trust, feature: devices } # C2 — server-issued device-trust token replay
+      - { name: User-Agent,      feature: devices }
+      - { name: X-Forwarded-For, feature: devices }
+      # The active-org selector — a slug the client sends to scope a request
+      # into one of its orgs. NOT in the reserved x-w17-* namespace (that's
+      # for VERIFIED auth/scope metadata only — a client header there could
+      # forge org scope); the plugin reads this raw selector, VALIDATES
+      # membership, then stamps the trusted scopes[org_id]. Gated org_membership.
+      - { name: W17-Org, feature: org_membership }
+    # Bearer middleware — the gateway calls Authenticate on every
+    # gated endpoint of the surface this activation injects into.
+    auth_methods:
+      - ref: AuthService.Authenticate
+        token_types: [BEARER]
+        feature: authenticate_turnkey
+    groups:
+      # The turnkey identity surface a consuming project used to copy
+      # by hand into its rest.proto. SignIn / SignUp are unauthenticated
+      # (the caller has no token yet); WhoAmI rides the bearer middleware.
+      - prefix: /auth
+        description: "Identity surface served turnkey by the auth plugin — sign-in / sign-up + session bootstrap."
+        endpoints:
+          - { ref: AuthService.SignIn, method: POST, path: /login,    exclude_auth: true, feature: sign_in_turnkey }
+          - { ref: AuthService.SignUp, method: POST, path: /register, exclude_auth: true, feature: sign_up_turnkey }
+          - { ref: AuthService.WhoAmI, method: GET,  path: /whoami,                        feature: authenticate_turnkey }
+          # Logout revokes the caller's CURRENT session token (bearer-
+          # authenticated). Base-tier — no `devices` feature needed;
+          # "log out everywhere" stays the devices group's job.
+          - { ref: AuthService.Logout, method: POST, path: /logout,                        feature: authenticate_turnkey }
+      # API/MCP token management — the caller manages their OWN tokens,
+      # authenticated by their browser-session bearer (no exclude_auth).
+      # Gated api_token: the whole group drops when the feature is off.
+      - prefix: /auth/tokens
+        description: "API / MCP token management (create / list / revoke), bearer-authenticated."
+        endpoints:
+          - { ref: AuthService.CreateApiToken, method: POST,   path: "",            feature: api_token }
+          - { ref: AuthService.ListApiTokens,  method: GET,    path: "",            feature: api_token }
+          - { ref: AuthService.RevokeApiToken, method: DELETE, path: "/{token_id}", feature: api_token }
+      # Machine accounts — provision a bot, list them, see which roles one
+      # may hold, and mint its token. Bearer-authenticated: an operator does
+      # this from a signed-in session, and the ACL decides which operators.
+      # Gated service_account: the whole group drops when the feature is off.
+      - prefix: /auth/bots
+        description: "Machine accounts — provision, list, and mint an API token for a bot."
+        endpoints:
+          - { ref: AuthService.CreateBot,     method: POST, path: "",              feature: service_account }
+          - { ref: AuthService.ListBots,      method: GET,  path: "",              feature: service_account }
+          - { ref: AuthService.ListBotRoles,  method: GET,  path: /roles,          feature: service_account }
+          - { ref: AuthService.IssueBotToken, method: POST, path: "/{user_id}/token", feature: service_account }
+      # OAuth2/OIDC sign-in — provider redirect + callback. Both
+      # unauthenticated (the caller has no token yet). Gated oauth.
+      - prefix: /auth/oauth
+        description: "OAuth2/OIDC sign-in — provider authorize redirect + callback."
+        endpoints:
+          # Starting the flow is a browser step too: this hands the
+          # user to the identity provider. `allow_external` because the
+          # target IS the provider's own URL — built server-side from
+          # the OAuthProvider row an administrator wrote, never from
+          # anything the caller sent. It carries NO token (the session
+          # does not exist yet), which is what keeps an outward redirect
+          # from being a way to deliver one somewhere.
+          - { ref: AuthService.OAuthAuthorizeURL, method: GET, path: "/{provider}/authorize", exclude_auth: true, feature: oauth,
+              browser_redirect: { target_field: "authorize_url", allow_external: true } }
+          # The callback is walked by a BROWSER: the identity provider
+          # sends it here with ?code=. `browser_redirect` makes it answer
+          # 302 instead of a JSON document, sending the user back where
+          # they started with the session in the fragment.
+          #
+          # `redirect_after` has been on OAuthCallbackResp since the
+          # feature shipped — caller-supplied, validated site-relative,
+          # signed into `state` so the callback can trust it — and until
+          # now NOTHING read it back. The browser landed on
+          # {"token":"ey…"} and the flow ended there.
+          - { ref: AuthService.OAuthCallback,     method: GET, path: "/{provider}/callback",  exclude_auth: true, feature: oauth,
+              browser_redirect: { target_field: "redirect_after", token_field: "token", token_param: "token", fallback: "/" } }
+      # Two-factor: enrollment (bearer) + challenge verification
+      # (VerifyMfa is unauthenticated — challenge_id, not a token yet).
+      # Gated two_factor: the whole group drops when the feature is off.
+      - prefix: /auth/mfa
+        description: "Two-factor: TOTP enrollment + challenge verification."
+        endpoints:
+          - { ref: AuthService.VerifyMfa,    method: POST,   path: /verify,       exclude_auth: true, feature: two_factor }
+          - { ref: AuthService.EnrollTotp,   method: POST,   path: /totp,                             feature: two_factor }
+          - { ref: AuthService.ConfirmTotp,  method: POST,   path: /totp/confirm,                     feature: two_factor }
+          - { ref: AuthService.DisableTotp,  method: DELETE, path: /totp,                             feature: two_factor }
+          - { ref: AuthService.GetMfaStatus, method: GET,    path: /status,                           feature: two_factor }
+      # Device/session management — the caller manages their OWN devices,
+      # authenticated by their bearer session. Gated devices: the whole
+      # group drops when the feature is off.
+      - prefix: /auth/devices
+        description: "Device/session management — list + log out one/others/all, bearer-authenticated."
+        endpoints:
+          - { ref: AuthService.ListDevices,        method: GET,    path: "",              feature: devices }
+          - { ref: AuthService.RevokeDevice,       method: DELETE, path: "/{device_id}",  feature: devices }
+          - { ref: AuthService.RevokeOtherDevices, method: POST,   path: "/revoke-others", feature: devices }
+          - { ref: AuthService.RevokeAllDevices,   method: POST,   path: "/revoke-all",    feature: devices }
+      # Password reset (E1) — both unauthenticated (the caller has no token:
+      # forgot-password flow). Gated password_reset.
+      - prefix: /auth/password
+        description: "Self-service password reset — request a token (e-mailed) + apply a new password."
+        endpoints:
+          - { ref: AuthService.RequestPasswordReset, method: POST, path: /reset-request, exclude_auth: true, feature: password_reset }
+          - { ref: AuthService.ResetPassword,        method: POST, path: /reset,         exclude_auth: true, feature: password_reset }
+          # Same prefix, different half of the same subject: the two above
+          # are the FORGOTTEN-password flow and need a mail channel to
+          # deliver a token, this one is the authenticated rotation whose
+          # proof is the current password. Separate features, so a
+          # deployment with no way to send mail still gets this one — and
+          # NOT exclude_auth: it acts on the caller's own account.
+          - { ref: AuthService.ChangePassword,       method: POST, path: /change,                            feature: password_change }
+      # E-mail verification (E1) — request is bearer-authenticated (verify
+      # your own address); the verify link click is unauthenticated. Gated
+      # email_verification.
+      - prefix: /auth/email
+        description: "E-mail ownership verification — request a verification link + confirm it."
+        endpoints:
+          - { ref: AuthService.RequestEmailVerification, method: POST, path: /verify-request,                     feature: email_verification }
+          - { ref: AuthService.VerifyEmail,              method: POST, path: /verify,        exclude_auth: true, feature: email_verification }
+      # First-party CLI login (loopback + PKCE). CliAuthorize is bearer-
+      # authenticated (the user is signed into the web; the browser carries
+      # the session bearer); CliToken is unauthenticated (the CLI has no
+      # token yet — it presents the authorization code + PKCE verifier).
+      # Gated cli_login.
+      - prefix: /auth/cli
+        description: "First-party CLI login (loopback + PKCE) — the console issues CLI bearers (e.g. for w17ctl)."
+        endpoints:
+          - { ref: AuthService.CliAuthorize, method: POST, path: /authorize,                     feature: cli_login }
+          - { ref: AuthService.CliToken,     method: POST, path: /token,     exclude_auth: true, feature: cli_login }
+      # Multi-org membership — the caller lists their OWN orgs, bearer-
+      # authenticated. Gated org_membership.
+      - prefix: /auth/orgs
+        description: "Multi-org membership — list the organizations the caller belongs to."
+        endpoints:
+          - { ref: AuthService.ListMyOrgs, method: GET, path: "", feature: org_membership }
+          # Members + invitations of the caller's ACTIVE org — the one
+          # Authenticate resolved from the W17-Org header and validated
+          # against membership. No org id in the path on purpose: a caller
+          # can only ever act in an org they belong to, and an id in the URL
+          # would invite a handler to trust it.
+          - { ref: AuthService.ListOrgMembers,   method: GET,    path: /members,               feature: org_membership }
+          # The role vocabulary an invitation may use. Under /orgs because the
+          # answer is org-scoped (realm roles are filtered out), and GET
+          # because a picker reads it before anything is submitted.
+          - { ref: AuthService.ListAssignableRoles, method: GET,  path: /roles,                 feature: org_invite }
+          - { ref: AuthService.ListOrgInvites,   method: GET,    path: /invites,               feature: org_invite }
+          - { ref: AuthService.InviteToOrg,      method: POST,   path: /invites,               feature: org_invite }
+          - { ref: AuthService.RevokeOrgInvite,  method: DELETE, path: "/invites/{invite_id}", feature: org_invite }
+      # Invitations addressed to the CALLER, across every org. Deliberately
+      # NOT under /auth/orgs: these are not scoped to an active org — the
+      # whole point is that the invitee may not be a member of any of them
+      # yet, so an org-scoped path could not name them.
+      - prefix: /auth/invites
+        description: "The signed-in caller's pending invitations, and accepting one."
+        endpoints:
+          - { ref: AuthService.ListMyInvites,   method: GET,  path: "",                       feature: org_invite }
+          - { ref: AuthService.AcceptOrgInvite, method: POST, path: "/{invite_id}/accept",     feature: org_invite }
+  mcp:
+    # MCP tools the plugin exposes. WhoAmI lets an MCP client confirm the
+    # principal behind its API token. Deliberately a NARROW surface —
+    # sign-in / token-management are browser flows, not MCP tools. A
+    # project gates the MCP surface (api_token roles) to control which of
+    # its OWN tools an MCP token can reach.
+    tools:
+      - { ref: AuthService.WhoAmI, feature: authenticate_turnkey }
+  admin:
+    # Auto-wire the admin surface's auth to this plugin's canonical
+    # methods, so an admin author who activates auth writes NO auth
+    # block (the admin surface is auth-required — gateway-parser
+    # enforced). login_method issues a token from credentials; user_lookup
+    # (Authenticate) resolves a token → user_id + permission_ids + scopes
+    # the admin gateway enforces ACL against. Injection qualifies these
+    # plugin-relative refs with the activation's registered name.
+    auth:
+      login_method: AuthService.SignIn
+      user_lookup: AuthService.Authenticate
+      feature: authenticate_turnkey
+    # Admin overview widgets the plugin contributes — custom-JS slots
+    # (`overview:widget:<slot>`). The project supplies the slot's JS; the
+    # plugin just reserves the slot. Gated rbac (relevant only when role
+    # management is on). Disable via the activation's presets.admin.enabled.
+    widgets:
+      - { slot: auth_user_count, size: SMALL, feature: rbac }
+    # Includable role-management admin page — the "manage roles for free"
+    # snippet. Injected onto the project's admin surface (refs qualified
+    # with the activation name). Roles are primarily declarative (seeded
+    # from `(w17.acl_roles)`), so the page is view + edit-copy + delete:
+    # list catalogue, inspect a role, retitle it, remove a stray one.
+    # The privilege flags stay declarative — see the page's fields below.
+    # Gated rbac. A hand-written page named "Roles" overrides this.
+    pages:
+      - name: Roles
+        model: Role
+        feature: rbac
+        list:
+          source: AuthQuery.ListRoles
+          columns: [name, all_permissions, assign_first_user, assign_default, created_at]
+          detail_link_column: name
+        detail:
+          read: AuthQuery.GetRole
+          update: AuthMutation.UpdateRole
+          delete: AuthMutation.DeleteRole
+          # name + description are what UpdateRole writes, so they are
+          # the editable set. The privilege flags stay readonly: they
+          # are seeded declaratively from `(w17.acl_roles)` and are not
+          # in the update request at all — editing a WILDCARD grant
+          # from a form would be a privilege-escalation path.
+          fields: [name, description]
+          readonly_fields: [all_permissions, assign_first_user, assign_default, created_at]
+      # Turnkey Django-style Users management. Gated user_admin — opt in
+      # on the realm whose admin manages end-user accounts (typically a
+      # staff/admin realm). List + editable detail (email only — never
+      # surfaces password_hash); delete hard-removes the account; the disable /
+      # enable bulk actions flip User.disabled_at (SignIn rejects a
+      # disabled account). A hand-written page named "Users" overrides
+      # this.
+      - name: Users
+        model: User
+        feature: user_admin
+        list:
+          source: AuthQuery.ListUsers
+          columns: [email, disabled_at, created_at]
+          detail_link_column: email
+        detail:
+          read: AuthQuery.GetUser
+          update: AuthMutation.UpdateUser
+          delete: AuthMutation.DeleteUser
+          # email is the only column UpdateUser writes. disabled_at
+          # stays readonly — it belongs to the disable/enable actions
+          # below — and password_hash is never surfaced at all.
+          fields: [email]
+          readonly_fields: [id, disabled_at, created_at]
+        actions:
+          - name: disable
+            source: AuthMutation.DisableUsers
+            label: "Disable"
+            confirm: "Disable the selected accounts? They won't be able to sign in until re-enabled."
+            target: both
+          - name: enable
+            source: AuthMutation.EnableUsers
+            label: "Enable"
+            confirm: "Re-enable the selected accounts?"
+            target: both
+      # Machine accounts. Gated service_account.
+      #
+      # Its own page rather than a `kind` column on Users: `User.kind` is
+      # feature-gated and a preset page's `columns` cannot be gated per entry,
+      # so a build without the feature would fail codegen on a field it does
+      # not have. A page CAN be gated. Same auth_user table either way — this
+      # is a view over it, not a second directory.
+      #
+      # No `update`: a bot has nothing an operator edits. Its address is its
+      # identity and its rights live in its roles, which are managed where
+      # every other grant is. Creation takes an address and nothing else — no
+      # password field, because a machine account has no password (that is
+      # what makes the sign-in refusal unbypassable rather than configured).
+      #
+      # Deleting one revokes it: the tokens hang off the user row.
+      - name: Service accounts
+        model: User
+        feature: service_account
+        list:
+          source: AuthQuery.ListBots
+          columns: [email, disabled_at, created_at]
+          detail_link_column: email
+        detail:
+          read: AuthQuery.GetUser
+          create: AuthMutation.CreateBot
+          delete: AuthMutation.DeleteUser
+          fields: [email]
+          readonly_fields: [id, disabled_at, created_at]
+        actions:
+          - name: disable
+            source: AuthMutation.DisableUsers
+            label: "Disable"
+            confirm: "Disable the selected machine accounts? Their tokens stop working until re-enabled."
+            target: both
+          - name: enable
+            source: AuthMutation.EnableUsers
+            label: "Enable"
+            confirm: "Re-enable the selected machine accounts?"
+            target: both
+      # Turnkey Organizations management. Gated org_membership. The
+      # tables are plugin-owned, so a project can't author these pages
+      # itself. View + edit + delete (list catalogue, inspect an org,
+      # edit its slug/name/kind, remove one — deleting purges its
+      # memberships); creation stays the project's provisioning flow
+      # (CreateOrganization off the OrganizationCreated hook). A
+      # hand-written page named
+      # "Organizations" overrides this.
+      - name: Organizations
+        model: Organization
+        feature: org_membership
+        list:
+          source: AuthQuery.ListOrganizations
+          columns: [slug, name, kind, created_at]
+          detail_link_column: slug
+        detail:
+          read: AuthQuery.GetOrganization
+          update: AuthMutation.UpdateOrganization
+          delete: AuthMutation.DeleteOrganization
+          fields: [slug, name, kind]
+          readonly_fields: [id, created_at]
+      # Turnkey OrgMemberships management (the user↔org link table).
+      # Gated org_membership. View + edit the member's role + delete
+      # (revoke one membership). The list projects the member's email +
+      # the org's name (ListOrgMemberships → OrgMembershipAdminRow, ADMIN-
+      # FK) so an operator sees "alice@x.com · Acme", never two raw UUIDs:
+      # `member` (email) is the clickable handle onto this membership's own
+      # detail; `organization` renders the org name and links to the
+      # Organizations page. A hand-written page named "OrgMemberships"
+      # overrides this.
+      - name: OrgMemberships
+        model: OrgMembership
+        feature: org_membership
+        list:
+          source: AuthQuery.ListOrgMemberships
+          # organization → the Organizations page, rendering the org name
+          # (org_name) row-locally instead of the UUID. Organizations is
+          # gated by the same org_membership feature, so it always co-
+          # exists with this page (no dangling ref).
+          columns:
+            - member
+            - { name: organization, ref: { title: org_name, page: Organizations } }
+            - role
+            - created_at
+          detail_link_column: member
+        detail:
+          read: AuthQuery.GetOrgMembership
+          update: AuthMutation.UpdateOrgMembership
+          delete: AuthMutation.DeleteOrgMembership
+          # Only the role is editable — moving a membership to another
+          # user/org is a delete + re-add (unique (user_id, org_id)).
+          fields: [role]
+          readonly_fields: [id, user_id, org_id, created_at]
+      # Turnkey session/token review. Gated user_admin. Lists every
+      # UserToken across users (NEVER the secret token value) so an
+      # operator can review + revoke sessions; delete = revoke that
+      # token (force-logout). The list projects the session owner's email
+      # (ListUserTokens → UserTokenAdminRow, ADMIN-FK) so an operator sees
+      # "alice@x.com", never a bare user UUID: `owner` (email) is the
+      # clickable handle onto this session's own detail; `user` links to
+      # the owner's Users page. A hand-written page named "Sessions"
+      # overrides this.
+      - name: Sessions
+        model: UserToken
+        feature: user_admin
+        list:
+          source: AuthQuery.ListUserTokens
+          # user → the Users page. NO `title`: a title here would just
+          # repeat the email `owner` already shows, so the ref falls back
+          # to the column header — the cell reads "User" and its tooltip
+          # carries the user id. Users is gated by the same user_admin
+          # feature, so it always co-exists with this page (no dangling ref).
+          columns:
+            - owner
+            - { name: user, ref: { page: Users } }
+            - created_at
+            - expires_at
+          detail_link_column: owner
+        detail:
+          read: AuthQuery.GetUserToken
+          delete: AuthMutation.RevokeUserToken
+          readonly_fields: [id, user_id, created_at, expires_at]
+
+# Dev-only sandbox services this plugin brings for testing / manual
+# trial. Each is wired into the consuming project's tool-owned
+# `compose.w17.yaml` and NOWHERE else (no prod stage, never the
+# hand-written compose.yaml). w17 emits the compose entry; the
+# orchestrator launches it. Spec: docs/specs/plugins/sandbox-services.md.
+sandboxes:
+  # A deterministic fake OIDC provider for live-proving the `oauth`
+  # feature without a real Google/GitHub. Gated `oauth`: only wired
+  # when the activation enables that feature. Reachable in-network at
+  # `http://fakeidp:8080` — seed an OAuthProvider row whose
+  # authorize/token/userinfo URLs point there. The image is built
+  # locally from plugins/auth/sandboxes/fakeidp:
+  #   docker build -t ${W17_WORKSPACE:-w17}-w17-fakeidp:dev plugins/auth/sandboxes/fakeidp
+  # The tag is WORKSPACE-PREFIXED: an image tag is build output, and a fixed
+  # one on a shared docker daemon is a name every checkout overwrites.
+  - name: fakeidp
+    description: "Fake OIDC provider (dev-only) for the oauth feature"
+    feature: oauth
+    image: ${W17_WORKSPACE:-w17}-w17-fakeidp:dev
+    # Documented default values the sandbox launches with — the e2e
+    # test + the seeded OAuthProvider row are written against these.
+    # Override in the hand-written compose.yaml / .env, never here.
+    env:
+      - name: PORT
+        value: "8080"
+        description: "Container listen port; siblings dial http://fakeidp:8080."
+      - name: ISSUER
+        value: "http://fakeidp:8080"
+        description: "iss claim + discovery base (the in-network name)."
+      - name: SUBJECT
+        value: "fake-sub-001"
+        description: "Canned external subject (the `sub` claim) every login carries."
+      - name: EMAIL
+        value: "oauth-user@example.com"
+        description: "Canned email; the OAuth user is found-or-created under it."

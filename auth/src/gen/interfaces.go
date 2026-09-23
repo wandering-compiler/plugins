@@ -1,0 +1,127 @@
+// Package gen is the plugin author's compile-time contract with
+// the bundle codegen — v4 plugin model. Holds the typed
+// interfaces (interfaces.go) the plugin's RegisterPlugin
+// depends on, plus the protoc-generated bindings under `pb/`.
+// Everything machine-owned lives here; the plugin author hand-
+// edits only handlers/ + lib/ + plugin.go + plugin.yaml.
+//
+// At staging time, the bundle's host codegen synthesises a
+// parallel `gen/` package containing the same exported types
+// (EnvConfig, ClientSet, HandlerRegistry) populated for the
+// activation; the plugin's authored RegisterPlugin function
+// depends on this package, and the staging import rewrite
+// swaps the plugin-stable import (`<go_module>/gen`) for the
+// per-activation staged path so the authored code links
+// against the codegen-emitted types without any text-level
+// edits. Plugin's local `gen/pb/` stubs are NOT copied into
+// the bundle — the bundle uses its own protoc-generated pb at
+// the per-activation path, and the rewrite maps
+// `<go_module>/gen/pb` → that per-activation pb path directly.
+//
+// POC stub today: the plugin has no env: declared in plugin.yaml
+// so EnvConfig is empty. ClientSet exposes the typed clients
+// the plugin's handlers need; HandlerRegistry exposes the
+// register-service hooks the plugin uses to plug its authored
+// AuthService implementation into the bundle's gRPC server. The
+// bundle's typed_clients.go codegen emits concrete impls for
+// both interfaces at staging time.
+package gen
+
+import (
+	"context"
+
+	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/sdk/go/lib/acllock"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+)
+
+// EnvConfig is the typed view of the activation's env-var
+// inputs. Plugin authors that add env: entries get one
+// PascalCase field per entry on this struct; the bundle's
+// main.go reads `<DOMAIN>_<PLUGIN>_<NAME>` from os.Getenv at
+// boot, coerces to the declared type, and populates the struct
+// before calling RegisterPlugin.
+//
+// The fields below match plugin.yaml's `env:` block. POC stub
+// today — when the codegen-emitted EnvConfig (synthesised from
+// plugin.yaml at staging time) lands, this hand-authored shape
+// gets shadowed by the codegen output. Keeping it here makes
+// `go build` against the plugin standalone work.
+type EnvConfig struct {
+	// PasswordHashAlgo selects the password-hash algorithm
+	// SignIn / SignUp use. One of: "argon2id" (default),
+	// "bcrypt", "scrypt", "pbkdf2". Matches the
+	// passwordhash.Algo string the SDK accepts.
+	PasswordHashAlgo string
+
+	// two_factor knobs (field names = codegen pascalCase of the
+	// plugin.yaml env names; the bundle's pluginwire populates them from
+	// <DOMAIN>_<PLUGIN>_<NAME>). Ignored unless the activation enables
+	// the `two_factor` feature.
+	TwoFactorTotp     bool   // two_factor_totp — built-in TOTP verify path (default true)
+	TwoFactorScope    string // two_factor_scope — all_logins | new_devices
+	MfaCodeTtlSeconds int    // mfa_code_ttl_seconds — event-flow code lifetime
+
+	// SessionTokenTtlSeconds — absolute lifetime of a browser session
+	// bearer token (session_token_ttl_seconds). Stamped into
+	// UserToken.expires_at at mint time; validation rejects expired
+	// tokens. <= 0 → 30-day default. Base-tier (no feature gate).
+	SessionTokenTtlSeconds int
+	TotpIssuer             string // totp_issuer — otpauth issuer label
+	TwoFactorSecretKey     string // two_factor_secret_key — base64 32-byte at-rest key for TOTP seeds
+
+	// oauth knob (Phase O). Public base URL the OAuth callback is reachable
+	// at; empty → derived from the request host.
+	OauthRedirectBase string // oauth_redirect_base
+
+	// E1 token lifetimes. Ignored unless the matching feature is enabled.
+	PasswordResetTtlSeconds     int // password_reset_ttl_seconds (default 3600)
+	EmailVerificationTtlSeconds int // email_verification_ttl_seconds (default 86400)
+
+	InviteOnly        bool // invite_only (default true)
+	OrgInviteTtlHours int  // org_invite_ttl_hours (default 168)
+}
+
+// ClientSet exposes the in-process typed clients the plugin's
+// handlers depend on. The bundle's typed_clients.go codegen
+// emits a concrete impl per activation that wraps the bundle's
+// existing storage servers via Adapter structs.
+type ClientSet interface {
+	AuthQuery() pb.AuthQueryClient
+	AuthMutation() pb.AuthMutationClient
+
+	// AclLock returns the bundle's compile-time ACL permission lock
+	// (the codegen-emitted `query.AclLock()` snapshot). The handler
+	// needs it to expand an `all_permissions` wildcard role to the
+	// full permission set via acllock.GrantAll(lock) — the catalogue
+	// is a compile-time enum, not a DB table, so the runtime can't
+	// enumerate it in SQL. Returns an empty (non-nil) lock when the
+	// project declares no ACL surface, so GrantAll yields no
+	// permissions rather than panicking.
+	AclLock() *acllock.Lock
+
+	// DistributedTransaction returns the in-process distributed-transaction
+	// coordinator client (backed by the bundle's shared txregistry). A handler
+	// that composes several storage mutations atomically opens one transaction
+	// on Connection() via distx.Begin, threads the returned w17-tx-id onto each
+	// mutation call (they adopt it), then Commit / Rollback — see SignUp.
+	DistributedTransaction() distxpb.W17DistributedTransactionClient
+
+	// Connection is the txregistry connection name the plugin's tables live on
+	// — passed as BeginRequest.ConnectionName so the coordinator opens the tx
+	// on the same *sql.DB the plugin's mutations adopt. Single connection per
+	// activation (distx is single-connection scoped).
+	Connection() string
+}
+
+// HandlerRegistry exposes the register-service hooks the plugin
+// uses to plug its authored gRPC service implementations into
+// the bundle's server, plus the shutdown hook accumulator the
+// bundle's drain loop walks at teardown. The bundle's
+// typed_clients.go codegen emits a concrete impl per activation
+// holding a `*grpc.Server` + a `*[]func(context.Context) error`
+// pointer to the bundle's pluginShutdowns slice.
+type HandlerRegistry interface {
+	RegisterAuthServiceServer(impl pb.AuthServiceServer)
+	RegisterShutdown(fn func(ctx context.Context) error)
+}

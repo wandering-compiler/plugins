@@ -1,0 +1,303 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+)
+
+// RunAgent drives the tool-calling loop against tools the CALLER runs.
+//
+// The shape is forced by what a plugin is: the tools are the caller's own gRPC
+// methods, compiled into their project, and this code was compiled without
+// knowing that project exists. So the loop asks over the stream and waits.
+func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentReq, pb.RunAgentEvent]) error {
+	if h.StreamClient == nil {
+		return status.Error(codes.Unimplemented, "agent: this deployment has no streaming client")
+	}
+
+	first, err := srv.Recv()
+	if err != nil {
+		return err
+	}
+	start := first.GetStart()
+	if start == nil {
+		return status.Error(codes.InvalidArgument, "agent: the first message must be Start")
+	}
+
+	// sends is serialised: the loop runs read-only tools in parallel, so
+	// several goroutines reach Send at once and a gRPC stream is not safe for
+	// concurrent sends.
+	var sendMu sync.Mutex
+	send := func(e *pb.RunAgentEvent) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return srv.Send(e)
+	}
+
+	pending := newPendingCalls()
+	// One reader owns Recv for the same reason one mutex owns Send.
+	//
+	// It is NOT waited for. Recv unblocks only when the RPC ends, which is when
+	// this handler returns — so waiting here would have the handler wait for
+	// the reader and the reader wait for the handler. gRPC guarantees the
+	// goroutine is released when the handler returns; every waiter it might
+	// have served is released explicitly by failAll below, which is the part
+	// that actually matters.
+	go func() {
+		for {
+			msg, rerr := srv.Recv()
+			if rerr != nil {
+				// EOF is the caller saying "no more results". Anything else is
+				// the transport. Either way every waiter is released rather
+				// than left blocking for a reply that cannot come.
+				pending.failAll(rerr)
+				return
+			}
+			if r := msg.GetToolResult(); r != nil {
+				pending.deliver(r)
+			}
+		}
+	}()
+
+	// Asked BEFORE the run, the same way `Complete` and `CompleteStream` ask
+	// before their call. This was MISSING, and a review of a consumer's PR
+	// found it: three entry points take `usage_scope`, two consulted the
+	// limit, and the third — the one that makes the MOST model calls per
+	// invocation, because it loops with tool calls — did not.
+	//
+	// A reader of the contract could not have seen it: `agent_scopelimit` is
+	// one table, `usage_scope` is one field, and nothing said the cap applied
+	// to some methods. Whoever set a cap and reached for RunAgent learned it
+	// from the invoice.
+	//
+	// Once at the start rather than per turn: a limit that fails mid-run would
+	// abandon a conversation that has already spent tool calls, and the
+	// per-turn budget a caller wants for that is `Limits` on the Start message.
+	if h.Limits != nil {
+		if d := h.Limits.Allow(srv.Context(), start.GetUsageScope()); !d.Allowed {
+			return status.Error(codes.ResourceExhausted, d.Reason)
+		}
+	}
+
+	tools := make([]llm.Tool, 0, len(start.GetTools()))
+	for _, spec := range start.GetTools() {
+		tools = append(tools, &remoteTool{spec: spec, send: send, pending: pending})
+	}
+
+	runStartedAt := time.Now()
+	out, runErr := llm.Run(srv.Context(), h.StreamClient,
+		h.modelForSpec(start.GetModel()), start.GetInstructions(),
+		messagesFrom(start.GetMessages()), tools, limitsFrom(start.GetLimits()),
+		func(e llm.RunEvent) error { return sendRunEvent(send, e) })
+
+	// One row for the run's model spend. The loop's own turns are not
+	// separately visible here — `out.Usage` is what the run reports in total —
+	// so this records what the plugin can actually observe rather than
+	// inventing per-turn numbers it does not have.
+	h.recordUsageFor(start.GetUsageScope(), start.GetUsageLabels(),
+		h.modelForSpec(start.GetModel()).ID, out, runOutcome(runErr, out), runStartedAt)
+
+	// Belt and braces. The reader already calls failAll on every Recv error, and
+	// that is the path a disconnect actually takes — break-proofing confirmed
+	// removing THIS line breaks no test, because the reader gets there first.
+	// It is kept for the case the reader cannot cover: a run that ends while a
+	// waiter is still registered, where nothing else would release it.
+	pending.failAll(io.EOF)
+
+	if runErr != nil {
+		return runError(runErr)
+	}
+	return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Finished{Finished: &pb.Finished{
+		Text:             out.Text,
+		Status:           statusOf(out.Status),
+		IncompleteReason: reasonOf(out.IncompleteReason),
+		Usage:            usageOf(out.Usage),
+		StoppedRepeating: out.Status == "",
+	}}})
+}
+
+// remoteTool is a tool whose work happens in the caller's process.
+type remoteTool struct {
+	spec    *pb.ToolSpec
+	send    func(*pb.RunAgentEvent) error
+	pending *pendingCalls
+}
+
+func (t *remoteTool) Name() string    { return t.spec.GetName() }
+func (t *remoteTool) Purpose() string { return t.spec.GetPurpose() }
+func (t *remoteTool) Mutating() bool  { return t.spec.GetMutating() }
+
+func (t *remoteTool) Params() json.RawMessage {
+	s := t.spec.GetParamsSchema()
+	if s == "" {
+		return nil
+	}
+	// Validated here rather than passed through: a schema the provider rejects
+	// fails the whole turn, and the caller who wrote it would see only that.
+	if !json.Valid([]byte(s)) {
+		return nil
+	}
+	return json.RawMessage(s)
+}
+
+func (t *remoteTool) Call(ctx context.Context, args string) (string, error) {
+	callID := llm.NewCallID()
+	wait := t.pending.add(callID)
+	defer t.pending.drop(callID)
+
+	if err := t.send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_ToolCall{ToolCall: &pb.ToolCall{
+		CallId: callID, Name: t.spec.GetName(), Arguments: args,
+	}}}); err != nil {
+		// The caller is gone. FATAL: a tool that cannot be asked will never be
+		// answerable, and letting the loop treat it as an ordinary failure
+		// would have the model retry it until the budget ran out.
+		return "", llm.Fatal(err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case res := <-wait:
+		if res.err != nil {
+			return "", llm.Fatal(res.err)
+		}
+		if res.failed {
+			// The caller's own error text, which they chose to make
+			// model-visible. Returned as an error too, so the activity says it
+			// failed — the run still continues.
+			return res.result, errors.New(res.result)
+		}
+		return res.result, nil
+	}
+}
+
+// pendingCalls matches ToolResults to the calls waiting for them. Several are
+// outstanding at once whenever read-only tools run in parallel.
+type pendingCalls struct {
+	mu   sync.Mutex
+	ch   map[string]chan toolReply
+	done error
+}
+
+type toolReply struct {
+	result string
+	failed bool
+	err    error
+}
+
+func newPendingCalls() *pendingCalls { return &pendingCalls{ch: map[string]chan toolReply{}} }
+
+func (p *pendingCalls) add(id string) <-chan toolReply {
+	// Buffered: deliver must never block on a waiter that has already given up
+	// on its context, or the single Recv reader stalls and every other call
+	// waits forever behind it.
+	c := make(chan toolReply, 1)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.done != nil {
+		c <- toolReply{err: p.done}
+		return c
+	}
+	p.ch[id] = c
+	return c
+}
+
+func (p *pendingCalls) drop(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.ch, id)
+}
+
+func (p *pendingCalls) deliver(r *pb.RunAgentReq_ToolResult) {
+	p.mu.Lock()
+	c, ok := p.ch[r.GetCallId()]
+	p.mu.Unlock()
+	if !ok {
+		// A result for a call nobody is waiting for: a late answer to a
+		// timed-out call, or an id the caller invented. Dropped rather than
+		// treated as an error — neither is worth ending a run over.
+		return
+	}
+	c <- toolReply{result: r.GetResult(), failed: r.GetFailed()}
+}
+
+// failAll releases every waiter. Without it a caller that disconnects leaves
+// the loop blocked on a reply that cannot arrive, holding the run open.
+func (p *pendingCalls) failAll(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.done == nil {
+		p.done = err
+	}
+	for id, c := range p.ch {
+		select {
+		case c <- toolReply{err: err}:
+		default:
+		}
+		delete(p.ch, id)
+	}
+}
+
+func sendRunEvent(send func(*pb.RunAgentEvent) error, e llm.RunEvent) error {
+	switch {
+	case e.Delta != "":
+		return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Delta{Delta: &pb.TextDelta{Text: e.Delta}}})
+	case e.ToolStarted != nil:
+		return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Activity{Activity: &pb.Activity{
+			ActivityId: e.ToolStarted.CallID,
+			Text:       e.ToolStarted.Name,
+		}}})
+	case e.ToolFinished != nil:
+		a := &pb.Activity{ActivityId: e.ToolFinished.CallID, Text: e.ToolFinished.Name, Finished: true}
+		if e.ToolFinished.Err != nil {
+			// Deliberately not the error's text: a tool's error is the caller's
+			// own string and may quote anything. The activity says THAT it
+			// failed; the caller already knows what they returned.
+			a.Error = "the tool failed"
+		}
+		return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Activity{Activity: a}})
+	}
+	return nil
+}
+
+func runError(err error) error {
+	switch {
+	case errors.Is(err, llm.ErrBudgetExhausted):
+		return status.Error(codes.ResourceExhausted, "agent: the run exceeded its tool-call budget")
+	case errors.Is(err, llm.ErrTurnsExhausted):
+		return status.Error(codes.DeadlineExceeded, "agent: the model did not finish within the turn limit")
+	case errors.Is(err, llm.ErrRunawayOutput):
+		return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")
+	case errors.Is(err, io.EOF), errors.Is(err, context.Canceled):
+		// The caller left. There is nobody to tell.
+		return err
+	default:
+		return status.Error(codes.Unavailable, "agent: the run failed")
+	}
+}
+
+func limitsFrom(l *pb.Limits) llm.Limits {
+	if l == nil {
+		return llm.Limits{}
+	}
+	return llm.Limits{
+		MaxTurns:     int(l.GetMaxTurns()),
+		MaxToolCalls: int(l.GetMaxToolCalls()),
+		MaxParallel:  int(l.GetMaxParallel()),
+	}
+}
+
+func (h *AgentServiceHandler) modelForSpec(spec *pb.ModelSpec) llm.Model {
+	return h.modelFor(&pb.CompleteReq{Model: spec})
+}

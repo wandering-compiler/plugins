@@ -1,0 +1,215 @@
+syntax = "proto3";
+
+// Payment plugin — PaymentQuery read primitives (Slice 1).
+//
+// Pure SELECTs via (w17.db.method).query; codegen emits the handler
+// bodies generically. The business PaymentService handler composes
+// them with the backend driver (e.g. resolve the local Customer before
+// a charge; look up a Payment by provider id during webhook
+// reconciliation).
+
+package w17.contrib.payment;
+
+import "google/protobuf/timestamp.proto";
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message GetCustomerByUserIdReq  { string user_id = 1 [(w17.field) = { type: UUID }]; }
+message GetCustomerByUserIdResp { Customer customer = 1; }
+
+message GetPaymentReq  { string id = 1 [(w17.field) = { type: UUID }]; }
+message GetPaymentResp { Payment payment = 1; }
+
+message GetCreditBalanceReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetCreditBalanceResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  CreditBalance balance = 1;
+}
+
+message GetCreditTopupByProviderIdReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetCreditTopupByProviderIdResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  CreditTopup topup = 1;
+}
+
+message GetUsageMeterReq {
+  option (w17.contrib.plugin_feature) = "usage";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string meter   = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string period  = 3 [(w17.field) = { type: CHAR, max_len: 32 }];
+}
+message GetUsageMeterResp {
+  option (w17.contrib.plugin_feature) = "usage";
+  UsageMeter meter = 1;
+}
+
+message GetPlanBySlugReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string slug = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+}
+message GetPlanBySlugResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Plan plan = 1;
+}
+
+message GetSubscriptionReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message GetSubscriptionResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Subscription subscription = 1;
+}
+
+service PaymentQuery {
+  // GetCustomerByUserId — resolve the provider-customer link for a
+  // principal (empty result = not yet a customer; the handler creates
+  // one on first charge).
+  rpc GetCustomerByUserId(GetCustomerByUserIdReq) returns (GetCustomerByUserIdResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS customer.id, "
+          "       c.user_id AS customer.user_id, "
+          "       c.provider_customer_id AS customer.provider_customer_id, "
+          "       c.email AS customer.email, "
+          "       c.created_at AS customer.created_at "
+          "FROM @module.Customer c WHERE c.user_id = :user_id"
+      }
+    };
+  }
+
+  // GetPayment — fetch one Payment by primary key (the REST GET
+  // /payments/{id} surface).
+  rpc GetPayment(GetPaymentReq) returns (GetPaymentResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS payment.id, "
+          "       p.customer_id AS payment.customer_id, "
+          "       p.provider_payment_id AS payment.provider_payment_id, "
+          "       p.amount AS payment.amount, "
+          "       p.currency AS payment.currency, "
+          "       p.status AS payment.status, "
+          "       p.idempotency_key AS payment.idempotency_key, "
+          "       p.description AS payment.description, "
+          "       p.created_at AS payment.created_at, "
+          "       p.updated_at AS payment.updated_at "
+          "FROM @module.Payment p WHERE p.id = :id"
+      }
+    };
+  }
+
+  // GetCreditBalance — read the materialized prepaid balance for a
+  // principal (empty result = no credits ever applied → treat as zero).
+  // Gated prepaid.
+  rpc GetCreditBalance(GetCreditBalanceReq) returns (GetCreditBalanceResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT b.user_id AS balance.user_id, "
+          "       b.balance AS balance.balance, "
+          "       b.updated_at AS balance.updated_at "
+          "FROM @module.CreditBalance b WHERE b.user_id = :user_id"
+      }
+    };
+  }
+
+  // GetCreditTopupByProviderId — resolve a pending top-up from a
+  // payment-succeeded webhook (maps the charge back to the credit grant).
+  // Gated prepaid.
+  rpc GetCreditTopupByProviderId(GetCreditTopupByProviderIdReq) returns (GetCreditTopupByProviderIdResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS topup.id, "
+          "       t.provider_payment_id AS topup.provider_payment_id, "
+          "       t.user_id AS topup.user_id, "
+          "       t.amount AS topup.amount, "
+          "       t.granted_at AS topup.granted_at, "
+          "       t.created_at AS topup.created_at "
+          "FROM @module.CreditTopup t WHERE t.provider_payment_id = :provider_payment_id"
+      }
+    };
+  }
+
+  // GetUsageMeter — read the materialized usage total for a
+  // (principal, meter, period). Empty result = no usage recorded yet.
+  // Gated usage.
+  rpc GetUsageMeter(GetUsageMeterReq) returns (GetUsageMeterResp) {
+    option (w17.contrib.plugin_feature_rpc) = "usage";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT m.user_id AS meter.user_id, "
+          "       m.meter AS meter.meter, "
+          "       m.period AS meter.period, "
+          "       m.total AS meter.total, "
+          "       m.reported_total AS meter.reported_total, "
+          "       m.updated_at AS meter.updated_at "
+          "FROM @module.UsageMeter m "
+          "WHERE m.user_id = :user_id AND m.meter = :meter AND m.period = :period"
+      }
+    };
+  }
+
+  // GetPlanBySlug — resolve a plan by its stable local slug (the
+  // Subscribe handler reads plan_id + provider_price_id from it).
+  // Gated subscriptions.
+  rpc GetPlanBySlug(GetPlanBySlugReq) returns (GetPlanBySlugResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS plan.id, "
+          "       p.slug AS plan.slug, "
+          "       p.name AS plan.name, "
+          "       p.amount AS plan.amount, "
+          "       p.currency AS plan.currency, "
+          "       p.interval AS plan.interval, "
+          "       p.provider_price_id AS plan.provider_price_id, "
+          "       p.enabled AS plan.enabled, "
+          "       p.created_at AS plan.created_at "
+          "FROM @module.Plan p WHERE p.slug = :slug"
+      }
+    };
+  }
+
+  // GetSubscription — fetch one subscription by id. Gated subscriptions.
+  rpc GetSubscription(GetSubscriptionReq) returns (GetSubscriptionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT s.id AS subscription.id, "
+          "       s.customer_id AS subscription.customer_id, "
+          "       s.plan_id AS subscription.plan_id, "
+          "       s.provider_subscription_id AS subscription.provider_subscription_id, "
+          "       s.status AS subscription.status, "
+          "       s.current_period_end AS subscription.current_period_end, "
+          "       s.created_at AS subscription.created_at, "
+          "       s.updated_at AS subscription.updated_at "
+          "FROM @module.Subscription s WHERE s.id = :id"
+      }
+    };
+  }
+}

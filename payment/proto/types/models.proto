@@ -1,0 +1,277 @@
+syntax = "proto3";
+
+// Payment plugin — core models (Slice 1).
+//
+// Provider-agnostic billing primitives: Customer links the project's
+// principal to the payment provider's customer object; Payment is one
+// charge whose lifecycle status the provider owns (reconciled via
+// webhook); Refund records a reversal; ProcessedWebhookEvent is the
+// idempotency ledger (every provider event id seen exactly once).
+//
+// Wire identity (`w17.contrib.payment`) derives from the manifest
+// `name`; placement identity comes from the activation's
+// `registered_as`. Tables emit as `<registered_as>_<message_lower>`
+// and bind to the project's default connection (no explicit
+// (w17.module).connection — same as the auth plugin's v1 default).
+//
+// Money — every monetary column is `type: DECIMAL` (string carrier,
+// NUMERIC(precision, scale)), NOT the double-carried MONEY preset:
+// floating-point is lossy for currency. precision 20 / scale 4 covers
+// any real currency amount exactly. Provider object ids are opaque
+// CHAR columns — no provider name leaks into the wire contract.
+
+package w17.contrib.payment;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+// go_package resolves per-activation: `@project` →
+// `<go_module>/<pb_root>/<domain>/<registered_as>`, `@pkg` →
+// `<registered_as>pb`. The standalone author build
+// (`w17ctl plugin gen-pb`) expands it to the plugin's own module.
+option go_package = "@project;@pkg";
+
+// Customer — the project principal ↔ provider customer link. One row
+// per user; `provider_customer_id` is the opaque id the backend
+// returns (e.g. Stripe `cus_…`). user_id is unique so a principal has
+// exactly one provider customer. No DB-level FK to the project's
+// principal table (the activation-rename caveat the auth plugin
+// documents applies here too); the link is app-enforced.
+message Customer {
+  option (w17.db.table) = {};
+
+  string id                   = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id              = 2 [(w17.field) = { type: UUID, unique: true }];
+  string provider_customer_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  string email                = 4 [(w17.field) = { type: EMAIL, max_len: 320, blank: true }];
+  google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// Payment — a single charge. The provider is the source of truth for
+// `status`; the local row is created at intent time and reconciled to
+// SUCCEEDED / FAILED by the webhook handler. `idempotency_key` is
+// unique so a retried CreatePayment never double-charges.
+message Payment {
+  option (w17.db.table) = {};
+
+  // Status mirrors the provider-neutral charge lifecycle. The webhook
+  // handler maps provider event types onto SUCCEEDED / FAILED.
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    REQUIRES_ACTION    = 1;  // needs client-side confirmation (3DS etc.)
+    PROCESSING         = 2;
+    SUCCEEDED          = 3;
+    FAILED             = 4;
+    CANCELED           = 5;
+    REFUNDED           = 6;
+  }
+
+  string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string customer_id         = 2 [(w17.field) = { type: UUID }];
+  string provider_payment_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency            = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
+  Status status              = 6 [(w17.field) = { type: ENUM }];
+  string idempotency_key     = 7 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  string description         = 8 [(w17.field) = { type: CHAR, max_len: 500, blank: true }];
+  google.protobuf.Timestamp created_at = 9  [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp updated_at = 10 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+}
+
+// Refund — a reversal of a Payment. v1 records the provider refund id +
+// amount; partial refunds are supported (amount may be < the payment).
+message Refund {
+  option (w17.db.table) = {};
+
+  string id                 = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string payment_id         = 2 [(w17.field) = { type: UUID }];
+  string provider_refund_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  string amount             = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency           = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// ProcessedWebhookEvent — the inbound-idempotency ledger. The webhook
+// handler INSERTs the provider event id before applying side effects;
+// a unique-PK violation means "already handled" so retries (the
+// provider re-delivers on any non-2xx) are no-ops. Gated
+// `stripe_webhooks` — the table exists only when the webhook surface
+// is active.
+message ProcessedWebhookEvent {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+
+  string provider_event_id = 1 [(w17.field) = { type: CHAR, max_len: 255, pk: true }];
+  string event_type        = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  google.protobuf.Timestamp received_at = 3 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// ── prepaid feature: credit ledger + materialized balance ───────────
+//
+// The prepaid model is an append-only ledger keyed by the project
+// principal (user_id) — deliberately independent of the provider /
+// Customer table, so credits are a purely local concept (a Stripe
+// top-up that funds them is a separate Payment whose success grants
+// credit; that wiring is a follow-up). The "current balance" is a
+// materialized aggregate maintained in the SAME transaction as the
+// ledger insert (one ApplyCredit mutation, two ops) — never a free-
+// standing mutable counter. Both tables gated `prepaid`.
+
+// CreditLedger — append-only journal. Every grant (+), spend (−) and
+// adjustment is one immutable row with an idempotency key (unique → a
+// retried apply is a no-op via the dedup path). delta is signed.
+message CreditLedger {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "prepaid";
+
+  string id              = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string delta           = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
+  string reason          = 4 [(w17.field) = { type: SLUG, max_len: 64 }];   // topup|spend|adjustment|refund
+  string ref             = 5 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // payment id / order id / …
+  string idempotency_key = 6 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  google.protobuf.Timestamp created_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// CreditBalance — materialized SUM(ledger.delta) per principal,
+// updated in the ApplyCredit transaction. The raw CHECK enforces a
+// non-negative balance at the DB on every write: a spend that would
+// overdraw violates it → the whole transaction (ledger insert +
+// balance update) rolls back, and the handler maps it to
+// FailedPrecondition. This is the concurrency-safe guard — a plain
+// pre-read-then-write would race.
+message CreditBalance {
+  option (w17.db.table) = {
+    raw_checks: [ { name: "credit_balance_nonneg", expr: "balance >= 0" } ]
+  };
+  option (w17.contrib.plugin_feature) = "prepaid";
+
+  string user_id = 1 [(w17.field) = { type: UUID, pk: true }];
+  string balance = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  google.protobuf.Timestamp updated_at = 3 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+}
+
+// CreditTopup — links a Payment (the money charge) to the credit grant
+// it funds. TopUpCredit inserts one (granted_at NULL) when it creates
+// the charge; the payment-succeeded webhook hook grants the credit and
+// stamps granted_at. provider_payment_id is unique (one top-up per
+// charge). Gated prepaid.
+message CreditTopup {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "prepaid";
+
+  string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string provider_payment_id = 2 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  string user_id             = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  google.protobuf.Timestamp granted_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// ── usage feature: metered / pay-as-you-go ──────────────────────────
+//
+// The pay-as-you-go model is the same append-only-ledger + materialized-
+// aggregate shape as prepaid. "Burning time" (a bare quantity) and
+// "ordering a service" (a quantity carrying an item reference) are the
+// SAME operation — one UsageRecord row — differing only in payload
+// (item_ref / metadata set or blank), never in code path. UsageMeter is
+// the materialized per-(principal, meter, billing-period) total,
+// maintained in the same transaction as the record insert. Both gated
+// `usage`.
+
+// UsageRecord — append-only usage journal. quantity is integer units
+// of the meter (seconds, API calls, render jobs, …). item_ref + metadata
+// are blank for raw time-burn, set for a concrete service line item.
+message UsageRecord {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "usage";
+
+  string id              = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string meter           = 3 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string period          = 4 [(w17.field) = { type: CHAR, max_len: 32 }]; // billing window key, e.g. "2026-06"
+  int64  quantity        = 5 [(w17.field) = { type: NUMBER, gte: 0 }];
+  string item_ref        = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  string metadata        = 7 [(w17.field) = { type: JSON, blank: true }];
+  string idempotency_key = 8 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  google.protobuf.Timestamp created_at = 9 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// UsageMeter — materialized SUM(quantity) per (user_id, meter, period),
+// updated in the RecordUsage transaction. Composite-unique on the three
+// dimensions (surrogate id PK + unique index) is the UPSERT conflict
+// target. reported_total is the cursor of how much has been pushed to
+// the provider (e.g. Stripe usage records); the push itself is a
+// follow-up that pairs with the subscriptions feature.
+message UsageMeter {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [ { name: "user_id" }, { name: "meter" }, { name: "period" } ] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "usage";
+
+  string id             = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id        = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string meter          = 3 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string period         = 4 [(w17.field) = { type: CHAR, max_len: 32 }];
+  int64  total          = 5 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64  reported_total = 6 [(w17.field) = { type: NUMBER, gte: 0 }];
+  google.protobuf.Timestamp updated_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+}
+
+// ── subscriptions feature: local plan catalogue + subscriptions ─────
+//
+// Unlike credits/usage, subscriptions are inherently provider-coupled.
+// The catalogue (Plan) is LOCALLY authoritative — the project defines
+// plans, the plugin pushes each to the provider and stamps the returned
+// provider_price_id. Subscription lifecycle STATUS is provider-
+// authoritative — created on Subscribe, then reconciled from provider
+// webhooks (the webhook lifecycle wiring is a follow-up; the
+// MarkSubscriptionStatus mutation is ready for it). Both gated
+// `subscriptions`.
+
+// Plan — a recurring offer. slug is the stable local key; amount is a
+// decimal string; interval is "month" | "year". provider_price_id is
+// stamped after the push to the provider.
+message Plan {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "subscriptions";
+
+  string id                = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string slug              = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }];
+  string name              = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string amount            = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency          = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
+  string interval          = 6 [(w17.field) = { type: SLUG, max_len: 16 }];   // month | year
+  string provider_price_id = 7 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  bool   enabled           = 8 [(w17.field) = { default_auto: TRUE }];
+  google.protobuf.Timestamp created_at = 9 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// Subscription — a customer's enrollment in a Plan. status is the
+// provider-neutral lifecycle; current_period_end is the provider's
+// renewal boundary.
+message Subscription {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "subscriptions";
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    TRIALING           = 1;
+    ACTIVE             = 2;
+    PAST_DUE           = 3;
+    CANCELED           = 4;
+  }
+
+  string id                      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string customer_id             = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string plan_id                 = 3 [(w17.field) = { type: UUID }];
+  string provider_subscription_id = 4 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  Status status                  = 5 [(w17.field) = { type: ENUM }];
+  google.protobuf.Timestamp current_period_end = 6 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp updated_at = 8 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+}

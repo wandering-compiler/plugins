@@ -1,0 +1,106 @@
+name: payment
+version: 0.1.0-rc.1
+requires_w17: ">=1.5"
+
+# Explicit Go module anchor — staging text-rewrites this prefix in
+# src/handlers/ + src/lib/ + plugin.go to the per-activation pb path.
+# Also the package base w17ctl plugin gen-pb regenerates src/gen/pb under.
+go_module: github.com/wandering-compiler/platform/plugins/payment
+
+description: "Provider-agnostic billing — customers, payments, refunds + webhook ingestion. Stripe driver. Slice 1 (core)."
+license: "Apache-2.0"
+
+channels:
+  - events
+
+# Plugin-author env-var contract. Becomes typed fields on the codegen
+# EnvConfig; the bundle reads <DOMAIN>_<PLUGIN>_<NAME> at boot.
+env:
+  - name: payment_provider
+    type: string
+    default: stripe
+    description: "Backend driver selecting the provider. v1 supports only 'stripe'; any other value fails loud at RegisterPlugin so a misconfigured bundle never boots half-wired."
+  - name: provider_api_key
+    type: string
+    secret: true
+    description: "Provider API secret key (Stripe sk_live_… / sk_test_…). secret:true → secret.String on EnvConfig: redacted in logs/traces, resolved via the env→age→plain chain, never baked as a default."
+  - name: webhook_signing_secret
+    type: string
+    secret: true
+    description: "Webhook signing secret (Stripe whsec_…) used to verify the Stripe-Signature HMAC on inbound webhooks. secret.String. Required when stripe_webhooks is active."
+  - name: default_currency
+    type: string
+    default: usd
+    description: "ISO-4217 currency (lowercase) applied to a CreatePayment that omits one."
+
+features:
+  # Baseline (Customer / Payment / Refund + CreateCustomer / CreatePayment
+  # / GetPayment) carries no feature tag — always emitted, like the auth
+  # plugin's User/UserToken core. Only the webhook surface is toggleable.
+  - name: stripe_webhooks
+    default: true
+    description: "Inbound Stripe webhook ingestion: the ProcessedWebhookEvent idempotency ledger, the MarkWebhookProcessed mutation, and PaymentService.IngestStripe (signature verify + dedup + dispatch to MarkPaymentSucceeded/MarkPaymentFailed). Disable for projects that reconcile payment status another way (polling, manual)."
+    go_files:
+      - handlers/webhook_stripe.go
+  - name: prepaid
+    default: false
+    description: "Prepaid credit wallet: append-only CreditLedger + materialized CreditBalance (non-negative CHECK), the atomic ApplyCredit mutation (ledger insert + balance increment in one tx), and PaymentService.GrantCredit/SpendCredit/GetBalance + the CreditApplied event. Off by default — opt in for credit/wallet billing."
+    go_files:
+      - handlers/prepaid.go
+  - name: usage
+    default: false
+    description: "Metered / pay-as-you-go: append-only UsageRecord + materialized UsageMeter (per principal/meter/period), the atomic RecordUsage mutation (record insert + meter increment in one tx), and PaymentService.ReportUsage/GetUsage + the UsageRecorded event. Off by default — opt in for usage-based billing."
+    go_files:
+      - handlers/usage.go
+  - name: subscriptions
+    default: false
+    description: "Recurring plans: locally-authoritative Plan catalogue (pushed to the provider) + Subscription records (provider-authoritative lifecycle). PaymentService.CreatePlan/Subscribe/GetSubscription, MarkSubscriptionStatus (webhook reconciliation), SubscriptionStarted/SubscriptionStatusChanged events. Off by default — opt in for subscription billing."
+    go_files:
+      - handlers/subscriptions.go
+
+# Gateway preset surfaces injected at activation time. Refs are
+# plugin-relative (<Service>.<Method>); codegen rewrites them to the
+# activation's registered_as.
+presets:
+  rest:
+    # The webhook needs the Stripe-Signature header threaded into backend
+    # gRPC metadata (the handler reads it from there to verify the HMAC).
+    # Gated stripe_webhooks.
+    forward_headers:
+      - { name: Stripe-Signature, feature: stripe_webhooks }
+    groups:
+      # Customer + payment management. Authenticated (the caller acts on
+      # their own billing); the project's gateway stamps the principal.
+      - prefix: /billing
+        description: "Billing surface served turnkey by the payment plugin — customer setup + charges."
+        endpoints:
+          - { ref: PaymentService.CreateCustomer, method: POST, path: /customers }
+          - { ref: PaymentService.CreatePayment,  method: POST, path: /payments }
+          # Pure reads go straight to the storage Query tier — no business
+          # logic to add, so no hand-written wrapper (the gateway fronts
+          # any service RPC; see matrix-admin-acl-rest for the same
+          # NoteQuery.GetNote pattern). Mutations / provider-touching ops
+          # keep their business handler (PaymentService.*).
+          - { ref: PaymentQuery.GetPayment, method: GET, path: "/payments/{id}" }
+          # Read own prepaid balance (gated prepaid). user_id is the
+          # authenticated principal — the project binds it from the
+          # session, not a path param. Grant/Spend stay business
+          # (privileged + signed-amount + insufficient-balance contract).
+          - { ref: PaymentQuery.GetCreditBalance, method: GET, path: /credit/balance, feature: prepaid }
+          # Read own metered usage for a (meter, period). ReportUsage
+          # stays business (validation + idempotency); reading the meter
+          # is a pure storage query.
+          - { ref: PaymentQuery.GetUsageMeter, method: GET, path: "/usage/{meter}/{period}", feature: usage }
+          # Subscribe stays business (provider call + customer resolve);
+          # CreatePlan is NOT exposed (privileged/admin). Reading a
+          # subscription is a pure storage query.
+          - { ref: PaymentService.Subscribe,    method: POST, path: /subscriptions,        feature: subscriptions }
+          - { ref: PaymentQuery.GetSubscription, method: GET, path: "/subscriptions/{id}", feature: subscriptions }
+      # Inbound provider webhooks. Unauthenticated (the provider has no
+      # bearer); authenticity is the HMAC signature, not a token. The
+      # verbatim body lands in IngestStripeReq.raw_payload via
+      # raw_body_field. Gated stripe_webhooks.
+      - prefix: /webhooks
+        description: "Inbound payment-provider webhooks (signature-verified, unauthenticated)."
+        endpoints:
+          - { ref: PaymentService.IngestStripe, method: POST, path: /stripe, exclude_auth: true, raw_body_field: raw_payload, feature: stripe_webhooks }

@@ -1,0 +1,1892 @@
+syntax = "proto3";
+
+// Auth plugin — AuthQuery read-only RPCs.
+//
+// Read primitives for the auth surface. The consumer's
+// business layer composes these into SignIn / Authenticate-
+// header-middleware / similar (see docs/specs/plugins/auth.md
+// §"Composing into SignUp / SignIn" for the canonical shape).
+//
+// All methods are pure SELECTs through the standard
+// `(w17.db.method).query` annotation; codegen emits the
+// handler bodies generically — no plugin-specific handler
+// surface.
+
+package w17.contrib.auth;
+
+// Plugin-internal cross-file import; C2 placeholder expansion
+// rewrites `@self` at staging time to the activation's staged
+// directory.
+import "google/protobuf/timestamp.proto";
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+import "w17/paging.proto";
+
+option go_package = "@project;@pkg";
+
+message GetUserByEmailReq  { string email = 1; }
+message GetUserByEmailResp { User user = 1; }
+
+message GetUserByTokenReq  { string token = 1; }
+message GetUserByTokenResp { User user = 1; }
+
+message GetUserPermissionsReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+  string user_id = 1;
+}
+message GetUserPermissionsResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  // Permission IDs from the activating domain's generated
+  // AclPermission enum (w17.lock.acl.proto). Plugin handler
+  // passes them through to AuthResp.permission_ids verbatim —
+  // no bitset packing, no string→id mapping.
+  repeated int32 permission_ids = 1;
+}
+
+message GetUserByTokenWithPermissionsReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+  string token = 1;
+}
+// UserWithPermissions packs identity + the deduped permission
+// IDs the user holds across every assigned role. One SQL
+// round-trip via ROWS_TO_ARRAY (Phase E1) — no separate
+// permission lookup. `permission_ids` is always populated
+// (never nil); an empty list means the user has no role
+// assignments or none of their roles carry any permissions.
+// RoleGrant — ONE role and what it carries, as resolved by ONE narrowing
+// axis.
+//
+// This shape is what makes two narrowings composable. Permissions used to be
+// resolved as bare id lists, so the realm axis and the organization axis each
+// produced a SET and the two were intersected. Intersecting sets is only sound
+// when one answer is a subset of the other, and neither query can see the
+// other's axis: a permission reachable through a session-realm role scoped to
+// org X *and* through an api-realm realm-wide role survived both filters for a
+// session token acting in org Y, where neither role applies.
+//
+// Carrying the role id turns that intersection into one over ROLES: a
+// permission survives only if a SINGLE role grants it and that role passes
+// every axis. There is no longer a way to assemble a grant from two roles that
+// individually fail.
+//
+// Ungated on purpose — see the note at the callers.
+message GetUserRoleGrantsReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetUserRoleGrantsResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  repeated RoleGrant grants = 1;
+}
+
+message RoleGrant {
+  string role_id = 1 [(w17.field) = { type: UUID }];
+
+  // The permissions this role carries. Empty for a wildcard role: its rows
+  // are not materialised, the grant is expanded from the deployed lock.
+  repeated int32 permission_ids = 2;
+
+  // all_permissions — this ROLE is a wildcard. Kept per-role rather than as
+  // one flag over the whole answer, because a wildcard must pass the other
+  // axis like any other role: a superadmin of one organization is not a
+  // superadmin in the next one.
+  bool all_permissions = 3;
+}
+
+message GetUserByTokenWithPermissionsResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  User   user     = 1;
+  // token_id is the id of the UserToken the bearer resolved to — threaded
+  // by Authenticate into AuthResp.session_token_id so base-tier Logout can
+  // revoke exactly this session without ever seeing the raw token.
+  string token_id = 3 [(w17.field) = { type: UUID }];
+
+  // The role grants are NOT here: they come from GetUserRoleGrants.
+  //
+  // They were, and the emitted scan code did not compile — a response that
+  // mixes header scalars with a repeated sub-message is a shape the query
+  // generator does not produce a fan-out for, and it silently generated a
+  // single-message assignment instead. Codegen SUCCEEDED; the Go build is
+  // what caught it. Two queries is the shape that works, at the cost of one
+  // extra round trip on the session path.
+  //
+  // 2 = permission_ids, 4 = all_permissions, 5 = grants.
+  reserved 2, 4, 5;
+}
+
+// Signup role-assignment support (rbac). CountUsers backs the
+// first-user determination (COUNT==1 right after the insert = bootstrap
+// admin); GetFirstUserRoles / GetDefaultRoles return the role ids the
+// turnkey SignUp assigns, driven by the seeded assign_first_user /
+// assign_default Role columns. Realm-agnostic — the UserRole link does
+// not carry realm; the realm only decides which roles count at auth.
+message CountUsersReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+}
+message CountUsersResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  int64 count = 1;
+}
+
+// --- user_admin feature: turnkey admin user directory ---
+// ListUsers backs the admin Users page list `source`; GetUser backs its
+// detail `read` (returns the User model DIRECTLY, like GetRole — the
+// detail read contract is "returns a single <model>"). Both deliberately
+// project WITHOUT password_hash (a PASSWORD column that must never leave
+// storage into an admin view). All gated user_admin.
+message ListUsersReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+}
+message ListUsersResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated User users = 1;
+
+  // Cursor-paged (admin-only): the `w17.Paging` field on the response IS
+  // the declaration — this list has no public REST endpoint to hang a
+  // `paged{}` config on. The admin list handler decodes `?cursor` /
+  // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
+  // this method's ORDER BY. An operator's user table grows without bound,
+  // so an unpaged list would eventually load the whole table into one
+  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  w17.Paging paging = 2;
+}
+message ListBotUsersReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+  // The ACTIVE organization. Not optional: User is not an org-scoped model —
+  // a person belongs to several — so without this the list is every machine
+  // account on the console. It was, and one company's operator saw another's
+  // (reported on production 2026-09-21).
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+
+message GetBotInOrgReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string org_id  = 2 [(w17.field) = { type: UUID }];
+}
+message GetBotInOrgResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  // Empty when the bot is not in this organization — or is not a bot.
+  string user_id = 1 [(w17.field) = { type: UUID, blank: true }];
+}
+message ListBotUsersResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  repeated User bots = 1;
+}
+
+message ListApiRealmRolesReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+}
+message ListApiRealmRolesResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  repeated OrgScopedRole roles = 1;
+}
+
+message GetUserReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+}
+
+message GetFirstUserRolesReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+}
+message GetFirstUserRolesResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  repeated string role_ids = 1;
+}
+
+message GetDefaultRolesReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+}
+message GetDefaultRolesResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  repeated string role_ids = 1;
+}
+
+// Role read side — backs the plugin-contributed admin role-management
+// pages (ListRoles = list source, GetRole = detail read). rbac-gated.
+// token_type is deliberately NOT selected (it is an api_token-gated
+// column absent from the base Role table); the always-present rbac
+// columns carry the management view.
+message ListRolesReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+}
+message GetUserOwnsAnyOrgReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetUserOwnsAnyOrgResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  bool owns = 1;
+}
+
+message GetOwnedOrgBySlugReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string slug    = 2;
+}
+message GetOwnedOrgBySlugResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  // Empty org_id = no organization with this slug is OWNED by this user
+  // (unknown slug, or a real org someone else owns).
+  string org_id = 1;
+}
+
+message ListOrgScopedRolesReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+}
+message ListOrgScopedRolesResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  repeated OrgScopedRole roles = 1;
+}
+// OrgScopedRole is the projection an invitation picker needs: what to send and
+// what to show. Deliberately not the full Role — permissions and the signup
+// flags are not a chooser's business.
+message OrgScopedRole {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id          = 1;
+  string name        = 2;
+  string description = 3;
+}
+
+message ListRolesResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  repeated Role roles = 1;
+
+  // Cursor-paged like the other admin lists (the `w17.Paging` field IS
+  // the declaration — see docs/specs/gateway/cursor-paging.md §Admin-only
+  // paging). The role catalogue is bounded by declaration and rarely
+  // outgrows one page, so in practice the SPA renders no pager at all
+  // (the footer appears only once a second page exists) — but a project
+  // with a long, generated role set pages like everything else instead
+  // of being the one list that loads unbounded.
+  w17.Paging paging = 2;
+}
+message GetRoleReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+  string id = 1;
+}
+
+// --- api_token feature: realm-aware + subset-narrowed auth lookup ---
+// These three back the gated realm-aware Authenticate path (handlers/
+// apitoken.go): resolve a token's kind, pull the user's permissions
+// for that realm, and (for API tokens) the token's permission subset.
+// Authenticate intersects realm-perms ∩ subset in Go — no SQL
+// subquery. All gated api_token. See docs/specs/plugins/auth-tokens-
+// and-roles.md §3.
+
+message GetTokenWithTypeReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string token = 1;
+}
+message GetTokenWithTypeResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string    user_id    = 1;
+  string    token_id   = 2;
+  TokenType token_type = 3;
+}
+
+message GetUserRolePermissionsByRealmReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string    user_id    = 1;
+  TokenType token_type = 2;
+}
+message GetUserRolePermissionsByRealmResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  // Role-attributed, so the organization axis can intersect on ROLES rather
+  // than on permission ids — the whole reason this feature may now be
+  // enabled alongside org_membership. A wildcard role arrives here like any
+  // other, flagged, so it has to pass the org axis too.
+  repeated RoleGrant grants = 2;
+  reserved 1;
+}
+
+
+message GetTokenPermissionSubsetReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string token_id = 1;
+}
+message GetTokenPermissionSubsetResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  repeated int32 permission_ids = 1;
+}
+
+// ApiTokenInfo — one API token's management view: id + label + audit
+// timestamps, NEVER the secret token string. ListApiTokensByUser
+// returns these for the token-management UI. api_token-gated.
+message ApiTokenInfo {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string                    id           = 1 [(w17.field) = { type: UUID }];
+  string                    name         = 2;
+  google.protobuf.Timestamp last_used_at = 3;
+  google.protobuf.Timestamp expires_at   = 4;
+  google.protobuf.Timestamp created_at   = 5;
+}
+message ListApiTokensByUserReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string    user_id    = 1;
+  TokenType token_type = 2;
+}
+message ListApiTokensByUserResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  repeated ApiTokenInfo tokens = 1;
+}
+
+// --- oauth feature: provider + identity lookups ---
+// GetProviderByName resolves the provider the authorize/callback URL keys
+// on (the handler checks `enabled` + does the token exchange + state HMAC
+// with client_secret). GetOAuthIdentity finds an existing User↔subject
+// link. Both gated `oauth`.
+
+message GetProviderByNameReq {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string name = 1;
+}
+message GetProviderByNameResp {
+  option (w17.contrib.plugin_feature) = "oauth";
+  OAuthProvider provider = 1;
+}
+
+message GetOAuthIdentityReq {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string provider_id = 1;
+  string external_id = 2;
+}
+message GetOAuthIdentityResp {
+  option (w17.contrib.plugin_feature) = "oauth";
+  OAuthIdentity identity = 1;
+}
+
+// --- two_factor feature: TOTP secret + MFA challenge lookups ---
+// GetTotpSecret backs the enrollment state (totp_enrolled = confirmed)
+// AND the VerifyMfa TOTP path (the handler decrypts `secret`).
+// GetMfaChallenge loads the pending challenge VerifyMfa consumes. Both
+// gated `two_factor`.
+
+// UNGATED, like its sibling GetUserByEmail. It was tagged `two_factor`
+// because that was the first feature to want "resolve a user by id" — but
+// the query says nothing about second factors, and the tag made every
+// later feature that needs the same row either drag `two_factor` in or
+// duplicate the read.
+message GetUserByIdReq {
+  string user_id = 1;
+}
+message GetUserByIdResp {
+  User user = 1;
+}
+
+message GetTotpSecretReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
+}
+message GetTotpSecretResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  UserTotpSecret secret = 1;
+}
+
+message GetMfaChallengeReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string challenge_id = 1;
+}
+message GetMfaChallengeResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  MfaChallenge challenge = 1;
+}
+
+// --- devices feature: device lookup at sign-in + the mgmt list ---
+// GetDeviceByIdentifier resolves the (user, identifier) device the
+// sign-in handler upserts against; ListUserDevices backs the
+// ListDevices management RPC. Both gated `devices`.
+
+message GetDeviceByIdentifierReq {
+  option (w17.contrib.plugin_feature) = "devices";
+  string user_id    = 1;
+  string identifier = 2;
+}
+message GetDeviceByIdentifierResp {
+  option (w17.contrib.plugin_feature) = "devices";
+  Device device = 1;
+}
+
+message ListUserDevicesReq {
+  option (w17.contrib.plugin_feature) = "devices";
+  string user_id = 1;
+}
+message ListUserDevicesResp {
+  option (w17.contrib.plugin_feature) = "devices";
+  repeated Device devices = 1;
+}
+
+// GetUserTenant resolves the authenticated principal's tenant —
+// the `tenant_id` data scope, sourced from auth (never client-
+// sent, per the data-scope rule). Behind `tenant_scope`: present
+// only when the activation enables the tenant feature; the
+// `User.tenant_id` column it reads is gated by the same tag, so
+// the query and its column appear / disappear together.
+message GetUserTenantReq {
+  option (w17.contrib.plugin_feature) = "tenant_scope";
+  string user_id = 1;
+}
+message GetUserTenantResp {
+  option (w17.contrib.plugin_feature) = "tenant_scope";
+  string tenant_id = 1;
+}
+
+// GetTenantBySlug / GetTenantByDomain resolve a Tenant id from the
+// request context at SignUp (slug from the URL `{tenant_slug}` path
+// param, domain from the forwarded Host header). The SignUp handler
+// stamps the result onto the new user's tenant_id. Both gated by
+// `tenant_scope` — they read the Tenant table the same feature adds.
+message GetTenantBySlugReq {
+  option (w17.contrib.plugin_feature) = "tenant_scope";
+  string slug = 1;
+}
+message GetTenantBySlugResp {
+  option (w17.contrib.plugin_feature) = "tenant_scope";
+  string tenant_id = 1;
+}
+message GetTenantByDomainReq {
+  option (w17.contrib.plugin_feature) = "tenant_scope";
+  string domain = 1;
+}
+message GetTenantByDomainResp {
+  option (w17.contrib.plugin_feature) = "tenant_scope";
+  string tenant_id = 1;
+}
+
+// ── org_membership query request/response messages ──────────
+//
+// Read primitives for the multi-org (GitHub-style) membership model: one
+// identity belongs to many Organizations via OrgMembership. The business
+// ListMyOrgs RPC composes ListUserOrgs for the authed caller; the
+// Authenticate org-scope decorator uses GetUserOrgBySlug to validate +
+// resolve the request's active org.
+
+// UserOrg is one organization the user belongs to, joined with the
+// caller's role in it (the SELECT aliases map onto these fields).
+message UserOrg {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string org_id = 1;
+  string slug   = 2;
+  string name   = 3;
+  string kind   = 4; // private | company
+  string role   = 5; // a name from the org role catalogue
+  // owner — TRUE when this caller IS the organization's owner
+  // (Organization.owner_id). Distinct from `role`, which is a GRANT somebody
+  // was given and can be changed by an admin; ownership is a property of the
+  // organization. Without this the person who created an org is
+  // indistinguishable from anyone they promoted, which is what a console
+  // showed on 2026-09-11.
+  bool   owner  = 6;
+}
+
+message ListUserOrgsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1;
+}
+message ListUserOrgsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  repeated UserOrg orgs = 1;
+}
+
+message GetUserOrgBySlugReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1;
+  string slug    = 2;
+}
+
+// Permissions scoped to one organization — realm-wide grants
+// (UserRole.org_id IS NULL) plus the grants assigned inside that org.
+// Mirrors GetUserByTokenWithPermissionsResp's permission half so the
+// narrowing step can substitute one for the other.
+message GetUserOrgPermissionsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1;
+  string org_id  = 2;
+}
+message GetUserOrgPermissionsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  // grants — the roles that APPLY IN THIS ORG: realm-wide ones plus those
+  // assigned inside it. Role-attributed so the realm axis can intersect on
+  // roles; a wildcard role carries its own flag and is scoped per org,
+  // because a superadmin of one company is not a superadmin of another.
+  repeated RoleGrant grants = 3;
+
+
+  // 1 = permission_ids, 2 = all_permissions (wildcard OR ownership).
+  reserved 1, 2;
+}
+
+// GetUserOwnsOrg — is this user the organization's owner?
+//
+// Its OWN query rather than a field beside `grants`, for two reasons. The
+// shape: that message is now one row per role, and a scalar riding along a
+// fan-out is the ambiguity `w17.Paging` had to be carved out of. And the
+// meaning: ownership is not a role grant, so putting it in the message that
+// carries role grants would re-create the conflation this change exists to
+// undo.
+message GetUserOwnsOrgReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string org_id  = 2 [(w17.field) = { type: UUID }];
+}
+message GetUserOwnsOrgResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  // owner — Organization.owner_id is this user.
+  //
+  // Split out of `all_permissions`, which used to mean "a wildcard role OR
+  // ownership". Conflating them made ownership INERT: it arrived in the
+  // narrowing step, narrowing can only subtract, and an owner holding no
+  // role intersected "everything" with "nothing" and got nothing. Verified
+  // on a live console 2026-09-10 — owner_id set, auth_userrole empty ⇒
+  // PermissionDenied. Owners needed seeded grants like anybody else, which
+  // is what the bootstrap script was quietly doing.
+  //
+  // ⚠️ This is the ONE flag in the plugin that WIDENS rather than narrows,
+  // and the exception is deliberate (docs/todos/owner-autopass.md asked for
+  // it to be argued rather than slipped in):
+  //
+  //   · ownership is not a permission anybody handed out — it is root
+  //     authority over the organization, read off the organization itself;
+  //   · it applies on the SESSION realm ONLY. An API token's ceiling stays
+  //     its holder's api-realm roles, so a stolen CI token is not an owner
+  //     login even when its owner owns the org;
+  //   · and the per-project CI lock runs ABOVE the ACL, so a locked project
+  //     still refuses a push from the owner.
+  bool owner = 1;
+}
+
+// The no-active-org half of the pair above. A separate query rather
+// than the same one called with an empty `org_id`: the column is a UUID
+// and an empty string is not one, so the comparison would fail at the
+// database rather than match nothing. A sentinel UUID would work but
+// puts a magic value in the request; the predicate is short enough to
+// state twice.
+message GetUserRealmWidePermissionsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1;
+}
+message GetUserRealmWidePermissionsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  // Realm-wide roles only — every org-scoped role is out of context here.
+  // No `owner` twin: ownership is per organization, and this is the answer
+  // for a request that named none.
+  repeated RoleGrant grants = 3;
+  reserved 1, 2;
+}
+message GetUserOrgBySlugResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  // Empty org_id = the user is NOT a member of an org with this slug
+  // (unknown slug, or a real org they don't belong to).
+  string org_id = 1;
+  string role   = 2;
+}
+
+// ── org_membership admin surface (turnkey Organizations /
+//    OrgMemberships pages) ────────────────────────────────────
+//
+// The per-user reads above (ListUserOrgs / GetUserOrgBySlug) back the
+// CLI's own-org flows; these GLOBAL list + get reads back the admin
+// preset's Organizations + OrgMemberships pages (a project can't author
+// them itself — the tables are plugin-owned). All gated org_membership.
+// The Get requests key on a bare `id` field so the admin detail id-stamp
+// resolves against it regardless of the model name.
+
+message ListOrganizationsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+}
+message ListOrganizationsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  repeated Organization organizations = 1;
+
+  // Cursor-paged (admin-only): the `w17.Paging` field on the response IS
+  // the declaration — this list has no public REST endpoint to hang a
+  // `paged{}` config on. The admin list handler decodes `?cursor` /
+  // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
+  // this method's ORDER BY. An operator's organization table grows without bound,
+  // so an unpaged list would eventually load the whole table into one
+  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  w17.Paging paging = 2;
+}
+
+message GetOrganizationReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id = 1;
+}
+
+message ListOrgMembershipsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+}
+
+// OrgMembershipAdminRow — the OrgMemberships list projection (ADMIN-FK).
+// NOT a `(w17.db.table)`: a read-only DTO the ListOrgMemberships DQL
+// joins User + Organization into, so the admin list shows the member's
+// EMAIL + the organization's NAME (both human handles) instead of the
+// two raw UUIDs the link table stores.
+//   - id           — the membership id; stamped into the detail link +
+//                    `record.id` navigation. Not a rendered column.
+//   - member       — u.email, the row's clickable human handle (opens the
+//                    membership's OWN detail via detail_link_column).
+//   - organization — the raw org_id, annotated by an AdminColumnRef to
+//                    link to the Organizations page while rendering
+//                    org_name (the org's name, not the UUID).
+//   - org_name     — o.name, the ref's row-local title source (projected
+//                    but not a rendered column).
+// The member's user page is deliberately NOT linked: the Users page is
+// gated by a DIFFERENT feature (user_admin) and may be absent, so an
+// org_membership-only activation would carry a dangling ref. The email
+// handle already identifies the member. Gated org_membership.
+message OrgMembershipAdminRow {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id           = 1 [(w17.field) = { type: UUID }];
+  string member       = 2;
+  string organization = 3 [(w17.field) = { type: UUID }];
+  string org_name     = 4;
+  string role         = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ListOrgMembershipsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  repeated OrgMembershipAdminRow memberships = 1;
+
+  // Cursor-paged (admin-only): the `w17.Paging` field on the response IS
+  // the declaration — this list has no public REST endpoint to hang a
+  // `paged{}` config on. The admin list handler decodes `?cursor` /
+  // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
+  // this method's ORDER BY. An operator's membership table grows without bound,
+  // so an unpaged list would eventually load the whole table into one
+  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  w17.Paging paging = 2;
+}
+
+message GetOrgMembershipReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id = 1;
+}
+
+// ── user_admin: global session/token review ──────────────────
+//
+// UserToken has only per-user reads (api_token's ListApiTokensByUser);
+// these GLOBAL list + get back the admin Sessions page (review + revoke
+// tokens across every user). The projection NEVER includes the secret
+// `token` column — only the base-tier id / user_id / created_at /
+// expires_at. Gated user_admin (the same realm that manages accounts).
+
+message ListUserTokensReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+}
+
+// UserTokenAdminRow — the Sessions list projection (ADMIN-FK). NOT a
+// `(w17.db.table)`: a read-only DTO the ListUserTokens DQL joins User
+// into, so the admin list shows the session owner's EMAIL (a human
+// handle) + a link to their Users page instead of a bare user UUID —
+// Django-admin discipline (no raw ids in a list an operator reads).
+//   - id      — the token id; the admin runtime stamps it into the
+//               detail link + `record.id` navigation. Deliberately not
+//               among the page's rendered `columns` (it stays a UUID).
+//   - owner   — u.email, the row's clickable human handle (opens the
+//               session's OWN detail via detail_link_column).
+//   - user    — the raw user_id, annotated by an AdminColumnRef to link
+//               to the Users page. The ref declares NO `title`, so the
+//               cell renders the column header ("User") with the id in
+//               its tooltip — the email already shows who it is, and a
+//               title here would just repeat `owner` in the next cell.
+// NEVER carries the secret `token` value. Gated user_admin.
+message UserTokenAdminRow {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id        = 1 [(w17.field) = { type: UUID }];
+  string owner     = 2;
+  string user      = 3 [(w17.field) = { type: UUID }];
+  reserved 4;
+  reserved "link_text";
+  google.protobuf.Timestamp created_at = 5;
+  // expires_at is NULL for a never-expiring API token, so the row field has
+  // to declare it: the annotation is what makes the row scan a SQL NULL
+  // (sql.NullTime) instead of failing on it, and — now that this list is
+  // cursor-paged — what tells the admin auto-sort to leave the column out
+  // of the sortable set (a keyset seek on a NULL key silently drops rows).
+  // A read-projection row is not the model, so nothing else carries this.
+  google.protobuf.Timestamp expires_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+message ListUserTokensResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated UserTokenAdminRow tokens = 1;
+
+  // Cursor-paged (admin-only): the `w17.Paging` field on the response IS
+  // the declaration — this list has no public REST endpoint to hang a
+  // `paged{}` config on. The admin list handler decodes `?cursor` /
+  // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
+  // this method's ORDER BY. An operator's session table grows without bound,
+  // so an unpaged list would eventually load the whole table into one
+  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  w17.Paging paging = 2;
+}
+
+message GetUserTokenReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id = 1;
+}
+
+// AuthQuery — read-only DB lookups.
+//
+// `GetUserByEmail` is the canonical "I have credentials" entry
+// point: returns the User row (including password_hash) so the
+// consumer's business layer can call passwordhash.Verify.
+//
+// `GetUserByToken` is the canonical "I have a bearer token"
+// entry point — typically called from gateway middleware to
+// populate request context from the Authorization header.
+//
+// `GetUserPermissions` is the canonical "give me everything
+// this user can do" entry point — the project's hand-written
+// `Authenticate` RPC composes it with `GetUserByToken` and
+// passes the returned int32 IDs straight into
+// `AuthResp.permission_ids` (no packing, no string→id mapping;
+// the activating domain's AclPermission proto enum IS the
+// catalog). Returns the deduped union of permission IDs across
+// every role the user holds; empty list means the user has no
+// role assignments (no permissions).
+// ── org member + invite reads ───────────────────────────────
+
+// OrgMemberRow — one row of an organization's member list: the
+// membership joined to the identity behind it. The email is what an
+// admin recognises a person by; a list of user ids is not a member list.
+message OrgMemberRow {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1;
+  string email   = 2;
+  string role    = 3;
+  google.protobuf.Timestamp joined_at = 4;
+  // owner — see UserOrg.owner. A member list that cannot show who owns the
+  // organization makes the owner look like any other admin.
+  bool   owner   = 5;
+}
+
+message ListOrgMembersByOrgReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgMembersByOrgResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  repeated OrgMemberRow members = 1;
+}
+
+message ListOrgInvitesByOrgReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgInvitesByOrgResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  repeated OrgInvite invites = 1;
+}
+
+message ListPendingInvitesForEmailReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+// Carries the ORG NAME, not just its id. This backs the "you have been
+// invited to X" list a person sees in their own account, and an
+// invitation that can only name a uuid is not one anybody can act on.
+message PendingInviteRow {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string invite_id = 1;
+  string org_id    = 2;
+  string org_slug  = 3;
+  string org_name  = 4;
+  string role      = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+message ListPendingInvitesForEmailResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  repeated PendingInviteRow invites = 1;
+}
+
+service AuthQuery {
+  rpc GetUserByEmail(GetUserByEmailReq) returns (GetUserByEmailResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        // EVERY gate SignIn runs reads its field off THIS lookup, so a
+        // column left out of the projection is a gate that consults a
+        // field nobody filled and passes. A gate on the projection
+        // target is what makes one statement serve both activations —
+        // see docs/decisions/dql-feature-gated-fragments.md §SELECT
+        // targets.
+        //
+        // disabled_at (`user_admin`): without it every soft-disabled
+        // account still signed in (T2-6 pass #9, D9-4).
+        //
+        // kind (`service_account`): without it signInBotGate read an
+        // unset AccountKind, and HUMAN is 0 — so a machine account that
+        // set itself a password through `password_change` signed in as
+        // a person, for a month, with the correction for the identical
+        // defect written three lines above it (marb #58/1).
+        dql:
+          "SELECT u.id AS user.id, "
+          "       u.email AS user.email, "
+          "       u.password_hash AS user.password_hash, "
+          "       u.created_at AS user.created_at, "
+          "       ?feature(service_account) u.kind AS user.kind, "
+          "       ?feature(user_admin) u.disabled_at AS user.disabled_at "
+          "FROM @module.User u WHERE u.email = :email"
+      }
+    };
+  }
+
+  rpc GetUserByToken(GetUserByTokenReq) returns (GetUserByTokenResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS user.id, "
+          "       u.email AS user.email, "
+          "       u.password_hash AS user.password_hash, "
+          "       ?feature(service_account) u.kind AS user.kind, "
+          "       u.created_at AS user.created_at "
+          "FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+      }
+    };
+  }
+
+  // GetUserPermissions — flattens UserRole → RolePermission for
+  // one user and returns the permission IDs (referencing the
+  // activating domain's generated AclPermission enum) as a single
+  // ROWS_TO_ARRAY list on the response's `repeated` field (a bare
+  // `SELECT rp.permission_id` is one-per-row and can't scan into a
+  // repeated scalar — the codegen decodes repeated scalars from an
+  // array column). Empty list when the user has no roles / none of
+  // their roles carry permissions (ROWS_TO_ARRAY never returns NULL).
+  // Two roles overlapping on a permission can list an id twice; that
+  // is harmless for the membership check the consumer runs (dedup via
+  // `array_agg(DISTINCT …)` isn't expressible — the DQL has no
+  // aggregate-DISTINCT — and matches GetUserByTokenWithPermissions).
+  rpc GetUserPermissions(GetUserPermissionsReq) returns (GetUserPermissionsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT ROWS_TO_ARRAY(rp.permission_id) AS permission_ids "
+          "FROM @module.RolePermission rp "
+          "JOIN @module.UserRole ur ON ur.role_id = rp.role_id "
+          "WHERE ur.user_id = :user_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // GetUserByTokenWithPermissions — the canonical auth-backend
+  // lookup. ONE round-trip resolves the bearer token into the
+  // User row + the deduped permission IDs the user holds.
+  // Hand-written Authenticate composes:
+  //
+  //   resp, _ := authQuery.GetUserByTokenWithPermissions(...)
+  //   return &AuthResp{PermissionIds: resp.GetPermissionIds()}
+  //
+  // Notes on the DQL:
+  //   - LEFT JOIN through UserRole / RolePermission means a
+  //     user with no roles still yields one row (rather than
+  //     NotFound); the ROWS_TO_ARRAY then carries an empty
+  //     list. The token JOIN stays inner — no token, no row,
+  //     and the consumer's gateway middleware returns 401.
+  //   - GROUP BY pins the row to the User's primary identity
+  //     so the aggregate folds the join cross-product into one
+  //     row per user.
+  //   - ROWS_TO_ARRAY (Phase E1) maps per-dialect to PG
+  //     `array_agg + FILTER + COALESCE`, MySQL `JSON_ARRAYAGG`,
+  //     SQLite `json_group_array` — always returns a list,
+  //     never NULL. The repeated-scalar scan path (Phase E2)
+  //     decodes the column into `[]int32` regardless of which
+  //     wire shape the dialect chose.
+  //   - DISTINCT-equivalent dedup: the M2M topology guarantees
+  //     unique (user_id, permission_id) pairs via the composite-
+  //     unique indexes on UserRole + RolePermission, so the
+  //     aggregate doesn't observe duplicates even across
+  //     multiple roles overlapping on a permission.
+  //
+  // Permission table is gone (the activating domain's
+  // AclPermission proto enum IS the catalog). RolePermission.
+  // permission_id carries the int32 enum value directly.
+  rpc GetUserByTokenWithPermissions(GetUserByTokenWithPermissionsReq) returns (GetUserByTokenWithPermissionsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS user.id, "
+          "       u.email AS user.email, "
+          "       u.password_hash AS user.password_hash, "
+          "       ?feature(service_account) u.kind AS user.kind, "
+          "       u.created_at AS user.created_at, "
+          "       t.id AS token_id "
+          "FROM @module.User u "
+          "JOIN @module.UserToken t ON t.user_id = u.id "
+          "WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // GetUserRoleGrants — every role this user holds, role-attributed.
+  //
+  // Its own query because the shape demands it: a repeated sub-message is
+  // generated as a fan-out only when it is the WHOLE response. Folding it
+  // into the token lookup produced scan code that did not compile.
+  rpc GetUserRoleGrants(GetUserRoleGrantsReq) returns (GetUserRoleGrantsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS role_id, "
+          "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
+          "       r.all_permissions AS all_permissions "
+          "FROM @module.UserRole ur "
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "WHERE ur.user_id = :user_id "
+          "GROUP BY r.id, r.all_permissions "
+          "ORDER BY r.id ASC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // CountUsers — total user count. The turnkey SignUp handler reads it
+  // right after the insert: count == 1 ⇒ this is the first registered
+  // user ⇒ assign the bootstrap-admin (first_user) roles. rbac-gated
+  // (only the role-assignment path calls it).
+  rpc CountUsers(CountUsersReq) returns (CountUsersResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT COUNT(*) AS count FROM @module.User u"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // ListUsers — the admin Users page catalogue. Projects the safe
+  // columns only (NO password_hash) into the repeated User; newest
+  // first. Gated user_admin.
+  rpc ListUsers(ListUsersReq) returns (ListUsersResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS id, u.email AS email, "
+          "       ?feature(service_account) u.kind AS kind, "
+          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "FROM @module.User u ORDER BY u.created_at DESC, u.id DESC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+
+  // ListBots — the machine accounts, for their own admin page.
+  //
+  // A separate list rather than a column on Users: `User.kind` is gated
+  // service_account, and a preset page's `columns` cannot be gated per entry —
+  // naming a field a build without the feature does not have is a codegen
+  // error. A PAGE can be gated, so the split is what the feature model
+  // supports. Same table either way; this is a view over it.
+  rpc ListBotUsers(ListBotUsersReq) returns (ListBotUsersResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS id, u.email AS email, "
+          "       u.kind AS kind, "
+          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "FROM @module.User u "
+          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
+          "WHERE u.kind = 1 "
+          "ORDER BY u.created_at DESC, u.id DESC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // GetBotInOrg — is this bot a member of THIS organization?
+  //
+  // Empty user_id = no. An endpoint acting on a bot by id must ask, because
+  // the id arrives on the wire: without it an operator in one company could
+  // name a machine account in another and be served. `kind = 1` is part of
+  // the predicate so the answer cannot be satisfied by a PERSON who happens
+  // to be a member.
+  rpc GetBotInOrg(GetBotInOrgReq) returns (GetBotInOrgResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS user_id "
+          "FROM @module.User u "
+          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
+          "WHERE u.id = :user_id AND u.kind = 1"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // ListApiRealmRoles — the roles a BOT may be given.
+  //
+  // The filter is the point and it is SERVER-side. A picker that merely omits
+  // a person's roles from a dropdown is decoration; an api-realm principal
+  // cannot reach a session-realm role anyway — permissions resolve within the
+  // presented token's realm — so offering one would produce a bot whose grant
+  // silently does nothing.
+  rpc ListApiRealmRoles(ListApiRealmRolesReq) returns (ListApiRealmRolesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, r.name AS name, "
+          "       r.description AS description "
+          "FROM @module.Role r WHERE r.token_type = 2 "
+          "ORDER BY r.name ASC, r.id ASC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // GetUser — one user for the admin detail view. Returns the User
+  // model DIRECTLY (readonly_fields resolve against its top-level
+  // fields). NO password_hash in the projection. Gated user_admin.
+  rpc GetUser(GetUserReq) returns (User) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        // kind is projected for the same reason as in GetUserByEmail,
+        // and it was missing here too: labelMachineAccount reads it off
+        // THIS lookup to stamp the machine-account ACL label. An unset
+        // AccountKind is HUMAN, so the label was never stamped and
+        // every rule written against it matched nothing — a gate that
+        // fails OPEN and reports no error while doing it. Found by
+        // sweeping the readers after marb #58/1, not reported.
+        dql:
+          "SELECT u.id AS id, u.email AS email, "
+          "       ?feature(service_account) u.kind AS kind, "
+          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+
+  // GetFirstUserRoles — role ids flagged assign_first_user (seeded from
+  // `(w17.acl_roles) { first_user: true }`). The bootstrap-admin set the
+  // SignUp handler grants the first user.
+  rpc GetFirstUserRoles(GetFirstUserRolesReq) returns (GetFirstUserRolesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_first_user = TRUE"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // GetDefaultRoles — role ids flagged assign_default (seeded from
+  // `(w17.acl_roles) { default: true }`). Granted to every signup after
+  // the first.
+  rpc GetDefaultRoles(GetDefaultRolesReq) returns (GetDefaultRolesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_default = TRUE"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // ListRoles — the role catalogue for the admin role-management page.
+  // ⚠️ Both role reads project every UNGATED column the model declares.
+  //
+  // Until 2026-09-04 they projected 7 of 11. `preset_key` and
+  // `display_name` were added to the model after these queries were
+  // written and nothing widened them, so both were declared, stored,
+  // seeded — and unreadable through any path in either realm.
+  // `preset_key`'s own comment calls it PROVENANCE, i.e. a thing a reader
+  // consults; no reader could.
+  //
+  // deinvo hit it on the one operation the field exists for: granting a
+  // founder `org-admin` in CreateOrg by matching the role the SEED owns
+  // rather than by name, which is a label a customer may rename. Their
+  // guard fired `role preset "org-admin" is not seeded` against a
+  // database where it demonstrably was.
+  //
+  // Add an ungated column to Role and add it here too. A projection is
+  // not a convenience list — it is the only way the field leaves the
+  // database.
+  //
+  // ⚠️ The two GATED columns stay out, and this is a known limit rather
+  // than an oversight: `token_type` is gated on `api_token` and
+  // `org_scoped` on `org_membership`, so naming either here makes the
+  // typecheck fail for every project without that feature ("column
+  // r.org_scoped not found on Role" — measured, not predicted). Reading
+  // them needs feature-variant DQL, which this vocabulary does not have.
+  // The consequence worth knowing: a caller cannot tell an org-scoped
+  // role from a global one through the API, only through the seed.
+  // GetUserOwnsAnyOrg — does this principal own an organization at all.
+  //
+  // The base principal query (GetUserByTokenWithPermissions) cannot ask this:
+  // it is BASE TIER, present in every activation, and `Organization` only
+  // exists when `org_membership` is on. Naming it there would fail the
+  // typecheck for every project without the feature — the same wall
+  // ListRoles hits with `org_scoped`.
+  //
+  // "ANY", deliberately, and it is not as wide as it reads. This answer only
+  // widens the BASE set; narrowGrantsToActiveOrg still runs after it and
+  // re-asks per organization, so owning one org buys nothing in another. What
+  // it fixes is the opposite order: ownership resolved only in the narrowing
+  // step could never widen anything, so an owner holding no role grant
+  // intersected "everything" with "nothing" and got nothing.
+  rpc GetUserOwnsAnyOrg(GetUserOwnsAnyOrgReq) returns (GetUserOwnsAnyOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
+          "              WHERE o.owner_id = :user_id) AS owns "
+          "FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+  }
+
+  // GetOwnedOrgBySlug — resolve a slug to an org the caller OWNS.
+  //
+  // The membership lookup's counterpart, and deliberately a second query
+  // rather than an OR bolted onto GetUserOrgBySlug: that one reads FROM
+  // OrgMembership and joins Organization, so admitting owners would mean
+  // inverting which table it starts from — the kind of edit that keeps the
+  // text almost identical while changing which rows can come back at all.
+  // Two flat single-table reads say what they mean, and the membership path
+  // (the common one) keeps the shape it has been tested in.
+  //
+  // Runs only when the membership lookup found nothing, so it costs the
+  // owner-without-membership case one query and everyone else nothing.
+  rpc GetOwnedOrgBySlug(GetOwnedOrgBySlugReq) returns (GetOwnedOrgBySlugResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT o.id AS org_id FROM @module.Organization o "
+          "WHERE o.slug = :slug AND o.owner_id = :user_id"
+      }
+    };
+  }
+
+  // ListOrgScopedRoles — the role catalogue restricted to roles that mean
+  // something INSIDE an organization.
+  //
+  // Separate from ListRoles rather than a flag on it, and the comment above
+  // that RPC is the reason: `org_scoped` only exists as a column when the
+  // `org_membership` feature is on, so naming it in the shared query fails
+  // the typecheck for every project without that feature. This one is GATED
+  // on org_membership, so the column is guaranteed to be there — the same
+  // shape GetUserOrgPermissions already uses.
+  //
+  // Exists so an invitation UI can offer choices instead of asking a person
+  // to type a role name and find out afterwards whether it was one.
+  rpc ListOrgScopedRoles(ListOrgScopedRolesReq) returns (ListOrgScopedRolesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, r.name AS name, r.description AS description "
+          "FROM @module.Role r WHERE r.org_scoped = TRUE "
+          "ORDER BY r.name ASC, r.id ASC"
+      }
+    };
+  }
+
+  rpc ListRoles(ListRolesReq) returns (ListRolesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, r.name AS name, r.description AS description, "
+          "       r.display_name AS display_name, "
+          "       r.all_permissions AS all_permissions, "
+          "       r.assign_first_user AS assign_first_user, "
+          "       r.assign_default AS assign_default, "
+          "       r.preset_key AS preset_key, "
+          "       r.created_at AS created_at "
+          "FROM @module.Role r ORDER BY r.name ASC, r.id ASC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // GetRole — one role for the admin detail view.
+  // GetRole — one role for the admin detail view. Returns the Role
+  // model DIRECTLY (not a wrapper): the admin detail `read` contract is
+  // "returns a single <model> instance", and its readonly_fields resolve
+  // against the response's top-level fields.
+  rpc GetRole(GetRoleReq) returns (Role) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, r.name AS name, "
+          "       r.description AS description, "
+          "       r.display_name AS display_name, "
+          "       r.all_permissions AS all_permissions, "
+          "       r.assign_first_user AS assign_first_user, "
+          "       r.assign_default AS assign_default, "
+          "       r.preset_key AS preset_key, "
+          "       r.created_at AS created_at "
+          "FROM @module.Role r WHERE r.id = :id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // GetTokenWithType — resolve a token string into its owner + id +
+  // kind (SESSION/API). The api_token Authenticate path calls this
+  // first to branch on the credential class. Gated api_token.
+  rpc GetTokenWithType(GetTokenWithTypeReq) returns (GetTokenWithTypeResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.user_id AS user_id, "
+          "       t.id AS token_id, "
+          "       t.token_type AS token_type "
+          "FROM @module.UserToken t WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // GetUserRolePermissionsByRealm — distinct permission IDs the user
+  // holds through roles of the given realm (token_type). The realm
+  // filter (Role.token_type = :token_type) is why a session token and
+  // an API token for the same user resolve different permission sets.
+  // Gated api_token (reads Role.token_type, an api_token column).
+  rpc GetUserRolePermissionsByRealm(GetUserRolePermissionsByRealmReq) returns (GetUserRolePermissionsByRealmResp) {
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS role_id, "
+          "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
+          "       r.all_permissions AS all_permissions "
+          "FROM @module.UserRole ur "
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "WHERE ur.user_id = :user_id AND r.token_type = :token_type "
+          "GROUP BY r.id, r.all_permissions "
+          "ORDER BY r.id ASC"
+      }
+    };
+  }
+
+
+  // GetTokenPermissionSubset — the per-token permission subset rows.
+  // Empty = no narrowing. Authenticate intersects these with the realm
+  // permissions for API tokens (narrow-only). Gated api_token.
+  rpc GetTokenPermissionSubset(GetTokenPermissionSubsetReq) returns (GetTokenPermissionSubsetResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT ROWS_TO_ARRAY(tp.permission_id) AS permission_ids "
+          "FROM @module.TokenPermission tp WHERE tp.token_id = :token_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // ListApiTokensByUser — the caller's API tokens (management view, no
+  // secret token string). Filtered to token_type = :token_type (handler
+  // stamps API). Newest first. Gated api_token.
+  rpc ListApiTokensByUser(ListApiTokensByUserReq) returns (ListApiTokensByUserResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          // FLAT aliases, matching the repeated ELEMENT's fields. A
+          // list-shaped response scans into ApiTokenInfo, so a
+          // `tokens.`-prefixed path walks the wrapper field name on the
+          // element and fails ("segment \"tokens\" not found on
+          // ApiTokenInfo"). The nested form above (GetUserByEmail's
+          // `u.id AS user.id`) is for a response that wraps ONE message;
+          // this one is the ListUsers shape. Nothing caught it because
+          // api_token is off by default and no example activated it, so
+          // this query had never been emitted.
+          "SELECT t.id AS id, "
+          "       t.name AS name, "
+          "       t.last_used_at AS last_used_at, "
+          "       t.expires_at AS expires_at, "
+          "       t.created_at AS created_at "
+          "FROM @module.UserToken t "
+          "WHERE t.user_id = :user_id AND t.token_type = :token_type "
+          "ORDER BY t.created_at DESC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // GetUserTenant — resolves the principal's tenant_id (the
+  // tenant data scope) by user id. The gated tenant.go handler
+  // calls this from Authenticate's scope decorator to stamp
+  // scopes["tenant_id"]. Tagged `tenant_scope`: the User.tenant_id
+  // column it reads is gated by the same feature, so the query
+  // and its column appear / disappear together. tenant_id is
+  // NOT NULL on User, so a resolved principal always yields one.
+  rpc GetUserTenant(GetUserTenantReq) returns (GetUserTenantResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT u.tenant_id AS tenant_id FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "tenant_scope";
+  }
+
+  // GetTenantBySlug — resolve a tenant id from its slug (Tenant.name).
+  // Used by SignUp for URL-based tenancy (`/t/{tenant_slug}/...`).
+  rpc GetTenantBySlug(GetTenantBySlugReq) returns (GetTenantBySlugResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT t.id AS tenant_id FROM @module.Tenant t WHERE t.name = :slug"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "tenant_scope";
+  }
+
+  // GetTenantByDomain — resolve a tenant id from its host domain.
+  // Used by SignUp for host-based tenancy (the forwarded Host header).
+  rpc GetTenantByDomain(GetTenantByDomainReq) returns (GetTenantByDomainResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT t.id AS tenant_id FROM @module.Tenant t WHERE t.domain = :domain"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "tenant_scope";
+  }
+
+  // GetProviderByName — the OAuth provider keyed by URL slug. Returns all
+  // columns incl. client_secret (the handler needs it for the token
+  // exchange + state HMAC). The handler enforces `enabled`. Gated oauth.
+  rpc GetProviderByName(GetProviderByNameReq) returns (GetProviderByNameResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS provider.id, "
+          "       p.name AS provider.name, "
+          "       p.display_name AS provider.display_name, "
+          "       p.client_id AS provider.client_id, "
+          "       p.client_secret AS provider.client_secret, "
+          "       p.authorize_url AS provider.authorize_url, "
+          "       p.token_url AS provider.token_url, "
+          "       p.userinfo_url AS provider.userinfo_url, "
+          "       p.scopes AS provider.scopes, "
+          "       p.subject_path AS provider.subject_path, "
+          "       p.email_path AS provider.email_path, "
+          "       p.enabled AS provider.enabled, "
+          "       p.created_at AS provider.created_at "
+          "FROM @module.OAuthProvider p WHERE p.name = :name"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+  }
+
+  // GetOAuthIdentity — the existing User↔subject link for a provider.
+  // NotFound = first sign-in (the handler creates user + identity). Gated
+  // oauth.
+  rpc GetOAuthIdentity(GetOAuthIdentityReq) returns (GetOAuthIdentityResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.id AS identity.id, "
+          "       i.user_id AS identity.user_id, "
+          "       i.provider_id AS identity.provider_id, "
+          "       i.external_id AS identity.external_id, "
+          "       i.email AS identity.email, "
+          "       i.created_at AS identity.created_at "
+          "FROM @module.OAuthIdentity i WHERE i.provider_id = :provider_id AND i.external_id = :external_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+  }
+
+  // GetUserById — resolve a user by id, password_hash included. Two
+  // callers today: the EnrollTotp otpauth label (which wants the email)
+  // and ChangePassword (which must verify the CURRENT password of the
+  // authenticated principal, and must not look that principal up by an
+  // address the request supplied). Ungated — see the messages above.
+  rpc GetUserById(GetUserByIdReq) returns (GetUserByIdResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS user.id, "
+          "       u.email AS user.email, "
+          "       u.password_hash AS user.password_hash, "
+          "       ?feature(service_account) u.kind AS user.kind, "
+          "       u.created_at AS user.created_at "
+          "FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+  }
+
+  // GetTotpSecret — the user's TOTP row (encrypted secret + confirmed_at).
+  // NotFound = not enrolled. The gate reads confirmed_at for totp_enrolled;
+  // VerifyMfa / ConfirmTotp decrypt + verify against `secret`. Gated
+  // two_factor.
+  rpc GetTotpSecret(GetTotpSecretReq) returns (GetTotpSecretResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT s.id AS secret.id, "
+          "       s.user_id AS secret.user_id, "
+          "       s.secret AS secret.secret, "
+          "       s.confirmed_at AS secret.confirmed_at, "
+          "       s.created_at AS secret.created_at "
+          "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+  }
+
+  // GetMfaChallenge — load a pending challenge by id for VerifyMfa
+  // (user_id to scope the verify, code_hash for the event/fallback path,
+  // consumed_at + created_at for the single-use + TTL checks). Gated
+  // two_factor.
+  rpc GetMfaChallenge(GetMfaChallengeReq) returns (GetMfaChallengeResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS challenge.id, "
+          "       c.user_id AS challenge.user_id, "
+          "       c.code_hash AS challenge.code_hash, "
+          "       c.consumed_at AS challenge.consumed_at, "
+          "       c.created_at AS challenge.created_at, "
+          "       c.attempts AS challenge.attempts "
+          "FROM @module.MfaChallenge c WHERE c.id = :challenge_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+  }
+
+  // GetDeviceByIdentifier — resolve the (user, identifier) Device the
+  // sign-in handler upserts against. NotFound (zero rows) is the
+  // expected "first sight of this device" signal: the handler treats
+  // any error as absent and falls through to CreateDevice. Gated devices.
+  rpc GetDeviceByIdentifier(GetDeviceByIdentifierReq) returns (GetDeviceByIdentifierResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS device.id, "
+          "       d.user_id AS device.user_id, "
+          "       d.identifier AS device.identifier, "
+          "       d.label AS device.label, "
+          "       d.ip AS device.ip, "
+          "       d.trusted_at AS device.trusted_at, "
+          "       d.last_seen_at AS device.last_seen_at, "
+          "       d.created_at AS device.created_at, "
+          "       d.trust_token_hash AS device.trust_token_hash "
+          "FROM @module.Device d WHERE d.user_id = :user_id AND d.identifier = :identifier"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "devices";
+  }
+
+  // ListUserDevices — the caller's devices (management view), newest
+  // first. The handler maps each row to DeviceInfo, deriving `trusted`
+  // (trusted_at present) + `current` (identifier matches the calling
+  // request's resolved device). Gated devices.
+  rpc ListUserDevices(ListUserDevicesReq) returns (ListUserDevicesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS id, "
+          "       d.user_id AS user_id, "
+          "       d.identifier AS identifier, "
+          "       d.label AS label, "
+          "       d.ip AS ip, "
+          "       d.trusted_at AS trusted_at, "
+          "       d.last_seen_at AS last_seen_at, "
+          "       d.created_at AS created_at "
+          "FROM @module.Device d WHERE d.user_id = :user_id "
+          "ORDER BY d.last_seen_at DESC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "devices";
+  }
+
+  // ── org_membership (multi-org, GitHub-style) ──
+
+  // ListUserOrgs — the organizations a user belongs to, with their role
+  // in each (join OrgMembership → Organization).
+  rpc ListUserOrgs(ListUserOrgsReq) returns (ListUserOrgsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT (o.owner_id = m.user_id) AS owner, "
+          "       o.id AS org_id, "
+          "       o.slug AS slug, "
+          "       o.name AS name, "
+          "       o.kind AS kind, "
+          "       m.role AS role "
+          "FROM @module.OrgMembership m "
+          "JOIN @module.Organization o ON o.id = m.org_id "
+          "WHERE m.user_id = :user_id "
+          "ORDER BY o.name ASC"
+      }
+    };
+  }
+
+  // GetUserOrgPermissions — the permissions the user holds IN A GIVEN
+  // ORGANIZATION: the union of every role assigned to them realm-wide
+  // (`UserRole.org_id IS NULL`) and every role assigned inside that org.
+  // The Authenticate org-narrowing step calls it after the scope
+  // decorator has validated membership and resolved the active org, and
+  // its answer REPLACES the unfiltered set — the unfiltered set is the
+  // union across every org the user belongs to, which is precisely what
+  // must not leak between tenants.
+  //
+  // This is the ONLY query that names `UserRole.org_id`, which is why it
+  // is the only one that had to be gated: the column is dropped when
+  // `org_membership` is off.
+  //
+  // Notes on the DQL, both of which are load-bearing:
+  //
+  //   - the org predicate sits in the LEFT JOIN's ON clause, NOT in
+  //     WHERE. In WHERE it would discard every row of a user whose roles
+  //     are all assigned in OTHER organizations, taking the user's own
+  //     row with them — the query would answer NotFound where the right
+  //     answer is "no permissions here". In ON, those roles simply fail
+  //     to join and the aggregate yields an empty list.
+  //   - the wildcard EXISTS repeats the same predicate. A superadmin
+  //     role assigned inside org A must not pass checks in org B, and a
+  //     wildcard carries no RolePermission rows to filter, so the org
+  //     test has to happen in the probe itself.
+  //   - the NULL-org leg asks the ROLE whether it is org-scoped, which is
+  //     why Role joins before the predicate rather than after it. A NULL
+  //     `org_id` means "realm-wide", deliberately and load-bearing for the
+  //     roles that are — but `(w17.acl_roles).scope: ORG` says this role's
+  //     grants live in the organization they were assigned in, and those
+  //     two readings collide on exactly the row the declaration exists to
+  //     prevent. Nothing enforced it: `org_scoped` was written by the seed
+  //     and read by NOBODY (T2-5 pass #11, D11-3), so an org-scoped role
+  //     assigned without an organization granted itself in every one of
+  //     them. Enforced HERE rather than on the write side, because the
+  //     read decides what an existing row MEANS — whatever wrote it, and
+  //     whenever.
+  rpc GetUserOrgPermissions(GetUserOrgPermissionsReq) returns (GetUserOrgPermissionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS role_id, "
+          "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
+          "       r.all_permissions AS all_permissions "
+          "FROM @module.UserRole ur "
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "WHERE ur.user_id = :user_id "
+          "  AND (ur.org_id = :org_id "
+          "       OR (ur.org_id IS NULL AND r.org_scoped = FALSE)) "
+          "GROUP BY r.id, r.all_permissions "
+          "ORDER BY r.id ASC"
+      }
+    };
+  }
+
+  // GetUserOwnsOrg — the ownership probe, kept apart from the grants above
+  // because ownership is not a grant. A correlated EXISTS; see
+  // GetUserOwnsOrgResp for why this one flag is allowed to widen.
+  rpc GetUserOwnsOrg(GetUserOwnsOrgReq) returns (GetUserOwnsOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
+          "              WHERE o.id = :org_id AND o.owner_id = u.id) AS owner "
+          "FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+  }
+
+  // GetUserRealmWidePermissions — what the caller holds when NO active
+  // organization could be resolved (they belong to none, or to several
+  // and sent no `W17-Org` header). Only realm-wide grants count; every
+  // org-scoped role is out of context — which this now ASKS, rather than
+  // inferring it from a NULL `org_id`. A role declared `scope: ORG` and
+  // assigned with no organization wrote exactly that NULL, so the
+  // inference answered "realm-wide" for the one role that must never be
+  // (T2-5 pass #11, D11-3; the sibling query carries the reasoning). Without this the request would
+  // fall back to the unfiltered set, which is the union across every org
+  // the user belongs to — the leak this whole feature exists to close.
+  rpc GetUserRealmWidePermissions(GetUserRealmWidePermissionsReq) returns (GetUserRealmWidePermissionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS role_id, "
+          "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
+          "       r.all_permissions AS all_permissions "
+          "FROM @module.UserRole ur "
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "WHERE ur.user_id = :user_id "
+          "  AND ur.org_id IS NULL AND r.org_scoped = FALSE "
+          "GROUP BY r.id, r.all_permissions "
+          "ORDER BY r.id ASC"
+      }
+    };
+  }
+
+  // GetUserOrgBySlug — resolve an org slug to its id AND validate the
+  // caller's membership in one shot (the join requires a membership row).
+  // Empty org_id = not a member. Backs the active-org scope decorator.
+  rpc GetUserOrgBySlug(GetUserOrgBySlugReq) returns (GetUserOrgBySlugResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT o.id AS org_id, m.role AS role "
+          "FROM @module.OrgMembership m "
+          "JOIN @module.Organization o ON o.id = m.org_id "
+          "WHERE m.user_id = :user_id AND o.slug = :slug"
+      }
+    };
+  }
+
+  // ── org_membership admin reads (turnkey Organizations /
+  //    OrgMemberships pages) ──
+
+  // ListOrganizations — the org catalogue for the admin Organizations
+  // page list `source`. Projects the Organization columns; newest orgs
+  // are found by name (a stable, human-scannable order). Gated
+  // org_membership.
+  rpc ListOrganizations(ListOrganizationsReq) returns (ListOrganizationsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
+          "       o.kind AS kind, o.created_at AS created_at "
+          "FROM @module.Organization o ORDER BY o.name ASC, o.id ASC"
+      }
+    };
+  }
+
+  // GetOrganization — one org for the admin detail view. Returns the
+  // Organization model DIRECTLY (readonly_fields resolve against its
+  // top-level fields). Gated org_membership.
+  rpc GetOrganization(GetOrganizationReq) returns (Organization) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
+          "       o.kind AS kind, o.created_at AS created_at "
+          "FROM @module.Organization o WHERE o.id = :id"
+      }
+    };
+  }
+
+  // ListOrgMemberships — every membership row for the admin
+  // OrgMemberships page list `source`; newest first. Projects into
+  // OrgMembershipAdminRow (ADMIN-FK): the member's EMAIL (LEFT JOIN
+  // User) + the org's NAME (LEFT JOIN Organization, linked to the
+  // Organizations page by the page's AdminColumnRef) instead of the two
+  // raw UUIDs the link table stores. LEFT JOINs + COALESCE so a membership
+  // whose user or org was hard-deleted (no DB-level FK) still lists with an
+  // empty handle instead of erroring the whole page (a NULL join scanned
+  // into a Go string is a scan error). Gated org_membership.
+  rpc ListOrgMemberships(ListOrgMembershipsReq) returns (ListOrgMembershipsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT m.id AS id, COALESCE(u.email, '') AS member, "
+          "       m.org_id AS organization, COALESCE(o.name, '') AS org_name, "
+          "       m.role AS role, m.created_at AS created_at "
+          "FROM @module.OrgMembership m "
+          "LEFT JOIN @module.User u ON u.id = m.user_id "
+          "LEFT JOIN @module.Organization o ON o.id = m.org_id "
+          "ORDER BY m.created_at DESC, m.id DESC"
+      }
+    };
+  }
+
+  // GetOrgMembership — one membership for the admin detail view. Returns
+  // the OrgMembership model DIRECTLY. Gated org_membership.
+  rpc GetOrgMembership(GetOrgMembershipReq) returns (OrgMembership) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT m.id AS id, m.user_id AS user_id, m.org_id AS org_id, "
+          "       m.role AS role, m.created_at AS created_at "
+          "FROM @module.OrgMembership m WHERE m.id = :id"
+      }
+    };
+  }
+
+  // ── user_admin: global session/token review ──
+
+  // ListUserTokens — every token for the admin Sessions page list
+  // `source`; newest first. Projects into UserTokenAdminRow (ADMIN-FK):
+  // the session owner's EMAIL (LEFT JOIN User — a display-only handle) +
+  // the raw user_id (linked to Users by the page's AdminColumnRef, which
+  // declares no title so the cell reads "User" with the id in its
+  // tooltip), so the list shows a name + a labelled link instead of a
+  // bare user UUID. The projection NEVER includes the secret `token`
+  // column — only base-tier id / user_id / created_at / expires_at (so
+  // it stays valid whether or not api_token / devices add their columns).
+  // LEFT JOIN + COALESCE so an orphan token (its user hard-deleted — there
+  // is no DB-level FK) still lists with an empty owner instead of erroring
+  // the whole page (converting a NULL join into a Go string is a scan
+  // error). Gated user_admin.
+  rpc ListUserTokens(ListUserTokensReq) returns (ListUserTokensResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS id, COALESCE(u.email, '') AS owner, t.user_id AS user, "
+          "       t.created_at AS created_at, t.expires_at AS expires_at "
+          "FROM @module.UserToken t "
+          "LEFT JOIN @module.User u ON u.id = t.user_id "
+          "ORDER BY t.created_at DESC, t.id DESC"
+      }
+    };
+  }
+
+  // GetUserToken — one token for the admin Sessions detail view. Returns
+  // the UserToken model DIRECTLY but projects only the safe base columns
+  // (NO secret `token`, same discipline as GetUser omitting
+  // password_hash). Gated user_admin.
+  rpc GetUserToken(GetUserTokenReq) returns (UserToken) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS id, t.user_id AS user_id, "
+          "       t.created_at AS created_at, t.expires_at AS expires_at "
+          "FROM @module.UserToken t WHERE t.id = :id"
+      }
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // org member + invite reads
+  // ────────────────────────────────────────────────────────────
+
+  // ListOrgMembersByOrg — everyone in ONE organization. The ByOrg
+  // suffix is not decoration: every proto in this plugin generates into
+  // ONE Go package, so a query message may not share a name with the
+  // business message that wraps it — and the business RPC is the one
+  // callers see, so it keeps the plain name., with the address that
+  // identifies them. Distinct from ListOrgMemberships, which is the
+  // admin preset's paged list across EVERY org and carries no org filter:
+  // a member list scoped to the caller's active org is a different
+  // question, and answering it by filtering the admin list in a handler
+  // would mean reading every organization's rows to return one's.
+  rpc ListOrgMembersByOrg(ListOrgMembersByOrgReq) returns (ListOrgMembersByOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT m.user_id AS user_id, "
+          "       u.email AS email, "
+          "       m.role AS role, "
+          "       (o.owner_id = m.user_id) AS owner, "
+          "       m.created_at AS joined_at "
+          "FROM @module.OrgMembership m "
+          "JOIN @module.User u ON u.id = m.user_id "
+          "JOIN @module.Organization o ON o.id = m.org_id "
+          "WHERE m.org_id = :org_id "
+          "ORDER BY u.email ASC"
+      }
+    };
+  }
+
+  // ListOrgInvitesByOrg — the PENDING invitations of one organization.
+  // Suffixed for the same reason as ListOrgMembersByOrg above.
+  // Accepted rows are excluded rather than deleted on acceptance, so the
+  // table keeps the record of how each membership came to exist while
+  // this list stays the set of things still outstanding.
+  rpc ListOrgInvitesByOrg(ListOrgInvitesByOrgReq) returns (ListOrgInvitesByOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.id AS id, "
+          "       i.org_id AS org_id, "
+          "       i.email AS email, "
+          "       i.role AS role, "
+          "       i.invited_by AS invited_by, "
+          "       i.expires_at AS expires_at, "
+          "       i.accepted_at AS accepted_at, "
+          "       i.created_at AS created_at "
+          "FROM @module.OrgInvite i "
+          "WHERE i.org_id = :org_id AND i.accepted_at IS NULL "
+          "ORDER BY i.created_at DESC"
+      }
+    };
+  }
+
+  // ListPendingInvitesForEmail — invitations waiting for ONE address,
+  // across every organization. Two callers, and they are why the org name
+  // is joined in: the signed-in person listing what they have been
+  // invited to, and SignUp under `invite_only` asking whether this
+  // address may create an account at all.
+  //
+  // The expiry test is in the query, not in a caller: an expired
+  // invitation must not appear in a list, and must not open sign-up
+  // either, and putting the predicate in one place is what keeps those
+  // two answers from drifting apart.
+  rpc ListPendingInvitesForEmail(ListPendingInvitesForEmailReq) returns (ListPendingInvitesForEmailResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.id AS invite_id, "
+          "       i.org_id AS org_id, "
+          "       o.slug AS org_slug, "
+          "       o.name AS org_name, "
+          "       i.role AS role, "
+          "       i.expires_at AS expires_at "
+          "FROM @module.OrgInvite i "
+          "JOIN @module.Organization o ON o.id = i.org_id "
+          "WHERE i.email = :email AND i.accepted_at IS NULL AND i.expires_at > NOW() "
+          "ORDER BY i.created_at DESC"
+      }
+    };
+  }
+}

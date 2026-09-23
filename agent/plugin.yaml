@@ -1,0 +1,67 @@
+name: agent
+version: 0.1.0-rc.1
+requires_w17: ">=1.5"
+
+# v3 — explicit Go module anchor. Staging text-rewrites every
+# occurrence of this prefix in handlers/ + lib/ source to the
+# per-activation pb path.
+go_module: github.com/wandering-compiler/platform/plugins/agent
+
+description: "LLM calls for a w17 project: one model call in, text + token usage out. An ENGINE — no conversation, no history, no user; your own service holds those and calls this. Phase 1 is a single non-streaming completion; streaming, tool-calling and agent delegation follow."
+license: "Apache-2.0"
+
+# Plugin-author env-var contract. Each entry becomes one PascalCase
+# field on the codegen-emitted EnvConfig the plugin's RegisterPlugin
+# receives; the consumer sets `<DOMAIN>_AGENT_<NAME>` in their deploy
+# manifest.
+env:
+  - name: provider
+    type: string
+    default: azure_openai
+    description: "Backend driver. v1 supports only 'azure_openai'; any other value fails at boot rather than at the first call, so a misconfigured bundle never serves a request it cannot answer."
+
+  - name: endpoint
+    type: string
+    description: "Provider base URL, e.g. https://<resource>.openai.azure.com. Required — there is no default, because a wrong default is a call to somebody else's deployment."
+
+  - name: api_key
+    type: string
+    secret: true
+    description: "Provider API key. secret:true → arrives as a secret.String whose value is revealed once, at wiring time."
+
+  - name: api_version
+    type: string
+    default: "2025-04-01-preview"
+    description: "Azure OpenAI API version. The Responses API is version-gated, so this is a knob rather than a constant."
+
+  - name: default_model
+    type: string
+    description: "Model used when a request leaves ModelSpec.id empty. Optional: leave it unset to require every caller to name their own model."
+
+  - name: max_output_tokens
+    type: int
+    default: 4096
+    description: "Ceiling applied when a request leaves ModelSpec.max_tokens at zero. A cap the caller cannot exceed is NOT this value — this is a default, and a deployment that needs a hard limit enforces it on its own side."
+
+  - name: request_timeout_seconds
+    type: int
+    default: 120
+    description: "Per-call deadline. A reasoning model with a large budget can legitimately think for a minute; the default is generous on purpose, and the caller's own context deadline still wins when it is shorter."
+
+features:
+  - name: usage_persistence
+    description: >-
+      Records what every model call spent — tokens by kind, wall time, outcome —
+      against an opaque scope the caller names, with a price list and per-scope
+      limits. OFF by default: switching it on adds seven tables — Scope,
+      Model, Usage, ModelPrice, ScopeLimit, Label, UsageLabel — which is a
+      migration, and a plugin should not schedule one for a project that did not
+      ask. On, the caller cannot forget to record spend, because recording stops
+      being the caller's job.
+    default: false
+    go_files:
+      # Staged only when the feature is on. Its tables' pb types do not exist
+      # otherwise, so this file could not compile — which is exactly why the
+      # decision cannot be a runtime `if` and has to be made at staging time.
+      - handlers/usage_enabled.go
+      - handlers/limits_enabled.go

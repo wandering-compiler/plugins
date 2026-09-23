@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+// Payment plugin — lifecycle event catalogue (Slice 1).
+//
+// Provider-neutral notifications a consuming project subscribes to in
+// order to integrate billing: PaymentSucceeded unlocks an entitlement
+// / sends a receipt; PaymentFailed triggers a dunning flow. Both fire
+// from the webhook-reconciliation mutations (MarkPaymentSucceeded /
+// MarkPaymentFailed) AFTER the provider confirms the charge — never
+// speculatively at intent time.
+//
+// Channel reference uses the plugin-internal alias `events`; the
+// activation maps it to a real project channel (NATS / Redis /
+// in-memory). No provider name appears on the wire.
+
+package w17.contrib.payment;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/event.proto";
+
+option go_package = "@project;@pkg";
+
+// PaymentSucceeded — emitted on MarkPaymentSucceeded after the Payment
+// row flips to SUCCEEDED. Carries enough for a subscriber to grant
+// access / send a receipt without re-reading the row.
+message PaymentSucceeded {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.payment.succeeded"
+  };
+
+  string                    payment_id          = 1;
+  string                    customer_id         = 2;
+  string                    provider_payment_id = 3;
+  string                    amount              = 4;
+  string                    currency            = 5;
+  google.protobuf.Timestamp succeeded_at        = 6;
+}
+
+// PaymentFailed — emitted on MarkPaymentFailed after the Payment row
+// flips to FAILED. Subscribers might notify the user / start dunning.
+message PaymentFailed {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.payment.failed"
+  };
+
+  string                    payment_id          = 1;
+  string                    customer_id         = 2;
+  string                    provider_payment_id = 3;
+  google.protobuf.Timestamp failed_at           = 4;
+}
+
+// CreditApplied — emitted on ApplyCredit after the ledger row + balance
+// commit (prepaid feature). A subscriber might fire a low-balance alert
+// or a usage-allowance refresh. `delta` is signed (+ grant, − spend);
+// `new_balance` is the post-apply materialized balance.
+message CreditApplied {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.credit.applied"
+  };
+  option (w17.contrib.plugin_feature) = "prepaid";
+
+  string                    user_id     = 1;
+  string                    delta       = 2;
+  string                    reason      = 3;
+  string                    new_balance = 4;
+  google.protobuf.Timestamp applied_at  = 5;
+}
+
+// UsageRecorded — emitted on RecordUsage after the record + meter
+// commit (usage feature). A subscriber might enforce a quota / fire a
+// soft-limit alert. new_total is the post-record materialized meter
+// total for the (meter, period).
+message UsageRecorded {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.usage.recorded"
+  };
+  option (w17.contrib.plugin_feature) = "usage";
+
+  string                    user_id    = 1;
+  string                    meter      = 2;
+  string                    period     = 3;
+  int64                     quantity   = 4;
+  int64                     new_total  = 5;
+  google.protobuf.Timestamp recorded_at = 6;
+}
+
+// SubscriptionStarted — emitted on CreateSubscription (subscriptions
+// feature). A subscriber might grant plan entitlements / send a welcome.
+message SubscriptionStarted {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.subscription.started"
+  };
+  option (w17.contrib.plugin_feature) = "subscriptions";
+
+  string                    subscription_id          = 1;
+  string                    customer_id              = 2;
+  string                    plan_id                  = 3;
+  string                    provider_subscription_id = 4;
+  google.protobuf.Timestamp started_at               = 5;
+}
+
+// SubscriptionStatusChanged — emitted on MarkSubscriptionStatus when a
+// provider webhook reconciles the lifecycle (active → past_due →
+// canceled). status is the numeric Subscription.Status.
+message SubscriptionStatusChanged {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.subscription.status_changed"
+  };
+  option (w17.contrib.plugin_feature) = "subscriptions";
+
+  string                    subscription_id          = 1;
+  string                    provider_subscription_id = 2;
+  int32                     status                   = 3;
+  google.protobuf.Timestamp changed_at               = 4;
+}

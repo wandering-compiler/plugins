@@ -1,0 +1,305 @@
+syntax = "proto3";
+
+package w17.contrib.agent;
+
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+
+option go_package = "@project;@pkg";
+
+// AgentService is a model call, and nothing else.
+//
+// # What this service is NOT
+//
+// It is not your chat endpoint. It has no conversation, no history table and no
+// user: history arrives as an argument because the CALLER holds it. Your own
+// business service sits in front of this one — it resolves who is asking, loads
+// the transcript, calls Complete, and persists what came back. That separation
+// is what lets one engine serve a chat UI, a batch job and an internal tool
+// without knowing which of them it is talking to.
+//
+// In a composed binary the call is a direct in-process one, so the gRPC shape
+// costs nothing until you split the tiers — at which point it is already right.
+//
+// # Phases
+//
+// Complete (one call, whole answer) and CompleteStream (the same call, text as
+// it arrives) are both here. Tools and delegation are the phase after and will
+// ADD methods rather than change these.
+
+message CompleteReq {
+  // Which model, and how hard to think. Required.
+  ModelSpec model = 1;
+
+  // The system prompt. A field of its own rather than the first message,
+  // because it is not something anybody said.
+  string instructions = 2;
+
+  // The conversation so far, oldest first, ending with the turn to answer.
+  // Text only.
+  repeated Message messages = 3;
+
+  // What SHAPE the answer must take.
+  //
+  // On the model, not in the prompt: "reply with JSON" in the instructions is a
+  // request the model may decline, and the decline surfaces as a parse error at
+  // the far end of whatever the answer was feeding. This is the provider
+  // enforcing it instead.
+  //
+  // It sits on the request rather than on ModelSpec because it is a property of
+  // the QUESTION — the same model answers prose one minute and a record the
+  // next.
+  ResponseFormat response_format = 4;
+  // ── Usage attribution ────────────────────────────────────────────────
+  //
+  // Both fields are UNGATED on purpose: the wire contract must not change
+  // with an activation's features, or a caller would have to know whether
+  // the deployment it is talking to persists usage. An activation without
+  // `usage_persistence` reads them and does nothing, which is the honest
+  // answer and the one that lets a project turn the layer on later without
+  // touching a single caller.
+
+  // Who the spend is charged to, in the CALLER's own vocabulary — a tenant
+  // id, in every case we know of. The plugin never parses it.
+  string usage_scope = 5;
+
+  // The caller's own attribution, recorded verbatim and aggregatable in the
+  // usage API. `{"run": "...", "subject": "..."}` is the shape the first
+  // consumer needs: one run is many calls, so this is N:1 and the reading
+  // side sums by label.
+  //
+  // A call that cannot be attributed to ONE subject should carry no label
+  // rather than a share of each — aggregating later is always possible,
+  // splitting back never is.
+  map<string, string> usage_labels = 6;
+}
+
+enum ResponseFormat {
+  // Prose. The provider's default.
+  RESPONSE_FORMAT_UNSPECIFIED = 0;
+  // A JSON object, enforced by the provider.
+  //
+  // The model still decides what is IN the object — this guarantees only that
+  // what comes back parses. Say what you want in `instructions`; this makes the
+  // saying binding rather than hopeful.
+  RESPONSE_FORMAT_JSON_OBJECT = 1;
+}
+
+message CompleteResp {
+  // What the model said. May be non-empty even when the response is
+  // INCOMPLETE — a truncated answer is still an answer, and the caller decides
+  // whether to keep it. Read `status` before showing it.
+  string text = 1;
+
+  // How it ended, and the detail beneath that. Checking these is not optional:
+  // a caller that ignores them cannot tell a finished answer from one the
+  // budget cut off, and will store the second as if it were the first.
+  Status           status            = 2;
+  IncompleteReason incomplete_reason = 3;
+
+  // What it cost in tokens. Always present; `measured` says whether the
+  // provider actually reported anything.
+  ModelUsage usage = 4;
+}
+
+// CompleteEvent is one thing that happened during a streaming call.
+//
+// A stream is DELTAS followed by exactly one FINISHED. The deltas are text to
+// show; the finished event carries the status and the usage, and is the only
+// place either appears.
+message CompleteEvent {
+  oneof event {
+    // A fragment of the answer, in order. Show it.
+    TextDelta delta = 1;
+    // The call ended. Read `status` before treating the text as an answer.
+    Finished finished = 2;
+  }
+}
+
+message TextDelta {
+  string text = 1;
+}
+
+message Finished {
+  // The whole answer: every delta concatenated, and what the reader was
+  // actually shown. Present so a consumer who only persists the final text does
+  // not have to accumulate the deltas themselves.
+  string text = 1;
+
+  Status           status            = 2;
+  IncompleteReason incomplete_reason = 3;
+  ModelUsage       usage             = 4;
+
+  // True when the stuck-model guard cut the stream off: the model had started
+  // repeating itself and was stopped rather than left to exhaust the budget.
+  //
+  // What was written BEFORE the loop is kept and delivered — a looping answer
+  // is usually right up until it starts looping. But `status` is UNSPECIFIED
+  // and `usage` is unmeasured, because the provider never sent its terminal
+  // event, so a consumer summing tokens must not read this row as a free call.
+  bool stopped_repeating = 5;
+}
+
+service AgentService {
+  // Complete runs one model call and returns the whole answer.
+  rpc Complete(CompleteReq) returns (CompleteResp);
+
+  // CompleteStream runs the same call and sends the text as it arrives.
+  //
+  // w17 maps a server-streaming RPC onto SSE for a REST surface, but note whose
+  // surface that is: this stream goes to YOUR service, which decides what
+  // reaches a browser. Yours is where the transcript is written, and it is the
+  // one that has to survive a client disconnecting mid-answer.
+  rpc CompleteStream(CompleteReq) returns (stream CompleteEvent);
+
+  // RunAgent runs the tool-calling loop. See the phase 3 block below: the
+  // engine drives, you run the tools.
+  rpc RunAgent(stream RunAgentReq) returns (stream RunAgentEvent);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 — tool calling
+//
+// The engine runs the loop; YOUR project runs the tools. That split is forced
+// and it is also right: a tool is one of your own gRPC methods, and the plugin
+// has no way to call it — it was compiled without knowing your project exists.
+//
+// So RunAgent is bidirectional. The plugin says "call `search` with these
+// arguments", your handler calls your own method and sends the result back, and
+// the loop continues. Your method keeps its own auth, its own scoping and its
+// own database; the engine never sees any of them.
+//
+// This is the part that differs most from a tool loop written in-process, and
+// the difference is the point: in-process, a tool is a function the engine can
+// reach. Here it is a method only you can reach, and the protocol is what makes
+// that a feature rather than a limitation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ToolSpec declares one thing the model may call.
+message ToolSpec {
+  // What the model calls it. Stable: it travels into the transcript, so
+  // renaming it mid-conversation makes earlier turns unreadable.
+  string name = 1;
+
+  // What the tool is for and when to reach for it. Written FOR A MODEL, which
+  // in practice means it says when NOT to call the tool as well as when to.
+  string purpose = 2;
+
+  // What a person is shown while it runs — "Searching listings". It belongs to
+  // the declaration and not to your method, because the same method is phrased
+  // differently in different agents.
+  string activity = 3;
+
+  // JSON Schema of the arguments. Empty means a tool that takes none.
+  //
+  // Be opt-IN about what you put here: the model only knows what this says, and
+  // a field you leave out is a field it cannot ask you to filter on.
+  string params_schema = 4;
+
+  // Whether the call has side effects.
+  //
+  // This is not documentation. Within one round the engine runs mutating tools
+  // SERIALLY and FIRST, then the read-only ones in parallel — so a read never
+  // observes a half-applied write. Declaring a mutating tool read-only is how
+  // that guarantee is lost, and nothing will report it.
+  bool mutating = 5;
+}
+
+// Limits bound one run. Every field has a default; zero means "use it".
+message Limits {
+  // How many model turns before the run gives up. A turn is one model call plus
+  // whatever tools it asked for.
+  int32 max_turns = 1;
+
+  // How many tool calls the whole run may make. This is the one that bounds
+  // work against YOUR database: untrusted text reaches the model, and a model
+  // told to "look up three hundred places" emits three hundred calls in one
+  // round. max_parallel bounds how many run at once — not how many run.
+  int32 max_tool_calls = 2;
+
+  // How many read-only calls run at once.
+  int32 max_parallel = 3;
+
+  // Per-tool deadline in seconds. A tool that exceeds it fails ALONE: its error
+  // becomes the tool result, the model reacts, and the run continues.
+  int32 tool_timeout_seconds = 4;
+}
+
+message RunAgentReq {
+  // Start opens the run. Exactly one, first.
+  message Start {
+    ModelSpec model        = 1;
+    string    instructions = 2;
+    repeated Message messages = 3;
+    repeated ToolSpec tools = 4;
+    Limits limits = 5;
+
+    // Same two fields as CompleteReq, and ungated for the same reason.
+    //
+    // A run is MANY model calls — one per turn of the tool loop — and each is
+    // recorded as its own row carrying these labels. That is deliberate: "one
+    // call" is ambiguous in a multi-turn run, and a row per turn is the shape
+    // that can be summed by label into "what did this run cost" without ever
+    // having to be split back apart.
+    string usage_scope = 6;
+    map<string, string> usage_labels = 7;
+  }
+
+  // ToolResult answers exactly one ToolCall, by its id.
+  message ToolResult {
+    string call_id = 1;
+
+    // What the model is told. On success this is your answer; on failure it is
+    // your error TEXT, because a failing tool is information the model can act
+    // on rather than a crash. Either way it is model-visible: do not put
+    // anything in it you would not show the person asking.
+    string result = 2;
+
+    // True when the call failed. The result still travels to the model; this
+    // only marks the activity as failed for whoever is watching.
+    bool failed = 3;
+  }
+
+  oneof msg {
+    Start      start       = 1;
+    ToolResult tool_result = 2;
+  }
+}
+
+// ToolCall asks the caller to run one tool.
+//
+// Several may be outstanding at once — read-only tools run in parallel — so
+// answer by `call_id` and do not assume order.
+message ToolCall {
+  string call_id = 1;
+  string name    = 2;
+
+  // The raw JSON the model produced. It MAY BE INVALID and may carry keys your
+  // schema never offered: validating it is your job, and your complaint goes
+  // back to the model as the result, which is usually enough for it to correct
+  // itself.
+  string arguments = 3;
+}
+
+// Activity is what is happening, for whoever is watching. Never required for
+// correctness — a consumer that ignores every Activity gets the same answer.
+message Activity {
+  string activity_id = 1;
+  // Empty at the top level; otherwise the activity this one runs inside.
+  string parent_activity_id = 2;
+  // What to show — the ToolSpec.activity of the tool being run.
+  string text = 3;
+  // True when this activity has ended.
+  bool finished = 4;
+  // Set on a finished activity that failed. Display-safe.
+  string error = 5;
+}
+
+message RunAgentEvent {
+  oneof event {
+    TextDelta delta    = 1;
+    ToolCall  tool_call = 2;
+    Activity  activity  = 3;
+    Finished  finished  = 4;
+  }
+}

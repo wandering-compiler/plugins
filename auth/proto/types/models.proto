@@ -1,0 +1,872 @@
+syntax = "proto3";
+
+// Auth plugin — User + UserToken + RBAC table definitions.
+//
+// Wire identity (`w17.contrib.auth`) is derived from the
+// plugin's manifest `name`; the placement-layer identity
+// comes from the activation's `registered_as` (default:
+// source_name). Tables emit as `<registered_as>_<message_lower>`
+// via the existing module-prefix derivation; the path the IR
+// loader sees at codegen time is
+// `domains/<activating_domain>/<registered_as>/types/models.proto`
+// because the plugin staging step copies this file there with
+// `@project` / `@pkg` / `@self` expanded.
+//
+// Tables target the project's lock-declared default connection
+// (per Phase A) — this v1 plugin omits any
+// (w17.module).connection annotation. Phase M (alias maps)
+// adds a `(w17.module).connection = "main"` annotation that
+// the activation maps to a real project connection; until
+// then, default-connection binding stays implicit.
+//
+// Identifier strategy — every PK + every FK across this plugin
+// is UUID (string carrier, type: UUID). PKs carry
+// `default_auto: UUID_V7` so inserts get time-sortable values
+// app-side without round-tripping through a sequence; PG emits
+// native UUID storage (16 bytes, indexable), MySQL/SQLite emit
+// CHAR(36)/TEXT with auto-emitted regex CHECK. FKs share the
+// same type so the storage shape matches end-to-end.
+
+package w17.contrib.auth;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+// go_package is resolved per-activation at install/codegen
+// time. `@project` expands to
+// `<go_module>/<pb_root>/<activating_domain>/<registered_as>`
+// and `@pkg` to `<registered_as>pb` (or `<registered_as>_pb`
+// when registered_as already ends in `pb`).
+option go_package = "@project;@pkg";
+
+// TokenType — the credential class a UserToken belongs to, and the
+// realm a Role applies to. SESSION is the browser bearer session
+// (today's only kind); API is the API / MCP token issued for non-
+// browser clients. Authenticate resolves a token's permissions from
+// the user's roles whose realm matches the presented token's type
+// (see docs/specs/plugins/auth-tokens-and-roles.md). SESSION = 1 is
+// the DB default so existing + IssueToken-minted tokens stay session
+// tokens.
+enum TokenType {
+  TOKEN_TYPE_UNSPECIFIED = 0;
+  TOKEN_TYPE_SESSION     = 1;
+  TOKEN_TYPE_API         = 2;
+}
+
+// User — the project-wide identity record. One row per
+// distinct sign-up; emails are unique inside the activation's
+// table.
+//
+// Plugin protos deliberately OMIT `(w17.db.table).name` so the
+// table identifier derives from the activation's
+// `registered_as` (the synthetic module slot) — e.g. activating
+// auth as `w17auth` produces `w17auth_user`. The bare table
+// name `user` collides with the Postgres reserved keyword;
+// the activation prefix sidesteps that.
+message User {
+  option (w17.db.table) = {};
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string email = 2 [(w17.field) = { type: EMAIL, max_len: 320, unique: true }];
+  string password_hash = 3 [(w17.field) = { type: PASSWORD }];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+
+  // email_verified_at — when the user confirmed ownership of their
+  // address via the `email_verification` flow (VerifyEmail). NULL = not
+  // verified. Non-blocking by default: SignIn does NOT reject an
+  // unverified user (a project can layer that policy on); the column just
+  // records the fact for projects that want to gate features on it. Field-
+  // gated `email_verification`: absent entirely when the feature is off.
+  // E1.
+  google.protobuf.Timestamp email_verified_at = 6 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "email_verification"
+  ];
+
+  // tenant_id — the owning tenant, behind `tenant_scope`. Sourced
+  // from auth (AuthQuery.GetUserTenant) into the `tenant_id` data
+  // scope; never client-set. NOT NULL so every user resolves a
+  // tenant. No DB-level FK (the activation-rename caveat that
+  // applies to every cross-table id ref in this plugin — see
+  // UserToken.user_id); referential integrity is app-enforced.
+  // Field-gated: dropped entirely when `tenant_scope` is off, and
+  // it shares the tag with the Tenant message so the FK target +
+  // the column drop atomically (no dangling reference).
+  string tenant_id = 5 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { index: true },
+    (w17.contrib.plugin_feature_field) = "tenant_scope"
+  ];
+
+  // disabled_at — when an admin soft-disabled this account (the
+  // Django `is_active` analogue, inverted: NULL = active, non-NULL =
+  // disabled). SignIn rejects a disabled account BEFORE issuing a
+  // token (handlers/user_admin.go overrides the signInDisabledGate
+  // seam); existing session/API tokens keep working until they
+  // expire or are revoked — disable is a login gate, not a session
+  // kill (delete the account, or revoke its tokens, for that). Set /
+  // cleared by AuthMutation.DisableUsers / EnableUsers from the admin
+  // Users page. Field-gated `user_admin`: absent entirely when the
+  // feature is off, so the always-compiled SignIn handler must reach
+  // it only through the seam (never name the field directly).
+  google.protobuf.Timestamp disabled_at = 7 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "user_admin"
+  ];
+
+  // kind says whether this account is a PERSON or a machine.
+  //
+  // An enum and not a string: an int-carrier enum column generates a
+  // `CHECK IN (…)`, so "some other kind of account" cannot reach the
+  // database at all.
+  //
+  // ⚠️ `zero_is_value` — HUMAN is 0 because that is the answer for every
+  // account that existed before this feature, and for every account a person
+  // signs up as. Left as the proto3 sentinel it would be excluded from the
+  // CHECK and unavailable as a default, and "not a bot" would have to be
+  // stored as NULL — an indirection on the field that a security decision
+  // reads.
+  //
+  // Field-gated `service_account`: absent entirely when the feature is off,
+  // so the always-compiled SignIn handler must reach it through the seam and
+  // never name it directly — the same rule `disabled_at` above carries.
+  AccountKind kind = 8 [
+    (w17.field) = { zero_is_value: true, default_int: 0 },
+    (w17.contrib.plugin_feature_field) = "service_account"
+  ];
+}
+
+// AccountKind separates people from machines.
+//
+// The distinction is not cosmetic and is not only for the admin UI: it is what
+// makes "an admin may mint a token for another account" safe to offer at all.
+// Without it that endpoint is "make yourself access as anyone"
+// (docs/todos/api-tokens-for-unattended-callers.md).
+enum AccountKind {
+  // A person. Zero on purpose — see `User.kind`.
+  HUMAN = 0;
+  // A machine: CI, a deploy runner. Cannot sign in with a password; acts
+  // only through an API token an admin minted for it.
+  BOT = 1;
+}
+
+// Tenant — an isolation boundary (organization / workspace) that
+// owns users. Behind `tenant_scope`: present only when the
+// activation enables tenant scoping. `User.tenant_id` references a
+// row here (app-enforced; same no-DB-FK caveat as the rest of the
+// plugin). The authenticated principal's tenant becomes the
+// `tenant_id` data scope, so a project that scopes its owned rows
+// by `name: "tenant_id"` gets per-tenant isolation with no hand-
+// written facade — sourced from auth as the data-scope rule
+// requires.
+message Tenant {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "tenant_scope";
+
+  string id   = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  // name doubles as the URL slug — SignUp resolves a tenant by it
+  // when the REST path carries `{tenant_slug}` (AuthQuery.GetTenantBySlug).
+  string name = 2 [(w17.field) = { type: SLUG, max_len: 100, unique: true }];
+  // domain — the host that maps to this tenant (e.g. `acme.example.com`),
+  // for host-based resolution at SignUp (AuthQuery.GetTenantByDomain reads
+  // the forwarded Host header). Nullable: a tenant may be slug-only.
+  string domain = 4 [
+    (w17.field) = { type: CHAR, max_len: 253, unique: true, null: true },
+    (w17.db.column) = { index: true }
+  ];
+  google.protobuf.Timestamp created_at = 3 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// UserToken — bearer-token record. Project clients trade an
+// (email, password) sign-in for a long-lived token they send
+// on subsequent requests. v1: tokens are immortal until
+// explicitly revoked or rotated.
+//
+// v1 LIMITATION — no DB-level FK constraint on `user_id`. The
+// FK target table name is `<registered_as>_user`, but plugin
+// authoring time can't see the per-activation rename, and
+// w17's current `fk:` syntax doesn't carry an activation-aware
+// placeholder. Application-layer code enforces the link via
+// the AuthService handler. Lifting this requires extending the
+// FK syntax with a plugin-aware reference (parked). Same
+// caveat applies to every cross-table id reference in this
+// plugin (User↔Role + Role's permission grants via RolePermission).
+message UserToken {
+  option (w17.db.table) = {};
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  // Phase N3 — storage codegen mutation-handler preamble fills
+  // this column app-side via `randstr.Token(64)` at INSERT time
+  // (the `(w17.field).default_auto = CRYPTO_RANDOM` annotation
+  // triggers the synthesized SetPair + bind). Caller's
+  // IssueTokenReq carries NO `token` field — the codegen owns
+  // the value end-to-end.
+  // SECRET, not CHAR: this IS the bearer credential, so the admin masks it
+  // and leaves it out of list views. max_len + unique stay — the stored value
+  // is the token itself, so it has a real width and a real identity.
+  string token = 2 [(w17.field) = {
+    type: SECRET
+    max_len: 64
+    unique: true
+    default_auto: CRYPTO_RANDOM
+  }];
+  string user_id = 3 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { index: true }
+  ];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+
+  // expires_at — absolute token lifetime. BASE-TIER (not api_token-
+  // gated): expiry is a universal token concept, not API-token-only.
+  // Session tokens get it set at mint time (IssueToken, from the
+  // configurable session_token_ttl_seconds, default 30d); API tokens
+  // are minted with it NULL today (never-expiring, the historical
+  // behaviour). NULL = never expires. The token-validation queries
+  // enforce `expires_at IS NULL OR expires_at > NOW()`, so the NULL
+  // case keeps never-expiring tokens valid across every config.
+  google.protobuf.Timestamp expires_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+
+  // token_type — SESSION (browser bearer, the default) vs API (MCP /
+  // non-browser). DB default SESSION (=1) so existing rows + IssueToken-
+  // minted tokens are session tokens; CreateApiToken stamps API.
+  // Gated by api_token: a project using only session bearer tokens
+  // carries no token_type column (every token is implicitly a session),
+  // so enabling/​disabling the feature is the only thing that touches the
+  // token schema — no breaking column on projects that don't opt in.
+  TokenType token_type = 5 [
+    (w17.field) = { type: ENUM, default_int: 1 },
+    (w17.contrib.plugin_feature_field) = "api_token"
+  ];
+
+  // --- api_token feature: management metadata for API/MCP tokens ---
+  // Dropped together when the feature is off (a project using only
+  // session bearer tokens carries none of these columns). `name` is the
+  // human label shown in the token list; last_used_at backs audit.
+  // (expiry lives in the base-tier expires_at above — it applies to
+  // every token, not just API ones.)
+  string name = 6 [
+    (w17.field) = { type: CHAR, max_len: 128, blank: true },
+    (w17.contrib.plugin_feature_field) = "api_token"
+  ];
+  google.protobuf.Timestamp last_used_at = 7 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "api_token"
+  ];
+
+  // device_id — the Device this session belongs to, behind `devices`.
+  // Stamped by IssueToken, whose SET list carries `?feature(devices)
+  // device_id = :device_id`; "log out a device" = delete every token
+  // carrying its id. Field-gated: dropped entirely with the rest of the
+  // device surface, exactly like the api_token columns above — a project
+  // not tracking devices carries no device_id column, and the same
+  // IssueToken emits an INSERT that never names it.
+  // No DB-level FK (the activation-rename caveat that applies to every
+  // cross-table id ref in this plugin — see the message header).
+  // Nullable: not every token is device-bound. SignUp / API tokens leave
+  // the field unset, so device_id stays NULL there; only the sign-in
+  // paths under `devices` (SignIn / VerifyMfa) pass one. A NOT NULL
+  // column would break SignUp the moment `devices` is enabled.
+  string device_id = 9 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.db.column) = { index: true },
+    (w17.contrib.plugin_feature_field) = "devices"
+  ];
+}
+
+// Device — a tracked device/session anchor for a user. Created or
+// refreshed at sign-in; `trusted_at` marks it as seen-and-passed-2FA,
+// the signal `two_factor`'s new-device mode reads. `identifier` is the
+// stable client device-id when the request carries `X-Device-Id`,
+// else a server-derived UA+IP fingerprint hash — best-effort, so churn
+// reads as a new device (an extra 2FA prompt, the safe failure). Behind
+// `devices`: present only when the activation enables device tracking.
+//
+// (user_id, identifier) is unique so sign-in upserts deterministically.
+// Same no-DB-FK caveat as the rest of the plugin (user_id is app-
+// enforced; see UserToken).
+message Device {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "user_id" }, { name: "identifier" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "devices";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string identifier  = 3 [(w17.field) = { type: CHAR, max_len: 128 }]; // device-id header | fp hash
+  string label       = 4 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // UA-derived friendly name
+  // IP-as-string (CHAR, not INET): the fingerprint path may resolve no
+  // client IP (absent X-Forwarded-For), and an empty string is a valid
+  // CHAR but not a valid INET. Stored for display in ListDevices only.
+  string ip          = 5 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  google.protobuf.Timestamp trusted_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp last_seen_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+  google.protobuf.Timestamp created_at   = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // C2 — SHA-256 hex of the SERVER-issued device-trust token. A device
+  // counts as trusted (new-device 2FA is skipped) only when the client
+  // presents a trust token whose hash matches this column — proving
+  // possession of a server-minted secret rather than a client-chosen
+  // X-Device-Id. Empty until a login mints one; rotated every login.
+  // Stored hashed (never the plaintext) so a DB read can't impersonate a
+  // device.
+  string trust_token_hash = 9 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+}
+
+// OAuthProvider — an admin-configured OAuth2/OIDC server, behind `oauth`.
+// Generic by design: provider differences (GitHub isn't OIDC) are captured
+// by userinfo_url + the *_path mapping columns, never per-provider code.
+// client_secret is SECRET-typed: an opaque secret stored exactly as issued,
+// masked in the admin, never hashed. oauth.go signs the OAuth state with it as
+// an HMAC key and posts it to the token endpoint verbatim, so the stored bytes
+// have to BE the secret.
+//
+// It was PASSWORD until 2026-09-09 — the annotation for a hash you VERIFY
+// against, whose rules all follow from that. The one that bit: fixtures refuse
+// a PASSWORD value that is not PHC-encoded, correctly for a credential and
+// wrongly here, so this row could not be seeded at all.
+//
+// Operators CRUD these through the generated admin. Same no-DB-FK caveat as
+// the rest of the plugin.
+message OAuthProvider {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "oauth";
+
+  string id            = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string name          = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }]; // url key: /auth/oauth/{name}/...
+  string display_name  = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string client_id     = 4 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string client_secret = 5 [(w17.field) = { type: SECRET }];
+  string authorize_url = 6 [(w17.field) = { type: URL }];
+  string token_url     = 7 [(w17.field) = { type: URL }];
+  string userinfo_url  = 8 [(w17.field) = { type: URL, blank: true }]; // empty → OIDC id_token claims
+  string scopes        = 9 [(w17.field) = { type: CHAR, max_len: 512, blank: true }]; // space-delimited
+  // userinfo field mapping — the generic knob that makes non-OIDC
+  // providers work without code. Defaults (applied in the handler) suit
+  // OIDC: sub / email.
+  string subject_path  = 10 [(w17.field) = { type: CHAR, max_len: 128, blank: true }]; // default "sub"
+  string email_path    = 11 [(w17.field) = { type: CHAR, max_len: 128, blank: true }]; // default "email"
+  bool   enabled       = 12 [(w17.field) = { default_auto: TRUE }];
+  google.protobuf.Timestamp created_at = 13 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+
+  // tenant_id — same shape as User.tenant_id, so a multi-tenant project
+  // can scope providers per tenant. Field-gated `tenant_scope` (drops with
+  // the feature). No DB-level FK (app-enforced, like the rest).
+  string tenant_id = 14 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { index: true },
+    (w17.contrib.plugin_feature_field) = "tenant_scope"
+  ];
+}
+
+// OAuthIdentity — links a local User to an external IdP subject, behind
+// `oauth`. (provider_id, external_id) is unique; a user may link several
+// providers. Same no-DB-FK caveat as the rest of the plugin.
+message OAuthIdentity {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "provider_id" }, { name: "external_id" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "oauth";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string provider_id = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string external_id = 4 [(w17.field) = { type: CHAR, max_len: 255 }]; // the IdP "sub"
+  string email       = 5 [(w17.field) = { type: EMAIL, max_len: 320, blank: true }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// UserTotpSecret — one per user (the built-in authenticator), behind
+// `two_factor`. `secret` is the base32 TOTP seed stored ENCRYPTED at rest
+// (lib/secretbox AES-256-GCM, keyed by two_factor_secret_key); RFC 6238
+// needs the raw seed to verify, so unlike a password it can't be one-way
+// hashed. confirmed_at NULL = enrolled-but-unconfirmed (the first code
+// hasn't been verified yet); a user "has an authenticator" iff
+// confirmed_at IS NOT NULL. Unique on user_id (one authenticator per
+// user). Same no-DB-FK caveat as the rest of the plugin.
+message UserTotpSecret {
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "user_id" }] } ]
+  };
+  option (w17.contrib.plugin_feature) = "two_factor";
+
+  string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string secret  = 3 [(w17.field) = { type: CHAR, max_len: 512 }]; // base32 seed, secretbox-encrypted
+  google.protobuf.Timestamp confirmed_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at   = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// MfaChallenge — a pending second-factor verification, behind
+// `two_factor`. Created by SignIn when 2FA fires; consumed by VerifyMfa.
+// `code_hash` backs the EVENT / fallback path only (a TOTP-enrolled user
+// is verified against their secret, no stored code). Expiry is NOT a
+// stored column: VerifyMfa computes it as created_at + mfa_code_ttl
+// (env), so there's no Timestamp-input-param binding and the TTL stays a
+// pure deploy knob. The challenge carries no device_id — VerifyMfa
+// re-resolves the device from its own request metadata (the client uses
+// the same device for the SignIn→VerifyMfa pair), which keeps this table
+// device-feature-agnostic.
+message MfaChallenge {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "two_factor";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string code_hash   = 3 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // event-flow only
+  google.protobuf.Timestamp consumed_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at  = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // attempts — failed VerifyMfa tries against this challenge. VerifyMfa
+  // increments it on every wrong code and refuses once it reaches the
+  // lockout threshold, so a 6-digit second factor can't be brute-forced
+  // within the TTL (Q43-auth-mfa).
+  int64 attempts     = 6 [(w17.field) = { type: COUNTER, default_int: 0 }];
+}
+
+// PasswordResetToken — a single-use, time-bounded credential the
+// `password_reset` flow mints for a user who asks to reset their
+// password. Only the SHA-256 hash of the token is stored (a DB read
+// can't reset an account); the plaintext travels once, in the
+// PasswordResetRequested event, for a hand-written delivery channel
+// (e-mail). E1.
+message PasswordResetToken {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "password_reset";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string token_hash  = 3 [(w17.field) = { type: CHAR, max_len: 128, unique: true }]; // sha256 hex
+  google.protobuf.Timestamp expires_at  = 4 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp consumed_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at  = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// EmailVerificationToken — single-use, time-bounded token the
+// `email_verification` flow mints to confirm a user owns their address.
+// Same hashed-at-rest + single-plaintext-delivery contract as
+// PasswordResetToken. E1.
+message EmailVerificationToken {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "email_verification";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string token_hash  = 3 [(w17.field) = { type: CHAR, max_len: 128, unique: true }]; // sha256 hex
+  google.protobuf.Timestamp expires_at  = 4 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp consumed_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at  = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// Role — a named bundle of permissions. Projects typically
+// declare a small fixed set ("admin" / "editor" / "viewer")
+// via fixtures or first-boot seeds; the admin UI lets operators
+// CRUD them at runtime. Role assignment to users goes through
+// UserRole; role's permission membership goes through
+// RolePermission.
+message Role {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "rbac";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string name        = 2 [(w17.field) = { type: SLUG, max_len: 100, unique: true }];
+  string description = 3 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+
+  // token_type — the realm this role applies to. SESSION roles count
+  // toward bearer-session auth; API roles toward API/MCP tokens. A user
+  // may hold roles of both realms; Authenticate picks the matching set
+  // for the presented token. Default SESSION. The domain's
+  // (w17.acl_roles) declaration drives which roles are seeded with which
+  // realm (via the role's `realm` string). Gated by api_token: without
+  // the feature there is one realm, so no column — every role counts for
+  // the (only) bearer-session path, exactly as today.
+  TokenType token_type = 5 [
+    (w17.field) = { type: ENUM, default_int: 1 },
+    (w17.contrib.plugin_feature_field) = "api_token"
+  ];
+
+  // all_permissions — WILDCARD grant. A user holding a role with
+  // this flag set passes EVERY ACL permission check for the role's
+  // realm, regardless of the RolePermission rows present and
+  // INCLUDING permissions added by later codegen runs. Authenticate
+  // detects the flag (storage returns it as a bool alongside
+  // permission_ids) and expands the granted set to
+  // `acllock.GrantAll(lock)` from the compile-time lock — so the
+  // grant follows the deployed permission catalogue, never a
+  // RolePermission seed snapshot. This is the superuser / superadmin
+  // knob; a wildcard role carries NO RolePermission rows by design
+  // (nothing to seed — the expansion is purely runtime). Driven by
+  // the domain's `(w17.acl_roles) { all_permissions: true }`
+  // declaration. Part of `rbac` (the whole Role message is gated).
+  bool all_permissions = 6 [(w17.field) = { default_auto: FALSE }];
+
+  // assign_first_user / assign_default — turnkey SignUp assignment
+  // policy, seeded from the domain's `(w17.acl_roles)` first_user /
+  // default flags. The generated SignUp handler assigns every role
+  // flagged assign_first_user to the FIRST registered user (bootstrap
+  // admin) and every role flagged assign_default to each later signup.
+  // Realm is NOT consulted here — the UserRole link is realm-agnostic;
+  // the realm (token_type) only decides which roles count at auth time.
+  bool assign_first_user = 7 [(w17.field) = { default_auto: FALSE }];
+  bool assign_default     = 8 [(w17.field) = { default_auto: FALSE }];
+
+  // preset_key — PROVENANCE. Carries the declaring
+  // `(w17.acl_roles).key` for a role that codegen seeded; NULL for a
+  // role a customer created through the project's own role-management
+  // surface.
+  //
+  // NULL rather than blank because the state being recorded is ABSENCE:
+  // a customer's role has no declaration to point at. It also keeps the
+  // SLUG format CHECK honest — a check applied to an empty-string
+  // sentinel would have to carry an exception for it.
+  //
+  // It is what lets those two kinds of row live in one table without
+  // either damaging the other. A seeded row is the supplier's preset:
+  // codegen owns its permission set and rewrites it on every regen, so
+  // a permission added upstream reaches every installation. A NULL
+  // row is the customer's own: no seed, migration or codegen pass
+  // reads or writes it, ever.
+  //
+  // A role-management UI reads this to tell the operator which rows it
+  // may not edit — and it is the predicate the seed's prune runs on,
+  // which is why it must be a stored column rather than an inference
+  // from "is this id in the current seed set".
+  string preset_key = 9 [(w17.field) = { type: SLUG, max_len: 100, null: true }];
+
+  // display_name — the CUSTOMER-owned label. Blank falls back to
+  // `name`.
+  //
+  // `name` is unique and belongs to the declaration; the seed rewrites
+  // it on every apply. Without a separate label, a customer renaming a
+  // preset would have the rename reverted on the next `fixtures
+  // apply` — and if they had renamed it onto a name another declared
+  // preset claims, the UNIQUE violation would abort the ENTIRE fixture
+  // transaction, since apply runs every statement in one. Splitting the
+  // technical identity from the label removes both failures, and means
+  // the seed needs no per-column upsert policy.
+  string display_name = 10 [(w17.field) = { type: CHAR, max_len: 100, blank: true }];
+
+  // org_scoped — TRUE when this role's grants apply only inside the
+  // organization they were assigned in (`(w17.acl_roles).scope: ORG`).
+  // FALSE = realm-wide, which is what an unset column means and what
+  // every role meant before organizations existed.
+  //
+  // Read by the two permission queries (GetUserOrgPermissions,
+  // GetUserRealmWidePermissions), which is where a grant's MEANING is
+  // decided: a UserRole row with a NULL org_id means "realm-wide", and
+  // for an org-scoped role that reading is the opposite of what the
+  // declaration asked for, so both queries ask this column before they
+  // honour a NULL.
+  //
+  // This comment used to name "the project's own role-assignment surface"
+  // as the reader, and no such reader existed — the column was written by
+  // the seed and read by nothing, so `scope: ORG` was a declaration with
+  // no enforcement point anywhere (T2-5 pass #11, D11-3). Enforcement sits
+  // on the READ side deliberately: a write-side check would only bind rows
+  // written after it, while the queries decide what every existing row
+  // means, every time they run.
+  //
+  // Gated org_membership, like the UserRole.org_id column it describes.
+  bool org_scoped = 11 [
+    (w17.field) = { default_auto: FALSE },
+    (w17.contrib.plugin_feature_field) = "org_membership"
+  ];
+}
+
+// RolePermission — M2M link tuple (role_id, permission_id).
+// `permission_id` is an INT32 referencing the activating
+// domain's generated `AclPermission` enum from
+// `w17.lock.acl.proto` — there's no Permission table in the
+// schema because the lock enum IS the catalog. Composite
+// uniqueness on (role_id, permission_id) prevents duplicate
+// grants.
+//
+// `permission_id` carries `auto_choices: ACL_PERMISSION_IDS`
+// → DB-level `CHECK col IN (1,2,…)` against the activating
+// domain's AclPermission enum numeric values. Inserting an
+// ID outside the catalog (stale JWT, hand-edit, allocator
+// drift) is refused at the storage layer with
+// VALIDATION_CHECK_CONSTRAINT mapped to InvalidArgument.
+//
+// v1 LIMITATION — no DB-level FK constraint on `role_id`
+// (activation-rename caveat; see UserToken). `permission_id`
+// has no FK target by design (the catalog is a proto enum,
+// not a DB table); the CHECK constraint covers the integrity
+// the FK would have provided.
+message RolePermission {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "role_id" }, { name: "permission_id" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "rbac";
+
+  string id            = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string role_id       = 2 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { index: true }
+  ];
+  int32  permission_id = 3 [
+    (w17.field) = { type: NUMBER, auto_choices: ACL_PERMISSION_IDS },
+    (w17.db.column) = { index: true }
+  ];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// UserRole — M2M link User ↔ Role. Composite uniqueness prevents
+// duplicate assignments. Same per-column index rationale as
+// RolePermission.
+//
+// The uniqueness is stated THREE times because it means two different
+// things depending on `org_membership` (the entries are staging-time
+// feature-gated — see `w17.db.Index.plugin_feature`):
+//
+//   - feature OFF — `(user_id, role_id)`, the historical guarantee.
+//   - feature ON  — `(user_id, role_id)` among REALM-WIDE rows
+//     (`org_id IS NULL`) and `(user_id, role_id, org_id)` among
+//     ORG-SCOPED ones.
+//
+// Two partial indexes rather than one three-column UNIQUE because
+// PostgreSQL treats NULLs as DISTINCT in a unique index: the plain
+// triple would let the same realm-wide grant be inserted any number of
+// times, quietly dropping the very guarantee that holds today. Partial
+// indexes are PG + SQLite only, which is the same support surface the
+// rest of this plugin's `where:` usage has.
+//
+// v1 LIMITATION — no DB-level FK on `user_id` / `role_id` / `org_id`
+// (activation-rename caveat applies; see UserToken).
+message UserRole {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }],
+        plugin_feature_unless: "org_membership" },
+      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }],
+        where: "org_id IS NULL", plugin_feature: "org_membership" },
+      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }, { name: "org_id" }],
+        where: "org_id IS NOT NULL", plugin_feature: "org_membership" }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "rbac";
+
+  string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id = 2 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { index: true }
+  ];
+  string role_id = 3 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { index: true }
+  ];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+
+  // org_id — WHICH organization this grant applies in.
+  //
+  //   NULL — realm-wide. The role counts in every org context (staff /
+  //          admin roles, and every role in a project that predates
+  //          `org_membership`). This is what an unset column means, so
+  //          existing rows keep behaving exactly as they do today.
+  //   set  — the grant exists only while that org is the request's
+  //          ACTIVE org (Authenticate resolves it from the validated
+  //          membership, never from client input).
+  //
+  // Two rows differing only in `role_id` for the same (user, org) is
+  // the ROLE-COMPOSITION shape — "accountant + worker" for someone who
+  // does both. It falls out of the M2M rather than needing a feature.
+  //
+  // Field-gated: dropped entirely when `org_membership` is off, exactly
+  // like `User.tenant_id` under `tenant_scope` — which is why the index
+  // entries above are gated in step with it.
+  //
+  // The gate is why NO permission-resolving query mentions this column.
+  // Putting `(ur.org_id IS NULL OR ur.org_id = :org_id)` into their DQL
+  // would need a second variant of each, and `api_token` already owns a
+  // realm-aware variant of the same queries — the two features would
+  // then require a THIRD variant for the build where both are on, owned
+  // and stageable by neither. Instead the queries project `role_id` and
+  // the org narrowing happens in Go against the role ids
+  // `GetUserOrgRoleIds` reports as applicable (see handlers/
+  // org_membership.go). One gated query, no matrix, and the realm axis
+  // keeps its own queries untouched.
+  //
+  // `tenant_scope` deliberately gets nothing here: it is 1:1
+  // user↔tenant, so a per-user role is ALREADY a per-tenant role there
+  // and an org axis would be a second name for the same thing.
+  string org_id = 5 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.db.column) = { index: true },
+    (w17.contrib.plugin_feature_field) = "org_membership"
+  ];
+}
+
+// TokenPermission — the per-API-token permission subset (least-privilege
+// narrowing). When an API token has rows here, Authenticate intersects
+// the user's API-realm role permissions with this set — a token can only
+// narrow, never escalate (no rows = no narrowing = the user's full API
+// perms). `permission_id` shares RolePermission's semantics (INT32 into
+// the activating domain's AclPermission enum + CHECK; no FK by design).
+// Gated by `api_token`: drops with the rest of the API-token surface.
+message TokenPermission {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "token_id" }, { name: "permission_id" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "api_token";
+
+  string id            = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string token_id      = 2 [
+    (w17.field) = { type: UUID },
+    (w17.db.column) = { index: true }
+  ];
+  int32  permission_id = 3 [
+    (w17.field) = { type: NUMBER, auto_choices: ACL_PERMISSION_IDS },
+    (w17.db.column) = { index: true }
+  ];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// CliAuthCode is a single-use PKCE authorization code minted by
+// CliAuthorize and redeemed by CliToken (the `cli_login` feature — the
+// console as a first-party OAuth authorization server for CLIs). Only the
+// code's sha256 hash is stored, so a DB read can't redeem a live code; the
+// code is bound to the approving user + the CLI's PKCE challenge and
+// expires in seconds. consumed_at enforces single-use (the atomic
+// ConsumeCliAuthCode flips it under a not-consumed/not-expired WHERE).
+// Mirrors PasswordResetToken (E1). See
+// docs/specs/plugins/auth-cli-login-and-orgs.md.
+message CliAuthCode {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "cli_login";
+
+  string id             = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id        = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string code_hash      = 3 [(w17.field) = { type: CHAR, max_len: 128, unique: true }]; // sha256 hex of the code
+  string code_challenge = 4 [(w17.field) = { type: CHAR, max_len: 128 }];                // PKCE S256 challenge
+  google.protobuf.Timestamp expires_at  = 5 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp consumed_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at  = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// Organization is a GitHub-style org — a membership boundary an identity
+// can belong to MANY of (a private personal org + a company org + …). The
+// `org_membership` feature's generalization of single-tenant tenant_scope:
+// where Tenant is 1:1 with a User, an Organization is M2M via OrgMembership.
+// See docs/specs/plugins/auth-cli-login-and-orgs.md.
+message Organization {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string id   = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string slug = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }];
+  string name = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // kind groups the org for the CLI's picker: "private" (personal) or
+  // "company". Free-form (not an enum) so a project can add its own kinds.
+  string kind = 4 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // owner_id — the account that OWNS this organization, and the only
+  // authorization fact that is not a role grant.
+  //
+  // Ownership is a property of the organization, not a permission somebody
+  // was handed, so it is recorded here rather than as a row in UserRole. A
+  // principal whose id matches this column is granted the whole permission
+  // catalogue by GetUserOrgPermissions — see that query for why the
+  // expansion cannot happen in SQL.
+  //
+  // This deliberately replaces reading `OrgMembership.role == "owner"`.
+  // That column is free-form and documented as such ("project policy owns
+  // the vocabulary; the plugin only passes it through"), so hanging
+  // authorization on one of its values would turn every writer of that
+  // string into a privilege-granting path.
+  //
+  // Nullable, and left so: organizations created before this column existed
+  // have no owner, and an absent owner must read as "nobody is
+  // auto-granted" rather than as an error. App-enforced, no DB-level FK —
+  // the same caveat every other link in this plugin carries.
+  string owner_id = 6 [(w17.field) = { type: UUID, null: true }, (w17.db.column) = { index: true }];
+}
+
+// OrgMembership is the M2M link between a User and an Organization, with
+// the user's role in that org. Unique per (user_id, org_id). Mirrors the
+// OAuthIdentity user↔external link shape. The plugin stamps the active
+// org's id into scopes[org_id] (Authenticate decorator) after validating
+// the principal's membership — so per-org data isolation reuses the
+// existing (w17.db.scope) machinery with no client-trusted org input.
+message OrgMembership {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string org_id  = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  // role: owner | admin | member. Free-form CHAR — project policy owns the
+  // vocabulary; the plugin only passes it through.
+  string role    = 4 [(w17.field) = { type: CHAR, max_len: 32 }];
+  google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// OrgInvite — a pending invitation for an EMAIL to join an Organization
+// with a named role.
+//
+// Keyed on (org, email), NOT on a user id, and that is the whole point.
+// PasswordResetToken and EmailVerificationToken both hang off `user_id`
+// because the person is already known; an invitation is the one flow where
+// they may not exist yet. Anchoring on the address collapses "invite an
+// existing user" and "invite someone who has to register" into ONE object
+// with two endings, decided at acceptance rather than at creation — which is
+// also the only correct time to decide it, since the invitee can register
+// on their own between the two.
+//
+// No token column, deliberately. The sibling token tables carry a hashed
+// secret because possession of the secret IS the proof; here the proof is
+// possession of the ADDRESS, checked at acceptance against the authenticated
+// account's email. That leaves a window — someone who guesses an invited
+// address can register it first — which closes when `email_verification` is
+// enabled, and is accepted until then rather than papered over with a secret
+// that would have to be delivered out of band anyway.
+//
+// `role` is a Role.name, not free text: accepting writes BOTH the
+// OrgMembership row (carrying this name as its label) and the UserRole grant
+// scoped to this org, so an invited member arrives with permissions rather
+// than with a label and nothing behind it.
+message OrgInvite {
+  option (w17.db.table) = {
+    indexes: [
+      // One PENDING invite per (org, email). Partial, because a consumed
+      // invite must not block a later re-invite — the same person can be
+      // removed from an org and invited back. PG + SQLite only, which is
+      // the support surface this plugin's other `where:` indexes already
+      // assume.
+      { unique: true, fields: [{ name: "org_id" }, { name: "email" }],
+        where: "accepted_at IS NULL" }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "org_invite";
+
+  string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id  = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  // The invited address. Stored normalized (lower-cased) by the handler, the
+  // same normalization SignIn applies, or "Someone@x" and "someone@x" would
+  // be two different invitations and only one of them would ever match.
+  string email   = 3 [(w17.field) = { type: EMAIL, max_len: 320 }, (w17.db.column) = { index: true }];
+  // The role the invitee gets in this org — a Role.name, validated to exist
+  // when the invite is created rather than when it is accepted, so a typo is
+  // the inviter's error at the moment they make it and not a failure the
+  // invitee sees days later.
+  string role    = 4 [(w17.field) = { type: SLUG, max_len: 100 }];
+  // Who sent it. Kept for the invite list, and because an org that cannot
+  // see who admitted a member cannot audit its own membership.
+  string invited_by = 5 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp expires_at = 6 [(w17.field) = { type: DATETIME }];
+  // NULL while pending. Set (not deleted) on acceptance so the row stays as
+  // the record of how that membership came to exist.
+  google.protobuf.Timestamp accepted_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at  = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}

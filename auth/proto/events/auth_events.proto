@@ -1,0 +1,462 @@
+syntax = "proto3";
+
+// Auth plugin — lifecycle event catalogue.
+//
+// Three notifications fire post-mutation: user creation, token
+// issuance, token revocation. Token rotation is consumer-composed
+// (GetUserByToken → DeleteToken → IssueToken) and fires the
+// IssueToken event + the DeleteToken event independently.
+//
+// Channel reference uses the plugin-internal alias `events`;
+// activation maps the alias to a real project channel (see
+// docs/specs/plugins/activation.md §"Channel binding via
+// aliases"). Plugin authors don't bake in a real channel name —
+// they pick `events` as the logical destination and the project
+// picks the transport (NATS / Redis / in-memory).
+//
+// Every id field on every event is a UUID (string carrier) —
+// mirrors the plugin's UUID-native identifier strategy
+// (types/models.proto §"Identifier strategy").
+
+package w17.contrib.auth;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/event.proto";
+
+option go_package = "@project;@pkg";
+
+// UserCreated — emitted on AuthMutation.CreateUser after the
+// User row commits. Downstream subscribers might send welcome
+// emails, populate audit logs, prime per-user projections, etc.
+message UserCreated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.user.created"
+  };
+
+  string                    user_id    = 1;
+  string                    email      = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// UserDeleted — emitted on AuthMutation.DeleteUser after the account +
+// its tokens are purged. The plugin cascades only the base tables it
+// can name unconditionally (UserToken); a subscriber cleans up the
+// feature-owned rows keyed on user_id that the delete method can't
+// reference across feature combinations — UserRole (rbac), devices,
+// OAuthIdentity (oauth), UserTotpSecret (two_factor). No-FK schema, so
+// this is the sanctioned cleanup seam. Gated user_admin.
+message UserDeleted {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.user.deleted"
+  };
+  option (w17.contrib.plugin_feature) = "user_admin";
+
+  string user_id = 1;
+}
+
+// UserUpdated — emitted on AuthMutation.UpdateUser (the admin Users page
+// detail edit). Carries the new email so a subscriber can re-sync any
+// denormalised copy of it (mailing list, billing contact, search index)
+// without re-reading the row. Gated user_admin.
+message UserUpdated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.user.updated"
+  };
+  option (w17.contrib.plugin_feature) = "user_admin";
+
+  string user_id = 1;
+  string email   = 2;
+}
+
+// UserTokenRevoked — emitted on AuthMutation.RevokeUserToken (the admin
+// Sessions page delete) after the UserToken row is gone. Subscribers can
+// audit forced logouts or drop the token from any hot session cache.
+// Distinct from the base-tier TokenRevoked (auth.token.revoked, the live
+// self-logout path): the eventbus allows only one emit site per event,
+// and this is the admin-initiated revoke — its own event + topic.
+message UserTokenRevoked {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.token.admin_revoked"
+  };
+  option (w17.contrib.plugin_feature) = "user_admin";
+
+  string token_id = 1;
+}
+
+// TokenIssued — emitted on AuthMutation.IssueToken after the
+// UserToken row commits. Subscribers might rate-limit token
+// issuance, populate a per-user session count, fan out to a
+// "new device" notification path, etc.
+message TokenIssued {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.token.issued"
+  };
+
+  string                    token_id  = 1;
+  string                    user_id   = 2;
+  google.protobuf.Timestamp issued_at = 3;
+}
+
+// TokenRevoked — emitted on AuthMutation.DeleteSessionToken (the live
+// logout path; the eventbus allows one emit site per event and the
+// uncalled DeleteToken primitive no longer emits). Idempotent upstream
+// → the event fires only when an actual row DELETE occurred; a
+// no-such-token logout doesn't emit (Phase D gates emit on
+// RowsAffected > 0 via the storage codegen's per-mutation conditional
+// emit path).
+message TokenRevoked {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.token.revoked"
+  };
+  // Gated in step with its ONLY emit site. DeleteSessionToken is the
+  // base-tier logout primitive and carries `authenticate_turnkey`, so an
+  // activation without that feature has no logout path in the plugin —
+  // and used to be left declaring an event nothing could ever fire, with
+  // every subscriber to auth.token.revoked silently never running.
+  //
+  // Found by the staging emit-coverage check the moment it landed; it is
+  // the fourth instance of this shape (UserCreated / TokenIssued /
+  // org-scoped roles were the others). See
+  // docs/decisions/dql-feature-gated-fragments.md.
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+
+  string token_id = 1;
+  string user_id  = 2;
+}
+
+// RBAC lifecycle — fired by the eight mutations on the
+// Role/Permission/RolePermission/UserRole tables. Subscribers
+// typically audit grants/revokes, invalidate per-user permission
+// caches, or fan out to security review pipelines.
+
+message RoleCreated {
+  option (w17.event) = { channel: "events", topic: "auth.role.created" };
+  option (w17.contrib.plugin_feature) = "rbac";
+  string                    role_id    = 1;
+  string                    name       = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message RoleDeleted {
+  option (w17.event) = { channel: "events", topic: "auth.role.deleted" };
+  option (w17.contrib.plugin_feature) = "rbac";
+  string role_id = 1;
+}
+
+// RoleUpdated — emitted on AuthMutation.UpdateRole (the admin Roles page
+// detail edit). Copy-only: the privilege flags are not editable there,
+// so a subscriber never has to re-evaluate grants off this event.
+message RoleUpdated {
+  option (w17.event) = { channel: "events", topic: "auth.role.updated" };
+  option (w17.contrib.plugin_feature) = "rbac";
+  string role_id = 1;
+}
+
+// Permission table is gone — the activating domain's
+// AclPermission proto enum (w17.lock.acl.proto) is now the
+// catalog. PermissionCreated / PermissionDeleted events were
+// retired together with the CreatePermission /
+// DeletePermission mutations (Phase 4 plugin track).
+
+message UserRoleAssigned {
+  option (w17.event) = { channel: "events", topic: "auth.user_role.assigned" };
+  option (w17.contrib.plugin_feature) = "rbac";
+  string                    user_role_id = 1;
+  string                    user_id      = 2;
+  string                    role_id      = 3;
+  google.protobuf.Timestamp assigned_at  = 4;
+  // org_id — WHICH organization the grant applies in; empty means
+  // realm-wide (`UserRole.org_id` NULL). Without it a subscriber could
+  // not tell a grant in one company from one that applies in all of
+  // them, which is the whole distinction `org_membership` adds.
+  //
+  // Gated in step with the column and with the emit's payload entry:
+  // all three drop together, and they have to, because an entry naming
+  // a field that is not there is a parse-time error.
+  string                    org_id       = 5 [(w17.contrib.plugin_feature_field) = "org_membership"];
+}
+
+message UserRoleRevoked {
+  option (w17.event) = { channel: "events", topic: "auth.user_role.revoked" };
+  option (w17.contrib.plugin_feature) = "rbac";
+  string user_id = 1;
+  string role_id = 2;
+  // Which org's grant was revoked — see UserRoleAssigned.org_id.
+  string org_id  = 3 [(w17.contrib.plugin_feature_field) = "org_membership"];
+}
+
+message RolePermissionAdded {
+  option (w17.event) = { channel: "events", topic: "auth.role_permission.added" };
+  option (w17.contrib.plugin_feature) = "rbac";
+  string                    role_permission_id = 1;
+  string                    role_id            = 2;
+  // int32 — references the activating domain's AclPermission
+  // enum value (w17.lock.acl.proto). The catalog is the proto
+  // enum, not a DB table; the event payload mirrors the
+  // RolePermission.permission_id column shape.
+  int32                     permission_id      = 3;
+  google.protobuf.Timestamp added_at           = 4;
+}
+
+message RolePermissionRemoved {
+  option (w17.event) = { channel: "events", topic: "auth.role_permission.removed" };
+  option (w17.contrib.plugin_feature) = "rbac";
+  string role_id       = 1;
+  // int32 — see RolePermissionAdded.permission_id.
+  int32  permission_id = 2;
+}
+
+// two_factor lifecycle — emitted by the TOTP enrollment mutations + the
+// MFA challenge create/consume. All gated `two_factor`.
+
+// MfaChallengeRequested — emitted by CreateMfaChallenge whenever a second
+// factor is required (i.e. by SignIn's 2FA gate). Fires on EVERY
+// challenge, carrying `totp_enrolled` so a hand-written subscriber knows
+// whether the built-in authenticator will satisfy it
+// (totp_enrolled=true → stay out of the way) or it must deliver a code
+// itself (totp_enrolled=false → SMS/e-mail using `code`). This single
+// boolean is the design's keystone. `code` is the plaintext fallback
+// code — present only in plugin-generates mode (TOTP off / not enrolled),
+// blank otherwise; it is never persisted.
+message MfaChallengeRequested {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.mfa.challenge_requested"
+  };
+  option (w17.contrib.plugin_feature) = "two_factor";
+
+  string                    user_id       = 1;
+  string                    challenge_id  = 2;
+  bool                      totp_enrolled = 3; // ← the keystone signal
+  string                    email         = 4; // delivery hint
+  string                    code          = 5; // plugin-generates mode only; blank otherwise
+  google.protobuf.Timestamp expires_at    = 6;
+}
+
+// MfaVerified — emitted by ConsumeMfaChallenge on a successful second
+// factor. Audit hook (logins-with-2FA, anomaly detection).
+message MfaVerified {
+  option (w17.event) = { channel: "events", topic: "auth.mfa.verified" };
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id      = 1;
+  string challenge_id = 2;
+}
+
+// TotpEnrolled / TotpConfirmed / TotpDisabled — authenticator lifecycle
+// audit hooks.
+message TotpEnrolled {
+  option (w17.event) = { channel: "events", topic: "auth.totp.enrolled" };
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string                    user_id     = 1;
+  google.protobuf.Timestamp enrolled_at = 2;
+}
+
+message TotpConfirmed {
+  option (w17.event) = { channel: "events", topic: "auth.totp.confirmed" };
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
+}
+
+message TotpDisabled {
+  option (w17.event) = { channel: "events", topic: "auth.totp.disabled" };
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
+}
+
+// password_reset lifecycle — emitted by CreatePasswordResetToken when a
+// user requests a reset. Carries the PLAINTEXT token (never persisted —
+// only its hash is stored) + email for a hand-written delivery channel
+// (e-mail with a reset link). The handler emits only on a known email and
+// silently no-ops an unknown one (anti-enumeration), so a subscriber only
+// ever sees a request for a real account. E1.
+message PasswordResetRequested {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.password_reset.requested"
+  };
+  option (w17.contrib.plugin_feature) = "password_reset";
+
+  string                    user_id    = 1;
+  string                    email      = 2; // delivery hint
+  string                    token      = 3; // plaintext reset token; NEVER persisted
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// email_verification lifecycle — emitted by CreateEmailVerificationToken
+// when a verification is requested (e.g. just after sign-up). Same shape
+// + single-plaintext-delivery contract as PasswordResetRequested. E1.
+message EmailVerificationRequested {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.email_verification.requested"
+  };
+  option (w17.contrib.plugin_feature) = "email_verification";
+
+  string                    user_id    = 1;
+  string                    email      = 2; // delivery hint + the address being verified
+  string                    token      = 3; // plaintext verification token; NEVER persisted
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// org_membership lifecycle — emitted by the two org write primitives
+// (AuthMutation.CreateOrganization / AddOrgMembership) after their rows
+// commit. These are the symmetric counterpart to UserCreated: a project
+// hangs its provisioning subscribers here (seed default resources for a
+// new org, audit membership grants, prime per-org projections) rather than
+// plumbing owned/replicated state off the plugin's Organization /
+// OrgMembership tables on the write path: these events are the stable
+// contract, whereas the plugin's table schema is internal and may change on
+// a version bump. A consuming PROJECT MAY still read the plugin's tables —
+// e.g. a read-only display JOIN in its own query (`... o.name AS
+// organization_name`) — it pins the plugin version, so the schema is frozen
+// until it deliberately updates. What stays forbidden is a *plugin's*
+// handler code reaching into *another plugin's* tables (the enforced
+// cross-plugin isolation rule, docs/specs/plugins/business-handlers.md).
+// All gated `org_membership`.
+
+// OrganizationCreated — emitted on AuthMutation.CreateOrganization after
+// the Organization row commits. The keystone provisioning hook: a
+// subscriber seeds an org's default data off org_id.
+message OrganizationCreated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org.created"
+  };
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string                    org_id     = 1;
+  string                    slug       = 2;
+  string                    name       = 3;
+  string                    kind       = 4; // private | company
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// OrgMembershipAdded — emitted on AuthMutation.AddOrgMembership after the
+// OrgMembership row commits (the creator's owner grant + every later
+// invite accept). Subscribers audit grants, invalidate per-user org
+// caches, or notify. `role` is the granted role (owner | admin | member).
+message OrgMembershipAdded {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org_membership.added"
+  };
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string                    membership_id = 1;
+  string                    user_id       = 2;
+  string                    org_id        = 3;
+  string                    role          = 4; // owner | admin | member
+  google.protobuf.Timestamp created_at    = 5;
+}
+
+// OrganizationDeleted — emitted on AuthMutation.DeleteOrganization (the
+// admin Organizations page delete) after the org + its memberships are
+// gone. The symmetric teardown counterpart to OrganizationCreated: a
+// subscriber tears down the org's provisioned resources off org_id.
+message OrganizationDeleted {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org.deleted"
+  };
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string org_id = 1;
+}
+
+// OrganizationUpdated — emitted on AuthMutation.UpdateOrganization (the
+// admin Organizations page detail edit). A subscriber re-syncs anything
+// keyed on the org's slug, which is its public handle.
+message OrganizationUpdated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org.updated"
+  };
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string org_id = 1;
+}
+
+// OrgMembershipUpdated — emitted on AuthMutation.UpdateOrgMembership
+// (the admin OrgMemberships page detail edit) after the member's role
+// changed. Subscribers invalidate the user's per-org authorization
+// cache — this event DOES change what the member may do.
+message OrgMembershipUpdated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org_membership.updated"
+  };
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string membership_id = 1;
+}
+
+// OrgMembershipRemoved — emitted on AuthMutation.DeleteOrgMembership (the
+// admin OrgMemberships page delete) after the membership row is gone.
+// Subscribers audit revocations or invalidate the user's per-org cache.
+message OrgMembershipRemoved {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org_membership.removed"
+  };
+  option (w17.contrib.plugin_feature) = "org_membership";
+
+  string membership_id = 1;
+}
+
+// ── org_invite lifecycle ────────────────────────────────────
+//
+// The plugin DELIVERS nothing, exactly as with PasswordResetRequested and
+// EmailVerificationRequested: it records the invitation and says so on the
+// bus, and a project that wants the invitee to hear about it writes a
+// subscriber. That is what keeps this feature usable on a deployment with
+// no mail channel at all — the invitation still works, it is just told to
+// the person some other way.
+
+message OrgInviteCreated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org_invite.created"
+  };
+  option (w17.contrib.plugin_feature) = "org_invite";
+
+  string invite_id  = 1;
+  string org_id     = 2;
+  string email      = 3; // delivery hint — the address invited
+  string role       = 4;
+  string invited_by = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message OrgInviteAccepted {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org_invite.accepted"
+  };
+  option (w17.contrib.plugin_feature) = "org_invite";
+
+  string invite_id = 1;
+  string org_id    = 2;
+  // The account that accepted. Present here and absent from the invitation
+  // itself, which is the whole shape of this feature: an invitation names
+  // an address, an acceptance names a user.
+  string user_id   = 3;
+  string role      = 4;
+}
+
+message OrgInviteRevoked {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.org_invite.revoked"
+  };
+  option (w17.contrib.plugin_feature) = "org_invite";
+
+  string invite_id = 1;
+  string org_id    = 2;
+}

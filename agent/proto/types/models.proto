@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package w17.contrib.agent;
+
+import "w17/contrib.proto";
+
+option go_package = "@project;@pkg";
+
+// ModelSpec is what to ask and how hard to think.
+//
+// The two families the provider offers want DIFFERENT parameters, and sending
+// the wrong set is a 400 rather than an ignored field — a reasoning model takes
+// an effort and refuses a temperature, a sampling model the other way round.
+// The plugin picks the shape from the id, so a caller states intent and not
+// wire format.
+message ModelSpec {
+  // Deployment or model name, e.g. "gpt-5.6-luna". The family is read off this
+  // by prefix, because a response carries a DATED id back
+  // (gpt-5-nano-2025-08-07) and equality would miss it.
+  string id = 1;
+
+  // Room for the ANSWER. On a reasoning model the plugin adds headroom beneath
+  // it, because thinking and answering share one budget and a cap that covered
+  // only the answer would have the thinking truncate it.
+  //
+  // Three values, three meanings:
+  //
+  //   > 0   this many tokens
+  //   = 0   the deployment's configured default
+  //   < 0   NO CAP — the budget field is omitted entirely and the provider's
+  //         own default applies
+  //
+  // The negative case exists because a caller whose answer is large and
+  // variable — fifty records in one reply — would otherwise have to guess a
+  // number, and a guess that is too low truncates. Reach for it when you cannot
+  // measure; `status` still says whether the provider cut you off.
+  int32 max_tokens = 2;
+
+  // Reasoning budget. Honoured by reasoning families, refused by sampling ones.
+  Effort effort = 3;
+
+  // Sampling temperature. Optional because a reasoning model rejects any value
+  // but the default — absent means "the provider's default", which is the only
+  // legal value there.
+  optional double temperature = 4;
+
+  // NO `seed`, and deliberately — see below. Field 5 is left free for it.
+  //
+  // A consumer porting a deterministic classifier looked for one here, found
+  // nothing, and had to drop half of what their determinism rested on
+  // (`temperature: 0` + seed + de-duplication upstream). They were right to
+  // look: this is where it would live.
+  //
+  // It is absent because this plugin speaks the provider's RESPONSES API,
+  // whose request carries `temperature` and `top_p` and no seed at all — seed
+  // exists only on the older chat-completions surface. Offering the field
+  // anyway would mean one of two bad things: a second code path for sampling
+  // models, or a parameter that is accepted and silently does nothing, which
+  // is the failure mode a determinism knob can least afford.
+  //
+  // Worth knowing before you pick a model: on a REASONING family seed is
+  // refused by the provider regardless, so nothing is lost there. The gap is
+  // real only on a SAMPLING family — and switching families is one line in a
+  // config, which is exactly when nobody expects to lose a guarantee. If you
+  // need it, say so: routing sampling calls through chat-completions is the
+  // known answer and it is a decision, not an oversight.
+}
+
+enum Effort {
+  EFFORT_UNSPECIFIED = 0;
+  EFFORT_NONE        = 1;
+  EFFORT_LOW         = 2;
+  EFFORT_MEDIUM      = 3;
+  EFFORT_HIGH        = 4;
+}
+
+// Role names who said something. There is no SYSTEM: the system prompt is a
+// field of its own on the request, not an entry at the head of the history —
+// which is where it belonged all along, so that the history is only what was
+// actually said.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_USER        = 1;
+  ROLE_ASSISTANT   = 2;
+}
+
+// Message is one thing somebody said. Text only, deliberately: the engine
+// carries no attachments and no tool-call records across a turn.
+message Message {
+  Role   role = 1;
+  string text = 2;
+}
+
+// ModelUsage is what a call cost in TOKENS. It is deliberately not money.
+//
+// Prices change without the code changing, differ per deployment and per
+// contract, and belong to whoever is billed. The plugin reports what it can
+// count and leaves pricing to the caller, who knows their own rate card.
+message ModelUsage {
+  // The model the PROVIDER says answered, which can differ from the one asked
+  // for (a dated id, a deployment alias).
+  string model = 1;
+
+  // False when the provider reported no usage at all. Without this a free call
+  // and an unreported one are the same row of zeros, and a caller summing them
+  // cannot tell which they have.
+  bool measured = 2;
+
+  int32 input_tokens  = 3;
+  int32 output_tokens = 4;
+  int32 total_tokens  = 5;
+
+  // Cached input and reasoning output, when the provider breaks them out. Both
+  // are subsets of the fields above, not additions to them.
+  int32 cached_input_tokens = 6;
+  int32 reasoning_tokens    = 7;
+}
+
+// Status is the provider's own word for how a response ended.
+//
+// It replaces a finish reason rather than renaming it: "stop" and "tool_calls"
+// were two values that both meant finished, and the detail of why an unfinished
+// one stopped lives in IncompleteReason beneath it. Without the pair, a
+// TRUNCATED answer is indistinguishable from a complete one.
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_COMPLETED   = 1;
+  STATUS_INCOMPLETE  = 2;
+}
+
+enum IncompleteReason {
+  INCOMPLETE_REASON_UNSPECIFIED = 0;
+  // Ran out of budget. On a reasoning model this is an ordinary outcome and not
+  // a broken response: thinking and answering share one allowance.
+  INCOMPLETE_REASON_MAX_OUTPUT_TOKENS = 1;
+  // The provider's content filter objected.
+  INCOMPLETE_REASON_CONTENT_FILTER = 2;
+}

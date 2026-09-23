@@ -1,0 +1,221 @@
+syntax = "proto3";
+
+// Agent plugin — the usage layer's write primitives.
+//
+// Every method here is gated on `usage_persistence`: with the feature off the
+// tables do not exist, so neither may the rpcs that write them.
+//
+// Every MESSAGE carries the same gate, and that is not belt-and-braces. A
+// proto file is dropped from an activation only when everything in it is
+// gated out; one ungated message keeps the file, and the file imports
+// @self/types/usage.proto, which an activation without the feature does not
+// have. The compile then fails on a dangling import rather than on anything
+// the author can see.
+//
+// The interning methods (scope, model, label) are UPSERTs in the NO-OP UPDATE
+// form — `DO UPDATE SET <conflict col> = <same value>` — because `DO NOTHING`
+// returns no row on conflict, and the id is the entire point of the call. The
+// compiler refuses the combination and says so, which is how this was caught. They are called from the async writer's FLUSH, never from the
+// model call itself — a lookup on the hot path would put a database round trip
+// in front of every completion, which is the opposite of what an async writer
+// is for.
+
+package w17.contrib.agent;
+
+import "google/protobuf/timestamp.proto";
+import "@self/types/usage.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message InternScopeReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  string external_id = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+}
+message InternScopeResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 id = 1;
+}
+
+message InternModelReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  string name = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+}
+message InternModelResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 id = 1;
+}
+
+message InternLabelReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  string key   = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string value = 2 [(w17.field) = { type: CHAR, max_len: 256 }];
+}
+message InternLabelResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 id = 1;
+}
+
+message RecordUsageReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 scope_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 model_id = 2 [(w17.field) = { type: NUMBER, gte: 0 }];
+  bool  measured = 3;
+
+  int64 input_tokens        = 4 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 output_tokens       = 5 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 cached_input_tokens = 6 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 reasoning_tokens    = 7 [(w17.field) = { type: NUMBER, gte: 0 }];
+
+  CallStatus status = 8 [(w17.field) = { type: ENUM }];
+
+  google.protobuf.Timestamp started_at = 9;
+  int64 duration_ms = 10 [(w17.field) = { type: NUMBER, gte: 0 }];
+}
+message RecordUsageResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 id = 1;
+}
+
+message AttachUsageLabelReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 usage_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 label_id = 2 [(w17.field) = { type: NUMBER, gte: 0 }];
+}
+message AttachUsageLabelResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 id = 1;
+}
+
+message RecordModelPriceReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 model_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+  google.protobuf.Timestamp valid_from = 2;
+  optional int64 input_per_million_minor        = 3 [(w17.field) = { type: NUMBER, gte: 0, null: true }];
+  optional int64 output_per_million_minor       = 4 [(w17.field) = { type: NUMBER, gte: 0, null: true }];
+  optional int64 cached_input_per_million_minor = 5 [(w17.field) = { type: NUMBER, gte: 0, null: true }];
+  string currency = 6 [(w17.field) = { type: CHAR, max_len: 3 }];
+}
+message RecordModelPriceResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 id = 1;
+}
+
+message SetScopeLimitReq {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 scope_id = 1 [(w17.field) = { type: NUMBER, gte: 0 }];
+  LimitWindow window = 2 [(w17.field) = { type: ENUM }];
+  int64 limit_minor = 3 [(w17.field) = { type: NUMBER, gte: 0 }];
+  string currency = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
+  google.protobuf.Timestamp valid_from = 5;
+}
+message SetScopeLimitResp {
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+  int64 id = 1;
+}
+
+service UsageMutation {
+  option (w17.contrib.plugin_feature_svc) = "usage_persistence";
+
+  // UPSERT so two flushes racing on a first-seen scope do not fail one of
+  // them: the id is what the caller needs, and it is the same id either way.
+  rpc InternScope(InternScopeReq) returns (InternScopeResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Scope SET external_id = :external_id "
+          "ON CONFLICT (external_id) DO UPDATE SET external_id = :external_id "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  rpc InternModel(InternModelReq) returns (InternModelResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Model SET name = :name "
+          "ON CONFLICT (name) DO UPDATE SET name = :name "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  rpc InternLabel(InternLabelReq) returns (InternLabelResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Label SET key = :key, value = :value "
+          "ON CONFLICT (key, value) DO UPDATE SET key = :key "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  rpc RecordUsage(RecordUsageReq) returns (RecordUsageResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Usage SET "
+          "scope_id = :scope_id, model_id = :model_id, measured = :measured, "
+          "input_tokens = :input_tokens, output_tokens = :output_tokens, "
+          "cached_input_tokens = :cached_input_tokens, "
+          "reasoning_tokens = :reasoning_tokens, "
+          "status = :status, started_at = :started_at, "
+          "duration_ms = :duration_ms "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  rpc AttachUsageLabel(AttachUsageLabelReq) returns (AttachUsageLabelResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.UsageLabel SET "
+          "usage_id = :usage_id, label_id = :label_id "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // Append-only: a correction is a new row at a new `valid_from`, never an
+  // edit. A past call keeps the price that was in force when it ran, and that
+  // property is only true if nothing rewrites history.
+  rpc RecordModelPrice(RecordModelPriceReq) returns (RecordModelPriceResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ModelPrice SET "
+          "model_id = :model_id, valid_from = :valid_from, "
+          "input_per_million_minor = :input_per_million_minor, "
+          "output_per_million_minor = :output_per_million_minor, "
+          "cached_input_per_million_minor = :cached_input_per_million_minor, "
+          "currency = :currency "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  rpc SetScopeLimit(SetScopeLimitReq) returns (SetScopeLimitResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ScopeLimit SET "
+          "scope_id = :scope_id, window = :window, "
+          "limit_minor = :limit_minor, currency = :currency, "
+          "valid_from = :valid_from "
+          "RETURNING id AS id"
+      }
+    };
+  }
+}

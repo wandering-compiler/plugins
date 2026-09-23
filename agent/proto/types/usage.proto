@@ -1,0 +1,276 @@
+syntax = "proto3";
+
+package w17.contrib.agent;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+// The usage layer: what a model call cost, who it is charged to, and what the
+// tokens were worth when it happened.
+//
+// Every table here is gated on the `usage_persistence` feature. An activation
+// that leaves it off gets no tables and no writes — and the obligation to
+// record spend goes back to the caller, which is exactly the hole this layer
+// exists to close: a caller that must remember to record is a caller that can
+// forget, and the first consumer did forget, in one branch, for calls the
+// provider did not measure.
+//
+// ── Why the fact table holds no strings ───────────────────────────────────
+//
+// One row per model call is the highest-volume thing this plugin writes, and
+// the same handful of strings would repeat in every one of them: the model
+// name, the tenant. They are interned into dimension tables instead, so a
+// distinct value is stored once and the fact row carries an integer.
+//
+// That is not only about bytes. `ModelPrice` keys on `model_id`, so a
+// model rename is one row in one dimension rather than a rewrite of history —
+// and the property "a finished call keeps the price that was in force when it
+// ran" holds on an integer join.
+//
+// ── Why a scope, and why the plugin does not know what one is ─────────────
+//
+// `Scope` is whoever the spend is charged to — a tenant, in every case we
+// know of. The plugin never resolves it: the caller supplies an opaque
+// identifier and the plugin interns it. A foreign key into the auth plugin's
+// Tenant table is not merely undesirable here, it is unexpressible — `fk:`
+// names a table whose real name depends on the ACTIVATION, so no plugin can
+// reference another's. The opacity is therefore the design, not a compromise.
+
+// Scope — the billing subject, opaque to this plugin.
+message Scope {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 id = 1 [(w17.field) = { pk: true, default_auto: IDENTITY }];
+
+  // The caller's own identifier for whoever pays. w17 never parses it.
+  string external_id = 2 [(w17.field) = { type: CHAR, max_len: 128, unique: true }];
+
+  google.protobuf.Timestamp first_seen_at = 3
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// Model — the model name, interned.
+message Model {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 id = 1 [(w17.field) = { pk: true, default_auto: IDENTITY }];
+
+  // As the PROVIDER named it in the response, which can differ from what was
+  // asked for — a dated id, a deployment alias. Billing follows what answered,
+  // not what was requested.
+  string name = 2 [(w17.field) = { type: CHAR, max_len: 128, unique: true }];
+
+  google.protobuf.Timestamp first_seen_at = 3
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// Usage — one model call. Integers and timestamps only, by design.
+message Usage {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 id = 1 [(w17.field) = { pk: true, default_auto: IDENTITY }];
+
+  int64 scope_id = 2 [
+    (w17.field)     = { type: NUMBER, gte: 0 },
+    (w17.db.column) = { index: true }
+  ];
+  int64 model_id = 3 [
+    (w17.field)     = { type: NUMBER, gte: 0 },
+    (w17.db.column) = { index: true }
+  ];
+
+  // measured=false means the PROVIDER reported no usage, and that is not the
+  // same as a call that cost nothing. Both used to be "no row", which is how a
+  // run can report a complete bill for tokens it actually spent. The row
+  // exists either way; this field is what separates them.
+  bool measured = 4;
+
+  // The four kinds are separate columns rather than separate rows because
+  // two of them are SUBSETS: cached input is part of input, reasoning is part
+  // of output. As rows they would be double-counted or need a rule nobody can
+  // see; as columns the pricing query subtracts.
+  int64 input_tokens        = 5 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 output_tokens       = 6 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 cached_input_tokens = 7 [(w17.field) = { type: NUMBER, gte: 0 }];
+  int64 reasoning_tokens    = 8 [(w17.field) = { type: NUMBER, gte: 0 }];
+
+  // How the call ended. Kept because a failed call still spends tokens, and a
+  // bill that silently drops them is wrong in the direction nobody checks.
+  CallStatus status = 9 [(w17.field) = { type: ENUM, default_int: 1 }];
+
+  // Wall time. `duration_ms` rather than a second timestamp: the question is
+  // "how long did it take", asked far more often than "when exactly did it
+  // finish", and one integer answers it without a second index.
+  google.protobuf.Timestamp started_at = 10
+      [(w17.field) = { type: DATETIME, immutable: true }];
+  int64 duration_ms = 11 [(w17.field) = { type: NUMBER, gte: 0 }];
+
+  google.protobuf.Timestamp recorded_at = 12
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// CallStatus — deliberately no zero member in the CHECK: an unset status
+// is a bug in the writer, not a state a call can be in.
+enum CallStatus {
+  CALL_STATUS_UNSPECIFIED = 0;
+  // The provider answered.
+  CALL_STATUS_OK = 1;
+  // The provider refused or errored. Tokens may still have been spent.
+  CALL_STATUS_FAILED = 2;
+  // The call happened and the writer could not establish the outcome — the
+  // async path's way of saying "we know less than usual", rather than
+  // guessing OK and quietly making the bill look clean.
+  CALL_STATUS_UNKNOWN = 3;
+}
+
+// ModelPrice — append-only price list, per model, valid from an instant.
+//
+// Three properties stand or fall on this shape, and all three come from a
+// consumer's own metering module, where each is pinned by a test:
+//
+//  1. changing the price list does not move a finished call's cost — the cost
+//     is a JOIN to the row in force at `started_at`, never a number copied
+//     onto the usage row;
+//  2. a price beginning AFTER a call cannot reach back to it;
+//  3. correcting a price is a NEW ROW, not an edit, so the past stays priced
+//     at what was true.
+//
+// Currency lives here rather than on the usage row for the same reason the
+// model name does: it repeats, and it belongs to the price, not the call.
+message ModelPrice {
+  // One price per model per instant. A correction picks a new instant rather
+  // than overwriting, which is what keeps a past call priced at what was true.
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "model_id" }, { name: "valid_from" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 id = 1 [(w17.field) = { pk: true, default_auto: IDENTITY }];
+
+  int64 model_id = 2 [
+    (w17.field)     = { type: NUMBER, gte: 0 },
+    (w17.db.column) = { index: true }
+  ];
+
+  // The instant this price starts applying. Unique with model_id: one price
+  // per model per instant, and a correction picks a new instant.
+  google.protobuf.Timestamp valid_from = 3
+      [(w17.field) = { type: DATETIME, immutable: true }];
+
+  // Minor units per MILLION tokens, one rate per kind. Absent (NULL) means
+  // "this kind is not priced for this model" — which must stay distinguishable
+  // from zero, or an unpriced kind silently bills as free.
+  optional int64 input_per_million_minor = 4
+      [(w17.field) = { type: NUMBER, gte: 0, null: true }];
+  optional int64 output_per_million_minor = 5
+      [(w17.field) = { type: NUMBER, gte: 0, null: true }];
+  // Cached input is usually cheaper than fresh input, and it is a SUBSET of
+  // it — the cost query bills (input - cached) at the input rate and cached at
+  // this one.
+  optional int64 cached_input_per_million_minor = 6
+      [(w17.field) = { type: NUMBER, gte: 0, null: true }];
+
+  // ISO 4217. On the price, never on the usage row.
+  string currency = 7 [(w17.field) = { type: CHAR, max_len: 3 }];
+
+  google.protobuf.Timestamp recorded_at = 8
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// ScopeLimit — how much a scope may spend in a window.
+//
+// Stored here, enforced in the plugin: a limit that only reports is a limit
+// the caller has to remember to check, which is the same hole this layer
+// closes for recording.
+message ScopeLimit {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 id = 1 [(w17.field) = { pk: true, default_auto: IDENTITY }];
+
+  int64 scope_id = 2 [
+    (w17.field)     = { type: NUMBER, gte: 0 },
+    (w17.db.column) = { index: true }
+  ];
+
+  LimitWindow window = 3 [(w17.field) = { type: ENUM, default_int: 1 }];
+
+  // Minor units. Zero is a real value — "this scope may not spend" — which is
+  // why it is not used as the absent marker.
+  int64 limit_minor = 4 [(w17.field) = { type: NUMBER, gte: 0 }];
+
+  string currency = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
+
+  google.protobuf.Timestamp valid_from = 6
+      [(w17.field) = { type: DATETIME, immutable: true }];
+  google.protobuf.Timestamp recorded_at = 7
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+enum LimitWindow {
+  LIMIT_WINDOW_UNSPECIFIED = 0;
+  LIMIT_WINDOW_DAY = 1;
+  LIMIT_WINDOW_MONTH = 2;
+  // No window: the cap applies to everything the scope has ever spent.
+  LIMIT_WINDOW_TOTAL = 3;
+}
+
+// Label — one interned attribution key/value pair.
+//
+// The decisive requirement from the first consumer: without a way to pin a
+// caller's own attribution to a call, the plugin answers "what did this tenant
+// spend" while their question is "what did THIS RUN cost and who is it charged
+// to" — and they keep a second set of books. Two sets of books drift, and
+// nobody notices for months.
+//
+// Interned, so the fact side stays integers. A call carries as many labels as
+// the caller sends and none if it sends none, which is why this is a join
+// rather than columns.
+message Label {
+  // (key, value) unique, so interning is an upsert and the same pair is one
+  // row however many calls carry it — the whole point of interning.
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "key" }, { name: "value" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 id = 1 [(w17.field) = { pk: true, default_auto: IDENTITY }];
+
+  string key   = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string value = 3 [(w17.field) = { type: CHAR, max_len: 256 }];
+
+  google.protobuf.Timestamp first_seen_at = 4
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// UsageLabel — which labels a call carried.
+//
+// A call that cannot be attributed to one subject gets NO label rather than a
+// share of each: aggregating later is always possible, splitting back never
+// is.
+message UsageLabel {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "usage_persistence";
+
+  int64 id = 1 [(w17.field) = { pk: true, default_auto: IDENTITY }];
+
+  int64 usage_id = 2 [
+    (w17.field)     = { type: NUMBER, gte: 0 },
+    (w17.db.column) = { index: true }
+  ];
+  int64 label_id = 3 [
+    (w17.field)     = { type: NUMBER, gte: 0 },
+    (w17.db.column) = { index: true }
+  ];
+}

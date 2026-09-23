@@ -1,0 +1,7 @@
+# Standard Go + IDE artifacts. NOTE: pb/ is COMMITTED — do not
+# add it here.
+*.test
+*.out
+coverage.txt
+.idea/
+.vscode/

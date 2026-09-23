@@ -1,0 +1,242 @@
+syntax = "proto3";
+
+// Payment plugin — PaymentService (turnkey, gateway-facing) (Slice 1).
+//
+// Hand-written business handlers (no (w17.db.method) — the plugin
+// author owns the bodies in src/handlers/). Each composes the backend
+// driver (provider API calls) with the PaymentQuery / PaymentMutation
+// DQL primitives:
+//
+//   - CreateCustomer  → backend.EnsureCustomer + PaymentMutation.CreateCustomer
+//   - CreatePayment   → resolve/ensure Customer + backend.CreatePayment
+//                       + PaymentMutation.CreatePayment
+//   - GetPayment      → PaymentQuery.GetPayment passthrough
+//   - IngestStripe    → verify signature (metadata) + dedup
+//                       (MarkWebhookProcessed) + dispatch
+//                       MarkPaymentSucceeded / MarkPaymentFailed
+//
+// The webhook RPC is gated `stripe_webhooks` (its handler body lives in
+// the feature-staged handlers/webhook_stripe.go). The signature rides
+// gRPC metadata (`Stripe-Signature`, declared in the REST preset's
+// forward_headers); the verbatim body rides the request's raw_payload
+// bytes field via the endpoint's raw_body_field.
+
+package w17.contrib.payment;
+
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+
+option go_package = "@project;@pkg";
+
+// CreateCustomer — establish the principal ↔ provider-customer link.
+// user_id is the project principal (resolved from auth, not trusted
+// from the body in a real deployment — the project's gateway stamps it
+// into the request via a field binding / scope).
+message NewCustomerReq {
+  string user_id = 1;
+  string email   = 2;
+}
+message NewCustomerResp { Customer customer = 1; }
+
+// CreatePayment — create a charge. The handler ensures the Customer
+// exists (creating the provider customer on first charge), calls the
+// backend to create the provider payment object with an idempotency
+// key, then persists the local Payment. amount is a decimal string
+// (e.g. "19.99"); currency is ISO-4217 (empty → default_currency).
+message ChargeReq {
+  string user_id         = 1;
+  string amount          = 2;
+  string currency        = 3;
+  string description      = 4;
+  // idempotency_key — caller-supplied retry guard. Empty → the handler
+  // derives one; supplying a stable key makes the whole create
+  // idempotent across client retries.
+  string idempotency_key = 5;
+}
+message ChargeResp {
+  Payment payment = 1;
+  // client_secret — provider-issued token the frontend uses to confirm
+  // the payment (e.g. Stripe PaymentIntent client_secret). Not
+  // persisted; returned for the create call only.
+  string  client_secret = 2;
+}
+
+// RefundPaymentReq reverses a Payment. amount is a decimal string; empty
+// = full refund (the payment's amount). currency defaults to the
+// payment's currency.
+message RefundPaymentReq {
+  string payment_id = 1;
+  string amount     = 2;
+  // idempotency_key — caller-supplied retry guard, REQUIRED. It is the
+  // provider Idempotency-Key for the refund, so it must be UNIQUE per
+  // distinct refund and STABLE across retries of the same one. Deriving
+  // it from (payment_id, amount) — as the handler used to — collides two
+  // legitimate same-amount partial refunds into one provider replay,
+  // silently shorting the customer; so the caller now owns it (mirrors
+  // prepaid GrantCredit / usage ReportUsage, which also require it).
+  string idempotency_key = 3;
+}
+message RefundPaymentResp { Refund refund = 1; }
+
+// IngestStripe — inbound webhook sink. raw_payload carries the verbatim
+// HTTP body (endpoint raw_body_field); the Stripe-Signature header
+// rides gRPC metadata. Gated stripe_webhooks.
+message IngestStripeReq {
+  bytes raw_payload = 1;
+}
+message IngestStripeResp {
+  bool   handled    = 1;  // false = duplicate event (already processed)
+  string event_id   = 2;
+  string event_type = 3;
+}
+
+// ── prepaid feature: credit grant / spend / balance ─────────────────
+// CreditView is the shared response — the principal + their post-op
+// materialized balance (decimal string).
+message CreditView {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string user_id = 1;
+  string balance = 2;
+}
+
+// GrantCreditReq / SpendCreditReq — amount is an UNSIGNED decimal
+// string; the handler applies the sign (grant +, spend −). reason/ref
+// annotate the ledger entry; idempotency_key (caller-supplied) makes
+// the apply idempotent.
+message GrantCreditReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string user_id         = 1;
+  string amount          = 2;
+  string reason          = 3;
+  string ref             = 4;
+  string idempotency_key = 5;
+}
+message SpendCreditReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string user_id         = 1;
+  string amount          = 2;
+  string reason          = 3;
+  string ref             = 4;
+  string idempotency_key = 5;
+}
+// TopUpCreditReq funds a credit top-up via a provider charge. The credit
+// is granted when the payment succeeds (the webhook hook) — 1:1 with the
+// charged amount. Requires the stripe_webhooks feature for the grant to
+// fire.
+message TopUpCreditReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string user_id         = 1;
+  string amount          = 2;
+  string currency        = 3;
+  string idempotency_key = 4;
+}
+message TopUpCreditResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  Payment payment       = 1;
+  string  client_secret = 2; // provider token to confirm the charge
+}
+
+// ── usage feature: report / read metered usage ──────────────────────
+// UsageView is the shared response — the (principal, meter, period) and
+// its post-op materialized total.
+message UsageView {
+  option (w17.contrib.plugin_feature) = "usage";
+  string user_id = 1;
+  string meter   = 2;
+  string period  = 3;
+  int64  total   = 4;
+}
+
+// ReportUsageReq records consumption. quantity is integer meter units.
+// item_ref / metadata are optional (set for a concrete service order,
+// blank for raw time-burn). idempotency_key makes the report idempotent.
+message ReportUsageReq {
+  option (w17.contrib.plugin_feature) = "usage";
+  string user_id         = 1;
+  string meter           = 2;
+  string period          = 3;
+  int64  quantity        = 4;
+  string item_ref        = 5;
+  string metadata        = 6;
+  string idempotency_key = 7;
+}
+
+// ── subscriptions feature: plan catalogue + subscribe ───────────────
+message DefinePlanReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string slug     = 1;
+  string name     = 2;
+  string amount   = 3;
+  string currency = 4;
+  string interval = 5; // month | year
+}
+message PlanView {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Plan plan = 1;
+}
+
+message SubscribeReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string user_id   = 1;
+  string plan_slug = 2;
+  // idempotency_key — caller-supplied retry guard, REQUIRED. It is the
+  // provider Idempotency-Key for StartSubscription, so it must be UNIQUE
+  // per distinct subscribe and STABLE across retries of the same one.
+  // Deriving it from (user_id, plan_slug) — as the handler used to —
+  // collides a re-subscribe-after-cancel onto the original (now canceled)
+  // subscription via the provider's idempotency replay, silently leaving
+  // the user unsubscribed; so the caller owns it (mirrors CreatePayment /
+  // RefundPayment / GrantCredit / ReportUsage).
+  string idempotency_key = 3;
+}
+message SubscriptionView {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Subscription subscription = 1;
+}
+
+service PaymentService {
+  rpc CreateCustomer(NewCustomerReq) returns (NewCustomerResp);
+  rpc CreatePayment(ChargeReq) returns (ChargeResp);
+  rpc RefundPayment(RefundPaymentReq) returns (RefundPaymentResp);
+
+  // IngestStripe — Stripe webhook ingestion. Gated stripe_webhooks; the
+  // handler body is in the feature-staged handlers/webhook_stripe.go.
+  rpc IngestStripe(IngestStripeReq) returns (IngestStripeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+  }
+
+  // Prepaid credit operations (gated prepaid; bodies in
+  // handlers/prepaid.go). GrantCredit / SpendCredit apply a signed
+  // ledger entry + materialized-balance update atomically; SpendCredit
+  // surfaces FailedPrecondition when the balance is insufficient.
+  rpc GrantCredit(GrantCreditReq) returns (CreditView) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+  }
+  rpc SpendCredit(SpendCreditReq) returns (CreditView) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+  }
+  // TopUpCredit — charge the principal and (on payment success, via the
+  // webhook) grant matching credit. Gated prepaid.
+  rpc TopUpCredit(TopUpCreditReq) returns (TopUpCreditResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+  }
+
+  // Metered usage (gated usage; body in handlers/usage.go). ReportUsage
+  // appends a usage record + increments the meter atomically. Reading the
+  // meter is a direct storage query (PaymentQuery.GetUsageMeter).
+  rpc ReportUsage(ReportUsageReq) returns (UsageView) {
+    option (w17.contrib.plugin_feature_rpc) = "usage";
+  }
+
+  // Subscriptions (gated subscriptions; bodies in
+  // handlers/subscriptions.go). CreatePlan defines a plan locally + pushes
+  // the price to the provider; Subscribe enrolls a principal's customer
+  // on a plan via the provider. Reading a subscription is a direct storage
+  // query (PaymentQuery.GetSubscription).
+  rpc CreatePlan(DefinePlanReq) returns (PlanView) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+  }
+  rpc Subscribe(SubscribeReq) returns (SubscriptionView) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+  }
+}

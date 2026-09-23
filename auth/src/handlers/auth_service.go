@@ -1,0 +1,862 @@
+// Package handlers contains the auth plugin's authored Go
+// business handlers — canonical implementations of
+// AuthService.Authenticate / SignIn / SignUp.
+//
+// Each method is deliberately anti-enumeration: every failure
+// path returns the SAME opaque codes.Unauthenticated status
+// with the same message so callers can't distinguish
+// "no-such-token" from "malformed header" from "wrong password"
+// from "transient DB error".
+//
+// Dependencies (Query, Mutation typed-client interfaces) are
+// populated by the plugin's RegisterPlugin function before
+// Init() runs. Plugin author tests construct
+// *AuthServiceHandler directly, inject mock pb.AuthQueryClient /
+// pb.AuthMutationClient, and exercise the methods with standard
+// Go testing — no codegen, no staging.
+package handlers
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/wandering-compiler/platform/plugins/auth/lib/passwordhash"
+
+	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/sdk/go/lib/acllock"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+)
+
+// randomURLToken returns a fresh 256-bit URL-safe random token — the
+// plaintext password-reset / email-verification token (E1) handed to the
+// user once (via the emitted event). Lives here (always-compiled) so both
+// feature-gated handler files can share it without a cross-file dependency.
+func randomURLToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// sha256Hex is the one-way function applied to an E1 token for storage +
+// lookup — only the hash is persisted, so a DB read can't redeem a token.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// defaultSessionTokenTTLSeconds is the fallback session bearer lifetime
+// (30 days) when session_token_ttl_seconds is unset / <= 0.
+const defaultSessionTokenTTLSeconds = 30 * 24 * 60 * 60
+
+// scopeUserIDKey / userMetadataKey are the gRPC metadata keys the
+// gateway threads the authenticated principal under: the
+// AuthResp.scopes["user_id"] entry, and the always-present
+// base64(marshaled AuthResp) envelope.
+//
+// Handler code reads them through principal.UserID / principal.Envelope
+// rather than by hand — these consts exist for the tests, which build
+// the metadata a gateway would stamp. principal owns the wire contract
+// (it is dependency-light public sdk/go, so using it keeps this module
+// free of any srcgo dependency).
+const (
+	scopeUserIDKey  = "x-w17-scope-user_id"
+	userMetadataKey = "x-w17-user"
+)
+
+// Authn-flow gate sentinels — cause values handler passes to
+// Unauthenticated when failure is shape-level (not an
+// underlying error). They never reach the wire; the auditor
+// (G3-G) walks errors.Unwrap to verify all failure paths
+// converge on Unauthenticated.
+var (
+	errAuthnHeaderMissing    = errors.New("auth header missing")
+	errAuthnSchemeMismatch   = errors.New("auth scheme prefix mismatch")
+	errAuthnTokenEmpty       = errors.New("auth token empty after scheme strip")
+	errAuthnPasswordMismatch = errors.New("password verify failed")
+	errAuthnNoPrincipal      = errors.New("no authenticated principal in scope metadata")
+)
+
+// AuthServiceHandler implements every method of the plugin's
+// AuthService. Every field is set by the caller (the plugin's
+// RegisterPlugin) at construction — no Init / two-phase setup.
+// Fields divide into typed-client dependencies (Query, Mutation),
+// configurable knobs (HeaderName, Scheme, PasswordHash), and
+// author-defined state (none today; rate limiters / per-IP
+// buckets / nonce caches land here when needed).
+//
+// No `Logger` field — observability is handled by the bundle's
+// stack (Sentry via observx, OTel via otelgrpc's stats handler
+// + ChainUnaryInterceptor). Per-RPC errors land on the span
+// automatically; handler-local logging would bypass that
+// routing and produce stderr-only output the operator can't
+// reach through their existing observability tooling.
+//
+// Storage returns permission IDs already typed as int32 and the
+// plugin passes them through into AuthResp.permission_ids verbatim;
+// the gateway resolves the bit checks against the slice at the
+// per-handler call site. The ONE exception is a wildcard
+// (`all_permissions`) role: the AclPermission catalogue is a
+// compile-time proto enum (no DB table), so storage can't
+// enumerate it in SQL. Storage instead returns an `all_permissions`
+// bool alongside the IDs, and Authenticate expands the grant to
+// acllock.GrantAll(Lock) — the compile-time lock reached via
+// RegisterPlugin (clients.AclLock()).
+type AuthServiceHandler struct {
+	Query    pb.AuthQueryClient
+	Mutation pb.AuthMutationClient
+
+	// DistTx + Connection wire the in-process distributed-transaction
+	// coordinator (bundle's shared txregistry) so multi-mutation handlers —
+	// SignUp composes CreateUser + role assignment + IssueToken — run in ONE
+	// transaction: distx.Begin(Connection) → thread w17-tx-id → Commit/Rollback.
+	// Both set by RegisterPlugin from the ClientSet; nil/"" in a hand-built
+	// test handler that doesn't exercise the transactional path (SignUp then
+	// falls back to non-atomic sequential calls — fine for a unit test).
+	DistTx     distxpb.W17DistributedTransactionClient
+	Connection string
+
+	// Lock is the bundle's compile-time ACL permission-lock snapshot
+	// (query.AclLock(), wired by RegisterPlugin). Non-nil in a wired
+	// bundle; nil only in a hand-built test handler that never
+	// exercises the wildcard path. Read solely to expand an
+	// `all_permissions` wildcard role via acllock.GrantAll.
+	Lock *acllock.Lock
+
+	PasswordHash passwordhash.Settings
+
+	HeaderName string
+	Scheme     string
+
+	// two_factor knobs (set from env in RegisterPlugin; ignored when the
+	// feature is off — only handlers/mfa.go reads them). Plain types so
+	// this always-compiled file stays free of the totp / secretbox
+	// imports; mfa.go builds the secretbox cipher from TwoFactorSecretKey.
+	TwoFactorTOTP     bool   // built-in TOTP verify path enabled (two_factor_totp)
+	TwoFactorScope    string // all_logins | new_devices (two_factor_scope)
+	MfaCodeTTLSeconds int    // event-flow challenge code lifetime (mfa_code_ttl_seconds)
+
+	// SessionTokenTTLSeconds is the absolute lifetime stamped into a
+	// freshly minted session bearer token's expires_at (from
+	// session_token_ttl_seconds). <= 0 → defaultSessionTokenTTLSeconds.
+	SessionTokenTTLSeconds int
+	TotpIssuer             string // otpauth:// issuer label (totp_issuer); empty → project/domain name
+	TwoFactorSecretKey     string // base64 32-byte key encrypting TOTP seeds at rest (two_factor_secret_key)
+
+	// oauth knob (set from env in RegisterPlugin; read only by
+	// handlers/oauth.go). Public base URL the callback is reachable at;
+	// empty → derived from the request Host.
+	OAuthRedirectBase string // oauth_redirect_base
+
+	// E1 token lifetimes (set from env in RegisterPlugin; read only by
+	// handlers/reset.go / emailverify.go). <= 0 → the file's default.
+	PasswordResetTTLSeconds     int // password_reset_ttl_seconds
+	EmailVerificationTTLSeconds int // email_verification_ttl_seconds
+
+	InviteOnly        bool // require a pending org invitation to sign up (invite_only)
+	OrgInviteTTLHours int  // how long an invitation stays acceptable (org_invite_ttl_hours)
+}
+
+// scopeDecorator augments the AuthResp scope + label maps for an
+// authenticated principal. Feature-gated handler files register
+// decorators via init(); Authenticate runs them after stamping the
+// canonical user_id scope, so each opt-in feature can publish its
+// own scope (e.g. tenant_scope → scopes["tenant_id"]) without the
+// base handler knowing about it. Declared here (always-present) so
+// Authenticate compiles with zero feature files staged — an empty
+// slice is a no-op. A decorator returning an error fails
+// Authenticate closed (the same opaque Unauthenticated path).
+//
+// `labels` is the BROADCAST audience key and is passed separately
+// BECAUSE it is not the same set as scopes — see AuthResp.labels in
+// the proto. A decorator writes a label only for a key that genuinely
+// partitions who may SEE an event; most write none, and an empty map
+// leaves today's every-client broadcast untouched.
+// `headers` is the AuthReq header map — the SAME channel the bearer token
+// arrives on, and the only one every transport fills. It is passed
+// explicitly because reading a client-sent selector off the gRPC context
+// instead does not work on a public gRPC surface: the rpc gateway builds
+// the sanitized metadata, hands it over as AuthReq.Headers, and then calls
+// Authenticate with the raw incoming context — which carries no OUTGOING
+// metadata, and `grpcclient.Dial` installs no forwarding interceptor. REST
+// only worked because its MetadataPropagation middleware stamps outgoing
+// metadata before the handler runs. Two channels for two values that
+// arrive together is what hid it.
+type scopeDecorator func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
+
+var scopeDecorators []scopeDecorator
+
+// grantNarrower rewrites the principal's permission set AFTER the scope
+// decorators have run, so a feature that resolves a request-scoped
+// context can restrict the grants to it. `org_membership` registers one:
+// the unfiltered set is the union of every role the user holds in every
+// organization, and serving that inside one org is exactly the
+// cross-tenant leak the feature exists to close.
+//
+// APPENDED, never assigned — that is the whole point of it being a
+// separate seam. `resolvePrincipal` is a single var that the realm axis
+// owns (`api_token` replaces it wholesale), so a second feature
+// assigning it too would win or lose by init order — filename order,
+// silently, with the loser's behaviour simply gone. A narrower composes
+// instead of competing.
+//
+// Contract: a narrower may only REMOVE permissions or expand a wildcard
+// it has itself re-checked in the narrower context. Returning a larger
+// ordinary set would let a feature escalate the principal past the realm
+// resolution that ran before it.
+type grantNarrower func(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error
+
+var grantNarrowers []grantNarrower
+
+// principal is what a validated token resolves to, before any narrowing.
+//
+// Grants are carried ROLE-ATTRIBUTED rather than as a flat permission set,
+// and that is the whole point: two narrowing axes (realm, organization)
+// intersect on roles, so a permission survives only when a SINGLE role grants
+// it and that role passes both. A flat set cannot express that — it forgets
+// which role contributed what, and an intersection then keeps permissions that
+// no one role grants under both axes.
+//
+// Realm rides along because one narrowing needs it: organization OWNERSHIP
+// widens, and it may only widen a SESSION principal (see narrowGrantsToActiveOrg).
+type authPrincipal struct {
+	userID  string
+	tokenID string
+	realm   pb.TokenType
+	grants  []*pb.RoleGrant
+}
+
+// effectivePermissions flattens the surviving grants into the permission set
+// Authenticate answers with. A wildcard grant that survived every axis expands
+// from the DEPLOYED LOCK, never from RolePermission rows — a wildcard role
+// stores none, so reading the table would silently drop exactly the
+// permissions only that role carries.
+func (p *authPrincipal) effectivePermissions(lock *acllock.Lock) []int32 {
+	seen := map[int32]struct{}{}
+	var out []int32
+	add := func(ids []int32) {
+		for _, id := range ids {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	for _, g := range p.grants {
+		if g.GetAllPermissions() {
+			add(acllock.GrantAll(lock))
+			continue
+		}
+		add(g.GetPermissionIds())
+	}
+	return out
+}
+
+// resolvePrincipal turns a validated token string into the
+// authenticated principal's id + the permission IDs it carries. The
+// default is the single-realm session path: one round-trip through
+// GetUserByTokenWithPermissions, every role counted. The api_token
+// feature file (handlers/apitoken.go) overrides this via init() with
+// the realm-aware path — branch on token_type, count only the matching
+// realm's roles, and intersect an API token with its permission subset.
+// Declared here (always-present) so Authenticate compiles with no
+// feature file staged; the override only ships when api_token is on.
+var resolvePrincipal = func(ctx context.Context, h *AuthServiceHandler, token string) (*authPrincipal, error) {
+	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{Token: token})
+	if err != nil {
+		return nil, err
+	}
+	// SESSION: with api_token off there is only one credential class, and
+	// this is it. Stamping it rather than leaving the zero value keeps the
+	// ownership rule (session-only) reading the same in both builds.
+	userID := resp.GetUser().GetId()
+	grants, err := h.Query.GetUserRoleGrants(ctx, &pb.GetUserRoleGrantsReq{UserId: userID})
+	if err != nil {
+		return nil, err
+	}
+	return &authPrincipal{
+		userID:  userID,
+		tokenID: resp.GetTokenId(),
+		realm:   pb.TokenType_TOKEN_TYPE_SESSION,
+		grants:  grants.GetGrants(),
+	}, nil
+}
+
+// signupResolveRoleIDs + signupAssignRoleIDs are the two halves of turnkey
+// declarative role assignment, split so SignUp can RESOLVE the role set from
+// COMMITTED state (reads run on the pool — query servers don't join the distx
+// tx) BEFORE opening its write transaction, then ASSIGN inside it. Doing the
+// count-based first-user decision inside the tx would misread (the new user is
+// still uncommitted and invisible to the pooled read), so the decision must
+// happen up front. Both default to no-ops — the base build has no RBAC tables;
+// the `rbac` feature file (handlers/signup_roles.go) overrides them via init().
+// Declared here (always-compiled) so SignUp compiles whether or not rbac is
+// staged; the overrides only ship when rbac is on.
+var signupResolveRoleIDs = func(ctx context.Context, h *AuthServiceHandler) ([]string, error) {
+	return nil, nil
+}
+var signupAssignRoleIDs = func(ctx context.Context, h *AuthServiceHandler, userID string, roleIDs []string) error {
+	return nil
+}
+
+// SignIn seams — always-present default behaviours opt-in feature
+// files override via init(), mirroring resolvePrincipal /
+// signupCreateUser / scopeDecorators. They let `devices` and
+// `two_factor` layer into the password sign-in without the base
+// handler knowing about either. With no feature file staged the
+// defaults make SignIn the plain GetUserByEmail → verify →
+// IssueToken flow.
+
+// devicesActive reports whether the `devices` feature is staged into this
+// bundle — handlers/devices.go's init() sets it true. The base value
+// (false) holds when the feature is off. Read by ValidateConfig to reject
+// two_factor_scope=new_devices without devices (the env value isn't
+// visible at codegen, so this fail-loud guard runs at plugin bootstrap —
+// the earliest point both the feature set and the env value are known).
+var devicesActive bool
+
+// ValidateConfig fails plugin bootstrap loud on a contradictory
+// activation, rather than silently degrading. Today: two_factor_scope=
+// new_devices requires the `devices` feature (without it the trusted-
+// device signal is always "trusted", so new-device 2FA would never fire —
+// a silent no-op). Called from RegisterPlugin after the handler is built.
+func ValidateConfig(h *AuthServiceHandler) error {
+	if h.TwoFactorScope == "new_devices" && !devicesActive {
+		return errors.New("auth plugin: two_factor_scope=new_devices requires the `devices` feature (enable it in the activation's features[])")
+	}
+	return nil
+}
+
+// resolveSignInDevice resolves the device this sign-in belongs to.
+// Default (no `devices`): no device tracking — empty id, and
+// "trusted" reported true so any 2FA new-device check (which itself
+// requires `devices`) is a non-issue. handlers/devices.go overrides
+// via init() with header/fingerprint resolution + upsert.
+var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userID string) (deviceID string, trusted bool, err error) {
+	return "", true, nil
+}
+
+// errSignUpNotInvited is the refusal under `invite_only`. It names the
+// remedy — ask for an invitation — because the person reading it did
+// nothing wrong and has no other way to learn that registration is closed:
+// the form accepted their input and the server said no.
+//
+// It deliberately does NOT say whether the address has an invitation that
+// merely expired, nor whether an account already exists. Either would turn
+// the registration form into a probe for who has been invited where.
+// A gRPC STATUS, not a bare error: the gateway maps an unclassified error
+// to INTERNAL, so a plain errors.New would reach the browser as a 500
+// saying "internal error" — the caller would see a server fault instead of
+// the sentence that tells them what to do. Measured, not assumed: the
+// first version of this was a bare error and answered HTTP 500.
+var errSignUpNotInvited = status.Error(codes.PermissionDenied,
+	"registration is by invitation only — ask an administrator of the organization you are joining to invite this address")
+
+// signupInviteGate decides whether an address may create an account at all.
+//
+// Permissive by default: with no `org_invite` staged there are no
+// invitations to require, and a gate that refused everything would be the
+// wrong default for every activation that has never heard of them.
+// handlers/org_invite.go's init() installs the enforcing one.
+//
+// It lives HERE, in the always-compiled file, and not beside SignUp, for
+// two reasons that were both learned the expensive way:
+//
+//   - `org_invite` does not require `sign_up_turnkey`. Staged under
+//     sign_up_turnkey the seam would vanish from an activation that has
+//     invitations and no turnkey registration, and the installing init()
+//     would not compile.
+//   - SignUp is not the only door. OAuth's resolveOrCreateUserByEmail
+//     creates an account for any address the provider asserts, so a gate
+//     reachable only from SignUp leaves invite-only registration open to
+//     anyone with an account at the identity provider.
+//
+// The enforcing implementation reads h.InviteOnly at CALL time rather than
+// deciding at install time: staging the feature must not close a surface
+// the operator left open.
+//
+// ⚠️ This seam shipped for a fortnight with no init() installing it, while
+// its own comment claimed one existed and the console activation's comment
+// claimed registration was closed. `invite_only` defaulted to true and was
+// read by nobody. What made it invisible is that nothing FAILED — the
+// permissive default is a valid state, so every test, every build and
+// every deployment was green. The only artefact was an unused variable:
+// staticcheck's U1000 named errSignUpNotInvited, in a directory `make
+// audit-go` did not scan. It scans it now (T3-7 pass #13).
+var signupInviteGate = func(ctx context.Context, h *AuthServiceHandler, email string) error {
+	return nil
+}
+
+// signInMfaGate decides whether a second factor challenges this
+// sign-in. Default (no `two_factor`): never — returns (nil, false,
+// nil) so SignIn proceeds straight to token issuance.
+// handlers/mfa.go overrides via init(): on a challenge it creates the
+// MfaChallenge (emitting MfaChallengeRequested) and returns the
+// mfa_required SignInResp + challenged=true so SignIn returns it
+// WITHOUT issuing a token.
+var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.User, deviceID string, deviceTrusted bool) (resp *pb.SignInResp, challenged bool, err error) {
+	return nil, false, nil
+}
+
+// issueSession mints the bearer token for an authenticated principal and
+// returns the opaque session token plus (C2, devices only) a server-issued
+// device-trust token the client replays as X-Device-Trust. Default (no
+// `devices`): IssueToken (no device column), empty trust token.
+// handlers/devices.go overrides via init() to stamp device_id + mint
+// + store the device-trust token. Shared by SignIn, OAuth, and (under
+// two_factor) VerifyMfa so they all honour device binding.
+var issueSession = func(ctx context.Context, h *AuthServiceHandler, userID, deviceID string) (token, trustToken string, err error) {
+	resp, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry()})
+	if err != nil {
+		return "", "", err
+	}
+	return resp.GetToken().GetToken(), "", nil
+}
+
+// sessionTokenExpiry returns the absolute expiry stamped into a freshly
+// minted session bearer token: NOW + session_token_ttl_seconds (default
+// 30d when unset/<=0). The token-validation queries reject a token past
+// this instant, so a leaked session token stops working after the TTL
+// even without an explicit logout. Shared by issueSession and the
+// `devices` override (issueSessionWithDevice).
+func (h *AuthServiceHandler) sessionTokenExpiry() *timestamppb.Timestamp {
+	ttl := h.SessionTokenTTLSeconds
+	if ttl <= 0 {
+		ttl = defaultSessionTokenTTLSeconds
+	}
+	return timestamppb.New(time.Now().Add(time.Duration(ttl) * time.Second))
+}
+
+// Shutdown runs once on bundle teardown with the bundle's drain
+// ctx. No-op today — handler holds no per-instance state worth
+// flushing.
+func (h *AuthServiceHandler) Shutdown(ctx context.Context) error {
+	return nil
+}
+
+// Authenticate is the gateway-facing turnkey. The gateway
+// parser's validateAuthRequestShape contract guarantees
+// req.Headers is non-nil (the parser refuses any AuthService
+// activation whose AuthReq lacks the `map<string,string>
+// headers` field). The handler:
+//
+//  1. Pulls the configured auth header off the map (case-folded
+//     to lower per the gateway convention).
+//  2. Strips the scheme prefix when configured.
+//  3. Delegates to AuthQuery.GetUserByTokenWithPermissions —
+//     one round-trip resolves identity + permission IDs (int32
+//     enum values from the activating domain's AclPermission).
+//  4. Runs the scope decorators, then the grant narrowers —
+//     the request-scoped context (e.g. the active organization)
+//     exists only after step 3, so restricting the permissions
+//     to it is a separate pass rather than part of the lookup.
+//  5. Passes the surviving IDs through into
+//     AuthResp.permission_ids verbatim — no packing, no string
+//     lookup. Gateway emits
+//     `acllock.HasPermission(ids, int32(pb.AclPermission_X))`
+//     per handler against this slice.
+//
+// Every failure mode returns the same Unauthenticated status.
+func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) (*pb.AuthResp, error) {
+	raw, ok := req.GetHeaders()[strings.ToLower(h.HeaderName)]
+	if !ok || raw == "" {
+		return nil, Unauthenticated(errAuthnHeaderMissing)
+	}
+	token := raw
+	if h.Scheme != "" {
+		prefix := h.Scheme + " "
+		if !strings.HasPrefix(raw, prefix) {
+			return nil, Unauthenticated(errAuthnSchemeMismatch)
+		}
+		token = strings.TrimPrefix(raw, prefix)
+	}
+	if token == "" {
+		return nil, Unauthenticated(errAuthnTokenEmpty)
+	}
+
+	// Resolve identity + permission IDs. Default = single-realm
+	// session path; api_token swaps in the realm-aware + subset-
+	// narrowed resolver (see resolvePrincipal).
+	prin, err := resolvePrincipal(ctx, h, token)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	userID := prin.userID
+
+	// REV-147 — publish the authenticated principal as the
+	// canonical `user_id` data scope. The gateway threads this into
+	// `x-w17-scope-user_id` metadata; a consuming project that
+	// scopes its owned rows by `name: "user_id"` then gets owner
+	// auto-stamp on INSERT + auto-WHERE on SELECT with no hand-
+	// written facade.
+	scopes := map[string]string{"user_id": userID}
+
+	// Feature-gated scope decorators (e.g. tenant_scope) append
+	// their own scopes here. Empty when no feature file is staged.
+	labels := map[string]string{}
+	for _, dec := range scopeDecorators {
+		if err := dec(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
+			return nil, Unauthenticated(err)
+		}
+	}
+
+	// Grants are narrowed to the request-scoped context the decorators
+	// just resolved — org_membership restricts them to the ACTIVE
+	// organization. Ordering is the contract: permissions are resolved
+	// before the decorators run (one round trip resolves identity +
+	// permissions together), so the narrowing has to happen here, after
+	// the scope exists. Empty when no feature file is staged, which is
+	// why an unscoped build behaves exactly as it did.
+	for _, narrow := range grantNarrowers {
+		if err := narrow(ctx, h, prin, scopes); err != nil {
+			return nil, Unauthenticated(err)
+		}
+	}
+
+	// Flatten LAST. Every axis has had its say on the roles by now, so a
+	// wildcard expands only if the role carrying it survived all of them —
+	// which is what stops a superadmin of one organization passing checks in
+	// the next.
+	return &pb.AuthResp{
+		PermissionIds:  prin.effectivePermissions(h.Lock),
+		UserId:         userID,
+		Scopes:         scopes,
+		Labels:         labels,
+		SessionTokenId: prin.tokenID,
+	}, nil
+}
+
+// SignIn is the canonical email+password→bearer-token flow.
+// Three steps in a fixed sequence with one opaque failure mode:
+//
+//  1. GetUserByEmail resolves the principal (and returns the
+//     stored password hash).
+//  2. PasswordHash.VerifyAndRotate compares against the plain
+//     password. Rotation update-fn is nil for v1 — the plugin
+//     doesn't expose an UpdateUserPasswordHash mutation in its
+//     client surface yet; rehash-on-login is parked.
+//  3. IssueToken mints the bearer token.
+//
+// Anti-enumeration: every failure path emits the same status.
+// VerifyAndRotate's `err` return is non-fatal when ok=true (a
+// failed rehash doesn't invalidate the auth) — discarded here
+// since the plugin doesn't yet have an UpdateUserPasswordHash
+// mutation to apply the new hash anyway.
+func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb.SignInResp, error) {
+	userResp, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: normalizeEmail(req.GetEmail())})
+	if err != nil {
+		// Anti-enumeration: a missing account must cost the same as a wrong
+		// password. Without this, GetUserByEmail returns fast (no argon2) for a
+		// non-existent user but the found path pays the ~argon2 derivation — a
+		// timing oracle that enumerates valid emails. Run a throwaway verify so
+		// the response time doesn't leak account existence. (The opaque
+		// Unauthenticated code is already identical on both paths.)
+		signInDummyVerify(h, req.GetPassword())
+		return nil, Unauthenticated(err)
+	}
+	user := userResp.GetUser()
+
+	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), nil)
+	if !ok {
+		return nil, Unauthenticated(errAuthnPasswordMismatch)
+	}
+
+	// Disabled-account gate (user_admin feature; no-op otherwise).
+	// Checked AFTER the password verify so a disabled account is
+	// indistinguishable from a wrong password (same opaque
+	// Unauthenticated) — a pre-password check would leak "this account
+	// is disabled" to anyone who knows the email.
+	// Machine accounts never sign in with a password. Checked beside the
+	// disabled gate, after the password verify, so a bot is indistinguishable
+	// from a wrong password (same opaque Unauthenticated).
+	if err := signInBotGate(user); err != nil {
+		return nil, Unauthenticated(err)
+	}
+	if err := signInDisabledGate(user); err != nil {
+		return nil, Unauthenticated(err)
+	}
+
+	// Resolve the device (devices feature; no-op otherwise) so the 2FA
+	// gate can make its new-device decision and the token can be bound.
+	deviceID, trusted, err := resolveSignInDevice(ctx, h, user.GetId())
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+
+	// Second-factor gate (two_factor feature; no-op otherwise). When it
+	// raises a challenge it returns the mfa_required response and we
+	// stop here WITHOUT issuing a token — VerifyMfa completes the login.
+	if resp, challenged, gErr := signInMfaGate(ctx, h, user, deviceID, trusted); gErr != nil {
+		return nil, Unauthenticated(gErr)
+	} else if challenged {
+		return resp, nil
+	}
+
+	token, trustToken, err := issueSession(ctx, h, user.GetId(), deviceID)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	resp := &pb.SignInResp{
+		UserId: user.GetId(),
+		Token:  token,
+	}
+	stampSignInDeviceTrust(resp, trustToken)
+	return resp, nil
+}
+
+// stampSignInDeviceTrust sets the device-trust token on a SignInResp.
+// No-op by default: `device_trust_token` is gated behind the `devices`
+// feature, so it is ABSENT from the consumer's generated SignInResp when
+// devices isn't active — the always-compiled base handler must not name the
+// field. handlers/devices.go (staged only when `devices` is active) overrides
+// this via init() to set resp.DeviceTrustToken, mirroring the issueSession
+// seam. Without this seam the base SignIn handler fails to compile on any
+// project that activates auth WITHOUT devices (e.g. console-app).
+var stampSignInDeviceTrust = func(resp *pb.SignInResp, trustToken string) {}
+
+// stampDeviceTrust is the device-trust seam for the responses whose MESSAGE is
+// itself feature-gated — OAuthCallbackResp (`oauth`) and VerifyMfaResp
+// (`two_factor`). Unlike SignInResp (always present), the base handler can't
+// name those Go types' `device_trust_token` field, so this seam sets it by
+// proto field NAME via reflection: the always-compiled base stays free of the
+// gated field and is a no-op unless handlers/devices.go (staged only under
+// `devices`) overrides it. Also a no-op for any message lacking the field
+// (devices off → the field is absent from the generated message). This is what
+// lets a project activate `oauth` / `two_factor` WITHOUT `devices`.
+var stampDeviceTrust = func(msg proto.Message, trustToken string) {}
+
+// signInDisabledGate rejects a soft-disabled account on SignIn. Base
+// no-op: `User.disabled_at` is gated behind the `user_admin` feature, so
+// it is ABSENT from the consumer's generated User when that feature is
+// off — the always-compiled SignIn handler must not name the field.
+// handlers/user_admin.go (staged only under `user_admin`) overrides this
+// via init() to check user.GetDisabledAt(), mirroring the signInMfaGate
+// seam. Returning a non-nil error makes SignIn emit the opaque
+// Unauthenticated (anti-enumeration) — the caller never learns the
+// account exists but is disabled.
+var signInDisabledGate = func(user *pb.User) error { return nil }
+
+// signInBotGate refuses a password sign-in for a MACHINE account.
+//
+// ⚠️ This is the enforcement that makes `User.kind` a control rather than a
+// label. A bot's `password_hash` is empty and `passwordhash.Verify` already
+// refuses an empty stored hash — but that is luck, not design: the column is a
+// plain string with no null, so "bot" is an empty value rather than an absent
+// one, and the first `password_change` against a bot would hand it a working
+// password and open the door the empty hash was holding shut.
+//
+// A bot acts through an API token an admin minted for it, and through nothing
+// else. Same seam shape as signInDisabledGate above and for the same reason:
+// `kind` is field-gated on `service_account`, so it is ABSENT from the
+// consumer's generated User when the feature is off and the always-compiled
+// handler must not name it. handlers/service_account.go installs the real one
+// via init().
+//
+// Returns a non-nil error so SignIn emits the opaque Unauthenticated: a caller
+// must not learn that an address belongs to a bot.
+var signInBotGate = func(user *pb.User) error { return nil }
+
+// normalizeEmail canonicalises an email for both storage and lookup: trim +
+// lowercase. Emails are treated case-insensitively in practice, but the
+// type:EMAIL field is a plain (case-sensitive) string unique constraint — so
+// without normalisation "Foo@X.com" and "foo@x.com" would create two accounts
+// and a cross-case sign-in would miss the row. Applied at every CreateUser /
+// GetUserByEmail boundary (signup, signin, oauth) so the canonical form is
+// consistent across writes and reads.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+var (
+	signInDummyOnce sync.Once
+	signInDummyHash string
+)
+
+// signInDummyVerify runs a throwaway password verification on SignIn's
+// user-not-found path so the response time doesn't reveal whether the account
+// exists (timing-based user enumeration). The dummy hash is computed once with
+// the configured params — Verify derives its argon2 cost from the STORED hash's
+// params, so this matches a real verify's derivation time. A `var` so tests can
+// assert SignIn invokes it without paying the argon2 cost.
+var signInDummyVerify = func(h *AuthServiceHandler, plain string) {
+	signInDummyOnce.Do(func() {
+		signInDummyHash, _ = h.PasswordHash.Hash("w17-anti-enumeration-dummy-secret")
+	})
+	if signInDummyHash != "" {
+		_, _, _ = h.PasswordHash.VerifyAndRotate(signInDummyHash, plain, nil)
+	}
+}
+
+// SignUp (the register-and-issue-token flow) + its signupCreateUser seam
+// live in handlers/signup.go, staged only under the sign_up_turnkey
+// feature — alongside the pb.SignUpReq/Resp types gated by the same
+// feature. Keeping them out of this always-compiled file lets an
+// activation omit sign_up_turnkey (e.g. an admin auth realm that seeds
+// accounts) without a dangling reference.
+
+// WhoAmI returns the authenticated principal so the FE can confirm
+// a persisted token is still live. By the time the request reaches
+// this handler the gateway's auth_method (Authenticate) has already
+// validated the bearer per-request — an invalid/absent token 401s
+// at the gateway before dispatch — and threaded the principal both
+// as the `x-w17-user` AuthResp envelope (always) and, when the
+// project declares a `user_id` data scope, as `x-w17-scope-user_id`.
+// The handler echoes whichever is present; no storage round-trip
+// (the metadata value is itself the proof).
+//
+// The scope key is preferred (cheap string read) with a fallback to
+// decoding the always-present envelope, so WhoAmI works in projects
+// with NO data scopes — there the scope key is never threaded.
+//
+// The fail-closed guard covers direct gRPC callers that bypass the
+// gateway (no metadata at all) — same opaque Unauthenticated as the
+// rest of the surface.
+func (h *AuthServiceHandler) WhoAmI(ctx context.Context, req *pb.WhoAmIReq) (*pb.WhoAmIResp, error) {
+	userID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	resp := &pb.WhoAmIResp{UserId: userID}
+	whoAmIEnrich(ctx, h, userID, resp)
+	return resp, nil
+}
+
+// whoAmIEnrich fills the org half of WhoAmI. Base tier: a no-op.
+//
+// The org fields exist on this message only under `org_membership`, and the
+// queries that answer them exist only there too, so the base build must not
+// name either. handlers/org_membership.go swaps in the real one when that
+// feature is staged — the same seam shape signupAssignRoles uses for rbac,
+// and for the same reason: a staged file may reference gated queries, this
+// one may not.
+var whoAmIEnrich = func(ctx context.Context, h *AuthServiceHandler, userID string, resp *pb.WhoAmIResp) {
+}
+
+// Logout revokes the caller's CURRENT session token — the base-tier
+// counterpart to SignIn, available without the `devices` feature. It
+// reads the authenticated principal (user_id) plus the session_token_id
+// the gateway threaded in the auth envelope and deletes exactly that one
+// SESSION token via DeleteSessionToken (ownership guarded in the mutation:
+// id AND user_id). The raw bearer never reaches here — only the resolved
+// session token id does, so it's always a session token (the DQL drops the
+// token_type filter — that column is api_token-gated; Q64-auth-1).
+//
+// Idempotent: a caller with no resolvable session token (an API-token
+// bearer, or a direct gRPC call) or one whose token was already revoked
+// still gets a clean success. "Log out everywhere / other devices" is the
+// `devices` feature's RevokeAllDevices, not this.
+func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.LogoutResp, error) {
+	userID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	tokenID := callerSessionTokenID(ctx)
+	if tokenID == "" {
+		return &pb.LogoutResp{}, nil
+	}
+	if _, err := h.Mutation.DeleteSessionToken(ctx, &pb.DeleteSessionTokenReq{
+		TokenId:   tokenID,
+		UserId:    userID,
+		TokenType: pb.TokenType_TOKEN_TYPE_SESSION,
+	}); err != nil {
+		// Already-gone token (zero rows → NotFound) is an idempotent
+		// logout success; anything else propagates.
+		if e := notFoundOK(err); e != nil {
+			return nil, e
+		}
+	}
+	return &pb.LogoutResp{}, nil
+}
+
+// notFoundOK turns a storage NotFound into success. The DELETE primitives
+// RETURNING a row map zero matched rows to NotFound (single-row scan →
+// sql.ErrNoRows), but deleting something already gone — revoking a stale
+// device, clearing a TOTP secret that was never enrolled — is a no-op, not
+// an error. Lives here (always-compiled) so both handlers/devices.go and
+// handlers/mfa.go use it without a cross-feature dependency.
+func notFoundOK(err error) error {
+	if status.Code(err) == codes.NotFound {
+		return nil
+	}
+	return err
+}
+
+// callerUserID reads the bearer-authenticated principal the gateway
+// threaded into x-w17-scope-user_id metadata (same source as WhoAmI) —
+// the self-service management RPCs (api_token, devices, two_factor) act on
+// the calling user's own resources. Fails closed (opaque Unauthenticated
+// cause) for direct gRPC callers that bypass the gateway and carry no
+// scope. Lives here (always-compiled) because several independent feature
+// files depend on it — keeping it in any one feature's file would break a
+// bundle that enables that consumer feature but not the file's owner.
+func callerUserID(ctx context.Context) (string, error) {
+	// principal.UserID applies the same dual-source recovery this used to
+	// hand-roll: the x-w17-scope-user_id fast path, then the always-threaded
+	// x-w17-user envelope (the gateway only threads the scope key when the
+	// surface declares a `user_id` data scope, so a project with no scoped
+	// model — the common case for the management RPCs — would 401 without
+	// the fallback). Collapse its sentinel to ours so the authn-flow
+	// auditor still sees every path converge on Unauthenticated.
+	uid, err := principal.UserID(ctx, &pb.AuthResp{})
+	if err != nil {
+		return "", errAuthnNoPrincipal
+	}
+	return uid, nil
+}
+
+// callerSessionTokenID recovers the id of the UserToken the caller's
+// bearer resolved to, from the gateway's x-w17-user envelope (Authenticate
+// stamps AuthResp.session_token_id). Returns "" on any miss — so Logout
+// no-ops rather than erroring for a caller with no resolvable session
+// (e.g. an API-token bearer, or a direct gRPC call bypassing the gateway).
+// Reads the envelope, never the raw bearer (which never reaches handlers).
+func callerSessionTokenID(ctx context.Context) string {
+	var ar pb.AuthResp
+	if err := principal.Envelope(ctx, &ar); err != nil {
+		return ""
+	}
+	return ar.GetSessionTokenId()
+}
+
+// intersectInt32 returns the elements of `a` that also appear in `b`,
+// preserving `a`'s order and de-duplicating.
+//
+// Lives here, in the always-compiled file, because BOTH narrowing axes
+// need it: `api_token` narrows realm permissions to a token's declared
+// subset, and `org_membership` narrows them to the active organization.
+// Keeping it in either feature's file would make that feature's presence
+// a build-time prerequisite of the other's.
+func intersectInt32(a, b []int32) []int32 {
+	allow := make(map[int32]struct{}, len(b))
+	for _, x := range b {
+		allow[x] = struct{}{}
+	}
+	out := make([]int32, 0, len(a))
+	seen := make(map[int32]struct{}, len(a))
+	for _, x := range a {
+		if _, ok := allow[x]; !ok {
+			continue
+		}
+		if _, dup := seen[x]; dup {
+			continue
+		}
+		seen[x] = struct{}{}
+		out = append(out, x)
+	}
+	return out
+}

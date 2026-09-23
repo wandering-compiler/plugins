@@ -1,0 +1,623 @@
+syntax = "proto3";
+
+// Payment plugin — PaymentMutation write primitives (Slice 1).
+//
+// Each method is one atomic DB write. The business PaymentService
+// handler composes them with the backend driver (create the provider
+// objects first, then persist the local row). Status transitions land
+// from the webhook handler: MarkPaymentSucceeded / MarkPaymentFailed
+// are separate mutations (not one parameterised UPDATE) because each
+// owns exactly one lifecycle event — mirroring the auth plugin's
+// one-emit-site-per-event rule.
+
+package w17.contrib.payment;
+
+import "google/protobuf/timestamp.proto";
+import "@self/types/models.proto";
+import "@self/events/payment_events.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/event.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message CreateCustomerReq {
+  string user_id              = 1 [(w17.field) = { type: UUID }];
+  string provider_customer_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string email                = 3 [(w17.field) = { type: EMAIL, max_len: 320, blank: true }];
+}
+message CreateCustomerResp { Customer customer = 1; }
+
+message CreatePaymentReq {
+  string customer_id         = 1 [(w17.field) = { type: UUID }];
+  string provider_payment_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string amount              = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency            = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
+  // Payment.Status numeric value the handler stamps at intent time
+  // (REQUIRES_ACTION / PROCESSING). Plain int — the fixed INSERT DQL
+  // binds it without an enum literal.
+  int32  status              = 5;
+  string idempotency_key     = 6 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string description         = 7 [(w17.field) = { type: CHAR, max_len: 500, blank: true }];
+}
+message CreatePaymentResp { Payment payment = 1; }
+
+message MarkPaymentSucceededReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message MarkPaymentSucceededResp { Payment payment = 1; }
+
+message MarkPaymentFailedReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message MarkPaymentFailedResp { Payment payment = 1; }
+
+message CreateRefundReq {
+  string payment_id         = 1 [(w17.field) = { type: UUID }];
+  string provider_refund_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string amount             = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency           = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
+}
+message CreateRefundResp { Refund refund = 1; }
+
+message MarkWebhookProcessedReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string provider_event_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string event_type        = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+}
+message MarkWebhookProcessedResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string provider_event_id = 1;
+}
+
+// ── prepaid mutation request/response ───────────────────────────────
+message ApplyCreditReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string user_id         = 1 [(w17.field) = { type: UUID }];
+  string delta           = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }]; // signed
+  string reason          = 3 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string ref             = 4 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  string idempotency_key = 5 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message ApplyCreditResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string                    user_id    = 1;
+  string                    balance    = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message CreateCreditTopupReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string user_id             = 2 [(w17.field) = { type: UUID }];
+  string amount              = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+}
+message CreateCreditTopupResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  CreditTopup topup = 1;
+}
+
+message MarkTopupGrantedReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message MarkTopupGrantedResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1;
+}
+
+// ── usage mutation request/response ─────────────────────────────────
+message RecordUsageReq {
+  option (w17.contrib.plugin_feature) = "usage";
+  string user_id         = 1 [(w17.field) = { type: UUID }];
+  string meter           = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string period          = 3 [(w17.field) = { type: CHAR, max_len: 32 }];
+  int64  quantity        = 4 [(w17.field) = { type: NUMBER, gte: 0 }];
+  string item_ref        = 5 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  string metadata        = 6 [(w17.field) = { type: JSON, blank: true }];
+  string idempotency_key = 7 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message RecordUsageResp {
+  option (w17.contrib.plugin_feature) = "usage";
+  string                    user_id    = 1;
+  string                    meter      = 2;
+  string                    period     = 3;
+  int64                     total      = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+// ── subscriptions mutation request/response ─────────────────────────
+message CreatePlanReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string slug              = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string name              = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string amount            = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency          = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
+  string interval          = 5 [(w17.field) = { type: SLUG, max_len: 16 }];
+  string provider_price_id = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+}
+message CreatePlanResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Plan plan = 1;
+}
+
+message CreateSubscriptionReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string                    customer_id              = 1 [(w17.field) = { type: UUID }];
+  string                    plan_id                  = 2 [(w17.field) = { type: UUID }];
+  string                    provider_subscription_id = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  int32                     status                   = 4;
+  google.protobuf.Timestamp current_period_end       = 5;
+}
+message CreateSubscriptionResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Subscription subscription = 1;
+}
+
+message MarkSubscriptionStatusReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string                    provider_subscription_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  int32                     status                   = 2;
+  google.protobuf.Timestamp current_period_end       = 3;
+}
+message MarkSubscriptionStatusResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Subscription subscription = 1;
+}
+
+service PaymentMutation {
+  // CreateCustomer — INSERT the principal ↔ provider-customer link.
+  // The handler creates the provider customer object first, then
+  // persists its id here. Duplicate user_id / provider_customer_id →
+  // AlreadyExists (unique violation).
+  rpc CreateCustomer(CreateCustomerReq) returns (CreateCustomerResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Customer SET "
+          "user_id = :user_id, "
+          "provider_customer_id = :provider_customer_id, "
+          "email = :email "
+          "RETURNING id AS customer.id, "
+          "          user_id AS customer.user_id, "
+          "          provider_customer_id AS customer.provider_customer_id, "
+          "          email AS customer.email, "
+          "          created_at AS customer.created_at"
+      }
+    };
+  }
+
+  // CreatePayment — INSERT the local Payment at intent time. The
+  // handler has already created the provider payment object and passes
+  // its id + the chosen initial status. Duplicate idempotency_key →
+  // AlreadyExists (the retry guard).
+  rpc CreatePayment(CreatePaymentReq) returns (CreatePaymentResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Payment SET "
+          "customer_id = :customer_id, "
+          "provider_payment_id = :provider_payment_id, "
+          "amount = :amount, "
+          "currency = :currency, "
+          "status = :status, "
+          "idempotency_key = :idempotency_key, "
+          "description = :description "
+          "RETURNING id AS payment.id, "
+          "          customer_id AS payment.customer_id, "
+          "          provider_payment_id AS payment.provider_payment_id, "
+          "          amount AS payment.amount, "
+          "          currency AS payment.currency, "
+          "          status AS payment.status, "
+          "          idempotency_key AS payment.idempotency_key, "
+          "          description AS payment.description, "
+          "          created_at AS payment.created_at, "
+          "          updated_at AS payment.updated_at"
+      }
+    };
+  }
+
+  // MarkPaymentSucceeded — flip the Payment to SUCCEEDED (status 3)
+  // during webhook reconciliation. RETURNING the row lets the emit
+  // carry full context. Emits PaymentSucceeded.
+  //
+  // TRANSITION-GUARDED (`AND status <> 3`), and the guard is what makes
+  // the emission correct rather than the write. The write on its own is
+  // idempotent — 3 → 3 changes nothing — but the row still MATCHED, so
+  // the method still returned successfully, and the generated emit
+  // wrapper fires after every successful return. A provider redelivery
+  // (Stripe is at-least-once, and the dedup ledger is written LAST by
+  // design — Q43-pay-1) therefore emitted PaymentSucceeded a second time
+  // for one charge, and every non-idempotent subscriber acted twice.
+  //
+  // With the guard a redelivery matches zero rows → sql.ErrNoRows →
+  // NotFound → no emit. It also makes SUCCEEDED absorbing: a
+  // `payment_intent.payment_failed` from an earlier attempt that Stripe
+  // delivers late can no longer un-succeed the charge (see
+  // MarkPaymentFailed).
+  //
+  // Zero rows is ambiguous at the handler — "already SUCCEEDED" vs "no
+  // such provider id yet" (TopUpCredit charges the provider before its
+  // own CreatePayment INSERT, so a fast webhook can outrun it). The
+  // webhook handler discriminates with the dedup ledger's own INSERT;
+  // see IngestStripe.
+  rpc MarkPaymentSucceeded(MarkPaymentSucceededReq) returns (MarkPaymentSucceededResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Payment SET "
+          "status = 3, "
+          "updated_at = NOW() "
+          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 "
+          "RETURNING id AS payment.id, "
+          "          customer_id AS payment.customer_id, "
+          "          provider_payment_id AS payment.provider_payment_id, "
+          "          amount AS payment.amount, "
+          "          currency AS payment.currency, "
+          "          status AS payment.status, "
+          "          updated_at AS payment.updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "PaymentSucceeded"
+      payload: {
+        fields: [
+          { key: "payment_id",          value: "$response.payment.id" },
+          { key: "customer_id",         value: "$response.payment.customer_id" },
+          { key: "provider_payment_id", value: "$response.payment.provider_payment_id" },
+          { key: "amount",              value: "$response.payment.amount" },
+          { key: "currency",            value: "$response.payment.currency" },
+          { key: "succeeded_at",        value: "$response.payment.updated_at" }
+        ]
+      }
+    };
+  }
+
+  // MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
+  // PaymentFailed.
+  //
+  // TRANSITION-GUARDED (`AND status <> 3 AND status <> 4`). One
+  // PaymentIntent whose first charge attempt fails and whose second
+  // succeeds produces `payment_intent.payment_failed` and
+  // `payment_intent.succeeded` as two DISTINCT event ids, so the dedup
+  // ledger cannot relate them, and Stripe guarantees neither ordering
+  // nor serialisation. Unconditional, the late failure overwrote a
+  // charge that had actually succeeded and emitted PaymentFailed after
+  // PaymentSucceeded.
+  //
+  // `status <> 3` makes SUCCEEDED absorbing (correct for a provider
+  // whose succeeded PaymentIntent is terminal — a reversal is a Refund,
+  // a separate object); `status <> 4` makes a redelivered failure a
+  // no-op, so it emits once. FAILED → SUCCEEDED stays open: a retried
+  // attempt must still be able to succeed.
+  rpc MarkPaymentFailed(MarkPaymentFailedReq) returns (MarkPaymentFailedResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Payment SET "
+          "status = 4, "
+          "updated_at = NOW() "
+          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 4 "
+          "RETURNING id AS payment.id, "
+          "          customer_id AS payment.customer_id, "
+          "          provider_payment_id AS payment.provider_payment_id, "
+          "          updated_at AS payment.updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "PaymentFailed"
+      payload: {
+        fields: [
+          { key: "payment_id",          value: "$response.payment.id" },
+          { key: "customer_id",         value: "$response.payment.customer_id" },
+          { key: "provider_payment_id", value: "$response.payment.provider_payment_id" },
+          { key: "failed_at",           value: "$response.payment.updated_at" }
+        ]
+      }
+    };
+  }
+
+  // CreateRefund — INSERT a Refund row after the backend confirms the
+  // provider refund. Duplicate provider_refund_id → AlreadyExists.
+  rpc CreateRefund(CreateRefundReq) returns (CreateRefundResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Refund SET "
+          "payment_id = :payment_id, "
+          "provider_refund_id = :provider_refund_id, "
+          "amount = :amount, "
+          "currency = :currency "
+          "RETURNING id AS refund.id, "
+          "          payment_id AS refund.payment_id, "
+          "          provider_refund_id AS refund.provider_refund_id, "
+          "          amount AS refund.amount, "
+          "          currency AS refund.currency, "
+          "          created_at AS refund.created_at"
+      }
+    };
+  }
+
+  // MarkWebhookProcessed — INSERT the provider event id into the
+  // idempotency ledger AFTER the side effects have been applied
+  // (Q43-pay-1 inverted the original order; recording it first stranded
+  // the event whenever a side effect failed transiently). A unique-PK
+  // violation is the dedup signal: the handler treats it as "already
+  // handled" and returns 200 so the provider stops retrying. Gated
+  // stripe_webhooks.
+  //
+  // The violation surfaces as InvalidArgument carrying a
+  // `w17.ErrorDetail{code: "UNIQUE_VIOLATION"}` — grpcerr collapses
+  // UNIQUE to InvalidArgument, so it is NOT AlreadyExists; match on the
+  // detail code, never on the gRPC status alone.
+  //
+  // Because it is written last and never read first, this ledger cannot
+  // prevent a side effect from re-running — the reconciliation
+  // mutations' own transition guards do that. What the ledger still
+  // decides is what a redelivery is TOLD, and it is the discriminator
+  // IngestStripe uses for a guard that matched zero rows: a unique
+  // violation means the event was fully processed before, a clean
+  // insert means it was not.
+  rpc MarkWebhookProcessed(MarkWebhookProcessedReq) returns (MarkWebhookProcessedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ProcessedWebhookEvent SET "
+          "provider_event_id = :provider_event_id, "
+          "event_type = :event_type "
+          "RETURNING provider_event_id"
+      }
+    };
+  }
+
+  // ApplyCredit — append a signed ledger entry AND update the
+  // materialized balance, atomically in one transaction (two ops). The
+  // balance upsert increments the existing row (or inserts on first
+  // credit); the CreditBalance non-negative CHECK rejects an overdraw,
+  // rolling the whole transaction back so the ledger never records a
+  // spend that wasn't applied. The unique idempotency_key makes a
+  // retried apply fail the ledger insert → also a clean rollback (the
+  // handler treats UNIQUE_VIOLATION as an idempotent no-op). Gated
+  // prepaid. Emits CreditApplied.
+  rpc ApplyCredit(ApplyCreditReq) returns (ApplyCreditResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "ledger"
+        dql:
+          "INSERT INTO @module.CreditLedger SET "
+          "user_id = :user_id, "
+          "delta = :delta, "
+          "reason = :reason, "
+          "ref = :ref, "
+          "idempotency_key = :idempotency_key"
+      }
+      ops: {
+        name: "balance"
+        dql:
+          "UPSERT INTO @module.CreditBalance SET "
+          "user_id = :user_id, balance = :delta, updated_at = NOW() "
+          "ON CONFLICT (user_id) DO UPDATE SET "
+          "balance = balance + :delta, updated_at = NOW() "
+          "RETURNING user_id, balance, updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "CreditApplied"
+      payload: {
+        fields: [
+          { key: "user_id",     value: "$response.user_id" },
+          { key: "delta",       value: "$request.delta" },
+          { key: "reason",      value: "$request.reason" },
+          { key: "new_balance", value: "$response.balance" },
+          { key: "applied_at",  value: "$response.updated_at" }
+        ]
+      }
+    };
+  }
+
+  // CreateCreditTopup — record a pending credit top-up linked to a
+  // charge. The payment-succeeded webhook grants it later. Duplicate
+  // provider_payment_id → AlreadyExists. Gated prepaid.
+  rpc CreateCreditTopup(CreateCreditTopupReq) returns (CreateCreditTopupResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.CreditTopup SET "
+          "provider_payment_id = :provider_payment_id, "
+          "user_id = :user_id, "
+          "amount = :amount "
+          "RETURNING id AS topup.id, "
+          "          provider_payment_id AS topup.provider_payment_id, "
+          "          user_id AS topup.user_id, "
+          "          amount AS topup.amount, "
+          "          granted_at AS topup.granted_at, "
+          "          created_at AS topup.created_at"
+      }
+    };
+  }
+
+  // MarkTopupGranted — stamp granted_at once (guard: granted_at IS NULL),
+  // so a re-delivered webhook can't double-grant via this path. An empty
+  // RETURNING means it was already granted. Gated prepaid.
+  rpc MarkTopupGranted(MarkTopupGrantedReq) returns (MarkTopupGrantedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.CreditTopup SET granted_at = NOW() "
+          "WHERE provider_payment_id = :provider_payment_id AND granted_at IS NULL "
+          "RETURNING provider_payment_id"
+      }
+    };
+  }
+
+  // RecordUsage — append a UsageRecord AND increment the materialized
+  // UsageMeter for the (user, meter, period), atomically in one
+  // transaction. The unique idempotency_key makes a retried record a
+  // clean rollback (the handler treats UNIQUE_VIOLATION as an idempotent
+  // no-op). Gated usage. Emits UsageRecorded.
+  rpc RecordUsage(RecordUsageReq) returns (RecordUsageResp) {
+    option (w17.contrib.plugin_feature_rpc) = "usage";
+    option (w17.db.method) = {
+      ops: {
+        name: "record"
+        dql:
+          "INSERT INTO @module.UsageRecord SET "
+          "user_id = :user_id, "
+          "meter = :meter, "
+          "period = :period, "
+          "quantity = :quantity, "
+          "item_ref = :item_ref, "
+          "metadata = :metadata, "
+          "idempotency_key = :idempotency_key"
+      }
+      ops: {
+        name: "meter"
+        dql:
+          "UPSERT INTO @module.UsageMeter SET "
+          "user_id = :user_id, meter = :meter, period = :period, "
+          "total = :quantity, reported_total = 0, updated_at = NOW() "
+          "ON CONFLICT (user_id, meter, period) DO UPDATE SET "
+          "total = total + :quantity, updated_at = NOW() "
+          "RETURNING user_id, meter, period, total, updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "UsageRecorded"
+      payload: {
+        fields: [
+          { key: "user_id",     value: "$response.user_id" },
+          { key: "meter",       value: "$response.meter" },
+          { key: "period",      value: "$response.period" },
+          { key: "quantity",    value: "$request.quantity" },
+          { key: "new_total",   value: "$response.total" },
+          { key: "recorded_at", value: "$response.updated_at" }
+        ]
+      }
+    };
+  }
+
+  // CreatePlan — INSERT a Plan with the provider price id the handler
+  // obtained from the backend. Duplicate slug → AlreadyExists. Gated
+  // subscriptions.
+  rpc CreatePlan(CreatePlanReq) returns (CreatePlanResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Plan SET "
+          "slug = :slug, "
+          "name = :name, "
+          "amount = :amount, "
+          "currency = :currency, "
+          "interval = :interval, "
+          "provider_price_id = :provider_price_id "
+          "RETURNING id AS plan.id, "
+          "          slug AS plan.slug, "
+          "          name AS plan.name, "
+          "          amount AS plan.amount, "
+          "          currency AS plan.currency, "
+          "          interval AS plan.interval, "
+          "          provider_price_id AS plan.provider_price_id, "
+          "          enabled AS plan.enabled, "
+          "          created_at AS plan.created_at"
+      }
+    };
+  }
+
+  // CreateSubscription — INSERT the local Subscription after the
+  // provider subscription is created. Gated subscriptions. Emits
+  // SubscriptionStarted.
+  rpc CreateSubscription(CreateSubscriptionReq) returns (CreateSubscriptionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Subscription SET "
+          "customer_id = :customer_id, "
+          "plan_id = :plan_id, "
+          "provider_subscription_id = :provider_subscription_id, "
+          "status = :status, "
+          "current_period_end = :current_period_end "
+          "RETURNING id AS subscription.id, "
+          "          customer_id AS subscription.customer_id, "
+          "          plan_id AS subscription.plan_id, "
+          "          provider_subscription_id AS subscription.provider_subscription_id, "
+          "          status AS subscription.status, "
+          "          current_period_end AS subscription.current_period_end, "
+          "          created_at AS subscription.created_at, "
+          "          updated_at AS subscription.updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "SubscriptionStarted"
+      payload: {
+        fields: [
+          { key: "subscription_id",          value: "$response.subscription.id" },
+          { key: "customer_id",              value: "$response.subscription.customer_id" },
+          { key: "plan_id",                  value: "$response.subscription.plan_id" },
+          { key: "provider_subscription_id", value: "$response.subscription.provider_subscription_id" },
+          { key: "started_at",               value: "$response.subscription.created_at" }
+        ]
+      }
+    };
+  }
+
+  // MarkSubscriptionStatus — reconcile the lifecycle status +
+  // current_period_end from a provider webhook (ACTIVE / PAST_DUE /
+  // CANCELED). Gated subscriptions. Emits SubscriptionStatusChanged.
+  //
+  // TRANSITION-GUARDED (`AND status <> 4`): CANCELED is terminal for a
+  // given provider subscription id — the provider never revives one, a
+  // re-subscribe mints a new id — so a `customer.subscription.updated`
+  // that Stripe delivers after the `deleted` must not put the row back
+  // to ACTIVE, nor emit SubscriptionStatusChanged for a revival that
+  // did not happen.
+  //
+  // The guard is deliberately terminal-state only, NOT `status <>
+  // :status`: a same-status delivery still carries a fresh
+  // current_period_end (the renewal boundary), and refusing it would
+  // drop the one field the event exists to refresh. Two same-status
+  // deliveries racing are last-writer-wins on a value both took from
+  // the provider, which every serial order also produces.
+  rpc MarkSubscriptionStatus(MarkSubscriptionStatusReq) returns (MarkSubscriptionStatusResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Subscription SET "
+          "status = :status, "
+          "current_period_end = :current_period_end, "
+          "updated_at = NOW() "
+          "WHERE provider_subscription_id = :provider_subscription_id AND status <> 4 "
+          "RETURNING id AS subscription.id, "
+          "          provider_subscription_id AS subscription.provider_subscription_id, "
+          "          status AS subscription.status, "
+          "          current_period_end AS subscription.current_period_end, "
+          "          updated_at AS subscription.updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "SubscriptionStatusChanged"
+      payload: {
+        fields: [
+          { key: "subscription_id",          value: "$response.subscription.id" },
+          { key: "provider_subscription_id", value: "$response.subscription.provider_subscription_id" },
+          { key: "status",                   value: "$response.subscription.status" },
+          { key: "changed_at",               value: "$response.subscription.updated_at" }
+        ]
+      }
+    };
+  }
+}

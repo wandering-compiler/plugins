@@ -1,0 +1,444 @@
+package handlers
+
+import (
+	"context"
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/tx/distx"
+
+	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+)
+
+// This file implements the `org_invite` feature. Staged only when the
+// activation enables it (plugin.yaml maps the feature to this file via
+// go_files); the plugin author's own `go test` always compiles it.
+//
+// The shape, and why it is this one:
+//
+// An invitation names an EMAIL and an ORGANIZATION, never a user id. The
+// sibling token tables (PasswordResetToken, EmailVerificationToken) hang
+// off `user_id` because the person is already known; an invitation is the
+// one flow where they may not exist yet. Anchoring on the address collapses
+// "invite someone who has an account" and "invite someone who has to
+// register" into ONE object with two endings, decided at acceptance — which
+// is also the only correct time to decide it, since the invitee can go and
+// register on their own between the two.
+//
+// Accepting writes BOTH halves in one transaction: the OrgMembership row
+// AND the UserRole grant scoped to that org. A membership without the grant
+// is a label with nothing behind it — the state this console was in before
+// this feature existed, where the only way to give an invited person any
+// permission was to edit the database by hand.
+
+const defaultOrgInviteTTLHours = 24 * 7 // 7 days
+
+// init installs the enforcing invite gate. The seam it replaces lives in
+// auth_service.go and defaults to permissive; this file is staged only
+// when the activation enables `org_invite`, so the enforcing version
+// exists exactly when there are invitations to enforce.
+//
+// ⚠️ NOTHING REFERENCES THIS FUNCTION, which is exactly how it was lost
+// once. A refactor that moved `ListOrgMembers` out of this file took the
+// init() with it. The three helpers in the same span came back because the
+// compiler demanded them; nothing demands an init, and removing one is
+// always valid Go. So it compiled, the plugin's tests passed, `make ci`
+// passed, codegen staged it, the image built, the deploy succeeded — and
+// the deployed console accepted an UNINVITED registration on the public
+// internet: HTTP 200, account created, `invite_only` at its default and
+// then pinned explicitly in the stack env, twice (2026-09-08).
+//
+// The compiler cannot miss what nobody calls. If you move things out of
+// this file, check that this survived — and note that the behavioural test
+// in org_invite_gate_test.go fails exactly when it has not, because the
+// permissive default returns nil for everything.
+func init() {
+	signupInviteGate = requirePendingInvite
+}
+
+// requirePendingInvite refuses an address that holds no acceptable
+// invitation, when the activation asked for invite-only registration.
+//
+// Reads h.InviteOnly at call time, not at install time: enabling
+// `org_invite` gives an activation invitations, and must not by itself
+// close a registration surface the operator left open. The two knobs are
+// independent on purpose — invitations without invite_only means "anyone
+// may register, and an invitation only decides which org they land in".
+//
+// Fail-CLOSED on a query error. The alternative admits everybody whenever
+// the query tier is unreachable, which is the one moment nobody is
+// watching the registration form.
+//
+// Expiry is the query's business (it selects pending, unaccepted, unexpired
+// rows), so this gate does not re-derive it — two places deciding what
+// "pending" means is how the two halves drift apart.
+func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email string) error {
+	if !h.InviteOnly {
+		return nil
+	}
+	resp, err := h.Query.ListPendingInvitesForEmail(ctx, &pb.ListPendingInvitesForEmailReq{Email: email})
+	if err != nil {
+		return err
+	}
+	if len(resp.GetInvites()) == 0 {
+		return errSignUpNotInvited
+	}
+	return nil
+}
+
+// Every refusal in this file is a gRPC STATUS, never a bare error: the
+// gateway maps an unclassified error to INTERNAL, and the caller then
+// reads a 500 "internal error" instead of the sentence explaining what
+// to do about it.
+//
+// errInviteInvalid is the opaque answer to every failed acceptance:
+// unknown id, expired, already accepted, or addressed to somebody else.
+// One message for four causes on purpose — an invite id is guessable and
+// telling a guesser WHICH of the four they hit turns this into an oracle
+// that reports whether an address has been invited somewhere.
+var errInviteInvalid = status.Error(codes.NotFound,
+	"invitation invalid, expired, already accepted, or addressed to another account")
+
+// errUnknownRole names the catalogue rather than the value, because the
+// person reading it picked from a list and needs to know which list was
+// wrong. It says ORG-ASSIGNABLE, not "exists": a realm role exists and is
+// still refused here, and a message saying it does not exist would send the
+// reader hunting for a typo that isn't there.
+var errUnknownRole = status.Error(codes.InvalidArgument,
+	"no org-assignable role by that name exists in this project's role catalogue")
+
+func (h *AuthServiceHandler) orgInviteTTL() time.Duration {
+	if h.OrgInviteTTLHours > 0 {
+		return time.Duration(h.OrgInviteTTLHours) * time.Hour
+	}
+	return defaultOrgInviteTTLHours * time.Hour
+}
+
+// callerEmail resolves the authenticated principal's address. Invitations
+// are keyed on it, so this is what decides which ones the caller may see
+// and accept — and it comes from the user row the principal resolves to,
+// never from anything the request carried.
+func (h *AuthServiceHandler) callerEmail(ctx context.Context, userID string) (string, error) {
+	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
+	if err != nil {
+		return "", err
+	}
+	return normalizeEmail(got.GetUser().GetEmail()), nil
+}
+
+// assignableRoles is the ONE catalogue the invitation surface reads: the
+// roles an org admin may hand out, which is the org-scoped ones.
+//
+// It is a function rather than a rule each caller applies because the two
+// callers already drifted. The picker moved to ListOrgScopedRoles while
+// roleIDByName kept reading ListRoles, so for a day the list a caller was
+// OFFERED and the list that would be ACCEPTED disagreed: an org admin could
+// invite at a realm role over the API by naming it, and only the UI knew not
+// to. The picker's comment claimed the two could not disagree, which is why
+// nothing caught it — a comment is not a check. They cannot disagree now
+// because there is only one of them.
+func (h *AuthServiceHandler) assignableRoles(ctx context.Context) ([]*pb.OrgScopedRole, error) {
+	resp, err := h.Query.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetRoles(), nil
+}
+
+// roleIDByName resolves an assignable Role.name to its id.
+//
+// Validated when the invitation is CREATED rather than when it is
+// accepted: a typo is then the inviter's error at the moment they make it,
+// instead of a failure the invitee walks into days later with no way to
+// tell what is wrong or who to ask.
+//
+// It runs AGAIN at accept, against the same catalogue. That is not
+// belt-and-braces: a role can be retired or unscoped between the two
+// moments, and the accept is where the grant is actually written.
+func (h *AuthServiceHandler) roleIDByName(ctx context.Context, name string) (string, error) {
+	roles, err := h.assignableRoles(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range roles {
+		if r.GetName() == name {
+			return r.GetId(), nil
+		}
+	}
+	return "", errUnknownRole
+}
+
+// ListAssignableRoles returns the roles an invitation in this org may name.
+//
+// Reads the same catalogue roleIDByName validates against — literally the
+// same function — so the choices a caller is offered and the values that
+// will be accepted cannot disagree. That is the whole reason this exists
+// rather than a list written down in a UI: a hardcoded picker would keep
+// offering a role the day it is renamed.
+//
+// ORG-SCOPED ONLY. A realm role reaches every organization, so it is not an
+// org admin's to hand out; filtering here rather than in the caller means a
+// second consumer cannot forget to.
+func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, _ *pb.ListAssignableRolesReq) (*pb.ListAssignableRolesResp, error) {
+	// ListOrgScopedRoles, not ListRoles: the shared catalogue query cannot
+	// return `org_scoped` at all (the column only exists under the
+	// org_membership feature, so naming it there fails the typecheck for
+	// projects without it — the query's own comment says so). Filtering in Go
+	// on a field that is never populated silently returned an EMPTY list,
+	// which is how this was found.
+	roles, err := h.assignableRoles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &pb.ListAssignableRolesResp{}
+	for _, r := range roles {
+		out.Roles = append(out.Roles, &pb.AssignableRole{
+			Name:        r.GetName(),
+			Description: r.GetDescription(),
+		})
+	}
+	return out, nil
+}
+
+// InviteToOrg records an invitation for an address to join the caller's
+// active organization with a named role.
+func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
+	inviter, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	orgID, err := activeOrgID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Normalized here, once, and stored normalized: SignIn lower-cases the
+	// address it looks up, so an invitation stored as typed would never
+	// match the account that arrives to accept it.
+	email := normalizeEmail(req.GetEmail())
+	if email == "" {
+		return nil, status.Error(codes.InvalidArgument, "invite: email is required")
+	}
+	if _, err := h.roleIDByName(ctx, req.GetRole()); err != nil {
+		return nil, err
+	}
+
+	// Release a lapsed invitation for this address before writing a new one.
+	//
+	// The pending-invite index cannot exclude expired rows — a partial index
+	// predicate has to be IMMUTABLE and `NOW()` is not — so an invitation that
+	// ran out still holds (org, email), and the re-invite fails on a unique
+	// violation that reads like a race between two inviters. It is not one:
+	// the blocker is a dead row the inviter can see in their own list and
+	// cannot get past.
+	//
+	// NOT_FOUND here is the ORDINARY answer: nothing had lapsed. Treating it
+	// as a failure would refuse every first invitation to an address, which is
+	// the same unreachable-branch mistake D13-7 shipped one function away.
+	if _, cerr := h.Mutation.ClearExpiredOrgInvite(ctx, &pb.ClearExpiredOrgInviteReq{
+		OrgId: orgID,
+		Email: email,
+	}); cerr != nil && status.Code(cerr) != codes.NotFound {
+		return nil, cerr
+	}
+
+	created, err := h.Mutation.CreateOrgInvite(ctx, &pb.CreateOrgInviteReq{
+		OrgId:     orgID,
+		Email:     email,
+		Role:      req.GetRole(),
+		InvitedBy: inviter,
+		ExpiresAt: timestamppb.New(time.Now().Add(h.orgInviteTTL())),
+	})
+	if err != nil {
+		return nil, err
+	}
+	inv := created.GetInvite()
+	return &pb.InviteToOrgResp{Invite: &pb.OrgInviteSummary{
+		InviteId:  inv.GetId(),
+		Email:     inv.GetEmail(),
+		Role:      inv.GetRole(),
+		ExpiresAt: inv.GetExpiresAt(),
+		CreatedAt: inv.GetCreatedAt(),
+	}}, nil
+}
+
+// ListOrgInvites returns the active organization's outstanding invitations.
+func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, _ *pb.ListOrgInvitesReq) (*pb.ListOrgInvitesResp, error) {
+	if _, err := callerUserID(ctx); err != nil {
+		return nil, Unauthenticated(err)
+	}
+	orgID, err := activeOrgID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := h.Query.ListOrgInvitesByOrg(ctx, &pb.ListOrgInvitesByOrgReq{OrgId: orgID})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pb.OrgInviteSummary, 0, len(resp.GetInvites()))
+	for _, i := range resp.GetInvites() {
+		out = append(out, &pb.OrgInviteSummary{
+			InviteId:  i.GetId(),
+			Email:     i.GetEmail(),
+			Role:      i.GetRole(),
+			ExpiresAt: i.GetExpiresAt(),
+			CreatedAt: i.GetCreatedAt(),
+		})
+	}
+	return &pb.ListOrgInvitesResp{Invites: out}, nil
+}
+
+// RevokeOrgInvite withdraws a pending invitation of the active org.
+func (h *AuthServiceHandler) RevokeOrgInvite(ctx context.Context, req *pb.RevokeOrgInviteReq) (*pb.RevokeOrgInviteResp, error) {
+	if _, err := callerUserID(ctx); err != nil {
+		return nil, Unauthenticated(err)
+	}
+	orgID, err := activeOrgID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// org_id goes into the statement's WHERE, not just into a check here:
+	// the delete itself refuses an invitation belonging to another
+	// organization, so guessing a uuid is not a way to revoke somebody
+	// else's.
+	if _, err := h.Mutation.DeleteOrgInvite(ctx, &pb.DeleteOrgInviteReq{
+		InviteId: req.GetInviteId(),
+		OrgId:    orgID,
+	}); err != nil {
+		return nil, err
+	}
+	return &pb.RevokeOrgInviteResp{}, nil
+}
+
+// ListMyInvites returns the invitations addressed to the CALLER, across
+// every organization — the list a person sees in their own account.
+func (h *AuthServiceHandler) ListMyInvites(ctx context.Context, _ *pb.ListMyInvitesReq) (*pb.ListMyInvitesResp, error) {
+	userID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	email, err := h.callerEmail(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := h.Query.ListPendingInvitesForEmail(ctx, &pb.ListPendingInvitesForEmailReq{Email: email})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pb.MyInvite, 0, len(resp.GetInvites()))
+	for _, i := range resp.GetInvites() {
+		out = append(out, &pb.MyInvite{
+			InviteId:  i.GetInviteId(),
+			OrgSlug:   i.GetOrgSlug(),
+			OrgName:   i.GetOrgName(),
+			Role:      i.GetRole(),
+			ExpiresAt: i.GetExpiresAt(),
+		})
+	}
+	return &pb.ListMyInvitesResp{Invites: out}, nil
+}
+
+// AcceptOrgInvite joins the caller to the inviting organization.
+//
+// One distributed transaction over three writes, and all three have to
+// land together: consuming the invitation without the membership loses the
+// invitation, and the membership without the role grant produces a member
+// who can do nothing and no screen to fix them from.
+func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.AcceptOrgInviteReq) (*pb.AcceptOrgInviteResp, error) {
+	userID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	email, err := h.callerEmail(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	var tx *distx.TxHandle
+	txCtx := ctx
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	resp, err := h.acceptInviteTx(txCtx, req.GetInviteId(), userID, email)
+	if err != nil {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return nil, err
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return resp, nil
+}
+
+func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, inviteID, userID, email string) (*pb.AcceptOrgInviteResp, error) {
+	// Claim first. The not-yet-accepted, not-expired and addressed-to-me
+	// tests sit in the UPDATE's own WHERE, so there is no window between
+	// deciding an invitation is good and consuming it — two clicks cannot
+	// both win.
+	claimed, err := h.Mutation.MarkOrgInviteAccepted(txCtx, &pb.MarkOrgInviteAcceptedReq{
+		InviteId: inviteID,
+		Email:    email,
+	})
+	// A claim that matches nothing arrives as NotFound, not as an empty
+	// response: the mutation carries RETURNING, and the generated write
+	// reports zero rows as an error.
+	//
+	// That is what made the opaque refusal below unreachable. `errInviteInvalid`
+	// exists precisely so an unauthenticated guess cannot learn WHICH of the
+	// four causes it hit — expired, already accepted, addressed to somebody
+	// else, or never existed — and instead of it the caller got a NotFound
+	// naming an internal RPC. The anti-probe wording was written, tested by
+	// eye, and never sent.
+	if status.Code(err) == codes.NotFound {
+		return nil, errInviteInvalid
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Kept as well, and deliberately not as belt-and-braces: the two are
+	// different shapes of "no row". NotFound is what the generator emits
+	// today; an empty org_id is what a caller would see if that ever changed,
+	// and proceeding with one would write a membership into no organization.
+	// Both answer with the same refusal, which is the property that matters.
+	orgID := claimed.GetOrgId()
+	if orgID == "" {
+		return nil, errInviteInvalid
+	}
+	roleName := claimed.GetRole()
+
+	// The role is resolved from the CLAIMED row, not from anything the
+	// request said: the invitation decides the role, the acceptor only
+	// decides whether to take it.
+	roleID, err := h.roleIDByName(txCtx, roleName)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := h.Mutation.AddOrgMembership(txCtx, &pb.AddOrgMembershipReq{
+		UserId: userID,
+		OrgId:  orgID,
+		Role:   roleName,
+	}); err != nil {
+		return nil, err
+	}
+	// org_id on the grant is what scopes it. Empty would mean REALM-WIDE
+	// — the role would count in every organization the person belongs to,
+	// which is the one outcome an org invitation must never produce.
+	if _, err := h.Mutation.AssignRoleToUser(txCtx, &pb.AssignRoleToUserReq{
+		UserId: userID,
+		RoleId: roleID,
+		OrgId:  orgID,
+	}); err != nil {
+		return nil, err
+	}
+	return &pb.AcceptOrgInviteResp{OrgId: orgID, Role: roleName}, nil
+}
