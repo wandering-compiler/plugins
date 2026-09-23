@@ -255,6 +255,17 @@ message CreateMfaChallengeResp {
   MfaChallenge challenge = 1;
 }
 
+// SupersedePendingMfaChallengesReq — the user whose still-pending
+// challenges the issuer retires before minting a new one, so at most ONE
+// code is live at a time. The response is deliberately EMPTY: see the RPC.
+message SupersedePendingMfaChallengesReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message SupersedePendingMfaChallengesResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+}
+
 message ConsumeMfaChallengeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string challenge_id = 1 [(w17.field) = { type: UUID }];
@@ -653,11 +664,45 @@ message RemovePermissionFromRoleResp {
 // login flow. The business CliAuthorize / CliToken handlers compose
 // them; only the code's hash is ever stored.
 
+message RegisterAuthClientReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string client_id    = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string name         = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string redirect_uri = 3 [(w17.field) = { type: URL, max_len: 2048 }];
+}
+message RegisterAuthClientResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  AuthClient client = 1;
+}
+
+message SetAuthClientEnabledReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id      = 1 [(w17.field) = { type: UUID }];
+  bool   enabled = 2;
+}
+message SetAuthClientEnabledResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1;
+}
+
+message DeleteAuthClientReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message DeleteAuthClientResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1;
+}
+
 message CreateCliAuthCodeReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string user_id        = 1 [(w17.field) = { type: UUID }];
   string code_hash      = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
   string code_challenge = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // The target this code is for — stored so the exchange can require the
+  // same one (RFC 6749 §4.1.3). Blank for a code minted before that binding
+  // existed; CliToken treats a blank as "nothing to compare".
+  string redirect_uri   = 5 [(w17.field) = { type: URL, max_len: 2048, blank: true }];
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
 }
 message CreateCliAuthCodeResp {
@@ -676,6 +721,10 @@ message ConsumeCliAuthCodeResp {
   // expired / already-consumed).
   string user_id        = 1;
   string code_challenge = 2;
+  // The redirect this code was issued for. The exchange compares it against
+  // the one the caller presents — blank means a code from before that binding
+  // existed, and there is nothing to compare.
+  string redirect_uri   = 3;
 }
 
 // ── org_membership mutation request/response messages ───────
@@ -1267,6 +1316,32 @@ service AuthMutation {
           "attempts = attempts + 1 "
           "WHERE id = :challenge_id AND consumed_at IS NULL "
           "RETURNING attempts AS attempts"
+      }
+    };
+  }
+
+  // SupersedePendingMfaChallenges — retire every still-pending challenge
+  // of a user, so issuing a new one leaves exactly one live code. Without
+  // it, N sign-ins leave N codes alive, each with its own attempt budget,
+  // and the budget on any one of them bounds nothing (marb #63).
+  //
+  // NO RETURNING, deliberately. Zero rows is the ORDINARY case — a first
+  // sign-in has nothing to supersede — and a mutation carrying RETURNING
+  // reports zero rows as a NotFound error, which would turn the common
+  // path into a failure. Nothing reads the count, so nothing is lost.
+  //
+  // No event: this is issuance hygiene, not a user-visible lifecycle step
+  // (same reasoning as RecordMfaAttempt). A subscriber that wants "your
+  // older code stopped working" derives it from MfaChallengeRequested.
+  rpc SupersedePendingMfaChallenges(SupersedePendingMfaChallengesReq) returns (SupersedePendingMfaChallengesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.MfaChallenge SET "
+          "consumed_at = NOW() "
+          "WHERE user_id = :user_id AND consumed_at IS NULL"
       }
     };
   }
@@ -1868,6 +1943,56 @@ service AuthMutation {
 
   // CreateCliAuthCode — INSERT a single-use PKCE code bound to the
   // approving user + challenge (only the hash is stored).
+  // RegisterAuthClient — write down a redirect target an operator vouches
+  // for. One row per (client_id, redirect_uri); the composite unique makes a
+  // repeat registration a no-op rather than a duplicate.
+  rpc RegisterAuthClient(RegisterAuthClientReq) returns (RegisterAuthClientResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.AuthClient SET "
+          "client_id = :client_id, "
+          "name = :name, "
+          "redirect_uri = :redirect_uri, "
+          "enabled = TRUE "
+          "RETURNING id AS client.id, "
+          "          client_id AS client.client_id, "
+          "          name AS client.name, "
+          "          redirect_uri AS client.redirect_uri, "
+          "          enabled AS client.enabled, "
+          "          created_at AS client.created_at"
+      }
+    };
+  }
+
+  // SetAuthClientEnabled — retire (or restore) ONE registered callback.
+  // Per row, not per client: an operator taking down a single environment's
+  // callback must not have to remove the others.
+  rpc SetAuthClientEnabled(SetAuthClientEnabledReq) returns (SetAuthClientEnabledResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.AuthClient SET enabled = :enabled "
+          "WHERE id = :id RETURNING id AS id"
+      }
+    };
+  }
+
+  // DeleteAuthClient — remove a registration outright.
+  rpc DeleteAuthClient(DeleteAuthClientReq) returns (DeleteAuthClientResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "DELETE FROM @module.AuthClient WHERE id = :id RETURNING id AS id"
+      }
+    };
+  }
+
   rpc CreateCliAuthCode(CreateCliAuthCodeReq) returns (CreateCliAuthCodeResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
     option (w17.db.method) = {
@@ -1878,6 +2003,7 @@ service AuthMutation {
           "user_id = :user_id, "
           "code_hash = :code_hash, "
           "code_challenge = :code_challenge, "
+          "redirect_uri = :redirect_uri, "
           "expires_at = :expires_at "
           "RETURNING id AS code.id, "
           "          user_id AS code.user_id, "
@@ -1903,7 +2029,7 @@ service AuthMutation {
           "UPDATE @module.CliAuthCode SET "
           "consumed_at = NOW() "
           "WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() "
-          "RETURNING user_id, code_challenge"
+          "RETURNING user_id, code_challenge, redirect_uri"
       }
     };
   }

@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -66,32 +68,39 @@ func (h *AuthServiceHandler) RequestPasswordReset(ctx context.Context, req *pb.R
 // stolen-then-reset credential can't keep a live session. Any bad token is
 // an opaque Unauthenticated — no enumeration of valid tokens.
 func (h *AuthServiceHandler) ResetPassword(ctx context.Context, req *pb.ResetPasswordReq) (*pb.ResetPasswordResp, error) {
-	consumed, err := h.Mutation.ConsumePasswordResetToken(ctx, &pb.ConsumePasswordResetTokenReq{
-		TokenHash: sha256Hex(req.GetToken()),
-	})
+	// The consume and the write it authorises are ONE unit.
+	//
+	// Apart, the token is spent before the password changes: a failure in
+	// between burns a valid link and leaves the old password in place, so the
+	// person is left with NEITHER — and they asked for that link precisely
+	// because they could not get in (marb #58). The consume must come first
+	// (it is the check), so the only honest arrangement is to roll the pair
+	// back together.
+	var tx *distx.TxHandle
+	txCtx := ctx
+	var err error
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	userID, err := h.consumeAndSetPassword(txCtx, sha256Hex(req.GetToken()), req.GetNewPassword())
 	if err != nil {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
 		return nil, err
 	}
-	userID := consumed.GetUserId()
-	if userID == "" {
-		// Zero rows matched the live-token WHERE → invalid/expired/used.
-		return nil, Unauthenticated(errResetTokenInvalid)
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
 	}
 
-	hash, err := h.PasswordHash.Hash(req.GetNewPassword())
-	if err != nil {
-		return nil, err
-	}
-	if _, err := h.Mutation.UpdateUserPassword(ctx, &pb.UpdateUserPasswordReq{
-		UserId:       userID,
-		PasswordHash: hash,
-	}); err != nil {
-		return nil, err
-	}
 	// Revoke every existing token (sessions + API tokens): a reset implies the
-	// prior credential may be compromised. Still best-effort — the password is
-	// already changed and a failed sweep must not undo it — but the outcome is
-	// REPORTED now.
+	// prior credential may be compromised. Deliberately OUTSIDE the
+	// transaction and still best-effort — the password is committed by now and
+	// a failed sweep must not undo it — but the outcome is REPORTED.
 	//
 	// It used to be `_, _ =` under a comment saying the error was "logged by
 	// the caller's interceptor". It was discarded here, before any interceptor
@@ -101,4 +110,46 @@ func (h *AuthServiceHandler) ResetPassword(ctx context.Context, req *pb.ResetPas
 	// reset their password believing it had done something.
 	_, sweepErr := h.Mutation.DeleteUserSessionsForReset(ctx, &pb.DeleteUserSessionsForResetReq{UserId: userID})
 	return &pb.ResetPasswordResp{SessionsRevoked: sweepErr == nil}, nil
+}
+
+// consumeAndSetPassword spends the token and writes the new password. Kept
+// together so one transaction can hold them; separated again, a rollback has
+// no password write to undo and the link is gone either way.
+//
+// Hashing sits BETWEEN them rather than before: hashing first would pay an
+// argon2 derivation for every bogus token somebody posts, on an endpoint that
+// needs no credential to reach.
+func (h *AuthServiceHandler) consumeAndSetPassword(txCtx context.Context, tokenHash, newPassword string) (string, error) {
+	consumed, err := h.Mutation.ConsumePasswordResetToken(txCtx, &pb.ConsumePasswordResetTokenReq{
+		TokenHash: tokenHash,
+	})
+	if err != nil {
+		// Through the opaque constructor, not raw.
+		//
+		// The statement carries RETURNING, so "no live row" arrives as
+		// NotFound — an ERROR, not an empty response. Returned raw it told a
+		// caller apart "this token is unknown/used/expired" from every other
+		// outcome, which is the enumeration the opaque refusal exists to
+		// prevent, and it made the `== ""` branch below unreachable: written
+		// for a shape this mutation never produces (marb #58).
+		//
+		// Unauthenticated() classifies: a refusal stays opaque, an outage
+		// comes back as Unavailable rather than dressed as a bad token.
+		return "", Unauthenticated(err)
+	}
+	userID := consumed.GetUserId()
+	if userID == "" {
+		return "", Unauthenticated(errResetTokenInvalid)
+	}
+	hash, err := h.PasswordHash.Hash(newPassword)
+	if err != nil {
+		return "", err
+	}
+	if _, err := h.Mutation.UpdateUserPassword(txCtx, &pb.UpdateUserPasswordReq{
+		UserId:       userID,
+		PasswordHash: hash,
+	}); err != nil {
+		return "", err
+	}
+	return userID, nil
 }

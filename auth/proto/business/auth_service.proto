@@ -59,6 +59,7 @@ package w17.contrib.auth;
 
 import "google/protobuf/timestamp.proto";
 import "@self/queries/auth_query.proto";
+import "@self/types/models.proto";
 import "w17/contrib.proto";
 import "w17/field.proto";
 
@@ -692,6 +693,24 @@ service AuthService {
   rpc CreateApiToken(CreateApiTokenReq) returns (CreateApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
+  // RegisterClient / ListClients / SetClientEnabled / DeleteClient — the
+  // operator's registry of non-loopback redirect targets for the
+  // authorization-code flow. Admin-only, bearer-authenticated: writing one
+  // down is the act that makes a redirect trustworthy, so it belongs to a
+  // person with a session and never to a token in a pipeline. Gated
+  // cli_login.
+  rpc RegisterClient(RegisterClientReq) returns (RegisterClientResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+  rpc ListClients(ListClientsReq) returns (ListClientsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+  rpc SetClientEnabled(SetClientEnabledReq) returns (SetClientEnabledResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+  rpc DeleteClient(DeleteClientReq) returns (DeleteClientResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
   // CreateBot — provision a machine account AND give it its role, in one
   // call. Gated service_account.
   rpc CreateBot(CreateBotReq) returns (CreateBotResp) {
@@ -951,11 +970,33 @@ message CliAuthorizeReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   // PKCE code_challenge = BASE64URL(SHA256(code_verifier)) (S256 only).
   string code_challenge = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
-  // The loopback callback the CLI is listening on
-  // (http://127.0.0.1:PORT/... or http://localhost:PORT/...). Restricted
-  // to loopback so a stolen authorize link can't exfiltrate the code to an
-  // attacker origin (RFC 8252 §7.3).
-  string redirect_uri = 2 [(w17.field) = { type: URL, max_len: 512 }];
+  // Where to send the code. Either a LOOPBACK callback the CLI is listening
+  // on (http://127.0.0.1:PORT/... or http://localhost:PORT/...), which needs
+  // no registration because the target is the user's own machine (RFC 8252
+  // §7.3) — or a callback REGISTERED for `client_id`, matched exactly.
+  //
+  // Anything else is refused: a stolen authorize link pointing at an
+  // attacker-controlled origin is exactly what this is here to stop.
+  string redirect_uri = 2 [(w17.field) = { type: URL, max_len: 2048 }];
+  // state — the client's anti-CSRF value, echoed back untouched.
+  //
+  // PKCE protects the EXCHANGE: a stolen code is useless without the
+  // verifier. It does not protect the browser from being walked through
+  // somebody else's flow — an attacker who gets a victim to complete one with
+  // the attacker's code leaves the victim signed in as the attacker, inside
+  // the victim's own app. `state` is what the client compares on return to
+  // refuse that.
+  //
+  // Its own field rather than something a client appends to redirect_uri: the
+  // redirect is matched as a WHOLE STRING against the registry, so a
+  // per-request value could never be registered.
+  string state = 4 [(w17.field) = { type: CHAR, max_len: 256, blank: true }];
+  // client_id — required for a non-loopback redirect, ignored for loopback.
+  //
+  // A browser app on its own origin cannot use the loopback exemption, so it
+  // names the registration the operator wrote down. Optional on the wire so
+  // the CLI flow, which predates the registry, is unchanged.
+  string client_id = 3 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
 }
 message CliAuthorizeResp {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -966,13 +1007,49 @@ message CliAuthorizeResp {
   // Echoed back so the web front-end builds the redirect without re-reading
   // the request.
   string redirect_uri = 2;
+  // The state the request carried, unchanged, so the client can compare it
+  // after the browser comes back.
+  string state = 3 [(w17.field) = { type: CHAR, max_len: 256, blank: true }];
 }
+
+message RegisterClientReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string client_id    = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string name         = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  // Exact, whole-string. Registering `https://app.example.com/` does not
+  // authorise `https://app.example.com/cb` — register each callback.
+  string redirect_uri = 3 [(w17.field) = { type: URL, max_len: 2048 }];
+}
+message RegisterClientResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  AuthClient client = 1;
+}
+message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
+message ListClientsResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  repeated AuthClient clients = 1;
+}
+message SetClientEnabledReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id      = 1 [(w17.field) = { type: UUID }];
+  bool   enabled = 2;
+}
+message SetClientEnabledResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+message DeleteClientReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message DeleteClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
 
 message CliTokenReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string code = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
   // PKCE code_verifier (RFC 7636: 43–128 chars of the unreserved set).
   string code_verifier = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // The same redirect the code was issued for (RFC 6749 §4.1.3). Optional
+  // only so a code minted before this binding existed can still be redeemed;
+  // when the stored value is present, this must equal it.
+  string redirect_uri = 3 [(w17.field) = { type: URL, max_len: 2048, blank: true }];
 }
 message CliTokenResp {
   option (w17.contrib.plugin_feature) = "cli_login";

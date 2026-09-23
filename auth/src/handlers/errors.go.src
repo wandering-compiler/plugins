@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"errors"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -51,10 +53,49 @@ func (e *authnError) Error() string {
 // exists. The classification is on the CAUSE's own status code, and only codes
 // that describe the service rather than the credential flip.
 func (e *authnError) GRPCStatus() *status.Status {
+	if st, ok := deliberateStatus(e.cause); ok {
+		return st
+	}
 	if c := operationalCode(e.cause); c != codes.OK {
 		return status.New(c, "the authentication service is temporarily unavailable")
 	}
 	return status.New(codes.Unauthenticated, authnErrorMessage)
+}
+
+// wireError is a refusal this package mints when it has DECIDED that the
+// caller may be told what happened. It is the narrow exception to the opaque
+// answer, and the rule for minting one is a single sentence:
+//
+//	Only for a refusal that is reached AFTER the credential was proven.
+//
+// Past that point the caller already knows the password is right, so a clear
+// answer tells an attacker nothing they did not buy with the credential — and
+// telling the legitimate user "you asked for too many codes, wait" instead of
+// "invalid credentials" is the difference between a hint and a lie. Refusals
+// on the way TO proving the credential (no such email, wrong password, header
+// gates) must NOT use this; they are the enumeration surface the opaque answer
+// exists for.
+//
+// It is a package-private TYPE rather than a status code check on purpose. A
+// cause that merely CARRIES some code can arrive from anything downstream, so
+// classifying on the code would let another service steer the wire answer;
+// only code in this package can construct a wireError.
+type wireError struct {
+	code codes.Code
+	msg  string
+}
+
+func (e *wireError) Error() string { return e.msg }
+
+// deliberateStatus reports the status a wireError anywhere in the cause chain
+// asks for. Not a status.FromError call: that would also match a status error
+// from a downstream service.
+func deliberateStatus(cause error) (*status.Status, bool) {
+	var we *wireError
+	if errors.As(cause, &we) {
+		return status.New(we.code, we.msg), true
+	}
+	return nil, false
 }
 
 // operationalCode reports the wire code to use when a cause describes the

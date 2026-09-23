@@ -340,6 +340,24 @@ message ListApiTokensByUserResp {
 // with client_secret). GetOAuthIdentity finds an existing User↔subject
 // link. Both gated `oauth`.
 
+message GetRegisteredRedirectReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string client_id    = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string redirect_uri = 2 [(w17.field) = { type: URL, max_len: 2048 }];
+}
+message GetRegisteredRedirectResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  AuthClient client = 1;
+}
+
+message ListAuthClientsReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+}
+message ListAuthClientsResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  repeated AuthClient clients = 1;
+}
+
 message GetProviderByNameReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string name = 1;
@@ -393,6 +411,21 @@ message GetMfaChallengeReq {
 message GetMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   MfaChallenge challenge = 1;
+}
+
+// CountRecentMfaChallenges backs the ISSUANCE cap. The attempts counter on
+// MfaChallenge bounds guesses against ONE challenge; a new challenge starts
+// a fresh budget, so without a second cap the total number of guesses an
+// attacker who already has the password can buy is unbounded — they just
+// sign in again (marb #63).
+message CountRecentMfaChallengesReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
+  google.protobuf.Timestamp since = 2;
+}
+message CountRecentMfaChallengesResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  int64 count = 1;
 }
 
 // --- devices feature: device lookup at sign-in + the mgmt list ---
@@ -1378,6 +1411,54 @@ service AuthQuery {
   // GetProviderByName — the OAuth provider keyed by URL slug. Returns all
   // columns incl. client_secret (the handler needs it for the token
   // exchange + state HMAC). The handler enforces `enabled`. Gated oauth.
+  // GetRegisteredRedirect — is this (client_id, redirect_uri) pair one the
+  // operator wrote down, and still enabled?
+  //
+  // The whole check is in the WHERE: an exact equality on the redirect, never
+  // a prefix or a host comparison. A prefix match would accept
+  // `https://app.example.com.evil.example`, and a host comparison would
+  // accept any path on a registered origin — including one an attacker can
+  // make the app render.
+  //
+  // NotFound (or an empty row) means "not registered", which is the same
+  // answer as "no such client": the authorize refusal must not tell a caller
+  // which half they got wrong.
+  rpc GetRegisteredRedirect(GetRegisteredRedirectReq) returns (GetRegisteredRedirectResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS client.id, "
+          "       c.client_id AS client.client_id, "
+          "       c.name AS client.name, "
+          "       c.redirect_uri AS client.redirect_uri, "
+          "       c.enabled AS client.enabled, "
+          "       c.created_at AS client.created_at "
+          "FROM @module.AuthClient c "
+          "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri AND c.enabled = TRUE"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+
+  // ListAuthClients — the operator's view of what is registered. Admin-only.
+  rpc ListAuthClients(ListAuthClientsReq) returns (ListAuthClientsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS id, "
+          "       c.client_id AS client_id, "
+          "       c.name AS name, "
+          "       c.redirect_uri AS redirect_uri, "
+          "       c.enabled AS enabled, "
+          "       c.created_at AS created_at "
+          "FROM @module.AuthClient c ORDER BY c.client_id, c.redirect_uri"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+
   rpc GetProviderByName(GetProviderByNameReq) returns (GetProviderByNameResp) {
     option (w17.db.method) = {
       ops: {
@@ -1478,6 +1559,23 @@ service AuthQuery {
           "       c.created_at AS challenge.created_at, "
           "       c.attempts AS challenge.attempts "
           "FROM @module.MfaChallenge c WHERE c.id = :challenge_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+  }
+
+  // CountRecentMfaChallenges — how many challenges this user has been
+  // ISSUED since :since, consumed or not. It counts ROWS, not live codes:
+  // a superseded challenge still spent its slice of the window, which is
+  // the whole point — the cap is on issuance, and superseding is what the
+  // issuer does to the previous one. Gated two_factor.
+  rpc CountRecentMfaChallenges(CountRecentMfaChallengesReq) returns (CountRecentMfaChallengesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT COUNT(*) AS count FROM @module.MfaChallenge c "
+          "WHERE c.user_id = :user_id AND c.created_at > :since"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "two_factor";

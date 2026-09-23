@@ -62,6 +62,13 @@ type EnvConfig struct {
 	TwoFactorScope    string // two_factor_scope — all_logins | new_devices
 	MfaCodeTtlSeconds int    // mfa_code_ttl_seconds — event-flow code lifetime
 
+	// Issuance cap for MFA challenges (marb #63). maxMfaAttempts is per
+	// CHALLENGE and a new sign-in mints a new one, so these bound how many
+	// challenges — and so how many attempt budgets — one user can be issued
+	// in a window. <= 0 → 10 per 900s.
+	MfaMaxChallengesPerWindow int // mfa_max_challenges_per_window
+	MfaChallengeWindowSeconds int // mfa_challenge_window_seconds
+
 	// SessionTokenTtlSeconds — absolute lifetime of a browser session
 	// bearer token (session_token_ttl_seconds). Stamped into
 	// UserToken.expires_at at mint time; validation rejects expired

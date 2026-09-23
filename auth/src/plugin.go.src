@@ -70,11 +70,13 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		// mfa.go is the only reader, and it isn't staged then). pluginwire
 		// sets TwoFactorTotp from envBool(..., true), so the built-in TOTP
 		// verify path defaults ON.
-		TwoFactorTOTP:      cfg.TwoFactorTotp,
-		TwoFactorScope:     cfg.TwoFactorScope,
-		MfaCodeTTLSeconds:  cfg.MfaCodeTtlSeconds,
-		TotpIssuer:         cfg.TotpIssuer,
-		TwoFactorSecretKey: cfg.TwoFactorSecretKey,
+		TwoFactorTOTP:             cfg.TwoFactorTotp,
+		TwoFactorScope:            cfg.TwoFactorScope,
+		MfaCodeTTLSeconds:         cfg.MfaCodeTtlSeconds,
+		MaxMfaChallengesPerWindow: cfg.MfaMaxChallengesPerWindow,
+		MfaChallengeWindowSeconds: cfg.MfaChallengeWindowSeconds,
+		TotpIssuer:                cfg.TotpIssuer,
+		TwoFactorSecretKey:        cfg.TwoFactorSecretKey,
 
 		// Session bearer absolute lifetime (base-tier; <=0 → 30d default
 		// applied in sessionTokenExpiry). pluginwire sets this from

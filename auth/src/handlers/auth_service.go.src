@@ -149,6 +149,13 @@ type AuthServiceHandler struct {
 	TwoFactorTOTP     bool   // built-in TOTP verify path enabled (two_factor_totp)
 	TwoFactorScope    string // all_logins | new_devices (two_factor_scope)
 	MfaCodeTTLSeconds int    // event-flow challenge code lifetime (mfa_code_ttl_seconds)
+	// Issuance cap (marb #63): at most MaxMfaChallengesPerWindow challenges
+	// per user per MfaChallengeWindowSeconds. The per-challenge attempt
+	// budget bounds guesses against one challenge; this bounds how many
+	// challenges — and so how many budgets — a caller can buy. <= 0 → the
+	// defaults in mfa.go.
+	MaxMfaChallengesPerWindow int // mfa_max_challenges_per_window
+	MfaChallengeWindowSeconds int // mfa_challenge_window_seconds
 
 	// SessionTokenTTLSeconds is the absolute lifetime stamped into a
 	// freshly minted session bearer token's expires_at (from

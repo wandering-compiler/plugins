@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -64,18 +66,50 @@ func (h *AuthServiceHandler) RequestEmailVerification(ctx context.Context, req *
 // expired) and stamps the user's email_verified_at. Unauthenticated (the
 // link click carries no session). Any bad token is an opaque error.
 func (h *AuthServiceHandler) VerifyEmail(ctx context.Context, req *pb.VerifyEmailReq) (*pb.VerifyEmailResp, error) {
-	consumed, err := h.Mutation.ConsumeEmailVerificationToken(ctx, &pb.ConsumeEmailVerificationTokenReq{
-		TokenHash: sha256Hex(req.GetToken()),
+	// Same pairing as ResetPassword: the consume spends the token and the
+	// write is what it authorised. Apart, a failure between them burns a
+	// valid link and leaves the address unverified, so the person has to ask
+	// for another one to reach a state the first one already paid for
+	// (marb #58).
+	var tx *distx.TxHandle
+	txCtx := ctx
+	var err error
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	if err := h.consumeAndMarkVerified(txCtx, sha256Hex(req.GetToken())); err != nil {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return nil, err
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return &pb.VerifyEmailResp{}, nil
+}
+
+// consumeAndMarkVerified spends the token and stamps the address. Kept
+// together so one transaction can hold them.
+func (h *AuthServiceHandler) consumeAndMarkVerified(txCtx context.Context, tokenHash string) error {
+	consumed, err := h.Mutation.ConsumeEmailVerificationToken(txCtx, &pb.ConsumeEmailVerificationTokenReq{
+		TokenHash: tokenHash,
 	})
 	if err != nil {
-		return nil, err
+		// Opaque, not raw — see consumeAndSetPassword for why the RETURNING
+		// shape makes the `== ""` branch below unreachable on its own.
+		return Unauthenticated(err)
 	}
 	userID := consumed.GetUserId()
 	if userID == "" {
-		return nil, Unauthenticated(errVerifyTokenInvalid)
+		return Unauthenticated(errVerifyTokenInvalid)
 	}
-	if _, err := h.Mutation.MarkEmailVerified(ctx, &pb.MarkEmailVerifiedReq{UserId: userID}); err != nil {
-		return nil, err
+	if _, err := h.Mutation.MarkEmailVerified(txCtx, &pb.MarkEmailVerifiedReq{UserId: userID}); err != nil {
+		return err
 	}
-	return &pb.VerifyEmailResp{}, nil
+	return nil
 }

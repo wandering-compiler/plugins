@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"time"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/platform/plugins/auth/lib/secretbox"
@@ -32,9 +33,24 @@ const (
 	// maxMfaAttempts is the failed-VerifyMfa ceiling per challenge
 	// (Q43-auth-mfa). At this count the challenge is locked — even the
 	// correct code is refused — so a 6-digit factor (10^6 space) can't be
-	// brute-forced within the TTL. The user restarts the sign-in flow for
-	// a fresh challenge.
+	// brute-forced within the TTL.
+	//
+	// PER CHALLENGE is the whole of what it claims. Restarting the sign-in
+	// flow yields a fresh challenge with a fresh budget, so this number
+	// alone bounds nothing; the ISSUANCE cap below is the other half, and
+	// neither is sufficient on its own (marb #63).
 	maxMfaAttempts = 5
+
+	// defaultMaxMfaChallengesPerWindow / defaultMfaChallengeWindowSeconds
+	// cap ISSUANCE: at most 10 challenges per 15 minutes per user, so the
+	// guesses an attacker holding the password can buy are bounded at
+	// 10 × maxMfaAttempts per window rather than being unbounded in time.
+	//
+	// Sized for a human, not for the attacker: ten sign-ins in a quarter
+	// hour is already an unusual session, and the two knobs exist for a
+	// deployment that finds otherwise.
+	defaultMaxMfaChallengesPerWindow = 10
+	defaultMfaChallengeWindowSeconds = 900
 )
 
 // scopeNewDevices is the two_factor_scope value that challenges only
@@ -44,6 +60,17 @@ const (
 const scopeNewDevices = "new_devices"
 
 var errMfaChallengeInvalid = errors.New("mfa challenge invalid/expired/consumed")
+
+// errMfaChallengeBudget refuses a new challenge once the issuance cap is
+// spent. It is a wireError — a DELIBERATE, non-opaque answer — because it is
+// only reachable AFTER the password verified, so saying what happened tells
+// an attacker nothing the credential did not already buy. The opaque
+// "invalid credentials" here would be a lie of the same shape marb #60/4
+// objected to: it sends a user whose password is fine to go reset it.
+var errMfaChallengeBudget = &wireError{
+	code: codes.ResourceExhausted,
+	msg:  "too many verification codes requested for this account — wait a few minutes and sign in again",
+}
 
 // init wires the two_factor sign-in gate on package load.
 func init() {
@@ -92,6 +119,104 @@ func (h *AuthServiceHandler) totpEnrolled(ctx context.Context, userID string) (b
 	return s.GetConfirmedAt() != nil, s.GetSecret(), nil
 }
 
+// mfaChallengeWindow / maxMfaChallengesPerWindow read the ISSUANCE cap
+// knobs. <= 0 falls back to the default, matching mfaTTL — a security cap
+// that switches itself off when someone writes 0 is not a knob worth having.
+func (h *AuthServiceHandler) mfaChallengeWindow() time.Duration {
+	if h.MfaChallengeWindowSeconds > 0 {
+		return time.Duration(h.MfaChallengeWindowSeconds) * time.Second
+	}
+	return defaultMfaChallengeWindowSeconds * time.Second
+}
+
+func (h *AuthServiceHandler) maxMfaChallengesPerWindow() int64 {
+	if h.MaxMfaChallengesPerWindow > 0 {
+		return int64(h.MaxMfaChallengesPerWindow)
+	}
+	return defaultMaxMfaChallengesPerWindow
+}
+
+// enforceMfaChallengeBudget caps how many challenges a user can be ISSUED
+// within the window.
+//
+// The attempts counter on MfaChallenge is a per-CHALLENGE budget, and it was
+// read as if it bounded guessing. It does not: a new challenge is a new row
+// with attempts = 0, so an attacker who already holds the password buys five
+// more guesses per sign-in, for as long as they care to sign in. Five of a
+// six-digit space is a real bound; five-times-unbounded is none (marb #63).
+//
+// The threat model this closes is exactly the one the second factor exists
+// for — an attacker WITH the password and without the delivery channel. The
+// practical brake today is that every challenge sends a message, so a run at
+// the space is 200k e-mails; that brake belongs to the mail provider, not to
+// us, and a project delivering codes through its own channel (the shape
+// MfaChallengeRequested deliberately invites) may have no brake at all.
+//
+// A read failure REFUSES. The alternative is to issue on a failed count,
+// which is the same as having no cap during an outage.
+func (h *AuthServiceHandler) enforceMfaChallengeBudget(ctx context.Context, userID string) error {
+	since := timestamppb.New(time.Now().Add(-h.mfaChallengeWindow()))
+	resp, err := h.Query.CountRecentMfaChallenges(ctx, &pb.CountRecentMfaChallengesReq{
+		UserId: userID,
+		Since:  since,
+	})
+	if err != nil {
+		return err
+	}
+	if resp.GetCount() >= h.maxMfaChallengesPerWindow() {
+		return errMfaChallengeBudget
+	}
+	return nil
+}
+
+// issueMfaChallenge retires the user's pending challenges and mints the new
+// one IN ONE TRANSACTION, because the two halves are a REPLACEMENT and not
+// two independent writes — the same reasoning as replaceTotpSecret. Split,
+// a failure of the insert leaves a user whose working code was just retired
+// by an operation that was supposed to hand them a new one.
+//
+// Superseding is what makes "one live code per user" true. Without it, N
+// sign-ins leave N codes alive at once, each with its own five guesses, and
+// the user who clicks "sign in" five times holds five valid codes.
+//
+// The transaction has a second effect worth keeping: CreateMfaChallenge
+// carries the MfaChallengeRequested emit, and a generated emitter defers
+// until COMMIT when a transaction is in scope (txregistry.DeferUntilCommit).
+// So the delivery channel is handed a code only once the row it belongs to is
+// durable. Unwrap this and the message goes out on the insert, which is a code
+// a user can be sent for a challenge that was rolled back.
+func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.CreateMfaChallengeReq) (*pb.CreateMfaChallengeResp, error) {
+	var tx *distx.TxHandle
+	txCtx := ctx
+	var err error
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	fail := func(err error) (*pb.CreateMfaChallengeResp, error) {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return nil, err
+	}
+	if _, err := h.Mutation.SupersedePendingMfaChallenges(txCtx, &pb.SupersedePendingMfaChallengesReq{
+		UserId: req.GetUserId(),
+	}); err != nil {
+		return fail(err)
+	}
+	created, err := h.Mutation.CreateMfaChallenge(txCtx, req)
+	if err != nil {
+		return fail(err)
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return created, nil
+}
+
 // mfaSignInGate is the two_factor SignIn seam. It decides whether a
 // challenge fires (scope), creates the MfaChallenge (which emits
 // MfaChallengeRequested), and returns the mfa_required response so SignIn
@@ -107,6 +232,12 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, de
 	if err != nil {
 		// Refuse the sign-in rather than issue a token with one factor
 		// because the enrolment store was unreachable.
+		return nil, false, err
+	}
+
+	// Issuance cap BEFORE any work: a refused issue must not send a
+	// message, and hashing a code we are about to throw away is waste.
+	if err := h.enforceMfaChallengeBudget(ctx, user.GetId()); err != nil {
 		return nil, false, err
 	}
 
@@ -128,7 +259,7 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, de
 	}
 
 	expiresAt := timestamppb.New(time.Now().Add(h.mfaTTL()))
-	created, err := h.Mutation.CreateMfaChallenge(ctx, &pb.CreateMfaChallengeReq{
+	created, err := h.issueMfaChallenge(ctx, &pb.CreateMfaChallengeReq{
 		UserId:       user.GetId(),
 		CodeHash:     codeHash,
 		TotpEnrolled: enrolled,

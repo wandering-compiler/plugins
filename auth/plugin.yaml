@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.1
+version: 0.1.0-rc.2
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -39,6 +39,14 @@ env:
     type: int
     default: "300"
     description: "Lifetime of an event-flow MfaChallenge code (the SMS/e-mail path). TOTP windows are governed by RFC 6238, not this knob. Also bounds the VerifyMfa window for the TOTP path."
+  - name: mfa_max_challenges_per_window
+    type: int
+    default: "10"
+    description: "How many MFA challenges one user may be ISSUED per mfa_challenge_window_seconds (two_factor feature). The five-attempt lockout is per CHALLENGE, and every sign-in mints a new challenge with a fresh budget, so this is what bounds total guessing by an attacker who already has the password. Issuing a challenge also retires the user's previous pending ones, so at most one code is live at a time. <= 0 falls back to 10."
+  - name: mfa_challenge_window_seconds
+    type: int
+    default: "900"
+    description: "The window mfa_max_challenges_per_window counts over (two_factor feature). Default 900 = 15 minutes. <= 0 falls back to 900."
   - name: session_token_ttl_seconds
     type: int
     default: "2592000"
@@ -79,6 +87,13 @@ features:
     go_files:
       - handlers/signup_roles.go
   - name: authenticate_turnkey
+    requires:
+      # Authenticate delegates to GetUserByTokenWithPermissions, which is
+      # gated `rbac` — and auth_service.go calls it unconditionally. Without
+      # this, activating the turnkey resolver alone fails the BUNDLE build on
+      # `undefined: pb.GetUserByTokenWithPermissionsReq`, pointing at a file
+      # the project never wrote and cannot edit (marb #58).
+      - rbac
     description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids."
     default: true
   - name: sign_up_turnkey
@@ -90,6 +105,19 @@ features:
     description: "AuthService.SignIn — authored Go handler chaining GetUserByEmail + passwordhash.VerifyAndRotate + IssueToken. Emits opaque Unauthenticated on every failure (anti-enumeration). Disable for custom sign-in flows (MFA, rate limit, lockout, federated identity)."
     default: true
   - name: tenant_scope
+    requires:
+      # The tenant create path IS the SignUp create path: tenant.go replaces
+      # the `signupCreateUser` seam with a function taking `*pb.SignUpReq`,
+      # a type gated `sign_up_turnkey`. Without it the bundle does not build.
+      - sign_up_turnkey
+    conflicts_with:
+      # Stated in the description since this feature existed, enforced by
+      # nothing until now: handlers/oauth.go creates users through the
+      # baseline CreateUser and has no tenant to resolve, so an OAuth sign-in
+      # under tenant_scope hits the NOT NULL tenant_id at RUNTIME — the worst
+      # place to learn it. A documented incompatibility that codegen does not
+      # know about is a promise the compiler cannot keep (marb #58).
+      - oauth
     description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth`: handlers/oauth.go creates users through the baseline CreateUser and has no tenant to resolve, so the pair is unsupported (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Off by default — opt in for multi-tenant deployments."
     default: false
     go_files:
@@ -100,6 +128,10 @@ features:
     go_files:
       - handlers/apitoken.go
   - name: devices
+    requires:
+      # devices.go names pb.SignInResp — the device gate hangs off the
+      # sign-in it decorates, so without it the bundle does not build.
+      - sign_in_turnkey
     description: "Device/session tracking + log-out endpoints (ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices). Adds the Device table + a UserToken.device_id column; each session links to a Device so 'log out a device' is 'delete its tokens'. New vs. trusted devices are distinguished by a client-sent X-Device-Id header (falling back to a UA+IP fingerprint), and trusted_at supplies the trusted-device signal two_factor new-device mode reads. The project must forward X-Device-Id / User-Agent / X-Forwarded-For via (w17.rest_api).metadata_propagation for full-fidelity detection. Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
     default: false
     go_files:
@@ -131,6 +163,10 @@ features:
     requires:
       - email_verification
   - name: two_factor
+    requires:
+      # mfa.go names pb.SignInResp: the two-step sign-in RETURNS one
+      # (mfa_required instead of a token). No sign-in, no build.
+      - sign_in_turnkey
     description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (secret encrypted at rest) + MfaChallenge tables, the EnrollTotp/ConfirmTotp/DisableTotp/GetMfaStatus enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (new_devices requires `devices`). Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
     default: false
     go_files:
@@ -146,11 +182,15 @@ features:
     go_files:
       - handlers/emailverify.go
   - name: cli_login
-    description: "First-party CLI login — the console acts as an OAuth authorization server for CLIs (e.g. w17ctl) via the loopback + PKCE flow (the same UX as `claude login`). Adds the CliAuthCode table + CliAuthorize (bearer-authenticated: mint a single-use, PKCE-bound authorization code for the signed-in principal) and CliToken (unauthenticated: verify the PKCE code_verifier, consume the code single-use, mint a bearer) RPCs. The human authenticates through the project's existing surface (password sign-in or the `oauth` providers); cli_login only issues + redeems the CLI's code. Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
+    description: "First-party CLI login — the console acts as an OAuth authorization server for CLIs (e.g. w17ctl) via the loopback + PKCE flow (the same UX as `claude login`). Adds the CliAuthCode table + CliAuthorize (bearer-authenticated: mint a single-use, PKCE-bound authorization code for the signed-in principal) and CliToken (unauthenticated: verify the PKCE code_verifier, consume the code single-use, mint a bearer) RPCs. The human authenticates through the project's existing surface (password sign-in or the `oauth` providers); cli_login only issues + redeems the CLI's code. A redirect target must be LOOPBACK (RFC 8252 §7.3 — the user's own machine, no registration needed) or listed in the AuthClient registry under its client_id, matched as a whole string; that registry is what lets the same flow serve a browser app on its own origin instead of only a CLI. Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
     default: false
     go_files:
       - handlers/cli_login.go
   - name: org_membership
+    requires:
+      # org_membership.go names pb.WhoAmIResp — the caller's orgs are
+      # reported through the turnkey identity answer.
+      - authenticate_turnkey
     description: "GitHub-style multi-org membership — one identity belongs to MANY Organizations via OrgMembership (the generalization of single-tenant tenant_scope). Adds the Organization + OrgMembership tables + AuthQuery.ListUserOrgs / GetUserOrgBySlug, the ListMyOrgs business RPC (the caller's orgs, for a CLI's `org list` + login cache + init org picker), and an Authenticate decorator that stamps scopes[org_id] for the request's ACTIVE org (a client-selected slug in the W17-Org header, VALIDATED against membership — a caller can only ever scope into an org they belong to). A project scoping rows by name: org_id then gets per-org isolation. Coexists with tenant_scope (a project picks one model). Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
     default: false
     # api_token narrows permissions by REALM (inside resolvePrincipal);
@@ -192,6 +232,14 @@ features:
     requires:
       - api_token
       - user_admin
+      # CreateBot assigns the bot's role: pb.AssignRoleToUserReq is rbac's.
+      - rbac
+      # CreateBot resolves the caller's active organization and writes the
+      # membership before the grant — both are org_membership's. Undeclared,
+      # activating service_account without it fails the BUNDLE build on
+      # `undefined: pb.AddOrgMembershipReq`, in a file the project never wrote
+      # (marb #58).
+      - org_membership
     go_files:
       - handlers/service_account.go
   - name: user_admin
@@ -344,6 +392,17 @@ presets:
         endpoints:
           - { ref: AuthService.CliAuthorize, method: POST, path: /authorize,                     feature: cli_login }
           - { ref: AuthService.CliToken,     method: POST, path: /token,     exclude_auth: true, feature: cli_login }
+      # The registry of redirect targets the same flow may send a code to.
+      # Bearer-authenticated and admin-scoped by the ACL: writing a callback
+      # down is the act that makes it trustworthy, so it belongs to a person
+      # with a session rather than a token in a pipeline. Gated cli_login.
+      - prefix: /auth/clients
+        description: "Registered redirect targets for the authorization-code flow — what a non-loopback callback must be listed in before it can receive a code."
+        endpoints:
+          - { ref: AuthService.RegisterClient,   method: POST,   path: "",            feature: cli_login }
+          - { ref: AuthService.ListClients,      method: GET,    path: "",            feature: cli_login }
+          - { ref: AuthService.SetClientEnabled, method: PATCH,  path: "/{id}",       feature: cli_login }
+          - { ref: AuthService.DeleteClient,     method: DELETE, path: "/{id}",       feature: cli_login }
       # Multi-org membership — the caller lists their OWN orgs, bearer-
       # authenticated. Gated org_membership.
       - prefix: /auth/orgs
