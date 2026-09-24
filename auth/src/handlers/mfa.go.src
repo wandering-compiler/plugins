@@ -154,6 +154,11 @@ func (h *AuthServiceHandler) maxMfaChallengesPerWindow() int64 {
 //
 // A read failure REFUSES. The alternative is to issue on a failed count,
 // which is the same as having no cap during an outage.
+//
+// Called ONLY from issueMfaChallenge, inside the transaction that holds the
+// user row lock. Counting outside that lock reads a number that another
+// request is already making wrong (marb #65) — the count and the insert it
+// gates have to be one serialised section or the cap is decorative.
 func (h *AuthServiceHandler) enforceMfaChallengeBudget(ctx context.Context, userID string) error {
 	since := timestamppb.New(time.Now().Add(-h.mfaChallengeWindow()))
 	resp, err := h.Query.CountRecentMfaChallenges(ctx, &pb.CountRecentMfaChallengesReq{
@@ -200,6 +205,25 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 		}
 		return nil, err
 	}
+	// Serialise issuance for THIS user, then decide. The cap used to count
+	// outside any transaction and decide on the answer, which bounds nothing
+	// against anything concurrent: marb sent twenty sign-ins at once and got
+	// twenty challenges past a limit of ten, because all twenty read zero
+	// before any of them committed (#65).
+	//
+	// The lock is on the USER row, not on the challenges being counted —
+	// there may be none yet, and a row that does not exist cannot be locked,
+	// which is precisely the case that was measured.
+	if _, err := h.Query.LockUserForIssuance(txCtx, &pb.LockUserForIssuanceReq{
+		UserId: req.GetUserId(),
+	}); err != nil {
+		return fail(err)
+	}
+	// INSIDE the lock, and only here: a second copy of this check outside it
+	// would pass on its own and hide that this one is the load-bearing one.
+	if err := h.enforceMfaChallengeBudget(txCtx, req.GetUserId()); err != nil {
+		return fail(err)
+	}
 	if _, err := h.Mutation.SupersedePendingMfaChallenges(txCtx, &pb.SupersedePendingMfaChallengesReq{
 		UserId: req.GetUserId(),
 	}); err != nil {
@@ -232,12 +256,6 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, de
 	if err != nil {
 		// Refuse the sign-in rather than issue a token with one factor
 		// because the enrolment store was unreachable.
-		return nil, false, err
-	}
-
-	// Issuance cap BEFORE any work: a refused issue must not send a
-	// message, and hashing a code we are about to throw away is waste.
-	if err := h.enforceMfaChallengeBudget(ctx, user.GetId()); err != nil {
 		return nil, false, err
 	}
 

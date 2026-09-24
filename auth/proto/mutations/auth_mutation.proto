@@ -669,6 +669,10 @@ message RegisterAuthClientReq {
   string client_id    = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
   string name         = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   string redirect_uri = 3 [(w17.field) = { type: URL, max_len: 2048 }];
+  // client_secret — already HASHED by the handler. The storage tier stores
+  // what it is handed; the plaintext exists only in the handler and in the
+  // one response that carries it back to the operator.
+  string client_secret = 4 [(w17.field) = { type: PASSWORD }];
 }
 message RegisterAuthClientResp {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -703,6 +707,9 @@ message CreateCliAuthCodeReq {
   // same one (RFC 6749 §4.1.3). Blank for a code minted before that binding
   // existed; CliToken treats a blank as "nothing to compare".
   string redirect_uri   = 5 [(w17.field) = { type: URL, max_len: 2048, blank: true }];
+  // The registered client this code belongs to, so the token endpoint can
+  // demand ITS secret. Blank for loopback, which has no registration.
+  string client_id      = 6 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
 }
 message CreateCliAuthCodeResp {
@@ -725,6 +732,10 @@ message ConsumeCliAuthCodeResp {
   // the one the caller presents — blank means a code from before that binding
   // existed, and there is nothing to compare.
   string redirect_uri   = 3;
+  // The registered client the code belongs to. NON-BLANK means the exchange
+  // must present that client's secret; blank is a loopback code, where there
+  // is no client to authenticate and PKCE is the binding.
+  string client_id      = 4;
 }
 
 // ── org_membership mutation request/response messages ───────
@@ -1956,6 +1967,7 @@ service AuthMutation {
           "client_id = :client_id, "
           "name = :name, "
           "redirect_uri = :redirect_uri, "
+          "client_secret = :client_secret, "
           "enabled = TRUE "
           "RETURNING id AS client.id, "
           "          client_id AS client.client_id, "
@@ -2004,6 +2016,7 @@ service AuthMutation {
           "code_hash = :code_hash, "
           "code_challenge = :code_challenge, "
           "redirect_uri = :redirect_uri, "
+          "client_id = :client_id, "
           "expires_at = :expires_at "
           "RETURNING id AS code.id, "
           "          user_id AS code.user_id, "
@@ -2029,7 +2042,7 @@ service AuthMutation {
           "UPDATE @module.CliAuthCode SET "
           "consumed_at = NOW() "
           "WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() "
-          "RETURNING user_id, code_challenge, redirect_uri"
+          "RETURNING user_id, code_challenge, redirect_uri, client_id"
       }
     };
   }

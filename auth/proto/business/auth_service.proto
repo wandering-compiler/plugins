@@ -1022,7 +1022,16 @@ message RegisterClientReq {
 }
 message RegisterClientResp {
   option (w17.contrib.plugin_feature) = "cli_login";
+  // The stored row. Its `client_secret` is ALWAYS EMPTY here: the registry
+  // queries project explicit column lists that do not name it, so the hash
+  // has exactly one reader (GetAuthClientSecret) and cannot ride out on a
+  // response that happens to carry the model.
   AuthClient client = 1;
+  // client_secret — the PLAINTEXT, and the only time it exists outside the
+  // client. Stored hashed, never recoverable: a client that loses it is
+  // re-registered rather than reminded. Same single-delivery contract as a
+  // password-reset token.
+  string client_secret = 2;
 }
 message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
 message ListClientsResp {
@@ -1050,6 +1059,11 @@ message CliTokenReq {
   // only so a code minted before this binding existed can still be redeemed;
   // when the stored value is present, this must equal it.
   string redirect_uri = 3 [(w17.field) = { type: URL, max_len: 2048, blank: true }];
+  // client_secret — REQUIRED when the code was minted for a registered
+  // client, refused without it. Blank for loopback, which has no registration
+  // and authenticates by PKCE alone (RFC 8252) — that is the whole of the
+  // public-client shape this flow still offers.
+  string client_secret = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
 }
 message CliTokenResp {
   option (w17.contrib.plugin_feature) = "cli_login";

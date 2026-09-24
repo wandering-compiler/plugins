@@ -765,6 +765,23 @@ message AuthClient {
   // pattern, not a prefix, not a host: the whole string.
   string redirect_uri = 4 [(w17.field) = { type: URL, max_len: 2048 }];
   bool   enabled      = 5 [(w17.field) = { default_auto: TRUE }];
+  // client_secret — what the client proves it is with at the TOKEN endpoint.
+  //
+  // PASSWORD, not SECRET: we never need the bytes back, we only verify what
+  // is presented, so what is stored is a hash (same argon2id as a user's
+  // password). The plaintext travels once, in the RegisterClient response.
+  //
+  // REQUIRED, with no blank: registering IS the act of becoming a
+  // confidential client. A target that cannot hold a secret does not need a
+  // registration either — loopback is served without one, per RFC 8252 §7.3,
+  // and that is the only public-client shape this flow offers.
+  //
+  // The flow was built for CLIs (2026-06-28), where a secret cannot be kept
+  // and PKCE alone is the right answer. Extending it past loopback to browser
+  // and server apps (marb #61) carried that shape onto clients that CAN keep
+  // one, which left the redirect allowlist as the only thing standing between
+  // a registration and a delivered code (marb #65).
+  string client_secret = 7 [(w17.field) = { type: PASSWORD }];
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 }
 
@@ -794,6 +811,11 @@ message CliAuthCode {
   // register more than one callback — a code minted for one could then be
   // redeemed as though it came from another.
   string redirect_uri   = 8 [(w17.field) = { type: URL, max_len: 2048, blank: true }];
+  // client_id — WHICH registered client this code was minted for, so the
+  // token endpoint can demand that client's secret and refuse anyone else
+  // redeeming it. Blank for a loopback code: there is no registration and no
+  // secret, and PKCE is the whole binding there.
+  string client_id      = 9 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
   google.protobuf.Timestamp expires_at  = 5 [(w17.field) = { type: DATETIME }];
   google.protobuf.Timestamp consumed_at = 6 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at  = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];

@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.2
+version: 0.1.0-rc.3
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -393,9 +393,22 @@ presets:
           - { ref: AuthService.CliAuthorize, method: POST, path: /authorize,                     feature: cli_login }
           - { ref: AuthService.CliToken,     method: POST, path: /token,     exclude_auth: true, feature: cli_login }
       # The registry of redirect targets the same flow may send a code to.
-      # Bearer-authenticated and admin-scoped by the ACL: writing a callback
-      # down is the act that makes it trustworthy, so it belongs to a person
-      # with a session rather than a token in a pipeline. Gated cli_login.
+      #
+      # ⚠ THE PLUGIN AUTHENTICATES THESE, IT DOES NOT AUTHORIZE THEM. The
+      # handlers require a resolved principal and nothing more: any account
+      # that can sign in can register a callback. Gating them to an
+      # administrator is the PROJECT's job, through the endpoint ACL axis
+      # (REV-146) — and a project that leaves the ACL axis off entirely gets
+      # no gate at all.
+      #
+      # This comment used to read "admin-scoped by the ACL", which describes
+      # a property the plugin does not have and a consumer read it as one
+      # (marb #65). What makes a registration safe today is the other end:
+      # registering issues a client_secret, and a code minted for a registered
+      # client cannot be redeemed without it. The gate still matters — it is
+      # what keeps an attacker from registering at all — but it is yours.
+      #
+      # Gated cli_login.
       - prefix: /auth/clients
         description: "Registered redirect targets for the authorization-code flow — what a non-loopback callback must be listed in before it can receive a code."
         endpoints:

@@ -350,6 +350,23 @@ message GetRegisteredRedirectResp {
   AuthClient client = 1;
 }
 
+// GetAuthClientSecret is the ONLY reader of the stored secret hash, and it
+// exists as its own RPC rather than as a wider projection on
+// GetRegisteredRedirect for that reason: a hash that is selected in one place
+// cannot be leaked by a second caller who did not know it was there.
+// ListAuthClients and RegisterAuthClient project column lists that do not
+// name it, and this keeps that true by construction.
+message GetAuthClientSecretReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string client_id    = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string redirect_uri = 2 [(w17.field) = { type: URL, max_len: 2048 }];
+}
+message GetAuthClientSecretResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string client_secret = 1; // argon2id PHC hash — verified against, never returned to a caller
+  bool   enabled       = 2;
+}
+
 message ListAuthClientsReq {
   option (w17.contrib.plugin_feature) = "cli_login";
 }
@@ -411,6 +428,30 @@ message GetMfaChallengeReq {
 message GetMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   MfaChallenge challenge = 1;
+}
+
+// LockUserForIssuance takes a row lock on the user for the duration of the
+// caller's transaction, so MFA challenge issuance for ONE user serialises.
+//
+// The cap read the count and then decided, which is only a cap when nothing
+// runs beside it. marb measured twenty concurrent sign-ins producing twenty
+// challenges past a limit of ten (#65): every one of them read zero before any
+// of them committed. An attacker who already holds the password — the whole
+// threat the second factor is for — sends twenty at once as easily as twenty
+// in a row.
+//
+// A lock on the USER row rather than on the challenges: the challenges being
+// counted may not exist yet, and a row that does not exist cannot be locked,
+// which is exactly the case the measurement hit. The user always exists by
+// this point (the password just verified against it), so it is the one row
+// guaranteed to be there to serialise on.
+message LockUserForIssuanceReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
+}
+message LockUserForIssuanceResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
 }
 
 // CountRecentMfaChallenges backs the ISSUANCE cap. The attempts counter on
@@ -1459,6 +1500,25 @@ service AuthQuery {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
 
+  // GetAuthClientSecret — the registered client's secret hash, for the token
+  // endpoint to verify what the client presents. Keyed on the same
+  // (client_id, redirect_uri) pair the registry is unique on, so it reads the
+  // row the code was actually minted against. `enabled` rides along: a client
+  // disabled between authorize and exchange must not be able to redeem.
+  rpc GetAuthClientSecret(GetAuthClientSecretReq) returns (GetAuthClientSecretResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.client_secret AS client_secret, "
+          "       c.enabled AS enabled "
+          "FROM @module.AuthClient c "
+          "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+
   rpc GetProviderByName(GetProviderByNameReq) returns (GetProviderByNameResp) {
     option (w17.db.method) = {
       ops: {
@@ -1560,6 +1620,24 @@ service AuthQuery {
           "       c.attempts AS challenge.attempts "
           "FROM @module.MfaChallenge c WHERE c.id = :challenge_id"
       }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+  }
+
+  // LockUserForIssuance — SELECT … FOR UPDATE on the user row. Read inside
+  // the issuance transaction, so the count-then-insert that follows is one
+  // serialised section per user. Gated two_factor.
+  rpc LockUserForIssuance(LockUserForIssuanceReq) returns (LockUserForIssuanceResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT u.id AS user_id FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "User", kind: SELECT_FOR_UPDATE }
+      ]
     };
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
   }

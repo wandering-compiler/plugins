@@ -50,6 +50,10 @@ var (
 	errCliVerifierInvalid  = errors.New("cli auth: code_verifier invalid")
 	errCliCodeInvalid      = errors.New("cli auth: authorization code invalid/expired/used")
 	errCliRedirectMismatch = errors.New("cli auth: redirect_uri does not match the one the code was issued for")
+	// One sentinel for every way client authentication can fail — no such
+	// client, disabled since authorize, wrong or absent secret. Telling them
+	// apart is precisely what someone probing the registry would want.
+	errCliClientAuthFailed = errors.New("cli auth: client authentication failed")
 )
 
 // CliAuthorize mints a single-use authorization code for the
@@ -78,7 +82,11 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 		CodeHash:      sha256Hex(code),
 		CodeChallenge: req.GetCodeChallenge(),
 		RedirectUri:   req.GetRedirectUri(),
-		ExpiresAt:     timestamppb.New(time.Now().Add(defaultCliAuthCodeTTL)),
+		// Bind the code to the client that asked for it, so the exchange can
+		// demand that client's secret. Blank for loopback — no registration,
+		// no secret, PKCE is the binding (RFC 8252).
+		ClientId:  clientIDForCode(req.GetClientId(), req.GetRedirectUri()),
+		ExpiresAt: timestamppb.New(time.Now().Add(defaultCliAuthCodeTTL)),
 	}); err != nil {
 		return nil, err
 	}
@@ -155,6 +163,25 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 			return nil, Unauthenticated(errCliRedirectMismatch)
 		}
 	}
+	// Client authentication. A code minted for a REGISTERED client is redeemed
+	// only by that client, proving itself with the secret it was issued.
+	//
+	// This flow was built for CLIs, where a secret cannot be kept and PKCE
+	// alone is the right answer (RFC 8252). Taking it past loopback to browser
+	// and server apps carried the public-client shape onto clients that CAN
+	// keep one — and then the only thing between "anybody may register a
+	// callback" and "a code is delivered there" was the registry's write path
+	// (marb #65). A confidential client closes it from the other end: the
+	// registration is worthless without the secret.
+	//
+	// Loopback keeps its public-client shape deliberately. There is no
+	// registration, nothing to authenticate with, and PKCE is the binding —
+	// every CLI in the field redeems this way.
+	if clientID := consumed.GetClientId(); clientID != "" {
+		if err := h.authenticateClient(ctx, clientID, consumed.GetRedirectUri(), req.GetClientSecret()); err != nil {
+			return nil, err
+		}
+	}
 	resp, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
 		UserId:    userID,
 		ExpiresAt: h.sessionTokenExpiry(),
@@ -163,6 +190,58 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 		return nil, err
 	}
 	return &pb.CliTokenResp{Token: resp.GetToken().GetToken(), UserId: userID}, nil
+}
+
+// authenticateClient verifies a confidential client's secret at the token
+// endpoint. Every failure is the same opaque refusal: which of "no such
+// client", "disabled since authorize", "wrong secret" happened is exactly
+// what an attacker probing the registry would want to learn.
+//
+// A read that does not answer REFUSES. The alternative is to let a client
+// through because the store was down, which is the one moment the check is
+// most worth having.
+// clientIDForCode returns the client a code should be bound to: the presented
+// client_id for a REGISTERED target, and "" for loopback.
+//
+// The discriminator is the redirect, not the presence of a client_id. A caller
+// may send a client_id alongside a loopback redirect — w17ctl does not, but
+// nothing stops it — and binding on that would demand a secret from a public
+// client that has none, breaking every CLI in the field.
+func clientIDForCode(clientID, redirectURI string) string {
+	if isLoopbackRedirect(redirectURI) {
+		return ""
+	}
+	return clientID
+}
+
+func (h *AuthServiceHandler) authenticateClient(ctx context.Context, clientID, redirectURI, presented string) error {
+	if presented == "" {
+		return Unauthenticated(errCliClientAuthFailed)
+	}
+	got, err := h.Query.GetAuthClientSecret(ctx, &pb.GetAuthClientSecretReq{
+		ClientId:    clientID,
+		RedirectUri: redirectURI,
+	})
+	if err != nil {
+		if notFoundOK(err) == nil {
+			return Unauthenticated(errCliClientAuthFailed)
+		}
+		return Unauthenticated(err)
+	}
+	// Disabled BETWEEN authorize and exchange: the code is live, the client is
+	// not. Checked here because GetRegisteredRedirect's `enabled = TRUE` ran at
+	// authorize time and says nothing about now.
+	if !got.GetEnabled() {
+		return Unauthenticated(errCliClientAuthFailed)
+	}
+	// Same comparator the password path uses — constant-time inside, and the
+	// rehash slot is ignored: a client secret is rotated by reissuing it, not
+	// by upgrading its hash under a caller who is only proving identity.
+	ok, _, _ := h.PasswordHash.VerifyAndRotate(got.GetClientSecret(), presented, nil)
+	if !ok {
+		return Unauthenticated(errCliClientAuthFailed)
+	}
+	return nil
 }
 
 // verifyPKCES256 reports whether BASE64URL(SHA256(verifier)) equals the
@@ -275,15 +354,28 @@ func (h *AuthServiceHandler) RegisterClient(ctx context.Context, req *pb.Registe
 	if err := validateRegisteredRedirect(req.GetRedirectUri()); err != nil {
 		return nil, err
 	}
+	// Registering IS becoming a confidential client: the secret is minted
+	// here, hashed before it is stored, and handed back exactly once. There
+	// is no endpoint that returns it again — a client that loses it is
+	// re-registered, the same contract a password-reset token has.
+	secret, err := randomURLToken()
+	if err != nil {
+		return nil, err
+	}
+	hashed, err := h.PasswordHash.Hash(secret)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := h.Mutation.RegisterAuthClient(ctx, &pb.RegisterAuthClientReq{
-		ClientId:    req.GetClientId(),
-		Name:        req.GetName(),
-		RedirectUri: req.GetRedirectUri(),
+		ClientId:     req.GetClientId(),
+		Name:         req.GetName(),
+		RedirectUri:  req.GetRedirectUri(),
+		ClientSecret: hashed,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.RegisterClientResp{Client: resp.GetClient()}, nil
+	return &pb.RegisterClientResp{Client: resp.GetClient(), ClientSecret: secret}, nil
 }
 
 // ListClients returns every registration, enabled or not — an operator
