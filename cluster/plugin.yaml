@@ -1,0 +1,177 @@
+name: cluster
+version: 0.1.0-rc.1
+requires_w17: ">=1.5"
+
+# v3 — explicit Go module anchor. Staging text-rewrites every
+# occurrence of this prefix in handlers/ + lib/ source to the
+# per-activation pb path.
+go_module: github.com/wandering-compiler/platform/plugins/cluster
+
+description: "Control plane for a pool of relays that place work on workers the control plane never talks to. Registers relays, picks one, and hands the caller an address and a single-use ticket. Deliberately knows NOTHING about what the workers do — activate it as `codegen` for compile workers, as `browser` for headless-browser workers, and the same plugin serves both."
+license: "Apache-2.0"
+
+# The plugin is activated ONCE PER POOL, under the name of that pool:
+#
+#   plugins: [ { source_name: "cluster", registered_as: "codegen" } ]
+#
+# `registered_as` drives the table prefix, the Go alias and the pb path, so a
+# project needing two pools activates it twice with two names and gets
+# `codegen.Relay` beside `browser.Relay`. That is why there is no `type` column
+# anywhere in this plugin: the pool IS the activation. A type enum would have
+# had to enumerate every consumer's workload in the plugin's own proto, which
+# no consumer could extend without forking it.
+
+env:
+  - name: client_cert_path
+    type: string
+    description: "PEM client certificate this control plane presents to a relay. The control plane DIALS OUT to relays, so this is its identity — one identity for every relay, held on the machine, never in the database. Required: with no client identity a relay has nothing to authorise and must refuse."
+
+  - name: client_key_path
+    type: string
+    description: "Path to the private key for client_cert_path. NOT marked secret: the path is not the secret, the file is. Putting a filename behind secret.String would protect nothing and cost every reader a Reveal(); protect the file with its permissions and keep the key itself out of the environment entirely."
+
+  - name: dial_timeout_seconds
+    type: int
+    default: 5
+    description: "Deadline for opening the management connection to one relay. Short on purpose: an unreachable relay must be skipped quickly enough that scheduling falls through to a healthy one rather than making the caller wait."
+
+  - name: ticket_ttl_seconds
+    type: int
+    default: 30
+    description: "How long a granted ticket stays claimable. This is TIME-TO-CLAIM, not time-to-run: it bounds the gap between 'the slot is yours' and the worker connection appearing, after which the relay takes the slot back. A job that has started is held by its connection and is not affected by this value."
+
+# No features yet.
+#
+# A `task_ledger` feature was declared here and REMOVED before it shipped: its
+# only gated source was a file that did not exist and there was no ledger table
+# behind it, so enabling it would have staged nothing and silently done
+# nothing. An advertised feature that is absent is worse than a missing one,
+# because a project can switch it on and believe it.
+# Dev-only sandbox: a relay next to the generated stack, so the pool can be
+# tried by hand without standing one up somewhere. Wired into the project's
+# tool-owned `compose.w17.yaml` and NOWHERE else — w17 never ships a sandbox to
+# production, which is right here: in production a relay lives OUTSIDE the
+# project's network, because it is what the workers reach.
+#
+# Build the image from the plugin directory (it shares the plugin's Go module,
+# so the relay and the handlers carry one copy of the contract):
+#   docker build -f plugins/cluster/sandboxes/relay/Dockerfile \
+#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev plugins/cluster
+#
+# ⚠️ IT MINTS ITS OWN IDENTITY AND PRINTS THE FINGERPRINT AT STARTUP. Read it
+# out of the container log and paste it into the relay's row — the same
+# comparison an operator makes in production, deliberately not shortcut here.
+# There is no dev-insecure mode and there will not be one: the convenient flag
+# that skips verification is the flag that escapes into production.
+#
+# ⚠️ The identity lives in the container's own filesystem, because a sandbox
+# cannot declare a volume (see docs/specs/plugins/sandbox-services.md — the
+# manifest carries name/image/ports/env and nothing else). So it survives a
+# `restart` and is LOST on `down`/`up`, and a recreated relay comes back with a
+# different fingerprint that has to be pasted again. Tolerable for a dev
+# sandbox; the fix is volume support in the sandbox spec, not a fixed key baked
+# into the image.
+sandboxes:
+  # Single token, no hyphen: the name is a compose service, a DNS label and a
+  # Go identifier all at once, and the manifest refuses anything else.
+  - name: clusterrelay
+    description: "Dev-only relay for the cluster pool — mints its own identity and prints the fingerprint to paste into its registry row."
+    image: ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev
+    # FOUR listeners, and the split is not arbitrary — each has a different
+    # audience and therefore a different rule about who may complete a
+    # handshake:
+    #   13444  management  — the control plane, whose certificate is PINNED
+    #   13446  attach      — workers, admitted by approval
+    #   13445  tunnels     — workers again, the raw sockets that carry work
+    #   9000   callers     — TLS, and the caller pins this relay using the
+    #                        fingerprint its grant carried
+    ports:
+      - "13444"
+      - "13445"
+      - "13446"
+      - "9000"
+    env:
+      - name: RELAY_IDENTITY_DIR
+        value: "/var/lib/relay"
+        description: "Where the relay mints and keeps its key pair. Container-local: survives a restart, not a recreate."
+      - name: RELAY_PROXY_ADDRESS
+        value: "clusterrelay:9000"
+        description: "What callers are told to send work to. The in-network name, because that is how a sibling service reaches this sandbox — a relay is TOLD its externally visible address, it cannot discover one."
+      - name: RELAY_CAPACITY
+        value: "2"
+        description: "Tasks that may run here at once. Two rather than one so a dev can see a queue form."
+      - name: RELAY_CONTROL_PLANE_FINGERPRINT
+        value: ""
+        description: "REQUIRED, and deliberately empty: the relay refuses to start without it. Set it to the fingerprint of the client certificate this project's control plane presents (OPS_CLUSTER_CLIENT_CERT_PATH). Nothing else may manage this relay."
+
+presets:
+  admin:
+    # The backoffice this plugin exists to make possible. Both pages are
+    # contributed to the project's admin surface with refs qualified by the
+    # activation name, so a project that activates `cluster` as `codegen` gets
+    # them without writing an admin.proto entry.
+    pages:
+      - name: Relays
+        model: Relay
+        list:
+          source: RelayQuery.ListRelays
+          columns: [name, url, enabled, last_seen_at, last_error]
+          detail_link_column: name
+        detail:
+          read: RelayQuery.GetRelay
+          update: RelayMutation.UpdateRelay
+          delete: RelayMutation.DeleteRelay
+          # cert_fingerprint IS editable — rotating a relay's certificate is an
+          # edit here, and that edit is the audit trail a CA-issued swap would
+          # not leave.
+          fields: [name, url, cert_fingerprint, enabled]
+          # Observed state, written by the control plane as a side effect of
+          # trying to use the relay. Read-only because it is a CACHE: an
+          # operator editing last_seen_at would be editing a measurement.
+          readonly_fields: [id, created_at, last_seen_at, last_error]
+
+      - name: Workers
+        model: Worker
+        list:
+          source: WorkerQuery.ListWorkers
+          # cert_fingerprint sits in the LIST, not buried in the detail, and
+          # that placement is the security control rather than a layout
+          # choice. The operator's job here is to compare it against what the
+          # machine printed at its own startup; name and device_id are claims
+          # any connecting machine can make, and the obvious attack is to
+          # claim the name of a machine somebody is expecting. An approval
+          # screen that shows only the name is an approval of whoever
+          # connected first.
+          columns: [name, cert_fingerprint, state, first_seen_at, decided_by]
+          detail_link_column: name
+        detail:
+          read: WorkerQuery.GetWorker
+          # No update and no delete. Nothing here is an operator's to edit:
+          # the fingerprint is evidence, the claims are the machine's, and the
+          # state belongs to the two actions below. Deleting a row would only
+          # mean the machine is rediscovered on the next sweep as new.
+          readonly_fields: [id, cert_fingerprint, name, device_id, state, relay_id, first_seen_at, decided_at, decided_by]
+        actions:
+          # The sweep, as a PAGE action: it operates on the page rather than on
+          # a selection, because there is nothing here to select — the machines
+          # it discovers do not exist as rows until it has run.
+          #
+          # This is the button an operator presses after standing a worker up.
+          # Discovery is pulled by a human rather than swept in the background
+          # for a reason recorded on CheckWorkers itself: the console is HA, so
+          # a sweep would run in every replica and need coordination to avoid
+          # duplicate rows and a thundering herd.
+          - name: check
+            source: ClusterService.CheckWorkers
+            label: "Check for new workers"
+            target: page
+          - name: approve
+            source: WorkerMutation.ApproveWorkers
+            label: "Approve"
+            confirm: "Approve the selected machines? Check each fingerprint against what the machine printed at startup first — the name it reports is a claim, the fingerprint is not."
+            target: both
+          - name: deny
+            source: WorkerMutation.DenyWorkers
+            label: "Deny"
+            confirm: "Deny the selected machines? Their relay will drop the connection and keep dropping it."
+            target: both

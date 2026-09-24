@@ -1,0 +1,96 @@
+package workerconn
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"google.golang.org/grpc"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+)
+
+// ServeTunnel opens the work channel and serves on it until ctx ends or the
+// connection drops.
+//
+// The worker DIALS and then SERVES on the resulting socket. That inversion is
+// the whole mechanism: a machine behind NAT cannot be called, so it calls out
+// and answers on the way back.
+//
+// `register` installs the worker's own services on the server — this package
+// has no idea what they are, which is the same ignorance the relay has.
+func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server)) error {
+	if register == nil {
+		return errors.New("workerconn: ServeTunnel needs something to serve")
+	}
+	if strings.TrimSpace(cfg.TunnelAddress) == "" {
+		return errors.New("workerconn: TunnelAddress is required")
+	}
+	crt, err := tls.X509KeyPair(cfg.Identity.CertPEM, cfg.Identity.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("workerconn: this worker's own identity does not load: %w", err)
+	}
+	want := strings.ToLower(strings.TrimSpace(cfg.RelayFingerprint))
+	if want == "" {
+		return errors.New("workerconn: RelayFingerprint is required for the tunnel too — " +
+			"it carries the work, so an impostor on this address would receive it")
+	}
+
+	pinRelay := func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return errors.New("workerconn: the relay presented no certificate")
+		}
+		sum := sha256.Sum256(rawCerts[0])
+		if got := hex.EncodeToString(sum[:]); got != want {
+			return fmt.Errorf("workerconn: tunnel peer is %s, this worker pins %s", got, want)
+		}
+		return nil
+	}
+	d := &tls.Dialer{Config: &tls.Config{
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		// #nosec G402 -- chain off, pin below; the relay may be self-signed and
+		// the leaf fingerprint is the narrower check.
+		InsecureSkipVerify:    true,
+		VerifyPeerCertificate: pinRelay,
+		// The tunnel CARRIES THE WORK, so a pin that a resumed session skips is
+		// the worst place to have one: VerifyPeerCertificate does not run on a
+		// resumed handshake, VerifyConnection runs on both (gosec G123).
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("workerconn: the relay presented no certificate")
+			}
+			return pinRelay([][]byte{cs.PeerCertificates[0].Raw}, nil)
+		},
+	}}
+	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	conn, err := d.DialContext(dialCtx, "tcp", cfg.TunnelAddress)
+	if err != nil {
+		return fmt.Errorf("workerconn: dialling the tunnel: %w", err)
+	}
+
+	srv := grpc.NewServer()
+	register(srv)
+	lis := tunnel.NewSingleConnListener(conn)
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(lis) }()
+	select {
+	case <-ctx.Done():
+		// GracefulStop, not Stop: work already running on this tunnel is
+		// somebody's job, and the relay has no way to re-place it.
+		srv.GracefulStop()
+		_ = lis.Close()
+		return ctx.Err()
+	case err := <-done:
+		_ = lis.Close()
+		return err
+	}
+}

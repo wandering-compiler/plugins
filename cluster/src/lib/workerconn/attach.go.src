@@ -1,0 +1,197 @@
+package workerconn
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+)
+
+// State is what the relay last said about this worker.
+type State int
+
+const (
+	// Waiting — connected, not approved. The worker does nothing and stays
+	// visible on the operator's screen.
+	Waiting State = iota
+	// Admitted — approved.
+	Admitted
+	// Denied — refused, and refused again on every reconnect.
+	Denied
+	// Disconnected — no relay right now; the loop is retrying.
+	Disconnected
+)
+
+func (s State) String() string {
+	switch s {
+	case Waiting:
+		return "waiting for approval"
+	case Admitted:
+		return "admitted"
+	case Denied:
+		return "denied"
+	default:
+		return "disconnected"
+	}
+}
+
+// Config is what a worker needs to join a pool.
+type Config struct {
+	// RelayAddress is `host:port` of the relay's WORKER listener.
+	RelayAddress string
+
+	// RelayFingerprint pins the relay's certificate.
+	//
+	// The worker verifies the relay for the same reason the relay verifies the
+	// worker, and it is not symmetry for its own sake: an impostor relay would
+	// be handed this machine's work, and in a pool that compiles somebody's
+	// source or fetches somebody's pages, the work IS the secret.
+	RelayFingerprint string
+
+	Identity identity.Identity
+	Name     string
+	DeviceID string
+
+	// TunnelAddress is `host:port` of the relay's WORK listener — a separate
+	// port from the one Attach uses, because the two connections carry
+	// different things and only one of them exists before approval.
+	TunnelAddress string
+
+	// RetryInterval between reconnects. Zero uses a sane default.
+	RetryInterval time.Duration
+	// DeniedRetryInterval is longer: a denial is a decision, and hammering a
+	// relay that has already refused is noise in somebody's logs. Retried at
+	// all because denial can be reversed, and a worker that exited would need
+	// a human to notice and restart it.
+	DeniedRetryInterval time.Duration
+}
+
+// Run attaches to the relay and keeps attaching until ctx ends.
+//
+// onState is called on every transition, including repeats after a reconnect —
+// the caller decides what is worth logging. It must not block.
+func Run(ctx context.Context, cfg Config, onState func(State)) error {
+	if strings.TrimSpace(cfg.RelayAddress) == "" {
+		return errors.New("workerconn: RelayAddress is required")
+	}
+	if strings.TrimSpace(cfg.RelayFingerprint) == "" {
+		// Refused rather than defaulted to "trust any relay": without a pin
+		// this worker would hand its work to whoever answered the address.
+		return errors.New(
+			"workerconn: RelayFingerprint is required — without it this worker cannot tell " +
+				"the relay from anything else listening on that address")
+	}
+	retry, denied := cfg.RetryInterval, cfg.DeniedRetryInterval
+	if retry <= 0 {
+		retry = 5 * time.Second
+	}
+	if denied <= 0 {
+		denied = 5 * time.Minute
+	}
+	if onState == nil {
+		onState = func(State) {}
+	}
+
+	for {
+		wait := retry
+		if err := attachOnce(ctx, cfg, onState); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if status.Code(err) == codes.PermissionDenied {
+				onState(Denied)
+				wait = denied
+			} else {
+				onState(Disconnected)
+			}
+		} else {
+			onState(Disconnected)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+func attachOnce(ctx context.Context, cfg Config, onState func(State)) error {
+	conn, err := dialRelay(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	stream, err := workerpb.NewWorkerAttachClient(conn).Attach(ctx, &workerpb.AttachReq{
+		Name:     cfg.Name,
+		DeviceId: cfg.DeviceID,
+	})
+	if err != nil {
+		return err
+	}
+	for {
+		ev, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		switch ev.GetEvent().(type) {
+		case *workerpb.AttachEvent_Admitted:
+			onState(Admitted)
+		case *workerpb.AttachEvent_Waiting:
+			onState(Waiting)
+		}
+	}
+}
+
+func dialRelay(cfg Config) (*grpc.ClientConn, error) {
+	crt, err := tls.X509KeyPair(cfg.Identity.CertPEM, cfg.Identity.KeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("workerconn: this worker's own identity does not load: %w", err)
+	}
+	want := strings.ToLower(strings.TrimSpace(cfg.RelayFingerprint))
+	pinRelay := func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return errors.New("workerconn: the relay presented no certificate")
+		}
+		sum := sha256.Sum256(rawCerts[0])
+		if got := hex.EncodeToString(sum[:]); got != want {
+			return fmt.Errorf(
+				"workerconn: %s presented certificate %s, this worker pins %s — "+
+					"the relay's certificate was rotated, or something else is answering "+
+					"on that address", cfg.RelayAddress, got, want)
+		}
+		return nil
+	}
+	return grpc.NewClient(cfg.RelayAddress, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		// Chain verification off, identity verification below — a relay may be
+		// self-signed, and the pin is narrower than any CA would be.
+		// #nosec G402 -- deliberate; the pin replaces the chain check.
+		InsecureSkipVerify:    true,
+		VerifyPeerCertificate: pinRelay,
+		// A resumed TLS session never reaches VerifyPeerCertificate, so a pin
+		// enforced only there holds for the FIRST connection of a session and
+		// is silently skipped afterwards. VerifyConnection runs on both paths,
+		// which is what makes the pin actually hold (gosec G123).
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("workerconn: the relay presented no certificate")
+			}
+			return pinRelay([][]byte{cs.PeerCertificates[0].Raw}, nil)
+		},
+	})))
+}

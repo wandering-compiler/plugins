@@ -1,0 +1,127 @@
+// Package relayserver is the relay's control-plane-facing half: the
+// ClusterService a control plane calls to place work here.
+//
+// It is the SAME service the project serves, which is what makes the control
+// plane a stream proxy rather than a translator. What differs is the answer:
+// the project decides WHICH relay, this decides WHEN and hands out the ticket.
+package relayserver
+
+import (
+	"context"
+	"errors"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+)
+
+// Server serves one relay's scheduling.
+type Server struct {
+	pb.UnimplementedClusterServiceServer
+
+	// Pool is this relay's capacity and queue.
+	Pool *relaycore.Pool
+
+	// Workers is this relay's admission state. Never nil in a running relay.
+	Workers *workeradmit.Registry
+
+	// ProxyFingerprint is the lowercase hex SHA-256 of the certificate the
+	// PROXY presents, handed to the caller so it can pin what answers at
+	// ProxyAddress.
+	//
+	// Without it the caller sends a bearer ticket and its work to whatever
+	// holds that address; it has no other way to know what should be there,
+	// because it learned the address from the control plane a moment ago.
+	ProxyFingerprint string
+
+	// ProxyAddress is `host:port` of the half a CALLER connects to, as the
+	// outside world reaches it.
+	//
+	// Local configuration, and it has to be: a process behind NAT cannot
+	// discover how it is addressed, and the management address the control
+	// plane dialled is a different port. This is the one fact about itself a
+	// relay can only be told.
+	ProxyAddress string
+}
+
+// ScheduleTask holds a queue place for as long as the caller holds the stream.
+func (s *Server) ScheduleTask(
+	req *pb.ScheduleTaskReq,
+	srv grpc.ServerStreamingServer[pb.ScheduleTaskEvent],
+) error {
+	if s.ProxyAddress == "" || s.ProxyFingerprint == "" {
+		// Refused rather than answered with an empty address: a grant the
+		// caller cannot connect to is worse than no grant, because it consumes
+		// a slot and fails later somewhere with less context.
+		return status.Error(codes.FailedPrecondition,
+			"relay: the work endpoint is not fully described (address + certificate fingerprint), "+
+				"so a grant would name somewhere the caller cannot verify")
+	}
+
+	// `relay` is left EMPTY on every event below. A relay has never been told
+	// its name in the control plane's registry, and inventing one — its
+	// hostname, say — would put a second, disagreeing identity on the wire.
+	// The control plane stamps it as the events pass through.
+	grant, err := s.Pool.Wait(srv.Context(), func(pos int) error {
+		return srv.Send(&pb.ScheduleTaskEvent{
+			Event: &pb.ScheduleTaskEvent_Queued{
+				Queued: &pb.TaskQueued{Position: int32(pos)},
+			},
+		})
+	})
+	switch {
+	case errors.Is(err, relaycore.ErrClosed):
+		return status.Error(codes.Unavailable, "relay: shutting down")
+	case err != nil:
+		// Context errors land here — the caller left, or its deadline passed.
+		// Both are the caller's own status, not a failure of this relay.
+		return status.FromContextError(err).Err()
+	}
+
+	return srv.Send(&pb.ScheduleTaskEvent{
+		Event: &pb.ScheduleTaskEvent_Granted{
+			Granted: &pb.TaskGranted{
+				Address:         s.ProxyAddress,
+				CertFingerprint: s.ProxyFingerprint,
+				Ticket:          grant.Ticket,
+				ExpiresAt:       timestamppb.New(grant.ExpiresAt),
+			},
+		},
+	})
+}
+
+// ExchangeWorkers applies the control plane's decisions and reports what is
+// waiting. One call, both directions, because a relay cannot start this
+// conversation — the control plane dials out and nothing dials in.
+func (s *Server) ExchangeWorkers(
+	_ context.Context, req *pb.ExchangeWorkersReq,
+) (*pb.ExchangeWorkersResp, error) {
+	if s.Workers == nil {
+		return nil, status.Error(codes.FailedPrecondition, "relay: no worker registry is wired")
+	}
+	s.Workers.Apply(req.GetApprovedFingerprints(), req.GetDeniedFingerprints())
+
+	pending := s.Workers.Pending()
+	out := make([]*pb.PendingWorker, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, &pb.PendingWorker{
+			CertFingerprint: p.Fingerprint,
+			Name:            p.Name,
+			DeviceId:        p.DeviceID,
+		})
+	}
+	return &pb.ExchangeWorkersResp{Pending: out}, nil
+}
+
+// CheckWorkers is the PROJECT's method. A relay has no registry to sweep and
+// no other relay to ask, so it says so rather than answering for a side it is
+// not.
+func (s *Server) CheckWorkers(context.Context, *pb.CheckWorkersReq) (*pb.CheckWorkersResp, error) {
+	return nil, status.Error(codes.Unimplemented,
+		"relay: CheckWorkers is answered by the control plane, not by a relay")
+}

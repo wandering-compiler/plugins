@@ -1,0 +1,266 @@
+// Package relaycore is a relay's scheduling core: capacity, a queue, and
+// tickets. It holds no storage and survives nothing — a restart drops every
+// queue place and every outstanding ticket, which is correct, because the
+// slots those tickets named are gone too.
+//
+// Split out from the gRPC server so the rules below can be tested as rules. A
+// queue whose only test is "the RPC worked" is a queue whose race conditions
+// are discovered in production.
+package relaycore
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+)
+
+// Grant is one slot, held for whoever was at the head of the queue.
+type Grant struct {
+	Ticket    string
+	ExpiresAt time.Time
+}
+
+var (
+	// ErrNoSuchTicket covers redeemed, expired and invented tickets with ONE
+	// error on purpose. Telling a caller which of the three it was tells an
+	// attacker whether a guessed ticket ever existed.
+	ErrNoSuchTicket = errors.New("relaycore: no such ticket")
+	ErrClosed       = errors.New("relaycore: pool is closed")
+)
+
+type waiter struct {
+	ch chan Grant
+	// pos carries position updates. Buffered and written non-blockingly: a
+	// waiter that has not read the last one does not hold up the queue, and a
+	// stale position it never saw is not worth blocking a grant for.
+	pos  chan int
+	last int
+	done bool
+}
+
+// Pool is one relay's capacity and the queue in front of it.
+type Pool struct {
+	capacity int
+	ttl      time.Duration
+	now      func() time.Time
+	newID    func() string
+
+	mu      sync.Mutex
+	inUse   int
+	tickets map[string]*time.Timer
+	queue   []*waiter
+	closed  bool
+}
+
+// Options configures a Pool. Zero values are refused rather than defaulted:
+// a capacity of zero is a relay that can never serve anything, and a TTL of
+// zero is a ticket that expires before it can be used — both are almost
+// certainly a config that did not load.
+type Options struct {
+	Capacity  int
+	TicketTTL time.Duration
+	// Now and NewID are seams for tests. Nil uses the real ones.
+	Now   func() time.Time
+	NewID func() string
+}
+
+func New(o Options) (*Pool, error) {
+	if o.Capacity <= 0 {
+		return nil, fmt.Errorf("relaycore: capacity must be positive, got %d", o.Capacity)
+	}
+	if o.TicketTTL <= 0 {
+		return nil, fmt.Errorf("relaycore: ticket TTL must be positive, got %s", o.TicketTTL)
+	}
+	p := &Pool{
+		capacity: o.Capacity,
+		ttl:      o.TicketTTL,
+		now:      o.Now,
+		newID:    o.NewID,
+		tickets:  map[string]*time.Timer{},
+	}
+	if p.now == nil {
+		p.now = time.Now
+	}
+	if p.newID == nil {
+		p.newID = randomID
+	}
+	return p, nil
+}
+
+func randomID() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A ticket that is not unpredictable is not a credential. There is no
+		// degraded mode worth having here.
+		panic("relaycore: no entropy for a ticket: " + err.Error())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// Wait joins the queue and blocks until a slot is granted to THIS caller, or
+// ctx ends.
+//
+// onPosition is called with a 1-based queue position whenever it changes, and
+// never when the grant is immediate — a caller that is served at once should
+// see one event, not a position followed by a grant.
+//
+// # Why the grant is targeted rather than announced
+//
+// The pool does not publish "a slot is free" and let waiters race for it. It
+// picks the head of the queue and hands the slot to that waiter alone. There
+// is therefore no race to lose: a second waiter never sees the slot, so it
+// cannot take one that was already given away, and no compare-and-swap is
+// needed to make that true.
+func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, error) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return Grant{}, ErrClosed
+	}
+	w := &waiter{ch: make(chan Grant, 1), pos: make(chan int, 1)}
+	p.queue = append(p.queue, w)
+	p.promoteLocked()
+	p.notifyLocked()
+	p.mu.Unlock()
+
+	if onPosition == nil {
+		onPosition = func(int) error { return nil }
+	}
+	for {
+		select {
+		case g := <-w.ch:
+			return g, nil
+		case pos := <-w.pos:
+			// Every CHANGE, not just the first. A caller watching a queue sees
+			// it shorten as the places ahead are granted or give up; reporting
+			// only the initial number would have it stare at a position that
+			// stopped being true seconds later.
+			if err := onPosition(pos); err != nil {
+				p.drop(w)
+				return Grant{}, err
+			}
+		case <-ctx.Done():
+			// The caller left. Its place goes away with it — which is the
+			// whole reason the queue is held by a live connection and not by a
+			// row with a timeout somebody has to sweep.
+			p.drop(w)
+			return Grant{}, ctx.Err()
+		}
+	}
+}
+
+// notifyLocked tells every queued waiter its current place, when it changed.
+//
+// Called after ANY queue mutation — an enqueue, a promotion, a drop — because
+// all three move somebody. Sends are non-blocking: a waiter still holding an
+// unread update gets the newer number next time round rather than stalling the
+// mutation that produced it.
+func (p *Pool) notifyLocked() {
+	for i, q := range p.queue {
+		pos := i + 1
+		if q.last == pos {
+			continue
+		}
+		q.last = pos
+		select {
+		case q.pos <- pos:
+		default:
+		}
+	}
+}
+
+func (p *Pool) drop(w *waiter) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, q := range p.queue {
+		if q == w {
+			p.queue = append(p.queue[:i], p.queue[i+1:]...)
+			break
+		}
+	}
+	// A grant may have landed in the channel between ctx.Done and this lock.
+	// Returning the slot rather than dropping it on the floor is what keeps a
+	// cancelled caller from leaking capacity.
+	select {
+	case g := <-w.ch:
+		p.releaseLocked(g.Ticket)
+	default:
+	}
+	p.notifyLocked()
+}
+
+// promoteLocked hands slots to the head of the queue while capacity allows.
+func (p *Pool) promoteLocked() {
+	for p.inUse < p.capacity && len(p.queue) > 0 {
+		w := p.queue[0]
+		p.queue = p.queue[1:]
+		p.inUse++
+		id := p.newID()
+		g := Grant{Ticket: id, ExpiresAt: p.now().Add(p.ttl)}
+		// The slot is held by the TICKET until it is claimed. If nobody
+		// claims it, the timer returns it — otherwise a caller that died
+		// between the grant and the connection would hold capacity that
+		// nothing releases.
+		p.tickets[id] = time.AfterFunc(p.ttl, func() { p.expire(id) })
+		w.ch <- g
+		w.done = true
+	}
+	p.notifyLocked()
+}
+
+func (p *Pool) expire(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.releaseLocked(id)
+}
+
+// Claim redeems a ticket, converting a time-bounded reservation into a slot
+// held by the caller's work. Single use: the ticket is forgotten here, so a
+// replay finds nothing.
+func (p *Pool) Claim(ticket string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	t, ok := p.tickets[ticket]
+	if !ok {
+		return ErrNoSuchTicket
+	}
+	t.Stop()
+	delete(p.tickets, ticket)
+	// inUse is NOT decremented: the slot moves from "reserved" to "running".
+	// It comes back through Done.
+	return nil
+}
+
+// Done returns a slot held by running work.
+func (p *Pool) Done() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.inUse > 0 {
+		p.inUse--
+	}
+	p.promoteLocked()
+}
+
+// releaseLocked returns a slot still held by an unclaimed ticket.
+func (p *Pool) releaseLocked(id string) {
+	if t, ok := p.tickets[id]; ok {
+		t.Stop()
+		delete(p.tickets, id)
+		if p.inUse > 0 {
+			p.inUse--
+		}
+		p.promoteLocked()
+	}
+}
+
+// Stats reports what the relay is doing, for the control plane and for an
+// operator. Point-in-time and immediately stale, like every such number.
+func (p *Pool) Stats() (inUse, queued, capacity int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.inUse, len(p.queue), p.capacity
+}

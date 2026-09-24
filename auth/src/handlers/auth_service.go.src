@@ -774,7 +774,32 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 	}
 	tokenID := callerSessionTokenID(ctx)
 	if tokenID == "" {
-		return &pb.LogoutResp{}, nil
+		// ⛔ REFUSED, and it used to succeed (marb #69).
+		//
+		// An empty id means Logout does not know WHICH session to end. That is
+		// not idempotence — idempotence is "this session is already gone, so
+		// there is nothing to do", and the handler below says so by treating a
+		// zero-row delete as success. This is "I was not told which one", and
+		// answering OK to that is a claim that is not true.
+		//
+		// What it cost: a consumer wrapped Logout in their own facade whose
+		// VerifyRes carried fields 1-3 (the trio our docs name as the shared
+		// contract) and not field 4. Every sign-out returned 200, the UI said
+		// "signed out", the app dropped the cookie — and the token kept working
+		// until it expired. They caught it only because their check took the
+		// token BEFORE signing out and tried it after; a check on the status
+		// code passes. On a shared or stolen machine that is the difference
+		// between logged out and logged in without it showing.
+		//
+		// The envelope cannot tell the two blank cases apart — AuthResp carries
+		// no token type — so the refusal names both. An API-token bearer has no
+		// session to end and was ALSO getting a false OK; RevokeApiToken is the
+		// operation for that, and being told so beats being told nothing.
+		return nil, status.Error(codes.FailedPrecondition,
+			"logout: the request carries no session token id, so there is no session to end — "+
+				"either the caller is an API-token bearer (use RevokeApiToken; an API token is not a session), "+
+				"or the auth envelope reaching this handler is missing AuthResp.session_token_id (field 4), "+
+				"which a hand-written facade VerifyRes must carry for logout to revoke anything")
 	}
 	if _, err := h.Mutation.DeleteSessionToken(ctx, &pb.DeleteSessionTokenReq{
 		TokenId:   tokenID,
@@ -828,9 +853,13 @@ func callerUserID(ctx context.Context) (string, error) {
 
 // callerSessionTokenID recovers the id of the UserToken the caller's
 // bearer resolved to, from the gateway's x-w17-user envelope (Authenticate
-// stamps AuthResp.session_token_id). Returns "" on any miss — so Logout
-// no-ops rather than erroring for a caller with no resolvable session
-// (e.g. an API-token bearer, or a direct gRPC call bypassing the gateway).
+// stamps AuthResp.session_token_id). Returns "" on any miss.
+//
+// ⚠️ Logout used to NO-OP on that empty string, "rather than erroring for a
+// caller with no resolvable session". The intent was to spare an API-token
+// bearer an error; the cost was that a real session's logout could answer OK
+// having revoked nothing, and nothing anywhere said so (marb #69). Logout
+// refuses now — see the note at its call site.
 // Reads the envelope, never the raw bearer (which never reaches handlers).
 func callerSessionTokenID(ctx context.Context) string {
 	var ar pb.AuthResp

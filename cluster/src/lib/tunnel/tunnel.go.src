@@ -1,0 +1,129 @@
+// Package tunnel reverses the direction of a gRPC connection.
+//
+// # The problem it solves
+//
+// A worker is on the public internet behind whatever NAT its provider gives
+// it, so the relay cannot dial it. Work therefore has to travel down a channel
+// the WORKER opened — but the worker is the one being called, not the caller.
+//
+// The trick is that a TCP connection has no opinion about which end speaks
+// first. The worker dials out and then SERVES gRPC on the resulting socket;
+// the relay accepts and treats the same socket as a CLIENT connection. HTTP/2
+// multiplexes over it natively, so several calls ride one tunnel with no
+// framing of our own — no yamux, no session layer, nothing to get wrong.
+package tunnel
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+// ErrClosed is returned by a listener that has been closed or already used.
+var ErrClosed = errors.New("tunnel: listener closed")
+
+// SingleConnListener is a net.Listener that yields ONE already-established
+// connection and then blocks until closed.
+//
+// It exists so a gRPC server can be pointed at a socket that was dialled
+// rather than accepted. grpc.Server wants a Listener; this is the smallest
+// honest adapter, and it refuses a second Accept rather than looping — a
+// server that got the same conn twice would race two HTTP/2 framers over one
+// socket, which fails in ways that read like network corruption.
+type SingleConnListener struct {
+	mu     sync.Mutex
+	conn   net.Conn
+	served bool
+	closed chan struct{}
+	once   sync.Once
+}
+
+func NewSingleConnListener(c net.Conn) *SingleConnListener {
+	l := &SingleConnListener{closed: make(chan struct{})}
+	// The conn is wrapped so that CLOSING IT closes the listener too.
+	//
+	// Without this the second Accept blocks on `closed` forever and has no way
+	// to learn the socket died — grpc.Server.Serve sits in it, Serve never
+	// returns, and the worker cannot open a replacement tunnel short of
+	// cancelling its whole context. The transport closes the conn when the
+	// tunnel drops, so that is exactly the event to hang the listener's
+	// lifetime on.
+	l.conn = &closeNotifyConn{Conn: c, onClose: l.Close}
+	return l
+}
+
+type closeNotifyConn struct {
+	net.Conn
+	once    sync.Once
+	onClose func() error
+}
+
+func (c *closeNotifyConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { _ = c.onClose() })
+	return err
+}
+
+func (l *SingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if !l.served {
+		l.served = true
+		c := l.conn
+		l.mu.Unlock()
+		return c, nil
+	}
+	l.mu.Unlock()
+	// The connection is spoken for. Block until Close rather than returning an
+	// error: grpc.Server treats a non-temporary Accept error as fatal and
+	// tears the whole server down, which would kill the call already running
+	// on the conn we just handed it.
+	<-l.closed
+	return nil, ErrClosed
+}
+
+func (l *SingleConnListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *SingleConnListener) Addr() net.Addr { return l.conn.LocalAddr() }
+
+// ClientOverConn turns an ALREADY-ESTABLISHED connection into a gRPC client.
+//
+// This is the other half of the reversal: the relay accepted this socket, and
+// now speaks client over it to the server the worker is running on its end.
+//
+// Transport credentials are `insecure` because the conn handed in is already
+// TLS — the handshake happened when it was accepted, and that is also where
+// the worker's identity came from. Wrapping it again would mean a second
+// handshake inside the first.
+// onClose fires when gRPC closes the socket. For a SINGLE-USE tunnel that is
+// the only honest death signal: the connection can never be re-established, so
+// closed means gone — whereas the connectivity state machine parks a broken
+// tunnel in TransientFailure or Idle indefinitely, retrying a dial that is
+// refused by construction, and a watcher waiting for Shutdown waits forever.
+func ClientOverConn(c net.Conn, dialTarget string, onClose func()) (*grpc.ClientConn, error) {
+	if onClose != nil {
+		c = &closeNotifyConn{Conn: c, onClose: func() error { onClose(); return nil }}
+	}
+	var once sync.Once
+	return grpc.NewClient(dialTarget,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			var out net.Conn
+			once.Do(func() { out = c })
+			if out == nil {
+				// A RECONNECT attempt. There is nothing to reconnect to — the
+				// socket was the worker's, it is gone, and the worker will
+				// dial again when it notices. Returning the same conn would
+				// hand gRPC a closed socket forever; erroring lets the
+				// ClientConn go IDLE and the backend be dropped.
+				return nil, ErrClosed
+			}
+			return out, nil
+		}))
+}

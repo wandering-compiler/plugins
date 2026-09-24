@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+// Cluster plugin — reading the relay registry.
+
+package w17.contrib.cluster;
+
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message ListRelaysReq {
+  // Narrow to the relays scheduling would actually consider. The backoffice
+  // list leaves it false and shows everything, including the disabled ones —
+  // a registry that hides rows is a registry an operator cannot audit.
+  bool enabled_only = 1;
+}
+
+message ListRelaysResp {
+  repeated Relay relays = 1;
+}
+
+message GetRelayReq {
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+
+service RelayQuery {
+  // Ordered by name rather than by creation, because the operator reading this
+  // list knows the relays by name and is looking one up, not browsing history.
+  rpc ListRelays(ListRelaysReq) returns (ListRelaysResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, "
+          "       r.name AS name, "
+          "       r.url AS url, "
+          "       r.cert_fingerprint AS cert_fingerprint, "
+          "       r.enabled AS enabled, "
+          "       r.created_at AS created_at, "
+          "       r.last_seen_at AS last_seen_at, "
+          "       r.last_error AS last_error "
+          "FROM @module.Relay r "
+          "WHERE (:enabled_only = false OR r.enabled = true) "
+          "ORDER BY r.name"
+      }
+    };
+  }
+
+  rpc GetRelay(GetRelayReq) returns (Relay) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, "
+          "       r.name AS name, "
+          "       r.url AS url, "
+          "       r.cert_fingerprint AS cert_fingerprint, "
+          "       r.enabled AS enabled, "
+          "       r.created_at AS created_at, "
+          "       r.last_seen_at AS last_seen_at, "
+          "       r.last_error AS last_error "
+          "FROM @module.Relay r "
+          "WHERE r.id = :id"
+      }
+    };
+  }
+}

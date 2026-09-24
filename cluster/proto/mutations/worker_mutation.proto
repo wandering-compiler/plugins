@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+// Cluster plugin — deciding about workers.
+
+package w17.contrib.cluster;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+// RecordPendingWorker is called once per machine a relay reports.
+//
+// IDEMPOTENT by fingerprint, because "check new workers" is a button a human
+// presses and a relay keeps reporting the same waiting machine until it is
+// decided about. A second press must not create a second row, and — more
+// importantly — must not reset a decision already taken: a DENIED worker that
+// keeps reconnecting would otherwise be quietly returned to pending on the
+// next sweep, and denial would mean nothing.
+message RecordPendingWorkerReq {
+  string cert_fingerprint = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string name = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string device_id = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string relay_id = 4 [(w17.field) = { type: UUID }];
+}
+
+message RecordPendingWorkerResp {}
+
+// Bulk by construction. The admin's approve/deny arrive as a SELECTION — an
+// operator reviewing a batch of machines decides about several at once — and a
+// single-id method would have the page issue N calls and report N outcomes for
+// one human action.
+message DecideWorkersReq {
+  repeated string ids = 1;
+  // Whoever took the decision, in the consumer's own terms. Recorded because
+  // the first question during an incident is who let the machine in.
+  string decided_by = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  google.protobuf.Timestamp at = 3;
+}
+
+message DecideWorkersResp {}
+
+service WorkerMutation {
+  rpc RecordPendingWorker(RecordPendingWorkerReq) returns (RecordPendingWorkerResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Worker "
+          "SET cert_fingerprint = :cert_fingerprint, name = :name, "
+          "    device_id = :device_id, relay_id = :relay_id, state = 1 "
+          "ON CONFLICT (cert_fingerprint) DO NOTHING"
+      }
+    };
+  }
+
+  // Approve and Deny are separate methods rather than one taking a target
+  // state. The two are not variations of a setting — they are opposite
+  // decisions, they will diverge (approval will want a note, denial a reason),
+  // and an ACL that must distinguish them needs two names to gate.
+  rpc ApproveWorkers(DecideWorkersReq) returns (DecideWorkersResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Worker "
+          "SET state = 2, decided_at = :at, decided_by = :decided_by "
+          "WHERE id IN (:ids)"
+      }
+    };
+  }
+
+  rpc DenyWorkers(DecideWorkersReq) returns (DecideWorkersResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Worker "
+          "SET state = 3, decided_at = :at, decided_by = :decided_by "
+          "WHERE id IN (:ids)"
+      }
+    };
+  }
+}

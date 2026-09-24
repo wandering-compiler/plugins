@@ -1,0 +1,110 @@
+package handlers
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+)
+
+// Relay is what the scheduler needs to know about one registered relay. A
+// narrow struct rather than the generated row, so this package does not depend
+// on the shape of a table it does not own.
+type Relay struct {
+	ID          string
+	Name        string
+	URL         string
+	Fingerprint string
+}
+
+// RelayStore is the seam onto the plugin's own tables, wired by
+// RegisterPlugin. An interface rather than the generated client directly,
+// because scheduling is worth testing against a store that cannot fail in
+// ways a real database would never produce.
+type RelayStore interface {
+	// ListEnabled returns the relays scheduling may consider, in any order.
+	ListEnabled(ctx context.Context) ([]Relay, error)
+	// RecordReached and RecordFailed maintain the observed-state CACHE on the
+	// row. Both are best-effort: a scheduling decision that succeeded must not
+	// be failed because bookkeeping about it could not be written.
+	RecordReached(ctx context.Context, id string) error
+	RecordFailed(ctx context.Context, id, msg string) error
+}
+
+// Dialer opens a pinned connection to one relay. Injected so a test can stand
+// a relay up in-process without certificates.
+type Dialer func(target, fingerprint string) (*grpc.ClientConn, error)
+
+// ClusterServiceHandler serves the project's side of ClusterService.
+//
+// # The relay speaks the SAME contract
+//
+// A relay implements ClusterService too, and this handler is a STREAM PROXY
+// over it: it chooses a relay and forwards that relay's events to the caller.
+// One contract describes both hops.
+//
+// The alternative — a second, relay-facing proto — was considered and is
+// worse: two contracts describing one conversation drift, and the drift shows
+// up as a scheduling bug rather than a compile error. The only thing the relay
+// cannot fill in is its own registry NAME, which it has never been told; this
+// handler stamps it on the way past.
+type ClusterServiceHandler struct {
+	pb.UnimplementedClusterServiceServer
+
+	// Relays is the registry. Never nil after RegisterPlugin.
+	Relays RelayStore
+
+	// Workers is the worker registry. Never nil after RegisterPlugin.
+	Workers WorkerStore
+
+	// Dial opens the management connection. Never nil after RegisterPlugin.
+	Dial Dialer
+
+	// DialTimeout bounds how long ONE relay may take to answer before it is
+	// treated as unreachable and the next is tried. Zero means a default.
+	//
+	// It exists because grpc.NewClient is LAZY: without waiting for the
+	// connection to come up, "dial" returns instantly for a black-holed relay
+	// and the failure surfaces as the caller's own deadline expiring, with the
+	// pool never falling through to a healthy one.
+	DialTimeout time.Duration
+
+	// inflight counts streams this process is currently proxying, per relay
+	// id. It is the load signal used to choose between relays, and it is
+	// deliberately LOCAL knowledge: this process knows exactly what it placed
+	// and nothing about what another console replica placed.
+	//
+	// That makes it a heuristic, not a capacity model, and it is the right one
+	// for phase 1 — it costs no extra round trip, and it cannot be stale,
+	// which a reported capacity always can be. When it guesses wrong the
+	// consequence is a longer queue on one relay, not a failure: the relay
+	// queues rather than refusing, so a bad choice is slow and never wrong.
+	mu       sync.Mutex
+	inflight map[string]int
+}
+
+func (h *ClusterServiceHandler) enter(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight == nil {
+		h.inflight = map[string]int{}
+	}
+	h.inflight[id]++
+}
+
+func (h *ClusterServiceHandler) leave(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight[id] > 0 {
+		h.inflight[id]--
+	}
+}
+
+func (h *ClusterServiceHandler) load(id string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.inflight[id]
+}

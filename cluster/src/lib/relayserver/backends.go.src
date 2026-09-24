@@ -1,0 +1,210 @@
+package relayserver
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+)
+
+// TicketHeader carries the grant a caller redeems at the proxy.
+//
+// Lowercase because gRPC metadata keys are, and named without the `x-w17-`
+// prefix on purpose: that namespace is for metadata the gateway has VERIFIED,
+// and a value the caller supplies must not look like one.
+const TicketHeader = "w17-cluster-ticket"
+
+// Backends is the set of workers currently attached to this relay.
+//
+// A worker holds ONE tunnel connection and HTTP/2 multiplexes every call over
+// it, so this is a set of connections rather than a pool of slots — how much
+// work may run is decided by the ticket, not by how many sockets exist.
+type Backends struct {
+	mu    sync.Mutex
+	conns map[string]*grpc.ClientConn // fingerprint → tunnel
+	order []string                    // round-robin cursor over conns
+	next  int
+}
+
+func NewBackends() *Backends {
+	return &Backends{conns: map[string]*grpc.ClientConn{}}
+}
+
+// Add registers a worker's tunnel. A second tunnel from the same fingerprint
+// REPLACES the first — a worker that reconnected has a live socket and a dead
+// one, and keeping both would send half the work into the dead one.
+//
+// It also WATCHES the connection. Without that the entry outlives the socket:
+// the worker hangs up, the fingerprint stays selectable, and later tickets are
+// sent into a dead connection while Count still reports a worker. The failure
+// looks like a flaky relay and points nowhere near the cause.
+func (b *Backends) Add(fingerprint string, conn *grpc.ClientConn) {
+	b.mu.Lock()
+	if old, ok := b.conns[fingerprint]; ok {
+		_ = old.Close()
+	} else {
+		b.order = append(b.order, fingerprint)
+	}
+	b.conns[fingerprint] = conn
+	b.mu.Unlock()
+	// Connect eagerly. grpc.NewClient is LAZY, so without this the conn sits
+	// in Idle until the first call goes through it — and a tunnel that dies
+	// before any work arrives would never have left Idle for the watcher to
+	// notice it leaving Ready. The socket is already open; this only makes the
+	// state machine say so.
+	conn.Connect()
+	go b.watch(fingerprint, conn)
+}
+
+// watch drops a backend once its tunnel can no longer carry anything.
+//
+// A tunnel is SINGLE USE by construction — the socket was the worker's, the
+// dialer hands it over once, and a reconnect is refused — so the connection
+// can never recover. The signal is therefore leaving Ready for anything but a
+// transient Connecting.
+//
+// Two shapes were tried first and are recorded so nobody repeats them.
+// Waiting for Shutdown waits forever: a broken tunnel parks in
+// TransientFailure retrying a dial that is refused by construction. And
+// hanging removal on the socket's Close never fires: gRPC keeps its end open
+// and goes on redialling, so the close hook the worker side relies on has no
+// counterpart here.
+func (b *Backends) watch(fingerprint string, conn *grpc.ClientConn) {
+	ctx := context.Background()
+	ready := false
+	for {
+		st := conn.GetState()
+		if st == connectivity.Ready {
+			ready = true
+		} else if ready && st != connectivity.Connecting {
+			break
+		} else if st == connectivity.Shutdown {
+			break
+		}
+		if !conn.WaitForStateChange(ctx, st) {
+			break
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// Only if it is still THE SAME connection: a worker that reconnected has
+	// already replaced this entry, and dropping the new tunnel because the old
+	// one finally noticed it was dead would disconnect a healthy worker.
+	if cur, ok := b.conns[fingerprint]; !ok || cur != conn {
+		return
+	}
+	_ = conn.Close()
+	delete(b.conns, fingerprint)
+	for i, f := range b.order {
+		if f == fingerprint {
+			b.order = append(b.order[:i], b.order[i+1:]...)
+			break
+		}
+	}
+}
+
+// Remove drops a worker's tunnel — it hung up, or was denied while attached.
+//
+// Called from the tunnel's own close hook, which is the only signal that is
+// both prompt and true for a single-use connection.
+func (b *Backends) Remove(fingerprint string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if c, ok := b.conns[fingerprint]; ok {
+		_ = c.Close()
+		delete(b.conns, fingerprint)
+	}
+	for i, f := range b.order {
+		if f == fingerprint {
+			b.order = append(b.order[:i], b.order[i+1:]...)
+			break
+		}
+	}
+}
+
+// Count reports how many workers are attached.
+func (b *Backends) Count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.conns)
+}
+
+var errNoWorker = errors.New("no worker attached")
+
+// take returns the next worker that is STILL ADMITTED, round-robin.
+//
+// Admission is re-checked here and not only when the tunnel opened, because
+// approval can be withdrawn while a worker is connected. Checking once at
+// accept would leave a revoked machine receiving work until it happened to
+// reconnect — which is to say, until it felt like it.
+func (b *Backends) take(admitted func(string) bool) (*grpc.ClientConn, string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for range b.order {
+		if len(b.order) == 0 {
+			break
+		}
+		b.next = (b.next + 1) % len(b.order)
+		fp := b.order[b.next]
+		if admitted == nil || admitted(fp) {
+			return b.conns[fp], fp, nil
+		}
+	}
+	return nil, "", errNoWorker
+}
+
+// TicketPicker is the proxy's admission: it redeems the caller's ticket and
+// then hands back a worker.
+//
+// THE TICKET IS REDEEMED HERE, not when it was granted. A grant reserves a
+// slot; redeeming converts the reservation into running work. Doing it at the
+// proxy is what makes the reservation real — a caller that never arrives loses
+// the slot to the TTL, and one that arrives twice with the same ticket finds
+// it already spent.
+func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit.Registry) tunnel.Picker {
+	return func(ctx context.Context, _ string) (tunnel.Backend, error) {
+		md, _ := metadata.FromIncomingContext(ctx)
+		vals := md.Get(TicketHeader)
+		if len(vals) == 0 || vals[0] == "" {
+			return tunnel.Backend{}, status.Errorf(codes.Unauthenticated,
+				"relay: no %s — ask the control plane to schedule a task and send the ticket it grants",
+				TicketHeader)
+		}
+		if err := pool.Claim(vals[0]); err != nil {
+			// Deliberately does not distinguish expired from spent from
+			// invented: see relaycore.ErrNoSuchTicket.
+			return tunnel.Backend{}, status.Error(codes.PermissionDenied,
+				"relay: that ticket is not redeemable — it may have expired, or already been used")
+		}
+
+		admitted := func(string) bool { return true }
+		if workers != nil {
+			admitted = workers.Admitted
+		}
+		conn, _, err := backends.take(admitted)
+		if err != nil {
+			// The slot was claimed and there is nobody to run the work, so it
+			// goes back immediately rather than waiting out the call.
+			pool.Done()
+			return tunnel.Backend{}, status.Error(codes.Unavailable,
+				"relay: the ticket was valid but no admitted worker is attached right now")
+		}
+		// Done exactly once, however the call ends: the slot is held by the
+		// CONNECTION from here, and a leak would shrink the pool silently
+		// until a restart.
+		var once sync.Once
+		return tunnel.Backend{
+			Conn:    conn,
+			Release: func() { once.Do(pool.Done) },
+		}, nil
+	}
+}

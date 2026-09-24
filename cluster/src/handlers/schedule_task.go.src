@@ -1,0 +1,213 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"io"
+	"sort"
+	"time"
+
+	"fmt"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+)
+
+// ScheduleTask picks a relay and proxies its scheduling stream to the caller.
+//
+// The caller's connection is what holds the queue place, so this handler's job
+// is to keep one open toward a relay for exactly as long as the caller keeps
+// one open toward it. Everything else — the queue, the capacity, the ticket —
+// belongs to the relay and is never modelled here.
+func (h *ClusterServiceHandler) ScheduleTask(
+	req *pb.ScheduleTaskReq,
+	srv grpc.ServerStreamingServer[pb.ScheduleTaskEvent],
+) error {
+	ctx := srv.Context()
+
+	// The caller's own deadline wins when it is shorter. max_wait_seconds is a
+	// second opinion the caller volunteered, and a zero there means "I already
+	// have a deadline and would rather you used it".
+	if s := req.GetMaxWaitSeconds(); s > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(s)*time.Second)
+		defer cancel()
+	}
+
+	relays, err := h.Relays.ListEnabled(ctx)
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+	}
+	if len(relays) == 0 {
+		// Unavailable and not NotFound: the pool is EMPTY, which an operator
+		// fixes by registering or enabling a relay. NotFound would read as
+		// "you asked for something that does not exist", and the caller asked
+		// for nothing but capacity.
+		return status.Error(codes.Unavailable,
+			"cluster: no enabled relay is registered — register one, or re-enable one that was turned off")
+	}
+
+	// Least-loaded first, then by name so the order is stable when loads tie
+	// (which they always do on an idle pool — without a tiebreak the first
+	// relay in map order would take everything).
+	sort.Slice(relays, func(i, j int) bool {
+		li, lj := h.load(relays[i].ID), h.load(relays[j].ID)
+		if li != lj {
+			return li < lj
+		}
+		return relays[i].Name < relays[j].Name
+	})
+
+	var lastErr error
+	for _, r := range relays {
+		err := h.proxyOne(ctx, r, req, srv)
+		if err == nil {
+			return nil
+		}
+		// The caller went away, or their deadline passed. Trying the next
+		// relay would place work for somebody who is no longer listening.
+		if ctx.Err() != nil {
+			return status.FromContextError(ctx.Err()).Err()
+		}
+		// Anything the RELAY said is final for this request — it accepted the
+		// conversation and then refused or failed, and a second relay would be
+		// answering a question the first one already answered.
+		if _, ok := status.FromError(err); ok && !errors.Is(err, errUnreachable) {
+			return err
+		}
+		lastErr = err
+	}
+	return status.Errorf(codes.Unavailable,
+		"cluster: no registered relay could be reached (%d tried); last error: %v", len(relays), lastErr)
+}
+
+// errUnreachable marks the failures that justify trying another relay: the
+// connection never got far enough for the relay to have an opinion.
+var errUnreachable = errors.New("relay unreachable")
+
+func (h *ClusterServiceHandler) proxyOne(
+	ctx context.Context,
+	r Relay,
+	req *pb.ScheduleTaskReq,
+	srv grpc.ServerStreamingServer[pb.ScheduleTaskEvent],
+) error {
+	conn, err := h.dialReady(ctx, r)
+	if err != nil {
+		h.note(ctx, r, err)
+		return errors.Join(errUnreachable, err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	h.enter(r.ID)
+	defer h.leave(r.ID)
+
+	up, err := pb.NewClusterServiceClient(conn).ScheduleTask(ctx, req)
+	if err != nil {
+		h.note(ctx, r, err)
+		return errors.Join(errUnreachable, err)
+	}
+
+	reached := false
+	for {
+		ev, err := up.Recv()
+		if errors.Is(err, io.EOF) {
+			// The relay closed without granting. That is not success: the
+			// caller is owed either a grant or a reason, and an empty stream
+			// is neither.
+			return status.Errorf(codes.Unavailable,
+				"cluster: relay %q closed the stream without granting a slot", r.Name)
+		}
+		if err != nil {
+			if !reached {
+				h.note(ctx, r, err)
+				return errors.Join(errUnreachable, err)
+			}
+			return err
+		}
+		if !reached {
+			// First byte back is the only honest definition of "reached": the
+			// connection is up AND the relay is answering.
+			reached = true
+			h.noteOK(ctx, r)
+		}
+
+		// The relay has never been told its registry name, so it cannot fill
+		// this in and the caller needs it — to read a queue position, and to
+		// say which relay an incident is about.
+		switch e := ev.GetEvent().(type) {
+		case *pb.ScheduleTaskEvent_Queued:
+			e.Queued.Relay = r.Name
+		case *pb.ScheduleTaskEvent_Granted:
+			e.Granted.Relay = r.Name
+		}
+
+		if err := srv.Send(ev); err != nil {
+			return err
+		}
+		if ev.GetGranted() != nil {
+			// Granted is terminal. Returning closes both streams — this one
+			// because the caller has what it came for, and the upstream
+			// because the deferred Close runs. The SLOT is not released by
+			// that: it is held by the ticket until claimed, and then by the
+			// worker connection.
+			return nil
+		}
+	}
+}
+
+// note and noteOK maintain the observed-state cache. Both swallow their own
+// errors on purpose: this is bookkeeping for an operator reading a list, and a
+// scheduling decision must not fail because a cache write did.
+func (h *ClusterServiceHandler) note(ctx context.Context, r Relay, cause error) {
+	// A fresh context: `ctx` is usually already cancelled by the time a
+	// failure is being recorded, and a write on a dead context records
+	// nothing — which is exactly the case an operator most needs to see.
+	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = h.Relays.RecordFailed(c, r.ID, cause.Error())
+}
+
+func (h *ClusterServiceHandler) noteOK(ctx context.Context, r Relay) {
+	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = h.Relays.RecordReached(c, r.ID)
+}
+
+// dialReady opens a management connection AND waits for it to be usable.
+//
+// grpc.NewClient is lazy, so the dial itself never fails — a relay that has
+// vanished returns a ClientConn that will simply never connect. Waiting here,
+// bounded, is what turns "unreachable" into something the loop above can act
+// on while the caller is still waiting on the pool rather than on one dead
+// address.
+func (h *ClusterServiceHandler) dialReady(ctx context.Context, r Relay) (*grpc.ClientConn, error) {
+	conn, err := h.Dial(r.URL, r.Fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	timeout := h.DialTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	wait, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn.Connect()
+	for {
+		switch st := conn.GetState(); st {
+		case connectivity.Ready:
+			return conn, nil
+		case connectivity.Shutdown:
+			_ = conn.Close()
+			return nil, fmt.Errorf("relay %q: connection shut down before it was ready", r.Name)
+		default:
+			if !conn.WaitForStateChange(wait, st) {
+				_ = conn.Close()
+				return nil, fmt.Errorf("relay %q: not reachable within %s", r.Name, timeout)
+			}
+		}
+	}
+}

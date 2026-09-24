@@ -1,0 +1,124 @@
+// Package relaydial opens the control plane's connection to one relay.
+//
+// The control plane DIALS OUT, and it dials only to a url the registry holds.
+// That direction is the whole security model: a stolen credential is useless
+// without also controlling the address it is pinned to, and the credential
+// here is a client certificate whose private key never travels.
+package relaydial
+
+import (
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"fmt"
+	"strings"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+)
+
+// Fingerprint is the lowercase hex SHA-256 of a certificate's DER bytes — the
+// same string the registry stores in `Relay.cert_fingerprint`.
+func Fingerprint(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// Config is the control plane's own identity, read once at boot from the env
+// contract in plugin.yaml. One identity for every relay: the per-relay half of
+// the trust decision is the fingerprint, not a per-relay secret.
+type Config struct {
+	ClientCertPEM []byte
+	ClientKeyPEM  []byte
+}
+
+// Dial opens a connection to one relay, pinned to `want`.
+//
+// # Why the certificate is pinned instead of validated against a CA
+//
+// A pinned fingerprint makes the trust decision EXPLICIT and local: an
+// operator pastes one string, and rotating a relay's certificate becomes an
+// edit to a row — an audit trail a CA-issued swap would not leave. It also
+// lets a relay hold a self-signed certificate, so standing one up needs no
+// enrolment ceremony.
+//
+// Verification is therefore done by hand, which is why InsecureSkipVerify is
+// set: it turns off the CHAIN check, not the identity check. The identity
+// check below is strictly narrower than a CA's — a CA says "somebody I trust
+// signed this", the pin says "this exact certificate". Leaving the default
+// verification on would reject every self-signed relay before this code ever
+// ran.
+func Dial(cfg Config, target, want string) (*grpc.ClientConn, error) {
+	want = strings.ToLower(strings.TrimSpace(want))
+	if want == "" {
+		// Refused rather than defaulted to "trust anything": an empty pin is a
+		// row that was never finished, and the failure it would otherwise
+		// cause is a silent downgrade to no identity check at all.
+		return nil, fmt.Errorf("relaydial: %s has no cert_fingerprint pinned", target)
+	}
+	crt, err := tls.X509KeyPair(cfg.ClientCertPEM, cfg.ClientKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("relaydial: client identity: %w", err)
+	}
+
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		// #nosec G402 -- deliberate: a relay may be self-signed, so the CHAIN
+		// check is replaced by a leaf-fingerprint pin, which is narrower than
+		// any CA would be. Both verification hooks below carry it.
+		InsecureSkipVerify:    true,
+		VerifyPeerCertificate: PinnedVerifier(target, want),
+		VerifyConnection:      PinnedConnectionVerifier(target, want),
+	}
+	return grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+}
+
+// PinnedVerifier is the identity check, named so it can be exercised without
+// standing up a TLS handshake — the alternative is a test that proves the
+// plumbing and never the rule.
+func PinnedVerifier(target, want string) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return fmt.Errorf("relaydial: %s presented no certificate", target)
+		}
+		// The LEAF only. A pin that accepted any certificate in the chain
+		// would be satisfied by an intermediate, which is not an identity.
+		leaf, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("relaydial: %s: unparseable certificate: %w", target, err)
+		}
+		if got := Fingerprint(leaf); got != want {
+			return fmt.Errorf(
+				"relaydial: %s presented certificate %s, registry pins %s — "+
+					"the relay's certificate was rotated without updating its row, "+
+					"or this is not the relay the registry means", target, got, want)
+		}
+		return nil
+	}
+}
+
+// PinnedConnectionVerifier is the SAME rule on the hook a RESUMED session
+// actually reaches.
+//
+// crypto/tls calls VerifyPeerCertificate only during a full handshake. TLS 1.3
+// session tickets make resumption the ordinary case for a long-lived control
+// plane, and on a resumed connection that callback never runs — so a pin
+// enforced only there is enforced only on the first connection of a session
+// and silently skipped afterwards. VerifyConnection runs on both paths, which
+// is what makes the pin actually hold (gosec G123).
+//
+// It delegates to PinnedVerifier rather than re-deriving the fingerprint: the
+// pin was already written three times in this plugin (here and twice inline in
+// workerconn), which is how the same gap came to exist in all three. One rule,
+// one implementation.
+func PinnedConnectionVerifier(target, want string) func(tls.ConnectionState) error {
+	verify := PinnedVerifier(target, want)
+	return func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("relaydial: %s presented no certificate", target)
+		}
+		return verify([][]byte{cs.PeerCertificates[0].Raw}, nil)
+	}
+}

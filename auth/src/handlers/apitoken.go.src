@@ -8,6 +8,9 @@ import (
 
 	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
+
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 )
 
 // This file implements the `api_token` feature. It is staged into a
@@ -107,27 +110,69 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	issued, err := h.Mutation.IssueApiToken(ctx, &pb.IssueApiTokenReq{
-		UserId:    userID,
-		Name:      req.GetName(),
-		TokenType: pb.TokenType_TOKEN_TYPE_API,
-	})
+	// The token and its narrowing are ONE unit — the same reason IssueBotToken
+	// gives, and this is the endpoint a PERSON calls.
+	//
+	// Minting first is forced: a permission row points at the token's id. So a
+	// failure partway leaves a LIVE token carrying a partial subset — or none,
+	// which the resolver reads as `all_permissions` (applyTokenSubset narrows
+	// only a non-empty subset). A caller who asked for a narrow credential and
+	// got an error back would be left owning a WIDER one, believing nothing
+	// happened.
+	//
+	// ⚠️ Fixed here on 2026-09-24, a few hours after the identical shape was
+	// fixed in IssueBotToken and CreateBot (marb #58). This one was missed in
+	// that sweep, which is the whole argument for naming siblings when a shape
+	// is fixed rather than fixing the instances that were reported: the bot
+	// endpoints are called by an admin, and this one is called by everybody.
+	var tx *distx.TxHandle
+	txCtx := ctx
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	token, tokenID, err := h.issueApiTokenTx(txCtx, userID, req.GetName(), req.GetPermissionSubset())
 	if err != nil {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
 		return nil, err
 	}
-	tokenID := issued.GetToken().GetId()
-	for _, perm := range req.GetPermissionSubset() {
-		if _, err := h.Mutation.AddTokenPermission(ctx, &pb.AddTokenPermissionReq{
-			TokenId:      tokenID,
-			PermissionId: perm,
-		}); err != nil {
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
 	}
 	return &pb.CreateApiTokenResp{
-		Token:   issued.GetToken().GetToken(),
+		Token:   token,
 		TokenId: tokenID,
 	}, nil
+}
+
+// issueApiTokenTx mints the token and writes its permission subset on the SAME
+// context, so a transaction wrapped around the pair holds both. Separated for
+// exactly that reason: a caller that inlined the two could not roll them back
+// together, and the seam is what a test can drive.
+func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, userID, name string, subset []int32) (token, tokenID string, err error) {
+	issued, err := h.Mutation.IssueApiToken(txCtx, &pb.IssueApiTokenReq{
+		UserId:    userID,
+		Name:      name,
+		TokenType: pb.TokenType_TOKEN_TYPE_API,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	id := issued.GetToken().GetId()
+	for _, perm := range subset {
+		if _, err := h.Mutation.AddTokenPermission(txCtx, &pb.AddTokenPermissionReq{
+			TokenId:      id,
+			PermissionId: perm,
+		}); err != nil {
+			return "", "", err
+		}
+	}
+	return issued.GetToken().GetToken(), id, nil
 }
 
 // ListApiTokens returns the calling user's API tokens (management view —

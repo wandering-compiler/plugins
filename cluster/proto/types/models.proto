@@ -1,0 +1,171 @@
+syntax = "proto3";
+
+package w17.contrib.cluster;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+// Relay — one relay server this control plane may place work on.
+//
+// A relay is a process with two halves: a MANAGEMENT gRPC the control plane
+// calls, and a PROXY gRPC that forwards to whichever worker it chose. It holds
+// no storage — its queue, its capacity and every ticket it has minted live in
+// memory, and all of that is gone when it restarts. Workers dial IN to it and
+// reconnect forever, so a restart heals itself without anyone being told.
+//
+// This row is the WHITELIST. The control plane dials out, and it dials only to
+// a url that appears here with `enabled` set; a relay that is not in this table
+// cannot be reached by accident, and one that is disabled stops receiving work
+// without being deleted (so its history, if the ledger is on, survives).
+message Relay {
+  option (w17.db.table) = {};
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+
+  // Operator-facing label. This is what the backoffice list shows and what an
+  // incident refers to, so it is a name and not a hostname: "eu-west-1",
+  // "spare-box". Unique, because two relays called the same thing make every
+  // later conversation about them ambiguous.
+  string name = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }];
+
+  // `host:port` of the relay's MANAGEMENT endpoint — the half this control
+  // plane calls. Not the proxy endpoint the caller is handed; that one the
+  // relay reports for itself, because only the relay knows how the outside
+  // world reaches it (see ScheduleTaskResp.address).
+  string url = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+
+  // Lowercase hex SHA-256 of the relay's TLS certificate, no separators, 64
+  // characters.
+  //
+  // The relay's identity is PINNED to this fingerprint rather than validated
+  // against a CA, which means a relay may hold a self-signed certificate and
+  // needs no enrolment ceremony — the operator pastes a fingerprint and that is
+  // the whole trust decision. Rotating a relay's certificate is an edit here,
+  // and an edit is exactly the audit trail that a silent CA-issued swap would
+  // not leave.
+  //
+  // Deliberately NOT a shared secret. A bearer secret would have to be stored
+  // in a form this control plane can read back in order to present it, which
+  // means encrypted at rest, which means key management (see
+  // docs/todos/secrets-are-plaintext-and-secret-conflates-two-jobs.md). A
+  // fingerprint is PUBLIC information: leaking this table tells an attacker
+  // which certificates to expect and gets them no closer to holding one.
+  string cert_fingerprint = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+
+  // Off takes the relay out of scheduling immediately and keeps the row.
+  // Default-on is deliberate: a relay is registered by someone who wants it
+  // used, and a registration that silently does nothing until a second switch
+  // is flipped is a support ticket waiting to happen.
+  bool enabled = 5 [(w17.field) = { default_auto: TRUE }];
+
+  google.protobuf.Timestamp created_at = 6
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+
+  // ─── Observed state, below. Written by the control plane, never by an
+  // operator, and every field of it is a CACHE.
+  //
+  // It exists so the backoffice list can say whether a relay is alive without
+  // opening a connection per row while someone waits for a page to render. It
+  // is therefore allowed to be stale, and nothing in scheduling may READ it as
+  // truth: a relay that looks healthy here can still refuse the next call, and
+  // a relay that looks dead may have come back a second ago. Scheduling learns
+  // the answer by asking.
+
+  // When this control plane last completed a management call to the relay.
+  // Absent means "never reached since the row was created" — which is a
+  // different statement from "reached once and now failing", and the two must
+  // not be collapsed into one zero value.
+  optional google.protobuf.Timestamp last_seen_at = 7
+      [(w17.field) = { type: DATETIME }];
+
+  // What went wrong on the last failed attempt, for the operator who is trying
+  // to work out why a relay is not taking work. Cleared on success.
+  string last_error = 8 [(w17.field) = { type: TEXT, blank: true }];
+}
+
+// WorkerState is where one worker stands with the operator.
+//
+// `PENDING` is a first-class state, not "absent from the approved list". A
+// worker waiting to be let in reconnects forever and must be given NO work,
+// and an operator has to be able to see it waiting — both of which need a name
+// for the condition.
+enum WorkerState {
+  WORKER_STATE_UNSPECIFIED = 0;
+  WORKER_STATE_PENDING     = 1;
+  WORKER_STATE_APPROVED    = 2;
+  WORKER_STATE_DENIED      = 3;
+}
+
+// Worker — one machine that has offered to do work, and what was decided
+// about it.
+//
+// # Why this table exists at all
+//
+// Workers are not on a private network. They are laptops and VPSs at whatever
+// provider was cheapest, dialling in from the public internet, and the relay
+// admits whoever holds a key it recognises. So SOMETHING has to decide which
+// keys it recognises, and that decision cannot live in the relay: the relay
+// holds nothing across a restart.
+//
+// Short-lived certificates were considered and rejected. They only move the
+// problem: the machine still has to hold a renewal credential, that credential
+// is long-lived by construction, and leaking it puts you exactly where you
+// started. This is trust-on-first-use with an explicit human approval instead
+// — the same shape as Tailscale device approval, Kubernetes CSR approval, and
+// ssh `known_hosts`.
+//
+// What it buys is NOT prevention. An approved key that leaks is a key the
+// attacker has, the same as any long-lived credential. What changes is the
+// RESPONSE: one decision, immediate, scoped to one machine — which matters
+// here because the tunnel this key opens carries other people's work.
+message Worker {
+  option (w17.db.table) = {};
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+
+  // Lowercase hex SHA-256 of the worker's TLS certificate. THE IDENTITY, and
+  // the only field here that is evidence rather than a claim: holding the
+  // matching private key is what the handshake proves.
+  //
+  // Everything else below is something the worker SAID about itself.
+  string cert_fingerprint = 2 [(w17.field) = { type: CHAR, max_len: 64, unique: true }];
+
+  // What the worker calls itself. A CLAIM, and the reason the approval screen
+  // must show the fingerprint beside it rather than this alone: an attacker
+  // can offer any name, and the obvious attack is to offer the name of a
+  // machine the operator is expecting.
+  //
+  // The defence is comparison — the worker prints its own fingerprint at
+  // startup and the operator checks it matches. Approving on the strength of
+  // the name is approving whoever connected first.
+  string name = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+
+  // The worker's own stable id for itself across restarts. Also a claim; kept
+  // because it survives a re-install that changes the name, which makes it
+  // useful for reading history. Never used to authorise anything.
+  string device_id = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+
+  // No column default. Proto3 pins 0 to UNSPECIFIED, and a row that defaulted
+  // to "unspecified" would be a worker in no state at all; PENDING is a
+  // decision the code that inserts the row makes, explicitly.
+  WorkerState state = 5;
+
+  // Which relay reported it. A worker reaches exactly one relay, and an
+  // operator chasing "why is this machine idle" needs to know which.
+  string relay_id = 6 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+
+  google.protobuf.Timestamp first_seen_at = 7
+      [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+
+  // When the decision was taken and by whom. Absent while pending.
+  //
+  // `decided_by` is free text rather than a foreign key on purpose: this
+  // plugin has no user table and must not require one. The consumer writes
+  // whatever identifies an operator in their own system.
+  optional google.protobuf.Timestamp decided_at = 8 [(w17.field) = { type: DATETIME }];
+  string decided_by = 9 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+}

@@ -1,0 +1,122 @@
+// Package workeradmit is a relay's answer to "may this machine work here".
+//
+// It holds the decisions the control plane has taken and the machines still
+// waiting for one. All of it is in memory and none of it survives a restart —
+// which is safe only because the control plane sends the COMPLETE sets on
+// every contact, so a relay that just came up converges on the next exchange
+// rather than having to recover anything.
+package workeradmit
+
+import "sync"
+
+// Decision is what a relay does with a connection.
+type Decision int
+
+const (
+	// Wait — not decided about. The machine is recorded as pending and given
+	// NO work. It keeps reconnecting; that is normal and is how it eventually
+	// gets picked up.
+	Wait Decision = iota
+	// Admit — approved. It may receive work.
+	Admit
+	// Reject — denied. The connection is dropped and stays dropped.
+	Reject
+)
+
+// Pending is what a relay can say about a machine nobody has decided about.
+// The fingerprint is evidence; the rest is whatever the machine claimed.
+type Pending struct {
+	Fingerprint string
+	Name        string
+	DeviceID    string
+}
+
+// Registry is one relay's admission state.
+type Registry struct {
+	mu       sync.Mutex
+	approved map[string]struct{}
+	denied   map[string]struct{}
+	pending  map[string]Pending
+}
+
+func New() *Registry {
+	return &Registry{
+		approved: map[string]struct{}{},
+		denied:   map[string]struct{}{},
+		pending:  map[string]Pending{},
+	}
+}
+
+// Offer records a connecting machine and says what to do with it.
+//
+// The fingerprint comes from the TLS handshake — the one thing here the
+// machine proved rather than asserted. Name and deviceID are carried only so
+// an operator has something readable to look at, and they authorise nothing:
+// two machines may claim the same name, and the registry will not care.
+func (r *Registry) Offer(fingerprint, name, deviceID string) Decision {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Denied is checked FIRST. If a fingerprint somehow appears in both sets —
+	// a control plane bug, a half-applied edit — the safe reading is the
+	// restrictive one, and a machine wrongly kept out is a support ticket
+	// while one wrongly let in is an incident.
+	if _, ok := r.denied[fingerprint]; ok {
+		delete(r.pending, fingerprint)
+		return Reject
+	}
+	if _, ok := r.approved[fingerprint]; ok {
+		delete(r.pending, fingerprint)
+		return Admit
+	}
+	r.pending[fingerprint] = Pending{Fingerprint: fingerprint, Name: name, DeviceID: deviceID}
+	return Wait
+}
+
+// Apply replaces both decision sets with what the control plane sent.
+//
+// WHOLESALE, not merged. Removing a fingerprint from the approved list is how
+// an approval is withdrawn, and a merge would make that impossible to express
+// — the relay would keep admitting a machine the registry no longer lists,
+// with nothing to say so.
+func (r *Registry) Apply(approved, denied []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.approved = make(map[string]struct{}, len(approved))
+	for _, f := range approved {
+		r.approved[f] = struct{}{}
+		// A machine that was waiting has been decided about; it is no longer
+		// news for the next sweep.
+		delete(r.pending, f)
+	}
+	r.denied = make(map[string]struct{}, len(denied))
+	for _, f := range denied {
+		r.denied[f] = struct{}{}
+		delete(r.pending, f)
+	}
+}
+
+// Pending lists the machines waiting for a decision, for the next exchange.
+func (r *Registry) Pending() []Pending {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Pending, 0, len(r.pending))
+	for _, p := range r.pending {
+		out = append(out, p)
+	}
+	return out
+}
+
+// Admitted reports whether a fingerprint may work right now. Used on every
+// piece of work, not just at connect: an approval withdrawn while a machine is
+// connected has to take effect without waiting for it to reconnect.
+func (r *Registry) Admitted(fingerprint string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.denied[fingerprint]; ok {
+		return false
+	}
+	_, ok := r.approved[fingerprint]
+	return ok
+}

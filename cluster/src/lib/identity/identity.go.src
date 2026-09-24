@@ -1,0 +1,142 @@
+// Package identity is a machine's own key pair and the fingerprint an operator
+// approves.
+//
+// Shared by the relay and the worker because they need the same thing for
+// opposite reasons: a relay prints its fingerprint so an operator can paste it
+// into the registry row, a worker prints its own so the operator can compare
+// it on the approval screen. One implementation, so the two can never disagree
+// about what a fingerprint IS.
+package identity
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// Identity is a machine's key pair and the fingerprint an operator approves.
+type Identity struct {
+	CertPEM     []byte
+	KeyPEM      []byte
+	Fingerprint string
+}
+
+// certLifetime is deliberately long.
+//
+// Expiry is NOT the revocation mechanism here — approval is. A short-lived
+// certificate would need a renewal credential the machine holds permanently,
+// which is the same secret with an extra step, and leaking it would put you
+// exactly where you started. So the key is long-lived and revocation is an
+// operator denying its fingerprint, which takes effect immediately and scopes
+// to one machine.
+const certLifetime = 10 * 365 * 24 * time.Hour
+
+// LoadOrCreateIdentity returns the machine's identity, generating one the
+// first time.
+//
+// IDEMPOTENT, and that is the whole point: the fingerprint an operator
+// approved must survive every restart, or approval would have to be repeated
+// and would stop meaning anything. A worker that regenerated its key on each
+// start would appear as a new pending machine forever.
+func LoadOrCreateIdentity(dir, name string) (Identity, error) {
+	certPath := filepath.Join(dir, name+".crt")
+	keyPath := filepath.Join(dir, name+".key")
+
+	certPEM, certErr := os.ReadFile(certPath)
+	keyPEM, keyErr := os.ReadFile(keyPath)
+	switch {
+	case certErr == nil && keyErr == nil:
+		fp, err := fingerprintOfPEM(certPEM)
+		if err != nil {
+			return Identity{}, fmt.Errorf("identity: %s is unreadable: %w", certPath, err)
+		}
+		return Identity{CertPEM: certPEM, KeyPEM: keyPEM, Fingerprint: fp}, nil
+	case os.IsNotExist(certErr) && os.IsNotExist(keyErr):
+		// Neither half exists — first run.
+	default:
+		// Exactly one half exists. REFUSED rather than regenerated: a
+		// half-written identity is the state a disk filling up leaves behind,
+		// and silently minting a new key there would make an approved machine
+		// come back as a stranger with no explanation.
+		return Identity{}, fmt.Errorf(
+			"identity: %s and %s must both exist or both be absent — found one of the two, "+
+				"which is a half-written identity; remove both to mint a new one "+
+				"(the new fingerprint then needs approving again)", certPath, keyPath)
+	}
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Identity{}, fmt.Errorf("identity: creating %s: %w", dir, err)
+	}
+	id, err := mint(name)
+	if err != nil {
+		return Identity{}, err
+	}
+	// The key is written 0600 and the directory 0700. Nothing here protects
+	// against a reader who is already root; it protects against the ordinary
+	// case of another account on a shared box.
+	if err := os.WriteFile(keyPath, id.KeyPEM, 0o600); err != nil {
+		return Identity{}, fmt.Errorf("identity: writing %s: %w", keyPath, err)
+	}
+	if err := os.WriteFile(certPath, id.CertPEM, 0o644); err != nil {
+		return Identity{}, fmt.Errorf("identity: writing %s: %w", certPath, err)
+	}
+	return id, nil
+}
+
+func mint(name string) (Identity, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return Identity{}, fmt.Errorf("identity: generating a key: %w", err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return Identity{}, fmt.Errorf("identity: generating a serial: %w", err)
+	}
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		// SELF-SIGNED, and there is no CA anywhere in this design. The
+		// fingerprint is what an operator approves, so a signature from an
+		// authority would add a second trust root that decides nothing.
+		Subject:   pkix.Name{CommonName: "w17-cluster-" + name},
+		NotBefore: now.Add(-time.Hour),
+		NotAfter:  now.Add(certLifetime),
+		KeyUsage:  x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{
+			x509.ExtKeyUsageClientAuth,
+		},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return Identity{}, fmt.Errorf("identity: creating a certificate: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return Identity{}, fmt.Errorf("identity: marshalling the key: %w", err)
+	}
+	sum := sha256.Sum256(der)
+	return Identity{
+		CertPEM:     pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		KeyPEM:      pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+		Fingerprint: hex.EncodeToString(sum[:]),
+	}, nil
+}
+
+func fingerprintOfPEM(certPEM []byte) (string, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return "", fmt.Errorf("not a PEM certificate")
+	}
+	sum := sha256.Sum256(block.Bytes)
+	return hex.EncodeToString(sum[:]), nil
+}

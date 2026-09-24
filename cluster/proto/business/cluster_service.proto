@@ -1,0 +1,208 @@
+syntax = "proto3";
+
+package w17.contrib.cluster;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+// ClusterService — ask for somewhere to run one task.
+//
+// The caller gets back an ADDRESS and a TICKET and then talks to the worker
+// directly. Nothing about the work itself passes through here: this service
+// never sees the request the worker will answer, never sees the response, and
+// carries no schema for either. That is what lets one plugin serve a pool of
+// compile workers and a pool of headless browsers without knowing the
+// difference between them.
+service ClusterService {
+  // ScheduleTask asks for a slot and streams progress until there is one.
+  //
+  // ─── Why a stream, and not "returns a ticket or an error" ───
+  //
+  // Because the caller's presence is the signal. A slot is held for whoever is
+  // waiting, and the only reliable way to know they are still waiting is that
+  // their connection is still open. Close the stream — because the caller
+  // cancelled, crashed, or hit its own deadline — and the place in the queue
+  // goes away with it, with nothing to time out and no reaper to write.
+  //
+  // A request/response API would need a second mechanism for that: a poll, a
+  // heartbeat, and a background sweep for the ones that stopped polling. All
+  // three exist only to reconstruct what an open connection already tells you.
+  //
+  // There is deliberately NO `CancelTask`. Cancelling is closing the stream.
+  rpc ScheduleTask(ScheduleTaskReq) returns (stream ScheduleTaskEvent) {}
+
+  // ─── The two methods below are each answered by exactly ONE side ───
+  //
+  // This service is served by the project AND by every relay, which works for
+  // ScheduleTask because the question means the same thing to both ("place
+  // this") and only the answer differs. Worker admission is not like that: one
+  // side holds the decisions, the other holds the connections.
+  //
+  // Rather than a second proto tree describing one conversation twice — which
+  // would drift, and whose drift would surface as an admission bug instead of
+  // a compile error — both methods live here and each side implements the one
+  // that is its own. The other returns Unimplemented, DELIBERATELY: an
+  // explicit refusal beats a method that quietly answers for the wrong side.
+
+  // CheckWorkers is the OPERATOR's action, answered by the PROJECT. It
+  // contacts every enabled relay, records whatever new machines they are
+  // holding, and returns what it found. A relay returns Unimplemented.
+  //
+  // Discovery is deliberately pulled by a human rather than swept in the
+  // background: the console is HA, so a sweep would run in every replica and
+  // need coordination to avoid duplicate rows and a thundering herd. The cost
+  // is that a worker connecting at 3am waits until somebody looks, which is
+  // the right trade for a pool whose machines are added on purpose.
+  rpc CheckWorkers(CheckWorkersReq) returns (CheckWorkersResp) {}
+
+  // ExchangeWorkers is answered by a RELAY. The project sends the fingerprints
+  // it has approved and receives the ones waiting. The project returns
+  // Unimplemented.
+  //
+  // One call, both directions, because the relay cannot start this
+  // conversation — the control plane dials out and nothing dials in. That
+  // constraint turns out to fix something else: a relay keeps its allow-list
+  // in memory and loses it on restart, and being handed the list on every
+  // contact means it rehydrates itself with no recovery path to write.
+  rpc ExchangeWorkers(ExchangeWorkersReq) returns (ExchangeWorkersResp) {}
+}
+
+message CheckWorkersReq {}
+
+message CheckWorkersResp {
+  // Machines seen for the first time on this sweep.
+  int32 discovered = 1;
+  // Machines waiting for a decision, including the ones already known. The
+  // number an operator acts on.
+  int32 pending_total = 2;
+  // Relays that could not be reached, by name. Reported rather than failed:
+  // one unreachable relay must not hide the workers every other relay is
+  // holding.
+  repeated string unreachable_relays = 3;
+}
+
+message ExchangeWorkersReq {
+  // Every fingerprint the registry has APPROVED for this relay. The complete
+  // list, not a delta: a relay that just restarted has nothing to apply a
+  // delta to, and sending the whole set makes the two states converge from any
+  // starting point.
+  repeated string approved_fingerprints = 1;
+
+  // Every fingerprint DENIED for this relay — also complete, for the same
+  // reason.
+  //
+  // Sent as well as the approved list, rather than left implicit in "not
+  // approved", because the two conditions call for different behaviour.
+  // Unapproved means WAIT: the machine reconnects and the operator has not
+  // looked yet. Denied means GO AWAY: the relay drops the connection and keeps
+  // dropping it, which is what makes a denial a revocation rather than a note
+  // in a table. A relay that knew only the approved set would leave a denied
+  // machine connected and idle forever, reported as pending on every sweep.
+  repeated string denied_fingerprints = 2;
+}
+
+message ExchangeWorkersResp {
+  repeated PendingWorker pending = 1;
+}
+
+// PendingWorker is what a relay knows about a machine that connected and has
+// not been decided about.
+//
+// The fingerprint is EVIDENCE — the handshake proved possession of the key.
+// The other two are whatever the worker said about itself, carried so an
+// operator has something readable to look at, and authorising nothing.
+message PendingWorker {
+  string cert_fingerprint = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string name = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string device_id = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+}
+
+message ScheduleTaskReq {
+  // Opaque caller-supplied label, shown to operators and recorded by the
+  // ledger when that feature is on. Never parsed — it exists so that a queue
+  // an operator is staring at during an incident has words in it instead of
+  // uuids.
+  string label = 1 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+
+  // Give up after this long without a slot. Zero means "wait as long as my own
+  // context allows", which is the common case: the caller already has a
+  // deadline and a second number that disagrees with it helps nobody.
+  int32 max_wait_seconds = 2 [(w17.field) = { type: NUMBER, gte: 0 }];
+}
+
+// One event on the scheduling stream. Exactly one field is set.
+//
+// `queued` may arrive many times, or never — a pool with room grants
+// immediately and the caller sees a single `granted`. `granted` is always
+// last: the server closes the stream after it, because everything the caller
+// needs is in it and the connection's remaining job (holding the queue place)
+// is done.
+message ScheduleTaskEvent {
+  oneof event {
+    TaskQueued queued = 1;
+    TaskGranted granted = 2;
+  }
+}
+
+message TaskQueued {
+  // Which relay is holding the place. Named because an operator watching a
+  // caller wait needs to know WHERE it is waiting before they can do anything
+  // about it.
+  string relay = 1;
+
+  // 1-based place in that relay's queue. Advisory: it can only go down, but it
+  // can go down faster than a task-per-second if tasks ahead give up.
+  //
+  // The caller stays on the relay it was queued at and is never migrated to a
+  // relay that emptied out sooner. Migration would mean the position jumps to
+  // an unrelated number on a different queue, and a progress indicator that can
+  // go UP is worse than a slow one — the caller cannot tell progress from
+  // churn.
+  int32 position = 2;
+}
+
+message TaskGranted {
+  string relay = 1;
+
+  // `host:port` to send the work to — the relay's PROXY endpoint, reported by
+  // the relay itself rather than read from `Relay.url`.
+  //
+  // Two reasons it cannot be the registered url. That one addresses the
+  // MANAGEMENT half, which is a different port. And a process behind NAT does
+  // not know how the world reaches it, so the externally-visible address is
+  // local configuration on the relay — the one place that can be told the
+  // truth about it.
+  string address = 2;
+
+  // Lowercase hex SHA-256 of the certificate the relay's WORK endpoint
+  // presents, so the caller can pin what answers at `address`.
+  //
+  // Without it the ticket below travels to whatever holds that address, and
+  // the ticket is a bearer credential — an impostor would receive both it and
+  // the work. The caller cannot look this up: it knows the relay only by an
+  // address the control plane just gave it.
+  string cert_fingerprint = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
+
+  // Single-use credential for this one task. The relay minted it, holds it in
+  // memory, and forgets it the moment it is redeemed — so a replay finds
+  // nothing, and a relay restart invalidates every outstanding ticket at once
+  // (which is correct: the slots they named are gone too).
+  string ticket = 3 [(w17.field) = { type: SECRET, max_len: 64 }];
+
+  // TIME-TO-CLAIM, not time-to-run.
+  //
+  // It bounds the gap between "the slot is yours" and the worker connection
+  // appearing. Miss it and the relay takes the slot back and gives it to the
+  // next waiter — otherwise a caller that died between the grant and the
+  // connection would hold capacity nobody can use and nobody will release.
+  //
+  // Once connected, the slot is held by the CONNECTION and this deadline stops
+  // applying. A task is allowed to run for as long as it runs; capacity is
+  // returned when the connection ends. Conflating the two would have put a
+  // wall-clock cap on every job in the pool, which is a scheduling policy the
+  // caller never asked for.
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+}

@@ -1,0 +1,103 @@
+package handlers
+
+import (
+	"context"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+)
+
+// NewRelayStore adapts the bundle's generated clients to the seam the
+// scheduler uses. The handler is written against the interface so that the
+// scheduling rules can be tested against a store that fails on command; this
+// is the one implementation that talks to a database.
+func NewRelayStore(q pb.RelayQueryClient, m pb.RelayMutationClient) RelayStore {
+	return relayStore{q: q, m: m}
+}
+
+type relayStore struct {
+	q pb.RelayQueryClient
+	m pb.RelayMutationClient
+}
+
+func (s relayStore) ListEnabled(ctx context.Context) ([]Relay, error) {
+	resp, err := s.q.ListRelays(ctx, &pb.ListRelaysReq{EnabledOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Relay, 0, len(resp.GetRelays()))
+	for _, r := range resp.GetRelays() {
+		out = append(out, Relay{
+			ID:          r.GetId(),
+			Name:        r.GetName(),
+			URL:         r.GetUrl(),
+			Fingerprint: r.GetCertFingerprint(),
+		})
+	}
+	return out, nil
+}
+
+func (s relayStore) RecordReached(ctx context.Context, id string) error {
+	_, err := s.m.RecordRelayReached(ctx, &pb.RecordRelayReachedReq{Id: id, At: timestamppb.Now()})
+	return err
+}
+
+func (s relayStore) RecordFailed(ctx context.Context, id, msg string) error {
+	_, err := s.m.RecordRelayFailed(ctx, &pb.RecordRelayFailedReq{Id: id, Error: msg})
+	return err
+}
+
+// NewWorkerStore adapts the generated clients to the admission seam.
+func NewWorkerStore(q pb.WorkerQueryClient, m pb.WorkerMutationClient) WorkerStore {
+	return workerRegistry{q: q, m: m}
+}
+
+type workerRegistry struct {
+	q pb.WorkerQueryClient
+	m pb.WorkerMutationClient
+}
+
+func (s workerRegistry) Decisions(ctx context.Context, relayID string) ([]string, []string, error) {
+	approved, err := s.fingerprints(ctx, relayID, pb.WorkerState_WORKER_STATE_APPROVED)
+	if err != nil {
+		return nil, nil, err
+	}
+	denied, err := s.fingerprints(ctx, relayID, pb.WorkerState_WORKER_STATE_DENIED)
+	if err != nil {
+		// Both or neither. Sending an approved list without the denied one
+		// would have the relay REPLACE its denial set with nothing — which is
+		// how a half-failed sweep would quietly re-admit everyone who had been
+		// turned away.
+		return nil, nil, err
+	}
+	return approved, denied, nil
+}
+
+func (s workerRegistry) fingerprints(ctx context.Context, relayID string, state pb.WorkerState) ([]string, error) {
+	resp, err := s.q.FingerprintsByState(ctx, &pb.FingerprintsByStateReq{RelayId: relayID, State: state})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetFingerprints(), nil
+}
+
+func (s workerRegistry) RecordPending(ctx context.Context, relayID string, w *pb.PendingWorker) error {
+	_, err := s.m.RecordPendingWorker(ctx, &pb.RecordPendingWorkerReq{
+		CertFingerprint: w.GetCertFingerprint(),
+		Name:            w.GetName(),
+		DeviceId:        w.GetDeviceId(),
+		RelayId:         relayID,
+	})
+	return err
+}
+
+func (s workerRegistry) PendingCount(ctx context.Context) (int, error) {
+	resp, err := s.q.CountWorkersByState(ctx, &pb.CountWorkersByStateReq{
+		State: pb.WorkerState_WORKER_STATE_PENDING,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(resp.GetTotal()), nil
+}

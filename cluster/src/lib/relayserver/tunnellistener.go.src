@@ -1,0 +1,73 @@
+package relayserver
+
+import (
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+)
+
+// ServeTunnels accepts worker tunnels until lis is closed.
+//
+// A worker holds TWO connections to a relay: the Attach stream, which is its
+// availability, and this one, which carries work. They are separate because
+// admission happens before there is anything to carry — a machine has to be
+// able to connect, be seen, and wait, without being handed a socket the relay
+// would then have to police.
+func ServeTunnels(lis net.Listener, workers *workeradmit.Registry, backends *Backends, onError func(error)) error {
+	if onError == nil {
+		onError = func(error) {}
+	}
+	for {
+		c, err := lis.Accept()
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := acceptTunnel(c, workers, backends); err != nil {
+				_ = c.Close()
+				onError(err)
+			}
+		}()
+	}
+}
+
+func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends) error {
+	tc, ok := c.(*tls.Conn)
+	if !ok {
+		// The listener is supposed to be TLS-wrapped. A plain connection here
+		// means a misconfigured relay, and a tunnel with no identity would
+		// take work from anyone who found the port.
+		return errors.New("relay: a tunnel arrived without TLS — the listener must be wrapped")
+	}
+	if err := tc.Handshake(); err != nil {
+		return fmt.Errorf("relay: tunnel handshake: %w", err)
+	}
+	certs := tc.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return errors.New("relay: the tunnel presented no certificate, so it has no identity")
+	}
+	sum := sha256.Sum256(certs[0].Raw)
+	fp := hex.EncodeToString(sum[:])
+
+	// Checked HERE and not only at Attach, because approval can be withdrawn
+	// between the two: a worker that attached while approved and opened its
+	// tunnel a second later must not keep the tunnel if the decision changed.
+	if !workers.Admitted(fp) {
+		return fmt.Errorf("relay: %s opened a tunnel without being admitted", fp)
+	}
+
+	conn, err := tunnel.ClientOverConn(tc, "passthrough:///worker", func() {
+		backends.Remove(fp)
+	})
+	if err != nil {
+		return fmt.Errorf("relay: turning the tunnel around: %w", err)
+	}
+	backends.Add(fp, conn)
+	return nil
+}

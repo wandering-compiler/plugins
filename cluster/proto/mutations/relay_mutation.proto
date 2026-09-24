@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+// Cluster plugin — writing the relay registry.
+//
+// Two audiences write here and they must not be confused. An OPERATOR writes
+// configuration — url, fingerprint, enabled — through the backoffice. The
+// CONTROL PLANE writes observation — last_seen_at, last_error — as a side
+// effect of trying to use a relay. They are separate RPCs so that a rendered
+// admin form can never overwrite an observation with a stale value it happened
+// to have loaded, and so an observation can never silently re-enable a relay an
+// operator turned off.
+
+package w17.contrib.cluster;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message CreateRelayReq {
+  string name = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string url = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string cert_fingerprint = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+
+// The new row's id, and nothing else.
+//
+// Returning the whole Relay would mean projecting every column back through a
+// RETURNING clause, which invites the caller to treat a write's echo as the
+// current state — it is not, the moment anything else writes. The id is what
+// the caller cannot compute for itself; the rest is a GetRelay away.
+message CreateRelayResp {
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+
+message UpdateRelayReq {
+  string id = 1 [(w17.field) = { type: UUID }];
+  string name = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string url = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string cert_fingerprint = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  bool enabled = 5;
+}
+
+// Empty, for the reason CreateRelayResp returns only an id: the caller already
+// holds the id it just wrote to, and an echoed row would be a snapshot dressed
+// up as state.
+message UpdateRelayResp {}
+
+message DeleteRelayReq {
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+
+message DeleteRelayResp {}
+
+// Two RPCs rather than one with a `reached` flag, because the two writes touch
+// DIFFERENT columns and only one of them may move last_seen_at. A single
+// statement would have to express that conditionally, and "when did this last
+// work" is exactly the field a failure must not overwrite.
+message RecordRelayReachedReq {
+  string id = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp at = 2;
+}
+
+message RecordRelayReachedResp {}
+
+message RecordRelayFailedReq {
+  string id = 1 [(w17.field) = { type: UUID }];
+  string error = 2 [(w17.field) = { type: TEXT }];
+}
+
+message RecordRelayFailedResp {}
+
+service RelayMutation {
+  rpc CreateRelay(CreateRelayReq) returns (CreateRelayResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Relay "
+          "SET name = :name, url = :url, cert_fingerprint = :cert_fingerprint "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  rpc UpdateRelay(UpdateRelayReq) returns (UpdateRelayResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Relay "
+          "SET name = :name, url = :url, "
+          "    cert_fingerprint = :cert_fingerprint, enabled = :enabled "
+          "WHERE id = :id"
+      }
+    };
+  }
+
+  // Deletes rather than soft-deletes. `enabled = false` is how a relay is
+  // taken out of service and kept; delete means the operator is done with it,
+  // and a registry that accumulates tombstones stops being readable.
+  rpc DeleteRelay(DeleteRelayReq) returns (DeleteRelayResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "DELETE FROM @module.Relay WHERE id = :id"
+      }
+    };
+  }
+
+  // Success also CLEARS last_error: a relay that answers is not still failing,
+  // and a stale error beside a fresh last_seen_at sends an operator hunting a
+  // problem that fixed itself.
+  rpc RecordRelayReached(RecordRelayReachedReq) returns (RecordRelayReachedResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Relay "
+          "SET last_seen_at = :at, last_error = '' "
+          "WHERE id = :id"
+      }
+    };
+  }
+
+  rpc RecordRelayFailed(RecordRelayFailedReq) returns (RecordRelayFailedResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Relay "
+          "SET last_error = :error "
+          "WHERE id = :id"
+      }
+    };
+  }
+}

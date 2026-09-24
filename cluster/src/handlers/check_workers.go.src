@@ -1,0 +1,124 @@
+package handlers
+
+import (
+	"context"
+	"sort"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+)
+
+// WorkerStore is the seam onto the worker registry, wired by RegisterPlugin.
+type WorkerStore interface {
+	// Decisions returns the fingerprints approved and denied for one relay.
+	Decisions(ctx context.Context, relayID string) (approved, denied []string, err error)
+	// RecordPending is idempotent by fingerprint and must NOT reset a decision
+	// already taken — a denied machine keeps reconnecting, and returning it to
+	// pending on every sweep would make denial mean nothing.
+	RecordPending(ctx context.Context, relayID string, w *pb.PendingWorker) error
+	// PendingCount is the number of undecided machines across every relay.
+	PendingCount(ctx context.Context) (int, error)
+}
+
+// CheckWorkers contacts every enabled relay, hands over the decisions it is
+// owed, and records whatever machines it is holding.
+//
+// Pulled by an operator rather than swept in the background: the console is
+// HA, and a sweep would run in every replica needing coordination it does not
+// have. The cost is that a machine connecting at 3am waits until somebody
+// looks — the right trade for a pool whose workers are added on purpose.
+func (h *ClusterServiceHandler) CheckWorkers(
+	ctx context.Context, _ *pb.CheckWorkersReq,
+) (*pb.CheckWorkersResp, error) {
+	if h.Workers == nil {
+		return nil, status.Error(codes.FailedPrecondition, "cluster: no worker registry is wired")
+	}
+	relays, err := h.Relays.ListEnabled(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+	}
+
+	// Counted before and after rather than reported per row, because the
+	// recording statement is an idempotent upsert and cannot say whether it
+	// inserted. The difference is the honest answer to "what is new", and it
+	// stays honest if two operators press the button at once — the second one
+	// simply discovers nothing.
+	before, err := h.Workers.PendingCount(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cluster: cannot count pending workers: %v", err)
+	}
+
+	var unreachable []string
+	for _, r := range relays {
+		if err := h.exchangeOne(ctx, r); err != nil {
+			// Reported, not returned. One unreachable relay must not hide the
+			// machines every other relay is holding — which is exactly the
+			// moment an operator is most likely to be pressing this button.
+			unreachable = append(unreachable, r.Name)
+			h.note(ctx, r, err)
+			continue
+		}
+		h.noteOK(ctx, r)
+	}
+
+	after, err := h.Workers.PendingCount(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cluster: cannot count pending workers: %v", err)
+	}
+	sort.Strings(unreachable)
+
+	discovered := after - before
+	if discovered < 0 {
+		// Somebody decided about a worker while the sweep ran. "Negative
+		// discoveries" is not a thing to report.
+		discovered = 0
+	}
+	return &pb.CheckWorkersResp{
+		Discovered:        int32(discovered),
+		PendingTotal:      int32(after),
+		UnreachableRelays: unreachable,
+	}, nil
+}
+
+func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) error {
+	approved, denied, err := h.Workers.Decisions(ctx, r.ID)
+	if err != nil {
+		return err
+	}
+	conn, err := h.Dial(r.URL, r.Fingerprint)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	resp, err := pb.NewClusterServiceClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{
+		ApprovedFingerprints: approved,
+		DeniedFingerprints:   denied,
+	})
+	if err != nil {
+		return err
+	}
+	for _, w := range resp.GetPending() {
+		if w.GetCertFingerprint() == "" {
+			// A pending entry with no fingerprint has no identity to approve.
+			// Skipped rather than stored: a row an operator cannot act on is
+			// worse than no row.
+			continue
+		}
+		if err := h.Workers.RecordPending(ctx, r.ID, w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ExchangeWorkers is a RELAY's method. The project holds the decisions; it has
+// no relay to be one for.
+func (h *ClusterServiceHandler) ExchangeWorkers(
+	context.Context, *pb.ExchangeWorkersReq,
+) (*pb.ExchangeWorkersResp, error) {
+	return nil, status.Error(codes.Unimplemented,
+		"cluster: ExchangeWorkers is answered by a relay, not by the control plane")
+}

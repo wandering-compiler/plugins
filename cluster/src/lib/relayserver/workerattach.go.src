@@ -1,0 +1,164 @@
+package relayserver
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+)
+
+// WorkerServer is the relay's WORKER-facing half: a different audience, a
+// different credential, and therefore a different listener from the one the
+// control plane manages this relay on.
+//
+// The control plane is one known peer whose certificate is pinned. Workers are
+// a fleet that comes and goes, admitted by approval — so this side verifies
+// that a client certificate was presented and then asks the registry, rather
+// than checking it against anything.
+type WorkerServer struct {
+	workerpb.UnimplementedWorkerAttachServer
+
+	Workers *workeradmit.Registry
+
+	// PollInterval is how often a waiting worker re-checks whether it has been
+	// approved. Approval is a human looking at a screen, so this is seconds
+	// rather than milliseconds; it is a field so a test does not have to wait
+	// at human speed.
+	PollInterval time.Duration
+}
+
+// Attach admits, refuses, or parks a connecting worker, and holds the stream
+// open for as long as the worker is available.
+func (s *WorkerServer) Attach(
+	req *workerpb.AttachReq,
+	srv grpc.ServerStreamingServer[workerpb.AttachEvent],
+) error {
+	ctx := srv.Context()
+	fp, err := peerFingerprint(ctx)
+	if err != nil {
+		return err
+	}
+
+	switch s.Workers.Offer(fp, req.GetName(), req.GetDeviceId()) {
+	case workeradmit.Reject:
+		// The message names the fingerprint on purpose. A denied machine's
+		// operator is usually its owner, and "you were denied" without saying
+		// WHICH identity was denied is unactionable — especially on a box that
+		// has been reinstalled and is presenting a new key.
+		return status.Errorf(codes.PermissionDenied,
+			"relay: %s is denied; if that fingerprint is not the one you expect, "+
+				"this machine minted a new identity and needs approving again", fp)
+
+	case workeradmit.Admit:
+		if err := s.sendAdmitted(srv); err != nil {
+			return err
+		}
+		// And then HOLD. The stream is the worker's availability — the relay
+		// knows it is there because this is open — so returning here would
+		// close it, the worker would see EOF, report a disconnect and
+		// reconnect, forever, in a loop that looks like a flapping network.
+		return s.holdAdmitted(srv, fp)
+	}
+
+	// Waiting. The worker stays connected and does nothing, which is what puts
+	// it on the operator's screen — a machine that hung up after being told to
+	// wait would have to be caught mid-connection to be seen at all.
+	if err := srv.Send(&workerpb.AttachEvent{
+		Event: &workerpb.AttachEvent_Waiting{Waiting: &workerpb.Waiting{}},
+	}); err != nil {
+		return err
+	}
+
+	interval := s.PollInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return status.FromContextError(ctx.Err()).Err()
+		case <-tick.C:
+			// Re-offered rather than only checked, so a decision that arrived
+			// while this worker was parked also clears it from the pending
+			// list — otherwise it would keep being reported as news.
+			switch s.Workers.Offer(fp, req.GetName(), req.GetDeviceId()) {
+			case workeradmit.Reject:
+				return status.Errorf(codes.PermissionDenied, "relay: %s is denied", fp)
+			case workeradmit.Admit:
+				if err := s.sendAdmitted(srv); err != nil {
+					return err
+				}
+				return s.holdAdmitted(srv, fp)
+			}
+		}
+	}
+}
+
+// peerFingerprint reads the identity out of the TLS handshake.
+//
+// This is the only thing in the conversation the worker PROVED; everything in
+// AttachReq is a claim. A missing certificate is refused rather than treated
+// as an anonymous worker: the listener is supposed to require one, so its
+// absence means the server was misconfigured, and admitting on a
+// misconfiguration is how a whole fleet gets let in at once.
+func peerFingerprint(ctx context.Context) (string, error) {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.AuthInfo == nil {
+		return "", status.Error(codes.Unauthenticated,
+			"relay: the worker listener accepted a connection with no TLS information — "+
+				"it must require a client certificate")
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(tlsInfo.State.PeerCertificates) == 0 {
+		return "", status.Error(codes.Unauthenticated,
+			"relay: the worker presented no certificate, so it has no identity to approve")
+	}
+	sum := sha256.Sum256(tlsInfo.State.PeerCertificates[0].Raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func (s *WorkerServer) sendAdmitted(srv grpc.ServerStreamingServer[workerpb.AttachEvent]) error {
+	return srv.Send(&workerpb.AttachEvent{
+		Event: &workerpb.AttachEvent_Admitted{Admitted: &workerpb.Admitted{}},
+	})
+}
+
+// holdAdmitted keeps an admitted worker's stream open for as long as it stays
+// admitted.
+//
+// Two jobs, and the second is the one that is easy to miss: the open stream IS
+// the availability, and a decision can change while it is open. A worker
+// denied mid-attachment has to be told, or it keeps its tunnel and keeps
+// taking work until it next reconnects — which, for a healthy worker, is
+// never.
+func (s *WorkerServer) holdAdmitted(srv grpc.ServerStreamingServer[workerpb.AttachEvent], fp string) error {
+	ctx := srv.Context()
+	interval := s.PollInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return status.FromContextError(ctx.Err()).Err()
+		case <-tick.C:
+			if !s.Workers.Admitted(fp) {
+				return status.Errorf(codes.PermissionDenied,
+					"relay: %s is no longer admitted", fp)
+			}
+		}
+	}
+}
