@@ -535,7 +535,18 @@ message Role {
   // may not edit — and it is the predicate the seed's prune runs on,
   // which is why it must be a stored column rather than an inference
   // from "is this id in the current seed set".
-  string preset_key = 9 [(w17.field) = { type: SLUG, max_len: 100, null: true }];
+  //
+  // UNIQUE, because it is the row's IDENTITY and the seed now upserts on it
+  // (`upsert_on`). The seed used to key on `id`, which the generator derives
+  // from the declaration — so a change in how that derivation is spelled
+  // re-minted every id, the upsert matched nothing, and the INSERT collided
+  // with the unique over `name`, taking `stack build` down on any database
+  // old enough to hold the previous ids (marb #72, deinvo, 2026-09-24).
+  //
+  // NULL stays NULL-able and PostgreSQL treats NULLs as DISTINCT, so the
+  // customer's own rows — the whole point of this column — are untouched by
+  // the constraint: any number of them may coexist.
+  string preset_key = 9 [(w17.field) = { type: SLUG, max_len: 100, null: true, unique: true }];
 
   // display_name — the CUSTOMER-owned label. Blank falls back to
   // `name`.
