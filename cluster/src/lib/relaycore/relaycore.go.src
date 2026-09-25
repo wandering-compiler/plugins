@@ -44,23 +44,42 @@ type waiter struct {
 
 // Pool is one relay's capacity and the queue in front of it.
 type Pool struct {
-	capacity int
-	ttl      time.Duration
-	now      func() time.Time
-	newID    func() string
+	// ceiling is the relay's own upper bound, or 0 for none. The EFFECTIVE
+	// capacity is what the attached workers add up to, capped by this.
+	ceiling int
+	ttl     time.Duration
+	now     func() time.Time
+	newID   func() string
 
-	mu      sync.Mutex
-	inUse   int
-	tickets map[string]*time.Timer
-	queue   []*waiter
-	closed  bool
+	mu sync.Mutex
+	// capacity is DERIVED: SetCapacity is called by whatever tracks the
+	// attached workers, and it starts at zero because a relay with nobody
+	// attached can run nothing.
+	//
+	// It used to be a static RELAY_CAPACITY, which meant a relay with zero
+	// workers happily granted its full complement of slots. Every one of those
+	// callers was told TaskGranted — success, by the contract — and only found
+	// out at the proxy, with "the ticket was valid but no admitted worker is
+	// attached right now". A grant is supposed to BE a slot; for a pool whose
+	// machines come and go, that was not an edge case but the normal morning
+	// (marb, 2026-09-25).
+	capacity int
+	inUse    int
+	tickets  map[string]*time.Timer
+	queue    []*waiter
+	closed   bool
 }
 
-// Options configures a Pool. Zero values are refused rather than defaulted:
-// a capacity of zero is a relay that can never serve anything, and a TTL of
-// zero is a ticket that expires before it can be used — both are almost
-// certainly a config that did not load.
+// Options configures a Pool.
+//
+// A zero TTL is still refused — a ticket that expires before it can be used is
+// almost certainly a config that did not load. Capacity is different now: it
+// is a CEILING, it is optional, and zero means "whatever the workers add up
+// to". A relay that wants to cap itself below its fleet (bandwidth, a shared
+// box) sets it; most do not.
 type Options struct {
+	// Capacity is the relay's own upper bound, or 0 for none. It is not the
+	// capacity — SetCapacity supplies that from the attached workers.
 	Capacity  int
 	TicketTTL time.Duration
 	// Now and NewID are seams for tests. Nil uses the real ones.
@@ -69,18 +88,18 @@ type Options struct {
 }
 
 func New(o Options) (*Pool, error) {
-	if o.Capacity <= 0 {
-		return nil, fmt.Errorf("relaycore: capacity must be positive, got %d", o.Capacity)
+	if o.Capacity < 0 {
+		return nil, fmt.Errorf("relaycore: capacity ceiling cannot be negative, got %d", o.Capacity)
 	}
 	if o.TicketTTL <= 0 {
 		return nil, fmt.Errorf("relaycore: ticket TTL must be positive, got %s", o.TicketTTL)
 	}
 	p := &Pool{
-		capacity: o.Capacity,
-		ttl:      o.TicketTTL,
-		now:      o.Now,
-		newID:    o.NewID,
-		tickets:  map[string]*time.Timer{},
+		ceiling: o.Capacity,
+		ttl:     o.TicketTTL,
+		now:     o.Now,
+		newID:   o.NewID,
+		tickets: map[string]*time.Timer{},
 	}
 	if p.now == nil {
 		p.now = time.Now
@@ -210,6 +229,32 @@ func (p *Pool) promoteLocked() {
 		w.done = true
 	}
 	p.notifyLocked()
+}
+
+// SetCapacity reports how much the attached workers can take right now.
+//
+// Called on every change to the fleet — a worker attaches, leaves, drains or
+// reports itself unhealthy — and it promotes immediately, so a queued caller
+// is granted the moment a machine shows up rather than on the next arrival.
+//
+// Shrinking below what is in use is normal and safe: the loop below only ever
+// promotes while there is room, so a shrunk pool simply stops granting until
+// the work in flight drains. Nothing is revoked — a ticket already handed out
+// is a promise, and taking it back would break the contract to fix an estimate.
+func (p *Pool) SetCapacity(n int) {
+	if n < 0 {
+		n = 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ceiling > 0 && n > p.ceiling {
+		n = p.ceiling
+	}
+	if n == p.capacity {
+		return
+	}
+	p.capacity = n
+	p.promoteLocked()
 }
 
 func (p *Pool) expire(id string) {

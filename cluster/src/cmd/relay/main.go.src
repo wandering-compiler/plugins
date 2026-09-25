@@ -91,7 +91,8 @@ func run() error {
 			"the fingerprint on the relay's row, not an expiry")
 	fs.StringVar(&cfg.controlPin, "control-plane-fingerprint", os.Getenv("RELAY_CONTROL_PLANE_FINGERPRINT"),
 		"lowercase hex SHA-256 of the control plane's client certificate; nothing else may manage this relay")
-	fs.IntVar(&cfg.capacity, "capacity", envInt("RELAY_CAPACITY", 1), "how many tasks may run here at once")
+	fs.IntVar(&cfg.capacity, "capacity", envInt("RELAY_CAPACITY", 0),
+		"OPTIONAL ceiling on concurrent tasks; 0 means whatever the attached workers add up to")
 	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("RELAY_TICKET_TTL", 30*time.Second),
 		"how long a granted ticket stays claimable — TIME TO CLAIM, not a cap on how long work may run")
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -146,6 +147,15 @@ func run() error {
 	})))
 	workers := workeradmit.New()
 	backends := relayserver.NewBackends()
+	// Capacity comes from the FLEET, and this is the wire that carries it: a
+	// worker attaching, draining, going unhealthy or hanging up changes the
+	// total, and the pool promotes whoever is queued as soon as it does.
+	//
+	// Without it the relay is back to granting against a number that has no
+	// relationship to the machines present — which meant an empty relay handed
+	// out its full complement of tickets and every caller found out at the
+	// proxy (marb, 2026-09-25).
+	backends.OnCapacityChange(pool.SetCapacity)
 	// MANAGEMENT ONLY. This server's TLS pins the control plane, so nothing a
 	// worker holds can complete its handshake — registering the worker-facing
 	// service here would have published it on a port no worker can reach,
@@ -184,7 +194,13 @@ func run() error {
 
 	// The WORKER-ATTACH server: gRPC, worker TLS, its own port.
 	attachSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(workerTLS)))
-	workerpb.RegisterWorkerAttachServer(attachSrv, &relayserver.WorkerServer{Workers: workers})
+	// Backends is handed over so a worker's declared slots and its readiness
+	// land where scheduling can see them. The attach stream and the tunnel are
+	// separate connections; this is where the two halves meet.
+	workerpb.RegisterWorkerAttachServer(attachSrv, &relayserver.WorkerServer{
+		Workers:  workers,
+		Backends: backends,
+	})
 	attachLis, err := net.Listen("tcp", cfg.attachListen)
 	if err != nil {
 		return fmt.Errorf("listening for worker attach on %s: %w", cfg.attachListen, err)

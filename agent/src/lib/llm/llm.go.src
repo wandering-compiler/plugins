@@ -306,6 +306,40 @@ func usageFrom(res *responses.Response) Usage {
 // runs against a live model because the failure named neither the field nor
 // the status — so the summary is now built here, where the provider's type is
 // known, and the full error is logged by the caller.
+// ProviderLogLine is what the CALLER may log: everything ProviderFault gives a
+// caller, plus the request URL — and nothing else.
+//
+// It exists because "the whole error goes to the log, where the URL is
+// acceptable" was true about the URL and wrong about the rest. The full text
+// also carries the RESPONSE BODY, which this very file records as sometimes
+// quoting the prompt — so `%v` on a provider error put user input into the
+// bundle's log, on a line whose comment justified only the URL (marb #74/2).
+//
+// A log is not a safe place for a prompt: it is shipped, aggregated and kept
+// far longer than the request, and nobody reading it asked for the content.
+// The classification, the status and the URL are what a bisect needs, and they
+// are all here.
+//
+// Falls back to the error's own text for a non-provider error — a transport or
+// context failure carries no body and is the caller's only clue.
+func ProviderLogLine(err error) string {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) {
+		return err.Error()
+	}
+	parts := make([]string, 0, 5)
+	if summary, ok := ProviderFault(err); ok {
+		parts = append(parts, summary)
+	}
+	if req := apiErr.Request; req != nil && req.URL != nil {
+		parts = append(parts, "url "+req.URL.String())
+	}
+	if len(parts) == 0 {
+		return "provider error (no classification; body withheld)"
+	}
+	return strings.Join(parts, ", ") + " (body withheld: it can quote the prompt)"
+}
+
 func ProviderFault(err error) (summary string, ok bool) {
 	var apiErr *openai.Error
 	if !errors.As(err, &apiErr) {

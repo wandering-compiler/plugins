@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -29,6 +30,11 @@ type WorkerServer struct {
 
 	Workers *workeradmit.Registry
 
+	// Backends is where a worker's declared capacity and readiness land, so
+	// scheduling can see them. Optional: nil means nothing records profiles,
+	// which is the shape the admission-only tests use.
+	Backends *Backends
+
 	// PollInterval is how often a waiting worker re-checks whether it has been
 	// approved. Approval is a human looking at a screen, so this is seconds
 	// rather than milliseconds; it is a field so a test does not have to wait
@@ -38,15 +44,46 @@ type WorkerServer struct {
 
 // Attach admits, refuses, or parks a connecting worker, and holds the stream
 // open for as long as the worker is available.
+//
+// The stream is bidirectional: the worker opens with an announcement and may
+// keep talking, which is how it drains or reports itself unhealthy without
+// dropping the tunnel its running work is travelling over.
 func (s *WorkerServer) Attach(
-	req *workerpb.AttachReq,
-	srv grpc.ServerStreamingServer[workerpb.AttachEvent],
+	srv grpc.BidiStreamingServer[workerpb.WorkerMessage, workerpb.AttachEvent],
 ) error {
 	ctx := srv.Context()
 	fp, err := peerFingerprint(ctx)
 	if err != nil {
 		return err
 	}
+
+	first, err := srv.Recv()
+	if err != nil {
+		return err
+	}
+	req := first.GetAnnounce()
+	if req == nil {
+		// Refused rather than defaulted. A status before an announcement is
+		// about a worker that has not said what it is, and inventing an empty
+		// announcement would put a nameless machine on the approval screen.
+		return status.Error(codes.InvalidArgument,
+			"relay: the first message on an attach stream must be the announcement")
+	}
+
+	// One attachment, one generation. Every profile write below carries it, so
+	// a reconnect that overtakes this stream's unwind is not erased by it.
+	att := s.newAttachment(fp, req.GetSlots())
+	defer att.close()
+	// The worker's OWN answer, as of the announcement. Taken from the
+	// announcement rather than waiting for a first status, so a machine that
+	// came up already draining is never briefly counted as ready.
+	att.setWorkerReady(req.GetReadiness() == workerpb.WorkerStatus_READY)
+
+	// Everything the worker says after the announcement, for as long as it is
+	// connected. Runs alongside the admission logic below rather than inside
+	// it, because a worker may drain while it is still waiting to be approved
+	// and the two conversations do not take turns.
+	go att.readStatuses(srv)
 
 	switch s.Workers.Offer(fp, req.GetName(), req.GetDeviceId()) {
 	case workeradmit.Reject:
@@ -59,7 +96,8 @@ func (s *WorkerServer) Attach(
 				"this machine minted a new identity and needs approving again", fp)
 
 	case workeradmit.Admit:
-		if err := s.sendAdmitted(srv); err != nil {
+		att.setAdmitted(true)
+		if err := s.sendAdmitted(srv, req.GetSlots()); err != nil {
 			return err
 		}
 		// And then HOLD. The stream is the worker's availability — the relay
@@ -96,7 +134,8 @@ func (s *WorkerServer) Attach(
 			case workeradmit.Reject:
 				return status.Errorf(codes.PermissionDenied, "relay: %s is denied", fp)
 			case workeradmit.Admit:
-				if err := s.sendAdmitted(srv); err != nil {
+				att.setAdmitted(true)
+				if err := s.sendAdmitted(srv, req.GetSlots()); err != nil {
 					return err
 				}
 				return s.holdAdmitted(srv, fp)
@@ -128,9 +167,102 @@ func peerFingerprint(ctx context.Context) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (s *WorkerServer) sendAdmitted(srv grpc.ServerStreamingServer[workerpb.AttachEvent]) error {
+// attachment is one worker's stream, and the single place its two independent
+// answers are combined.
+//
+// A worker contributes capacity only when BOTH are true: the operator admitted
+// it, and it says it wants work. They arrive from different places and change
+// independently — approval from a human on a screen, readiness from the
+// machine — so neither can be folded into the other.
+//
+// Admission being part of it is not a detail. capacityLocked sums over
+// profiles and knows nothing about approval, so a profile published before
+// admission would make a PENDING worker raise the relay's capacity: callers
+// would be granted tickets and then refused at the proxy, because take() does
+// check admission. That is the same "a grant is not a slot" defect this whole
+// change exists to remove, re-entering through the other door (caught in
+// review on PR #9).
+type attachment struct {
+	b     *Backends
+	fp    string
+	gen   uint64
+	slots uint32
+
+	mu       sync.Mutex
+	admitted bool
+	ready    bool
+}
+
+func (s *WorkerServer) newAttachment(fp string, slots uint32) *attachment {
+	a := &attachment{fp: fp, slots: slots}
+	if s.Backends != nil {
+		a.b = s.Backends
+		a.gen = s.Backends.NewAttachment()
+	}
+	return a
+}
+
+func (a *attachment) setAdmitted(v bool) {
+	a.mu.Lock()
+	a.admitted = v
+	a.mu.Unlock()
+	a.publish()
+}
+
+func (a *attachment) setWorkerReady(v bool) {
+	a.mu.Lock()
+	a.ready = v
+	a.mu.Unlock()
+	a.publish()
+}
+
+func (a *attachment) publish() {
+	if a.b == nil {
+		return
+	}
+	a.mu.Lock()
+	ready := a.admitted && a.ready
+	a.mu.Unlock()
+	a.b.SetProfile(a.fp, a.gen, a.slots, ready)
+}
+
+func (a *attachment) close() {
+	if a.b != nil {
+		a.b.ClearProfile(a.fp, a.gen)
+	}
+}
+
+// readStatuses applies every status update until the stream ends.
+//
+// Errors end it silently: a failed Recv means the worker is gone, and the
+// admission half owns reporting that. The deferred close on the way out of
+// Attach is what stops the fleet counting a machine that stopped talking.
+func (a *attachment) readStatuses(
+	srv grpc.BidiStreamingServer[workerpb.WorkerMessage, workerpb.AttachEvent],
+) {
+	for {
+		msg, err := srv.Recv()
+		if err != nil {
+			return
+		}
+		st := msg.GetStatus()
+		if st == nil {
+			// A second announcement, or an empty message. Ignored rather than
+			// fatal: the identity is the certificate and cannot be re-declared,
+			// so there is nothing here to act on and nothing worth killing a
+			// live worker's stream over.
+			continue
+		}
+		a.setWorkerReady(st.GetReadiness() == workerpb.WorkerStatus_READY)
+	}
+}
+
+func (s *WorkerServer) sendAdmitted(
+	srv grpc.BidiStreamingServer[workerpb.WorkerMessage, workerpb.AttachEvent],
+	slots uint32,
+) error {
 	return srv.Send(&workerpb.AttachEvent{
-		Event: &workerpb.AttachEvent_Admitted{Admitted: &workerpb.Admitted{}},
+		Event: &workerpb.AttachEvent_Admitted{Admitted: &workerpb.Admitted{Slots: slots}},
 	})
 }
 
@@ -142,7 +274,10 @@ func (s *WorkerServer) sendAdmitted(srv grpc.ServerStreamingServer[workerpb.Atta
 // denied mid-attachment has to be told, or it keeps its tunnel and keeps
 // taking work until it next reconnects — which, for a healthy worker, is
 // never.
-func (s *WorkerServer) holdAdmitted(srv grpc.ServerStreamingServer[workerpb.AttachEvent], fp string) error {
+func (s *WorkerServer) holdAdmitted(
+	srv grpc.BidiStreamingServer[workerpb.WorkerMessage, workerpb.AttachEvent],
+	fp string,
+) error {
 	ctx := srv.Context()
 	interval := s.PollInterval
 	if interval <= 0 {

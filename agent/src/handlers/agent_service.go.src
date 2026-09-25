@@ -75,6 +75,13 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		// that drops them is wrong in the direction nobody checks. The token
 		// counts are whatever the provider managed to report — usually
 		// nothing, which is what `measured` is for.
+		// A request the LLM layer refused BEFORE calling the provider is not a
+		// failed call: no tokens were spent and nothing was unavailable.
+		// Recording one invents spend, and `Unavailable` sends the caller to the
+		// provider's status page for what is an invalid argument (marb #74/3).
+		if llm.IsPreflight(err) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 		h.recordUsage(req, m.ID, out, OutcomeFailed, startedAt)
 		// The provider's own text is NOT forwarded whole: it renders the
 		// deployment URL and, on some failures, fragments of the prompt, and
@@ -87,9 +94,15 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		// the status — the same shape as the `<DOMAIN>` placeholder they
 		// reported earlier: the first line an operator sees, saying nothing.
 		//
-		// So: the whole error goes to the log, where the URL is acceptable,
-		// and the provider's own CLASSIFICATION goes to the caller.
-		log.Printf("agent: model call failed (model %q): %v", m.ID, err)
+		// So: the provider's own CLASSIFICATION goes to the caller, and the
+		// classification PLUS the URL goes to the log.
+		//
+		// Not the whole error, which is what this said and did for a day. The
+		// full text also carries the response BODY, and llm.go records that it
+		// sometimes quotes the prompt — so `%v` put user input into a log that
+		// is shipped, aggregated and kept far longer than the request (marb
+		// #74/2). The justification covered the URL and the body rode along.
+		log.Printf("agent: model call failed (model %q): %s", m.ID, llm.ProviderLogLine(err))
 		return nil, status.Error(codes.Unavailable, modelCallFailure(err))
 	}
 	h.recordUsage(req, m.ID, out, OutcomeOK, startedAt)

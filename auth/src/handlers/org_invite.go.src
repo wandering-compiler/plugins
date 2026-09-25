@@ -356,6 +356,13 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	if err != nil {
 		return nil, err
 	}
+	// Before the claim, not after. The check is about the CALLER's own
+	// account, so refusing here leaks nothing about whether an invitation
+	// exists — and running it after a successful claim would have consumed
+	// the invitation to refuse it.
+	if err := inviteVerifiedEmailGate(ctx, h, userID); err != nil {
+		return nil, err
+	}
 
 	var tx *distx.TxHandle
 	txCtx := ctx

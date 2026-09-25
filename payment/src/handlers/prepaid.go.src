@@ -85,36 +85,6 @@ func (h *PaymentServiceHandler) currentBalance(ctx context.Context, userID strin
 	return &pb.CreditView{UserId: userID, Balance: balance}, nil
 }
 
-// isPositiveDecimal reports whether s is a non-zero, non-negative
-// decimal string (digits + at most one dot). Grant/spend take an
-// unsigned amount; the sign is the handler's to apply.
-func isPositiveDecimal(s string) bool {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return false
-	}
-	dots, nonZero := 0, false
-	for _, r := range s {
-		switch {
-		case r >= '1' && r <= '9':
-			nonZero = true
-		case r == '0':
-		case r == '.':
-			dots++
-		default:
-			return false
-		}
-	}
-	return dots <= 1 && nonZero
-}
-
-func orDefault(s, def string) string {
-	if strings.TrimSpace(s) == "" {
-		return def
-	}
-	return s
-}
-
 // TopUpCredit funds a credit top-up: charge the principal via the
 // provider and record a pending CreditTopup. The credit itself is
 // granted when the payment-succeeded webhook fires

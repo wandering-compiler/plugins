@@ -98,8 +98,8 @@ sandboxes:
         value: "clusterrelay:9000"
         description: "What callers are told to send work to. The in-network name, because that is how a sibling service reaches this sandbox — a relay is TOLD its externally visible address, it cannot discover one."
       - name: RELAY_CAPACITY
-        value: "2"
-        description: "Tasks that may run here at once. Two rather than one so a dev can see a queue form."
+        value: "0"
+        description: "OPTIONAL ceiling on tasks running here at once; 0 (the default) means the relay carries whatever its attached workers add up to. A worker reports its own slot count when it attaches, because how many sessions a machine holds is a property of the machine. Set this only to cap a relay BELOW its fleet — a shared box, or a bandwidth limit. It used to be the capacity itself, which meant a relay with no workers cheerfully granted two tickets and both callers failed at the proxy."
       - name: RELAY_CONTROL_PLANE_FINGERPRINT
         value: ""
         description: "REQUIRED, and deliberately empty: the relay refuses to start without it. Set it to the fingerprint of the client certificate this project's control plane presents (OPS_CLUSTER_CLIENT_CERT_PATH). Nothing else may manage this relay."

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -72,18 +73,32 @@ type ClusterServiceHandler struct {
 	// pool never falling through to a healthy one.
 	DialTimeout time.Duration
 
-	// inflight counts streams this process is currently proxying, per relay
-	// id. It is the load signal used to choose between relays, and it is
-	// deliberately LOCAL knowledge: this process knows exactly what it placed
-	// and nothing about what another console replica placed.
+	// inflight counts callers this process is currently holding open against a
+	// relay, per relay id. LOCAL knowledge on purpose: this process knows what
+	// it placed and nothing about another console replica.
 	//
-	// That makes it a heuristic, not a capacity model, and it is the right one
-	// for phase 1 — it costs no extra round trip, and it cannot be stale,
-	// which a reported capacity always can be. When it guesses wrong the
-	// consequence is a longer queue on one relay, not a failure: the relay
-	// queues rather than refusing, so a bad choice is slow and never wrong.
+	// ⚠️ IT COUNTS QUEUED CALLERS, NOT RUNNING WORK, and the comment here used
+	// to claim otherwise. `Granted` is terminal for proxyOne, so `leave` runs
+	// the moment a slot is handed out — everything after that happens on the
+	// data path, which the control plane has left by design and cannot see.
+	// A caller that is granted immediately is therefore counted for the
+	// duration of a round trip and then forgotten.
+	//
+	// So on a pool below capacity every relay reads zero, and the choice falls
+	// entirely to the tiebreak. It is still worth having: above capacity the
+	// queues are exactly what this process is holding, and that is real.
 	mu       sync.Mutex
 	inflight map[string]int
+
+	// rotate breaks ties, and carries the spread on an idle pool.
+	//
+	// The tiebreak used to be the relay NAME, which is stable and therefore
+	// always picks the same relay — so below capacity, where every load is
+	// zero, the alphabetically first relay took every task and the rest idled
+	// (marb, 2026-09-25). For a pool whose POINT is spreading work over
+	// several machines and addresses, that turned the feature off during
+	// exactly the conditions it is normally in.
+	rotate atomic.Uint64
 }
 
 func (h *ClusterServiceHandler) enter(id string) {

@@ -908,10 +908,24 @@ message OrgMembership {
 // No token column, deliberately. The sibling token tables carry a hashed
 // secret because possession of the secret IS the proof; here the proof is
 // possession of the ADDRESS, checked at acceptance against the authenticated
-// account's email. That leaves a window — someone who guesses an invited
-// address can register it first — which closes when `email_verification` is
-// enabled, and is accepted until then rather than papered over with a secret
-// that would have to be delivered out of band anyway.
+// account's email. That leaves a window: someone who guesses an invited
+// address and registers it first inherits the membership and the role.
+//
+// ⚠️ This comment used to say the window "closes when `email_verification` is
+// enabled". IT DOES NOT, and did not on the day it was written. That feature
+// adds a column and two RPCs; it blocks nothing. A project could turn it on,
+// verify nobody, and be told by this file that it was covered — which is what
+// happened: a consumer measured 19 accounts of 19 with the column NULL and
+// asked which side was supposed to enforce it (marb #77).
+//
+// What closes it today is `invite_requires_verified_email`, which refuses an
+// acceptance from an unverified account. It is off by default, so the weak
+// proof is still the shipped behaviour and is now named rather than implied.
+//
+// What closes it PROPERLY is moving the proof off the address and onto the
+// link — a single-use token on the invitation, which also removes the need to
+// verify anything. That is a model change and it is written up rather than
+// guessed at: docs/decisions/invite-proof-belongs-on-the-link.md.
 //
 // `role` is a Role.name, not free text: accepting writes BOTH the
 // OrgMembership row (carrying this name as its label) and the UserRole grant

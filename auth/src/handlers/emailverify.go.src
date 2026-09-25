@@ -7,6 +7,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
@@ -112,4 +114,45 @@ func (h *AuthServiceHandler) consumeAndMarkVerified(txCtx context.Context, token
 		return err
 	}
 	return nil
+}
+
+// init installs the invitation gate. This file is staged only when
+// `email_verification` is active, which is what makes the field reference
+// below safe to compile — `User.email_verified_at` does not exist otherwise.
+func init() {
+	inviteVerifiedEmailGate = inviteVerifiedEmailGateImpl
+}
+
+// MsgInviteNeedsVerifiedEmail is what the person accepting is told.
+//
+// It is about the CALLER's OWN account and says nothing about whether an
+// invitation exists, so it does not reopen the probe `errInviteInvalid`
+// exists to close. Being specific is the point: "that invitation is not
+// valid" would send somebody to ask an admin to re-send a perfectly good
+// invitation, when what they have to do is confirm their address.
+//
+//w17:msgid
+const MsgInviteNeedsVerifiedEmail = "Confirm your email address before accepting this invitation."
+
+// inviteVerifiedEmailGateImpl refuses an acceptance from an unverified
+// account, when the deployment asked for that.
+//
+// Reads the knob at CALL time rather than at install time, the same way
+// invite_only is read: a deployment that turns it on should not have to
+// restart to mean it.
+func inviteVerifiedEmailGateImpl(ctx context.Context, h *AuthServiceHandler, userID string) error {
+	if !h.InviteRequiresVerifiedEmail {
+		return nil
+	}
+	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
+	if err != nil {
+		return err
+	}
+	if got.GetUser().GetEmailVerifiedAt().IsValid() {
+		return nil
+	}
+	return withUserDetail(
+		status.New(codes.FailedPrecondition, "accept org invite: caller's email is not verified"),
+		CodeEmailNotVerified, MsgInviteNeedsVerifiedEmail,
+	).Err()
 }

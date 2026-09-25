@@ -92,7 +92,7 @@ func Run(
 			offer = nil
 		}
 
-		res, calls, err := completeTurn(ctx, client, m, instructions, input, offer, sink)
+		res, calls, err := completeTurn(ctx, client, m, instructions, history, input, offer, sink)
 		if err != nil {
 			return nil, err
 		}
@@ -229,11 +229,15 @@ func completeTurn(
 	client StreamCompleter,
 	m Model,
 	instructions string,
+	// history is carried alongside `input` purely so the JSON-object
+	// precondition can read the caller's own turns — the same check the
+	// non-tool path makes. Without it this path validated less than its twin.
+	history []Message,
 	input []responses.ResponseInputItemUnionParam,
 	tools []responses.ToolUnionParam,
 	sink func(RunEvent) error,
 ) (*Completion, []toolCall, error) {
-	params, err := paramsForInput(m, instructions, input)
+	params, err := paramsForInput(m, instructions, history, input)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -300,14 +304,23 @@ func assistantToolCalls(calls []toolCall) []responses.ResponseInputItemUnionPara
 
 // paramsForInput is paramsFor with the input already built, for the loop, which
 // accumulates rather than converting a history each turn.
-func paramsForInput(m Model, instructions string, input []responses.ResponseInputItemUnionParam) (*responses.ResponseNewParams, error) {
+// ⚠️ This is paramsFor's twin for the tool-calling loop, and the two have to
+// validate ALIKE. They did not: the JSON-object precondition and the preflight
+// marker were added to paramsFor only, so RunAgent went on answering a request
+// the provider is documented to refuse with a plain `Unavailable` and a usage
+// row for a call that never happened (marb #74/3 and #74/4, on the path they did
+// not test). `history` is the caller's own turns, which is what the guard reads.
+func paramsForInput(m Model, instructions string, history []Message, input []responses.ResponseInputItemUnionParam) (*responses.ResponseNewParams, error) {
 	if strings.TrimSpace(m.ID) == "" {
-		return nil, errors.New("agent: no model id")
+		return nil, preflight("no model id")
 	}
 	// Zero is "unstated" and is the caller's to resolve before reaching here;
 	// negative is a deliberate "no cap" and passes through.
 	if m.MaxTokens == 0 {
-		return nil, errors.New("agent: model has no token budget")
+		return nil, preflight("model has no token budget")
+	}
+	if err := checkJSONObjectPrecondition(m, instructions, history); err != nil {
+		return nil, err
 	}
 	params := responses.ResponseNewParams{
 		Model: m.ID,

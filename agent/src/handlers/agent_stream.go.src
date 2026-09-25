@@ -44,6 +44,15 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 			})
 		})
 	if err != nil {
+		// BEFORE the usage row, not after it. A preflight refusal never reached
+		// the provider, so there is nothing to have paid for — recording one
+		// invents spend, and `Unavailable` sends the caller to a status page for
+		// what is an invalid argument (marb #74/3). The unary path got this and
+		// the stream path did not: the branch sat below recordUsage, so the
+		// event was already written by the time it ran.
+		if llm.IsPreflight(err) {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
 		// Recorded before the error is shaped: a stream that died mid-flight
 		// has already paid for whatever the provider produced, and a runaway
 		// guard stopping it does not make those tokens free.
@@ -54,12 +63,16 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 			return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")
 		}
 		// As in Complete: the provider's own text renders the deployment URL
-		// and can quote the prompt, so it stops here.
-		// Same reasoning as the unary path: the whole error to the log, the
-		// provider's classification to the caller. A stream that dies with an
-		// unexplained Unavailable is if anything worse, because the caller has
-		// already consumed part of an answer.
-		log.Printf("agent: model stream failed (model %q): %v", m.ID, err)
+		// and can quote the prompt, so it stops here — and it stops before the
+		// LOG too, which is the half this comment used to get wrong. "The whole
+		// error to the log" covered the URL and carried the response body with
+		// it (marb #74/2). ProviderLogLine keeps the classification and the URL
+		// and drops the body.
+		//
+		// The caller still gets the provider's classification. A stream that
+		// dies with an unexplained Unavailable is if anything worse than a unary
+		// one, because the caller has already consumed part of an answer.
+		log.Printf("agent: model stream failed (model %q): %s", m.ID, llm.ProviderLogLine(err))
 		return status.Error(codes.Unavailable, modelCallFailure(err))
 	}
 

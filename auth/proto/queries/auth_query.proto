@@ -620,7 +620,7 @@ message GetUserOwnsOrgResp {
   // is what the bootstrap script was quietly doing.
   //
   // ⚠️ This is the ONE flag in the plugin that WIDENS rather than narrows,
-  // and the exception is deliberate (docs/todos/owner-autopass.md asked for
+  // and the exception is deliberate (docs/decisions/owner-autopass.md asked for
   // it to be argued rather than slipped in):
   //
   //   · ownership is not a permission anybody handed out — it is root

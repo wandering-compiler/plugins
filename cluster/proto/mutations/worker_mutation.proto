@@ -19,6 +19,26 @@ option go_package = "@project;@pkg";
 // importantly — must not reset a decision already taken: a DENIED worker that
 // keeps reconnecting would otherwise be quietly returned to pending on the
 // next sweep, and denial would mean nothing.
+//
+// The DECISION is idempotent; the LOCATION is not. `relay_id` is refreshed on
+// every report, because it records where the machine is attached RIGHT NOW and
+// that legitimately changes — new hardware, another region, or an operator
+// pointing a worker somewhere else.
+//
+// It used to be DO NOTHING, which froze the location along with the decision
+// and built a trap with no way out (marb, 2026-09-25). A worker approved on
+// relay A that reconnects to B keeps `relay_id = A`; B asks
+// FingerprintsByState(B, APPROVED) and never hears about it, so it never gives
+// it work — and because the row is APPROVED it is not pending either, so it
+// never appears on the approval screen. The machine sits connected, approved
+// and idle, and the admin preset offers no action that clears it. Only SQL
+// does.
+//
+// Nothing else is refreshed, and that is the point: `state`, `decided_at` and
+// `decided_by` are the decision and stay put, so denial still means denial.
+// `name` and `device_id` are left alone too — they are claims a machine makes
+// about itself, and letting a denied one keep re-labelling how it appears on
+// an operator's screen buys nothing worth the surface.
 message RecordPendingWorkerReq {
   string cert_fingerprint = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
   string name = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
@@ -51,7 +71,7 @@ service WorkerMutation {
           "UPSERT INTO @module.Worker "
           "SET cert_fingerprint = :cert_fingerprint, name = :name, "
           "    device_id = :device_id, relay_id = :relay_id, state = 1 "
-          "ON CONFLICT (cert_fingerprint) DO NOTHING"
+          "ON CONFLICT (cert_fingerprint) DO UPDATE SET relay_id = :relay_id"
       }
     };
   }

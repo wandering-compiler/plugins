@@ -51,15 +51,27 @@ func (h *ClusterServiceHandler) ScheduleTask(
 			"cluster: no enabled relay is registered — register one, or re-enable one that was turned off")
 	}
 
-	// Least-loaded first, then by name so the order is stable when loads tie
-	// (which they always do on an idle pool — without a tiebreak the first
-	// relay in map order would take everything).
-	sort.Slice(relays, func(i, j int) bool {
-		li, lj := h.load(relays[i].ID), h.load(relays[j].ID)
-		if li != lj {
-			return li < lj
-		}
-		return relays[i].Name < relays[j].Name
+	// Least-loaded first; ties go round-robin.
+	//
+	// Loads tie constantly — every relay reads zero whenever the pool is below
+	// capacity, which is most of the time — so the tiebreak is not a detail,
+	// it IS the scheduler under normal load. Rotating the slice by a
+	// per-request counter and sorting STABLY keeps equal-load relays in
+	// rotated order, so consecutive tasks land on different machines.
+	//
+	// A name tiebreak was the original, and it sent every task to the
+	// alphabetically first relay for as long as the pool was not saturated.
+	// Random would also spread, but this is deterministic, which a test can
+	// state as "three tasks, three relays" instead of a distribution.
+	if n := len(relays); n > 1 {
+		k := int((h.rotate.Add(1) - 1) % uint64(n))
+		rotated := make([]Relay, 0, n)
+		rotated = append(rotated, relays[k:]...)
+		rotated = append(rotated, relays[:k]...)
+		relays = rotated
+	}
+	sort.SliceStable(relays, func(i, j int) bool {
+		return h.load(relays[i].ID) < h.load(relays[j].ID)
 	})
 
 	var lastErr error

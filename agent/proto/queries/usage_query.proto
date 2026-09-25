@@ -188,6 +188,36 @@ service UsageQuery {
   // then summed — not joined once for the period. A period spanning a price
   // change would otherwise bill all of it at one rate, and which rate would
   // depend on where the join happened to land.
+  //
+  // ⚠️ A MIXED-CURRENCY ROLLUP REPORTS NO COST (marb #74/1).
+  //
+  // `MAX(p.currency)` beside `SUM(p.line_minor)` used to sum minor units across
+  // currencies and stamp whichever one sorted highest — a number that looks like
+  // money and is not. ModelPrice.currency is per MODEL and a rollup spans
+  // several, so this is reachable by anyone with a multi-currency price list.
+  //
+  // Both halves go ABSENT instead: `cost_minor` and `currency` are `optional`,
+  // so absence is on the wire and is not the zero. That reuses the absent-cost
+  // rule this message already documents — absent means "we do not know" — rather
+  // than inventing a marker value that a reader could mistake for a currency
+  // code.
+  //
+  // Telling the two absences apart is `priced_calls`: absent cost with
+  // priced_calls > 0 is a mixed rollup; absent cost with priced_calls == 0 is
+  // nothing priced at all. No new field for something already derivable.
+  //
+  // `MIN(...) <> MAX(...)` rather than `COUNT(DISTINCT ...)`, which the DQL
+  // grammar refuses outright (it has no place for a set quantifier inside a
+  // call, and says so). MIN/MAX skip NULLs, so unpriced calls do not make a
+  // single-currency rollup look mixed, and an all-unpriced rollup compares NULL
+  // with NULL — neither true nor false, so the ELSE arm runs and both columns
+  // come back absent, which is correct for it.
+  //
+  // ⚠️ What was tried first and REVERTED: putting currency in the GROUP BY. An
+  // unpriced call has a NULL currency, so grouping on it splits every rollup that
+  // mixes priced and unpriced calls — the ordinary case, the one `priced_calls`
+  // exists to report — and `calls` stopped counting a label's calls and started
+  // counting a (label, currency) pair's. e2e caught it.
   rpc GetScopeSpend(GetScopeSpendReq) returns (GetScopeSpendResp) {
     option (w17.db.method) = {
       ops: {
@@ -200,8 +230,10 @@ service UsageQuery {
           "       SUM(u.output_tokens) AS output_tokens, "
           "       SUM(u.cached_input_tokens) AS cached_input_tokens, "
           "       SUM(u.reasoning_tokens) AS reasoning_tokens, "
-          "       SUM(p.line_minor) AS cost_minor, "
-          "       MAX(p.currency) AS currency "
+          "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
+          "             ELSE SUM(p.line_minor) END) AS cost_minor, "
+          "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
+          "             ELSE MAX(p.currency) END) AS currency "
           "FROM @module.Usage u "
           "JOIN @module.Model m ON m.id = u.model_id "
           "LEFT JOIN LATERAL ("
@@ -234,6 +266,11 @@ service UsageQuery {
   // usage ROW, at that row's own `started_at`. Two aggregates over the same
   // rows that priced them differently would be worse than not having the
   // second one.
+  //
+  // ⚠️ Same mixed-currency rule as GetScopeSpend, and this is the aggregate where
+  // it bites hardest: a LABEL spans several models, so one covering models priced
+  // in different currencies is the easy case to hit. See the note there for the
+  // shape and for why grouping on currency is not the answer.
   rpc GetLabelSpend(GetLabelSpendReq) returns (GetLabelSpendResp) {
     option (w17.db.method) = {
       ops: {
@@ -246,8 +283,10 @@ service UsageQuery {
           "       SUM(u.output_tokens) AS output_tokens, "
           "       SUM(u.cached_input_tokens) AS cached_input_tokens, "
           "       SUM(u.reasoning_tokens) AS reasoning_tokens, "
-          "       SUM(p.line_minor) AS cost_minor, "
-          "       MAX(p.currency) AS currency "
+          "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
+          "             ELSE SUM(p.line_minor) END) AS cost_minor, "
+          "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
+          "             ELSE MAX(p.currency) END) AS currency "
           "FROM @module.Usage u "
           "JOIN @module.UsageLabel ul ON ul.usage_id = u.id "
           "JOIN @module.Label lb ON lb.id = ul.label_id "
@@ -270,9 +309,6 @@ service UsageQuery {
     };
   }
 
-  // The limit in force at an instant. Newest `valid_from` not after it —
-  // the same rule as a price, because a limit changed today must not
-  // retroactively make yesterday an overspend.
   // Every price ever recorded for one model, newest `valid_from` first.
   //
   // The convenience surface over an append-only table. `RecordModelPrice`
@@ -307,6 +343,12 @@ service UsageQuery {
     };
   }
 
+  // The limit in force at an instant. Newest `valid_from` not after it —
+  // the same rule as a price, because a limit changed today must not
+  // retroactively make yesterday an overspend.
+  //
+  // (This paragraph spent a while stranded above ListModelPrices, where it
+  // described the wrong RPC and left this one undocumented — marb #74/5.)
   rpc GetScopeLimit(GetScopeLimitReq) returns (GetScopeLimitResp) {
     option (w17.db.method) = {
       ops: {

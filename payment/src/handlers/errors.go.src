@@ -3,6 +3,7 @@ package handlers
 import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"strings"
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
@@ -49,4 +50,48 @@ func notFound(msg string) error {
 // The cause is preserved for handler-side logging via %w.
 func providerFailure(cause error) error {
 	return status.Errorf(codes.Unavailable, "payment provider error: %v", cause)
+}
+
+// ── amount helpers ─────────────────────────────────────────────────────────
+//
+// HERE, in a file no feature gates, and not beside their first caller.
+//
+// Both were declared in `prepaid.go` and used from `payment_service.go`
+// (always staged) and `subscriptions.go` (feature `subscriptions`, which does
+// not require `prepaid`). Features stage independently, so a project
+// activating payment WITHOUT prepaid got those call sites without these
+// functions and its bundle build failed on an undefined identifier — while
+// everything compiled in this module, which has every file at once.
+//
+// Found by `make check-plugin-stage` on its first run; nobody had reported it,
+// because it only breaks the combination nobody happened to try.
+
+// isPositiveDecimal reports whether s is a non-zero, non-negative
+// decimal string (digits + at most one dot). Grant/spend take an
+// unsigned amount; the sign is the handler's to apply.
+func isPositiveDecimal(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	dots, nonZero := 0, false
+	for _, r := range s {
+		switch {
+		case r >= '1' && r <= '9':
+			nonZero = true
+		case r == '0':
+		case r == '.':
+			dots++
+		default:
+			return false
+		}
+	}
+	return dots <= 1 && nonZero
+}
+
+func orDefault(s, def string) string {
+	if strings.TrimSpace(s) == "" {
+		return def
+	}
+	return s
 }

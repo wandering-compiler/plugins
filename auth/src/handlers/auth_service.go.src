@@ -174,8 +174,18 @@ type AuthServiceHandler struct {
 	PasswordResetTTLSeconds     int // password_reset_ttl_seconds
 	EmailVerificationTTLSeconds int // email_verification_ttl_seconds
 
-	InviteOnly        bool // require a pending org invitation to sign up (invite_only)
-	OrgInviteTTLHours int  // how long an invitation stays acceptable (org_invite_ttl_hours)
+	InviteOnly bool // require a pending org invitation to sign up (invite_only)
+	// InviteRequiresVerifiedEmail refuses AcceptOrgInvite from an account
+	// whose address was never proved (invite_requires_verified_email).
+	//
+	// Off by default and deliberately not derived from whether
+	// `email_verification` is active: a project can have the feature on and
+	// every account unverified, and flipping this for them on an upgrade
+	// would lock every one of those people out of the invitation they were
+	// sent. Turning it on is the deployment's call, and saying that plainly
+	// beats a default that reads as safe and is really a breaking change.
+	InviteRequiresVerifiedEmail bool
+	OrgInviteTTLHours           int // how long an invitation stays acceptable (org_invite_ttl_hours)
 }
 
 // scopeDecorator augments the AuthResp scope + label maps for an
@@ -356,6 +366,51 @@ func ValidateConfig(h *AuthServiceHandler) error {
 // via init() with header/fingerprint resolution + upsert.
 var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userID string) (deviceID string, trusted bool, err error) {
 	return "", true, nil
+}
+
+// inviteVerifiedEmailGate refuses an acceptance from an account whose address
+// was never proved to belong to it.
+//
+// A no-op by default, and replaced by the real check when `email_verification`
+// is staged — the pattern the device and disabled-account gates use, and
+// required rather than stylistic: `User.email_verified_at` exists only when
+// that feature is on, so naming the field from an always-staged file would
+// fail the BUNDLE build of every project that runs org_invite without it.
+//
+// ⚠️ IT LIVES HERE, in an always-staged file, and not beside its caller in
+// `org_invite.go`. Two features stage independently, so the seam has to exist
+// for every combination of them:
+//
+//	org_invite on,  email_verification off — caller present, no implementation
+//	org_invite off, email_verification on  — implementation present, no caller
+//
+// The second one is the trap. `emailverify.go` assigns this var in its init,
+// so declaring it in the gated `org_invite.go` meant an activation with
+// verification and no invitations staged the assignment without the
+// declaration and failed the bundle build on an undefined identifier —
+// breaking a combination that has nothing to do with invitations (caught in
+// review on PR #11).
+//
+// The fix is not to make `email_verification` require `org_invite`: that would
+// force invitations on every project that only wants to confirm addresses.
+// A seam spans the features it joins, so it belongs above both.
+//
+// # Why this exists at all
+//
+// An invitation is keyed on an ADDRESS and accepted by whoever holds an
+// account with it, so the proof is "I own this mailbox" — and until now
+// nothing checked that the account's address had ever been proved. Both the
+// OrgInvite model and the invite_only knob said that window "closes when
+// email_verification is enabled". It did not: the feature adds a column and
+// two RPCs and blocks nothing, so a project could enable it, verify nobody,
+// and still be told by its own documentation that it was covered. A consumer
+// measured 19 accounts out of 19 with the column NULL and asked which of us
+// was supposed to enforce it (marb #77).
+//
+// The answer is: this, and only if asked. See `invite_requires_verified_email`
+// in plugin.yaml for why it is opt-in rather than automatic.
+var inviteVerifiedEmailGate = func(_ context.Context, _ *AuthServiceHandler, _ string) error {
+	return nil
 }
 
 // errSignUpNotInvited is the refusal under `invite_only`. It names the
@@ -574,13 +629,13 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 		// the response time doesn't leak account existence. (The opaque
 		// Unauthenticated code is already identical on both paths.)
 		signInDummyVerify(h, req.GetPassword())
-		return nil, Unauthenticated(err)
+		return nil, UnauthenticatedSignIn(err)
 	}
 	user := userResp.GetUser()
 
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), nil)
 	if !ok {
-		return nil, Unauthenticated(errAuthnPasswordMismatch)
+		return nil, UnauthenticatedSignIn(errAuthnPasswordMismatch)
 	}
 
 	// Disabled-account gate (user_admin feature; no-op otherwise).
@@ -592,10 +647,10 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	// disabled gate, after the password verify, so a bot is indistinguishable
 	// from a wrong password (same opaque Unauthenticated).
 	if err := signInBotGate(user); err != nil {
-		return nil, Unauthenticated(err)
+		return nil, UnauthenticatedSignIn(err)
 	}
 	if err := signInDisabledGate(user); err != nil {
-		return nil, Unauthenticated(err)
+		return nil, UnauthenticatedSignIn(err)
 	}
 
 	// Resolve the device (devices feature; no-op otherwise) so the 2FA
@@ -763,10 +818,20 @@ var whoAmIEnrich = func(ctx context.Context, h *AuthServiceHandler, userID strin
 // session token id does, so it's always a session token (the DQL drops the
 // token_type filter — that column is api_token-gated; Q64-auth-1).
 //
-// Idempotent: a caller with no resolvable session token (an API-token
-// bearer, or a direct gRPC call) or one whose token was already revoked
-// still gets a clean success. "Log out everywhere / other devices" is the
-// `devices` feature's RevokeAllDevices, not this.
+// Idempotent about the SESSION, not about the caller: a token that was already
+// revoked still gets a clean success, because "this session is already gone" is
+// nothing left to do.
+//
+// ⛔ A caller with NO resolvable session token — an API-token bearer, or a
+// direct gRPC call — is REFUSED (FailedPrecondition), not waved through. That
+// changed in auth v0.1.0-rc.4 and this comment promised the old behaviour for a
+// day afterwards (marb #74/7): whoever read the contract was told a false
+// success was the contract. The reasoning for the refusal is at the branch
+// itself; the short version is that "I was not told which session" is not
+// idempotence.
+//
+// "Log out everywhere / other devices" is the `devices` feature's
+// RevokeAllDevices, not this.
 func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.LogoutResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {

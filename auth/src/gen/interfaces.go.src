@@ -85,8 +85,9 @@ type EnvConfig struct {
 	PasswordResetTtlSeconds     int // password_reset_ttl_seconds (default 3600)
 	EmailVerificationTtlSeconds int // email_verification_ttl_seconds (default 86400)
 
-	InviteOnly        bool // invite_only (default true)
-	OrgInviteTtlHours int  // org_invite_ttl_hours (default 168)
+	InviteOnly                  bool // invite_only (default true)
+	InviteRequiresVerifiedEmail bool // invite_requires_verified_email (default false)
+	OrgInviteTtlHours           int  // org_invite_ttl_hours (default 168)
 }
 
 // ClientSet exposes the in-process typed clients the plugin's

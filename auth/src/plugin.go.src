@@ -91,8 +91,9 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		PasswordResetTTLSeconds:     cfg.PasswordResetTtlSeconds,
 		EmailVerificationTTLSeconds: cfg.EmailVerificationTtlSeconds,
 
-		InviteOnly:        cfg.InviteOnly,
-		OrgInviteTTLHours: cfg.OrgInviteTtlHours,
+		InviteOnly:                  cfg.InviteOnly,
+		InviteRequiresVerifiedEmail: cfg.InviteRequiresVerifiedEmail,
+		OrgInviteTTLHours:           cfg.OrgInviteTtlHours,
 	}
 	if err := handlers.ValidateConfig(h); err != nil {
 		return err

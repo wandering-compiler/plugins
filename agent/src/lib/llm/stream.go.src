@@ -180,16 +180,37 @@ func toolCallsOf(res *responses.Response) []toolCall {
 	return out
 }
 
+// ErrPreflight marks a failure raised BEFORE the provider is called — a request
+// this layer can already tell will not work.
+//
+// It exists because the handlers treated every error out of this package as a
+// failed model call: they wrote a usage row with `out == nil` and answered
+// `Unavailable`. For a provider failure that is right. For a request that never
+// left the process it is wrong twice over — it invents spend for a call that did
+// not happen, and it reports an outage for what is an invalid argument, so the
+// caller goes looking at the provider's status page (marb #74/3).
+//
+// Wrap, don't replace: the messages already say what is wrong, and callers use
+// errors.Is to decide how to answer.
+var ErrPreflight = errors.New("agent: request refused before calling the model")
+
+// IsPreflight reports whether err was raised before the provider was called.
+func IsPreflight(err error) bool { return errors.Is(err, ErrPreflight) }
+
+// preflight wraps a pre-call validation failure so a handler can tell it apart
+// from a provider fault.
+func preflight(msg string) error { return fmt.Errorf("%w: %s", ErrPreflight, msg) }
+
 // paramsFor builds the request both call paths share, so a parameter added for
 // one cannot go missing from the other.
 func paramsFor(m Model, instructions string, history []Message) (*responses.ResponseNewParams, error) {
 	if strings.TrimSpace(m.ID) == "" {
-		return nil, errors.New("agent: no model id")
+		return nil, preflight("no model id")
 	}
 	// Zero is "unstated" and is the caller's to resolve before reaching here;
 	// negative is a deliberate "no cap" and passes through.
 	if m.MaxTokens == 0 {
-		return nil, errors.New("agent: model has no token budget")
+		return nil, preflight("model has no token budget")
 	}
 	params := responses.ResponseNewParams{
 		Model: m.ID,
@@ -233,14 +254,24 @@ func checkJSONObjectPrecondition(m Model, instructions string, history []Message
 		return nil
 	}
 	for _, msg := range history {
+		// The ASSISTANT's own words do not count, and that is the provider's
+		// rule, not ours: "the model will not generate JSON without a SYSTEM OR
+		// USER message instructing it to do so". Accepting an assistant turn
+		// made this guard pass on a request the provider still refuses — so the
+		// check that exists to replace a bare 400 handed back the bare 400
+		// (marb #74/4). A model that mentioned JSON in a previous reply is
+		// exactly the conversation where that happens.
+		if msg.Assistant {
+			continue
+		}
 		if mentionsJSON(msg.Text) {
 			return nil
 		}
 	}
-	return errors.New("agent: response_format JSON_OBJECT needs the prompt to ask for JSON — " +
-		"the provider refuses this format unless the instructions or one of the messages says the word, " +
-		"and it refuses with a bare 400 that names nothing. Say what the object should contain " +
-		"(`reply with a JSON object of …`) in `instructions`")
+	return preflight("response_format JSON_OBJECT needs the prompt to ask for JSON — " +
+		"the provider refuses this format unless the instructions or a system/user message says the word " +
+		"(its own reply in an earlier turn does not count), and it refuses with a bare 400 that names " +
+		"nothing. Say what the object should contain (`reply with a JSON object of …`) in `instructions`")
 }
 
 // mentionsJSON reports whether a prompt asks for JSON, case-insensitively.

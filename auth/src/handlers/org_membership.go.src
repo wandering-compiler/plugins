@@ -119,7 +119,7 @@ func init() {
 // wildcard ROLE and therefore arrived inside the narrowing — where it could
 // only subtract. An owner holding no role intersected "everything" with
 // "nothing" and got nothing (verified live 2026-09-10), so owners needed seeded
-// grants like anyone else. See docs/todos/owner-autopass.md.
+// grants like anyone else. See docs/decisions/owner-autopass.md.
 func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
 	orgID := scopes["org_id"]
 

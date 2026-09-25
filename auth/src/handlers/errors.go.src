@@ -5,6 +5,9 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/protoadapt"
+
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
 // authnError is the opaque error every auth-handler failure
@@ -20,6 +23,14 @@ import (
 // transient failure", and so on.
 type authnError struct {
 	cause error
+
+	// userCode / userMsg are the pair a REST gateway renders for a person.
+	// EMPTY unless a flow-specific constructor set them, and that default is
+	// the safe one: the generic constructor serves 87 call sites across MFA,
+	// reset tokens, OAuth, API tokens and invites, so any sentence put here
+	// would be wrong for most of them.
+	userCode string
+	userMsg  string
 }
 
 const authnErrorMessage = "invalid credentials"
@@ -57,9 +68,92 @@ func (e *authnError) GRPCStatus() *status.Status {
 		return st
 	}
 	if c := operationalCode(e.cause); c != codes.OK {
-		return status.New(c, "the authentication service is temporarily unavailable")
+		return withUserDetail(status.New(c, "the authentication service is temporarily unavailable"),
+			CodeAuthUnavailable, MsgAuthUnavailable)
 	}
-	return status.New(codes.Unauthenticated, authnErrorMessage)
+	st := status.New(codes.Unauthenticated, authnErrorMessage)
+	if e.userCode == "" {
+		// No flow claimed this refusal, so we say nothing rather than guess.
+		// The gateway renders its generic sentence for the code, which for a
+		// bearer/session failure — the bulk of these — is exactly right.
+		return st
+	}
+	return withUserDetail(st, e.userCode, e.userMsg)
+}
+
+// Codes a caller may branch on. Stable, and narrow ON PURPOSE: the pair below
+// is the whole vocabulary of this package's opaque answer, because telling
+// them apart is the one distinction an auth surface is allowed to make.
+//
+// CodeInvalidCredentials deliberately does not say WHICH half was wrong —
+// that is the anti-enumeration rule this file exists for, and it is why the
+// sentence beside it names both.
+//
+// Only SIGN-IN mints CodeInvalidCredentials. Every other flow that refuses —
+// a missing bearer header, a bad MFA code, a spent reset token — goes out
+// with no detail at all and renders the gateway's generic sentence. That is
+// deliberate: those flows want their own wording, and inventing it here from
+// the cause is how the anti-enumeration rule gets broken by accident (see
+// UnauthenticatedSignIn).
+const (
+	CodeInvalidCredentials = "INVALID_CREDENTIALS" // #nosec G101 -- the NAME of the code a client dispatches on, not a credential value
+	CodeAuthUnavailable    = "AUTH_UNAVAILABLE"
+
+	// CodeEmailNotVerified is a REFUSAL THE CALLER CAN ACT ON, which is why
+	// it is not folded into the opaque pair above. It describes the caller's
+	// own account — an address they already know they own or do not — so it
+	// tells an attacker nothing they did not arrive with.
+	CodeEmailNotVerified = "EMAIL_NOT_VERIFIED"
+)
+
+// The sentences a person reads, and the ONE place each is written.
+//
+// `//w17:msgid` marks a string as translatable. Nothing harvests a plugin's
+// Go — that runs in the consumer's binary, and harvesting happens on the
+// console — so `make plugin-msgids-sync` mirrors these into plugin.yaml, where
+// codegen can put them in a project's .po, and `make check-plugin-msgids`
+// fails if the mirror drifts from what is here.
+//
+// Write a new user-facing sentence as a constant in this block. One written
+// inline at a call site is invisible to the sync, reaches no catalog, and
+// renders in English in every locale with nothing reporting it.
+//
+//w17:msgid
+const (
+	// Names BOTH halves on purpose: the anti-enumeration rule of this file,
+	// expressed in the text. "No account with that email" would be friendlier
+	// and would be an email oracle.
+	MsgInvalidCredentials = "Wrong email or password." // #nosec G101 -- the SENTENCE a person reads, not a credential value
+
+	// Flow-neutral. Every auth flow reaches the outage branch, so a sentence
+	// naming sign-in would be wrong for a bad MFA code or a spent reset token.
+	MsgAuthUnavailable = "Authentication is temporarily unavailable. Please try again shortly."
+)
+
+// withUserDetail attaches the pair a REST gateway renders for a person.
+//
+// Attached only when a flow asked for it, or for an outage — never as a
+// blanket default. The status MESSAGE is unchanged either way: it is the
+// operator's copy, and everything about the opaque answer above still holds
+// for it.
+//
+// ⚠️ NOT TRANSLATED. i18n.T needs the request context and this runs from
+// GRPCStatus(), which has none — threading one would mean changing
+// Unauthenticated() at 87 call sites for no other reason. It renders in
+// English until plugin-authored msgids can be harvested into project
+// catalogs, which nothing supports yet; see
+// docs/decisions/plugin-authored-messages-are-not-harvested.md.
+func withUserDetail(st *status.Status, code, message string) *status.Status {
+	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
+		Code:    code,
+		Message: message,
+	}))
+	if err != nil {
+		// coverage-exempt: WithDetails only fails if the detail cannot
+		// marshal, and ErrorDetail is a static well-typed proto.
+		return st
+	}
+	return with
 }
 
 // wireError is a refusal this package mints when it has DECIDED that the
@@ -162,4 +256,36 @@ func (e *authnError) Unwrap() error {
 // pulling the shared dep.
 func Unauthenticated(cause error) error {
 	return &authnError{cause: cause}
+}
+
+// UnauthenticatedSignIn is Unauthenticated for the four gates a SIGN-IN
+// rejects on, and the only place CodeInvalidCredentials is minted.
+//
+// Everything about the opaque answer is unchanged — same code, same status
+// message, same cause handling. The one addition is the pair a gateway can
+// render, because "You are not signed in." beside a login form the caller
+// just submitted is true, useless and confusing.
+//
+// Use it ONLY where a rejection means the submitted credential was refused:
+// no such account, wrong password, bot gate, disabled gate. All four must
+// carry the IDENTICAL pair or this file's whole purpose is defeated — a
+// different sentence for "no such account" than for "wrong password" is an
+// email enumeration oracle wearing a friendly face.
+//
+// Do NOT use it for failures reached after the credential was accepted
+// (device resolution, the MFA gate, session issue). They are not credential
+// refusals, so the sentence would be a lie; they stay generic.
+//
+// Why a constructor rather than classifying on the cause in GRPCStatus, next
+// to the outage check: the four gates do not share a sentinel — "no such
+// account" arrives as whatever the query returned. A cause-keyed table would
+// match the wrong-password sentinel and miss the missing-account one, which
+// is precisely the pair that has to be indistinguishable. The flow knows; the
+// cause does not.
+func UnauthenticatedSignIn(cause error) error {
+	return &authnError{
+		cause:    cause,
+		userCode: CodeInvalidCredentials,
+		userMsg:  MsgInvalidCredentials,
+	}
 }
