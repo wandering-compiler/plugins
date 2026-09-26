@@ -1586,7 +1586,18 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.User SET "
-          "email = :email "
+          "email = :email, "
+          // ⚠️ marb #79/2. `email_verified_at` records only THAT something was
+          // verified, never WHICH address — so a verified account whose email
+          // was changed stayed "verified" for an address it had never proved.
+          // That walks straight through the invite gate the flag exists for:
+          // verify one address, change to the invited one, accept.
+          //
+          // Cleared here rather than storing the verified address beside it.
+          // Both fix it; this one cannot drift, because there is no second copy
+          // to keep in step — and re-verifying after an address change is what
+          // a person expects anyway.
+          "?feature(email_verification) email_verified_at = NULL "
           "WHERE id = :user_id "
           "RETURNING id AS user_id, email AS email"
       }

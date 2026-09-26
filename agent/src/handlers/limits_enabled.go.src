@@ -94,15 +94,21 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 		if sErr != nil {
 			return LimitDecision{Allowed: true}
 		}
-		var total int64
-		for _, line := range resp.GetLines() {
-			// An unpriced line contributes NOTHING to the total rather than
-			// zero-by-assumption: a model nobody priced must not make a scope
-			// look cheap, and it must not make it look expensive either. The
-			// bill says `priced=false` elsewhere; here it simply cannot be
-			// counted.
-			if line.CostMinor != nil {
-				total += line.GetCostMinor()
+		total, ok := totalSpend(resp.GetLines())
+		if !ok {
+			// Fail CLOSED, and this is the one place in this file that does.
+			// Everywhere else the limiter fails open on purpose — an
+			// unreachable database must not become a second outage — because
+			// there the uncertainty is infrastructure and it passes. Here the
+			// data arrived and says the cap cannot be evaluated at all: the
+			// spend exists, and letting it through is an unbounded overspend
+			// against a limit somebody set deliberately. An operator fixes it
+			// by pricing a scope's models alike; a caller cannot fix it by
+			// retrying, so the reason says which it is.
+			return LimitDecision{
+				Allowed: false,
+				Reason: "agent: this scope's spending cannot be totalled — its models are priced in " +
+					"more than one currency, and a limit is a single amount. Price them alike, or lift the limit.",
 			}
 		}
 		spent = total
@@ -126,4 +132,46 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 		return 0, err
 	}
 	return resp.GetId(), nil
+}
+
+// totalSpend reduces a scope's spend lines to ONE comparable amount, reporting
+// whether that is possible at all.
+//
+// Minor units are only comparable within a currency, and a cap is one integer
+// with no currency of its own. The loop this replaced added them flat — dollars
+// to euros — which is the defect marb #74/1 fixed INSIDE a rollup, still present
+// across the rollups being summed here.
+//
+// Three kinds of line, and the middle one is what marb #79/3 reported:
+//
+//	cost present            counted, under its own currency
+//	cost absent, priced > 0 UNTOTALLABLE. #74/1 gave absence a second meaning —
+//	                        the currencies inside this line disagreed — and the
+//	                        old `if CostMinor != nil` skipped it, so real spend
+//	                        vanished and a scope priced in two currencies never
+//	                        reached its cap.
+//	cost absent, priced = 0 contributes nothing, as before: a model nobody
+//	                        priced must not make a scope look cheap, and must not
+//	                        make it look expensive either.
+//
+// A pure function because the decision is the thing worth pinning, and the
+// generated clients around it are not: there was no test on this file at all
+// when #79/3 arrived, which is how two correct changes met and nobody noticed.
+func totalSpend(lines []*pb.ScopeSpendLine) (int64, bool) {
+	byCurrency := map[string]int64{}
+	for _, line := range lines {
+		switch {
+		case line.CostMinor != nil:
+			byCurrency[line.GetCurrency()] += line.GetCostMinor()
+		case line.GetPricedCalls() > 0:
+			return 0, false
+		}
+	}
+	if len(byCurrency) > 1 {
+		return 0, false
+	}
+	for _, total := range byCurrency {
+		return total, true
+	}
+	return 0, true
 }

@@ -101,6 +101,19 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		messagesFrom(start.GetMessages()), tools, limitsFrom(start.GetLimits()),
 		func(e llm.RunEvent) error { return sendRunEvent(send, e) })
 
+	// ⚠️ marb #79/4. A request the LLM layer refused BEFORE calling the provider
+	// is not a failed call: no tokens were spent and nothing was unavailable, so
+	// recording a usage row invents spend and the error sends the caller to the
+	// provider's status page for what is an invalid argument. That is #74/3, and
+	// it was fixed on the two unary paths (agent_service.go, agent_stream.go)
+	// and missed here — the tool-calling path, which is the one that reaches the
+	// provider most often.
+	//
+	// Before recordUsageFor, not after: the point is that no row is written.
+	if llm.IsPreflight(runErr) {
+		return status.Error(codes.InvalidArgument, runErr.Error())
+	}
+
 	// One row for the run's model spend. The loop's own turns are not
 	// separately visible here — `out.Usage` is what the run reports in total —
 	// so this records what the plugin can actually observe rather than

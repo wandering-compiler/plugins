@@ -103,13 +103,31 @@ func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email stri
 var errInviteInvalid = status.Error(codes.NotFound,
 	"invitation invalid, expired, already accepted, or addressed to another account")
 
-// errUnknownRole names the catalogue rather than the value, because the
-// person reading it picked from a list and needs to know which list was
-// wrong. It says ORG-ASSIGNABLE, not "exists": a realm role exists and is
-// still refused here, and a message saying it does not exist would send the
-// reader hunting for a typo that isn't there.
+// errUnknownRole is the TYPO: no role of that name in the catalogue at all.
+//
+// ⚠️ It used to serve two causes, and the adjective was carrying the whole
+// distinction — "no ORG-ASSIGNABLE role by that name exists". The comment here
+// even said why: a realm role exists and is still refused, and calling that
+// "does not exist" sends the reader hunting for a typo that is not there. It
+// happened anyway: marb measured three states, got one message, and went looking
+// for a row that WAS there (member-management-audit-findings, from #71/#72).
+//
+// One adjective is not a distinction a reader can act on. Two errors are.
 var errUnknownRole = status.Error(codes.InvalidArgument,
-	"no org-assignable role by that name exists in this project's role catalogue")
+	"no role by that name exists in this project's role catalogue")
+
+// errRoleNotOrgScoped is the other cause: the role is real, and an invitation is
+// not the thing that may hand it out.
+//
+// Saying so is not an oracle. The caller already holds the invite permission in
+// an organization and can list the org-scoped catalogue; on the ACCEPT path they
+// hold the invitation and the role name came from it, so the only thing this adds
+// is WHY a name they were given stopped working — which is the question the single
+// message could not answer.
+var errRoleNotOrgScoped = status.Error(codes.InvalidArgument,
+	"that role exists but is realm-wide, and an invitation may only grant an "+
+		"organization-scoped role — a realm role reaches every organization, so it is not an "+
+		"org admin's to give")
 
 func (h *AuthServiceHandler) orgInviteTTL() time.Duration {
 	if h.OrgInviteTTLHours > 0 {
@@ -169,6 +187,18 @@ func (h *AuthServiceHandler) roleIDByName(ctx context.Context, name string) (str
 			return r.GetId(), nil
 		}
 	}
+	// Not org-assignable — and the two reasons for that are a typo and a realm
+	// role, which a caller fixes in completely different ways. The full catalogue
+	// tells them apart; `org_invite` requires `rbac`, so ListRoles is always here.
+	if all, lerr := h.Query.ListRoles(ctx, &pb.ListRolesReq{}); lerr == nil {
+		for _, r := range all.GetRoles() {
+			if r.GetName() == name {
+				return "", errRoleNotOrgScoped
+			}
+		}
+	}
+	// A catalogue lookup that could not answer must not invent the distinction:
+	// the typo message is the one that holds for both.
 	return "", errUnknownRole
 }
 

@@ -906,7 +906,14 @@ service AuthQuery {
           "       u.password_hash AS user.password_hash, "
           "       u.created_at AS user.created_at, "
           "       ?feature(service_account) u.kind AS user.kind, "
-          "       ?feature(user_admin) u.disabled_at AS user.disabled_at "
+          "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          // email_verified_at (`email_verification`): read by the OAuth
+          // local-account check, which refuses to link a provider identity to
+          // an existing password account unless that address is verified.
+          // Missing from the projection it inverted the gate — the field was
+          // never valid, so EVERY local account was refused, and unlike the
+          // invite gate this one is not behind an opt-in knob (marb #79/1).
+          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at "
           "FROM @module.User u WHERE u.email = :email"
       }
     };
@@ -1577,6 +1584,12 @@ service AuthQuery {
           "       u.email AS user.email, "
           "       u.password_hash AS user.password_hash, "
           "       ?feature(service_account) u.kind AS user.kind, "
+          // email_verified_at (`email_verification`): without it
+          // inviteVerifiedEmailGate read a field nobody filled, so with
+          // AUTH_INVITE_REQUIRES_VERIFIED_EMAIL on it refused EVERY invite —
+          // including verified accounts (marb #79/1). Third instance of the
+          // shape GetUserByEmail's comment already names.
+          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           "       u.created_at AS user.created_at "
           "FROM @module.User u WHERE u.id = :user_id"
       }
