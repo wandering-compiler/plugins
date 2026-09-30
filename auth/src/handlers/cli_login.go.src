@@ -126,7 +126,7 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 		// caller apart "this token is unknown/used/expired" from every other
 		// outcome, which is the enumeration the opaque refusal exists to
 		// prevent, and it made the `== ""` branch below unreachable: the code
-		// was written for a shape this mutation never produces (marb #58).
+		// was written for a shape this mutation never produces (a consumer).
 		//
 		// Unauthenticated() classifies: a refusal stays opaque, an outage
 		// comes back as Unavailable rather than being dressed as a bad token.
@@ -171,7 +171,7 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	// and server apps carried the public-client shape onto clients that CAN
 	// keep one — and then the only thing between "anybody may register a
 	// callback" and "a code is delivered there" was the registry's write path
-	// (marb #65). A confidential client closes it from the other end: the
+	// (a consumer). A confidential client closes it from the other end: the
 	// registration is worthless without the secret.
 	//
 	// Loopback keeps its public-client shape deliberately. There is no

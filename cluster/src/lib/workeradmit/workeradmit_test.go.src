@@ -1,0 +1,122 @@
+package workeradmit
+
+import (
+	"sort"
+	"testing"
+)
+
+func pendingNames(t *testing.T, r *Registry) []string {
+	t.Helper()
+	var out []string
+	for _, p := range r.Pending() {
+		out = append(out, p.Fingerprint)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// A machine nobody has decided about waits, and is REPORTED — those two go
+// together. Admitting it would let anyone in; forgetting it would mean the
+// operator never learns it is there, and the machine would reconnect forever
+// against a console that has nothing to show.
+func TestOffer_UnknownWaitsAndIsReported(t *testing.T) {
+	r := New()
+	if got := r.Offer("aa", "vps-1", "dev-1"); got != Wait {
+		t.Fatalf("decision = %v, want Wait", got)
+	}
+	p := r.Pending()
+	if len(p) != 1 || p[0].Fingerprint != "aa" {
+		t.Fatalf("pending = %+v, want the offered machine", p)
+	}
+	if p[0].Name != "vps-1" || p[0].DeviceID != "dev-1" {
+		t.Errorf("the claims were not carried for the operator to read: %+v", p[0])
+	}
+	if r.Admitted("aa") {
+		t.Error("an undecided machine is admitted")
+	}
+}
+
+// Approval admits, and takes the machine off the pending list — it is no
+// longer news.
+func TestApply_ApprovalAdmitsAndClearsPending(t *testing.T) {
+	r := New()
+	r.Offer("aa", "vps-1", "")
+	r.Apply([]string{"aa"}, nil)
+
+	if got := r.Offer("aa", "vps-1", ""); got != Admit {
+		t.Fatalf("decision = %v, want Admit", got)
+	}
+	if n := len(r.Pending()); n != 0 {
+		t.Errorf("an approved machine is still reported as pending (%d)", n)
+	}
+	if !r.Admitted("aa") {
+		t.Error("Admitted disagrees with Offer about an approved machine")
+	}
+}
+
+// Denial rejects. This is what makes a denial a REVOCATION rather than a note
+// in a table: the relay drops the connection instead of leaving the machine
+// connected and idle.
+func TestApply_DenialRejects(t *testing.T) {
+	r := New()
+	r.Offer("bb", "stranger", "")
+	r.Apply(nil, []string{"bb"})
+
+	if got := r.Offer("bb", "stranger", ""); got != Reject {
+		t.Fatalf("decision = %v, want Reject", got)
+	}
+	if n := len(r.Pending()); n != 0 {
+		t.Errorf("a denied machine is still reported as pending (%d)", n)
+	}
+	if r.Admitted("bb") {
+		t.Error("a denied machine is admitted")
+	}
+}
+
+// THE REVOCATION PATH. Dropping a fingerprint from the approved list must stop
+// admitting it — which is only true because Apply REPLACES rather than merges.
+// A merge would leave the relay admitting a machine the registry no longer
+// lists, with nothing anywhere to say so.
+func TestApply_ReplacesRatherThanMerges(t *testing.T) {
+	r := New()
+	r.Apply([]string{"aa", "bb"}, nil)
+	if !r.Admitted("aa") || !r.Admitted("bb") {
+		t.Fatal("setup: both should be admitted")
+	}
+
+	r.Apply([]string{"bb"}, nil) // aa withdrawn
+
+	if r.Admitted("aa") {
+		t.Error("a withdrawn approval still admits — Apply merged instead of replacing")
+	}
+	if !r.Admitted("bb") {
+		t.Error("a still-approved machine was dropped")
+	}
+}
+
+// Both sets at once is a control-plane bug or a half-applied edit. The safe
+// reading is the restrictive one: a machine wrongly kept out is a support
+// ticket, one wrongly let in is an incident.
+func TestOffer_DeniedWinsOverApproved(t *testing.T) {
+	r := New()
+	r.Apply([]string{"cc"}, []string{"cc"})
+	if got := r.Offer("cc", "", ""); got != Reject {
+		t.Errorf("decision = %v, want Reject — denial must win", got)
+	}
+	if r.Admitted("cc") {
+		t.Error("Admitted let through a fingerprint that is also denied")
+	}
+}
+
+// A relay restarts with nothing. It must not admit anyone until the control
+// plane has told it who, and it must report whoever reconnects meanwhile.
+func TestNew_EmptyRegistryAdmitsNobody(t *testing.T) {
+	r := New()
+	if r.Admitted("aa") {
+		t.Fatal("a fresh relay admitted a machine it has never been told about")
+	}
+	r.Offer("aa", "", "")
+	if got := pendingNames(t, r); len(got) != 1 {
+		t.Errorf("pending = %v, want the reconnecting machine reported", got)
+	}
+}

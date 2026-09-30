@@ -434,7 +434,7 @@ message GetMfaChallengeResp {
 // caller's transaction, so MFA challenge issuance for ONE user serialises.
 //
 // The cap read the count and then decided, which is only a cap when nothing
-// runs beside it. marb measured twenty concurrent sign-ins producing twenty
+// runs beside it. a consumer measured twenty concurrent sign-ins producing twenty
 // challenges past a limit of ten (#65): every one of them read zero before any
 // of them committed. An attacker who already holds the password — the whole
 // threat the second factor is for — sends twenty at once as easily as twenty
@@ -458,7 +458,7 @@ message LockUserForIssuanceResp {
 // MfaChallenge bounds guesses against ONE challenge; a new challenge starts
 // a fresh budget, so without a second cap the total number of guesses an
 // attacker who already has the password can buy is unbounded — they just
-// sign in again (marb #63).
+// sign in again (a consumer).
 message CountRecentMfaChallengesReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
@@ -850,6 +850,22 @@ message ListOrgMembersByOrgResp {
   repeated OrgMemberRow members = 1;
 }
 
+message GetPendingOrgInviteByTokenReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+}
+message GetPendingOrgInviteByTokenResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string org_id = 1;
+  string role   = 2;
+  // Empty = the invitation is OPEN — it names no address, and accepting it
+  // therefore derives nothing about the one the registrant holds.
+  string email  = 3;
+  // So a caller can look at what is pinned BEFORE spending the invitation. Opaque
+  // here as everywhere — see OrgInvite.metadata.
+  string metadata = 4;
+}
+
 message ListOrgInvitesByOrgReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -899,7 +915,7 @@ service AuthQuery {
         // unset AccountKind, and HUMAN is 0 — so a machine account that
         // set itself a password through `password_change` signed in as
         // a person, for a month, with the correction for the identical
-        // defect written three lines above it (marb #58/1).
+        // defect written three lines above it (reported by a consumer).
         dql:
           "SELECT u.id AS user.id, "
           "       u.email AS user.email, "
@@ -912,7 +928,7 @@ service AuthQuery {
           // an existing password account unless that address is verified.
           // Missing from the projection it inverted the gate — the field was
           // never valid, so EVERY local account was refused, and unlike the
-          // invite gate this one is not behind an opt-in knob (marb #79/1).
+          // invite gate this one is not behind an opt-in knob (reported by a consumer).
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at "
           "FROM @module.User u WHERE u.email = :email"
       }
@@ -1145,7 +1161,7 @@ service AuthQuery {
         // AccountKind is HUMAN, so the label was never stamped and
         // every rule written against it matched nothing — a gate that
         // fails OPEN and reports no error while doing it. Found by
-        // sweeping the readers after marb #58/1, not reported.
+        // sweeping the readers after a consumer, not reported.
         dql:
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
@@ -1192,7 +1208,7 @@ service AuthQuery {
   // `preset_key`'s own comment calls it PROVENANCE, i.e. a thing a reader
   // consults; no reader could.
   //
-  // deinvo hit it on the one operation the field exists for: granting a
+  // a consumer hit it on the one operation the field exists for: granting a
   // founder `org-admin` in CreateOrg by matching the role the SEED owns
   // rather than by name, which is a label a customer may rename. Their
   // guard fired `role preset "org-admin" is not seeded` against a
@@ -1587,7 +1603,7 @@ service AuthQuery {
           // email_verified_at (`email_verification`): without it
           // inviteVerifiedEmailGate read a field nobody filled, so with
           // AUTH_INVITE_REQUIRES_VERIFIED_EMAIL on it refused EVERY invite —
-          // including verified accounts (marb #79/1). Third instance of the
+          // including verified accounts (reported by a consumer). Third instance of the
           // shape GetUserByEmail's comment already names.
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           "       u.created_at AS user.created_at "
@@ -2028,6 +2044,34 @@ service AuthQuery {
   // Accepted rows are excluded rather than deleted on acceptance, so the
   // table keeps the record of how each membership came to exist while
   // this list stays the set of things still outstanding.
+  // GetPendingOrgInviteByToken — read the link's invitation WITHOUT spending it.
+  //
+  // The read exists because the proof gate has to know whether the invitation is
+  // BOUND before anything is consumed, and the old ordering ("gate first, claim
+  // second") cannot answer that — the gate ran before there was an invitation in
+  // hand. Consuming first and rolling back would do it only where a transaction is
+  // running, and `AcceptOrgInvite` begins one only when DistTx is wired. So: read,
+  // decide, then consume.
+  //
+  // Leaks nothing a guesser did not already supply: it answers only for a token
+  // they presented, and a wrong token is NOT_FOUND exactly like a spent one.
+  rpc GetPendingOrgInviteByToken(GetPendingOrgInviteByTokenReq) returns (GetPendingOrgInviteByTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.org_id AS org_id, "
+          "       i.role AS role, "
+          "       i.email AS email, "
+          "       i.metadata AS metadata "
+          "FROM @module.OrgInvite i "
+          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.expires_at > NOW() "
+          "LIMIT 1"
+      }
+    };
+  }
+
   rpc ListOrgInvitesByOrg(ListOrgInvitesByOrgReq) returns (ListOrgInvitesByOrgResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {
@@ -2041,7 +2085,8 @@ service AuthQuery {
           "       i.invited_by AS invited_by, "
           "       i.expires_at AS expires_at, "
           "       i.accepted_at AS accepted_at, "
-          "       i.created_at AS created_at "
+          "       i.created_at AS created_at, "
+          "       i.metadata AS metadata "
           "FROM @module.OrgInvite i "
           "WHERE i.org_id = :org_id AND i.accepted_at IS NULL "
           "ORDER BY i.created_at DESC"

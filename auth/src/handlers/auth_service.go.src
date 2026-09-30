@@ -149,7 +149,7 @@ type AuthServiceHandler struct {
 	TwoFactorTOTP     bool   // built-in TOTP verify path enabled (two_factor_totp)
 	TwoFactorScope    string // all_logins | new_devices (two_factor_scope)
 	MfaCodeTTLSeconds int    // event-flow challenge code lifetime (mfa_code_ttl_seconds)
-	// Issuance cap (marb #63): at most MaxMfaChallengesPerWindow challenges
+	// Issuance cap (a consumer): at most MaxMfaChallengesPerWindow challenges
 	// per user per MfaChallengeWindowSeconds. The per-challenge attempt
 	// budget bounds guesses against one challenge; this bounds how many
 	// challenges — and so how many budgets — a caller can buy. <= 0 → the
@@ -175,17 +175,25 @@ type AuthServiceHandler struct {
 	EmailVerificationTTLSeconds int // email_verification_ttl_seconds
 
 	InviteOnly bool // require a pending org invitation to sign up (invite_only)
-	// InviteRequiresVerifiedEmail refuses AcceptOrgInvite from an account
-	// whose address was never proved (invite_requires_verified_email).
+	// EmailProofRequired is the FLOOR an address must reach before
+	// AcceptOrgInvite will admit it: "none", "derived" or "full"
+	// (email_proof_required).
 	//
-	// Off by default and deliberately not derived from whether
-	// `email_verification` is active: a project can have the feature on and
-	// every account unverified, and flipping this for them on an upgrade
-	// would lock every one of those people out of the invitation they were
-	// sent. Turning it on is the deployment's call, and saying that plainly
-	// beats a default that reads as safe and is really a breaking change.
-	InviteRequiresVerifiedEmail bool
-	OrgInviteTTLHours           int // how long an invitation stays acceptable (org_invite_ttl_hours)
+	// It replaced a boolean, and the reason is the middle value: a bound
+	// invitation names the address and the secret link reached whoever
+	// registered, which is a real proof and a weaker one than a confirmation
+	// the person completed themselves. A boolean could say "verified or not"
+	// and could not say "this much" — so a deployment that wanted the
+	// address-guessing hole closed had to demand a round trip nobody needed.
+	//
+	// Defaults to "none" and deliberately not to something stricter: every
+	// account that exists today is UNPROVEN, so a stricter default would
+	// refuse invitations those people were legitimately sent. Turning it up is
+	// the deployment's call, and saying that plainly beats a default that reads
+	// as safe and is really a breaking change — which is the same reasoning the
+	// boolean carried, kept because it did not stop being true.
+	EmailProofRequired string
+	OrgInviteTTLHours  int // how long an invitation stays acceptable (org_invite_ttl_hours)
 }
 
 // scopeDecorator augments the AuthResp scope + label maps for an
@@ -405,11 +413,28 @@ var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userI
 // two RPCs and blocks nothing, so a project could enable it, verify nobody,
 // and still be told by its own documentation that it was covered. A consumer
 // measured 19 accounts out of 19 with the column NULL and asked which of us
-// was supposed to enforce it (marb #77).
+// was supposed to enforce it (a consumer).
 //
-// The answer is: this, and only if asked. See `invite_requires_verified_email`
-// in plugin.yaml for why it is opt-in rather than automatic.
-var inviteVerifiedEmailGate = func(_ context.Context, _ *AuthServiceHandler, _ string) error {
+// The answer is: this, and only if asked. See `email_proof_required` in
+// plugin.yaml for why it is opt-in rather than automatic.
+//
+// The last argument says whether the invitation being accepted BINDS an address.
+// It is here rather than derived inside, because only the caller holds the
+// invitation at that moment and the gate must run before the row is spent: a
+// bound invitation derives the address by being accepted, an open one derives
+// nothing, and the difference is what the middle floor is for.
+var inviteVerifiedEmailGate = func(_ context.Context, _ *AuthServiceHandler, _ string, _ bool) error {
+	return nil
+}
+
+// markEmailDerived records that a BOUND invitation proved the caller's address.
+//
+// A seam for the same reason the gate above is one: `User.email_proof` is
+// field-gated on `email_verification`, so the column — and the mutation that
+// writes it — exist only when that feature is staged. A no-op here means the
+// project declined the feature, not that the derivation failed, and an
+// invitation must keep working either way.
+var markEmailDerived = func(_ context.Context, _ *AuthServiceHandler, _ string) error {
 	return nil
 }
 
@@ -460,7 +485,7 @@ var errSignUpNotInvited = status.Error(codes.PermissionDenied,
 // every deployment was green. The only artefact was an unused variable:
 // staticcheck's U1000 named errSignUpNotInvited, in a directory `make
 // audit-go` did not scan. It scans it now (T3-7 pass #13).
-var signupInviteGate = func(ctx context.Context, h *AuthServiceHandler, email string) error {
+var signupInviteGate = func(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) error {
 	return nil
 }
 
@@ -825,7 +850,7 @@ var whoAmIEnrich = func(ctx context.Context, h *AuthServiceHandler, userID strin
 // ⛔ A caller with NO resolvable session token — an API-token bearer, or a
 // direct gRPC call — is REFUSED (FailedPrecondition), not waved through. That
 // changed in auth v0.1.0-rc.4 and this comment promised the old behaviour for a
-// day afterwards (marb #74/7): whoever read the contract was told a false
+// day afterwards (reported by a consumer): whoever read the contract was told a false
 // success was the contract. The reasoning for the refusal is at the branch
 // itself; the short version is that "I was not told which session" is not
 // idempotence.
@@ -839,7 +864,7 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 	}
 	tokenID := callerSessionTokenID(ctx)
 	if tokenID == "" {
-		// ⛔ REFUSED, and it used to succeed (marb #69).
+		// ⛔ REFUSED, and it used to succeed (a consumer).
 		//
 		// An empty id means Logout does not know WHICH session to end. That is
 		// not idempotence — idempotence is "this session is already gone, so
@@ -923,7 +948,7 @@ func callerUserID(ctx context.Context) (string, error) {
 // ⚠️ Logout used to NO-OP on that empty string, "rather than erroring for a
 // caller with no resolvable session". The intent was to spare an API-token
 // bearer an error; the cost was that a real session's logout could answer OK
-// having revoked nothing, and nothing anywhere said so (marb #69). Logout
+// having revoked nothing, and nothing anywhere said so (a consumer). Logout
 // refuses now — see the note at its call site.
 // Reads the envelope, never the raw bearer (which never reaches handlers).
 func callerSessionTokenID(ctx context.Context) string {

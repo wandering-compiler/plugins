@@ -101,7 +101,7 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		messagesFrom(start.GetMessages()), tools, limitsFrom(start.GetLimits()),
 		func(e llm.RunEvent) error { return sendRunEvent(send, e) })
 
-	// ⚠️ marb #79/4. A request the LLM layer refused BEFORE calling the provider
+	// ⚠️ a consumer. A request the LLM layer refused BEFORE calling the provider
 	// is not a failed call: no tokens were spent and nothing was unavailable, so
 	// recording a usage row invents spend and the error sends the caller to the
 	// provider's status page for what is an invalid argument. That is #74/3, and

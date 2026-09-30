@@ -62,7 +62,7 @@ type EnvConfig struct {
 	TwoFactorScope    string // two_factor_scope — all_logins | new_devices
 	MfaCodeTtlSeconds int    // mfa_code_ttl_seconds — event-flow code lifetime
 
-	// Issuance cap for MFA challenges (marb #63). maxMfaAttempts is per
+	// Issuance cap for MFA challenges (a consumer). maxMfaAttempts is per
 	// CHALLENGE and a new sign-in mints a new one, so these bound how many
 	// challenges — and so how many attempt budgets — one user can be issued
 	// in a window. <= 0 → 10 per 900s.
@@ -85,9 +85,9 @@ type EnvConfig struct {
 	PasswordResetTtlSeconds     int // password_reset_ttl_seconds (default 3600)
 	EmailVerificationTtlSeconds int // email_verification_ttl_seconds (default 86400)
 
-	InviteOnly                  bool // invite_only (default true)
-	InviteRequiresVerifiedEmail bool // invite_requires_verified_email (default false)
-	OrgInviteTtlHours           int  // org_invite_ttl_hours (default 168)
+	InviteOnly         bool   // invite_only (default true)
+	EmailProofRequired string // email_proof_required: none | derived | full (default "none")
+	OrgInviteTtlHours  int    // org_invite_ttl_hours (default 168)
 }
 
 // ClientSet exposes the in-process typed clients the plugin's

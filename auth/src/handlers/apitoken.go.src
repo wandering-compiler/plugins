@@ -121,7 +121,7 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 	// happened.
 	//
 	// ⚠️ Fixed here on 2026-09-24, a few hours after the identical shape was
-	// fixed in IssueBotToken and CreateBot (marb #58). This one was missed in
+	// fixed in IssueBotToken and CreateBot (a consumer). This one was missed in
 	// that sweep, which is the whole argument for naming siblings when a shape
 	// is fixed rather than fixing the instances that were reported: the bot
 	// endpoints are called by an admin, and this one is called by everybody.

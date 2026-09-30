@@ -2,7 +2,7 @@
 //
 // # Provenance
 //
-// Ported from `lib/chatengine/llm.go` in Marb-AI/platform, which has run this
+// Ported from a sibling project of ours, which has run this
 // in production. The parameter shaping, the reasoning-family table and the
 // status handling are theirs, and the comments explaining WHY each one is the
 // way it is were kept — a threshold whose reason is lost is a number nobody
@@ -313,7 +313,7 @@ func usageFrom(res *responses.Response) Usage {
 // acceptable" was true about the URL and wrong about the rest. The full text
 // also carries the RESPONSE BODY, which this very file records as sometimes
 // quoting the prompt — so `%v` on a provider error put user input into the
-// bundle's log, on a line whose comment justified only the URL (marb #74/2).
+// bundle's log, on a line whose comment justified only the URL (reported by a consumer).
 //
 // A log is not a safe place for a prompt: it is shipped, aggregated and kept
 // far longer than the request, and nobody reading it asked for the content.

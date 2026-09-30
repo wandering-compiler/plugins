@@ -189,7 +189,7 @@ service UsageQuery {
   // change would otherwise bill all of it at one rate, and which rate would
   // depend on where the join happened to land.
   //
-  // ⚠️ A MIXED-CURRENCY ROLLUP REPORTS NO COST (marb #74/1).
+  // ⚠️ A MIXED-CURRENCY ROLLUP REPORTS NO COST (reported by a consumer).
   //
   // `MAX(p.currency)` beside `SUM(p.line_minor)` used to sum minor units across
   // currencies and stamp whichever one sorted highest — a number that looks like
@@ -348,7 +348,7 @@ service UsageQuery {
   // retroactively make yesterday an overspend.
   //
   // (This paragraph spent a while stranded above ListModelPrices, where it
-  // described the wrong RPC and left this one undocumented — marb #74/5.)
+  // described the wrong RPC and left this one undocumented — a consumer.)
   rpc GetScopeLimit(GetScopeLimitReq) returns (GetScopeLimitResp) {
     option (w17.db.method) = {
       ops: {

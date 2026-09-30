@@ -1,0 +1,120 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"google.golang.org/grpc"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+)
+
+type workerStore struct {
+	approved, denied []string
+	recorded         []string // "<relayID>:<fingerprint>"
+	pending          int
+}
+
+func (w *workerStore) Decisions(context.Context, string) ([]string, []string, error) {
+	return w.approved, w.denied, nil
+}
+func (w *workerStore) RecordPending(_ context.Context, relayID string, p *pb.PendingWorker) error {
+	w.recorded = append(w.recorded, relayID+":"+p.GetCertFingerprint())
+	w.pending++
+	return nil
+}
+func (w *workerStore) PendingCount(context.Context) (int, error) { return w.pending, nil }
+
+// serveRelayWithWorkers stands a real relay up with a real admission registry.
+func serveRelayWithWorkers(t *testing.T, offer ...workeradmit.Pending) (*workeradmit.Registry, Dialer) {
+	t.Helper()
+	reg := workeradmit.New()
+	for _, p := range offer {
+		reg.Offer(p.Fingerprint, p.Name, p.DeviceID)
+	}
+	pool, err := relaycore.New(relaycore.Options{Capacity: 1, TicketTTL: minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, dial := serveOn(t, &relayserver.Server{Pool: pool, Workers: reg, ProxyAddress: "w:1"})
+	return reg, dial
+}
+
+// One unreachable relay must not hide the machines every other relay is
+// holding — which is exactly the moment an operator is most likely to be
+// pressing this button.
+func TestCheckWorkers_AnUnreachableRelayIsReportedNotFatal(t *testing.T) {
+	_, dialLive := serveRelayWithWorkers(t, workeradmit.Pending{Fingerprint: "aa", Name: "vps-1"})
+
+	ws := &workerStore{}
+	h := &ClusterServiceHandler{
+		Relays: &store{relays: []Relay{
+			{ID: "dead", Name: "a-dead"},
+			{ID: "live", Name: "b-live", URL: "live"},
+		}},
+		Workers: ws,
+	}
+	h.Dial = func(target, _ string) (*grpc.ClientConn, error) {
+		if target == "" {
+			return nil, errors.New("connection refused")
+		}
+		return dialLive(target, "")
+	}
+
+	resp, err := h.CheckWorkers(t.Context(), &pb.CheckWorkersReq{})
+	if err != nil {
+		t.Fatalf("CheckWorkers failed because one relay was down: %v", err)
+	}
+	if got := resp.GetUnreachableRelays(); len(got) != 1 || got[0] != "a-dead" {
+		t.Errorf("unreachable = %v, want [a-dead]", got)
+	}
+	if len(ws.recorded) != 1 || ws.recorded[0] != "live:aa" {
+		t.Errorf("recorded = %v, want the live relay's pending machine", ws.recorded)
+	}
+	if resp.GetDiscovered() != 1 || resp.GetPendingTotal() != 1 {
+		t.Errorf("discovered=%d pending=%d, want 1 and 1", resp.GetDiscovered(), resp.GetPendingTotal())
+	}
+}
+
+// The decisions reach the relay, and what the relay does with them is the
+// revocation: a denied machine stops being admitted.
+func TestCheckWorkers_DecisionsReachTheRelay(t *testing.T) {
+	reg, dial := serveRelayWithWorkers(t,
+		workeradmit.Pending{Fingerprint: "aa"},
+		workeradmit.Pending{Fingerprint: "bb"},
+	)
+	ws := &workerStore{approved: []string{"aa"}, denied: []string{"bb"}}
+	h := &ClusterServiceHandler{
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "r", URL: "live"}}},
+		Workers: ws,
+		Dial:    dial,
+	}
+
+	if _, err := h.CheckWorkers(t.Context(), &pb.CheckWorkersReq{}); err != nil {
+		t.Fatalf("CheckWorkers: %v", err)
+	}
+	if !reg.Admitted("aa") {
+		t.Error("the approved machine is not admitted at the relay")
+	}
+	if reg.Admitted("bb") {
+		t.Error("the denied machine is still admitted at the relay")
+	}
+	// Both were decided about, so neither is news any more — and nothing was
+	// recorded as pending, because the relay had nothing left to report.
+	if len(ws.recorded) != 0 {
+		t.Errorf("recorded = %v, want nothing: both machines were decided about", ws.recorded)
+	}
+}
+
+// Wiring that is missing must SAY so rather than sweeping nothing and
+// reporting success.
+func TestCheckWorkers_RefusesWithNoRegistry(t *testing.T) {
+	h := &ClusterServiceHandler{Relays: &store{}}
+	if _, err := h.CheckWorkers(t.Context(), &pb.CheckWorkersReq{}); err == nil {
+		t.Fatal("a handler with no worker registry reported a successful sweep")
+	}
+}

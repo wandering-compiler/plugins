@@ -84,6 +84,32 @@ message User {
     (w17.field) = { type: DATETIME, null: true },
     (w17.contrib.plugin_feature_field) = "email_verification"
   ];
+  // HOW that address was proved, because "verified" stopped being one thing.
+  //
+  // A bound invitation derives it: the invitation named this address and the
+  // secret link reached whoever registered, so no round trip is needed. That is
+  // weaker than a confirmation the person completed themselves, and a deployment
+  // is allowed to demand the stronger one — which it cannot do while both look
+  // identical in the data. Hence a METHOD beside the timestamp rather than a
+  // second boolean: `email_verification_mode = at_least_derived` has to be able
+  // to tell them apart, and one nullable timestamp cannot say which.
+  //
+  // ⚠️ The derivation is only as good as the channel the link travelled, and it
+  // says nothing at all about an OPEN invitation, where the registrant picks the
+  // address. There the method stays UNPROVEN even though the caller was
+  // authorised — authorisation is not address proof
+  // (decisions/invite-proof-belongs-on-the-link).
+  //
+  // ⚠️ `zero_is_value` for the same reason `kind` below carries it: UNPROVEN is
+  // the answer for every address that existed before this column, so 0 has to be
+  // a stored classification rather than the proto3 sentinel. Without it the
+  // codegen refuses `default_int: 0` outright ("0 is not a value of enum
+  // EmailProof (valid: [1 2])") — the enum would have a value no row could hold
+  // and the ADD COLUMN would have no default to backfill with.
+  EmailProof email_proof = 9 [
+    (w17.field) = { type: ENUM, zero_is_value: true, default_int: 0 },
+    (w17.contrib.plugin_feature_field) = "email_verification"
+  ];
 
   // tenant_id — the owning tenant, behind `tenant_scope`. Sourced
   // from auth (AuthQuery.GetUserTenant) into the `tenant_id` data
@@ -144,6 +170,20 @@ message User {
 // makes "an admin may mint a token for another account" safe to offer at all.
 // Without it that endpoint is "make yourself access as anyone"
 // (docs/todos/api-tokens-for-unattended-callers.md).
+// EmailProof — how an address came to be trusted, for deployments that care
+// about the difference. Ordered weakest to strongest so a mode can be read as a
+// floor.
+enum EmailProof {
+  // Nobody proved anything. The state of every address today that did not go
+  // through VerifyEmail, and of every OPEN invitation's registrant.
+  UNPROVEN = 0;
+  // A bound invitation: the invitation named this address, and the secret link
+  // reached the person who registered. No round trip asked of them.
+  DERIVED_FROM_INVITE = 1;
+  // The person completed the `email_verification` flow themselves.
+  SELF_CONFIRMED = 2;
+}
+
 enum AccountKind {
   // A person. Zero on purpose — see `User.kind`.
   HUMAN = 0;
@@ -541,7 +581,7 @@ message Role {
   // from the declaration — so a change in how that derivation is spelled
   // re-minted every id, the upsert matched nothing, and the INSERT collided
   // with the unique over `name`, taking `stack build` down on any database
-  // old enough to hold the previous ids (marb #72, deinvo, 2026-09-24).
+  // old enough to hold the previous ids (two consumers, 2026-09-24).
   //
   // NULL stays NULL-able and PostgreSQL treats NULLs as DISTINCT, so the
   // customer's own rows — the whole point of this column — are untouched by
@@ -758,7 +798,7 @@ message TokenPermission {
 // so an operator can retire a single callback without touching the others.
 //
 // Requested by a consumer who had the whole flow working on loopback and
-// could not deploy it (marb, 2026-09-23).
+// could not deploy it (a consumer, 2026-09-23).
 message AuthClient {
   option (w17.db.table) = {
     indexes: [
@@ -789,9 +829,9 @@ message AuthClient {
   //
   // The flow was built for CLIs (2026-06-28), where a secret cannot be kept
   // and PKCE alone is the right answer. Extending it past loopback to browser
-  // and server apps (marb #61) carried that shape onto clients that CAN keep
+  // and server apps (a consumer) carried that shape onto clients that CAN keep
   // one, which left the redirect allowlist as the only thing standing between
-  // a registration and a delivered code (marb #65).
+  // a registration and a delivered code (a consumer).
   string client_secret = 7 [(w17.field) = { type: PASSWORD }];
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 }
@@ -916,7 +956,7 @@ message OrgMembership {
 // adds a column and two RPCs; it blocks nothing. A project could turn it on,
 // verify nobody, and be told by this file that it was covered — which is what
 // happened: a consumer measured 19 accounts of 19 with the column NULL and
-// asked which side was supposed to enforce it (marb #77).
+// asked which side was supposed to enforce it (a consumer).
 //
 // What closes it today is `invite_requires_verified_email`, which refuses an
 // acceptance from an unverified account. It is off by default, so the weak
@@ -947,10 +987,23 @@ message OrgInvite {
 
   string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string org_id  = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  // The invited address. Stored normalized (lower-cased) by the handler, the
-  // same normalization SignIn applies, or "Someone@x" and "someone@x" would
-  // be two different invitations and only one of them would ever match.
-  string email   = 3 [(w17.field) = { type: EMAIL, max_len: 320 }, (w17.db.column) = { index: true }];
+  // The invited address, and NULL is a real state: the invitation is OPEN and
+  // whoever holds the link picks their own address.
+  //
+  // Nullable since the link became the proof (decisions/invite-proof-belongs-on-the-link).
+  // Bound (non-NULL) is the corporate case — this address and no other — and it is
+  // also the only case that can derive a verified address, because only there does
+  // "the invitation named it" say anything about the address the registrant types.
+  //
+  // The partial unique index below keeps working across the change on purpose: two
+  // OPEN invitations carry NULL and NULL does not collide with NULL, so an org can
+  // have many open links at once, each its own secret. Two BOUND invitations to one
+  // address still collide while pending, which is the rule that index exists for.
+  //
+  // Stored normalized (lower-cased) by the handler when present, the same
+  // normalization SignIn applies, or "Someone@x" and "someone@x" would be two
+  // different invitations and only one of them would ever match.
+  string email   = 3 [(w17.field) = { type: EMAIL, max_len: 320, null: true }, (w17.db.column) = { index: true }];
   // The role the invitee gets in this org — a Role.name, validated to exist
   // when the invite is created rather than when it is accepted, so a typo is
   // the inviter's error at the moment they make it and not a failure the
@@ -964,4 +1017,38 @@ message OrgInvite {
   // the record of how that membership came to exist.
   google.protobuf.Timestamp accepted_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at  = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // sha256 hex of the single-use token that IS the invitation link.
+  //
+  // The same shape `PasswordResetToken` and `EmailVerificationToken` carry, and a
+  // consumer put the reason best: that shape existed twice in this plugin and not
+  // where it was needed. Only the hash is stored; the plaintext is returned to the
+  // INVITER once, because here the sender is the delivery channel — unlike a
+  // password reset, where the token goes to the mailbox and never to a caller.
+  //
+  // ⚠️ NO `consumed_at` beside it, deliberately: `accepted_at` above is already that
+  // fact, and the partial index already reads it as "pending". A second timestamp
+  // meaning the same thing is two names for one state, and they drift.
+  string token_hash = 9 [(w17.field) = { type: CHAR, max_len: 128, unique: true }];
+  // Consumer-owned, OPAQUE. Whatever the caller needs paired with this invitation —
+  // the reported case is "a tenant and one object in our own engine", so that
+  // accepting an invitation pairs both at once instead of joining a side table on
+  // the e-mail address, which is the weak key this whole change is about.
+  //
+  // The plugin never reads it. That is what makes this answerable without deciding
+  // the general question ("does a plugin's table take CONSUMER-SHAPED columns?"):
+  // it takes one column whose CONTENTS the plugin has no opinion about. The
+  // precedent is already shipped — `payment`'s UsageEvent.metadata is the same
+  // field with the same annotation, and nothing in that plugin interprets it
+  // either.
+  //
+  // It comes back at ACCEPTANCE, out of the same statement that spends the
+  // invitation (ConsumeOrgInviteByToken RETURNING metadata). That is the half a
+  // side table cannot do: the consumer's pairing and the acceptance either both
+  // happen or neither does.
+  //
+  // `blank: true` rather than `null: true` — an invitation with nothing pinned to
+  // it carries the empty string, so a reader never has to tell "no metadata" from
+  // "metadata I could not read". JSON because the shape is the consumer's and a
+  // single opaque column has to hold whatever they put there.
+  string metadata = 10 [(w17.field) = { type: JSON, blank: true }];
 }

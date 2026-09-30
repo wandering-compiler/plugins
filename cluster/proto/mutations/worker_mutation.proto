@@ -26,7 +26,7 @@ option go_package = "@project;@pkg";
 // pointing a worker somewhere else.
 //
 // It used to be DO NOTHING, which froze the location along with the decision
-// and built a trap with no way out (marb, 2026-09-25). A worker approved on
+// and built a trap with no way out (a consumer, 2026-09-25). A worker approved on
 // relay A that reconnects to B keeps `relay_id = A`; B asks
 // FingerprintsByState(B, APPROVED) and never hears about it, so it never gives
 // it work — and because the row is APPROVED it is not pending either, so it

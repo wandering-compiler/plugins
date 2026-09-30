@@ -38,7 +38,7 @@ const (
 	// PER CHALLENGE is the whole of what it claims. Restarting the sign-in
 	// flow yields a fresh challenge with a fresh budget, so this number
 	// alone bounds nothing; the ISSUANCE cap below is the other half, and
-	// neither is sufficient on its own (marb #63).
+	// neither is sufficient on its own (a consumer).
 	maxMfaAttempts = 5
 
 	// defaultMaxMfaChallengesPerWindow / defaultMfaChallengeWindowSeconds
@@ -65,7 +65,7 @@ var errMfaChallengeInvalid = errors.New("mfa challenge invalid/expired/consumed"
 // spent. It is a wireError — a DELIBERATE, non-opaque answer — because it is
 // only reachable AFTER the password verified, so saying what happened tells
 // an attacker nothing the credential did not already buy. The opaque
-// "invalid credentials" here would be a lie of the same shape marb #60/4
+// "invalid credentials" here would be a lie of the same shape a consumer
 // objected to: it sends a user whose password is fine to go reset it.
 var errMfaChallengeBudget = &wireError{
 	code: codes.ResourceExhausted,
@@ -100,7 +100,7 @@ func (h *AuthServiceHandler) mfaTTL() time.Duration {
 // and "the enrolment store did not answer" are opposite facts about a second
 // factor, and collapsing them let a read failure downgrade every caller: the
 // sign-in gate skipped the challenge, VerifyMfa fell to the weaker code path,
-// and GetMfaStatus told the user they had no authenticator (marb #58/3). The
+// and GetMfaStatus told the user they had no authenticator (reported by a consumer). The
 // call sites now refuse instead, which is the direction a factor may fail in.
 //
 // NotFound stays a value, not an error: it is the genuine "not enrolled".
@@ -143,7 +143,7 @@ func (h *AuthServiceHandler) maxMfaChallengesPerWindow() int64 {
 // read as if it bounded guessing. It does not: a new challenge is a new row
 // with attempts = 0, so an attacker who already holds the password buys five
 // more guesses per sign-in, for as long as they care to sign in. Five of a
-// six-digit space is a real bound; five-times-unbounded is none (marb #63).
+// six-digit space is a real bound; five-times-unbounded is none (a consumer).
 //
 // The threat model this closes is exactly the one the second factor exists
 // for — an attacker WITH the password and without the delivery channel. The
@@ -157,7 +157,7 @@ func (h *AuthServiceHandler) maxMfaChallengesPerWindow() int64 {
 //
 // Called ONLY from issueMfaChallenge, inside the transaction that holds the
 // user row lock. Counting outside that lock reads a number that another
-// request is already making wrong (marb #65) — the count and the insert it
+// request is already making wrong (a consumer) — the count and the insert it
 // gates have to be one serialised section or the cap is decorative.
 func (h *AuthServiceHandler) enforceMfaChallengeBudget(ctx context.Context, userID string) error {
 	since := timestamppb.New(time.Now().Add(-h.mfaChallengeWindow()))
@@ -207,7 +207,7 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 	}
 	// Serialise issuance for THIS user, then decide. The cap used to count
 	// outside any transaction and decide on the answer, which bounds nothing
-	// against anything concurrent: marb sent twenty sign-ins at once and got
+	// against anything concurrent: a consumer sent twenty sign-ins at once and got
 	// twenty challenges past a limit of ten, because all twenty read zero
 	// before any of them committed (#65).
 	//
@@ -324,7 +324,7 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	// user with NO second factor: their working authenticator was already
 	// deleted, and they are locked out of the thing that was protecting them
 	// — by an operation whose entire purpose was to move it to a new phone
-	// (marb #58). Same distx shape AcceptOrgInvite uses.
+	// (a consumer). Same distx shape AcceptOrgInvite uses.
 	var tx *distx.TxHandle
 	txCtx := ctx
 	if h.DistTx != nil {
@@ -399,7 +399,7 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	// `err == nil && …` made the whole condition false on a read failure, so
 	// the TOTP check was SKIPPED and the delete ran anyway: a signed-in
 	// session could drop a confirmed second factor without presenting a code,
-	// for as long as the read was failing (marb #58/2). Going through
+	// for as long as the read was failing (reported by a consumer). Going through
 	// totpEnrolled keeps that impossible — the error is now a refusal.
 	enrolled, encSecret, err := h.totpEnrolled(ctx, userID)
 	if err != nil {

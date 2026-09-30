@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.7
+version: 0.1.0-rc.8
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -66,11 +66,11 @@ env:
   - name: invite_only
     type: bool
     default: "true"
-    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. This text used to claim the window closes once `email_verification` is enabled — it does not, and never did: that feature adds a column and two RPCs and blocks nothing (marb #77 measured 19 unverified accounts of 19 with it on). Set `invite_requires_verified_email` to close it, or see docs/decisions/invite-proof-belongs-on-the-link.md for the change that removes the need to verify at all."
-  - name: invite_requires_verified_email
-    type: bool
-    default: "false"
-    description: "Refuse AcceptOrgInvite from an account whose e-mail was never verified (org_invite + email_verification). An invitation is keyed on an ADDRESS and accepted by whoever holds an account with it, so without this the proof is 'I registered this address', not 'I own this mailbox' — and whoever guesses an invited address first inherits the membership and its role. ⚠️ OFF by default, which is NOT this plugin's usual 'the unsafe state is the one you opt into': a project can have `email_verification` active with every account unverified (that is exactly what was measured in marb #77), and defaulting this on would lock all of those people out of invitations they were legitimately sent. A default that reads as safe and is really a breaking change is worse than an honest knob. It has no effect unless `email_verification` is active — the column it reads does not exist otherwise. The refusal names the remedy (confirm your address) and says nothing about whether an invitation exists, so it does not reopen the probe `errInviteInvalid` closes. The better answer is a token on the invitation, which makes verification unnecessary rather than mandatory: docs/decisions/invite-proof-belongs-on-the-link.md."
+    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. This text used to claim the window closes once `email_verification` is enabled — it does not, and never did: that feature adds a column and two RPCs and blocks nothing (a consumer measured 19 unverified accounts of 19 with it on). Set `invite_requires_verified_email` to close it, or see docs/decisions/invite-proof-belongs-on-the-link.md for the change that removes the need to verify at all."
+  - name: email_proof_required
+    type: string
+    default: "none"
+    description: "How much proof an address needs before AcceptOrgInvite will admit it (org_invite). Three values, ordered weakest to strongest, and they read as a FLOOR on User.email_proof: 'none' asks nothing and is today's behaviour; 'derived' accepts an address a BOUND invitation named (the invitation said this address and the secret link reached whoever registered — no round trip asked of anybody), and also accepts a self-confirmed one; 'full' accepts only an address whose owner completed the email_verification flow themselves. ⚠️ Defaults to 'none' on purpose, which is NOT this plugin's usual 'the unsafe state is the one you opt into': every account that exists today is UNPROVEN, so a stricter default would refuse invitations those people were legitimately sent — a default that reads as safe and is really a breaking change is worse than an honest knob, which is the same reasoning the boolean this replaces carried. 'derived' is the setting most deployments want once they are past onboarding: it closes the address-guessing hole without asking anyone for a round trip, because an OPEN invitation cannot derive anything (the registrant picks the address) and is therefore refused by it. Replaces `invite_requires_verified_email`, a boolean that could not express 'derived' at all. See docs/decisions/invite-proof-belongs-on-the-link.md."
   - name: org_invite_ttl_hours
     type: int
     default: "168"
@@ -96,7 +96,7 @@ features:
       # gated `rbac` — and auth_service.go calls it unconditionally. Without
       # this, activating the turnkey resolver alone fails the BUNDLE build on
       # `undefined: pb.GetUserByTokenWithPermissionsReq`, pointing at a file
-      # the project never wrote and cannot edit (marb #58).
+      # the project never wrote and cannot edit (a consumer).
       - rbac
     description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids."
     default: true
@@ -120,14 +120,14 @@ features:
       # baseline CreateUser and has no tenant to resolve, so an OAuth sign-in
       # under tenant_scope hits the NOT NULL tenant_id at RUNTIME — the worst
       # place to learn it. A documented incompatibility that codegen does not
-      # know about is a promise the compiler cannot keep (marb #58).
+      # know about is a promise the compiler cannot keep (a consumer).
       - oauth
     description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth`: handlers/oauth.go creates users through the baseline CreateUser and has no tenant to resolve, so the pair is unsupported (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Off by default — opt in for multi-tenant deployments."
     default: false
     go_files:
       - handlers/tenant.go
   - name: api_token
-    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. This used to `conflicts_with: org_membership`, because two narrowings over bare permission-id SETS cannot compose. Lifted 2026-09-20: both axes now resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (deinvo asked 2026-09-06; the anonymous case with NO permissions is a custom auth method, as in a public-link view). See docs/specs/plugins/auth-tokens-and-roles.md."
+    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. This used to `conflicts_with: org_membership`, because two narrowings over bare permission-id SETS cannot compose. Lifted 2026-09-20: both axes now resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (a consumer asked 2026-09-06; the anonymous case with NO permissions is a custom auth method, as in a public-link view). See docs/specs/plugins/auth-tokens-and-roles.md."
     default: false
     go_files:
       - handlers/apitoken.go
@@ -242,7 +242,7 @@ features:
       # membership before the grant — both are org_membership's. Undeclared,
       # activating service_account without it fails the BUNDLE build on
       # `undefined: pb.AddOrgMembershipReq`, in a file the project never wrote
-      # (marb #58).
+      # (a consumer).
       - org_membership
     go_files:
       - handlers/service_account.go
@@ -407,7 +407,7 @@ presets:
       #
       # This comment used to read "admin-scoped by the ACL", which describes
       # a property the plugin does not have and a consumer read it as one
-      # (marb #65). What makes a registration safe today is the other end:
+      # (a consumer). What makes a registration safe today is the other end:
       # registering issues a client_secret, and a code minted for a registered
       # client cannot be redeemed without it. The gate still matters — it is
       # what keeps an attacker from registering at all — but it is yours.
@@ -447,7 +447,21 @@ presets:
         description: "The signed-in caller's pending invitations, and accepting one."
         endpoints:
           - { ref: AuthService.ListMyInvites,   method: GET,  path: "",                       feature: org_invite }
-          - { ref: AuthService.AcceptOrgInvite, method: POST, path: "/{invite_id}/accept",     feature: org_invite }
+          # ⛔ The path carries NO id, and that is the point twice over.
+          #
+          # It cannot carry `invite_id` any more: the request retired that field when
+          # the invitation became a secret link (reserved 1), so this binding named a
+          # field the message no longer has — and codegen REFUSES that, which means
+          # the plugin as published could not be installed at all. No example
+          # activates org_invite, so nothing caught it until a console-app regen was
+          # run against the author tree.
+          #
+          # And it must not carry the TOKEN either. A token in a URL path is written
+          # to every access log, proxy log and browser history between the invitee and
+          # the console — for a credential whose whole security model is "holding the
+          # link IS the invitation", that is the one place it cannot go. It travels in
+          # the POST body.
+          - { ref: AuthService.AcceptOrgInvite, method: POST, path: "/accept",                 feature: org_invite }
   mcp:
     # MCP tools the plugin exposes. WhoAmI lets an MCP client confirm the
     # principal behind its API token. Deliberately a NARROW surface —

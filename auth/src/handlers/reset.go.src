@@ -73,7 +73,7 @@ func (h *AuthServiceHandler) ResetPassword(ctx context.Context, req *pb.ResetPas
 	// Apart, the token is spent before the password changes: a failure in
 	// between burns a valid link and leaves the old password in place, so the
 	// person is left with NEITHER — and they asked for that link precisely
-	// because they could not get in (marb #58). The consume must come first
+	// because they could not get in (a consumer). The consume must come first
 	// (it is the check), so the only honest arrangement is to roll the pair
 	// back together.
 	var tx *distx.TxHandle
@@ -131,7 +131,7 @@ func (h *AuthServiceHandler) consumeAndSetPassword(txCtx context.Context, tokenH
 		// caller apart "this token is unknown/used/expired" from every other
 		// outcome, which is the enumeration the opaque refusal exists to
 		// prevent, and it made the `== ""` branch below unreachable: written
-		// for a shape this mutation never produces (marb #58).
+		// for a shape this mutation never produces (a consumer).
 		//
 		// Unauthenticated() classifies: a refusal stays opaque, an outage
 		// comes back as Unavailable rather than dressed as a bad token.

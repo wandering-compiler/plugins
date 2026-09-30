@@ -1,0 +1,295 @@
+package workerconn
+
+import (
+	"context"
+	"crypto/tls"
+	"net"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+)
+
+// fakeWork is what the WORKER serves. ClusterService is borrowed as a stand-in
+// for "whatever this pool's workers speak" — and it is a pointed choice: a
+// relay's own ClusterService answers CheckWorkers with Unimplemented, so an
+// answer of 42 can only have come from the far end of the tunnel.
+type fakeWork struct {
+	pb.UnimplementedClusterServiceServer
+	seenTicket []string
+}
+
+func (f *fakeWork) CheckWorkers(ctx context.Context, _ *pb.CheckWorkersReq) (*pb.CheckWorkersResp, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	f.seenTicket = md.Get(relayserver.TicketHeader)
+	return &pb.CheckWorkersResp{Discovered: 42}, nil
+}
+
+type rig struct {
+	pool       *relaycore.Pool
+	workers    *workeradmit.Registry
+	backends   *relayserver.Backends
+	proxyAddr  string
+	work       *fakeWork
+	workerFP   string
+	stopWorker context.CancelFunc
+}
+
+// standUp builds a whole relay: a TLS tunnel listener, a schema-blind proxy in
+// front of it, and one worker attached through both.
+func standUp(t *testing.T) *rig {
+	t.Helper()
+	relayID, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerID, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	crt, err := tls.X509KeyPair(relayID.CertPEM, relayID.KeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pool, err := relaycore.New(relaycore.Options{Capacity: 2, TicketTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workers := workeradmit.New()
+	workers.Apply([]string{workerID.Fingerprint}, nil) // approved up front
+	backends := relayserver.NewBackends()
+	// The wiring a real relay has: capacity comes from the attached fleet.
+	backends.OnCapacityChange(pool.SetCapacity)
+	// This rig runs the TUNNEL only, not the attach stream, so nothing here
+	// would ever announce a profile — and a worker that has not said what it
+	// can take is credited with nothing, which is deliberate. Declaring it
+	// directly stands in for the announcement, and keeps this test about the
+	// tunnel.
+	backends.SetProfile(workerID.Fingerprint, backends.NewAttachment(), 2, true)
+
+	// The work listener: TLS, and it must ask for a client certificate —
+	// that handshake is where the worker's identity comes from.
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunLis := tls.NewListener(raw, &tls.Config{
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.RequireAnyClientCert,
+	})
+	go func() { _ = relayserver.ServeTunnels(tunLis, workers, backends, nil) }()
+	t.Cleanup(func() { _ = tunLis.Close() })
+
+	// The proxy: NO services of its own, only the unknown-service handler.
+	proxyLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := grpc.NewServer(tunnel.ProxyServerOptions(
+		relayserver.TicketPicker(pool, backends, workers))...)
+	go func() { _ = proxy.Serve(proxyLis) }()
+	t.Cleanup(proxy.Stop)
+
+	// The worker: dials the tunnel and serves on it.
+	work := &fakeWork{}
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go func() {
+		_ = ServeTunnel(ctx, Config{
+			TunnelAddress:    tunLis.Addr().String(),
+			RelayFingerprint: relayID.Fingerprint,
+			Identity:         workerID,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) })
+	}()
+
+	for deadline := time.After(10 * time.Second); backends.Capacity() == 0; {
+		select {
+		case <-deadline:
+			t.Fatal("the worker never attached its tunnel")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return &rig{pool: pool, workers: workers, backends: backends,
+		proxyAddr: proxyLis.Addr().String(), work: work,
+		workerFP: workerID.Fingerprint, stopWorker: cancel}
+}
+
+func callThroughProxy(t *testing.T, r *rig, ticket string) (*pb.CheckWorkersResp, error) {
+	t.Helper()
+	cc, err := grpc.NewClient(r.proxyAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+	ctx := t.Context()
+	if ticket != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, relayserver.TicketHeader, ticket)
+	}
+	return pb.NewClusterServiceClient(cc).CheckWorkers(ctx, &pb.CheckWorkersReq{})
+}
+
+// The whole point of the thing: a call made to the RELAY is answered by the
+// WORKER, over a connection the worker opened, with the relay never decoding
+// a byte of it.
+func TestTunnel_ACallReachesTheWorkerAndComesBack(t *testing.T) {
+	r := standUp(t)
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := callThroughProxy(t, r, grant.Ticket)
+	if err != nil {
+		t.Fatalf("the call did not survive the tunnel: %v", err)
+	}
+	// 42 is the worker's answer. A relay answering for itself would have said
+	// Unimplemented — CheckWorkers is the control plane's method, not a
+	// relay's — so this number cannot have come from anywhere else.
+	if resp.GetDiscovered() != 42 {
+		t.Errorf("discovered = %d, want the worker's 42", resp.GetDiscovered())
+	}
+	// The caller's metadata travels as-is; the relay is a pipe.
+	if len(r.work.seenTicket) != 1 || r.work.seenTicket[0] != grant.Ticket {
+		t.Errorf("the worker saw ticket %v, want the caller's", r.work.seenTicket)
+	}
+}
+
+// The ticket is redeemed AT THE PROXY, which is what makes a grant a
+// reservation rather than a promise. Spending it twice must fail.
+func TestTunnel_ATicketIsSpentOnFirstUse(t *testing.T) {
+	r := standUp(t)
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callThroughProxy(t, r, grant.Ticket); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	_, err = callThroughProxy(t, r, grant.Ticket)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("replaying a ticket gave %v, want PermissionDenied", status.Code(err))
+	}
+}
+
+// No ticket at all is refused, and the message says where to get one — the
+// caller reaching this port without one has skipped the control plane.
+func TestTunnel_NoTicketIsRefused(t *testing.T) {
+	r := standUp(t)
+	_, err := callThroughProxy(t, r, "")
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated", status.Code(err))
+	}
+	if !contains(err.Error(), "schedule a task") {
+		t.Errorf("the refusal does not say how to get a ticket: %v", err)
+	}
+}
+
+// A slot returns when the call ends. Without that the pool shrinks by one per
+// task until a restart, and the symptom — a queue that grows for no reason —
+// points nowhere near the cause.
+func TestTunnel_TheSlotComesBackWhenTheCallEnds(t *testing.T) {
+	r := standUp(t)
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callThroughProxy(t, r, grant.Ticket); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.After(5 * time.Second); ; {
+		if inUse, _, _ := r.pool.Stats(); inUse == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			inUse, _, capacity := r.pool.Stats()
+			t.Fatalf("inUse = %d of %d after the call ended — the slot leaked", inUse, capacity)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (func() bool {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	})()
+}
+
+// Revocation must bite a worker that is ALREADY CONNECTED. Checking admission
+// only when the tunnel opened would leave a revoked machine taking work until
+// it happened to reconnect — which, for a healthy worker, is never.
+func TestTunnel_RevokingAWorkerStopsItReceivingWork(t *testing.T) {
+	r := standUp(t)
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callThroughProxy(t, r, grant.Ticket); err != nil {
+		t.Fatalf("setup call: %v", err)
+	}
+
+	// The operator denies it while its tunnel is still open.
+	r.workers.Apply(nil, []string{r.workerFP})
+
+	next, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = callThroughProxy(t, r, next.Ticket)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable — a revoked worker is still being picked", status.Code(err))
+	}
+	// And the slot did not leak: the ticket was claimed, then given back when
+	// there turned out to be nobody to run it.
+	for deadline := time.After(3 * time.Second); ; {
+		if inUse, _, _ := r.pool.Stats(); inUse == 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			inUse, _, _ := r.pool.Stats()
+			t.Fatalf("inUse = %d after a refused pick — the slot leaked", inUse)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// A tunnel that dies must stop being selectable. Left in place, Count keeps
+// reporting a worker and later tickets are sent into a dead connection —
+// a failure that looks like a flaky relay and points nowhere near the cause.
+func TestTunnel_ADeadTunnelStopsBeingABackend(t *testing.T) {
+	r := standUp(t)
+	if n := r.backends.Count(); n != 1 {
+		t.Fatalf("setup: %d backends, want 1", n)
+	}
+	r.stopWorker() // the worker goes away
+
+	for deadline := time.After(10 * time.Second); ; {
+		if r.backends.Count() == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("the dead tunnel is still registered as a backend")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}

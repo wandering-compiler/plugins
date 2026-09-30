@@ -323,7 +323,7 @@ var errNoWorker = errors.New("no worker attached")
 // MOST FREE SLOTS, not round-robin. A plain cursor moved one step per call
 // whatever each machine was already carrying, so a four-slot box and a
 // one-slot box were handed the same amount and the small one thrashed while
-// the big one idled (marb, 2026-09-25). Free slots weights the choice by what
+// the big one idled (a consumer, 2026-09-25). Free slots weights the choice by what
 // each machine actually said it can take.
 //
 // Draining and unhealthy workers are skipped: they keep their tunnel so the

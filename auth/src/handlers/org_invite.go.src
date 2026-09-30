@@ -76,9 +76,36 @@ func init() {
 // Expiry is the query's business (it selects pending, unaccepted, unexpired
 // rows), so this gate does not re-derive it — two places deciding what
 // "pending" means is how the two halves drift apart.
-func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email string) error {
+func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) error {
 	if !h.InviteOnly {
 		return nil
+	}
+	// An OPEN invitation names no address, so the address lookup below can never
+	// find it — and `invite_only` defaults ON, which made path 1 unusable in the
+	// default configuration until this branch existed. The token is the whole
+	// authorisation there: holding the link IS the invitation.
+	//
+	// Read, not consumed. Acceptance is what spends a single-use invitation, and a
+	// signup that fails after this point must leave the link usable.
+	if inviteToken != "" {
+		pending, err := h.Query.GetPendingOrgInviteByToken(ctx, &pb.GetPendingOrgInviteByTokenReq{
+			TokenHash: sha256Hex(inviteToken),
+		})
+		if err == nil {
+			// A BOUND invitation's token still has to go to its own address — the
+			// link being secret does not make it transferable to another mailbox.
+			if invited := pending.GetEmail(); invited == "" || invited == email {
+				return nil
+			}
+		} else if status.Code(err) != codes.NotFound {
+			// Fail-CLOSED on a real query failure, for the reason below: the
+			// alternative admits everybody exactly when nobody is watching.
+			return err
+		}
+		// A token that matched nothing falls through to the address check rather
+		// than refusing here, so a stale link plus a legitimately invited address
+		// still registers — and the refusal, when it comes, is the same one for
+		// both causes.
 	}
 	resp, err := h.Query.ListPendingInvitesForEmail(ctx, &pb.ListPendingInvitesForEmailReq{Email: email})
 	if err != nil {
@@ -109,7 +136,7 @@ var errInviteInvalid = status.Error(codes.NotFound,
 // distinction — "no ORG-ASSIGNABLE role by that name exists". The comment here
 // even said why: a realm role exists and is still refused, and calling that
 // "does not exist" sends the reader hunting for a typo that is not there. It
-// happened anyway: marb measured three states, got one message, and went looking
+// happened anyway: a consumer measured three states, got one message, and went looking
 // for a row that WAS there (member-management-audit-findings, from #71/#72).
 //
 // One adjective is not a distinction a reader can act on. Two errors are.
@@ -248,11 +275,20 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	// Normalized here, once, and stored normalized: SignIn lower-cases the
 	// address it looks up, so an invitation stored as typed would never
 	// match the account that arrives to accept it.
+	// An EMPTY address is a real request now: the invitation is OPEN and whoever
+	// holds the link picks their own. Bound (non-empty) is the corporate case —
+	// this address and no other — and the only one that can derive a verified
+	// address later, because only there does "the invitation named it" say
+	// anything about what the registrant types.
 	email := normalizeEmail(req.GetEmail())
-	if email == "" {
-		return nil, status.Error(codes.InvalidArgument, "invite: email is required")
-	}
 	if _, err := h.roleIDByName(ctx, req.GetRole()); err != nil {
+		return nil, err
+	}
+	// The link's secret. Minted here, stored hashed, returned once — the same
+	// three steps a password reset takes, and for the same reason: a stored
+	// plaintext is a stored credential.
+	token, err := randomURLToken()
+	if err != nil {
 		return nil, err
 	}
 
@@ -281,18 +317,33 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		Role:      req.GetRole(),
 		InvitedBy: inviter,
 		ExpiresAt: timestamppb.New(time.Now().Add(h.orgInviteTTL())),
+		TokenHash: sha256Hex(token),
+		// Stored exactly as given and never read here. The plugin has no opinion
+		// about the shape; see OrgInvite.metadata for why that is what makes an
+		// opaque column answerable without deciding the general plugin-model
+		// question.
+		Metadata: req.GetMetadata(),
 	})
 	if err != nil {
 		return nil, err
 	}
 	inv := created.GetInvite()
-	return &pb.InviteToOrgResp{Invite: &pb.OrgInviteSummary{
-		InviteId:  inv.GetId(),
-		Email:     inv.GetEmail(),
-		Role:      inv.GetRole(),
-		ExpiresAt: inv.GetExpiresAt(),
-		CreatedAt: inv.GetCreatedAt(),
-	}}, nil
+	return &pb.InviteToOrgResp{
+		Invite: &pb.OrgInviteSummary{
+			InviteId:  inv.GetId(),
+			Email:     inv.GetEmail(),
+			Role:      inv.GetRole(),
+			ExpiresAt: inv.GetExpiresAt(),
+			CreatedAt: inv.GetCreatedAt(),
+			// Echoed from the WRITTEN row rather than from the request, so the
+			// caller sees what was actually stored.
+			Metadata: inv.GetMetadata(),
+		},
+		// Handed back ONCE. The row keeps only the hash, so there is no second
+		// chance to read it and no list that can show it — the inviter is the
+		// delivery channel and this is the moment they are holding the link.
+		Token: token,
+	}, nil
 }
 
 // ListOrgInvites returns the active organization's outstanding invitations.
@@ -316,6 +367,8 @@ func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, _ *pb.ListOrgIn
 			Role:      i.GetRole(),
 			ExpiresAt: i.GetExpiresAt(),
 			CreatedAt: i.GetCreatedAt(),
+			// So an admin screen can show WHAT each pending invitation is for.
+			Metadata: i.GetMetadata(),
 		})
 	}
 	return &pb.ListOrgInvitesResp{Invites: out}, nil
@@ -386,11 +439,37 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	if err != nil {
 		return nil, err
 	}
-	// Before the claim, not after. The check is about the CALLER's own
-	// account, so refusing here leaks nothing about whether an invitation
-	// exists — and running it after a successful claim would have consumed
-	// the invitation to refuse it.
-	if err := inviteVerifiedEmailGate(ctx, h, userID); err != nil {
+	// READ, then gate, then consume — and the order is the design rather than a
+	// preference.
+	//
+	// The gate now has to know whether this invitation BINDS an address, and it
+	// cannot: only the row says. So the row is read first. Consuming first and
+	// rolling back on refusal would do it too, but only where a transaction is
+	// running, and the one below begins only when DistTx is wired — a refusal on
+	// a plain connection would have spent the invitation to say no.
+	//
+	// Reading leaks nothing the caller did not bring: it answers only for a token
+	// they presented, and a wrong token is NOT_FOUND exactly like a spent one.
+	tokenHash := sha256Hex(req.GetToken())
+	pending, err := h.Query.GetPendingOrgInviteByToken(ctx, &pb.GetPendingOrgInviteByTokenReq{
+		TokenHash: tokenHash,
+	})
+	if status.Code(err) == codes.NotFound {
+		return nil, errInviteInvalid
+	}
+	if err != nil {
+		return nil, err
+	}
+	invitedEmail := pending.GetEmail()
+	bound := invitedEmail != ""
+	// A BOUND invitation is for one address and no other. That test used to live
+	// in the claim's own WHERE (`AND email = :email`); it moves here because the
+	// claim is now keyed on the token, and the same opaque refusal covers it — a
+	// guesser must not learn that the token was good but the account was wrong.
+	if bound && invitedEmail != email {
+		return nil, errInviteInvalid
+	}
+	if err := inviteVerifiedEmailGate(ctx, h, userID, bound); err != nil {
 		return nil, err
 	}
 
@@ -401,7 +480,7 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 			return nil, err
 		}
 	}
-	resp, err := h.acceptInviteTx(txCtx, req.GetInviteId(), userID, email)
+	resp, err := h.acceptInviteTx(txCtx, tokenHash, userID, bound)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -416,14 +495,13 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	return resp, nil
 }
 
-func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, inviteID, userID, email string) (*pb.AcceptOrgInviteResp, error) {
-	// Claim first. The not-yet-accepted, not-expired and addressed-to-me
-	// tests sit in the UPDATE's own WHERE, so there is no window between
-	// deciding an invitation is good and consuming it — two clicks cannot
-	// both win.
-	claimed, err := h.Mutation.MarkOrgInviteAccepted(txCtx, &pb.MarkOrgInviteAcceptedReq{
-		InviteId: inviteID,
-		Email:    email,
+func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, userID string, bound bool) (*pb.AcceptOrgInviteResp, error) {
+	// Claim by TOKEN. The not-yet-accepted and not-expired tests still sit in the
+	// UPDATE's own WHERE, so there is no window between deciding an invitation is
+	// good and consuming it — two clicks cannot both win, and the read above is
+	// advisory rather than a decision this relies on.
+	claimed, err := h.Mutation.ConsumeOrgInviteByToken(txCtx, &pb.ConsumeOrgInviteByTokenReq{
+		TokenHash: tokenHash,
 	})
 	// A claim that matches nothing arrives as NotFound, not as an empty
 	// response: the mutation carries RETURNING, and the generated write
@@ -477,5 +555,25 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, inviteID, use
 	}); err != nil {
 		return nil, err
 	}
-	return &pb.AcceptOrgInviteResp{OrgId: orgID, Role: roleName}, nil
+	// A BOUND invitation proved the address by being accepted, so record HOW —
+	// inside the same transaction as the membership, because a proof recorded
+	// against a membership that rolled back is a proof of nothing.
+	//
+	// Open invitations deliberately do not reach here: the registrant chose the
+	// address, so what was proved is that they were authorised, not that the
+	// address is theirs.
+	//
+	// The seam is nil unless `email_verification` is staged — the column does not
+	// exist otherwise, and an invitation must not stop working because a project
+	// declined that feature.
+	if bound {
+		if err := markEmailDerived(txCtx, h, userID); err != nil {
+			return nil, err
+		}
+	}
+	// Metadata comes from the CLAIMED row — the same statement that spent the
+	// invitation — so a caller acting on the pairing knows the acceptance
+	// committed. Reading it back with a second query could answer for a row a
+	// different request had since consumed.
+	return &pb.AcceptOrgInviteResp{OrgId: orgID, Role: roleName, Metadata: claimed.GetMetadata()}, nil
 }

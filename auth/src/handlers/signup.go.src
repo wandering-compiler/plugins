@@ -72,7 +72,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 	// expensive, so hashing first would let an uninvited caller spend the
 	// server's CPU on every attempt — and a refusal that costs the
 	// attacker nothing and the server plenty is a way in of its own.
-	if err := signupInviteGate(ctx, h, normalizeEmail(req.GetEmail())); err != nil {
+	if err := signupInviteGate(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken()); err != nil {
 		return nil, err
 	}
 

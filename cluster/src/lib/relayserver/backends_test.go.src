@@ -1,0 +1,349 @@
+package relayserver
+
+import (
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+// conn returns a ClientConn that is never dialled. take() only chooses one;
+// nothing in these tests sends a byte through it.
+func conn(t *testing.T) *grpc.ClientConn {
+	t.Helper()
+	c, err := grpc.NewClient("passthrough:///unused",
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+// attach stands in for one worker doing both halves: opening its tunnel and
+// announcing on its attach stream. Returns the attachment generation so a test
+// can simulate a stale write from a superseded stream.
+func attach(t *testing.T, b *Backends, fp string, slots uint32, ready bool) uint64 {
+	t.Helper()
+	b.Add(fp, conn(t))
+	gen := b.NewAttachment()
+	b.SetProfile(fp, gen, slots, ready)
+	return gen
+}
+
+// A relay carries what its workers say they can carry.
+//
+// It used to carry a static RELAY_CAPACITY with no relationship to the
+// machines present, so a relay with nobody attached granted its full
+// complement of tickets and every caller discovered the truth at the proxy
+// (a consumer, 2026-09-25).
+func TestBackends_CapacityIsTheSumOfTheFleet(t *testing.T) {
+	b := NewBackends()
+	if got := b.Capacity(); got != 0 {
+		t.Fatalf("an empty relay reports capacity %d, want 0 — a grant must be a slot", got)
+	}
+	attach(t, b, "big", 4, true)
+	attach(t, b, "small", 1, true)
+	if got := b.Capacity(); got != 5 {
+		t.Errorf("capacity = %d, want 4+1", got)
+	}
+	b.Remove("big")
+	if got := b.Capacity(); got != 1 {
+		t.Errorf("after the big worker left, capacity = %d, want 1 — "+
+			"the survivors must not inherit its share", got)
+	}
+}
+
+// A tunnel alone earns nothing. A worker that has not announced has not said
+// what it can take, and crediting it with a guess is how a machine sized for
+// one session gets handed four.
+func TestBackends_ATunnelWithoutAnAnnouncementCarriesNothing(t *testing.T) {
+	b := NewBackends()
+	b.Add("quiet", conn(t))
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("capacity = %d for a worker that never announced, want 0", got)
+	}
+	if _, _, _, err := b.take(nil); err == nil {
+		t.Error("work was handed to a worker that never said it could take any")
+	}
+}
+
+// Work goes where there is the most room, not to whoever is next in line.
+//
+// A plain round-robin cursor moved one step per call whatever each machine was
+// carrying, so a four-slot box and a one-slot box were handed the same amount:
+// the small one thrashed while the big one idled.
+func TestBackends_TakePrefersTheWorkerWithTheMostRoom(t *testing.T) {
+	b := NewBackends()
+	attach(t, b, "big", 4, true)
+	attach(t, b, "small", 1, true)
+
+	got := map[string]int{}
+	for i := 0; i < 5; i++ {
+		_, fp, _, err := b.take(nil)
+		if err != nil {
+			t.Fatalf("take %d: %v", i, err)
+		}
+		got[fp]++
+	}
+	if got["big"] != 4 || got["small"] != 1 {
+		t.Errorf("five tasks split %v, want 4 to the four-slot worker and 1 to the one-slot one", got)
+	}
+	// And the fleet is now full: every slot is booked.
+	if _, _, _, err := b.take(nil); err == nil {
+		t.Error("a sixth task was placed on a fleet with five slots, all taken")
+	}
+}
+
+// Finishing work frees the machine again.
+func TestBackends_ReleaseReturnsTheSlot(t *testing.T) {
+	b := NewBackends()
+	attach(t, b, "w", 1, true)
+	// The generation release needs is the TUNNEL's, which take() hands back —
+	// not the attach stream's. They are different numbers and confusing them
+	// silently does nothing, which is why the release path carries it rather
+	// than looking it up.
+	_, _, gen, err := b.take(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := b.take(nil); err == nil {
+		t.Fatal("a one-slot worker took a second task")
+	}
+	b.release("w", gen)
+	if _, _, _, err := b.take(nil); err != nil {
+		t.Errorf("after the work finished the worker was still considered busy: %v", err)
+	}
+}
+
+// DRAINING stops new work and KEEPS THE CONNECTION.
+//
+// That combination is the whole point. Before this, the only way for a worker
+// to stop receiving work was to drop its tunnel — which also killed the
+// sessions already running over it, so a worker could not be replaced without
+// losing work in flight.
+func TestBackends_DrainingTakesNoWorkButKeepsItsTunnel(t *testing.T) {
+	b := NewBackends()
+	gen := attach(t, b, "w", 2, true)
+	b.SetProfile("w", gen, 2, false) // the worker said: draining
+
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("a draining worker still contributes %d to capacity, want 0", got)
+	}
+	if _, _, _, err := b.take(nil); err == nil {
+		t.Error("a draining worker was handed new work")
+	}
+	if got := b.Count(); got != 1 {
+		t.Errorf("attached workers = %d — draining must not drop the tunnel the "+
+			"running work is travelling over", got)
+	}
+
+	b.SetProfile("w", gen, 2, true) // and it can come back
+	if _, _, _, err := b.take(nil); err != nil {
+		t.Errorf("a worker that finished draining was not given work again: %v", err)
+	}
+}
+
+// A worker whose attach stream ended stops attracting work even if its tunnel
+// is briefly still up: it is no longer declaring itself available.
+func TestBackends_ClearProfileStopsNewWork(t *testing.T) {
+	b := NewBackends()
+	gen := attach(t, b, "w", 2, true)
+	b.ClearProfile("w", gen)
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("capacity = %d after the attach stream ended, want 0", got)
+	}
+}
+
+// Capacity changes are PUSHED, so a queued caller is granted by the attach
+// itself rather than waiting for the next arrival.
+func TestBackends_CapacityChangesArePublished(t *testing.T) {
+	b := NewBackends()
+	var seen []int
+	b.OnCapacityChange(func(n int) { seen = append(seen, n) })
+	if len(seen) != 1 || seen[0] != 0 {
+		t.Fatalf("wiring the sink reported %v, want the current value 0 once", seen)
+	}
+	gen := attach(t, b, "w", 3, true)
+	if len(seen) == 0 || seen[len(seen)-1] != 3 {
+		t.Errorf("after a 3-slot worker attached the sink saw %v, want it to end at 3", seen)
+	}
+	b.SetProfile("w", gen, 3, false)
+	if seen[len(seen)-1] != 0 {
+		t.Errorf("after the worker drained the sink saw %v, want it to end at 0", seen)
+	}
+}
+
+// Admission still outranks everything: a worker whose approval was withdrawn
+// takes no work even while attached and ready.
+func TestBackends_TakeSkipsAWorkerThatIsNoLongerAdmitted(t *testing.T) {
+	b := NewBackends()
+	attach(t, b, "revoked", 4, true)
+	if _, _, _, err := b.take(func(string) bool { return false }); err == nil {
+		t.Error("work was handed to a worker the registry no longer admits")
+	}
+}
+
+// ── the five review findings on PR #9, each as a guard ──────────────────────
+
+// A PENDING worker must not raise the relay's capacity.
+//
+// capacityLocked sums over profiles and knows nothing about approval, while
+// take() does check it. Publishing a profile before admission therefore made
+// an unapproved machine grant tickets that were refused at the proxy — the
+// same "a grant is not a slot" defect the whole change exists to remove,
+// re-entering through the other door.
+func TestBackends_AnUnadmittedWorkerAddsNoCapacity(t *testing.T) {
+	b := NewBackends()
+	b.Add("pending", conn(t))
+	gen := b.NewAttachment()
+	// What the attach stream publishes while the worker waits: it said what it
+	// can take, but nobody has approved it.
+	b.SetProfile("pending", gen, 4, false)
+
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("capacity = %d for a worker nobody approved, want 0 — "+
+			"callers would be granted tickets and refused at the proxy", got)
+	}
+	b.SetProfile("pending", gen, 4, true) // approved
+	if got := b.Capacity(); got != 4 {
+		t.Errorf("capacity = %d once admitted, want 4", got)
+	}
+}
+
+// A tunnel that DIES must leave the capacity, not only one that is removed on
+// purpose. The watcher is the path a dead tunnel actually takes.
+func TestBackends_ADeadTunnelLeavesTheCapacity(t *testing.T) {
+	b := NewBackends()
+	var seen []int
+	b.OnCapacityChange(func(n int) { seen = append(seen, n) })
+	c := conn(t)
+	b.Add("w", c)
+	b.SetProfile("w", b.NewAttachment(), 3, true)
+	if b.Capacity() != 3 {
+		t.Fatalf("setup: capacity = %d, want 3", b.Capacity())
+	}
+
+	// Closing is what the watcher observes.
+	_ = c.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && b.Capacity() != 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("capacity = %d after the tunnel died, want 0 — the pool keeps "+
+			"granting tickets nobody can run until an unrelated event refreshes it", got)
+	}
+	if seen[len(seen)-1] != 0 {
+		t.Errorf("the capacity sink ended at %v — a dead tunnel did not publish", seen)
+	}
+}
+
+// A call still unwinding on a REPLACED tunnel must not give back a slot booked
+// on the replacement, or the new connection can be overfilled past what the
+// machine said it can take.
+func TestBackends_AStaleReleaseDoesNotFreeTheNewTunnel(t *testing.T) {
+	b := NewBackends()
+	attach(t, b, "w", 1, true)
+	_, _, oldGen, err := b.take(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The worker reconnects: a new tunnel, a fresh booking count.
+	b.Add("w", conn(t))
+	if _, _, _, err := b.take(nil); err != nil {
+		t.Fatalf("the replacement tunnel took no work: %v", err)
+	}
+
+	// Now the OLD call finishes.
+	b.release("w", oldGen)
+
+	if _, _, _, err := b.take(nil); err == nil {
+		t.Error("a release from the dead tunnel freed a slot on the live one — " +
+			"the replacement is now carrying more than its declared capacity")
+	}
+}
+
+// A reconnect that overtakes the old stream's unwind must keep its profile.
+// Otherwise a healthy replacement drops out of the fleet until it happens to
+// send another status.
+func TestBackends_AStaleClearDoesNotEraseTheNewAttachment(t *testing.T) {
+	b := NewBackends()
+	b.Add("w", conn(t))
+	oldGen := b.NewAttachment()
+	b.SetProfile("w", oldGen, 2, true)
+
+	// The worker reconnects and announces on a new stream.
+	newGen := b.NewAttachment()
+	b.SetProfile("w", newGen, 4, true)
+
+	// Only now does the old stream finish unwinding.
+	b.ClearProfile("w", oldGen)
+
+	if got := b.Capacity(); got != 4 {
+		t.Errorf("capacity = %d, want the new attachment's 4 — the dying stream "+
+			"erased the live one", got)
+	}
+	// And the live stream can still clear itself.
+	b.ClearProfile("w", newGen)
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("capacity = %d after the current attachment cleared, want 0", got)
+	}
+}
+
+// A superseded stream's status update must not overwrite the current one's.
+func TestBackends_AStaleStatusDoesNotOverwriteTheNewAttachment(t *testing.T) {
+	b := NewBackends()
+	b.Add("w", conn(t))
+	oldGen := b.NewAttachment()
+	b.SetProfile("w", oldGen, 2, true)
+	newGen := b.NewAttachment()
+	b.SetProfile("w", newGen, 4, true)
+
+	// The old stream's reader, still running, reports a drain.
+	b.SetProfile("w", oldGen, 2, false)
+
+	if got := b.Capacity(); got != 4 {
+		t.Errorf("capacity = %d — a drain from the SUPERSEDED stream took the "+
+			"live worker out of the fleet", got)
+	}
+}
+
+// The two answers an attachment combines, exercised where they are combined.
+//
+// The guard above asserts that Backends does not count an unready profile.
+// It does NOT reach the defect, which was in what the ATTACHMENT publishes:
+// the attach stream marked a worker ready the moment it announced, before
+// anybody had approved it. Disarming the fix left that guard green, which is
+// the whole reason this one exists.
+func TestAttachment_CapacityNeedsApprovalAndReadinessBoth(t *testing.T) {
+	b := NewBackends()
+	b.Add("w", conn(t))
+	s := &WorkerServer{Backends: b}
+	att := s.newAttachment("w", 4)
+
+	// Announced, says it wants work — but nobody has approved it.
+	att.setWorkerReady(true)
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("a PENDING worker contributes %d, want 0 — an unapproved machine "+
+			"must not make the relay grant tickets take() will refuse", got)
+	}
+
+	att.setAdmitted(true)
+	if got := b.Capacity(); got != 4 {
+		t.Errorf("an approved, ready worker contributes %d, want 4", got)
+	}
+
+	// Either half going away takes it out again.
+	att.setWorkerReady(false)
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("a draining worker contributes %d, want 0", got)
+	}
+	att.setWorkerReady(true)
+	att.setAdmitted(false)
+	if got := b.Capacity(); got != 0 {
+		t.Errorf("a worker whose approval was withdrawn contributes %d, want 0", got)
+	}
+}

@@ -1,0 +1,278 @@
+package workerconn
+
+import (
+	"context"
+	"crypto/tls"
+	"net"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+)
+
+// serveWorkerListener stands the relay's worker-facing half on a REAL TCP
+// listener with REAL TLS.
+//
+// Not bufconn, and not an injected fingerprint: the identity this whole model
+// rests on is carried by the handshake, so a test that supplied it some other
+// way would prove the bookkeeping and never the thing being trusted.
+func serveWorkerListener(t *testing.T, reg *workeradmit.Registry) (addr, relayFP string) {
+	t.Helper()
+	a, f, _ := serveWorkerListenerWithBackends(t, reg)
+	return a, f
+}
+
+func serveWorkerListenerWithBackends(t *testing.T, reg *workeradmit.Registry) (
+	addr, relayFP string, backends *relayserver.Backends,
+) {
+	t.Helper()
+	relayID, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	crt, err := tls.X509KeyPair(relayID.CertPEM, relayID.KeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.RequireAnyClientCert,
+	})))
+	backends = relayserver.NewBackends()
+	workerpb.RegisterWorkerAttachServer(srv, &relayserver.WorkerServer{
+		Workers:      reg,
+		Backends:     backends,
+		PollInterval: 20 * time.Millisecond,
+	})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	return lis.Addr().String(), relayID.Fingerprint, backends
+}
+
+func runWorker(t *testing.T, addr, relayFP string, id identity.Identity) (<-chan State, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	states := make(chan State, 32)
+	go func() {
+		_ = Run(ctx, Config{
+			RelayAddress:     addr,
+			RelayFingerprint: relayFP,
+			Identity:         id,
+			Name:             "vps-1",
+			DeviceID:         "dev-1",
+			Slots:            1,
+			RetryInterval:    20 * time.Millisecond,
+		}, func(s State) {
+			select {
+			case states <- s:
+			default:
+			}
+		})
+	}()
+	return states, cancel
+}
+
+func awaitState(t *testing.T, states <-chan State, want State) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case got := <-states:
+			if got == want {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("never reached %q", want)
+		}
+	}
+}
+
+// The admission loop, end to end: a machine connects, is parked, is approved
+// by an operator, and becomes admitted — with its identity taken from the TLS
+// handshake at every step.
+func TestAttach_WaitsThenAdmittedAfterApproval(t *testing.T) {
+	reg := workeradmit.New()
+	addr, relayFP := serveWorkerListener(t, reg)
+
+	id, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	states, cancel := runWorker(t, addr, relayFP, id)
+	defer cancel()
+
+	awaitState(t, states, Waiting)
+
+	// The relay learned the worker's identity from the handshake, not from
+	// anything the worker claimed — and the claims came along for the
+	// operator to read.
+	var pending workeradmit.Pending
+	for deadline := time.After(5 * time.Second); ; {
+		p := reg.Pending()
+		if len(p) == 1 {
+			pending = p[0]
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("the worker never appeared as pending: %+v", p)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if pending.Fingerprint != id.Fingerprint {
+		t.Errorf("relay recorded %s, the worker's certificate is %s",
+			pending.Fingerprint, id.Fingerprint)
+	}
+	if pending.Name != "vps-1" || pending.DeviceID != "dev-1" {
+		t.Errorf("the claims did not reach the operator's view: %+v", pending)
+	}
+
+	// The operator approves.
+	reg.Apply([]string{id.Fingerprint}, nil)
+	awaitState(t, states, Admitted)
+}
+
+// A denied machine is refused, and the refusal survives reconnection — which
+// is what makes denial a revocation rather than a note.
+func TestAttach_DeniedIsRefusedAndStaysRefused(t *testing.T) {
+	reg := workeradmit.New()
+	addr, relayFP := serveWorkerListener(t, reg)
+
+	id, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Apply(nil, []string{id.Fingerprint})
+
+	states, cancel := runWorker(t, addr, relayFP, id)
+	defer cancel()
+
+	awaitState(t, states, Denied)
+	if reg.Admitted(id.Fingerprint) {
+		t.Error("a denied worker is admitted")
+	}
+	if n := len(reg.Pending()); n != 0 {
+		t.Errorf("a denied worker is reported as pending (%d)", n)
+	}
+}
+
+// A worker pins the relay. An impostor answering on the address — with a
+// perfectly valid certificate of its own — must not receive this machine's
+// work, because in a pool that compiles somebody's source the work IS the
+// secret.
+func TestAttach_RefusesARelayThatIsNotThePinnedOne(t *testing.T) {
+	reg := workeradmit.New()
+	addr, _ := serveWorkerListener(t, reg)
+
+	other, err := identity.LoadOrCreateIdentity(t.TempDir(), "w") // some other certificate
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	states, cancel := runWorker(t, addr, other.Fingerprint, id)
+	defer cancel()
+
+	awaitState(t, states, Disconnected)
+	if n := len(reg.Pending()); n != 0 {
+		t.Errorf("the worker attached to a relay it should have refused (%d pending)", n)
+	}
+}
+
+// Without a pin the worker would hand its work to whoever answered.
+func TestRun_RefusesWithNoRelayPin(t *testing.T) {
+	err := Run(t.Context(), Config{RelayAddress: "x:1"}, nil)
+	if err == nil {
+		t.Fatal("a worker with no relay fingerprint started anyway")
+	}
+}
+
+// A worker that comes up ALREADY draining is never briefly counted as ready.
+//
+// The relay credits a worker from the moment it announces. Readiness that
+// arrived only with the first status left a window one tick wide — a second by
+// default — in which a machine that was already wedged got work. Carrying the
+// answer in the announcement closes it, and a window is exactly the kind of
+// thing a test has to hold open rather than race against: the readiness
+// reporter here is set to a minute, so nothing but the announcement can have
+// told the relay anything.
+func TestAttach_AWorkerThatStartsDrainingIsNeverCountedReady(t *testing.T) {
+	id, err := identity.LoadOrCreateIdentity(t.TempDir(), "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := workeradmit.New()
+	reg.Apply([]string{id.Fingerprint}, nil) // approved up front
+	addr, relayFP, backends := serveWorkerListenerWithBackends(t, reg)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	states := make(chan State, 32)
+	go func() {
+		_ = Run(ctx, Config{
+			RelayAddress:      addr,
+			RelayFingerprint:  relayFP,
+			Identity:          id,
+			Name:              "vps-1",
+			DeviceID:          "dev-1",
+			Slots:             4,
+			Readiness:         func() Readiness { return Draining },
+			ReadinessInterval: time.Minute,
+			RetryInterval:     20 * time.Millisecond,
+		}, func(s State) {
+			select {
+			case states <- s:
+			default:
+			}
+		})
+	}()
+
+	// Proof the attachment actually happened — otherwise a capacity that never
+	// moves proves nothing. Count() is the wrong witness here: it counts
+	// TUNNELS, and this worker opens only its attach stream.
+	admitted := false
+	for deadline := time.After(5 * time.Second); !admitted; {
+		select {
+		case st := <-states:
+			if st == Admitted {
+				admitted = true
+			}
+		case <-deadline:
+			t.Fatal("the worker was never admitted, so this proved nothing")
+		}
+	}
+
+	// A tunnel for this fingerprint, because capacity is summed over workers
+	// that HAVE one — without it this test could not observe a capacity at all
+	// and would pass whatever the announcement said.
+	tun, err := grpc.NewClient("passthrough:///unused",
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tun.Close() })
+	backends.Add(id.Fingerprint, tun)
+
+	// And now the claim: approved, attached, and still contributing nothing.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if got := backends.Capacity(); got != 0 {
+			t.Fatalf("capacity reached %d for a worker that announced while draining", got)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

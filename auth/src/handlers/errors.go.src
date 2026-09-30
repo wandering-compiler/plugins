@@ -56,7 +56,7 @@ func (e *authnError) Error() string {
 // built a facade that wanted to tell an outage from a rejection and could not,
 // because the information was destroyed here — so their running service, with
 // its database down, told people their password was wrong. That is a lie they
-// cannot check, and it sends them to reset a password that was fine (marb,
+// cannot check, and it sends them to reset a password that was fine (a consumer,
 // 2026-09-23).
 //
 // Nothing leaks: the operational answer is the same for every caller and every

@@ -182,6 +182,19 @@ message SignUpReq {
   option (w17.contrib.plugin_feature) = "sign_up_turnkey";
   string email    = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
   string password = 2 [(w17.field) = { type: PASSWORD }];
+  // The invitation link's token, when the person arrived through one.
+  //
+  // Needed because `invite_only` asks "was THIS ADDRESS invited?", and an OPEN
+  // invitation names no address — so without the token in hand the gate refuses
+  // every holder of an open link, which is the whole of path 1 and happens in the
+  // DEFAULT configuration (`invite_only` defaults true). Found by review, after
+  // the model was already written.
+  //
+  // Validated here and NOT consumed: the invitation is single-use and acceptance
+  // is what spends it, so a signup that fails afterwards must not have burnt the
+  // link. Empty is normal — a bound invitation still matches by address, and a
+  // deployment with `invite_only` off asks nothing at all.
+  string invite_token = 4 [(w17.field) = { type: CHAR, max_len: 128, null: true }];
   // tenant_slug — the URL-based tenant identifier, bound at the
   // gateway from a `{tenant_slug}` path placeholder (PATH_VAR). Field-
   // gated by `tenant_scope`: present only when BOTH sign_up_turnkey
@@ -588,10 +601,27 @@ message InviteToOrgReq {
   // into days later — and so that accepting can turn it into a real
   // grant instead of a label with nothing behind it.
   string role  = 2 [(w17.field) = { type: SLUG, max_len: 100 }];
+  // Opaque, consumer-owned, and the reason this field exists: the caller pins
+  // whatever their own system needs paired with this invitation — the reported case
+  // is a tenant plus one object in their engine — and gets it back at acceptance out
+  // of the same statement that spends the invitation. See OrgInvite.metadata.
+  string metadata = 3 [(w17.field) = { type: JSON, blank: true }];
 }
 message InviteToOrgResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   OrgInviteSummary invite = 1;
+  // The link's secret, in plaintext, and this is the ONLY time it exists outside
+  // a hash.
+  //
+  // Unlike a password reset — where the token goes to the mailbox and never to a
+  // caller — the inviter IS the delivery channel here: they send the link by mail,
+  // by chat, by whatever they have. So it has to come back to them once, and it
+  // cannot be shown again: the row keeps only sha256 of it.
+  //
+  // ⚠️ Not in `OrgInviteSummary`, deliberately. That summary is what a LIST of an
+  // org's outstanding invitations shows, and a secret that appears in a list is a
+  // secret readable long after the moment it was handed over.
+  string token = 2;
 }
 
 // OrgInviteSummary — what a list of an org's outstanding invitations
@@ -604,6 +634,10 @@ message OrgInviteSummary {
   string role      = 3;
   google.protobuf.Timestamp expires_at = 4;
   google.protobuf.Timestamp created_at = 5;
+  // Listed too: an admin screen showing pending invitations has to be able to show
+  // WHAT each one is for. Opaque — see OrgInvite.metadata. (The plaintext token is
+  // deliberately NOT here; it is returned once, by InviteToOrgResp.)
+  string metadata = 6;
 }
 
 message ListOrgInvitesReq  { option (w17.contrib.plugin_feature) = "org_invite"; }
@@ -637,12 +671,24 @@ message ListMyInvitesResp {
 
 message AcceptOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
-  string invite_id = 1 [(w17.field) = { type: UUID }];
+  // The token from the link, not a row id.
+  //
+  // ⚠️ Field 1 is RETIRED rather than reused: it held `invite_id`, and a client
+  // built against the old shape would otherwise send a uuid into a field that now
+  // means a secret — accepted as a well-formed string and matching nothing, which
+  // reads as "your invitation is invalid" rather than "your client is old".
+  reserved 1;
+  reserved "invite_id";
+  string token = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
 }
 message AcceptOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   string org_id = 1;
   string role   = 2;
+  // What the inviter pinned, returned from the same statement that consumed the
+  // invitation — so the caller can act on the pairing knowing the acceptance
+  // committed. Empty when nothing was pinned.
+  string metadata = 3;
 }
 
 // ── password_change ─────────────────────────────────────────
@@ -938,7 +984,7 @@ message ResetPasswordResp {
   // call site under a comment claiming "logged by the caller's interceptor",
   // and the plugin has no logging at all: grep handlers/ for slog, log or
   // logger and there is nothing. So a reset after a theft could leave the
-  // thief's session alive, report success, and end there (marb #58).
+  // thief's session alive, report success, and end there (a consumer).
   //
   // `false` means: your password IS changed, and the old sessions may still
   // be live — sign out everywhere, or reset again. A caller that ignores this

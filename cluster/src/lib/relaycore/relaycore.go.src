@@ -62,7 +62,7 @@ type Pool struct {
 	// out at the proxy, with "the ticket was valid but no admitted worker is
 	// attached right now". A grant is supposed to BE a slot; for a pool whose
 	// machines come and go, that was not an edge case but the normal morning
-	// (marb, 2026-09-25).
+	// (a consumer, 2026-09-25).
 	capacity int
 	inUse    int
 	tickets  map[string]*time.Timer

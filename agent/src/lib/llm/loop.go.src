@@ -308,7 +308,7 @@ func assistantToolCalls(calls []toolCall) []responses.ResponseInputItemUnionPara
 // validate ALIKE. They did not: the JSON-object precondition and the preflight
 // marker were added to paramsFor only, so RunAgent went on answering a request
 // the provider is documented to refuse with a plain `Unavailable` and a usage
-// row for a call that never happened (marb #74/3 and #74/4, on the path they did
+// row for a call that never happened (a consumer and #74/4, on the path they did
 // not test). `history` is the caller's own turns, which is what the guard reads.
 func paramsForInput(m Model, instructions string, history []Message, input []responses.ResponseInputItemUnionParam) (*responses.ResponseNewParams, error) {
 	if strings.TrimSpace(m.ID) == "" {

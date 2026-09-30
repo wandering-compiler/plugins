@@ -5,6 +5,7 @@ import (
 	"errors"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -72,7 +73,7 @@ func (h *AuthServiceHandler) VerifyEmail(ctx context.Context, req *pb.VerifyEmai
 	// write is what it authorised. Apart, a failure between them burns a
 	// valid link and leaves the address unverified, so the person has to ask
 	// for another one to reach a state the first one already paid for
-	// (marb #58).
+	// (a consumer).
 	var tx *distx.TxHandle
 	txCtx := ctx
 	var err error
@@ -121,6 +122,22 @@ func (h *AuthServiceHandler) consumeAndMarkVerified(txCtx context.Context, token
 // below safe to compile — `User.email_verified_at` does not exist otherwise.
 func init() {
 	inviteVerifiedEmailGate = inviteVerifiedEmailGateImpl
+	markEmailDerived = markEmailDerivedImpl
+}
+
+// markEmailDerivedImpl stamps EmailProof.DERIVED_FROM_INVITE.
+//
+// The statement itself refuses to downgrade a self-confirmed address, so this
+// carries no guard of its own: a rule the caller can forget is a rule that gets
+// forgotten, and this one has to hold for every future caller too.
+func markEmailDerivedImpl(ctx context.Context, h *AuthServiceHandler, userID string) error {
+	_, err := h.Mutation.MarkEmailDerivedFromInvite(ctx, &pb.MarkEmailDerivedFromInviteReq{UserId: userID})
+	// Nothing moved is the ORDINARY case — the address was already confirmed, or
+	// already derived — and the generated write reports zero rows as NotFound.
+	if status.Code(err) == codes.NotFound {
+		return nil
+	}
+	return err
 }
 
 // MsgInviteNeedsVerifiedEmail is what the person accepting is told.
@@ -140,19 +157,53 @@ const MsgInviteNeedsVerifiedEmail = "Confirm your email address before accepting
 // Reads the knob at CALL time rather than at install time, the same way
 // invite_only is read: a deployment that turns it on should not have to
 // restart to mean it.
-func inviteVerifiedEmailGateImpl(ctx context.Context, h *AuthServiceHandler, userID string) error {
-	if !h.InviteRequiresVerifiedEmail {
+func inviteVerifiedEmailGateImpl(ctx context.Context, h *AuthServiceHandler, userID string, inviteBindsAddress bool) error {
+	floor := strings.TrimSpace(strings.ToLower(h.EmailProofRequired))
+	if floor == "" || floor == emailProofNone {
 		return nil
 	}
+
+	// What THIS acceptance is worth, before asking what the account already
+	// holds. A BOUND invitation names the address and the secret link reached
+	// whoever is registering, so accepting it derives the address — which is the
+	// whole point of the middle mode: the corporate case closes the hole without
+	// sending anybody on a round trip.
+	//
+	// An OPEN invitation derives nothing. The registrant picked the address, and
+	// the link may have travelled by a channel that has no address at all, so
+	// what was proved is that they were AUTHORISED, not that the address is
+	// theirs. Treating those as the same is the mistake this gate exists to stop
+	// being possible.
+	if floor == emailProofDerived && inviteBindsAddress {
+		return nil
+	}
+
 	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
 	if err != nil {
 		return err
 	}
+	// A self-confirmed address satisfies every floor — it is the strongest proof
+	// there is, so it is never refused by a gate asking for less.
 	if got.GetUser().GetEmailVerifiedAt().IsValid() {
 		return nil
 	}
+	// Already derived, on an earlier bound invitation, satisfies the middle floor
+	// and not the top one.
+	if floor == emailProofDerived && got.GetUser().GetEmailProof() == pb.EmailProof_DERIVED_FROM_INVITE {
+		return nil
+	}
+
 	return withUserDetail(
-		status.New(codes.FailedPrecondition, "accept org invite: caller's email is not verified"),
+		status.New(codes.FailedPrecondition, "accept org invite: caller's email proof is below "+floor),
 		CodeEmailNotVerified, MsgInviteNeedsVerifiedEmail,
 	).Err()
 }
+
+// The three floors, weakest first. Strings rather than an enum because the knob
+// is an env var an operator types, and a typo has to be readable in the refusal
+// rather than silently becoming zero.
+const (
+	emailProofNone    = "none"
+	emailProofDerived = "derived"
+	emailProofFull    = "full"
+)

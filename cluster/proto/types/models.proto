@@ -51,7 +51,7 @@ message Relay {
   // Deliberately NOT a shared secret. A bearer secret would have to be stored
   // in a form this control plane can read back in order to present it, which
   // means encrypted at rest, which means key management (see
-  // docs/todos/secrets-are-plaintext-and-secret-conflates-two-jobs.md). A
+  // docs/decisions/secret-split-into-secret-and-crypted-secret.md). A
   // fingerprint is PUBLIC information: leaking this table tells an attacker
   // which certificates to expect and gets them no closer to holding one.
   string cert_fingerprint = 4 [(w17.field) = { type: CHAR, max_len: 64 }];

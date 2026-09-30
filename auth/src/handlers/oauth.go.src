@@ -431,7 +431,17 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 	// After the auto-link branch on purpose: an invited person who has
 	// already registered must keep being able to sign in through the IdP
 	// once their invitation has been accepted and is no longer pending.
-	if err := signupInviteGate(ctx, h, email); err != nil {
+	// ⚠️ NO invitation token here, and that is a real limitation rather than an
+	// omission: this path has nowhere to carry one. An OPEN invitation names no
+	// address, so under `invite_only` (default ON) a person holding an open link
+	// CANNOT register through the identity provider — only through the password
+	// signup, which takes `invite_token`.
+	//
+	// A BOUND invitation still works here, because the address lookup finds it.
+	// Carrying the token through an IdP round trip means putting it in the OAuth
+	// `state`, which is a bigger change than this one and is not smuggled in:
+	// docs/decisions/invite-proof-belongs-on-the-link.md records it as the gap.
+	if err := signupInviteGate(ctx, h, email, ""); err != nil {
 		return "", err
 	}
 

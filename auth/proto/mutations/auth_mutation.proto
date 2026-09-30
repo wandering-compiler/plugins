@@ -387,6 +387,18 @@ message ConsumeEmailVerificationTokenResp {
 
 // MarkEmailVerified — stamp User.email_verified_at = NOW(). Gated
 // `email_verification`.
+message MarkEmailDerivedFromInviteReq {
+  option (w17.contrib.plugin_feature) = "email_verification";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message MarkEmailDerivedFromInviteResp {
+  option (w17.contrib.plugin_feature) = "email_verification";
+  // Empty when nothing moved, which is the ORDINARY case rather than a failure:
+  // the address was already self-confirmed, or already derived. The caller does
+  // not branch on it.
+  string user_id = 1;
+}
+
 message MarkEmailVerifiedReq {
   option (w17.contrib.plugin_feature) = "email_verification";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -849,10 +861,20 @@ message RevokeUserTokenResp {
 message CreateOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string org_id     = 1 [(w17.field) = { type: UUID }];
-  string email      = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // `null: true` because an OPEN invitation names no address — whoever holds the
+  // link picks their own. Same shape and same reason as `IssueTokenReq.device_id`:
+  // without it the generated request validation makes the field REQUIRED, and the
+  // first open invite fails with REQUIRED_VIOLATION.
+  string email      = 2 [(w17.field) = { type: EMAIL, max_len: 320, null: true }];
   string role       = 3 [(w17.field) = { type: SLUG, max_len: 100 }];
   string invited_by = 4 [(w17.field) = { type: UUID }];
   google.protobuf.Timestamp expires_at = 5 [(w17.field) = { type: DATETIME }];
+  // sha256 hex of the link's token. The plaintext never arrives here — the
+  // handler mints it, hashes it, and hands the plaintext back to the inviter once.
+  string token_hash = 6 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // Opaque, consumer-owned — see OrgInvite.metadata. Stored as given and never read
+  // by this plugin.
+  string metadata   = 7 [(w17.field) = { type: JSON, blank: true }];
 }
 message CreateOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -867,6 +889,29 @@ message ClearExpiredOrgInviteReq {
 message ClearExpiredOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   string id = 1;
+}
+
+message ConsumeOrgInviteByTokenReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  // sha256 hex of the token the link carried. The plaintext never reaches the
+  // database, the same way it never does for a password reset.
+  string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+}
+message ConsumeOrgInviteByTokenResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  // Populated on a successful claim. Nothing matched — expired, already spent, or
+  // never there — arrives as NOT_FOUND, because the statement carries RETURNING and
+  // the generated write reports zero rows as an error. One answer for all three
+  // causes, so somebody trying tokens learns nothing from the difference.
+  string org_id = 1;
+  string role   = 2;
+  // NULL/empty = the invitation was OPEN. This is the fact the acceptance cannot
+  // ask for afterwards, and the only one that licenses a derived email proof.
+  string email  = 3;
+  // Handed back out of the SAME statement that spends the invitation, which is the
+  // half a side table joined on the e-mail cannot give: the consumer's pairing and
+  // the acceptance either both happen or neither does.
+  string metadata = 4;
 }
 
 message MarkOrgInviteAcceptedReq {
@@ -1334,7 +1379,7 @@ service AuthMutation {
   // SupersedePendingMfaChallenges — retire every still-pending challenge
   // of a user, so issuing a new one leaves exactly one live code. Without
   // it, N sign-ins leave N codes alive, each with its own attempt budget,
-  // and the budget on any one of them bounds nothing (marb #63).
+  // and the budget on any one of them bounds nothing (a consumer).
   //
   // NO RETURNING, deliberately. Zero rows is the ORDINARY case — a first
   // sign-in has nothing to supersede — and a mutation carrying RETURNING
@@ -1587,7 +1632,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.User SET "
           "email = :email, "
-          // ⚠️ marb #79/2. `email_verified_at` records only THAT something was
+          // ⚠️ a consumer. `email_verified_at` records only THAT something was
           // verified, never WHICH address — so a verified account whose email
           // was changed stayed "verified" for an address it had never proved.
           // That walks straight through the invite gate the flag exists for:
@@ -1954,8 +1999,45 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.User SET "
-          "email_verified_at = NOW() "
+          // SELF_CONFIRMED (2) alongside the timestamp, and no `?feature` guard:
+          // this whole RPC is gated on `email_verification`, so the column exists
+          // wherever this statement can run — the same reason `email_verified_at`
+          // above carries no guard either.
+          //
+          // Found by review. `email_proof` was added for the floors and this
+          // mutation was left alone, so anyone verifying through the ordinary flow
+          // got the timestamp set and the proof still UNPROVEN — two fields about
+          // one fact, disagreeing. The gate reads the timestamp first and behaved
+          // correctly, which is exactly why the data would have stayed wrong
+          // without anybody noticing.
+          "email_verified_at = NOW(), "
+          "email_proof = 2 "
           "WHERE id = :user_id "
+          "RETURNING id AS user_id"
+      }
+    };
+  }
+
+  // MarkEmailDerivedFromInvite — record that a BOUND invitation proved this
+  // address, without claiming the person confirmed it themselves.
+  //
+  // `email_verified_at` is deliberately NOT touched: that column means "the owner
+  // completed the verification flow", and writing it here would erase the very
+  // distinction the mode `full` exists to demand. The proof LEVEL carries the fact
+  // instead.
+  //
+  // Never downgrades. The WHERE refuses to move a SELF_CONFIRMED address back to
+  // derived — accepting a second invitation must not weaken an address somebody
+  // already confirmed, and a guard in the statement cannot be forgotten by a caller.
+  rpc MarkEmailDerivedFromInvite(MarkEmailDerivedFromInviteReq) returns (MarkEmailDerivedFromInviteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "email_verification";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "email_proof = 1 "
+          "WHERE id = :user_id AND email_proof < 2 AND email_verified_at IS NULL "
           "RETURNING id AS user_id"
       }
     };
@@ -2287,7 +2369,9 @@ service AuthMutation {
           "email = :email, "
           "role = :role, "
           "invited_by = :invited_by, "
-          "expires_at = :expires_at "
+          "expires_at = :expires_at, "
+          "token_hash = :token_hash, "
+          "metadata = :metadata "
           "RETURNING id AS invite.id, "
           "          org_id AS invite.org_id, "
           "          email AS invite.email, "
@@ -2309,6 +2393,34 @@ service AuthMutation {
           { key: "invited_by", value: "$response.invite.invited_by" },
           { key: "expires_at", value: "$response.invite.expires_at" }
         ]
+      }
+    };
+  }
+
+  // ConsumeOrgInviteByToken — spend the link.
+  //
+  // Keyed on the TOKEN, not on (id, email), which is the whole of the model change:
+  // the identifier in the URL used to be the row id, and a row id reaches logs and
+  // `Referer` and cannot be rotated without changing the identity of the row
+  // (docs/decisions/invite-proof-belongs-on-the-link.md).
+  //
+  // `accepted_at IS NULL` is the single-use guard — there is deliberately no second
+  // `consumed_at` column, because that is the same fact under another name and the
+  // partial pending index already reads this one.
+  //
+  // RETURNS the email, and that is load-bearing rather than convenience: NULL means
+  // the invitation was OPEN, which is what decides whether accepting it may derive a
+  // verified address. The caller cannot ask afterwards — the row is spent.
+  rpc ConsumeOrgInviteByToken(ConsumeOrgInviteByTokenReq) returns (ConsumeOrgInviteByTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgInvite SET "
+          "accepted_at = NOW() "
+          "WHERE token_hash = :token_hash AND accepted_at IS NULL AND expires_at > NOW() "
+          "RETURNING org_id, role, email, metadata"
       }
     };
   }
