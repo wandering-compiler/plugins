@@ -233,8 +233,9 @@ func TestAcceptOrgInvite_AnUnknownTokenIsOpaque(t *testing.T) {
 type mintMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
-	storedHash  string
-	storedEmail string
+	storedHash     string
+	storedEmail    string
+	storedMetadata string
 }
 
 func (m *mintMock) ListRoles(_ context.Context, _ *pb.ListRolesReq, _ ...grpc.CallOption) (*pb.ListRolesResp, error) {
@@ -252,6 +253,7 @@ func (m *mintMock) ClearExpiredOrgInvite(_ context.Context, _ *pb.ClearExpiredOr
 func (m *mintMock) CreateOrgInvite(_ context.Context, in *pb.CreateOrgInviteReq, _ ...grpc.CallOption) (*pb.CreateOrgInviteResp, error) {
 	m.storedHash = in.GetTokenHash()
 	m.storedEmail = in.GetEmail()
+	m.storedMetadata = in.GetMetadata()
 	return &pb.CreateOrgInviteResp{Invite: &pb.OrgInvite{
 		Id: "inv-1", OrgId: "org-1", Email: in.GetEmail(), Role: in.GetRole(),
 	}}, nil
@@ -292,6 +294,43 @@ func TestInviteToOrg_ReturnsThePlaintextOnceAndStoresTheHash(t *testing.T) {
 	// account that arrives — SignIn lower-cases what it looks up.
 	if m.storedEmail != "her@corp.example" {
 		t.Errorf("stored email = %q, want it normalized", m.storedEmail)
+	}
+}
+
+// What reaches the column when the caller sends no metadata — and the answer
+// cannot be "whatever the caller sent", because the column is JSON NOT NULL and
+// the empty string is not a JSON document.
+//
+// This shipped broken in rc.8 and was found against PRODUCTION, not here: an
+// invitation with no metadata answered INVALID_ARGUMENT / VALUE_OUT_OF_RANGE with
+// an EMPTY field, which is grpcerr's fallback for a Postgres data exception
+// (wrap.go:433 — it names no column because PG reports none). So an OPTIONAL
+// field had become required, refusing in the one shape a client cannot act on.
+//
+// The three cases are one rule stated from both ends: nothing becomes `{}`, and
+// anything else is the consumer's document and is not touched.
+func TestInviteToOrg_AbsentMetadataBecomesTheEmptyObject(t *testing.T) {
+	for _, tc := range []struct{ name, sent, want string }{
+		{"omitted", "", "{}"},
+		{"whitespace only", "   \n", "{}"},
+		{"a document is stored byte for byte", `{"tenant":"t1","object":"o2"}`, `{"tenant":"t1","object":"o2"}`},
+		// Not this plugin's business to judge: the column is the consumer's, and
+		// nothing here reads it. A value the DATABASE rejects is the database's
+		// refusal to make, not a silent rewrite here.
+		{"a non-object document survives", `[1,2,3]`, `[1,2,3]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &mintMock{}
+			h := &AuthServiceHandler{Query: m, Mutation: m}
+			if _, err := h.InviteToOrg(ctxWithCallerInOrg("u1", "org-1"), &pb.InviteToOrgReq{
+				Email: "her@corp.example", Role: "member", Metadata: tc.sent,
+			}); err != nil {
+				t.Fatalf("InviteToOrg: %v", err)
+			}
+			if m.storedMetadata != tc.want {
+				t.Errorf("stored metadata = %q, want %q", m.storedMetadata, tc.want)
+			}
+		})
 	}
 }
 

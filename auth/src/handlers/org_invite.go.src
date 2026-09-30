@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -261,6 +262,19 @@ func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, _ *pb.List
 	return out, nil
 }
 
+// metadataOrEmptyObject turns "the caller sent nothing" into the empty JSON
+// object, because the column is JSON NOT NULL and ” is not a document.
+//
+// Only whitespace counts as nothing. Anything else is the consumer's document and
+// is stored byte for byte — including a value this plugin would not have chosen,
+// because the column is theirs and nothing here reads it.
+func metadataOrEmptyObject(m string) string {
+	if strings.TrimSpace(m) == "" {
+		return "{}"
+	}
+	return m
+}
+
 // InviteToOrg records an invitation for an address to join the caller's
 // active organization with a named role.
 func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
@@ -322,7 +336,22 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		// about the shape; see OrgInvite.metadata for why that is what makes an
 		// opaque column answerable without deciding the general plugin-model
 		// question.
-		Metadata: req.GetMetadata(),
+		//
+		// The one thing it DOES decide: what "no metadata" is. The column is JSON
+		// and NOT NULL, and the empty string is not a JSON document — so passing a
+		// caller's omission straight through reached Postgres as '' and came back
+		// as INVALID_ARGUMENT with code VALUE_OUT_OF_RANGE and an EMPTY field,
+		// because that code is grpcerr's FALLBACK for a PG data exception and PG
+		// reports neither the column nor the value (grpcerr/wrap.go:433). Measured
+		// against production on rc.8: an invitation with no metadata was refused,
+		// the same one with `{}` was not — so an optional field had silently become
+		// required, and it refused in the one shape a client cannot act on.
+		//
+		// An absent opaque value is therefore the empty OBJECT, which is what it
+		// means. Deliberately NOT a column default: a default is a schema change
+		// bought to settle a decision that belongs here, in the only place that
+		// knows the field is optional.
+		Metadata: metadataOrEmptyObject(req.GetMetadata()),
 	})
 	if err != nil {
 		return nil, err
