@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.9
+version: 0.1.0-rc.10
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -122,7 +122,27 @@ features:
       # place to learn it. A documented incompatibility that codegen does not
       # know about is a promise the compiler cannot keep (a consumer).
       - oauth
-    description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth`: handlers/oauth.go creates users through the baseline CreateUser and has no tenant to resolve, so the pair is unsupported (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Off by default — opt in for multi-tenant deployments."
+      # The SAME defect, found the same way and by a tool this time rather than
+      # by a consumer: `service_account` adds AuthMutation.CreateBotUser, whose
+      # INSERT into auth.User writes no tenant_id — so with this feature on, a
+      # machine account hits the NOT NULL column at RUNTIME, on every call.
+      #
+      # ⚠️ NOT fixable in the plugin as the plugin can be written today, and the
+      # first attempt got that wrong. Adding a `?feature(tenant_scope)` SET
+      # assignment and a gated request field — exactly what CreateUser does —
+      # makes the pair GENERATE, and `handlers/service_account.go` still cannot
+      # FILL the field: that file is gated on `service_account` alone, the field
+      # exists in the pb only when `tenant_scope` is on, and referencing it
+      # would stop the bundle compiling for every activation without the
+      # feature. `go_files` gates a file on ONE feature; a file needing both
+      # cannot be expressed.
+      #
+      # So generation would have started passing while the runtime stayed
+      # broken, which is worse than refusing: it moves the failure from
+      # activation to production. Refused here instead, and the mechanism a
+      # real fix needs is a compiler change, recorded as a todo.
+      - service_account
+    description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth` or with `service_account`: handlers/oauth.go creates users through the baseline CreateUser and handlers/service_account.go creates a machine account through CreateBotUser, and neither has a tenant to resolve, so both pairs are unsupported (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Off by default — opt in for multi-tenant deployments."
     default: false
     go_files:
       - handlers/tenant.go

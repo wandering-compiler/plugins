@@ -1,5 +1,5 @@
 name: payment
-version: 0.1.0-rc.1
+version: 0.1.0-rc.2
 requires_w17: ">=1.5"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in

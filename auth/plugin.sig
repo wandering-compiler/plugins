@@ -1,0 +1,3 @@
+w17-plugin-sig-file/1
+platform=1.5
+sig=9431dc74450a5fac2f0d3c6955fe66f4ba94b2c277ef93373bf9532a7dec7cb00cd27892b32eaab7d5a98ad5eee6f212b269ac8d19c902db15c4cf35174bca00

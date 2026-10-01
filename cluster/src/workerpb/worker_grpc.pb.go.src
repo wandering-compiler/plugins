@@ -61,7 +61,7 @@ type WorkerAttachClient interface {
 	// contradicted by hanging up, so the sole way to stop receiving work was to
 	// drop the tunnel — which kills the sessions still running on it. A browser
 	// pool cannot be deployed that way, and a hung engine on a healthy socket
-	// kept being handed work with nothing able to say otherwise (marb,
+	// kept being handed work with nothing able to say otherwise (a consumer,
 	// 2026-09-25).
 	Attach(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WorkerMessage, AttachEvent], error)
 }
@@ -112,7 +112,7 @@ type WorkerAttachServer interface {
 	// contradicted by hanging up, so the sole way to stop receiving work was to
 	// drop the tunnel — which kills the sessions still running on it. A browser
 	// pool cannot be deployed that way, and a hung engine on a healthy socket
-	// kept being handed work with nothing able to say otherwise (marb,
+	// kept being handed work with nothing able to say otherwise (a consumer,
 	// 2026-09-25).
 	Attach(grpc.BidiStreamingServer[WorkerMessage, AttachEvent]) error
 	mustEmbedUnimplementedWorkerAttachServer()
