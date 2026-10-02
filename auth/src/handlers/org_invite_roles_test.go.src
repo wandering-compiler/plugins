@@ -25,6 +25,7 @@ type roleCatalogueMock struct {
 
 	all       []*pb.Role          // ListRoles
 	orgScoped []*pb.OrgScopedRole // ListOrgScopedRoles
+	rolePerms map[string][]int32  // ListRoleGrants; a role absent here carries nothing
 
 	listRolesCalls int
 }
@@ -32,6 +33,14 @@ type roleCatalogueMock struct {
 func (m *roleCatalogueMock) ListRoles(ctx context.Context, in *pb.ListRolesReq, _ ...grpc.CallOption) (*pb.ListRolesResp, error) {
 	m.listRolesCalls++
 	return &pb.ListRolesResp{Roles: m.all}, nil
+}
+
+func (m *roleCatalogueMock) ListRoleGrants(ctx context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	out := &pb.ListRoleGrantsResp{}
+	for _, r := range m.all {
+		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: r.GetId(), PermissionIds: m.rolePerms[r.GetId()]})
+	}
+	return out, nil
 }
 
 func (m *roleCatalogueMock) ListOrgScopedRoles(ctx context.Context, in *pb.ListOrgScopedRolesReq, _ ...grpc.CallOption) (*pb.ListOrgScopedRolesResp, error) {
@@ -138,7 +147,7 @@ func TestRoleIDByName_AcceptsAnOrgScopedRole(t *testing.T) {
 // does not offer must be refused.
 func TestAssignableRolesAndValidatorCannotDisagree(t *testing.T) {
 	h := &AuthServiceHandler{Query: newRoleCatalogue()}
-	ctx := context.Background()
+	ctx := withHeldPermissions(context.Background(), "u1")
 
 	offered, err := h.ListAssignableRoles(ctx, &pb.ListAssignableRolesReq{})
 	if err != nil {

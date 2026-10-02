@@ -252,8 +252,17 @@ func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, _ *pb.List
 	if err != nil {
 		return nil, err
 	}
+	// Narrowed to the caller's ceiling with the function InviteToOrg enforces,
+	// so a role offered here is one the invitation will accept.
+	grantable, err := h.grantableRoleIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := &pb.ListAssignableRolesResp{}
 	for _, r := range roles {
+		if !grantable[r.GetId()] {
+			continue
+		}
 		out.Roles = append(out.Roles, &pb.AssignableRole{
 			Name:        r.GetName(),
 			Description: r.GetDescription(),
@@ -295,7 +304,15 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	// address later, because only there does "the invitation named it" say
 	// anything about what the registrant types.
 	email := normalizeEmail(req.GetEmail())
-	if _, err := h.roleIDByName(ctx, req.GetRole()); err != nil {
+	roleID, err := h.roleIDByName(ctx, req.GetRole())
+	if err != nil {
+		return nil, err
+	}
+	// Not above the inviter. Checked here, when the inviter is the caller —
+	// the accept path runs as the invitee, whose permissions say nothing about
+	// what the inviter was allowed to hand out.
+	snapshot, err := h.checkMayGrantRole(ctx, roleID)
+	if err != nil {
 		return nil, err
 	}
 	// The link's secret. Minted here, stored hashed, returned once — the same
@@ -352,6 +369,8 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		// bought to settle a decision that belongs here, in the only place that
 		// knows the field is optional.
 		Metadata: metadataOrEmptyObject(req.GetMetadata()),
+		// What the ceiling checked — accept holds the grant to it.
+		RoleSnapshot: snapshot,
 	})
 	if err != nil {
 		return nil, err
@@ -564,6 +583,12 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 	// decides whether to take it.
 	roleID, err := h.roleIDByName(txCtx, roleName)
 	if err != nil {
+		return nil, err
+	}
+	// The role the grant is about to write must be the one the inviter was
+	// checked against, and no wider. Refusing rolls the claim back, so the
+	// invitation stays unspent for the inviter to replace.
+	if err := h.checkRoleWithinSnapshot(txCtx, roleID, claimed.GetRoleSnapshot()); err != nil {
 		return nil, err
 	}
 

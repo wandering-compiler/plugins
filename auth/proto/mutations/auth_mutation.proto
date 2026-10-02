@@ -42,6 +42,19 @@ message CreateBotUserReq {
   // so they carry the same identity column and the same uniqueness — which is
   // what lets one answer for what a machine did.
   string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // tenant_id — the tenant the machine account belongs to, required by
+  // `tenant_scope` (the column is NOT NULL). It is the tenant the minting
+  // operator is acting in, read off their authenticated scope by
+  // handlers/service_account_tenant.go — never taken from the wire, or an
+  // operator could provision a bot into a tenant they are not in.
+  //
+  // Gated the way CreateUserReq.tenant_id is, and staged by a file that
+  // exists only when BOTH features are on (`go_files_combined`): the field
+  // is tenant_scope's and the rpc is service_account's.
+  string tenant_id = 2 [
+    (w17.field) = { type: UUID },
+    (w17.contrib.plugin_feature_field) = "tenant_scope"
+  ];
 }
 message CreateBotUserResp {
   option (w17.contrib.plugin_feature) = "service_account";
@@ -875,6 +888,8 @@ message CreateOrgInviteReq {
   // Opaque, consumer-owned — see OrgInvite.metadata. Stored as given and never read
   // by this plugin.
   string metadata   = 7 [(w17.field) = { type: JSON, blank: true }];
+  // See OrgInvite.role_snapshot.
+  string role_snapshot = 8 [(w17.field) = { type: TEXT, blank: true }];
 }
 message CreateOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -912,6 +927,9 @@ message ConsumeOrgInviteByTokenResp {
   // half a side table joined on the e-mail cannot give: the consumer's pairing and
   // the acceptance either both happen or neither does.
   string metadata = 4;
+  // What the inviter was checked against — accept refuses a role that has
+  // moved past it. See OrgInvite.role_snapshot.
+  string role_snapshot = 5;
 }
 
 message MarkOrgInviteAcceptedReq {
@@ -979,7 +997,8 @@ service AuthMutation {
           "INSERT INTO @module.User SET "
           "email = :email, "
           "password_hash = \'!\', "
-          "kind = 1 "
+          "kind = 1, "
+          "?feature(tenant_scope) tenant_id = :tenant_id "
           "RETURNING id AS user.id, "
           "          email AS user.email, "
           "          created_at AS user.created_at"
@@ -2261,6 +2280,11 @@ service AuthMutation {
         name: "purge_memberships"
         dql:  "DELETE FROM @module.OrgMembership WHERE org_id = :id"
       }
+      // Its grants go with it, for the reason DeleteOrgMembership gives.
+      ops: {
+        name: "purge_grants"
+        dql:  "DELETE FROM @module.UserRole WHERE org_id = :id"
+      }
       ops: {
         name: "main"
         dql:  "DELETE FROM @module.Organization WHERE id = :id RETURNING id AS org_id"
@@ -2284,9 +2308,33 @@ service AuthMutation {
   // or org is a delete + re-add, not an edit (the unique
   // (user_id, org_id) index makes an in-place move a constraint trap).
   // Gated org_membership.
+  // The membership's role label and the org-scoped grant behind it change
+  // TOGETHER. The label alone used to change, so a demotion revoked nothing:
+  // the member kept every permission of the role they were demoted from,
+  // because permissions are read from UserRole and never from this label
+  // (D13-3). One method, one transaction: read whose membership it is, check
+  // the new role is an org role (an unknown name finds no row and the whole
+  // update fails), drop every grant the member holds IN THIS ORGANIZATION, and
+  // grant the new one. Realm-wide grants are not touched.
   rpc UpdateOrgMembership(UpdateOrgMembershipReq) returns (UpdateOrgMembershipResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
+      ops: {
+        name: "m"
+        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id"
+      }
+      ops: {
+        name: "r"
+        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.name = :role AND r.org_scoped = TRUE"
+      }
+      ops: {
+        name: "revoke"
+        dql:  "DELETE FROM @module.UserRole WHERE user_id = :m.user_id AND org_id = :m.org_id"
+      }
+      ops: {
+        name: "grant"
+        dql:  "INSERT INTO @module.UserRole SET user_id = :m.user_id, role_id = :r.id, org_id = :m.org_id"
+      }
       ops: {
         name: "main"
         dql:
@@ -2295,6 +2343,15 @@ service AuthMutation {
           "WHERE id = :id "
           "RETURNING id AS membership_id"
       }
+    };
+    // The first op locks the membership row, so two changes to one membership
+    // run one after the other. Unlocked, two concurrent updates could both
+    // pass the revoke and each insert its own role — the label would name one
+    // and the member would hold both.
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "OrgMembership", kind: SELECT_FOR_UPDATE }
+      ]
     };
     option (w17.event_emit) = {
       event: "OrgMembershipUpdated"
@@ -2306,13 +2363,37 @@ service AuthMutation {
     };
   }
 
+  // A membership leaves WITH its org-scoped grants. Removed alone, the grants
+  // stayed and kept counting — permissions read UserRole by (user, org) and
+  // join no membership — so a member re-invited at a LESSER role came back with
+  // their old one, and one re-invited at the same role hit the unique grant and
+  // could never accept (D13-3). The request names only the membership, so the
+  // first op reads whose it is. An owner without a membership is unaffected:
+  // ownership is read off the organization.
   rpc DeleteOrgMembership(DeleteOrgMembershipReq) returns (DeleteOrgMembershipResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
       ops: {
+        name: "m"
+        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id"
+      }
+      ops: {
+        name: "revoke"
+        dql:  "DELETE FROM @module.UserRole WHERE user_id = :m.user_id AND org_id = :m.org_id"
+      }
+      ops: {
         name: "main"
         dql:  "DELETE FROM @module.OrgMembership WHERE id = :id RETURNING id AS membership_id"
       }
+    };
+    // The first op locks the membership row, so two changes to one membership
+    // run one after the other. Unlocked, two concurrent updates could both
+    // pass the revoke and each insert its own role — the label would name one
+    // and the member would hold both.
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "OrgMembership", kind: SELECT_FOR_UPDATE }
+      ]
     };
     option (w17.event_emit) = {
       event: "OrgMembershipRemoved"
@@ -2371,7 +2452,8 @@ service AuthMutation {
           "invited_by = :invited_by, "
           "expires_at = :expires_at, "
           "token_hash = :token_hash, "
-          "metadata = :metadata "
+          "metadata = :metadata, "
+          "role_snapshot = :role_snapshot "
           "RETURNING id AS invite.id, "
           "          org_id AS invite.org_id, "
           "          email AS invite.email, "
@@ -2420,7 +2502,7 @@ service AuthMutation {
           "UPDATE @module.OrgInvite SET "
           "accepted_at = NOW() "
           "WHERE token_hash = :token_hash AND accepted_at IS NULL AND expires_at > NOW() "
-          "RETURNING org_id, role, email, metadata"
+          "RETURNING org_id, role, email, metadata, role_snapshot"
       }
     };
   }

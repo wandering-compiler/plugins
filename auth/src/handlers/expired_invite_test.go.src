@@ -26,6 +26,10 @@ func (m *inviteMock) ListOrgScopedRoles(ctx context.Context, in *pb.ListOrgScope
 	return &pb.ListOrgScopedRolesResp{Roles: []*pb.OrgScopedRole{{Id: "r1", Name: "org-worker"}}}, nil
 }
 
+func (m *inviteMock) ListRoleGrants(_ context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "r1"}}}, nil
+}
+
 func (m *inviteMock) ClearExpiredOrgInvite(ctx context.Context, in *pb.ClearExpiredOrgInviteReq, _ ...grpc.CallOption) (*pb.ClearExpiredOrgInviteResp, error) {
 	m.clearCalls++
 	if m.clearErr != nil {
@@ -43,7 +47,7 @@ func (m *inviteMock) CreateOrgInvite(ctx context.Context, in *pb.CreateOrgInvite
 }
 
 func inviterCtx(userID, orgID string) context.Context {
-	return whoAmICtx(userID, orgID)
+	return withHeldPermissions(whoAmICtx(userID, orgID), userID)
 }
 
 // A lapsed invitation must not hold the address hostage.

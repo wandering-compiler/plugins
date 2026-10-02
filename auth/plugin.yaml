@@ -1,6 +1,6 @@
 name: auth
-version: 0.1.0-rc.10
-requires_w17: ">=1.5"
+version: 0.1.0-rc.11
+requires_w17: ">=1.7"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -122,27 +122,7 @@ features:
       # place to learn it. A documented incompatibility that codegen does not
       # know about is a promise the compiler cannot keep (a consumer).
       - oauth
-      # The SAME defect, found the same way and by a tool this time rather than
-      # by a consumer: `service_account` adds AuthMutation.CreateBotUser, whose
-      # INSERT into auth.User writes no tenant_id — so with this feature on, a
-      # machine account hits the NOT NULL column at RUNTIME, on every call.
-      #
-      # ⚠️ NOT fixable in the plugin as the plugin can be written today, and the
-      # first attempt got that wrong. Adding a `?feature(tenant_scope)` SET
-      # assignment and a gated request field — exactly what CreateUser does —
-      # makes the pair GENERATE, and `handlers/service_account.go` still cannot
-      # FILL the field: that file is gated on `service_account` alone, the field
-      # exists in the pb only when `tenant_scope` is on, and referencing it
-      # would stop the bundle compiling for every activation without the
-      # feature. `go_files` gates a file on ONE feature; a file needing both
-      # cannot be expressed.
-      #
-      # So generation would have started passing while the runtime stayed
-      # broken, which is worse than refusing: it moves the failure from
-      # activation to production. Refused here instead, and the mechanism a
-      # real fix needs is a compiler change, recorded as a todo.
-      - service_account
-    description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth` or with `service_account`: handlers/oauth.go creates users through the baseline CreateUser and handlers/service_account.go creates a machine account through CreateBotUser, and neither has a tenant to resolve, so both pairs are unsupported (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Off by default — opt in for multi-tenant deployments."
+    description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth`: handlers/oauth.go creates users through the baseline CreateUser and has no tenant to resolve (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Compatible with `service_account`: a machine account is created in the tenant its minting operator is acting in, written by handlers/service_account_tenant.go, which is staged only when both features are on. Off by default — opt in for multi-tenant deployments."
     default: false
     go_files:
       - handlers/tenant.go
@@ -215,6 +195,11 @@ features:
       # org_membership.go names pb.WhoAmIResp — the caller's orgs are
       # reported through the turnkey identity answer.
       - authenticate_turnkey
+      # role_ceiling.go reads the role catalogue (ListRoleGrants). rbac already
+      # comes through authenticate_turnkey; declared here because this
+      # feature's own file names it, and a dependency held only transitively
+      # breaks the day the link in between is relaxed.
+      - rbac
     description: "GitHub-style multi-org membership — one identity belongs to MANY Organizations via OrgMembership (the generalization of single-tenant tenant_scope). Adds the Organization + OrgMembership tables + AuthQuery.ListUserOrgs / GetUserOrgBySlug, the ListMyOrgs business RPC (the caller's orgs, for a CLI's `org list` + login cache + init org picker), and an Authenticate decorator that stamps scopes[org_id] for the request's ACTIVE org (a client-selected slug in the W17-Org header, VALIDATED against membership — a caller can only ever scope into an org they belong to). A project scoping rows by name: org_id then gets per-org isolation. Coexists with tenant_scope (a project picks one model). Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
     default: false
     # api_token narrows permissions by REALM (inside resolvePrincipal);
@@ -228,6 +213,13 @@ features:
     # per ROLE — see docs/specs/plugins/auth-org-scoped-roles.md §A3b.
     go_files:
       - handlers/org_membership.go
+      # The role ceiling reads the caller's resolved permissions off the
+      # AuthResp envelope (authenticate_turnkey's, which org_membership
+      # requires) and the role catalogue (rbac's, required through it). Its
+      # only callers — org_invite and service_account — both require
+      # org_membership. Staged with rbac it named AuthResp in an activation
+      # that need not have it.
+      - handlers/role_ceiling.go
   - name: org_invite
     description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / MarkOrgInviteAccepted / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default. See docs/specs/plugins/auth-org-invites.md."
     default: false
@@ -271,6 +263,14 @@ features:
     default: false
     go_files:
       - handlers/user_admin.go
+
+# Files that need a feature PAIR. A machine account under tenant_scope must be
+# written with a tenant (User.tenant_id is NOT NULL), and the code that fills it
+# references a field that exists only with tenant_scope from a handler that
+# exists only with service_account — so it lives in neither feature's go_files.
+go_files_combined:
+  - features: [service_account, tenant_scope]
+    files: [handlers/service_account_tenant.go]
 
 # Preset surfaces this plugin injects into a consuming project's
 # gateway at activation time. On by default when the gating feature

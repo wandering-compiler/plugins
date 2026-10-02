@@ -1051,4 +1051,17 @@ message OrgInvite {
   // "metadata I could not read". JSON because the shape is the consumer's and a
   // single opaque column has to hold whatever they put there.
   string metadata = 10 [(w17.field) = { type: JSON, blank: true }];
+
+  // role_snapshot — the role as the inviter was allowed to hand it out:
+  // `<role id>:<permission ids, sorted, comma-separated>`, a wildcard expanded
+  // from the deployed lock. Written at invite time by the role ceiling
+  // (handlers/role_ceiling.go) and checked at accept, because the grant is
+  // written THEN, against a catalogue that may have moved in between: a role
+  // widened during the invitation's life, or a different role now answering to
+  // the name, would otherwise hand out permissions the inviter never held.
+  //
+  // Empty on an invitation made before the ceiling existed — the default only
+  // fills those rows. An empty snapshot is refused at accept: such an
+  // invitation was never checked, and the inviter can send a new one.
+  string role_snapshot = 11 [(w17.field) = { type: TEXT, blank: true, default_string: "" }];
 }

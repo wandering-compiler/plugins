@@ -81,6 +81,21 @@ message GetUserRoleGrantsResp {
   repeated RoleGrant grants = 1;
 }
 
+// ListRoleGrants — every role in the catalogue with the permissions it
+// carries, in the same RoleGrant shape a user's grants come back in.
+//
+// Answers "may this caller hand out that role": a role may be granted only by
+// someone who holds every permission it carries (handlers/role_ceiling.go).
+// One read for the whole catalogue rather than one per role, because the
+// pickers ask it of every role they offer.
+message ListRoleGrantsReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+}
+message ListRoleGrantsResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  repeated RoleGrant grants = 1;
+}
+
 message RoleGrant {
   string role_id = 1 [(w17.field) = { type: UUID }];
 
@@ -1044,6 +1059,24 @@ service AuthQuery {
           "JOIN @module.Role r ON r.id = ur.role_id "
           "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
           "WHERE ur.user_id = :user_id "
+          "GROUP BY r.id, r.all_permissions "
+          "ORDER BY r.id ASC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+  }
+
+  // ListRoleGrants — the role catalogue, role-attributed. See the message.
+  rpc ListRoleGrants(ListRoleGrantsReq) returns (ListRoleGrantsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS role_id, "
+          "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
+          "       r.all_permissions AS all_permissions "
+          "FROM @module.Role r "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }

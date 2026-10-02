@@ -29,6 +29,13 @@ type inviteTokenMock struct {
 	accountEmail string
 	accountProof pb.EmailProof
 
+	// the role the invitation was checked against, and what it carries now.
+	// snapshot "" means the role as it is ("role-1:" for livePerms nil);
+	// legacy makes the claim return no snapshot at all.
+	snapshot  string
+	legacy    bool
+	livePerms []int32
+
 	// recorded
 	consumedHash    string
 	derivedFor      string
@@ -45,7 +52,11 @@ func (m *inviteTokenMock) GetPendingOrgInviteByToken(_ context.Context, in *pb.G
 
 func (m *inviteTokenMock) ConsumeOrgInviteByToken(_ context.Context, in *pb.ConsumeOrgInviteByTokenReq, _ ...grpc.CallOption) (*pb.ConsumeOrgInviteByTokenResp, error) {
 	m.consumedHash = in.GetTokenHash()
-	return &pb.ConsumeOrgInviteByTokenResp{OrgId: "org-1", Role: "member", Email: m.pendingEmail}, nil
+	snap := m.snapshot
+	if snap == "" && !m.legacy {
+		snap = "role-1:"
+	}
+	return &pb.ConsumeOrgInviteByTokenResp{OrgId: "org-1", Role: "member", Email: m.pendingEmail, RoleSnapshot: snap}, nil
 }
 
 func (m *inviteTokenMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
@@ -60,6 +71,10 @@ func (m *inviteTokenMock) ListRoles(_ context.Context, _ *pb.ListRolesReq, _ ...
 
 func (m *inviteTokenMock) ListOrgScopedRoles(_ context.Context, _ *pb.ListOrgScopedRolesReq, _ ...grpc.CallOption) (*pb.ListOrgScopedRolesResp, error) {
 	return &pb.ListOrgScopedRolesResp{Roles: []*pb.OrgScopedRole{{Id: "role-1", Name: "member"}}}, nil
+}
+
+func (m *inviteTokenMock) ListRoleGrants(_ context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "role-1", PermissionIds: m.livePerms}}}, nil
 }
 
 func (m *inviteTokenMock) AddOrgMembership(_ context.Context, _ *pb.AddOrgMembershipReq, _ ...grpc.CallOption) (*pb.AddOrgMembershipResp, error) {
@@ -244,6 +259,10 @@ func (m *mintMock) ListRoles(_ context.Context, _ *pb.ListRolesReq, _ ...grpc.Ca
 
 func (m *mintMock) ListOrgScopedRoles(_ context.Context, _ *pb.ListOrgScopedRolesReq, _ ...grpc.CallOption) (*pb.ListOrgScopedRolesResp, error) {
 	return &pb.ListOrgScopedRolesResp{Roles: []*pb.OrgScopedRole{{Id: "role-1", Name: "member"}}}, nil
+}
+
+func (m *mintMock) ListRoleGrants(_ context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "role-1"}}}, nil
 }
 
 func (m *mintMock) ClearExpiredOrgInvite(_ context.Context, _ *pb.ClearExpiredOrgInviteReq, _ ...grpc.CallOption) (*pb.ClearExpiredOrgInviteResp, error) {
