@@ -191,6 +191,17 @@ message ListBotUsersResp {
   repeated User bots = 1;
 }
 
+message ListBotAccountsReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+}
+message ListBotAccountsResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  repeated User bots = 1;
+
+  // Cursor-paged admin-only, like ListUsersResp — see there.
+  w17.Paging paging = 2;
+}
+
 message ListApiRealmRolesReq {
   option (w17.contrib.plugin_feature) = "service_account";
 }
@@ -1132,6 +1143,33 @@ service AuthQuery {
           "       u.disabled_at AS disabled_at, u.created_at AS created_at "
           "FROM @module.User u "
           "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
+          "WHERE u.kind = 1 "
+          "ORDER BY u.created_at DESC, u.id DESC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // ListBotAccounts — every machine account, for the admin ServiceAccounts page.
+  //
+  // REALM-WIDE, on purpose, and only for the admin surface: that surface is the
+  // operator's, and its Users page already lists every person (ListUsers). The
+  // org-scoped ListBotUsers above serves the in-product bot directory, where a
+  // company's operator must see their own bots only.
+  //
+  // The page used to name a query that does not exist, and before that the
+  // org-scoped one — whose required org_id an admin list cannot supply. No
+  // project ever published the page, so nothing ever generated it; plugin dev
+  // now publishes every preset surface, which is what found it.
+  rpc ListBotAccounts(ListBotAccountsReq) returns (ListBotAccountsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS id, u.email AS email, "
+          "       u.kind AS kind, "
+          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "FROM @module.User u "
           "WHERE u.kind = 1 "
           "ORDER BY u.created_at DESC, u.id DESC"
       }
