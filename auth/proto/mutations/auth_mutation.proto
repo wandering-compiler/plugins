@@ -160,6 +160,9 @@ message IssueApiTokenReq {
   string    user_id    = 1 [(w17.field) = { type: UUID }];
   string    name       = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   TokenType token_type = 3;
+  // Absent = NULL = never expires; the business handler decides, from the
+  // caller's request and the deployment's default.
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
 }
 message IssueApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -841,14 +844,21 @@ message UpdateOrganizationResp {
 }
 
 // UpdateOrgMembership — change a member's role within an org. Only
-// `role` is mutable: moving a membership to a different user or org is
+// the role is mutable: moving a membership to a different user or org is
 // a delete + re-add, not an edit (the unique (user_id, org_id) index
 // makes an in-place move a silent constraint trap). Gated
 // org_membership.
+//
+// Takes the role by ID, the one AuthService.UpdateOrgMembershipRole held to
+// the role ceiling. By name, the role checked and the role granted were two
+// lookups apart: a rename of two roles in between would grant the other one.
+// The membership's label is written from that role's current name.
 message UpdateOrgMembershipReq {
   option (w17.contrib.plugin_feature) = "org_membership";
-  string id   = 1 [(w17.field) = { type: UUID }];
-  string role = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+  string id      = 1 [(w17.field) = { type: UUID }];
+  reserved 2;
+  reserved "role";
+  string role_id = 3 [(w17.field) = { type: UUID }];
 }
 message UpdateOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -1150,13 +1160,15 @@ service AuthMutation {
           "INSERT INTO @module.UserToken SET "
           "user_id = :user_id, "
           "token_type = :token_type, "
-          "name = :name "
+          "name = :name, "
+          "expires_at = :expires_at "
           "RETURNING id AS token.id, "
           "          token AS token.token, "
           "          user_id AS token.user_id, "
           "          token_type AS token.token_type, "
           "          name AS token.name, "
-          "          created_at AS token.created_at"
+          "          created_at AS token.created_at, "
+          "          expires_at AS token.expires_at"
       }
     };
   }
@@ -2313,9 +2325,10 @@ service AuthMutation {
   // the member kept every permission of the role they were demoted from,
   // because permissions are read from UserRole and never from this label
   // (D13-3). One method, one transaction: read whose membership it is, check
-  // the new role is an org role (an unknown name finds no row and the whole
-  // update fails), drop every grant the member holds IN THIS ORGANIZATION, and
-  // grant the new one. Realm-wide grants are not touched.
+  // the new role is still an org role, drop every grant the member holds IN
+  // THIS ORGANIZATION, and grant the new one. Realm-wide grants are not
+  // touched. Called by AuthService.UpdateOrgMembershipRole, which holds the
+  // change to the role ceiling; it checks nothing about the caller itself.
   rpc UpdateOrgMembership(UpdateOrgMembershipReq) returns (UpdateOrgMembershipResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
@@ -2325,7 +2338,16 @@ service AuthMutation {
       }
       ops: {
         name: "r"
-        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.name = :role AND r.org_scoped = TRUE"
+        dql:  "SELECT r.id AS id, r.name AS name FROM @module.Role r WHERE r.id = :role_id AND r.org_scoped = TRUE"
+        // The caller resolved and checked this role a moment ago
+        // (AuthService.UpdateOrgMembershipRole answers a mistyped name
+        // itself). Missing now means it was deleted, or stopped being an org
+        // role, in between — not a missing membership, which op "m" answers.
+        on_empty: {
+          code:       ON_EMPTY_FAILED_PRECONDITION
+          error_code: "ORG_ROLE_CHANGED"
+          message:    "That role changed while it was being assigned. Choose it again."
+        }
       }
       ops: {
         name: "revoke"
@@ -2339,7 +2361,7 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.OrgMembership SET "
-          "role = :role "
+          "role = :r.name "
           "WHERE id = :id "
           "RETURNING id AS membership_id"
       }

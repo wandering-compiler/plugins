@@ -88,6 +88,8 @@ type EnvConfig struct {
 	InviteOnly         bool   // invite_only (default true)
 	EmailProofRequired string // email_proof_required: none | derived | full (default "none")
 	OrgInviteTtlHours  int    // org_invite_ttl_hours (default 168)
+
+	APITokenDefaultTtlHours int // api_token_default_ttl_hours (default 2160; 0 = never)
 }
 
 // ClientSet exposes the in-process typed clients the plugin's

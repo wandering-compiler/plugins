@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/protoadapt"
 
+	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -288,4 +290,23 @@ func UnauthenticatedSignIn(cause error) error {
 		userCode: CodeInvalidCredentials,
 		userMsg:  MsgInvalidCredentials,
 	}
+}
+
+// refusal is a status whose message is the operator's copy and whose
+// ErrorDetail is the person's. Here, not beside its first caller, because this
+// file is staged with every feature and its callers are not — translated through the project's catalog, with
+// the request field it is about, so a form can put it next to the input.
+func refusal(ctx context.Context, c codes.Code, dev, code, field, msgid string, params map[string]string) error {
+	st := status.New(c, dev)
+	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
+		Code:    code,
+		Message: i18n.T(ctx, msgid, params),
+		Field:   field,
+	}))
+	if err != nil {
+		// coverage-exempt: WithDetails only fails if the detail cannot
+		// marshal, and ErrorDetail is a static well-typed proto.
+		return st.Err()
+	}
+	return with.Err()
 }

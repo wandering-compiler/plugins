@@ -291,7 +291,7 @@ func TestServiceAccount_TheWritesThatMustNotSeparate(t *testing.T) {
 		seam  string
 		apart []string
 	}{
-		{"IssueBotToken", "issueBotTokenTx(", []string{"h.Mutation.IssueApiToken(", "h.Mutation.AddTokenPermission("}},
+		{"IssueBotToken", "issueApiTokenTx(", []string{"h.Mutation.IssueApiToken(", "h.Mutation.AddTokenPermission("}},
 		{"CreateBot", "createBotUserTx(", []string{"h.Mutation.CreateBotUser(", "h.Mutation.AddOrgMembership(", "h.Mutation.AssignRoleToUser("}},
 	} {
 		i := strings.Index(body, "func (h *AuthServiceHandler) "+tc.fn+"(")

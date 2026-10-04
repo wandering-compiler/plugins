@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -194,6 +195,11 @@ type AuthServiceHandler struct {
 	// boolean carried, kept because it did not stop being true.
 	EmailProofRequired string
 	OrgInviteTTLHours  int // how long an invitation stays acceptable (org_invite_ttl_hours)
+
+	// APITokenDefaultTTLHours is the lifetime of an API token minted without
+	// an explicit expires_at (api_token_default_ttl_hours). 0 = never expires;
+	// negative falls back to the 90-day default. See apiTokenExpiry.
+	APITokenDefaultTTLHours int
 }
 
 // scopeDecorator augments the AuthResp scope + label maps for an
@@ -355,6 +361,20 @@ var signupAssignRoleIDs = func(ctx context.Context, h *AuthServiceHandler, userI
 // the earliest point both the feature set and the env value are known).
 var devicesActive bool
 
+// defaultAPITokenTTLHours is the lifetime of an API token whose caller asked
+// for none, when the deployment did not choose one: 90 days.
+//
+// Both live in this always-staged file, not beside apiTokenExpiry
+// (apitoken.go, staged with api_token): ValidateConfig runs in every
+// activation, and a constant only api_token stages would leave every
+// activation without it unable to build.
+const defaultAPITokenTTLHours = 90 * 24
+
+// maxAPITokenTTLHours bounds the default lifetime (100 years). A longer one is
+// refused at boot by ValidateConfig: time.Duration overflows past ~292 years,
+// and "never" is spelled 0.
+const maxAPITokenTTLHours = 100 * 365 * 24
+
 // ValidateConfig fails plugin bootstrap loud on a contradictory
 // activation, rather than silently degrading. Today: two_factor_scope=
 // new_devices requires the `devices` feature (without it the trusted-
@@ -363,6 +383,12 @@ var devicesActive bool
 func ValidateConfig(h *AuthServiceHandler) error {
 	if h.TwoFactorScope == "new_devices" && !devicesActive {
 		return errors.New("auth plugin: two_factor_scope=new_devices requires the `devices` feature (enable it in the activation's features[])")
+	}
+	// Refused at boot rather than at the first mint: past this many hours
+	// time.Duration overflows, and a "practically never" setting would mint
+	// tokens already expired — accepted by the mint, refused by every read.
+	if h.APITokenDefaultTTLHours > maxAPITokenTTLHours {
+		return fmt.Errorf("auth plugin: api_token_default_ttl_hours=%d is longer than %d (100 years) — use 0 for tokens that never expire", h.APITokenDefaultTTLHours, maxAPITokenTTLHours)
 	}
 	return nil
 }

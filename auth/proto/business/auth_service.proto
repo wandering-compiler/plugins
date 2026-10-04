@@ -350,12 +350,20 @@ message IssueBotTokenReq {
   // which is why a machine account is the right owner for an unattended
   // credential and a person is not.
   repeated int32 permission_subset = 3;
+  // When the token stops working. Optional: absent takes the deployment's
+  // default lifetime (api_token_default_ttl_hours, 90 days unless changed;
+  // 0 there means "never"). Present, it must be in the future. A token is
+  // rotated by issuing a new one and revoking the old — the expiry is what
+  // makes forgetting the second step safe.
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
 }
 message IssueBotTokenResp {
   option (w17.contrib.plugin_feature) = "service_account";
   // The opaque token — returned ONCE, exactly as CreateApiToken does.
   string token    = 1;
   string token_id = 2 [(w17.field) = { type: UUID }];
+  // When it expires; absent = never (the deployment's default is 0).
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
 }
 
 message CreateApiTokenReq {
@@ -366,6 +374,12 @@ message CreateApiTokenReq {
   // API-realm perms (an out-of-realm entry is dropped at Authenticate),
   // so a token can never escalate. Empty = full API-realm perms.
   repeated int32 permission_subset = 2;
+  // When the token stops working. Optional: absent takes the deployment's
+  // default lifetime (api_token_default_ttl_hours, 90 days unless changed;
+  // 0 there means "never"). Present, it must be in the future. A token is
+  // rotated by issuing a new one and revoking the old — the expiry is what
+  // makes forgetting the second step safe.
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
 }
 message CreateApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -373,6 +387,8 @@ message CreateApiTokenResp {
   // retrievable again (ListApiTokens omits it).
   string token    = 1;
   string token_id = 2 [(w17.field) = { type: UUID }];
+  // When it expires; absent = never (the deployment's default is 0).
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
 }
 
 message ListApiTokensReq {
@@ -554,6 +570,33 @@ message RevokeAllDevicesResp {
 // membership. None of them takes an org id from the client, and that is
 // deliberate: an id in the request is a value a handler has to remember
 // to distrust, and the one that is already proven is right there.
+
+// UpdateOrgMembershipRole — change one membership's role, under the role
+// ceiling. The shape of AuthMutation.UpdateOrgMembership's, which it calls:
+// the admin's OrgMemberships page edits through this (its `role` is the only
+// editable field), so `id` is the membership the URL names.
+message UpdateOrgMembershipRoleReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id   = 1 [(w17.field) = { type: UUID }];
+  string role = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+}
+message UpdateOrgMembershipRoleResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string membership_id = 1;
+}
+
+// RemoveOrgMembership — remove one membership, under the role ceiling: the
+// caller must cover every role the member holds in that organization, since
+// removing the membership revokes them. The admin's OrgMemberships page
+// deletes through this.
+message RemoveOrgMembershipReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RemoveOrgMembershipResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string membership_id = 1;
+}
 
 message ListOrgMembersReq  { option (w17.contrib.plugin_feature) = "org_membership"; }
 message ListOrgMembersResp {
@@ -895,6 +938,25 @@ service AuthService {
 
   // ListOrgMembers — who is in the caller's active organization.
   rpc ListOrgMembers(ListOrgMembersReq) returns (ListOrgMembersResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+  }
+
+  // UpdateOrgMembershipRole — change a member's role, held to the role
+  // ceiling both ways (handlers/org_membership_role.go): the caller must hold
+  // every permission the NEW role carries, and cover every role the member
+  // holds in that organization now, since the change revokes them. The
+  // membership must be in the caller's active organization when there is
+  // one. The admin's OrgMemberships page edits through it;
+  // AuthMutation.UpdateOrgMembership, which it calls, checks nothing about
+  // the caller, so binding the page to it let anyone who could edit a
+  // membership grant any org role — their own included.
+  rpc UpdateOrgMembershipRole(UpdateOrgMembershipRoleReq) returns (UpdateOrgMembershipRoleResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+  }
+
+  // RemoveOrgMembership — the delete twin: the caller must cover every role
+  // the member holds in that organization, which the removal revokes.
+  rpc RemoveOrgMembership(RemoveOrgMembershipReq) returns (RemoveOrgMembershipResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
   }
 

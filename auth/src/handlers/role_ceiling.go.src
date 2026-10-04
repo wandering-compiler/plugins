@@ -42,7 +42,8 @@ import (
 //
 // Staged with `org_membership`, which brings both things it reads: the
 // AuthResp envelope (through authenticate_turnkey) and the role catalogue
-// (through rbac). Both callers — org_invite and service_account — require it.
+// (through rbac). Its callers — a membership's role change
+// (org_membership_role.go), org_invite and service_account — all have it.
 
 // errRoleAboveCaller is the refusal. It names the rule, not the missing
 // permissions: the list would describe the role's contents to someone who has

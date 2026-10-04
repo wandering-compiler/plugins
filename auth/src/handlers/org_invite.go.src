@@ -131,32 +131,6 @@ func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email, inv
 var errInviteInvalid = status.Error(codes.NotFound,
 	"invitation invalid, expired, already accepted, or addressed to another account")
 
-// errUnknownRole is the TYPO: no role of that name in the catalogue at all.
-//
-// ⚠️ It used to serve two causes, and the adjective was carrying the whole
-// distinction — "no ORG-ASSIGNABLE role by that name exists". The comment here
-// even said why: a realm role exists and is still refused, and calling that
-// "does not exist" sends the reader hunting for a typo that is not there. It
-// happened anyway: a consumer measured three states, got one message, and went looking
-// for a row that WAS there (member-management-audit-findings, from #71/#72).
-//
-// One adjective is not a distinction a reader can act on. Two errors are.
-var errUnknownRole = status.Error(codes.InvalidArgument,
-	"no role by that name exists in this project's role catalogue")
-
-// errRoleNotOrgScoped is the other cause: the role is real, and an invitation is
-// not the thing that may hand it out.
-//
-// Saying so is not an oracle. The caller already holds the invite permission in
-// an organization and can list the org-scoped catalogue; on the ACCEPT path they
-// hold the invitation and the role name came from it, so the only thing this adds
-// is WHY a name they were given stopped working — which is the question the single
-// message could not answer.
-var errRoleNotOrgScoped = status.Error(codes.InvalidArgument,
-	"that role exists but is realm-wide, and an invitation may only grant an "+
-		"organization-scoped role — a realm role reaches every organization, so it is not an "+
-		"org admin's to give")
-
 func (h *AuthServiceHandler) orgInviteTTL() time.Duration {
 	if h.OrgInviteTTLHours > 0 {
 		return time.Duration(h.OrgInviteTTLHours) * time.Hour
@@ -174,60 +148,6 @@ func (h *AuthServiceHandler) callerEmail(ctx context.Context, userID string) (st
 		return "", err
 	}
 	return normalizeEmail(got.GetUser().GetEmail()), nil
-}
-
-// assignableRoles is the ONE catalogue the invitation surface reads: the
-// roles an org admin may hand out, which is the org-scoped ones.
-//
-// It is a function rather than a rule each caller applies because the two
-// callers already drifted. The picker moved to ListOrgScopedRoles while
-// roleIDByName kept reading ListRoles, so for a day the list a caller was
-// OFFERED and the list that would be ACCEPTED disagreed: an org admin could
-// invite at a realm role over the API by naming it, and only the UI knew not
-// to. The picker's comment claimed the two could not disagree, which is why
-// nothing caught it — a comment is not a check. They cannot disagree now
-// because there is only one of them.
-func (h *AuthServiceHandler) assignableRoles(ctx context.Context) ([]*pb.OrgScopedRole, error) {
-	resp, err := h.Query.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{})
-	if err != nil {
-		return nil, err
-	}
-	return resp.GetRoles(), nil
-}
-
-// roleIDByName resolves an assignable Role.name to its id.
-//
-// Validated when the invitation is CREATED rather than when it is
-// accepted: a typo is then the inviter's error at the moment they make it,
-// instead of a failure the invitee walks into days later with no way to
-// tell what is wrong or who to ask.
-//
-// It runs AGAIN at accept, against the same catalogue. That is not
-// belt-and-braces: a role can be retired or unscoped between the two
-// moments, and the accept is where the grant is actually written.
-func (h *AuthServiceHandler) roleIDByName(ctx context.Context, name string) (string, error) {
-	roles, err := h.assignableRoles(ctx)
-	if err != nil {
-		return "", err
-	}
-	for _, r := range roles {
-		if r.GetName() == name {
-			return r.GetId(), nil
-		}
-	}
-	// Not org-assignable — and the two reasons for that are a typo and a realm
-	// role, which a caller fixes in completely different ways. The full catalogue
-	// tells them apart; `org_invite` requires `rbac`, so ListRoles is always here.
-	if all, lerr := h.Query.ListRoles(ctx, &pb.ListRolesReq{}); lerr == nil {
-		for _, r := range all.GetRoles() {
-			if r.GetName() == name {
-				return "", errRoleNotOrgScoped
-			}
-		}
-	}
-	// A catalogue lookup that could not answer must not invent the distinction:
-	// the typo message is the one that holds for both.
-	return "", errUnknownRole
 }
 
 // ListAssignableRoles returns the roles an invitation in this org may name.

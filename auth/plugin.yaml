@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.12
+version: 0.1.0-rc.13
 requires_w17: ">=1.7"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -50,7 +50,11 @@ env:
   - name: session_token_ttl_seconds
     type: int
     default: "2592000"
-    description: "Absolute lifetime (seconds) of a browser session bearer token, stamped into UserToken.expires_at at mint time (SignIn / SignUp / VerifyMfa). Default 2592000 = 30 days. The token-validation queries reject an expired token (expires_at > NOW()), so a leaked session token stops working after the TTL even without an explicit logout (OWASP session-timeout baseline). <= 0 falls back to the 30-day default. API tokens are minted with NULL expires_at (never-expiring) and are unaffected."
+    description: "Absolute lifetime (seconds) of a browser session bearer token, stamped into UserToken.expires_at at mint time (SignIn / SignUp / VerifyMfa). Default 2592000 = 30 days. The token-validation queries reject an expired token (expires_at > NOW()), so a leaked session token stops working after the TTL even without an explicit logout (OWASP session-timeout baseline). <= 0 falls back to the 30-day default. API tokens have their own lifetime (api_token_default_ttl_hours)."
+  - name: api_token_default_ttl_hours
+    type: int
+    default: "2160"
+    description: "Lifetime (hours) of an API token — a person's (CreateApiToken) or a machine account's (IssueBotToken) — minted WITHOUT an explicit expires_at. Default 2160 = 90 days. A caller may still choose its own expiry (any time in the future). 0 = never expires, the behaviour before this setting existed; tokens minted earlier keep their NULL expiry. Rotation is issue-new-then-revoke-old; the default is what makes forgetting the revoke safe."
   - name: totp_issuer
     type: string
     default: ""
@@ -216,10 +220,14 @@ features:
       # The role ceiling reads the caller's resolved permissions off the
       # AuthResp envelope (authenticate_turnkey's, which org_membership
       # requires) and the role catalogue (rbac's, required through it). Its
-      # only callers — org_invite and service_account — both require
-      # org_membership. Staged with rbac it named AuthResp in an activation
+      # callers — org_membership_role.go below, org_invite and service_account
+      # — all have org_membership. Staged with rbac it named AuthResp in an activation
       # that need not have it.
       - handlers/role_ceiling.go
+      # A membership's role change is a grant: it resolves the role through
+      # the org-scoped catalogue and holds it to the ceiling. The catalogue
+      # lookup lives here, not in org_invite.go, because both features grant.
+      - handlers/org_membership_role.go
   - name: org_invite
     description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / MarkOrgInviteAccepted / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default. See docs/specs/plugins/auth-org-invites.md."
     default: false
@@ -661,8 +669,17 @@ presets:
           detail_link_column: member
         detail:
           read: AuthQuery.GetOrgMembership
-          update: AuthMutation.UpdateOrgMembership
-          delete: AuthMutation.DeleteOrgMembership
+          # Through the Service method, not AuthMutation.UpdateOrgMembership:
+          # a role change is a GRANT, and only the Service method holds it to
+          # the role ceiling — the caller must hold every permission the new
+          # role carries. Bound to the mutation, anyone who could edit a
+          # membership could hand anyone (themselves included) any org role.
+          update: AuthService.UpdateOrgMembershipRole
+          # Removal revokes the member's org grants, so it is held to the
+          # ceiling too: the caller must cover every role the member holds
+          # there. The mutation alone would let anyone who may delete a
+          # membership strip an org-admin.
+          delete: AuthService.RemoveOrgMembership
           # Only the role is editable — moving a membership to another
           # user/org is a delete + re-add (unique (user_id, org_id)).
           fields: [role]
@@ -739,6 +756,12 @@ sandboxes:
 # so codegen can put them in a project's .po. The SOURCE is the Go constant
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
+  - "A token cannot expire in the past. Choose a later date."
   - "Authentication is temporarily unavailable. Please try again shortly."
   - "Confirm your email address before accepting this invitation."
+  - "That expiry date is not a valid date."
+  - "There is no organization role named {role}."
+  - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
+  - "This membership belongs to another organization."
   - "Wrong email or password."
+  - "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."

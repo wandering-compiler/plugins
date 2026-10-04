@@ -601,6 +601,21 @@ message GetUserOrgBySlugReq {
 // (UserRole.org_id IS NULL) plus the grants assigned inside that org.
 // Mirrors GetUserByTokenWithPermissionsResp's permission half so the
 // narrowing step can substitute one for the other.
+// ListUserOrgGrants — the roles granted to a user INSIDE one organization:
+// exactly the UserRole rows a membership change or removal revokes (it deletes
+// by (user_id, org_id)). Realm-wide grants are not among them; the member
+// keeps those. Read by the role ceiling's other half — whoever changes or
+// removes a membership must cover what the member loses.
+message ListUserOrgGrantsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1;
+  string org_id  = 2;
+}
+message ListUserOrgGrantsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  repeated string role_ids = 1;
+}
+
 message GetUserOrgPermissionsReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string user_id = 1;
@@ -1827,6 +1842,21 @@ service AuthQuery {
           "JOIN @module.Organization o ON o.id = m.org_id "
           "WHERE m.user_id = :user_id "
           "ORDER BY o.name ASC"
+      }
+    };
+  }
+
+  // ListUserOrgGrants — the role ids a user holds INSIDE one organization
+  // (see its request message).
+  rpc ListUserOrgGrants(ListUserOrgGrantsReq) returns (ListUserOrgGrantsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT ROWS_TO_ARRAY(ur.role_id) AS role_ids "
+          "FROM @module.UserRole ur "
+          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id"
       }
     };
   }

@@ -94,6 +94,9 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		InviteOnly:         cfg.InviteOnly,
 		EmailProofRequired: cfg.EmailProofRequired,
 		OrgInviteTTLHours:  cfg.OrgInviteTtlHours,
+
+		// api_token: the lifetime of a token minted without an expiry.
+		APITokenDefaultTTLHours: cfg.APITokenDefaultTtlHours,
 	}
 	if err := handlers.ValidateConfig(h); err != nil {
 		return err
