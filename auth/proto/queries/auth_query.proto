@@ -4,8 +4,7 @@ syntax = "proto3";
 //
 // Read primitives for the auth surface. The consumer's
 // business layer composes these into SignIn / Authenticate-
-// header-middleware / similar (see docs/specs/plugins/auth.md
-// §"Composing into SignUp / SignIn" for the canonical shape).
+// header-middleware / similar.
 //
 // All methods are pure SELECTs through the standard
 // `(w17.db.method).query` annotation; codegen emits the
@@ -164,7 +163,7 @@ message ListUsersResp {
   // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
   // this method's ORDER BY. An operator's user table grows without bound,
   // so an unpaged list would eventually load the whole table into one
-  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  // page.
   w17.Paging paging = 2;
 }
 message ListBotUsersReq {
@@ -282,8 +281,7 @@ message ListRolesResp {
   repeated Role roles = 1;
 
   // Cursor-paged like the other admin lists (the `w17.Paging` field IS
-  // the declaration — see docs/specs/gateway/cursor-paging.md §Admin-only
-  // paging). The role catalogue is bounded by declaration and rarely
+  // the declaration). The role catalogue is bounded by declaration and rarely
   // outgrows one page, so in practice the SPA renders no pager at all
   // (the footer appears only once a second page exists) — but a project
   // with a long, generated role set pages like everything else instead
@@ -300,8 +298,7 @@ message GetRoleReq {
 // apitoken.go): resolve a token's kind, pull the user's permissions
 // for that realm, and (for API tokens) the token's permission subset.
 // Authenticate intersects realm-perms ∩ subset in Go — no SQL
-// subquery. All gated api_token. See docs/specs/plugins/auth-tokens-
-// and-roles.md §3.
+// subquery. All gated api_token.
 
 message GetTokenWithTypeReq {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -661,8 +658,7 @@ message GetUserOwnsOrgResp {
   // is what the bootstrap script was quietly doing.
   //
   // ⚠️ This is the ONE flag in the plugin that WIDENS rather than narrows,
-  // and the exception is deliberate (docs/decisions/owner-autopass.md asked for
-  // it to be argued rather than slipped in):
+  // and the exception is deliberate, argued here rather than slipped in:
   //
   //   · ownership is not a permission anybody handed out — it is root
   //     authority over the organization, read off the organization itself;
@@ -723,7 +719,7 @@ message ListOrganizationsResp {
   // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
   // this method's ORDER BY. An operator's organization table grows without bound,
   // so an unpaged list would eventually load the whole table into one
-  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  // page.
   w17.Paging paging = 2;
 }
 
@@ -774,7 +770,7 @@ message ListOrgMembershipsResp {
   // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
   // this method's ORDER BY. An operator's membership table grows without bound,
   // so an unpaged list would eventually load the whole table into one
-  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  // page.
   w17.Paging paging = 2;
 }
 
@@ -838,7 +834,7 @@ message ListUserTokensResp {
   // `?limit` (25 default, 100 max) and the storage query keyset-seeks on
   // this method's ORDER BY. An operator's session table grows without bound,
   // so an unpaged list would eventually load the whole table into one
-  // page. See docs/specs/gateway/cursor-paging.md §Admin-only paging.
+  // page.
   w17.Paging paging = 2;
 }
 
@@ -945,9 +941,7 @@ service AuthQuery {
         // EVERY gate SignIn runs reads its field off THIS lookup, so a
         // column left out of the projection is a gate that consults a
         // field nobody filled and passes. A gate on the projection
-        // target is what makes one statement serve both activations —
-        // see docs/decisions/dql-feature-gated-fragments.md §SELECT
-        // targets.
+        // target is what makes one statement serve both activations.
         //
         // disabled_at (`user_admin`): without it every soft-disabled
         // account still signed in (T2-6 pass #9, D9-4).

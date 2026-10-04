@@ -20,8 +20,7 @@ import (
 // loopback + PKCE flow (the same UX as `claude login`). Staged into a
 // bundle only when the activation enables `cli_login` (plugin.yaml maps
 // the feature to this file via go_files). The plugin author's standalone
-// `go test` always compiles it. See
-// docs/specs/plugins/auth-cli-login-and-orgs.md.
+// `go test` always compiles it.
 //
 // The human authenticates through the project's EXISTING surface (password
 // SignIn or the `oauth` providers) — cli_login does not re-implement

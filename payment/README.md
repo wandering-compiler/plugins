@@ -6,8 +6,6 @@ gateway plugs in behind an internal `backend.Backend` interface selected
 by the `payment_provider` env. **Slice 1 ships the core + the Stripe
 driver.**
 
-Full design: [`docs/specs/plugins/payment.md`](../../docs/specs/plugins/payment.md).
-
 ## What Slice 1 (core) provides
 
 - **Models** — `Customer` (principal ↔ provider-customer link),

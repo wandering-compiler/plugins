@@ -65,7 +65,7 @@ env:
 # that skips verification is the flag that escapes into production.
 #
 # ⚠️ The identity lives in the container's own filesystem, because a sandbox
-# cannot declare a volume (see docs/specs/plugins/sandbox-services.md — the
+# cannot declare a volume (the sandbox
 # manifest carries name/image/ports/env and nothing else). So it survives a
 # `restart` and is LOST on `down`/`up`, and a recreated relay comes back with a
 # different fingerprint that has to be pasted again. Tolerable for a dev

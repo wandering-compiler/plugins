@@ -8,9 +8,7 @@ syntax = "proto3";
 // IssueToken event + the DeleteToken event independently.
 //
 // Channel reference uses the plugin-internal alias `events`;
-// activation maps the alias to a real project channel (see
-// docs/specs/plugins/activation.md §"Channel binding via
-// aliases"). Plugin authors don't bake in a real channel name —
+// activation maps the alias to a real project channel. Plugin authors don't bake in a real channel name —
 // they pick `events` as the logical destination and the project
 // picks the transport (NATS / Redis / in-memory).
 //
@@ -123,8 +121,7 @@ message TokenRevoked {
   //
   // Found by the staging emit-coverage check the moment it landed; it is
   // the fourth instance of this shape (UserCreated / TokenIssued /
-  // org-scoped roles were the others). See
-  // docs/decisions/dql-feature-gated-fragments.md.
+  // org-scoped roles were the others).
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
 
   string token_id = 1;
@@ -318,7 +315,7 @@ message EmailVerificationRequested {
 // organization_name`) — it pins the plugin version, so the schema is frozen
 // until it deliberately updates. What stays forbidden is a *plugin's*
 // handler code reaching into *another plugin's* tables (the enforced
-// cross-plugin isolation rule, docs/specs/plugins/business-handlers.md).
+// cross-plugin isolation rule).
 // All gated `org_membership`.
 
 // OrganizationCreated — emitted on AuthMutation.CreateOrganization after

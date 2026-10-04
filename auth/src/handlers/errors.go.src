@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/protoadapt"
 
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -106,6 +107,22 @@ const (
 	// own account — an address they already know they own or do not — so it
 	// tells an attacker nothing they did not arrive with.
 	CodeEmailNotVerified = "EMAIL_NOT_VERIFIED"
+
+	// CodeOrgNotMember: the credential was ACCEPTED, and the organization the
+	// request named (W17-Org) is not one the caller belongs to or owns. Not
+	// folded into the opaque answer, because it is not a credential refusal:
+	// it used to render "You are not signed in." to a caller who was, and
+	// whose real mistake — usually an org ID where the slug goes — that
+	// sentence hides (2026-10-04). It reveals nothing: an org that does not
+	// exist and one the caller is not in answer the same.
+	CodeOrgNotMember = "ORG_NOT_MEMBER"
+
+	// CodeOrgMismatch: the request's `org` field names a different
+	// organization than the one authentication resolved for it. Through
+	// REST the two cannot differ (the gateway makes the path's org the
+	// W17-Org it authenticates); a gRPC caller can send one org in the field
+	// and another in its metadata, and acting in either would be a guess.
+	CodeOrgMismatch = "ORG_MISMATCH"
 )
 
 // The sentences a person reads, and the ONE place each is written.
@@ -130,6 +147,12 @@ const (
 	// Flow-neutral. Every auth flow reaches the outage branch, so a sentence
 	// naming sign-in would be wrong for a bad MFA code or a spent reset token.
 	MsgAuthUnavailable = "Authentication is temporarily unavailable. Please try again shortly."
+
+	// Names the header and what it takes, because the usual cause is an
+	// organization's ID sent where its slug belongs.
+	MsgOrgNotMember = "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
+
+	MsgOrgMismatch = "This request names two different organizations. Name one."
 )
 
 // withUserDetail attaches the pair a REST gateway renders for a person.
@@ -143,8 +166,7 @@ const (
 // GRPCStatus(), which has none — threading one would mean changing
 // Unauthenticated() at 87 call sites for no other reason. It renders in
 // English until plugin-authored msgids can be harvested into project
-// catalogs, which nothing supports yet; see
-// docs/decisions/plugin-authored-messages-are-not-harvested.md.
+// catalogs, which nothing supports yet.
 func withUserDetail(st *status.Status, code, message string) *status.Status {
 	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
 		Code:    code,
@@ -292,6 +314,15 @@ func UnauthenticatedSignIn(cause error) error {
 	}
 }
 
+// UnauthenticatedOrgNotMember is the refusal of a request scoped into an
+// organization the caller does not belong to. Same code and status message as
+// every other authentication refusal — the contract — plus the pair a gateway
+// renders, so the person reads what is actually wrong. Here rather than beside
+// its caller because this file is staged with every feature.
+func UnauthenticatedOrgNotMember(cause error) error {
+	return &authnError{cause: cause, userCode: CodeOrgNotMember, userMsg: MsgOrgNotMember}
+}
+
 // refusal is a status whose message is the operator's copy and whose
 // ErrorDetail is the person's. Here, not beside its first caller, because this
 // file is staged with every feature and its callers are not — translated through the project's catalog, with
@@ -309,4 +340,26 @@ func refusal(ctx context.Context, c codes.Code, dev, code, field, msgid string, 
 		return st.Err()
 	}
 	return with.Err()
+}
+
+// refuseOtherOrg refuses a request whose `org` field names a different
+// organization than the one authentication resolved (scope `org_slug`). An
+// empty field defers to authentication, and so does a request with NO
+// resolved org: the field cannot select one (selection happens at
+// authentication), and the handler's own activeOrgID answers that case with
+// "send the W17-Org header" — "two different organizations" would describe a
+// request that named only one (a gRPC or MCP caller filling `org` alone).
+// Here rather than beside its callers because membership and invitation
+// handlers both call it, and this file is staged with every feature.
+func refuseOtherOrg(ctx context.Context, org string) error {
+	if org == "" {
+		return nil
+	}
+	slug, ok := principal.Scope(ctx, "org_slug")
+	if !ok || slug == org {
+		return nil
+	}
+	return refusal(ctx, codes.InvalidArgument,
+		"request field org "+org+" is not the organization this request was authenticated in",
+		CodeOrgMismatch, "org", MsgOrgMismatch, nil)
 }

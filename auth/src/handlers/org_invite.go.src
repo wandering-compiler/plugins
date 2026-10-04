@@ -161,7 +161,10 @@ func (h *AuthServiceHandler) callerEmail(ctx context.Context, userID string) (st
 // ORG-SCOPED ONLY. A realm role reaches every organization, so it is not an
 // org admin's to hand out; filtering here rather than in the caller means a
 // second consumer cannot forget to.
-func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, _ *pb.ListAssignableRolesReq) (*pb.ListAssignableRolesResp, error) {
+func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.ListAssignableRolesReq) (*pb.ListAssignableRolesResp, error) {
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
 	// ListOrgScopedRoles, not ListRoles: the shared catalogue query cannot
 	// return `org_scoped` at all (the column only exists under the
 	// org_membership feature, so naming it there fails the typecheck for
@@ -207,6 +210,9 @@ func metadataOrEmptyObject(m string) string {
 // InviteToOrg records an invitation for an address to join the caller's
 // active organization with a named role.
 func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
 	inviter, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -315,7 +321,10 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 }
 
 // ListOrgInvites returns the active organization's outstanding invitations.
-func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, _ *pb.ListOrgInvitesReq) (*pb.ListOrgInvitesResp, error) {
+func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, req *pb.ListOrgInvitesReq) (*pb.ListOrgInvitesResp, error) {
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -344,6 +353,9 @@ func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, _ *pb.ListOrgIn
 
 // RevokeOrgInvite withdraws a pending invitation of the active org.
 func (h *AuthServiceHandler) RevokeOrgInvite(ctx context.Context, req *pb.RevokeOrgInviteReq) (*pb.RevokeOrgInviteResp, error) {
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

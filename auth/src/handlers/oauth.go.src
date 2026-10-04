@@ -439,8 +439,8 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 	//
 	// A BOUND invitation still works here, because the address lookup finds it.
 	// Carrying the token through an IdP round trip means putting it in the OAuth
-	// `state`, which is a bigger change than this one and is not smuggled in:
-	// docs/decisions/invite-proof-belongs-on-the-link.md records it as the gap.
+	// `state`, which is a bigger change than this one and is not smuggled in;
+	// it stays a known gap.
 	if err := signupInviteGate(ctx, h, email, ""); err != nil {
 		return "", err
 	}

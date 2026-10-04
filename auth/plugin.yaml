@@ -1,11 +1,10 @@
 name: auth
-version: 0.1.0-rc.13
+version: 0.1.0-rc.14
 requires_w17: ">=1.7"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
-# per-activation pb path (see docs/specs/plugins/business-handlers.md
-# §"Staging — how compose-time works").
+# per-activation pb path when the plugin is staged into a project.
 go_module: github.com/wandering-compiler/platform/plugins/auth
 
 description: "Email + password authentication primitives + bearer tokens + RBAC. v3 plugin — proto + DQL primitives + authored Go business handlers (Authenticate, SignIn)."
@@ -70,11 +69,11 @@ env:
   - name: invite_only
     type: bool
     default: "true"
-    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. This text used to claim the window closes once `email_verification` is enabled — it does not, and never did: that feature adds a column and two RPCs and blocks nothing (a consumer measured 19 unverified accounts of 19 with it on). Set `invite_requires_verified_email` to close it, or see docs/decisions/invite-proof-belongs-on-the-link.md for the change that removes the need to verify at all."
+    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. This text used to claim the window closes once `email_verification` is enabled — it does not, and never did: that feature adds a column and two RPCs and blocks nothing (a consumer measured 19 unverified accounts of 19 with it on). Set `invite_requires_verified_email` to close it."
   - name: email_proof_required
     type: string
     default: "none"
-    description: "How much proof an address needs before AcceptOrgInvite will admit it (org_invite). Three values, ordered weakest to strongest, and they read as a FLOOR on User.email_proof: 'none' asks nothing and is today's behaviour; 'derived' accepts an address a BOUND invitation named (the invitation said this address and the secret link reached whoever registered — no round trip asked of anybody), and also accepts a self-confirmed one; 'full' accepts only an address whose owner completed the email_verification flow themselves. ⚠️ Defaults to 'none' on purpose, which is NOT this plugin's usual 'the unsafe state is the one you opt into': every account that exists today is UNPROVEN, so a stricter default would refuse invitations those people were legitimately sent — a default that reads as safe and is really a breaking change is worse than an honest knob, which is the same reasoning the boolean this replaces carried. 'derived' is the setting most deployments want once they are past onboarding: it closes the address-guessing hole without asking anyone for a round trip, because an OPEN invitation cannot derive anything (the registrant picks the address) and is therefore refused by it. Replaces `invite_requires_verified_email`, a boolean that could not express 'derived' at all. See docs/decisions/invite-proof-belongs-on-the-link.md."
+    description: "How much proof an address needs before AcceptOrgInvite will admit it (org_invite). Three values, ordered weakest to strongest, and they read as a FLOOR on User.email_proof: 'none' asks nothing and is today's behaviour; 'derived' accepts an address a BOUND invitation named (the invitation said this address and the secret link reached whoever registered — no round trip asked of anybody), and also accepts a self-confirmed one; 'full' accepts only an address whose owner completed the email_verification flow themselves. ⚠️ Defaults to 'none' on purpose, which is NOT this plugin's usual 'the unsafe state is the one you opt into': every account that exists today is UNPROVEN, so a stricter default would refuse invitations those people were legitimately sent — a default that reads as safe and is really a breaking change is worse than an honest knob, which is the same reasoning the boolean this replaces carried. 'derived' is the setting most deployments want once they are past onboarding: it closes the address-guessing hole without asking anyone for a round trip, because an OPEN invitation cannot derive anything (the registrant picks the address) and is therefore refused by it. Replaces `invite_requires_verified_email`, a boolean that could not express 'derived' at all."
   - name: org_invite_ttl_hours
     type: int
     default: "168"
@@ -131,7 +130,7 @@ features:
     go_files:
       - handlers/tenant.go
   - name: api_token
-    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. This used to `conflicts_with: org_membership`, because two narrowings over bare permission-id SETS cannot compose. Lifted 2026-09-20: both axes now resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (a consumer asked 2026-09-06; the anonymous case with NO permissions is a custom auth method, as in a public-link view). See docs/specs/plugins/auth-tokens-and-roles.md."
+    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. This used to `conflicts_with: org_membership`, because two narrowings over bare permission-id SETS cannot compose. Lifted 2026-09-20: both axes now resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (a consumer asked 2026-09-06; the anonymous case with NO permissions is a custom auth method, as in a public-link view)."
     default: false
     go_files:
       - handlers/apitoken.go
@@ -140,12 +139,12 @@ features:
       # devices.go names pb.SignInResp — the device gate hangs off the
       # sign-in it decorates, so without it the bundle does not build.
       - sign_in_turnkey
-    description: "Device/session tracking + log-out endpoints (ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices). Adds the Device table + a UserToken.device_id column; each session links to a Device so 'log out a device' is 'delete its tokens'. New vs. trusted devices are distinguished by a client-sent X-Device-Id header (falling back to a UA+IP fingerprint), and trusted_at supplies the trusted-device signal two_factor new-device mode reads. The project must forward X-Device-Id / User-Agent / X-Forwarded-For via (w17.rest_api).metadata_propagation for full-fidelity detection. Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
+    description: "Device/session tracking + log-out endpoints (ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices). Adds the Device table + a UserToken.device_id column; each session links to a Device so 'log out a device' is 'delete its tokens'. New vs. trusted devices are distinguished by a client-sent X-Device-Id header (falling back to a UA+IP fingerprint), and trusted_at supplies the trusted-device signal two_factor new-device mode reads. The project must forward X-Device-Id / User-Agent / X-Forwarded-For via (w17.rest_api).metadata_propagation for full-fidelity detection. Off by default."
     default: false
     go_files:
       - handlers/devices.go
   - name: oauth
-    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client_secret PASSWORD-typed) + OAuthIdentity (User↔external-subject link) tables and the authorize/callback handlers. Providers are configured at runtime via the generated admin CRUD; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
+    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client_secret PASSWORD-typed) + OAuthIdentity (User↔external-subject link) tables and the authorize/callback handlers. Providers are configured at runtime via the generated admin CRUD; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default."
     default: false
     go_files:
       - handlers/oauth.go
@@ -175,7 +174,7 @@ features:
       # mfa.go names pb.SignInResp: the two-step sign-in RETURNS one
       # (mfa_required instead of a token). No sign-in, no build.
       - sign_in_turnkey
-    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (secret encrypted at rest) + MfaChallenge tables, the EnrollTotp/ConfirmTotp/DisableTotp/GetMfaStatus enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (new_devices requires `devices`). Off by default. See docs/specs/plugins/auth-oauth-mfa-devices.md."
+    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (secret encrypted at rest) + MfaChallenge tables, the EnrollTotp/ConfirmTotp/DisableTotp/GetMfaStatus enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (new_devices requires `devices`). Off by default."
     default: false
     go_files:
       - handlers/mfa.go
@@ -190,7 +189,7 @@ features:
     go_files:
       - handlers/emailverify.go
   - name: cli_login
-    description: "First-party CLI login — the console acts as an OAuth authorization server for CLIs (e.g. w17ctl) via the loopback + PKCE flow (the same UX as `claude login`). Adds the CliAuthCode table + CliAuthorize (bearer-authenticated: mint a single-use, PKCE-bound authorization code for the signed-in principal) and CliToken (unauthenticated: verify the PKCE code_verifier, consume the code single-use, mint a bearer) RPCs. The human authenticates through the project's existing surface (password sign-in or the `oauth` providers); cli_login only issues + redeems the CLI's code. A redirect target must be LOOPBACK (RFC 8252 §7.3 — the user's own machine, no registration needed) or listed in the AuthClient registry under its client_id, matched as a whole string; that registry is what lets the same flow serve a browser app on its own origin instead of only a CLI. Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
+    description: "First-party CLI login — the console acts as an OAuth authorization server for CLIs (e.g. w17ctl) via the loopback + PKCE flow (the same UX as `claude login`). Adds the CliAuthCode table + CliAuthorize (bearer-authenticated: mint a single-use, PKCE-bound authorization code for the signed-in principal) and CliToken (unauthenticated: verify the PKCE code_verifier, consume the code single-use, mint a bearer) RPCs. The human authenticates through the project's existing surface (password sign-in or the `oauth` providers); cli_login only issues + redeems the CLI's code. A redirect target must be LOOPBACK (RFC 8252 §7.3 — the user's own machine, no registration needed) or listed in the AuthClient registry under its client_id, matched as a whole string; that registry is what lets the same flow serve a browser app on its own origin instead of only a CLI. Off by default."
     default: false
     go_files:
       - handlers/cli_login.go
@@ -204,7 +203,7 @@ features:
       # feature's own file names it, and a dependency held only transitively
       # breaks the day the link in between is relaxed.
       - rbac
-    description: "GitHub-style multi-org membership — one identity belongs to MANY Organizations via OrgMembership (the generalization of single-tenant tenant_scope). Adds the Organization + OrgMembership tables + AuthQuery.ListUserOrgs / GetUserOrgBySlug, the ListMyOrgs business RPC (the caller's orgs, for a CLI's `org list` + login cache + init org picker), and an Authenticate decorator that stamps scopes[org_id] for the request's ACTIVE org (a client-selected slug in the W17-Org header, VALIDATED against membership — a caller can only ever scope into an org they belong to). A project scoping rows by name: org_id then gets per-org isolation. Coexists with tenant_scope (a project picks one model). Off by default. See docs/specs/plugins/auth-cli-login-and-orgs.md."
+    description: "GitHub-style multi-org membership — one identity belongs to MANY Organizations via OrgMembership (the generalization of single-tenant tenant_scope). Adds the Organization + OrgMembership tables + AuthQuery.ListUserOrgs / GetUserOrgBySlug, the ListMyOrgs business RPC (the caller's orgs, for a CLI's `org list` + login cache + init org picker), and an Authenticate decorator that stamps scopes[org_id] for the request's ACTIVE org (a client-selected slug in the W17-Org header, VALIDATED against membership — a caller can only ever scope into an org they belong to). A project scoping rows by name: org_id then gets per-org isolation. Coexists with tenant_scope (a project picks one model). Off by default."
     default: false
     # api_token narrows permissions by REALM (inside resolvePrincipal);
     # org_membership narrows them by ORGANIZATION (a grant narrower that
@@ -214,7 +213,7 @@ features:
     # session-realm role scoped to org X and an api-realm realm-wide role
     # survives both filters for a session token acting in org Y, where
     # neither role applies. Refused until the queries resolve grants
-    # per ROLE — see docs/specs/plugins/auth-org-scoped-roles.md §A3b.
+    # per ROLE.
     go_files:
       - handlers/org_membership.go
       # The role ceiling reads the caller's resolved permissions off the
@@ -229,7 +228,7 @@ features:
       # lookup lives here, not in org_invite.go, because both features grant.
       - handlers/org_membership_role.go
   - name: org_invite
-    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / MarkOrgInviteAccepted / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default. See docs/specs/plugins/auth-org-invites.md."
+    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / MarkOrgInviteAccepted / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
     default: false
     # Built ON org_membership, not merely alongside it: the invite writes an
     # OrgMembership row and an org-scoped UserRole, both of which are types
@@ -285,7 +284,7 @@ go_files_combined:
 # is active; the project's activation block (`(w17.domain).plugins[]
 # .presets`) controls enable / mount per surface. Refs are plugin-
 # relative (`<Service>.<Method>`); codegen rewrites them to the
-# activation's `registered_as` name. Spec: docs/specs/plugins/presets.md.
+# activation's `registered_as` name.
 presets:
   rest:
     # Headers the gateway must thread into backend gRPC metadata for the
@@ -454,15 +453,27 @@ presets:
         description: "Multi-org membership — list the organizations the caller belongs to."
         endpoints:
           - { ref: AuthService.ListMyOrgs, method: GET, path: "", feature: org_membership }
-          # Members + invitations of the caller's ACTIVE org — the one
-          # Authenticate resolved from the W17-Org header and validated
-          # against membership. No org id in the path on purpose: a caller
-          # can only ever act in an org they belong to, and an id in the URL
-          # would invite a handler to trust it.
+      # One organization's members, roles and invitations — the org is IN THE
+      # PATH. `org_from_path` makes the gateway put that slug in the W17-Org
+      # header before authentication, so it is resolved and validated against
+      # membership exactly as the header always was; a W17-Org header naming
+      # a different org is refused.
+      #
+      # This said "No org id in the path on purpose: an id in the URL would
+      # invite a handler to trust it". The header was never more trustworthy
+      # — both are client-supplied, and the same validation covers both —
+      # while a header-only org meant a URL did not name what it showed: no
+      # deep link, and a client cache that could not tell two orgs apart. The
+      # handler still acts in the org AUTHENTICATION resolved; the request's
+      # `org` field only has to agree with it.
+      - prefix: "/auth/orgs/{org}"
+        description: "One organization's members, roles and invitations, named in the path."
+        org_from_path: org
+        endpoints:
           - { ref: AuthService.ListOrgMembers,   method: GET,    path: /members,               feature: org_membership }
-          # The role vocabulary an invitation may use. Under /orgs because the
-          # answer is org-scoped (realm roles are filtered out), and GET
-          # because a picker reads it before anything is submitted.
+          # The role vocabulary an invitation may use. Org-scoped (realm
+          # roles are filtered out), and GET because a picker reads it
+          # before anything is submitted.
           - { ref: AuthService.ListAssignableRoles, method: GET,  path: /roles,                 feature: org_invite }
           - { ref: AuthService.ListOrgInvites,   method: GET,    path: /invites,               feature: org_invite }
           - { ref: AuthService.InviteToOrg,      method: POST,   path: /invites,               feature: org_invite }
@@ -718,7 +729,7 @@ presets:
 # trial. Each is wired into the consuming project's tool-owned
 # `compose.w17.yaml` and NOWHERE else (no prod stage, never the
 # hand-written compose.yaml). w17 emits the compose entry; the
-# orchestrator launches it. Spec: docs/specs/plugins/sandbox-services.md.
+# orchestrator launches it.
 sandboxes:
   # A deterministic fake OIDC provider for live-proving the `oauth`
   # feature without a real Google/GitHub. Gated `oauth`: only wired
@@ -763,5 +774,7 @@ msgids:
   - "There is no organization role named {role}."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
+  - "This request names two different organizations. Name one."
   - "Wrong email or password."
+  - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
   - "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."

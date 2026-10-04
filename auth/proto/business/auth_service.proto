@@ -284,7 +284,7 @@ message LogoutResp {
 // a colleague, and every audit trail would show that colleague acting.
 //
 // Enforced SERVER-SIDE, in the handler. A UI that only offers this for bots is
-// UX, not a control (docs/todos/api-tokens-for-unattended-callers.md).
+// UX, not a control.
 //
 // It does NOT replace CreateApiToken: that one mints for the caller and stays
 // available to every principal, human or machine. The two answer different
@@ -598,7 +598,16 @@ message RemoveOrgMembershipResp {
   string membership_id = 1;
 }
 
-message ListOrgMembersReq  { option (w17.contrib.plugin_feature) = "org_membership"; }
+message ListOrgMembersReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  // org — the organization's slug, as the REST path names it
+  // (`/auth/orgs/{org}/…`): the gateway makes it the request's W17-Org, and
+  // authentication resolves and validates it. The handler acts in the org
+  // authentication resolved and REFUSES a different value here (a gRPC caller
+  // naming one org in this field and another in its metadata). Empty = the
+  // org comes from W17-Org alone.
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
 message ListOrgMembersResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   repeated OrgMember members = 1;
@@ -618,6 +627,13 @@ message OrgMember {
 
 message ListAssignableRolesReq {
   option (w17.contrib.plugin_feature) = "org_invite";
+  // org — the organization's slug, as the REST path names it
+  // (`/auth/orgs/{org}/…`): the gateway makes it the request's W17-Org, and
+  // authentication resolves and validates it. The handler acts in the org
+  // authentication resolved and REFUSES a different value here (a gRPC caller
+  // naming one org in this field and another in its metadata). Empty = the
+  // org comes from W17-Org alone.
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
 }
 message ListAssignableRolesResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -649,6 +665,13 @@ message InviteToOrgReq {
   // is a tenant plus one object in their engine — and gets it back at acceptance out
   // of the same statement that spends the invitation. See OrgInvite.metadata.
   string metadata = 3 [(w17.field) = { type: JSON, blank: true }];
+  // org — the organization's slug, as the REST path names it
+  // (`/auth/orgs/{org}/…`): the gateway makes it the request's W17-Org, and
+  // authentication resolves and validates it. The handler acts in the org
+  // authentication resolved and REFUSES a different value here (a gRPC caller
+  // naming one org in this field and another in its metadata). Empty = the
+  // org comes from W17-Org alone.
+  string org = 4 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
 }
 message InviteToOrgResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -683,7 +706,16 @@ message OrgInviteSummary {
   string metadata = 6;
 }
 
-message ListOrgInvitesReq  { option (w17.contrib.plugin_feature) = "org_invite"; }
+message ListOrgInvitesReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  // org — the organization's slug, as the REST path names it
+  // (`/auth/orgs/{org}/…`): the gateway makes it the request's W17-Org, and
+  // authentication resolves and validates it. The handler acts in the org
+  // authentication resolved and REFUSES a different value here (a gRPC caller
+  // naming one org in this field and another in its metadata). Empty = the
+  // org comes from W17-Org alone.
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
 message ListOrgInvitesResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   repeated OrgInviteSummary invites = 1;
@@ -692,6 +724,13 @@ message ListOrgInvitesResp {
 message RevokeOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string invite_id = 1 [(w17.field) = { type: UUID }];
+  // org — the organization's slug, as the REST path names it
+  // (`/auth/orgs/{org}/…`): the gateway makes it the request's W17-Org, and
+  // authentication resolves and validates it. The handler acts in the org
+  // authentication resolved and REFUSES a different value here (a gRPC caller
+  // naming one org in this field and another in its metadata). Empty = the
+  // org comes from W17-Org alone.
+  string org = 2 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
 }
 message RevokeOrgInviteResp { option (w17.contrib.plugin_feature) = "org_invite"; }
 
@@ -914,8 +953,7 @@ service AuthService {
   // CLI's PKCE challenge; the console web then redirects the browser to the
   // CLI's loopback redirect_uri?code=<code>. CliToken (unauthenticated —
   // the CLI has no token yet) verifies the PKCE verifier, consumes the
-  // code, and mints the bearer the CLI stores. Gated `cli_login`. See
-  // docs/specs/plugins/auth-cli-login-and-orgs.md.
+  // code, and mints the bearer the CLI stores. Gated `cli_login`.
   rpc CliAuthorize(CliAuthorizeReq) returns (CliAuthorizeResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }

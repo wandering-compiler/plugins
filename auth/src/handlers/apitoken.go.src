@@ -243,8 +243,7 @@ func (h *AuthServiceHandler) RevokeApiToken(ctx context.Context, req *pb.RevokeA
 	// turned every such revoke into a 404 while the token was ALREADY DELETED
 	// one statement earlier: the caller reads "no such token", retries, gets
 	// 404 again, and concludes the token is still live. Found by running
-	// examples/plugin-surfaces against a database (docs/todos/
-	// revoke-api-token-404-on-empty-subset.md).
+	// examples/plugin-surfaces against a database.
 	//
 	// Only NotFound is swallowed. Any other failure still fails the call — a
 	// subset that could not be removed is a credential narrower than it looks.

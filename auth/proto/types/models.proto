@@ -45,8 +45,8 @@ option go_package = "@project;@pkg";
 // realm a Role applies to. SESSION is the browser bearer session
 // (today's only kind); API is the API / MCP token issued for non-
 // browser clients. Authenticate resolves a token's permissions from
-// the user's roles whose realm matches the presented token's type
-// (see docs/specs/plugins/auth-tokens-and-roles.md). SESSION = 1 is
+// the user's roles whose realm matches the presented token's type.
+// SESSION = 1 is
 // the DB default so existing + IssueToken-minted tokens stay session
 // tokens.
 enum TokenType {
@@ -168,8 +168,7 @@ message User {
 //
 // The distinction is not cosmetic and is not only for the admin UI: it is what
 // makes "an admin may mint a token for another account" safe to offer at all.
-// Without it that endpoint is "make yourself access as anyone"
-// (docs/todos/api-tokens-for-unattended-callers.md).
+// Without it that endpoint is "make yourself access as anyone".
 // EmailProof — how an address came to be trusted, for deployments that care
 // about the difference. Ordered weakest to strongest so a mode can be read as a
 // floor.
@@ -843,8 +842,7 @@ message AuthClient {
 // code is bound to the approving user + the CLI's PKCE challenge and
 // expires in seconds. consumed_at enforces single-use (the atomic
 // ConsumeCliAuthCode flips it under a not-consumed/not-expired WHERE).
-// Mirrors PasswordResetToken (E1). See
-// docs/specs/plugins/auth-cli-login-and-orgs.md.
+// Mirrors PasswordResetToken (E1).
 message CliAuthCode {
   option (w17.db.table) = {};
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -876,7 +874,6 @@ message CliAuthCode {
 // can belong to MANY of (a private personal org + a company org + …). The
 // `org_membership` feature's generalization of single-tenant tenant_scope:
 // where Tenant is 1:1 with a User, an Organization is M2M via OrgMembership.
-// See docs/specs/plugins/auth-cli-login-and-orgs.md.
 message Organization {
   option (w17.db.table) = {};
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -964,8 +961,8 @@ message OrgMembership {
 //
 // What closes it PROPERLY is moving the proof off the address and onto the
 // link — a single-use token on the invitation, which also removes the need to
-// verify anything. That is a model change and it is written up rather than
-// guessed at: docs/decisions/invite-proof-belongs-on-the-link.md.
+// verify anything. That is a model change, made deliberately rather than
+// guessed at.
 //
 // `role` is a Role.name, not free text: accepting writes BOTH the
 // OrgMembership row (carrying this name as its label) and the UserRole grant

@@ -21,7 +21,7 @@ import (
 // (plugin.yaml maps the feature to this file via go_files). With the
 // feature off it is not staged, so the decorator below never registers and
 // Authenticate stamps no org scope. Standalone (`go test`) always compiles
-// it. See docs/specs/plugins/auth-cli-login-and-orgs.md.
+// it.
 
 // orgScopeMetadataKey is the gRPC metadata key the gateway threads the
 // request's ACTIVE-org selector under (the W17-Org header → w17-org). It is
@@ -119,7 +119,7 @@ func init() {
 // wildcard ROLE and therefore arrived inside the narrowing — where it could
 // only subtract. An owner holding no role intersected "everything" with
 // "nothing" and got nothing (verified live 2026-09-10), so owners needed seeded
-// grants like anyone else. See docs/decisions/owner-autopass.md.
+// grants like anyone else.
 func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
 	orgID := scopes["org_id"]
 
@@ -230,7 +230,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 		orgID = owned.GetOrgId()
 	}
 	if orgID == "" {
-		return errOrgNotMember
+		return UnauthenticatedOrgNotMember(errOrgNotMember)
 	}
 	stampOrg(scopes, labels, orgID, slug)
 	return nil
@@ -383,7 +383,10 @@ func activeOrgID(ctx context.Context) (string, error) {
 // enables membership WITHOUT invites holding an interface method nothing
 // implements. That is not hypothetical — e2e-project's admin_auth
 // activation is exactly that combination, and it is what caught this.
-func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, _ *pb.ListOrgMembersReq) (*pb.ListOrgMembersResp, error) {
+func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrgMembersReq) (*pb.ListOrgMembersResp, error) {
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

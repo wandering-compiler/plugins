@@ -997,7 +997,7 @@ service AuthMutation {
   // emit site, the baseline owned it, and the baseline was the one being
   // filtered away, so with `tenant_scope` on `UserCreated` had NO
   // emitter and every subscriber to auth.user.created silently never
-  // fired. See docs/decisions/dql-feature-gated-fragments.md.
+  // fired.
   // CreateBot — insert a machine account. kind = BOT (1), no password.
   rpc CreateBotUser(CreateBotUserReq) returns (CreateBotUserResp) {
     option (w17.db.method) = {
@@ -2339,14 +2339,19 @@ service AuthMutation {
       ops: {
         name: "r"
         dql:  "SELECT r.id AS id, r.name AS name FROM @module.Role r WHERE r.id = :role_id AND r.org_scoped = TRUE"
-        // The caller resolved and checked this role a moment ago
-        // (AuthService.UpdateOrgMembershipRole answers a mistyped name
-        // itself). Missing now means it was deleted, or stopped being an org
-        // role, in between — not a missing membership, which op "m" answers.
+        // Two kinds of caller, two reasons for a miss. Through
+        // AuthService.UpdateOrgMembershipRole (which the plugin's own admin
+        // page binds) the role was resolved by name a moment ago, so a miss is
+        // a race: deleted, or stopped being an org role, in between. A project
+        // that calls this mutation ITSELF with a role_id — a consumer's admin
+        // binding did, 2026-10-04 — most often misses on a role that never was
+        // assignable here: realm-wide, or no such id. The sentence names both;
+        // the first version spoke only of the race and sent that consumer
+        // looking for one. Not a missing membership, which op "m" answers.
         on_empty: {
           code:       ON_EMPTY_FAILED_PRECONDITION
-          error_code: "ORG_ROLE_CHANGED"
-          message:    "That role changed while it was being assigned. Choose it again."
+          error_code: "ORG_ROLE_NOT_ASSIGNABLE"
+          message:    "That role cannot be assigned in this organization: it is not an organization role, or it no longer exists. Choose a role again."
         }
       }
       ops: {
@@ -2505,8 +2510,7 @@ service AuthMutation {
   //
   // Keyed on the TOKEN, not on (id, email), which is the whole of the model change:
   // the identifier in the URL used to be the row id, and a row id reaches logs and
-  // `Referer` and cannot be rotated without changing the identity of the row
-  // (docs/decisions/invite-proof-belongs-on-the-link.md).
+  // `Referer` and cannot be rotated without changing the identity of the row.
   //
   // `accepted_at IS NULL` is the single-use guard — there is deliberately no second
   // `consumed_at` column, because that is the same fact under another name and the

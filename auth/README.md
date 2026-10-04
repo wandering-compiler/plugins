@@ -9,8 +9,7 @@ plugin to the v3 layout (the plugin source lives here, at
 still uses the v2 location + emits the F3/G2-F templates today;
 G3-D deletes those once the v3 staging pipeline (G3-B/C) lands.
 
-Layout follows
-[`docs/specs/plugins/business-handlers.md`](../../docs/specs/plugins/business-handlers.md):
+Layout:
 
 ```
 plugins/auth/
@@ -62,6 +61,5 @@ It reads `go_module` from `plugin.yaml` and drives the same `bufrun`
 pipeline as the project codegen — output is byte-stable across runs.
 It needs a reachable CONSOLE: the vocabulary is resolved server-side,
 the way every other compile is. (It used to say "from the w17ctl
-binary's embedded copy"; that embed is gone —
-docs/decisions/client-carries-compiler-payloads.md §2.)
+binary's embedded copy"; that embed is gone.)
 (This replaces the old hand-rolled `regen-pb.sh`.)

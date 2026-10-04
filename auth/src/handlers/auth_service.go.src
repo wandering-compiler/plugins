@@ -622,10 +622,8 @@ func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) 
 	// Feature-gated scope decorators (e.g. tenant_scope) append
 	// their own scopes here. Empty when no feature file is staged.
 	labels := map[string]string{}
-	for _, dec := range scopeDecorators {
-		if err := dec(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
-			return nil, Unauthenticated(err)
-		}
+	if err := runScopeDecorators(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
+		return nil, err
 	}
 
 	// Grants are narrowed to the request-scoped context the decorators
@@ -1011,4 +1009,21 @@ func intersectInt32(a, b []int32) []int32 {
 		out = append(out, x)
 	}
 	return out
+}
+
+// runScopeDecorators runs the feature-staged scope decorators in order and
+// turns the first failure into an authentication refusal. A decorator that
+// already said what kind of refusal it is (UnauthenticatedOrgNotMember) keeps
+// its words; wrapping it again would drop them back to the generic answer.
+func runScopeDecorators(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
+	for _, dec := range scopeDecorators {
+		if err := dec(ctx, h, userID, headers, scopes, labels); err != nil {
+			var classified *authnError
+			if errors.As(err, &classified) {
+				return classified
+			}
+			return Unauthenticated(err)
+		}
+	}
+	return nil
 }
