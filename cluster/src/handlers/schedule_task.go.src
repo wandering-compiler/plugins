@@ -202,7 +202,7 @@ func (h *ClusterServiceHandler) poll(ctx context.Context, r Relay) (*grpc.Client
 	}
 	c, cancel := context.WithTimeout(ctx, h.dialTimeout())
 	defer cancel()
-	st, err := pb.NewClusterServiceClient(conn).RelayStats(c, &pb.RelayStatsReq{})
+	st, err := newRelayClient(conn).RelayStats(c, &pb.RelayStatsReq{})
 	if err != nil {
 		_ = conn.Close()
 		return nil, nil, fmt.Errorf("relay %q: stats: %w", r.Name, err)
@@ -216,7 +216,7 @@ func (h *ClusterServiceHandler) proxyOne(
 	req *pb.ScheduleTaskReq,
 	srv grpc.ServerStreamingServer[pb.ScheduleTaskEvent],
 ) error {
-	up, err := pb.NewClusterServiceClient(c.conn).ScheduleTask(ctx, req)
+	up, err := newRelayClient(c.conn).ScheduleTask(ctx, req)
 	if err != nil {
 		h.note(ctx, c.Relay, err)
 		return errors.Join(errUnreachable, err)
@@ -368,6 +368,6 @@ func (h *ClusterServiceHandler) drainOne(ctx context.Context, r Relay) error {
 	defer func() { _ = conn.Close() }()
 	c, cancel := context.WithTimeout(ctx, h.dialTimeout())
 	defer cancel()
-	_, err = pb.NewClusterServiceClient(conn).DrainRelay(c, &pb.DrainRelayReq{})
+	_, err = newRelayClient(conn).DrainRelay(c, &pb.DrainRelayReq{})
 	return err
 }

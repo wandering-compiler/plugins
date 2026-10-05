@@ -37,7 +37,7 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 
 	var lastErr error
 	for _, c := range cands.list {
-		st, err := pb.NewClusterServiceClient(c.conn).ReserveTask(ctx, req)
+		st, err := newRelayClient(c.conn).ReserveTask(ctx, req)
 		if err == nil {
 			return stampReservation(st, c.Relay), nil
 		}
@@ -90,7 +90,7 @@ func (h *ClusterServiceHandler) GetReservation(ctx context.Context, req *pb.GetR
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
 	defer func() { _ = conn.Close() }()
-	st, err := pb.NewClusterServiceClient(conn).GetReservation(ctx, &pb.GetReservationReq{Reservation: local})
+	st, err := newRelayClient(conn).GetReservation(ctx, &pb.GetReservationReq{Reservation: local})
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (h *ClusterServiceHandler) CancelReservation(ctx context.Context, req *pb.C
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
 	defer func() { _ = conn.Close() }()
-	return pb.NewClusterServiceClient(conn).CancelReservation(ctx, &pb.CancelReservationReq{Reservation: local})
+	return newRelayClient(conn).CancelReservation(ctx, &pb.CancelReservationReq{Reservation: local})
 }
 
 // resolveHandle splits a handle and finds its relay. `gone` is a well-formed

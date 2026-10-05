@@ -119,7 +119,7 @@ func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) error 
 	}
 	defer func() { _ = conn.Close() }()
 
-	resp, err := pb.NewClusterServiceClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{})
+	resp, err := newRelayClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{})
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (h *ClusterServiceHandler) IssueRegistrationCode(
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", r.Name, err)
 	}
 	defer func() { _ = conn.Close() }()
-	resp, err := pb.NewClusterServiceClient(conn).IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
+	resp, err := newRelayClient(conn).IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
 	if err != nil {
 		return nil, err
 	}
