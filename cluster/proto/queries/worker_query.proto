@@ -12,10 +12,12 @@ import "w17/field.proto";
 option go_package = "@project;@pkg";
 
 message ListWorkersReq {
-  // Narrow to one state. UNSPECIFIED means every state, which is what the
-  // registry page wants — an operator auditing who has access needs the
-  // denied ones in front of them too, not filtered out of history.
-  WorkerState state = 1;
+  // Narrow to one state. ABSENT means every state, which is what the registry
+  // page wants — an operator auditing who has access needs the denied ones in
+  // front of them too, not filtered out of history. Optional because an enum
+  // cannot say "absent" any other way: `:state = 0 OR …` made the field
+  // required, and the admin page's list call (no filter) was refused.
+  optional WorkerState state = 1;
 }
 
 message ListWorkersResp {
@@ -67,7 +69,7 @@ service WorkerQuery {
           "       w.decided_at AS decided_at, "
           "       w.decided_by AS decided_by "
           "FROM @module.Worker w "
-          "WHERE (:state = 0 OR w.state = :state) "
+          "WHERE ?w.state = :state "
           "ORDER BY w.first_seen_at DESC"
       }
     };
