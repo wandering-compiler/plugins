@@ -194,8 +194,9 @@ func (b *Backends) ClearProfile(fingerprint string, gen uint64) {
 // looks like a flaky relay and points nowhere near the cause.
 func (b *Backends) Add(fingerprint string, conn *grpc.ClientConn) uint64 {
 	b.mu.Lock()
+	var replaced *grpc.ClientConn
 	if old, ok := b.conns[fingerprint]; ok {
-		_ = old.conn.Close()
+		replaced = old.conn
 	} else {
 		b.order = append(b.order, fingerprint)
 	}
@@ -206,6 +207,13 @@ func (b *Backends) Add(fingerprint string, conn *grpc.ClientConn) uint64 {
 	b.conns[fingerprint] = &backend{conn: conn, gen: gen}
 	publish := b.publishLocked()
 	b.mu.Unlock()
+	// Closed AFTER unlocking, like every Close here: closing runs the tunnel's
+	// close hook, which takes b.mu (RemoveConn), and gRPC's own locks sit in
+	// between — holding b.mu across a Close is a lock-order inversion that
+	// deadlocked the relay live.
+	if replaced != nil {
+		_ = replaced.Close()
+	}
 	publish()
 	// Connect eagerly. grpc.NewClient is LAZY, so without this the conn sits
 	// in Idle until the first call goes through it — and a tunnel that dies
@@ -254,7 +262,6 @@ func (b *Backends) watch(fingerprint string, conn *grpc.ClientConn, gen uint64) 
 		b.mu.Unlock()
 		return
 	}
-	_ = conn.Close()
 	b.removeLocked(fingerprint)
 	// Republished HERE too. This is the path a dead tunnel actually takes —
 	// Remove is the deliberate one — and without it the pool kept the departed
@@ -262,21 +269,31 @@ func (b *Backends) watch(fingerprint string, conn *grpc.ClientConn, gen uint64) 
 	// until some unrelated attach happened to refresh the total.
 	publish := b.publishLocked()
 	b.mu.Unlock()
+	_ = conn.Close() // outside b.mu — see Add
 	publish()
 }
 
-// Remove drops a worker's tunnel — it hung up, or was denied while attached.
+// RemoveConn drops a worker's tunnel when THAT connection ends — it hung up,
+// or was denied while attached. Called from the tunnel's own close hook, which
+// is the only signal that is both prompt and true for a single-use connection.
 //
-// Called from the tunnel's own close hook, which is the only signal that is
-// both prompt and true for a single-use connection.
-func (b *Backends) Remove(fingerprint string) {
+// Only if conn is still the worker's CURRENT tunnel: a worker opens a fresh
+// tunnel for every run, so the old one's hook fires while its replacement is
+// already serving, and removing by fingerprint alone disconnected a healthy
+// worker.
+func (b *Backends) RemoveConn(fingerprint string, conn *grpc.ClientConn) {
 	b.mu.Lock()
-	if c, ok := b.conns[fingerprint]; ok {
-		_ = c.conn.Close()
+	cur, ok := b.conns[fingerprint]
+	if !ok || cur.conn != conn {
+		b.mu.Unlock()
+		return
 	}
 	b.removeLocked(fingerprint)
 	publish := b.publishLocked()
 	b.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close() // outside b.mu — see Add
+	}
 	publish()
 }
 

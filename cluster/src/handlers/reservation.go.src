@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -55,9 +56,9 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 		}
 		lastErr = err
 	}
-	return nil, status.Errorf(codes.Unavailable,
+	return nil, refusal.New(codes.Unavailable, refusal.NoRelay, fmt.Sprintf(
 		"cluster: no registered relay could take a reservation (%d enabled, %d placeable); last error: %v",
-		cands.enabled, len(cands.list), lastErr)
+		cands.enabled, len(cands.list), lastErr))
 }
 
 // GetReservation polls the relay the handle names.

@@ -72,8 +72,11 @@ func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends,
 		return fmt.Errorf("relay: banned worker %s opened a tunnel", fp)
 	}
 
+	// The hook removes THIS connection, not whatever the worker holds now —
+	// it fires for an old tunnel after its replacement attached.
+	var conn *grpc.ClientConn
 	conn, err := tunnel.ClientOverConn(tc, "passthrough:///worker", func() {
-		backends.Remove(fp)
+		backends.RemoveConn(fp, conn)
 	}, opts...)
 	if err != nil {
 		return fmt.Errorf("relay: turning the tunnel around: %w", err)

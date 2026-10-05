@@ -69,9 +69,9 @@ func (h *ClusterServiceHandler) ScheduleTask(
 		}
 		lastErr = err
 	}
-	return status.Errorf(codes.Unavailable,
+	return refusal.New(codes.Unavailable, refusal.NoRelay, fmt.Sprintf(
 		"cluster: no registered relay could take the task (%d enabled, %d placeable); last error: %v",
-		cands.enabled, len(cands.list), lastErr)
+		cands.enabled, len(cands.list), lastErr))
 }
 
 // errUnreachable marks the failures that justify trying another relay: the
@@ -129,7 +129,7 @@ func (h *ClusterServiceHandler) placeable(ctx context.Context) (candidates, erro
 		// fixes by registering or enabling a relay. NotFound would read as
 		// "you asked for something that does not exist", and the caller asked
 		// for nothing but capacity.
-		return candidates{}, status.Error(codes.Unavailable,
+		return candidates{}, refusal.New(codes.Unavailable, refusal.NoRelay,
 			"cluster: no enabled relay is registered — register one, or re-enable one that was turned off")
 	}
 

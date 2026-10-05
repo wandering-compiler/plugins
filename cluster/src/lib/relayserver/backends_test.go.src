@@ -22,12 +22,32 @@ func conn(t *testing.T) *grpc.ClientConn {
 	return c
 }
 
+// attached remembers each test worker's tunnel, so a test can end THAT one.
+var attached = map[*Backends][]struct {
+	fp string
+	c  *grpc.ClientConn
+}{}
+
+func connOf(b *Backends, fp string) *grpc.ClientConn {
+	for _, a := range attached[b] {
+		if a.fp == fp {
+			return a.c
+		}
+	}
+	return nil
+}
+
 // attach stands in for one worker doing both halves: opening its tunnel and
 // announcing on its attach stream. Returns the attachment generation so a test
 // can simulate a stale write from a superseded stream.
 func attach(t *testing.T, b *Backends, fp string, slots uint32, ready bool) uint64 {
 	t.Helper()
-	b.Add(fp, conn(t))
+	c := conn(t)
+	attached[b] = append(attached[b], struct {
+		fp string
+		c  *grpc.ClientConn
+	}{fp, c})
+	b.Add(fp, c)
 	gen := b.NewAttachment()
 	b.SetProfile(fp, gen, slots, ready)
 	return gen
@@ -49,7 +69,7 @@ func TestBackends_CapacityIsTheSumOfTheFleet(t *testing.T) {
 	if got := b.Capacity(); got != 5 {
 		t.Errorf("capacity = %d, want 4+1", got)
 	}
-	b.Remove("big")
+	b.RemoveConn("big", connOf(b, "big"))
 	if got := b.Capacity(); got != 1 {
 		t.Errorf("after the big worker left, capacity = %d, want 1 — "+
 			"the survivors must not inherit its share", got)

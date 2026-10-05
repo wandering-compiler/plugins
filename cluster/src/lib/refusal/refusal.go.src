@@ -83,6 +83,16 @@ const (
 	CertificateExpired = "CERTIFICATE_EXPIRED"
 )
 
+// Reasons emitted by the CONTROL PLANE (the project's handlers).
+const (
+	// NoRelay — no registered relay could take the placement: none is
+	// enabled, none answered, or every one refused it. Retryable after a
+	// pause — a relay restarting comes back — and what an operator fixes when
+	// it persists. It used to be a bare Unavailable, which a client could only
+	// read as its CONSOLE being unreachable.
+	NoRelay = "NO_RELAY"
+)
+
 // Reasons emitted by a WORKER, carried back through the relay untouched.
 //
 // Declared here so a worker binary and a client agree on one spelling; this

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -192,4 +193,23 @@ func TestCancelReservation_FreesThePlace(t *testing.T) {
 	if _, err := h.CancelReservation(t.Context(), &pb.CancelReservationReq{Reservation: st.GetReservation()}); err != nil {
 		t.Errorf("a second cancel failed: %v", err)
 	}
+}
+
+// With every relay out of play the refusal says so in the cluster's own words:
+// NO_RELAY. A bare Unavailable reads, to a client, as its CONSOLE being down.
+func TestReserveTask_NoPlaceableRelayIsNoRelay(t *testing.T) {
+	h, a, b := twoRelays(t, 1, 1)
+	a.Drain()
+	b.Drain()
+	_, err := h.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	st, _ := status.FromError(err)
+	for _, d := range st.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == refusal.Domain && info.GetReason() == refusal.NoRelay {
+			if st.Code() != codes.Unavailable {
+				t.Fatalf("code = %s, want Unavailable", st.Code())
+			}
+			return
+		}
+	}
+	t.Fatalf("err = %v, want ErrorInfo{%s, %s}", err, refusal.Domain, refusal.NoRelay)
 }
