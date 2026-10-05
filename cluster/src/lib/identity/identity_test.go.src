@@ -12,9 +12,9 @@ import (
 	"testing"
 )
 
-// THE property the whole approval model rests on. An operator approves a
-// fingerprint; if a restart produced a different one, the machine would come
-// back as a stranger and approval would mean nothing.
+// THE property the relay pin rests on. An operator pastes a relay's
+// fingerprint into its row; if a restart produced a different one, the relay
+// would come back as a stranger and every pin to it would break.
 func TestLoadOrCreateIdentity_SurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
 	first, err := LoadOrCreateIdentity(dir, "worker")
@@ -77,7 +77,7 @@ func TestLoadOrCreateIdentity_IsAClientCertificate(t *testing.T) {
 }
 
 // Half an identity is REFUSED, not silently replaced. Minting a new key there
-// would have an approved machine reappear as a stranger with no explanation —
+// would have a pinned relay reappear as a stranger with no explanation —
 // and the disk-full case that produces this state is exactly when nobody is
 // watching.
 func TestLoadOrCreateIdentity_RefusesAHalfWrittenIdentity(t *testing.T) {
@@ -92,8 +92,9 @@ func TestLoadOrCreateIdentity_RefusesAHalfWrittenIdentity(t *testing.T) {
 	if err == nil {
 		t.Fatal("a half-written identity was silently replaced")
 	}
-	// The message has to say what to do, because the fix costs an approval.
-	for _, want := range []string{"both", "remove both", "approving again"} {
+	// The message has to say what to do, because the fix costs an edit to the
+	// relay's row.
+	for _, want := range []string{"both", "remove both", "pasted into the relay's row again"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
 		}

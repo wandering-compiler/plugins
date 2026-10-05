@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-// Cluster plugin — deciding about workers.
+// Cluster plugin — recording workers, and banning them.
 
 package w17.contrib.cluster;
 
@@ -11,51 +11,40 @@ import "w17/field.proto";
 
 option go_package = "@project;@pkg";
 
-// RecordPendingWorker is called once per machine a relay reports.
+// RecordWorker is called once per worker a relay reports.
 //
-// IDEMPOTENT by fingerprint, because "check new workers" is a button a human
-// presses and a relay keeps reporting the same waiting machine until it is
-// decided about. A second press must not create a second row, and — more
-// importantly — must not reset a decision already taken: a DENIED worker that
-// keeps reconnecting would otherwise be quietly returned to pending on the
-// next sweep, and denial would mean nothing.
+// IDEMPOTENT by fingerprint, because "check for workers" is a button a human
+// presses and a relay keeps reporting every worker it has met. A second press
+// must not create a second row, and — more importantly — must not reset a
+// decision: a BANNED worker that is still reported would otherwise be quietly
+// returned to ENROLLED on the next sweep, and a ban would mean nothing.
 //
 // The DECISION is idempotent; the LOCATION is not. `relay_id` is refreshed on
-// every report, because it records where the machine is attached RIGHT NOW and
-// that legitimately changes — new hardware, another region, or an operator
-// pointing a worker somewhere else.
+// every report, because it records where the worker is attached RIGHT NOW. (It
+// used to be DO NOTHING, which froze the location along with the decision: a
+// consumer, 2026-09-25, found a worker moved to another relay that the
+// registry kept placing at the first one, with no admin action to clear it.)
 //
-// It used to be DO NOTHING, which froze the location along with the decision
-// and built a trap with no way out (a consumer, 2026-09-25). A worker approved on
-// relay A that reconnects to B keeps `relay_id = A`; B asks
-// FingerprintsByState(B, APPROVED) and never hears about it, so it never gives
-// it work — and because the row is APPROVED it is not pending either, so it
-// never appears on the approval screen. The machine sits connected, approved
-// and idle, and the admin preset offers no action that clears it. Only SQL
-// does.
-//
-// Nothing else is refreshed, and that is the point: `state`, `decided_at` and
-// `decided_by` are the decision and stay put, so denial still means denial.
-// `name` and `device_id` are left alone too — they are claims a machine makes
-// about itself, and letting a denied one keep re-labelling how it appears on
-// an operator's screen buys nothing worth the surface.
-message RecordPendingWorkerReq {
+// Nothing else is refreshed: `state`, `decided_at` and `decided_by` are the
+// decision, and `name` / `device_id` are claims a banned machine must not be
+// able to keep re-labelling.
+message RecordWorkerReq {
   string cert_fingerprint = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
   string name = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   string device_id = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   string relay_id = 4 [(w17.field) = { type: UUID }];
 }
 
-message RecordPendingWorkerResp {}
+message RecordWorkerResp {}
 
-// Bulk by construction. The admin's approve/deny arrive as a SELECTION — an
-// operator reviewing a batch of machines decides about several at once — and a
+// Bulk by construction. The admin's ban/unban arrive as a SELECTION — an
+// operator responding to an incident acts on several machines at once — and a
 // single-id method would have the page issue N calls and report N outcomes for
 // one human action.
 message DecideWorkersReq {
   repeated string ids = 1;
   // Whoever took the decision, in the consumer's own terms. Recorded because
-  // the first question during an incident is who let the machine in.
+  // the first question during an incident is who let the machine back in.
   string decided_by = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
   google.protobuf.Timestamp at = 3;
 }
@@ -63,7 +52,7 @@ message DecideWorkersReq {
 message DecideWorkersResp {}
 
 service WorkerMutation {
-  rpc RecordPendingWorker(RecordPendingWorkerReq) returns (RecordPendingWorkerResp) {
+  rpc RecordWorker(RecordWorkerReq) returns (RecordWorkerResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
@@ -76,11 +65,14 @@ service WorkerMutation {
     };
   }
 
-  // Approve and Deny are separate methods rather than one taking a target
-  // state. The two are not variations of a setting — they are opposite
-  // decisions, they will diverge (approval will want a note, denial a reason),
+  // Ban and Unban are separate methods rather than one taking a target state.
+  // They are opposite decisions, they will diverge (a ban will want a reason),
   // and an ACL that must distinguish them needs two names to gate.
-  rpc ApproveWorkers(DecideWorkersReq) returns (DecideWorkersResp) {
+  //
+  // A ban takes effect at the relays on the control plane's NEXT call to each
+  // — and every placement makes one — without waiting for the machine to
+  // reconnect: a relay checks the ban on every piece of work.
+  rpc BanWorkers(DecideWorkersReq) returns (DecideWorkersResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
@@ -92,13 +84,13 @@ service WorkerMutation {
     };
   }
 
-  rpc DenyWorkers(DecideWorkersReq) returns (DecideWorkersResp) {
+  rpc UnbanWorkers(DecideWorkersReq) returns (DecideWorkersResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
           "UPDATE @module.Worker "
-          "SET state = 3, decided_at = :at, decided_by = :decided_by "
+          "SET state = 1, decided_at = :at, decided_by = :decided_by "
           "WHERE id IN (:ids)"
       }
     };

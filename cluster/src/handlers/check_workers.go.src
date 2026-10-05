@@ -2,38 +2,68 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"sort"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
 )
 
 // WorkerStore is the seam onto the worker registry, wired by RegisterPlugin.
 type WorkerStore interface {
-	// Decisions returns the fingerprints approved and denied for one relay.
-	Decisions(ctx context.Context, relayID string) (approved, denied []string, err error)
-	// RecordPending is idempotent by fingerprint and must NOT reset a decision
-	// already taken — a denied machine keeps reconnecting, and returning it to
-	// pending on every sweep would make denial mean nothing.
-	RecordPending(ctx context.Context, relayID string, w *pb.PendingWorker) error
-	// PendingCount is the number of undecided machines across every relay.
-	PendingCount(ctx context.Context) (int, error)
+	// Banned returns every banned worker id (SPKI fingerprint), across every
+	// relay — the set that rides on each call to a relay.
+	Banned(ctx context.Context) ([]string, error)
+	// Record is idempotent by fingerprint and must NOT reset a decision: a
+	// banned worker keeps being reported by its relay, and returning it to
+	// enrolled on every sweep would make a ban mean nothing.
+	Record(ctx context.Context, relayID string, w *pb.KnownWorker) error
+	// EnrolledCount is the number of enrolled, unbanned workers across every
+	// relay.
+	EnrolledCount(ctx context.Context) (int, error)
 }
 
-// CheckWorkers contacts every enabled relay, hands over the decisions it is
-// owed, and records whatever machines it is holding.
+// withBans puts the complete ban set on ctx, for every relay call made under
+// it.
+//
+// EVERY call, not a sync now and then: a relay holds bans in memory only, so
+// one that restarted would let a banned but CA-valid worker attach until the
+// next manual sync. With the set on every contact — and every placement
+// begins with one — a restarted relay is corrected before any work is placed
+// on it.
+//
+// A registry that cannot be read REFUSES the call rather than sending an
+// empty set: empty is "nobody is banned", and a database blip must not lift
+// every ban at once.
+func (h *ClusterServiceHandler) withBans(ctx context.Context) (context.Context, error) {
+	if h.Workers == nil {
+		return nil, status.Error(codes.FailedPrecondition,
+			"cluster: no worker registry is wired — the ban set cannot be sent to a relay")
+	}
+	bans, err := h.Workers.Banned(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err)
+	}
+	return workeradmit.WithBans(ctx, bans), nil
+}
+
+// CheckWorkers contacts every enabled relay and records every worker it has
+// met, so an operator can see the fleet and ban from it.
 //
 // Pulled by an operator rather than swept in the background: the console is
 // HA, and a sweep would run in every replica needing coordination it does not
-// have. The cost is that a machine connecting at 3am waits until somebody
-// looks — the right trade for a pool whose workers are added on purpose.
+// have. Nothing waits on it — a worker is admitted by its certificate, and a
+// ban travels on every call — so the only cost of not pressing it is a worker
+// not yet listed.
 func (h *ClusterServiceHandler) CheckWorkers(
 	ctx context.Context, _ *pb.CheckWorkersReq,
 ) (*pb.CheckWorkersResp, error) {
-	if h.Workers == nil {
-		return nil, status.Error(codes.FailedPrecondition, "cluster: no worker registry is wired")
+	ctx, err := h.withBans(ctx)
+	if err != nil {
+		return nil, err
 	}
 	relays, err := h.Relays.ListEnabled(ctx)
 	if err != nil {
@@ -45,16 +75,16 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	// inserted. The difference is the honest answer to "what is new", and it
 	// stays honest if two operators press the button at once — the second one
 	// simply discovers nothing.
-	before, err := h.Workers.PendingCount(ctx)
+	before, err := h.Workers.EnrolledCount(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster: cannot count pending workers: %v", err)
+		return nil, status.Errorf(codes.Unavailable, "cluster: cannot count workers: %v", err)
 	}
 
 	var unreachable []string
 	for _, r := range relays {
 		if err := h.exchangeOne(ctx, r); err != nil {
 			// Reported, not returned. One unreachable relay must not hide the
-			// machines every other relay is holding — which is exactly the
+			// workers every other relay is holding — which is exactly the
 			// moment an operator is most likely to be pressing this button.
 			unreachable = append(unreachable, r.Name)
 			h.note(ctx, r, err)
@@ -63,51 +93,43 @@ func (h *ClusterServiceHandler) CheckWorkers(
 		h.noteOK(ctx, r)
 	}
 
-	after, err := h.Workers.PendingCount(ctx)
+	after, err := h.Workers.EnrolledCount(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster: cannot count pending workers: %v", err)
+		return nil, status.Errorf(codes.Unavailable, "cluster: cannot count workers: %v", err)
 	}
 	sort.Strings(unreachable)
 
 	discovered := after - before
 	if discovered < 0 {
-		// Somebody decided about a worker while the sweep ran. "Negative
+		// Somebody banned a worker while the sweep ran. "Negative
 		// discoveries" is not a thing to report.
 		discovered = 0
 	}
 	return &pb.CheckWorkersResp{
 		Discovered:        int32(discovered),
-		PendingTotal:      int32(after),
+		EnrolledTotal:     int32(after),
 		UnreachableRelays: unreachable,
 	}, nil
 }
 
 func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) error {
-	approved, denied, err := h.Workers.Decisions(ctx, r.ID)
-	if err != nil {
-		return err
-	}
-	conn, err := h.Dial(r.URL, r.Fingerprint)
+	conn, err := h.dialReady(ctx, r)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 
-	resp, err := pb.NewClusterServiceClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{
-		ApprovedFingerprints: approved,
-		DeniedFingerprints:   denied,
-	})
+	resp, err := pb.NewClusterServiceClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{})
 	if err != nil {
 		return err
 	}
-	for _, w := range resp.GetPending() {
+	for _, w := range resp.GetWorkers() {
 		if w.GetCertFingerprint() == "" {
-			// A pending entry with no fingerprint has no identity to approve.
-			// Skipped rather than stored: a row an operator cannot act on is
-			// worse than no row.
+			// No fingerprint, no identity to ban. Skipped rather than stored:
+			// a row an operator cannot act on is worse than no row.
 			continue
 		}
-		if err := h.Workers.RecordPending(ctx, r.ID, w); err != nil {
+		if err := h.Workers.Record(ctx, r.ID, w); err != nil {
 			return err
 		}
 	}
@@ -121,4 +143,48 @@ func (h *ClusterServiceHandler) ExchangeWorkers(
 ) (*pb.ExchangeWorkersResp, error) {
 	return nil, status.Error(codes.Unimplemented,
 		"cluster: ExchangeWorkers is answered by a relay, not by the control plane")
+}
+
+// IssueRegistrationCode asks the selected relay for a one-time code a new
+// worker enrols with. Exactly one relay: a code is that relay's, and a worker
+// joins one relay.
+//
+// The code passes through here on its way to the operator and is not kept: the
+// relay holds it (as a hash), and a lost code is replaced by asking again.
+func (h *ClusterServiceHandler) IssueRegistrationCode(
+	ctx context.Context, req *pb.IssueRegistrationCodeReq,
+) (*pb.IssueRegistrationCodeResp, error) {
+	if len(req.GetIds()) != 1 {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"cluster: a registration code is for exactly one relay, %d were selected", len(req.GetIds()))
+	}
+	ctx, err := h.withBans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r, err := h.Relays.Get(ctx, req.GetIds()[0])
+	if errors.Is(err, ErrRelayNotFound) {
+		return nil, status.Errorf(codes.NotFound, "cluster: no relay %q is registered", req.GetIds()[0])
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+	}
+	conn, err := h.dialReady(ctx, r)
+	if err != nil {
+		h.note(ctx, r, err)
+		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", r.Name, err)
+	}
+	defer func() { _ = conn.Close() }()
+	resp, err := pb.NewClusterServiceClient(conn).IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
+	if err != nil {
+		return nil, err
+	}
+	h.noteOK(ctx, r)
+	resp.Relay = r.Name
+	// The fingerprint THIS connection was pinned to, i.e. the registry's —
+	// the relay presents one certificate on every listener, so it is also the
+	// one the worker will meet. Taken from what was verified rather than from
+	// what the relay said about itself.
+	resp.RelayFingerprint = r.Fingerprint
+	return resp, nil
 }

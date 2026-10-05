@@ -1,11 +1,15 @@
-// Package identity is a machine's own key pair and the fingerprint an operator
-// approves.
+// Package identity is every key and certificate in the cluster.
 //
-// Shared by the relay and the worker because they need the same thing for
-// opposite reasons: a relay prints its fingerprint so an operator can paste it
-// into the registry row, a worker prints its own so the operator can compare
-// it on the approval screen. One implementation, so the two can never disagree
-// about what a fingerprint IS.
+// Two kinds of identity, deliberately different:
+//
+//   - A RELAY has one long-lived, self-signed certificate (LoadOrCreateIdentity
+//     or a mounted pair) that the control plane and every caller PIN by the
+//     SHA-256 of its DER — the fingerprint on the relay's registry row.
+//   - A WORKER has a key it generates itself and a SHORT-LIVED certificate its
+//     relay's CA issues against it (ca.go, worker.go). Its identity is the
+//     SPKI fingerprint of that key (WorkerID), which survives renewal.
+//
+// One package, so no two places disagree about what a fingerprint IS.
 package identity
 
 import (
@@ -24,30 +28,33 @@ import (
 	"time"
 )
 
-// Identity is a machine's key pair and the fingerprint an operator approves.
+// Identity is a self-signed key pair and the fingerprint a peer pins it by:
+// the lowercase hex SHA-256 of the certificate's DER.
 type Identity struct {
 	CertPEM     []byte
 	KeyPEM      []byte
 	Fingerprint string
 }
 
-// certLifetime is deliberately long.
+// certLifetime is long because this certificate is PINNED, not validated:
+// the control plane holds its exact fingerprint on the relay's row, and a
+// caller receives it with every grant. Replacing it is an edit to that row —
+// the audit trail — and an expiry would only force that edit on a calendar
+// instead of when the key is actually in doubt.
 //
-// Expiry is NOT the revocation mechanism here — approval is. A short-lived
-// certificate would need a renewal credential the machine holds permanently,
-// which is the same secret with an extra step, and leaking it would put you
-// exactly where you started. So the key is long-lived and revocation is an
-// operator denying its fingerprint, which takes effect immediately and scopes
-// to one machine.
+// Workers are the opposite case and get the opposite answer: their
+// certificates are issued by the relay's CA and short-lived (ca.go), because
+// a fleet that comes and goes cannot be pinned row by row, and a forgotten
+// ban should still run out.
 const certLifetime = 10 * 365 * 24 * time.Hour
 
-// LoadOrCreateIdentity returns the machine's identity, generating one the
-// first time.
+// LoadOrCreateIdentity returns the machine's self-signed identity, generating
+// one the first time — a relay's, in a dev sandbox or wherever its pair is not
+// mounted from secrets.
 //
-// IDEMPOTENT, and that is the whole point: the fingerprint an operator
-// approved must survive every restart, or approval would have to be repeated
-// and would stop meaning anything. A worker that regenerated its key on each
-// start would appear as a new pending machine forever.
+// IDEMPOTENT, and that is the whole point: the fingerprint pasted into the
+// relay's row must survive every restart, or every restart would break the
+// pin.
 func LoadOrCreateIdentity(dir, name string) (Identity, error) {
 	certPath := filepath.Join(dir, name+".crt")
 	keyPath := filepath.Join(dir, name+".key")
@@ -71,7 +78,7 @@ func LoadOrCreateIdentity(dir, name string) (Identity, error) {
 		return Identity{}, fmt.Errorf(
 			"identity: %s and %s must both exist or both be absent — found one of the two, "+
 				"which is a half-written identity; remove both to mint a new one "+
-				"(the new fingerprint then needs approving again)", certPath, keyPath)
+				"(the new fingerprint then has to be pasted into the relay's row again)", certPath, keyPath)
 	}
 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -105,14 +112,18 @@ func mint(name string) (Identity, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		// SELF-SIGNED, and there is no CA anywhere in this design. The
-		// fingerprint is what an operator approves, so a signature from an
-		// authority would add a second trust root that decides nothing.
+		// SELF-SIGNED: this certificate is pinned by its fingerprint, so a
+		// signature from an authority would add a second trust root that
+		// decides nothing. (The relay's CA signs WORKER certificates only.)
 		Subject:   pkix.Name{CommonName: "w17-cluster-" + name},
 		NotBefore: now.Add(-time.Hour),
 		NotAfter:  now.Add(certLifetime),
 		KeyUsage:  x509.KeyUsageDigitalSignature,
+		// Both usages: a relay presents it as a SERVER to everyone and as a
+		// client nowhere today, but a peer stack that checks usage must not be
+		// the first to discover which.
 		ExtKeyUsage: []x509.ExtKeyUsage{
+			x509.ExtKeyUsageServerAuth,
 			x509.ExtKeyUsageClientAuth,
 		},
 	}

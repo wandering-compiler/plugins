@@ -89,59 +89,57 @@ message Relay {
 
 // WorkerState is where one worker stands with the operator.
 //
-// `PENDING` is a first-class state, not "absent from the approved list". A
-// worker waiting to be let in reconnects forever and must be given NO work,
-// and an operator has to be able to see it waiting — both of which need a name
-// for the condition.
+// There is no "pending": a worker exists only once it has ENROLLED, and it
+// enrolled with a registration code an operator asked for — the decision to
+// let it in was taken when the code was handed out. What remains for an
+// operator is the opposite decision, BANNED, which a relay enforces on every
+// connection and every piece of work.
 enum WorkerState {
   WORKER_STATE_UNSPECIFIED = 0;
-  WORKER_STATE_PENDING     = 1;
-  WORKER_STATE_APPROVED    = 2;
-  WORKER_STATE_DENIED      = 3;
+  WORKER_STATE_ENROLLED    = 1;
+  WORKER_STATE_BANNED      = 2;
 }
 
-// Worker — one machine that has offered to do work, and what was decided
-// about it.
+// Worker — one machine that enrolled with a relay, and whether it is banned.
 //
 // # Why this table exists at all
 //
 // Workers are not on a private network. They are laptops and VPSs at whatever
-// provider was cheapest, dialling in from the public internet, and the relay
-// admits whoever holds a key it recognises. So SOMETHING has to decide which
-// keys it recognises, and that decision cannot live in the relay: the relay
-// holds nothing across a restart.
+// provider was cheapest, dialling in from the public internet. Each relay is a
+// certificate authority for its own workers: a worker generates its own key,
+// presents a one-time registration code the relay minted, and receives a
+// short-lived certificate (weeks) that it renews before expiry with the one it
+// still holds. The certificate is the admission.
 //
-// Short-lived certificates were considered and rejected. They only move the
-// problem: the machine still has to hold a renewal credential, that credential
-// is long-lived by construction, and leaking it puts you exactly where you
-// started. This is trust-on-first-use with an explicit human approval instead
-// — the same shape as Tailscale device approval, Kubernetes CSR approval, and
-// ssh `known_hosts`.
+// What a certificate cannot carry is a decision taken AFTER it was issued.
+// That is this table: the ban, kept where it survives — a relay holds nothing
+// across a restart, so the control plane sends the complete ban set on every
+// call it makes to a relay.
 //
-// What it buys is NOT prevention. An approved key that leaks is a key the
-// attacker has, the same as any long-lived credential. What changes is the
-// RESPONSE: one decision, immediate, scoped to one machine — which matters
-// here because the tunnel this key opens carries other people's work.
+// Short-lived certificates were once rejected here on the grounds that a
+// renewal credential is long-lived by construction. It is not, in this shape:
+// the renewal credential is the current certificate itself, it expires with
+// it, and a banned or expired certificate cannot renew. A leaked key is good
+// for at most one lifetime unless renewed — and renewal is exactly where a ban
+// bites. So expiry bounds a FORGOTTEN ban, and the ban is the immediate
+// response, scoped to one machine.
 message Worker {
   option (w17.db.table) = {};
 
   string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
 
-  // Lowercase hex SHA-256 of the worker's TLS certificate. THE IDENTITY, and
-  // the only field here that is evidence rather than a claim: holding the
-  // matching private key is what the handshake proves.
+  // Lowercase hex SHA-256 of the worker key's SubjectPublicKeyInfo. THE
+  // IDENTITY, and the only field here that is evidence rather than a claim:
+  // holding the matching private key is what the handshake proves.
   //
-  // Everything else below is something the worker SAID about itself.
+  // The KEY's hash, not the certificate's: certificates are renewed every
+  // few weeks, and a certificate hash would change each time and orphan this
+  // row and the ban on it. Everything else below is something the worker SAID
+  // about itself.
   string cert_fingerprint = 2 [(w17.field) = { type: CHAR, max_len: 64, unique: true }];
 
-  // What the worker calls itself. A CLAIM, and the reason the approval screen
-  // must show the fingerprint beside it rather than this alone: an attacker
-  // can offer any name, and the obvious attack is to offer the name of a
-  // machine the operator is expecting.
-  //
-  // The defence is comparison — the worker prints its own fingerprint at
-  // startup and the operator checks it matches. Approving on the strength of
-  // the name is approving whoever connected first.
+  // What the worker calls itself. A CLAIM: any worker can offer any name, so
+  // a ban is taken against the fingerprint beside it, never by name.
   string name = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
 
   // The worker's own stable id for itself across restarts. Also a claim; kept
@@ -150,18 +148,19 @@ message Worker {
   string device_id = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
 
   // No column default. Proto3 pins 0 to UNSPECIFIED, and a row that defaulted
-  // to "unspecified" would be a worker in no state at all; PENDING is a
-  // decision the code that inserts the row makes, explicitly.
+  // to "unspecified" would be a worker in no state at all; ENROLLED is what
+  // the code that inserts the row says, explicitly.
   WorkerState state = 5;
 
-  // Which relay reported it. A worker reaches exactly one relay, and an
-  // operator chasing "why is this machine idle" needs to know which.
+  // Which relay reported it. A worker's certificate is valid at exactly one
+  // relay (that relay's CA issued it), and an operator chasing "why is this
+  // machine idle" needs to know which.
   string relay_id = 6 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
 
   google.protobuf.Timestamp first_seen_at = 7
       [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 
-  // When the decision was taken and by whom. Absent while pending.
+  // When the last ban or unban was decided, and by whom. Absent until one is.
   //
   // `decided_by` is free text rather than a foreign key on purpose: this
   // plugin has no user table and must not require one. The consumer writes

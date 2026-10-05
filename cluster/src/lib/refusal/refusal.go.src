@@ -1,0 +1,135 @@
+// Package refusal names WHY a relay said no, in a form a caller can branch on.
+//
+// # Why a reason and not a status code
+//
+// A caller that lost a placement has one decision to make — place again, or
+// give up — and the gRPC code cannot carry it. PermissionDenied means both "the
+// ticket was already spent" (place again: a new ticket fixes it) and "you are
+// not entitled" (fatal: nothing the caller does fixes it); Unavailable means
+// both "no worker is attached right now" and "the relay is going away". So
+// every refusal a relay makes carries a `google.rpc.ErrorInfo` detail with
+// Domain and one of the reasons below, and a client classifies by the REASON.
+//
+// The strings are a wire contract. A client in another module (w17ctl may not
+// import this plugin) re-declares them, so a value here is never renamed: add a
+// new one instead.
+package refusal
+
+import (
+	"errors"
+
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// Domain is ErrorInfo.domain on every refusal this plugin's processes make.
+const Domain = "cluster.w17"
+
+// Reasons emitted by a RELAY.
+const (
+	// NoWorker — a ticket was redeemed and no admitted worker could take the
+	// call. Retryable: a new placement may land where a worker is attached.
+	NoWorker = "NO_WORKER"
+
+	// TicketNotRedeemable — the ticket is expired, already spent, or was never
+	// minted here (a relay restart voids every ticket). Deliberately one reason
+	// for all three; see relaycore.ErrNoSuchTicket. Retryable through a NEW
+	// placement, never by resending the same ticket.
+	TicketNotRedeemable = "TICKET_NOT_REDEEMABLE"
+
+	// TicketMissing — the call reached the proxy with no ticket at all. The
+	// caller skipped placement; that is a client defect, so NOT retryable.
+	TicketMissing = "TICKET_MISSING"
+
+	// RelayDraining — the relay takes no new work (maintenance, shutdown). A
+	// control plane treats it like an unreachable relay and places elsewhere;
+	// a caller holding a reservation on it places again.
+	RelayDraining = "RELAY_DRAINING"
+
+	// RelayMisconfigured — the relay is running without something it needs to
+	// answer at all (its advertised work address, a wired registry). An
+	// operator fixes it; a control plane falls through to another relay.
+	RelayMisconfigured = "RELAY_MISCONFIGURED"
+
+	// WorkerLost — a worker was picked and the call could not be opened on its
+	// tunnel. Retryable through a new placement.
+	WorkerLost = "WORKER_LOST"
+
+	// ReservationUnknown — a poll named a reservation the relay does not
+	// hold: abandoned (not polled in time), cancelled, redeemed, expired, or
+	// lost in a restart. Deliberately one reason for all of them, as with
+	// tickets. Carried in ReservationExpired.reason; the answer is to place
+	// again.
+	ReservationUnknown = "RESERVATION_UNKNOWN"
+
+	// WorkerBanned — the worker's identity (its key's SPKI fingerprint) is
+	// banned. Answered to a WORKER (attach, tunnel, enrolment, renewal), never
+	// to a caller. A worker needs an operator to lift the ban, or a new key
+	// and a new registration code.
+	WorkerBanned = "WORKER_BANNED"
+
+	// RegistrationCodeInvalid — an enrolment presented a code that is unknown,
+	// spent or expired (one reason for all three). A worker needs a new code.
+	RegistrationCodeInvalid = "REGISTRATION_CODE_INVALID"
+
+	// CertificateNotRenewable — a renewal was refused: no certificate was
+	// presented, it is not one this relay's CA issued, it has expired, or the
+	// request is for another key. A worker needs a new registration code.
+	CertificateNotRenewable = "CERTIFICATE_NOT_RENEWABLE"
+
+	// CertificateExpired — an attached worker's certificate ran out while its
+	// stream was open. It reconnects with the renewed one.
+	CertificateExpired = "CERTIFICATE_EXPIRED"
+)
+
+// Reasons emitted by a WORKER, carried back through the relay untouched.
+//
+// Declared here so a worker binary and a client agree on one spelling; this
+// package emits none of them.
+const (
+	// AdmissionFull — the worker's own memory gate refused the run. Retryable
+	// through a new placement.
+	AdmissionFull = "ADMISSION_FULL"
+	// AdmissionTimeout — the worker's gate did not admit in time. Retryable.
+	AdmissionTimeout = "ADMISSION_TIMEOUT"
+	// InputTooLarge — the input exceeds what this pool runs at all. Fatal on
+	// this pool.
+	InputTooLarge = "INPUT_TOO_LARGE"
+	// NotEntitled — the caller may not have this work done. Fatal.
+	NotEntitled = "NOT_ENTITLED"
+)
+
+// New is a status carrying ErrorInfo{domain: Domain, reason}.
+//
+// It never fails. If the detail could not be attached (it cannot fail for an
+// ErrorInfo, but the API returns an error) the bare status is still the right
+// code with the right message — a refusal must not turn into a different error
+// because its annotation did.
+func New(code codes.Code, reason, msg string) error {
+	st := status.New(code, msg)
+	withInfo, err := st.WithDetails(&errdetails.ErrorInfo{Domain: Domain, Reason: reason})
+	if err != nil {
+		return st.Err()
+	}
+	return withInfo.Err()
+}
+
+// ReasonOf returns the reason of a refusal made in Domain, or "" when err
+// carries none — a transport failure, a context error, or a status from
+// somewhere else.
+func ReasonOf(err error) string {
+	if err == nil {
+		return ""
+	}
+	var se interface{ GRPCStatus() *status.Status }
+	if !errors.As(err, &se) {
+		return ""
+	}
+	for _, d := range se.GRPCStatus().Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == Domain {
+			return info.GetReason()
+		}
+	}
+	return ""
+}

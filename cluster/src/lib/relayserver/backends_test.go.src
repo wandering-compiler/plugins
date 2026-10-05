@@ -1,6 +1,7 @@
 package relayserver
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -216,8 +217,10 @@ func TestBackends_AnUnadmittedWorkerAddsNoCapacity(t *testing.T) {
 // purpose. The watcher is the path a dead tunnel actually takes.
 func TestBackends_ADeadTunnelLeavesTheCapacity(t *testing.T) {
 	b := NewBackends()
+	// Guarded: the sink is called from the watcher's goroutine.
+	var mu sync.Mutex
 	var seen []int
-	b.OnCapacityChange(func(n int) { seen = append(seen, n) })
+	b.OnCapacityChange(func(n int) { mu.Lock(); seen = append(seen, n); mu.Unlock() })
 	c := conn(t)
 	b.Add("w", c)
 	b.SetProfile("w", b.NewAttachment(), 3, true)
@@ -235,6 +238,8 @@ func TestBackends_ADeadTunnelLeavesTheCapacity(t *testing.T) {
 		t.Errorf("capacity = %d after the tunnel died, want 0 — the pool keeps "+
 			"granting tickets nobody can run until an unrelated event refreshes it", got)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if seen[len(seen)-1] != 0 {
 		t.Errorf("the capacity sink ended at %v — a dead tunnel did not publish", seen)
 	}

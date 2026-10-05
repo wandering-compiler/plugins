@@ -2,8 +2,7 @@ package relayserver
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/x509"
 	"sync"
 	"time"
 
@@ -13,6 +12,8 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
 	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
 )
@@ -22,9 +23,9 @@ import (
 // control plane manages this relay on.
 //
 // The control plane is one known peer whose certificate is pinned. Workers are
-// a fleet that comes and goes, admitted by approval — so this side verifies
-// that a client certificate was presented and then asks the registry, rather
-// than checking it against anything.
+// a fleet that comes and goes, each holding a certificate this relay's CA
+// issued at enrolment — so the handshake on this listener verifies the chain,
+// and this side only has to ask whether the worker has been banned since.
 type WorkerServer struct {
 	workerpb.UnimplementedWorkerAttachServer
 
@@ -35,15 +36,14 @@ type WorkerServer struct {
 	// which is the shape the admission-only tests use.
 	Backends *Backends
 
-	// PollInterval is how often a waiting worker re-checks whether it has been
-	// approved. Approval is a human looking at a screen, so this is seconds
-	// rather than milliseconds; it is a field so a test does not have to wait
-	// at human speed.
+	// PollInterval is how often an attached worker's ban and certificate
+	// expiry are re-checked. A field so a test does not have to wait at
+	// production speed.
 	PollInterval time.Duration
 }
 
-// Attach admits, refuses, or parks a connecting worker, and holds the stream
-// open for as long as the worker is available.
+// Attach admits or refuses a connecting worker, and holds the stream open for
+// as long as the worker is available.
 //
 // The stream is bidirectional: the worker opens with an announcement and may
 // keep talking, which is how it drains or reports itself unhealthy without
@@ -52,10 +52,11 @@ func (s *WorkerServer) Attach(
 	srv grpc.BidiStreamingServer[workerpb.WorkerMessage, workerpb.AttachEvent],
 ) error {
 	ctx := srv.Context()
-	fp, err := peerFingerprint(ctx)
+	cert, err := peerCertificate(ctx)
 	if err != nil {
 		return err
 	}
+	id := identity.WorkerID(cert)
 
 	first, err := srv.Recv()
 	if err != nil {
@@ -64,15 +65,24 @@ func (s *WorkerServer) Attach(
 	req := first.GetAnnounce()
 	if req == nil {
 		// Refused rather than defaulted. A status before an announcement is
-		// about a worker that has not said what it is, and inventing an empty
-		// announcement would put a nameless machine on the approval screen.
+		// about a worker that has not said what it is.
 		return status.Error(codes.InvalidArgument,
 			"relay: the first message on an attach stream must be the announcement")
+	}
+	// Recorded before the ban check, so a banned worker that keeps knocking
+	// is still visible to an operator reading the registry.
+	s.Workers.Met(workeradmit.Worker{ID: id, Name: req.GetName(), DeviceID: req.GetDeviceId()})
+	if !s.Workers.Admitted(id) {
+		// The message names the identity on purpose: a banned machine's
+		// operator is usually its owner, and "you were banned" without saying
+		// WHICH key is unactionable on a box that has been reinstalled.
+		return refusal.New(codes.PermissionDenied, refusal.WorkerBanned,
+			"relay: worker "+id+" is banned")
 	}
 
 	// One attachment, one generation. Every profile write below carries it, so
 	// a reconnect that overtakes this stream's unwind is not erased by it.
-	att := s.newAttachment(fp, req.GetSlots())
+	att := s.newAttachment(id, req.GetSlots())
 	defer att.close()
 	// The worker's OWN answer, as of the announcement. Taken from the
 	// announcement rather than waiting for a first status, so a machine that
@@ -80,108 +90,56 @@ func (s *WorkerServer) Attach(
 	att.setWorkerReady(req.GetReadiness() == workerpb.WorkerStatus_READY)
 
 	// Everything the worker says after the announcement, for as long as it is
-	// connected. Runs alongside the admission logic below rather than inside
-	// it, because a worker may drain while it is still waiting to be approved
-	// and the two conversations do not take turns.
+	// connected.
 	go att.readStatuses(srv)
 
-	switch s.Workers.Offer(fp, req.GetName(), req.GetDeviceId()) {
-	case workeradmit.Reject:
-		// The message names the fingerprint on purpose. A denied machine's
-		// operator is usually its owner, and "you were denied" without saying
-		// WHICH identity was denied is unactionable — especially on a box that
-		// has been reinstalled and is presenting a new key.
-		return status.Errorf(codes.PermissionDenied,
-			"relay: %s is denied; if that fingerprint is not the one you expect, "+
-				"this machine minted a new identity and needs approving again", fp)
-
-	case workeradmit.Admit:
-		att.setAdmitted(true)
-		if err := s.sendAdmitted(srv, req.GetSlots()); err != nil {
-			return err
-		}
-		// And then HOLD. The stream is the worker's availability — the relay
-		// knows it is there because this is open — so returning here would
-		// close it, the worker would see EOF, report a disconnect and
-		// reconnect, forever, in a loop that looks like a flapping network.
-		return s.holdAdmitted(srv, fp)
-	}
-
-	// Waiting. The worker stays connected and does nothing, which is what puts
-	// it on the operator's screen — a machine that hung up after being told to
-	// wait would have to be caught mid-connection to be seen at all.
+	att.setAdmitted(true)
 	if err := srv.Send(&workerpb.AttachEvent{
-		Event: &workerpb.AttachEvent_Waiting{Waiting: &workerpb.Waiting{}},
+		Event: &workerpb.AttachEvent_Admitted{Admitted: &workerpb.Admitted{Slots: req.GetSlots()}},
 	}); err != nil {
 		return err
 	}
-
-	interval := s.PollInterval
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return status.FromContextError(ctx.Err()).Err()
-		case <-tick.C:
-			// Re-offered rather than only checked, so a decision that arrived
-			// while this worker was parked also clears it from the pending
-			// list — otherwise it would keep being reported as news.
-			switch s.Workers.Offer(fp, req.GetName(), req.GetDeviceId()) {
-			case workeradmit.Reject:
-				return status.Errorf(codes.PermissionDenied, "relay: %s is denied", fp)
-			case workeradmit.Admit:
-				att.setAdmitted(true)
-				if err := s.sendAdmitted(srv, req.GetSlots()); err != nil {
-					return err
-				}
-				return s.holdAdmitted(srv, fp)
-			}
-		}
-	}
+	// And then HOLD. The stream is the worker's availability — the relay
+	// knows it is there because this is open — so returning here would close
+	// it, the worker would see EOF, report a disconnect and reconnect, forever,
+	// in a loop that looks like a flapping network.
+	return s.holdAdmitted(ctx, id, cert.NotAfter)
 }
 
-// peerFingerprint reads the identity out of the TLS handshake.
+// peerCertificate reads the worker's certificate out of the TLS handshake —
+// already verified against this relay's CA by the listener.
 //
-// This is the only thing in the conversation the worker PROVED; everything in
-// AttachReq is a claim. A missing certificate is refused rather than treated
-// as an anonymous worker: the listener is supposed to require one, so its
-// absence means the server was misconfigured, and admitting on a
-// misconfiguration is how a whole fleet gets let in at once.
-func peerFingerprint(ctx context.Context) (string, error) {
+// A missing certificate is refused rather than treated as an anonymous worker.
+// This listener lets a handshake through WITHOUT one, because enrolment
+// happens before a worker has a certificate; every call that needs one has to
+// say so, and this is where Attach does.
+func peerCertificate(ctx context.Context) (*x509.Certificate, error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.AuthInfo == nil {
-		return "", status.Error(codes.Unauthenticated,
-			"relay: the worker listener accepted a connection with no TLS information — "+
-				"it must require a client certificate")
+		return nil, status.Error(codes.Unauthenticated,
+			"relay: the worker listener accepted a connection with no TLS information")
 	}
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok || len(tlsInfo.State.PeerCertificates) == 0 {
-		return "", status.Error(codes.Unauthenticated,
-			"relay: the worker presented no certificate, so it has no identity to approve")
+		return nil, status.Error(codes.Unauthenticated,
+			"relay: no worker certificate was presented — enrol with a registration code first")
 	}
-	sum := sha256.Sum256(tlsInfo.State.PeerCertificates[0].Raw)
-	return hex.EncodeToString(sum[:]), nil
+	return tlsInfo.State.PeerCertificates[0], nil
 }
 
 // attachment is one worker's stream, and the single place its two independent
 // answers are combined.
 //
-// A worker contributes capacity only when BOTH are true: the operator admitted
-// it, and it says it wants work. They arrive from different places and change
-// independently — approval from a human on a screen, readiness from the
-// machine — so neither can be folded into the other.
+// A worker contributes capacity only when BOTH are true: it is admitted, and
+// it says it wants work. They arrive from different places and change
+// independently, so neither can be folded into the other.
 //
 // Admission being part of it is not a detail. capacityLocked sums over
-// profiles and knows nothing about approval, so a profile published before
-// admission would make a PENDING worker raise the relay's capacity: callers
-// would be granted tickets and then refused at the proxy, because take() does
-// check admission. That is the same "a grant is not a slot" defect this whole
-// change exists to remove, re-entering through the other door (caught in
-// review on PR #9).
+// profiles and knows nothing about admission, so a profile published before
+// admission would let a worker raise the relay's capacity before it was
+// known not to be banned: callers would be granted tickets and then refused
+// at the proxy, because take() does check admission (caught in review on PR
+// #9, when the gate was an operator's approval).
 type attachment struct {
 	b     *Backends
 	fp    string
@@ -257,28 +215,17 @@ func (a *attachment) readStatuses(
 	}
 }
 
-func (s *WorkerServer) sendAdmitted(
-	srv grpc.BidiStreamingServer[workerpb.WorkerMessage, workerpb.AttachEvent],
-	slots uint32,
-) error {
-	return srv.Send(&workerpb.AttachEvent{
-		Event: &workerpb.AttachEvent_Admitted{Admitted: &workerpb.Admitted{Slots: slots}},
-	})
-}
-
 // holdAdmitted keeps an admitted worker's stream open for as long as it stays
-// admitted.
+// admitted and its certificate stays valid.
 //
-// Two jobs, and the second is the one that is easy to miss: the open stream IS
-// the availability, and a decision can change while it is open. A worker
-// denied mid-attachment has to be told, or it keeps its tunnel and keeps
-// taking work until it next reconnects — which, for a healthy worker, is
-// never.
-func (s *WorkerServer) holdAdmitted(
-	srv grpc.BidiStreamingServer[workerpb.WorkerMessage, workerpb.AttachEvent],
-	fp string,
-) error {
-	ctx := srv.Context()
+// Two jobs, and both are easy to miss: the open stream IS the availability,
+// and the facts that admitted it can change while it is open. A worker banned
+// mid-attachment has to be told, or it keeps its tunnel and keeps taking work
+// until it next reconnects — which, for a healthy worker, is never. And a
+// certificate checked only at the handshake would let a connection outlive
+// it; ending the stream at expiry sends the worker back through a handshake
+// with its renewed one.
+func (s *WorkerServer) holdAdmitted(ctx context.Context, id string, notAfter time.Time) error {
 	interval := s.PollInterval
 	if interval <= 0 {
 		interval = 5 * time.Second
@@ -289,10 +236,14 @@ func (s *WorkerServer) holdAdmitted(
 		select {
 		case <-ctx.Done():
 			return status.FromContextError(ctx.Err()).Err()
-		case <-tick.C:
-			if !s.Workers.Admitted(fp) {
-				return status.Errorf(codes.PermissionDenied,
-					"relay: %s is no longer admitted", fp)
+		case now := <-tick.C:
+			if !s.Workers.Admitted(id) {
+				return refusal.New(codes.PermissionDenied, refusal.WorkerBanned,
+					"relay: worker "+id+" was banned")
+			}
+			if !now.Before(notAfter) {
+				return refusal.New(codes.Unauthenticated, refusal.CertificateExpired,
+					"relay: this worker's certificate has expired — reconnect with the renewed one")
 			}
 		}
 	}

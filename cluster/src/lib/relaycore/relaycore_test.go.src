@@ -190,11 +190,11 @@ func TestWait_ACancelledWaiterLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 
-	if _, queuedN, _ := p.Stats(); queuedN != 0 {
+	if queuedN := p.Stats().Queued; queuedN != 0 {
 		t.Errorf("the queue still holds %d place(s) for a caller that left", queuedN)
 	}
 	p.Done()
-	if inUse, _, _ := p.Stats(); inUse != 0 {
+	if inUse := p.Stats().Held(); inUse != 0 {
 		t.Errorf("inUse = %d after everyone left — a slot leaked", inUse)
 	}
 }
@@ -302,7 +302,7 @@ func TestSetCapacity_AttachingAWorkerPromotesTheQueue(t *testing.T) {
 		}
 	}()
 	// Let the caller reach the queue before the worker arrives.
-	waitFor(t, func() bool { _, queued, _ := p.Stats(); return queued == 1 })
+	waitFor(t, func() bool { return p.Stats().Queued == 1 })
 
 	p.SetCapacity(1)
 	select {
@@ -341,7 +341,7 @@ func TestSetCapacity_CeilingCapsTheFleet(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.SetCapacity(10)
-	if _, _, capacity := p.Stats(); capacity != 2 {
+	if capacity := p.Stats().Capacity; capacity != 2 {
 		t.Fatalf("capacity = %d, want the ceiling of 2 — a relay may be smaller than its fleet", capacity)
 	}
 }

@@ -9,8 +9,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
@@ -378,14 +378,13 @@ func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit
 		md, _ := metadata.FromIncomingContext(ctx)
 		vals := md.Get(TicketHeader)
 		if len(vals) == 0 || vals[0] == "" {
-			return tunnel.Backend{}, status.Errorf(codes.Unauthenticated,
-				"relay: no %s — ask the control plane to schedule a task and send the ticket it grants",
-				TicketHeader)
+			return tunnel.Backend{}, refusal.New(codes.Unauthenticated, refusal.TicketMissing,
+				"relay: no "+TicketHeader+" — ask the control plane to schedule a task and send the ticket it grants")
 		}
 		if err := pool.Claim(vals[0]); err != nil {
 			// Deliberately does not distinguish expired from spent from
 			// invented: see relaycore.ErrNoSuchTicket.
-			return tunnel.Backend{}, status.Error(codes.PermissionDenied,
+			return tunnel.Backend{}, refusal.New(codes.PermissionDenied, refusal.TicketNotRedeemable,
 				"relay: that ticket is not redeemable — it may have expired, or already been used")
 		}
 
@@ -398,7 +397,7 @@ func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit
 			// The slot was claimed and there is nobody to run the work, so it
 			// goes back immediately rather than waiting out the call.
 			pool.Done()
-			return tunnel.Backend{}, status.Error(codes.Unavailable,
+			return tunnel.Backend{}, refusal.New(codes.Unavailable, refusal.NoWorker,
 				"relay: the ticket was valid but no admitted worker is attached right now")
 		}
 		// Done exactly once, however the call ends: the slot is held by the

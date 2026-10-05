@@ -49,12 +49,16 @@ type WorkerAttachClient interface {
 	// Nothing polls, nothing heartbeats, and there is no liveness table to
 	// reconcile — the same reason a scheduling stream holds a queue place.
 	//
-	// The worker's IDENTITY is not in this conversation. It is the fingerprint
-	// of the certificate it presented in the TLS handshake, which is the one
-	// thing here it proved rather than asserted; everything a worker SENDS is a
+	// The worker's IDENTITY is not in this conversation. It is the SPKI
+	// fingerprint of the certificate it presented in the TLS handshake — a
+	// certificate this relay's CA issued at enrolment — which is the one thing
+	// here it proved rather than asserted; everything a worker SENDS is a
 	// claim, carried for an operator to read and for scheduling to use.
 	//
-	// A DENIED worker gets PermissionDenied and the stream never opens.
+	// A worker without a valid certificate cannot open this stream at all (the
+	// handshake refuses it); a BANNED one gets PermissionDenied with the
+	// cluster.w17 reason WORKER_BANNED. Every other worker is admitted at once:
+	// the certificate IS the admission, and a ban is the exception.
 	//
 	// BIDIRECTIONAL since 2026-09-25, and the reason is the difference between
 	// "connected" and "able to work". A one-shot announcement could only be
@@ -100,12 +104,16 @@ type WorkerAttachServer interface {
 	// Nothing polls, nothing heartbeats, and there is no liveness table to
 	// reconcile — the same reason a scheduling stream holds a queue place.
 	//
-	// The worker's IDENTITY is not in this conversation. It is the fingerprint
-	// of the certificate it presented in the TLS handshake, which is the one
-	// thing here it proved rather than asserted; everything a worker SENDS is a
+	// The worker's IDENTITY is not in this conversation. It is the SPKI
+	// fingerprint of the certificate it presented in the TLS handshake — a
+	// certificate this relay's CA issued at enrolment — which is the one thing
+	// here it proved rather than asserted; everything a worker SENDS is a
 	// claim, carried for an operator to read and for scheduling to use.
 	//
-	// A DENIED worker gets PermissionDenied and the stream never opens.
+	// A worker without a valid certificate cannot open this stream at all (the
+	// handshake refuses it); a BANNED one gets PermissionDenied with the
+	// cluster.w17 reason WORKER_BANNED. Every other worker is admitted at once:
+	// the certificate IS the admission, and a ban is the exception.
 	//
 	// BIDIRECTIONAL since 2026-09-25, and the reason is the difference between
 	// "connected" and "able to work". A one-shot announcement could only be
@@ -171,5 +179,197 @@ var WorkerAttach_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
+	Metadata: "worker.proto",
+}
+
+const (
+	WorkerEnrollment_Enroll_FullMethodName = "/w17.cluster.worker.WorkerEnrollment/Enroll"
+	WorkerEnrollment_Renew_FullMethodName  = "/w17.cluster.worker.WorkerEnrollment/Renew"
+)
+
+// WorkerEnrollmentClient is the client API for WorkerEnrollment service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// WorkerEnrollment is how a worker gets — and keeps — its certificate.
+//
+// Served on the same listener as WorkerAttach, which asks for a client
+// certificate but does not require one: Enroll is the call a worker makes
+// BEFORE it has one. Every other call there checks for itself.
+//
+// The worker generates its key and never sends it; it sends a certificate
+// request. What it receives is short-lived (weeks), so a worker renews before
+// expiry — and a certificate that is banned, or already expired, cannot renew:
+// that worker needs a new registration code.
+type WorkerEnrollmentClient interface {
+	// Enroll trades a one-time registration code for a certificate.
+	//
+	// The code was minted by THIS relay at an operator's request and is held in
+	// its memory: single use, short-lived, void after a relay restart. It is
+	// spent only by a request that is otherwise valid, so a malformed request
+	// does not cost the operator a code.
+	//
+	// Refusals carry cluster.w17 reasons: REGISTRATION_CODE_INVALID (unknown,
+	// spent or expired), WORKER_BANNED (the request's key is banned).
+	Enroll(ctx context.Context, in *EnrollReq, opts ...grpc.CallOption) (*Certificate, error)
+	// Renew reissues the caller's certificate for the SAME key, so the worker's
+	// identity — the SPKI fingerprint — survives it.
+	//
+	// Authenticated by the certificate presented in the handshake, which must
+	// be one this relay's CA issued and that has not expired, and whose key is
+	// the one in the request. Refusals: CERTIFICATE_NOT_RENEWABLE, WORKER_BANNED.
+	Renew(ctx context.Context, in *RenewReq, opts ...grpc.CallOption) (*Certificate, error)
+}
+
+type workerEnrollmentClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewWorkerEnrollmentClient(cc grpc.ClientConnInterface) WorkerEnrollmentClient {
+	return &workerEnrollmentClient{cc}
+}
+
+func (c *workerEnrollmentClient) Enroll(ctx context.Context, in *EnrollReq, opts ...grpc.CallOption) (*Certificate, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Certificate)
+	err := c.cc.Invoke(ctx, WorkerEnrollment_Enroll_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerEnrollmentClient) Renew(ctx context.Context, in *RenewReq, opts ...grpc.CallOption) (*Certificate, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Certificate)
+	err := c.cc.Invoke(ctx, WorkerEnrollment_Renew_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// WorkerEnrollmentServer is the server API for WorkerEnrollment service.
+// All implementations must embed UnimplementedWorkerEnrollmentServer
+// for forward compatibility.
+//
+// WorkerEnrollment is how a worker gets — and keeps — its certificate.
+//
+// Served on the same listener as WorkerAttach, which asks for a client
+// certificate but does not require one: Enroll is the call a worker makes
+// BEFORE it has one. Every other call there checks for itself.
+//
+// The worker generates its key and never sends it; it sends a certificate
+// request. What it receives is short-lived (weeks), so a worker renews before
+// expiry — and a certificate that is banned, or already expired, cannot renew:
+// that worker needs a new registration code.
+type WorkerEnrollmentServer interface {
+	// Enroll trades a one-time registration code for a certificate.
+	//
+	// The code was minted by THIS relay at an operator's request and is held in
+	// its memory: single use, short-lived, void after a relay restart. It is
+	// spent only by a request that is otherwise valid, so a malformed request
+	// does not cost the operator a code.
+	//
+	// Refusals carry cluster.w17 reasons: REGISTRATION_CODE_INVALID (unknown,
+	// spent or expired), WORKER_BANNED (the request's key is banned).
+	Enroll(context.Context, *EnrollReq) (*Certificate, error)
+	// Renew reissues the caller's certificate for the SAME key, so the worker's
+	// identity — the SPKI fingerprint — survives it.
+	//
+	// Authenticated by the certificate presented in the handshake, which must
+	// be one this relay's CA issued and that has not expired, and whose key is
+	// the one in the request. Refusals: CERTIFICATE_NOT_RENEWABLE, WORKER_BANNED.
+	Renew(context.Context, *RenewReq) (*Certificate, error)
+	mustEmbedUnimplementedWorkerEnrollmentServer()
+}
+
+// UnimplementedWorkerEnrollmentServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedWorkerEnrollmentServer struct{}
+
+func (UnimplementedWorkerEnrollmentServer) Enroll(context.Context, *EnrollReq) (*Certificate, error) {
+	return nil, status.Error(codes.Unimplemented, "method Enroll not implemented")
+}
+func (UnimplementedWorkerEnrollmentServer) Renew(context.Context, *RenewReq) (*Certificate, error) {
+	return nil, status.Error(codes.Unimplemented, "method Renew not implemented")
+}
+func (UnimplementedWorkerEnrollmentServer) mustEmbedUnimplementedWorkerEnrollmentServer() {}
+func (UnimplementedWorkerEnrollmentServer) testEmbeddedByValue()                          {}
+
+// UnsafeWorkerEnrollmentServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to WorkerEnrollmentServer will
+// result in compilation errors.
+type UnsafeWorkerEnrollmentServer interface {
+	mustEmbedUnimplementedWorkerEnrollmentServer()
+}
+
+func RegisterWorkerEnrollmentServer(s grpc.ServiceRegistrar, srv WorkerEnrollmentServer) {
+	// If the following call panics, it indicates UnimplementedWorkerEnrollmentServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&WorkerEnrollment_ServiceDesc, srv)
+}
+
+func _WorkerEnrollment_Enroll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnrollReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerEnrollmentServer).Enroll(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerEnrollment_Enroll_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerEnrollmentServer).Enroll(ctx, req.(*EnrollReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerEnrollment_Renew_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerEnrollmentServer).Renew(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerEnrollment_Renew_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerEnrollmentServer).Renew(ctx, req.(*RenewReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// WorkerEnrollment_ServiceDesc is the grpc.ServiceDesc for WorkerEnrollment service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var WorkerEnrollment_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "w17.cluster.worker.WorkerEnrollment",
+	HandlerType: (*WorkerEnrollmentServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Enroll",
+			Handler:    _WorkerEnrollment_Enroll_Handler,
+		},
+		{
+			MethodName: "Renew",
+			Handler:    _WorkerEnrollment_Renew_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "worker.proto",
 }

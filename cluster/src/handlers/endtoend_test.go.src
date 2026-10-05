@@ -38,8 +38,13 @@ const minute = time.Minute
 // dialer for it.
 func serveOn(t *testing.T, impl pb.ClusterServiceServer) (*grpc.Server, Dialer) {
 	t.Helper()
+	return serveWithOptions(t, impl)
+}
+
+func serveWithOptions(t *testing.T, impl pb.ClusterServiceServer, opts ...grpc.ServerOption) (*grpc.Server, Dialer) {
+	t.Helper()
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(opts...)
 	pb.RegisterClusterServiceServer(srv, impl)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -62,8 +67,9 @@ func serveOn(t *testing.T, impl pb.ClusterServiceServer) (*grpc.Server, Dialer) 
 func TestEndToEnd_TheGrantThatArrivesIsTheOneTheRelayMinted(t *testing.T) {
 	pool, dial := serveRelay(t, 1, time.Minute, "worker-net:9000")
 	h := &ClusterServiceHandler{
-		Relays: &store{relays: []Relay{{ID: "1", Name: "eu-west-1", URL: "mgmt:13444", Fingerprint: "f"}}},
-		Dial:   dial,
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "eu-west-1", URL: "mgmt:13444", Fingerprint: "f"}}},
+		Dial:    dial,
 	}
 
 	c, err := run(t, h)
@@ -104,8 +110,9 @@ func TestEndToEnd_TheGrantThatArrivesIsTheOneTheRelayMinted(t *testing.T) {
 func TestEndToEnd_QueuePositionFlowsThroughTheProxy(t *testing.T) {
 	pool, dial := serveRelay(t, 1, time.Minute, "worker-net:9000")
 	h := &ClusterServiceHandler{
-		Relays: &store{relays: []Relay{{ID: "1", Name: "eu-west-1"}}},
-		Dial:   dial,
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "eu-west-1"}}},
+		Dial:    dial,
 	}
 
 	// Occupy the only slot, through the same path.

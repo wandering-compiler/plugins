@@ -1,5 +1,5 @@
 name: cluster
-version: 0.1.0-rc.1
+version: 0.2.0-rc.1
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -64,13 +64,15 @@ env:
 # There is no dev-insecure mode and there will not be one: the convenient flag
 # that skips verification is the flag that escapes into production.
 #
-# ⚠️ The identity lives in the container's own filesystem, because a sandbox
-# cannot declare a volume (the sandbox
-# manifest carries name/image/ports/env and nothing else). So it survives a
-# `restart` and is LOST on `down`/`up`, and a recreated relay comes back with a
-# different fingerprint that has to be pasted again. Tolerable for a dev
-# sandbox; the fix is volume support in the sandbox spec, not a fixed key baked
-# into the image.
+# ⚠️ The identity — and the relay's worker CA beside it — lives in the
+# container's own filesystem, because a sandbox cannot declare a volume (the
+# sandbox manifest carries name/image/ports/env and nothing else). So it
+# survives a `restart` and is LOST on `down`/`up`: a recreated relay comes back
+# with a different fingerprint that has to be pasted again, and a different CA,
+# so every worker enrolled with it needs a new registration code. Tolerable for
+# a dev sandbox; the fix is volume support in the sandbox spec, not a fixed key
+# baked into the image. In production both come from secrets (--cert/--key,
+# --ca-cert/--ca-key).
 sandboxes:
   # Single token, no hyphen: the name is a compose service, a DNS label and a
   # Go identifier all at once, and the manifest refuses anything else.
@@ -81,8 +83,11 @@ sandboxes:
     # audience and therefore a different rule about who may complete a
     # handshake:
     #   13444  management  — the control plane, whose certificate is PINNED
-    #   13446  attach      — workers, admitted by approval
-    #   13445  tunnels     — workers again, the raw sockets that carry work
+    #   13446  attach      — workers: enrolment (no certificate yet), renewal
+    #                        and attach; a certificate, if presented, must be
+    #                        the relay CA's
+    #   13445  tunnels     — workers again, the raw sockets that carry work;
+    #                        a relay-CA certificate is REQUIRED
     #   9000   callers     — TLS, and the caller pins this relay using the
     #                        fingerprint its grant carried
     ports:
@@ -93,7 +98,7 @@ sandboxes:
     env:
       - name: RELAY_IDENTITY_DIR
         value: "/var/lib/relay"
-        description: "Where the relay mints and keeps its key pair. Container-local: survives a restart, not a recreate."
+        description: "Where the relay mints and keeps its key pair and the CA it issues worker certificates from. Container-local: survives a restart, not a recreate — and a new CA means every worker re-enrols."
       - name: RELAY_PROXY_ADDRESS
         value: "clusterrelay:9000"
         description: "What callers are told to send work to. The in-network name, because that is how a sibling service reaches this sandbox — a relay is TOLD its externally visible address, it cannot discover one."
@@ -129,49 +134,64 @@ presets:
           # trying to use the relay. Read-only because it is a CACHE: an
           # operator editing last_seen_at would be editing a measurement.
           readonly_fields: [id, created_at, last_seen_at, last_error]
+        actions:
+          # A new worker joins THIS relay with a one-time code the relay
+          # mints and holds in memory (single use, short-lived). The worker
+          # generates its own key and trades the code for a certificate the
+          # relay's CA signs, so nothing secret passes through here but the
+          # code — shown once, and replaced by pressing again if lost.
+          #
+          # The code is the action's RESPONSE, so the action declares a
+          # The admin does not display the code yet: showing an action's
+          # response needs a console newer than the one that signs this
+          # release. Until then enrol workers with `relay issue-worker`.
+          - name: issue_registration_code
+            source: ClusterService.IssueRegistrationCode
+            label: "Issue a registration code"
+            target: detail
+          # Maintenance without an outage: the relay takes no new work, sends
+          # its queue elsewhere, and lets everything running finish. One-way —
+          # a drained relay comes back by being restarted.
+          - name: drain
+            source: ClusterService.DrainRelay
+            label: "Drain"
+            confirm: "Drain the selected relays? They take no new work until they are restarted; running work finishes."
+            target: both
 
       - name: Workers
         model: Worker
         list:
           source: WorkerQuery.ListWorkers
-          # cert_fingerprint sits in the LIST, not buried in the detail, and
-          # that placement is the security control rather than a layout
-          # choice. The operator's job here is to compare it against what the
-          # machine printed at its own startup; name and device_id are claims
-          # any connecting machine can make, and the obvious attack is to
-          # claim the name of a machine somebody is expecting. An approval
-          # screen that shows only the name is an approval of whoever
-          # connected first.
-          columns: [name, cert_fingerprint, state, first_seen_at, decided_by]
+          # cert_fingerprint sits in the LIST, beside the name, because a ban
+          # is taken against the fingerprint: name and device_id are claims
+          # any worker can make, and banning by name bans whoever chose it.
+          columns: [name, cert_fingerprint, state, relay_id, first_seen_at, decided_by]
           detail_link_column: name
         detail:
           read: WorkerQuery.GetWorker
           # No update and no delete. Nothing here is an operator's to edit:
           # the fingerprint is evidence, the claims are the machine's, and the
-          # state belongs to the two actions below. Deleting a row would only
-          # mean the machine is rediscovered on the next sweep as new.
+          # state belongs to the actions below. Deleting a row would only mean
+          # the worker is recorded again on the next sweep — and would drop its
+          # ban.
           readonly_fields: [id, cert_fingerprint, name, device_id, state, relay_id, first_seen_at, decided_at, decided_by]
         actions:
-          # The sweep, as a PAGE action: it operates on the page rather than on
-          # a selection, because there is nothing here to select — the machines
-          # it discovers do not exist as rows until it has run.
-          #
-          # This is the button an operator presses after standing a worker up.
-          # Discovery is pulled by a human rather than swept in the background
-          # for a reason recorded on CheckWorkers itself: the console is HA, so
-          # a sweep would run in every replica and need coordination to avoid
-          # duplicate rows and a thundering herd.
+          # The sweep, as a PAGE action: there is nothing to select — the
+          # workers it records do not exist as rows until it has run. It is
+          # NOT how a worker gets in (its registration code did that) nor how a
+          # ban reaches a relay (every call to a relay carries the ban set); it
+          # lists the fleet so an operator can ban from it.
           - name: check
             source: ClusterService.CheckWorkers
-            label: "Check for new workers"
+            label: "Check for workers"
             target: page
-          - name: approve
-            source: WorkerMutation.ApproveWorkers
-            label: "Approve"
-            confirm: "Approve the selected machines? Check each fingerprint against what the machine printed at startup first — the name it reports is a claim, the fingerprint is not."
+          - name: ban
+            source: WorkerMutation.BanWorkers
+            label: "Ban"
+            confirm: "Ban the selected workers? Their relays refuse them on the next placement, drop their connections, and refuse to renew their certificates."
             target: both
-          - name: deny
-            source: WorkerMutation.DenyWorkers
-            label: "Deny"
-            confirm: "Deny the selected machines? Their relay will drop the connection and keep dropping it."
+          - name: unban
+            source: WorkerMutation.UnbanWorkers
+            label: "Unban"
+            confirm: "Lift the ban on the selected workers? A worker whose certificate expired meanwhile still needs a new registration code."
             target: both

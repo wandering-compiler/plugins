@@ -2,10 +2,7 @@ package workerconn
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,51 +21,33 @@ import (
 // and answers on the way back.
 //
 // `register` installs the worker's own services on the server — this package
-// has no idea what they are, which is the same ignorance the relay has.
-func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server)) error {
+// has no idea what they are, which is the same ignorance the relay has. `opts`
+// are extra server options (interceptors, say), applied after the cluster's.
+//
+// It returns when ctx ends or the ONE connection drops; a worker loops on it
+// with a backoff, dialling a fresh tunnel each time.
+func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), opts ...grpc.ServerOption) error {
 	if register == nil {
 		return errors.New("workerconn: ServeTunnel needs something to serve")
 	}
 	if strings.TrimSpace(cfg.TunnelAddress) == "" {
 		return errors.New("workerconn: TunnelAddress is required")
 	}
-	crt, err := tls.X509KeyPair(cfg.Identity.CertPEM, cfg.Identity.KeyPEM)
-	if err != nil {
-		return fmt.Errorf("workerconn: this worker's own identity does not load: %w", err)
-	}
-	want := strings.ToLower(strings.TrimSpace(cfg.RelayFingerprint))
-	if want == "" {
+	if strings.TrimSpace(cfg.RelayFingerprint) == "" {
 		return errors.New("workerconn: RelayFingerprint is required for the tunnel too — " +
 			"it carries the work, so an impostor on this address would receive it")
 	}
-
-	pinRelay := func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-		if len(rawCerts) == 0 {
-			return errors.New("workerconn: the relay presented no certificate")
-		}
-		sum := sha256.Sum256(rawCerts[0])
-		if got := hex.EncodeToString(sum[:]); got != want {
-			return fmt.Errorf("workerconn: tunnel peer is %s, this worker pins %s", got, want)
-		}
-		return nil
+	if _, err := certificateUsable(cfg); err != nil {
+		// No certificate yet (Run has not enrolled), or one that ran out: the
+		// relay would refuse the handshake, so say why instead.
+		return err
 	}
-	d := &tls.Dialer{Config: &tls.Config{
-		Certificates: []tls.Certificate{crt},
-		MinVersion:   tls.VersionTLS13,
-		// #nosec G402 -- chain off, pin below; the relay may be self-signed and
-		// the leaf fingerprint is the narrower check.
-		InsecureSkipVerify:    true,
-		VerifyPeerCertificate: pinRelay,
-		// The tunnel CARRIES THE WORK, so a pin that a resumed session skips is
-		// the worst place to have one: VerifyPeerCertificate does not run on a
-		// resumed handshake, VerifyConnection runs on both (gosec G123).
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("workerconn: the relay presented no certificate")
-			}
-			return pinRelay([][]byte{cs.PeerCertificates[0].Raw}, nil)
-		},
-	}}
+	// The same TLS as every other connection to the relay: pinned through
+	// relaydial (full AND resumed handshakes — the tunnel carries the work, so
+	// a pin a resumed session skipped would be the worst place for one), and
+	// this worker's current certificate, read at the handshake so a renewal
+	// takes effect on the next tunnel.
+	d := &tls.Dialer{Config: clientTLS(cfg, true)}
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	conn, err := d.DialContext(dialCtx, "tcp", cfg.TunnelAddress)
@@ -76,7 +55,11 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server)) e
 		return fmt.Errorf("workerconn: dialling the tunnel: %w", err)
 	}
 
-	srv := grpc.NewServer()
+	// The work server is built with the cluster's keepalive and the MaxMessage
+	// cap first, and the caller's options after them, so a caller can add (a
+	// unary interceptor, its own limits) without having to repeat these — the
+	// relay's pings are only tolerated because this side permits them.
+	srv := grpc.NewServer(append(tunnel.WorkServerOptions(), opts...)...)
 	register(srv)
 	lis := tunnel.NewSingleConnListener(conn)
 

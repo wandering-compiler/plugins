@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
 )
 
 // fakeRelay is a relay: it speaks the same ClusterService the project does,
@@ -26,6 +27,18 @@ type fakeRelay struct {
 	failErr error // fail the stream instead, after `sent` events
 	sent    int
 	seen    []string // labels this relay was asked for
+
+	// stats is what RelayStats answers. Nil answers an idle relay with one
+	// slot, which is what most tests want: the choice then falls to the
+	// rotation.
+	stats *pb.RelayStatsResp
+}
+
+func (f *fakeRelay) RelayStats(context.Context, *pb.RelayStatsReq) (*pb.RelayStatsResp, error) {
+	if f.stats != nil {
+		return f.stats, nil
+	}
+	return &pb.RelayStatsResp{Capacity: 1}, nil
 }
 
 func (f *fakeRelay) ScheduleTask(req *pb.ScheduleTaskReq, srv grpc.ServerStreamingServer[pb.ScheduleTaskEvent]) error {
@@ -68,18 +81,34 @@ func serve(t *testing.T, f *fakeRelay) func() (*grpc.ClientConn, error) {
 	}
 }
 
+// store is guarded: relays are polled for their load concurrently, and each
+// poll records its outcome.
 type store struct {
-	relays  []Relay
+	relays []Relay
+
+	mu      sync.Mutex
 	reached []string
 	failed  []string
 }
 
 func (s *store) ListEnabled(context.Context) ([]Relay, error) { return s.relays, nil }
+func (s *store) Get(_ context.Context, id string) (Relay, error) {
+	for _, r := range s.relays {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return Relay{}, ErrRelayNotFound
+}
 func (s *store) RecordReached(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.reached = append(s.reached, id)
 	return nil
 }
 func (s *store) RecordFailed(_ context.Context, id, msg string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.failed = append(s.failed, id+":"+msg)
 	return nil
 }
@@ -126,8 +155,9 @@ func run(t *testing.T, h *ClusterServiceHandler) (*collect, error) {
 func TestScheduleTask_StampsTheRelayNameOnEveryEvent(t *testing.T) {
 	dial := serve(t, &fakeRelay{queued: 2, grant: true})
 	h := &ClusterServiceHandler{
-		Relays: &store{relays: []Relay{{ID: "1", Name: "eu-west-1", URL: "x", Fingerprint: "f"}}},
-		Dial:   func(string, string) (*grpc.ClientConn, error) { return dial() },
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "eu-west-1", URL: "x", Fingerprint: "f"}}},
+		Dial:    func(string, string) (*grpc.ClientConn, error) { return dial() },
 	}
 	c, err := run(t, h)
 	if err != nil {
@@ -155,8 +185,9 @@ func TestScheduleTask_StampsTheRelayNameOnEveryEvent(t *testing.T) {
 func TestScheduleTask_GrantedEndsTheStream(t *testing.T) {
 	dial := serve(t, &fakeRelay{grant: true})
 	h := &ClusterServiceHandler{
-		Relays: &store{relays: []Relay{{ID: "1", Name: "a"}}},
-		Dial:   func(string, string) (*grpc.ClientConn, error) { return dial() },
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "a"}}},
+		Dial:    func(string, string) (*grpc.ClientConn, error) { return dial() },
 	}
 	c, _ := run(t, h)
 	if n := len(c.seen()); n != 1 || c.seen()[0].GetGranted() == nil {
@@ -172,7 +203,7 @@ func TestScheduleTask_FallsThroughAnUnreachableRelay(t *testing.T) {
 		{ID: "dead", Name: "a-dead"},
 		{ID: "live", Name: "b-live"},
 	}}
-	h := &ClusterServiceHandler{Relays: st}
+	h := &ClusterServiceHandler{Workers: &workerStore{}, Relays: st}
 	h.Dial = func(target, _ string) (*grpc.ClientConn, error) {
 		if target == "" { // the dead one carries no url
 			return nil, errors.New("connection refused")
@@ -202,7 +233,8 @@ func TestScheduleTask_DoesNotRetryAfterARelayHasAnswered(t *testing.T) {
 	dialGood := serve(t, &fakeRelay{grant: true})
 
 	h := &ClusterServiceHandler{
-		Relays: &store{relays: []Relay{{ID: "1", Name: "a"}, {ID: "2", Name: "b"}}},
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "a"}, {ID: "2", Name: "b"}}},
 	}
 	h.Dial = func(_, fp string) (*grpc.ClientConn, error) {
 		if fp == "second" {
@@ -227,7 +259,7 @@ func TestScheduleTask_DoesNotRetryAfterARelayHasAnswered(t *testing.T) {
 // An empty pool is an OPERATOR problem and the message has to say so — the
 // caller cannot fix it and must not be told to retry forever.
 func TestScheduleTask_EmptyPoolSaysWhatToDo(t *testing.T) {
-	h := &ClusterServiceHandler{Relays: &store{}}
+	h := &ClusterServiceHandler{Workers: &workerStore{}, Relays: &store{}}
 	_, err := run(t, h)
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("code = %s, want Unavailable", status.Code(err))
@@ -249,25 +281,24 @@ func TestScheduleTask_EmptyPoolSaysWhatToDo(t *testing.T) {
 // rest cold (a consumer, 2026-09-25), turning off the spread that is the whole
 // reason for running more than one machine.
 func TestScheduleTask_IdlePoolSpreadsAcrossRelays(t *testing.T) {
-	dial := serve(t, &fakeRelay{grant: true})
+	rs := newRelays(t, map[string]*fakeRelay{
+		"z-url": {grant: true}, "a-url": {grant: true}, "m-url": {grant: true},
+	})
 	h := &ClusterServiceHandler{
+		Workers: &workerStore{},
 		Relays: &store{relays: []Relay{
 			{ID: "z", Name: "z", URL: "z-url"},
 			{ID: "a", Name: "a", URL: "a-url"},
 			{ID: "m", Name: "m", URL: "m-url"},
 		}},
+		Dial: rs.Dial,
 	}
-	var picked string
 	seen := map[string]int{}
-	h.Dial = func(target, _ string) (*grpc.ClientConn, error) { picked = target; return dial() }
 
 	// Three tasks onto three idle relays must touch all three. Deterministic
 	// because the rotation is a counter, not a coin.
 	for i := 0; i < 3; i++ {
-		if _, err := run(t, h); err != nil {
-			t.Fatalf("ScheduleTask %d: %v", i, err)
-		}
-		seen[picked]++
+		seen[scheduledOn(t, h)]++
 	}
 	if len(seen) != 3 {
 		t.Errorf("three tasks over three idle relays reached %d of them (%v) — "+
@@ -275,28 +306,138 @@ func TestScheduleTask_IdlePoolSpreadsAcrossRelays(t *testing.T) {
 	}
 }
 
-// And load still outranks the rotation: a relay this process is already
-// holding callers against loses to an idle one, whatever the rotation says.
-func TestScheduleTask_LoadOutranksTheRotation(t *testing.T) {
-	dial := serve(t, &fakeRelay{grant: true})
+// relaysByURL serves one fake relay per url; a url it does not know refuses
+// the connection, which is how a test spells an unreachable relay.
+type relaysByURL struct {
+	dial map[string]func() (*grpc.ClientConn, error)
+}
+
+func newRelays(t *testing.T, fakes map[string]*fakeRelay) *relaysByURL {
+	r := &relaysByURL{dial: map[string]func() (*grpc.ClientConn, error){}}
+	for url, f := range fakes {
+		r.dial[url] = serve(t, f)
+	}
+	return r
+}
+
+func (r *relaysByURL) Dial(target, _ string) (*grpc.ClientConn, error) {
+	d, ok := r.dial[target]
+	if !ok {
+		return nil, errors.New("connection refused")
+	}
+	return d()
+}
+
+// scheduledOn names the relay that granted, from the event the caller saw.
+func scheduledOn(t *testing.T, h *ClusterServiceHandler) string {
+	t.Helper()
+	c, err := run(t, h)
+	if err != nil {
+		t.Fatalf("ScheduleTask: %v", err)
+	}
+	return c.seen()[len(c.seen())-1].GetGranted().GetRelay()
+}
+
+// Load outranks the rotation, and the load is the RELAY's own account of
+// itself — running work, promised slots and its queue, over its capacity.
+//
+// It used to be a count of the callers THIS console process was holding open,
+// which on a pool below capacity read zero everywhere (a grant ends the hold
+// at once) and knew nothing about any other replica.
+func TestScheduleTask_PlacesOnTheLeastLoadedRelay(t *testing.T) {
+	rs := newRelays(t, map[string]*fakeRelay{
+		"a-url": {grant: true, stats: &pb.RelayStatsResp{InUse: 1, Reserved: 1, Capacity: 2}},
+		"z-url": {grant: true, stats: &pb.RelayStatsResp{InUse: 1, Capacity: 4}},
+	})
 	h := &ClusterServiceHandler{
+		Workers: &workerStore{},
 		Relays: &store{relays: []Relay{
 			{ID: "a", Name: "a", URL: "a-url"},
 			{ID: "z", Name: "z", URL: "z-url"},
 		}},
+		Dial: rs.Dial,
 	}
-	var picked string
-	h.Dial = func(target, _ string) (*grpc.ClientConn, error) { picked = target; return dial() }
+	// Every rotation, so the choice cannot be the rotation's.
+	for i := 0; i < 3; i++ {
+		if got := scheduledOn(t, h); got != "z" {
+			t.Fatalf("placed on %q; a is full (2 of 2), z has 3 of 4 free", got)
+		}
+	}
+}
 
-	// Hold two callers against "a" so it cannot tie with "z" on any rotation.
-	h.enter("a")
-	h.enter("a")
+// Queued callers are load too: a relay with a free slot on paper and a queue
+// in front of it is not idle.
+func TestScheduleTask_AQueueCountsAsLoad(t *testing.T) {
+	rs := newRelays(t, map[string]*fakeRelay{
+		"a-url": {grant: true, stats: &pb.RelayStatsResp{Queued: 3, Capacity: 1}},
+		"z-url": {grant: true, stats: &pb.RelayStatsResp{InUse: 1, Capacity: 2}},
+	})
+	h := &ClusterServiceHandler{
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "a", Name: "a", URL: "a-url"}, {ID: "z", Name: "z", URL: "z-url"}}},
+		Dial:    rs.Dial,
+	}
 	for i := 0; i < 2; i++ {
-		if _, err := run(t, h); err != nil {
-			t.Fatalf("ScheduleTask %d: %v", i, err)
+		if got := scheduledOn(t, h); got != "z" {
+			t.Fatalf("placed on %q, behind a queue of 3", got)
 		}
-		if picked != "z-url" {
-			t.Fatalf("picked %q while a was loaded — load is not being consulted", picked)
+	}
+}
+
+// A draining relay is not a candidate at all, however idle it looks.
+func TestScheduleTask_SkipsADrainingRelay(t *testing.T) {
+	drainingRelay := &fakeRelay{grant: true, stats: &pb.RelayStatsResp{Capacity: 8, Draining: true}}
+	rs := newRelays(t, map[string]*fakeRelay{
+		"a-url": drainingRelay,
+		"z-url": {grant: true, stats: &pb.RelayStatsResp{InUse: 3, Capacity: 4}},
+	})
+	h := &ClusterServiceHandler{
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "a", Name: "a", URL: "a-url"}, {ID: "z", Name: "z", URL: "z-url"}}},
+		Dial:    rs.Dial,
+	}
+	for i := 0; i < 2; i++ {
+		if got := scheduledOn(t, h); got != "z" {
+			t.Fatalf("placed on %q — a draining relay was chosen", got)
 		}
+	}
+	if len(drainingRelay.seen) != 0 {
+		t.Errorf("the draining relay was asked to schedule %d time(s)", len(drainingRelay.seen))
+	}
+}
+
+// A relay that STARTS draining between the stats poll and the placement
+// answers RELAY_DRAINING — and that is fall-through, like an unreachable
+// relay, not a final answer. The relay did not judge the request; it is going
+// away.
+func TestScheduleTask_RelayDrainingIsFallThrough(t *testing.T) {
+	rs := newRelays(t, map[string]*fakeRelay{
+		"a-url": {queued: 1, failErr: refusal.New(codes.Unavailable, refusal.RelayDraining, "draining")},
+		"z-url": {grant: true, stats: &pb.RelayStatsResp{InUse: 3, Capacity: 4}},
+	})
+	h := &ClusterServiceHandler{
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "a", Name: "a", URL: "a-url"}, {ID: "z", Name: "z", URL: "z-url"}}},
+		Dial:    rs.Dial,
+	}
+	if got := scheduledOn(t, h); got != "z" {
+		t.Fatalf("granted by %q, want z after a drained", got)
+	}
+}
+
+// Every relay is unreachable or draining: the caller is told the pool has
+// nothing, not handed one relay's private refusal.
+func TestScheduleTask_NothingPlaceableIsUnavailable(t *testing.T) {
+	rs := newRelays(t, map[string]*fakeRelay{
+		"a-url": {grant: true, stats: &pb.RelayStatsResp{Capacity: 1, Draining: true}},
+	})
+	h := &ClusterServiceHandler{
+		Workers: &workerStore{},
+		Relays:  &store{relays: []Relay{{ID: "a", Name: "a", URL: "a-url"}, {ID: "d", Name: "dead", URL: "nowhere"}}},
+		Dial:    rs.Dial,
+	}
+	_, err := run(t, h)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("code = %s, want Unavailable", status.Code(err))
 	}
 }

@@ -1,122 +1,77 @@
 package workeradmit
 
 import (
-	"sort"
 	"testing"
+
+	"google.golang.org/grpc/metadata"
 )
 
-func pendingNames(t *testing.T, r *Registry) []string {
-	t.Helper()
-	var out []string
-	for _, p := range r.Pending() {
-		out = append(out, p.Fingerprint)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// A machine nobody has decided about waits, and is REPORTED — those two go
-// together. Admitting it would let anyone in; forgetting it would mean the
-// operator never learns it is there, and the machine would reconnect forever
-// against a console that has nothing to show.
-func TestOffer_UnknownWaitsAndIsReported(t *testing.T) {
+// An empty relay admits every worker its CA vouched for: the certificate is
+// the admission, and the registry only holds the exceptions.
+func TestNew_AdmitsUntilBanned(t *testing.T) {
 	r := New()
-	if got := r.Offer("aa", "vps-1", "dev-1"); got != Wait {
-		t.Fatalf("decision = %v, want Wait", got)
-	}
-	p := r.Pending()
-	if len(p) != 1 || p[0].Fingerprint != "aa" {
-		t.Fatalf("pending = %+v, want the offered machine", p)
-	}
-	if p[0].Name != "vps-1" || p[0].DeviceID != "dev-1" {
-		t.Errorf("the claims were not carried for the operator to read: %+v", p[0])
-	}
-	if r.Admitted("aa") {
-		t.Error("an undecided machine is admitted")
-	}
-}
-
-// Approval admits, and takes the machine off the pending list — it is no
-// longer news.
-func TestApply_ApprovalAdmitsAndClearsPending(t *testing.T) {
-	r := New()
-	r.Offer("aa", "vps-1", "")
-	r.Apply([]string{"aa"}, nil)
-
-	if got := r.Offer("aa", "vps-1", ""); got != Admit {
-		t.Fatalf("decision = %v, want Admit", got)
-	}
-	if n := len(r.Pending()); n != 0 {
-		t.Errorf("an approved machine is still reported as pending (%d)", n)
-	}
 	if !r.Admitted("aa") {
-		t.Error("Admitted disagrees with Offer about an approved machine")
+		t.Fatal("a fresh relay refused a worker nobody banned")
+	}
+	r.SetBanned([]string{"AA"})
+	if r.Admitted("aa") {
+		t.Error("a banned worker is admitted (ids compare case-insensitively)")
 	}
 }
 
-// Denial rejects. This is what makes a denial a REVOCATION rather than a note
-// in a table: the relay drops the connection instead of leaving the machine
-// connected and idle.
-func TestApply_DenialRejects(t *testing.T) {
+// The set REPLACES, so lifting a ban is expressible: send the set without it.
+func TestSetBanned_ReplacesRatherThanMerges(t *testing.T) {
 	r := New()
-	r.Offer("bb", "stranger", "")
-	r.Apply(nil, []string{"bb"})
-
-	if got := r.Offer("bb", "stranger", ""); got != Reject {
-		t.Fatalf("decision = %v, want Reject", got)
-	}
-	if n := len(r.Pending()); n != 0 {
-		t.Errorf("a denied machine is still reported as pending (%d)", n)
+	r.SetBanned([]string{"aa", "bb"})
+	r.SetBanned([]string{"bb"})
+	if !r.Admitted("aa") {
+		t.Error("a ban lifted by the control plane is still in force")
 	}
 	if r.Admitted("bb") {
-		t.Error("a denied machine is admitted")
+		t.Error("a ban still in the set was dropped")
 	}
 }
 
-// THE REVOCATION PATH. Dropping a fingerprint from the approved list must stop
-// admitting it — which is only true because Apply REPLACES rather than merges.
-// A merge would leave the relay admitting a machine the registry no longer
-// lists, with nothing anywhere to say so.
-func TestApply_ReplacesRatherThanMerges(t *testing.T) {
-	r := New()
-	r.Apply([]string{"aa", "bb"}, nil)
-	if !r.Admitted("aa") || !r.Admitted("bb") {
-		t.Fatal("setup: both should be admitted")
+// Absent and empty are different answers: empty lifts every ban, absent says
+// nothing. A relay reading absent as empty would let any call that happened to
+// lack the header unban the whole fleet.
+func TestBansFrom_EmptyIsAnAnswerAbsentIsNot(t *testing.T) {
+	in := func(md metadata.MD) ([]string, bool) {
+		return BansFrom(metadata.NewIncomingContext(t.Context(), md))
 	}
-
-	r.Apply([]string{"bb"}, nil) // aa withdrawn
-
-	if r.Admitted("aa") {
-		t.Error("a withdrawn approval still admits — Apply merged instead of replacing")
+	if _, ok := in(metadata.MD{}); ok {
+		t.Error("no header read as a ban set")
 	}
-	if !r.Admitted("bb") {
-		t.Error("a still-approved machine was dropped")
+	if got, ok := in(metadata.Pairs(BannedHeader, "")); !ok || len(got) != 0 {
+		t.Errorf("an empty header = %v, %v; want an empty set that counts", got, ok)
+	}
+	if got, ok := in(metadata.Pairs(BannedHeader, "AA, bb,")); !ok || len(got) != 2 || got[0] != "aa" || got[1] != "bb" {
+		t.Errorf("parsed %v, %v; want [aa bb]", got, ok)
 	}
 }
 
-// Both sets at once is a control-plane bug or a half-applied edit. The safe
-// reading is the restrictive one: a machine wrongly kept out is a support
-// ticket, one wrongly let in is an incident.
-func TestOffer_DeniedWinsOverApproved(t *testing.T) {
-	r := New()
-	r.Apply([]string{"cc"}, []string{"cc"})
-	if got := r.Offer("cc", "", ""); got != Reject {
-		t.Errorf("decision = %v, want Reject — denial must win", got)
+// And what WithBans writes is what BansFrom reads.
+func TestWithBans_RoundTrips(t *testing.T) {
+	out := WithBans(t.Context(), []string{"aa", "bb"})
+	md, _ := metadata.FromOutgoingContext(out)
+	got, ok := BansFrom(metadata.NewIncomingContext(t.Context(), md))
+	if !ok || len(got) != 2 {
+		t.Fatalf("round trip = %v, %v", got, ok)
 	}
-	if r.Admitted("cc") {
-		t.Error("Admitted let through a fingerprint that is also denied")
+	empty := WithBans(t.Context(), nil)
+	md, _ = metadata.FromOutgoingContext(empty)
+	if got, ok := BansFrom(metadata.NewIncomingContext(t.Context(), md)); !ok || len(got) != 0 {
+		t.Errorf("an empty ban set did not travel as one: %v, %v", got, ok)
 	}
 }
 
-// A relay restarts with nothing. It must not admit anyone until the control
-// plane has told it who, and it must report whoever reconnects meanwhile.
-func TestNew_EmptyRegistryAdmitsNobody(t *testing.T) {
+func TestMet_LatestClaimsWin(t *testing.T) {
 	r := New()
-	if r.Admitted("aa") {
-		t.Fatal("a fresh relay admitted a machine it has never been told about")
-	}
-	r.Offer("aa", "", "")
-	if got := pendingNames(t, r); len(got) != 1 {
-		t.Errorf("pending = %v, want the reconnecting machine reported", got)
+	r.Met(Worker{ID: "AA", Name: "old"})
+	r.Met(Worker{ID: "aa", Name: "new"})
+	r.Met(Worker{ID: "bb"})
+	got := r.Known()
+	if len(got) != 2 || got[0].Name != "new" {
+		t.Errorf("known = %+v, want aa (named new) and bb", got)
 	}
 }

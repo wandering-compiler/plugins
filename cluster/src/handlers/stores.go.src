@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
@@ -38,6 +40,23 @@ func (s relayStore) ListEnabled(ctx context.Context) ([]Relay, error) {
 	return out, nil
 }
 
+func (s relayStore) Get(ctx context.Context, id string) (Relay, error) {
+	r, err := s.q.GetRelay(ctx, &pb.GetRelayReq{Id: id})
+	if status.Code(err) == codes.NotFound {
+		return Relay{}, ErrRelayNotFound
+	}
+	if err != nil {
+		return Relay{}, err
+	}
+	if r.GetId() == "" {
+		// A single-row read that matched nothing. Whether the generated read
+		// answers NotFound or an empty row is the bundle's choice; both mean
+		// the same thing here.
+		return Relay{}, ErrRelayNotFound
+	}
+	return Relay{ID: r.GetId(), Name: r.GetName(), URL: r.GetUrl(), Fingerprint: r.GetCertFingerprint()}, nil
+}
+
 func (s relayStore) RecordReached(ctx context.Context, id string) error {
 	_, err := s.m.RecordRelayReached(ctx, &pb.RecordRelayReachedReq{Id: id, At: timestamppb.Now()})
 	return err
@@ -58,32 +77,16 @@ type workerRegistry struct {
 	m pb.WorkerMutationClient
 }
 
-func (s workerRegistry) Decisions(ctx context.Context, relayID string) ([]string, []string, error) {
-	approved, err := s.fingerprints(ctx, relayID, pb.WorkerState_WORKER_STATE_APPROVED)
-	if err != nil {
-		return nil, nil, err
-	}
-	denied, err := s.fingerprints(ctx, relayID, pb.WorkerState_WORKER_STATE_DENIED)
-	if err != nil {
-		// Both or neither. Sending an approved list without the denied one
-		// would have the relay REPLACE its denial set with nothing — which is
-		// how a half-failed sweep would quietly re-admit everyone who had been
-		// turned away.
-		return nil, nil, err
-	}
-	return approved, denied, nil
-}
-
-func (s workerRegistry) fingerprints(ctx context.Context, relayID string, state pb.WorkerState) ([]string, error) {
-	resp, err := s.q.FingerprintsByState(ctx, &pb.FingerprintsByStateReq{RelayId: relayID, State: state})
+func (s workerRegistry) Banned(ctx context.Context) ([]string, error) {
+	resp, err := s.q.FingerprintsByState(ctx, &pb.FingerprintsByStateReq{State: pb.WorkerState_WORKER_STATE_BANNED})
 	if err != nil {
 		return nil, err
 	}
 	return resp.GetFingerprints(), nil
 }
 
-func (s workerRegistry) RecordPending(ctx context.Context, relayID string, w *pb.PendingWorker) error {
-	_, err := s.m.RecordPendingWorker(ctx, &pb.RecordPendingWorkerReq{
+func (s workerRegistry) Record(ctx context.Context, relayID string, w *pb.KnownWorker) error {
+	_, err := s.m.RecordWorker(ctx, &pb.RecordWorkerReq{
 		CertFingerprint: w.GetCertFingerprint(),
 		Name:            w.GetName(),
 		DeviceId:        w.GetDeviceId(),
@@ -92,9 +95,9 @@ func (s workerRegistry) RecordPending(ctx context.Context, relayID string, w *pb
 	return err
 }
 
-func (s workerRegistry) PendingCount(ctx context.Context) (int, error) {
+func (s workerRegistry) EnrolledCount(ctx context.Context) (int, error) {
 	resp, err := s.q.CountWorkersByState(ctx, &pb.CountWorkersByStateReq{
-		State: pb.WorkerState_WORKER_STATE_PENDING,
+		State: pb.WorkerState_WORKER_STATE_ENROLLED,
 	})
 	if err != nil {
 		return 0, err

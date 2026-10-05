@@ -1,13 +1,14 @@
 package relayserver
 
 import (
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 
+	"google.golang.org/grpc"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
 )
@@ -19,7 +20,10 @@ import (
 // admission happens before there is anything to carry — a machine has to be
 // able to connect, be seen, and wait, without being handed a socket the relay
 // would then have to police.
-func ServeTunnels(lis net.Listener, workers *workeradmit.Registry, backends *Backends, onError func(error)) error {
+//
+// opts are added to every tunnel's client connection AFTER the cluster's own
+// (keepalive, MaxMessage — see tunnel.ClientOverConn), so they can override.
+func ServeTunnels(lis net.Listener, workers *workeradmit.Registry, backends *Backends, onError func(error), opts ...grpc.DialOption) error {
 	if onError == nil {
 		onError = func(error) {}
 	}
@@ -29,7 +33,7 @@ func ServeTunnels(lis net.Listener, workers *workeradmit.Registry, backends *Bac
 			return err
 		}
 		go func() {
-			if err := acceptTunnel(c, workers, backends); err != nil {
+			if err := acceptTunnel(c, workers, backends, opts); err != nil {
 				_ = c.Close()
 				onError(err)
 			}
@@ -37,7 +41,7 @@ func ServeTunnels(lis net.Listener, workers *workeradmit.Registry, backends *Bac
 	}
 }
 
-func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends) error {
+func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends, opts []grpc.DialOption) error {
 	tc, ok := c.(*tls.Conn)
 	if !ok {
 		// The listener is supposed to be TLS-wrapped. A plain connection here
@@ -48,23 +52,29 @@ func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends)
 	if err := tc.Handshake(); err != nil {
 		return fmt.Errorf("relay: tunnel handshake: %w", err)
 	}
+	// The listener REQUIRES a certificate and verifies it against this relay's
+	// CA (main wires tls.RequireAndVerifyClientCert): a tunnel carries work,
+	// and unlike the attach listener there is no enrolment to let through.
+	// Checked again here so a listener built without that rule fails closed.
 	certs := tc.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return errors.New("relay: the tunnel presented no certificate, so it has no identity")
+	if len(certs) == 0 || len(tc.ConnectionState().VerifiedChains) == 0 {
+		return errors.New("relay: the tunnel presented no verified certificate, so it has no identity — " +
+			"the tunnel listener must require and verify client certificates against the relay's CA")
 	}
-	sum := sha256.Sum256(certs[0].Raw)
-	fp := hex.EncodeToString(sum[:])
+	// The KEY's fingerprint, as everywhere a worker is identified: the
+	// certificate is renewed every few weeks, the key — and so the ban — is not.
+	fp := identity.WorkerID(certs[0])
 
-	// Checked HERE and not only at Attach, because approval can be withdrawn
-	// between the two: a worker that attached while approved and opened its
-	// tunnel a second later must not keep the tunnel if the decision changed.
+	// Checked HERE and not only at Attach, because a ban can land between the
+	// two: a worker that attached a second before it was banned must not get
+	// a tunnel after.
 	if !workers.Admitted(fp) {
-		return fmt.Errorf("relay: %s opened a tunnel without being admitted", fp)
+		return fmt.Errorf("relay: banned worker %s opened a tunnel", fp)
 	}
 
 	conn, err := tunnel.ClientOverConn(tc, "passthrough:///worker", func() {
 		backends.Remove(fp)
-	})
+	}, opts...)
 	if err != nil {
 		return fmt.Errorf("relay: turning the tunnel around: %w", err)
 	}

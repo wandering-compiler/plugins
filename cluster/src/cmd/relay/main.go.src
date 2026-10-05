@@ -1,15 +1,21 @@
 // Command relay is one relay server: it accepts work from a control plane and
 // holds a queue in front of the workers connected to it.
 //
-// It stores nothing. Capacity, queue, tickets and admission all live in
-// memory, and a restart drops every one of them — which is safe because the
-// control plane sends the complete decision sets on every contact and workers
-// reconnect forever.
+// It stores nothing but its keys. Capacity, queue, tickets, reservations,
+// registration codes and the ban set all live in memory, and a restart drops
+// every one of them — which is safe because the control plane sends the
+// complete ban set on every call and workers reconnect forever.
+//
+// Its two KEYS are the exception, and both must outlive the process: its own
+// certificate (pinned by the control plane and every caller) and its CA (which
+// signed every worker certificate it ever issued — a new CA would orphan the
+// whole fleet).
 //
 // # Run it
 //
 //	relay --listen :13444 --proxy-address relay.example.com:9000 \
 //	      --cert /etc/relay/tls.crt --key /etc/relay/tls.key \
+//	      --ca-cert /run/secrets/relay-ca.crt --ca-key /run/secrets/relay-ca.key \
 //	      --control-plane-fingerprint <hex>
 //
 // At startup it prints its OWN certificate fingerprint. That string is what an
@@ -37,6 +43,7 @@ import (
 
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/regcode"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
@@ -57,6 +64,13 @@ type config struct {
 	controlPin   string
 	capacity     int
 	ticketTTL    time.Duration
+	drainTimeout time.Duration
+	pollInterval time.Duration
+	pollTimeout  time.Duration
+	caCertPath   string
+	caKeyPath    string
+	certLifetime time.Duration
+	codeTTL      time.Duration
 }
 
 func main() {
@@ -68,6 +82,9 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "issue-worker" {
+		return issueWorker(os.Args[2:], os.Stdout)
+	}
 	cfg := config{}
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
 	fs.StringVar(&cfg.listen, "listen", envOr("RELAY_LISTEN", ":13444"),
@@ -77,8 +94,8 @@ func run() error {
 			"--listen because the management port pins the control plane's certificate and a "+
 			"worker does not hold it")
 	fs.StringVar(&cfg.tunnelListen, "tunnel-listen", envOr("RELAY_TUNNEL_LISTEN", ":13445"),
-		"address WORKERS dial to offer their work channel — a separate listener from --listen, "+
-			"because a worker connects and waits for approval before there is any work to carry")
+		"address WORKERS dial to offer their work channel — a separate listener from --attach-listen, "+
+			"because it REQUIRES a worker certificate, while attach must let an enrolling worker in without one")
 	fs.StringVar(&cfg.proxyListen, "proxy-listen", envOr("RELAY_PROXY_LISTEN", ":9000"),
 		"address CALLERS send work to, redeeming the ticket the control plane granted")
 	fs.StringVar(&cfg.proxyAddress, "proxy-address", os.Getenv("RELAY_PROXY_ADDRESS"),
@@ -86,15 +103,30 @@ func run() error {
 	fs.StringVar(&cfg.certPath, "cert", os.Getenv("RELAY_CERT"), "PEM certificate this relay presents")
 	fs.StringVar(&cfg.keyPath, "key", os.Getenv("RELAY_KEY"), "PEM private key for --cert")
 	fs.StringVar(&cfg.identityDir, "identity-dir", os.Getenv("RELAY_IDENTITY_DIR"),
-		"mint-or-load this relay's identity in this directory instead of supplying --cert/--key. "+
-			"The certificate is self-signed and long-lived; revocation here is an operator changing "+
-			"the fingerprint on the relay's row, not an expiry")
+		"mint-or-load this relay's identity AND its worker CA in this directory instead of supplying "+
+			"--cert/--key and --ca-cert/--ca-key (dev). The certificate is self-signed and pinned: replacing "+
+			"it is an edit to the relay's row. Keep the directory: a new CA orphans every enrolled worker")
+	fs.StringVar(&cfg.caCertPath, "ca-cert", os.Getenv("RELAY_CA_CERT"),
+		"PEM certificate of the CA this relay issues WORKER certificates from (production: a secret)")
+	fs.StringVar(&cfg.caKeyPath, "ca-key", os.Getenv("RELAY_CA_KEY"), "PEM private key for --ca-cert")
+	fs.DurationVar(&cfg.certLifetime, "worker-cert-lifetime",
+		envDuration("RELAY_WORKER_CERT_LIFETIME", relayserver.DefaultWorkerCertLifetime),
+		"how long an issued worker certificate lasts; workers renew well before, and a forgotten ban runs out with it")
+	fs.DurationVar(&cfg.codeTTL, "registration-code-ttl", envDuration("RELAY_REGISTRATION_CODE_TTL", 15*time.Minute),
+		"how long a one-time registration code stays usable")
 	fs.StringVar(&cfg.controlPin, "control-plane-fingerprint", os.Getenv("RELAY_CONTROL_PLANE_FINGERPRINT"),
 		"lowercase hex SHA-256 of the control plane's client certificate; nothing else may manage this relay")
 	fs.IntVar(&cfg.capacity, "capacity", envInt("RELAY_CAPACITY", 0),
 		"OPTIONAL ceiling on concurrent tasks; 0 means whatever the attached workers add up to")
 	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("RELAY_TICKET_TTL", 30*time.Second),
 		"how long a granted ticket stays claimable — TIME TO CLAIM, not a cap on how long work may run")
+	fs.DurationVar(&cfg.drainTimeout, "drain-timeout", envDuration("RELAY_DRAIN_TIMEOUT", 15*time.Minute),
+		"on SIGTERM, how long to wait for running work after draining before stopping anyway — at "+
+			"least the longest task this pool runs; the supervisor's kill timeout must be longer still")
+	fs.DurationVar(&cfg.pollInterval, "poll-interval", envDuration("RELAY_POLL_INTERVAL", relaycore.DefaultPollInterval),
+		"how often a client holding a polled reservation is told to ask again")
+	fs.DurationVar(&cfg.pollTimeout, "poll-timeout", envDuration("RELAY_POLL_TIMEOUT", relaycore.DefaultPollTimeout),
+		"how long a polled reservation survives without a poll before it is abandoned — a few poll intervals")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -127,25 +159,44 @@ func run() error {
 	log.Printf("certificate fingerprint: %s", relaydial.Fingerprint(leaf))
 	log.Printf("  ^ paste this into the relay's row in the control plane, after checking it matches")
 
-	pool, err := relaycore.New(relaycore.Options{Capacity: cfg.capacity, TicketTTL: cfg.ticketTTL})
+	if cfg.pollTimeout < 2*cfg.pollInterval {
+		// A client told to come back every interval must survive one late
+		// poll, or obedient clients lose their place to jitter.
+		return fmt.Errorf("--poll-timeout (%s) must be at least twice --poll-interval (%s)", cfg.pollTimeout, cfg.pollInterval)
+	}
+	pool, err := relaycore.New(relaycore.Options{Capacity: cfg.capacity, TicketTTL: cfg.ticketTTL, PollTimeout: cfg.pollTimeout})
 	if err != nil {
 		return err
 	}
+	ca, err := relayCA(cfg)
+	if err != nil {
+		return err
+	}
+	regCodes, err := regcode.New(cfg.codeTTL, nil)
+	if err != nil {
+		return err
+	}
+	workers := workeradmit.New()
+
 	controlPin := strings.ToLower(strings.TrimSpace(cfg.controlPin))
-	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+	// Every server here takes tunnel.ServerKeepalive: it pings its peers on
+	// the cluster schedule and accepts their pings (lib/tunnel/keepalive.go).
+	// The management server also applies the ban set every control-plane call
+	// carries, before the call runs (relayserver.BanInterceptors).
+	mgmtOpts := append(tunnel.ServerKeepalive(), relayserver.BanServerOptions(workers)...)
+	srv := grpc.NewServer(append(mgmtOpts, grpc.Creds(credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{crt},
 		MinVersion:   tls.VersionTLS13,
 		// The control plane is ONE known peer, so its certificate is pinned
 		// exactly as it pins this relay's — symmetric, and neither side needs
 		// a CA. Workers are the opposite case (a fleet that comes and goes)
-		// and are admitted on a different listener by approval, not by this.
+		// and are verified against this relay's CA on their own listeners.
 		ClientAuth:            tls.RequireAnyClientCert,
 		VerifyPeerCertificate: relaydial.PinnedVerifier("control plane", controlPin),
 		// A resumed session never reaches VerifyPeerCertificate; this hook runs
 		// on both paths, so the pin holds past the first connection (G123).
 		VerifyConnection: relaydial.PinnedConnectionVerifier("control plane", controlPin),
-	})))
-	workers := workeradmit.New()
+	})))...)
 	backends := relayserver.NewBackends()
 	// Capacity comes from the FLEET, and this is the wire that carries it: a
 	// worker attaching, draining, going unhealthy or hanging up changes the
@@ -163,23 +214,34 @@ func run() error {
 	pb.RegisterClusterServiceServer(srv, &relayserver.Server{
 		Pool:             pool,
 		Workers:          workers,
+		Backends:         backends,
+		Codes:            regCodes,
 		ProxyAddress:     cfg.proxyAddress,
 		ProxyFingerprint: relaydial.Fingerprint(leaf),
+		PollInterval:     cfg.pollInterval,
 	})
 
-	// The WORKER listener. Different audience, different rule: the control
-	// plane is one pinned peer, workers are a fleet admitted by approval, so
-	// this asks for a certificate and lets the registry decide.
-	workerTLS := &tls.Config{
+	// The WORKER listeners. Different audience, different rule: the control
+	// plane is one pinned peer, workers are a fleet whose certificates this
+	// relay's CA issued — so the handshake verifies the chain (and expiry),
+	// and the ban set decides the rest.
+	//
+	// The TUNNEL requires a certificate: it carries work and nothing enrols on
+	// it. ATTACH verifies one IF GIVEN, because enrolment is the call a worker
+	// makes before it has one; every call there that needs one checks itself.
+	tunnelTLS := &tls.Config{
 		Certificates: []tls.Certificate{crt},
 		MinVersion:   tls.VersionTLS13,
-		ClientAuth:   tls.RequireAnyClientCert,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    ca.Pool(),
 	}
+	attachTLS := tunnelTLS.Clone()
+	attachTLS.ClientAuth = tls.VerifyClientCertIfGiven
 	tunnelRaw, err := net.Listen("tcp", cfg.tunnelListen)
 	if err != nil {
 		return fmt.Errorf("listening for worker tunnels on %s: %w", cfg.tunnelListen, err)
 	}
-	tunnelLis := tls.NewListener(tunnelRaw, workerTLS)
+	tunnelLis := tls.NewListener(tunnelRaw, tunnelTLS)
 	go func() {
 		err := relayserver.ServeTunnels(tunnelLis, workers, backends, func(e error) {
 			// Logged and dropped. A refused tunnel is one machine's problem,
@@ -193,13 +255,21 @@ func run() error {
 	}()
 
 	// The WORKER-ATTACH server: gRPC, worker TLS, its own port.
-	attachSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(workerTLS)))
+	attachSrv := grpc.NewServer(append(tunnel.ServerKeepalive(), grpc.Creds(credentials.NewTLS(attachTLS)))...)
 	// Backends is handed over so a worker's declared slots and its readiness
 	// land where scheduling can see them. The attach stream and the tunnel are
 	// separate connections; this is where the two halves meet.
 	workerpb.RegisterWorkerAttachServer(attachSrv, &relayserver.WorkerServer{
 		Workers:  workers,
 		Backends: backends,
+	})
+	// Enrolment and renewal share the attach listener: a worker already
+	// reaches it, and it is the one that lets a certificate-less handshake in.
+	workerpb.RegisterWorkerEnrollmentServer(attachSrv, &relayserver.Enrollment{
+		CA:       ca,
+		Codes:    regCodes,
+		Workers:  workers,
+		Lifetime: cfg.certLifetime,
 	})
 	attachLis, err := net.Listen("tcp", cfg.attachListen)
 	if err != nil {
@@ -242,19 +312,30 @@ func run() error {
 	log.Printf("management %s · attach %s · tunnels %s · callers %s · capacity %d · advertised %s",
 		cfg.listen, cfg.attachListen, cfg.tunnelListen, cfg.proxyListen, cfg.capacity, cfg.proxyAddress)
 
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(lis) }()
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-stop
-		// GracefulStop, not Stop: a caller holding a scheduling stream is
-		// holding a QUEUE PLACE, and cutting it drops work that was about to
-		// be placed. Everything else here is memory and is meant to be lost.
-		log.Print("shutting down")
-		proxy.GracefulStop()
-		attachSrv.GracefulStop()
-		srv.GracefulStop()
-	}()
-	return srv.Serve(lis)
+	select {
+	case err := <-served:
+		// The management listener failed on its own: nothing can manage this
+		// relay any more, so it is not one.
+		return err
+	case <-stop:
+	}
+	log.Printf("draining: no new work; waiting up to %s for running work", cfg.drainTimeout)
+	shutdownPlan{
+		pool:         pool,
+		proxy:        proxy,
+		management:   srv,
+		attach:       attachSrv,
+		tunnels:      tunnelLis,
+		drainTimeout: cfg.drainTimeout,
+		stopTimeout:  10 * time.Second,
+	}.run()
+	log.Print("stopped")
+	return nil
 }
 
 func envOr(k, def string) string {
@@ -317,4 +398,32 @@ func relayIdentity(cfg config) (tls.Certificate, error) {
 	}
 	return tls.Certificate{}, errors.New(
 		"this relay has no identity: pass --cert/--key, or --identity-dir to mint one")
+}
+
+// relayCA resolves the CA this relay issues worker certificates from.
+//
+// --ca-cert/--ca-key is the production shape: both are secrets, mounted, so
+// the CA survives every recreation of the task. --identity-dir keeps it next
+// to the relay's own identity (dev). NEVER minted anywhere else: a CA that
+// silently changed would invalidate every worker certificate this relay ever
+// issued, and the fleet would discover it one failed handshake at a time.
+func relayCA(cfg config) (*identity.CA, error) {
+	explicit := strings.TrimSpace(cfg.caCertPath) != "" || strings.TrimSpace(cfg.caKeyPath) != ""
+	minted := strings.TrimSpace(cfg.identityDir) != ""
+	switch {
+	case explicit && minted:
+		return nil, errors.New(
+			"--identity-dir cannot be combined with --ca-cert/--ca-key: a relay with two CAs " +
+				"has no answer to which one its workers chain to")
+	case explicit:
+		if strings.TrimSpace(cfg.caCertPath) == "" || strings.TrimSpace(cfg.caKeyPath) == "" {
+			return nil, errors.New("--ca-cert and --ca-key go together")
+		}
+		return identity.LoadCA(cfg.caCertPath, cfg.caKeyPath)
+	case minted:
+		return identity.LoadOrCreateCA(cfg.identityDir)
+	}
+	return nil, errors.New(
+		"this relay has no worker CA: pass --ca-cert/--ca-key, or --identity-dir to keep one there — " +
+			"without it no worker can enrol")
 }

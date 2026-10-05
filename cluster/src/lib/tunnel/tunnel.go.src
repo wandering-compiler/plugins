@@ -101,17 +101,21 @@ func (l *SingleConnListener) Addr() net.Addr { return l.conn.LocalAddr() }
 // TLS — the handshake happened when it was accepted, and that is also where
 // the worker's identity came from. Wrapping it again would mean a second
 // handshake inside the first.
+//
+// It carries work, so it is built with the cluster's keepalive and MaxMessage
+// in both directions (see keepalive.go); opts are applied after them.
+//
 // onClose fires when gRPC closes the socket. For a SINGLE-USE tunnel that is
 // the only honest death signal: the connection can never be re-established, so
 // closed means gone — whereas the connectivity state machine parks a broken
 // tunnel in TransientFailure or Idle indefinitely, retrying a dial that is
 // refused by construction, and a watcher waiting for Shutdown waits forever.
-func ClientOverConn(c net.Conn, dialTarget string, onClose func()) (*grpc.ClientConn, error) {
+func ClientOverConn(c net.Conn, dialTarget string, onClose func(), opts ...grpc.DialOption) (*grpc.ClientConn, error) {
 	if onClose != nil {
 		c = &closeNotifyConn{Conn: c, onClose: func() error { onClose(); return nil }}
 	}
 	var once sync.Once
-	return grpc.NewClient(dialTarget,
+	base := append(workDialOptions(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 			var out net.Conn
@@ -125,5 +129,9 @@ func ClientOverConn(c net.Conn, dialTarget string, onClose func()) (*grpc.Client
 				return nil, ErrClosed
 			}
 			return out, nil
-		}))
+		}),
+	)
+	// The caller's options go LAST, so a test (or a relay with reasons of its
+	// own) can override the defaults — gRPC applies dial options in order.
+	return grpc.NewClient(dialTarget, append(base, opts...)...)
 }

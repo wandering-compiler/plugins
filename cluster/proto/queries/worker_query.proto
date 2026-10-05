@@ -22,12 +22,16 @@ message ListWorkersResp {
   repeated Worker workers = 1;
 }
 
-// The fingerprints in one state for one relay. Parameterised by state rather
-// than split into two RPCs because an exchange needs BOTH sets and they differ
-// only in a number — two near-identical statements would be two places for the
-// same filter to go wrong.
+// The fingerprints in one state, across EVERY relay.
+//
+// Not per relay, although a worker's certificate is valid at one relay only:
+// the ban set travels on every call the control plane makes to any relay, and
+// a key banned anywhere is a key nobody wants anywhere. One statement per
+// call, rather than one per relay per placement, and a worker that moves
+// relays cannot outrun its ban by having been recorded at the old one.
 message FingerprintsByStateReq {
-  string relay_id = 1 [(w17.field) = { type: UUID }];
+  reserved 1;
+  reserved "relay_id";
   WorkerState state = 2;
 }
 
@@ -96,7 +100,7 @@ service WorkerQuery {
         dql:
           "SELECT ROWS_TO_ARRAY(w.cert_fingerprint) AS fingerprints "
           "FROM @module.Worker w "
-          "WHERE w.relay_id = :relay_id AND w.state = :state"
+          "WHERE w.state = :state"
       }
     };
   }

@@ -16,6 +16,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
 )
 
 // Fingerprint is the lowercase hex SHA-256 of a certificate's DER bytes — the
@@ -35,13 +37,18 @@ type Config struct {
 
 // Dial opens a connection to one relay, pinned to `want`.
 //
-// # Why the certificate is pinned instead of validated against a CA
+// # Why a RELAY is pinned, while workers get a CA
 //
-// A pinned fingerprint makes the trust decision EXPLICIT and local: an
-// operator pastes one string, and rotating a relay's certificate becomes an
-// edit to a row — an audit trail a CA-issued swap would not leave. It also
-// lets a relay hold a self-signed certificate, so standing one up needs no
-// enrolment ceremony.
+// A relay is one machine an operator registers on purpose, by pasting its
+// fingerprint into a row: the trust decision is explicit and local, and
+// rotating its certificate is an edit to that row — an audit trail a
+// CA-issued swap would not leave. The certificate may be self-signed and
+// long-lived, because what it is trusted by is the pin, not a calendar.
+//
+// Workers are the other case: a fleet that comes and goes is not pinned row
+// by row, so each relay is a CA for its own workers and issues them short-lived
+// certificates (lib/identity). The two rules meet in one place: a worker pins
+// its RELAY with this same verifier.
 //
 // Verification is therefore done by hand, which is why InsecureSkipVerify is
 // set: it turns off the CHAIN check, not the identity check. The identity
@@ -72,7 +79,9 @@ func Dial(cfg Config, target, want string) (*grpc.ClientConn, error) {
 		VerifyPeerCertificate: PinnedVerifier(target, want),
 		VerifyConnection:      PinnedConnectionVerifier(target, want),
 	}
-	return grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	// Keepalive like every other hop (tunnel.ClientKeepalive); the relay's
+	// management server accepts these pings.
+	return grpc.NewClient(target, tunnel.ClientKeepalive(), grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 }
 
 // PinnedVerifier is the identity check, named so it can be exercised without
@@ -110,9 +119,9 @@ func PinnedVerifier(target, want string) func([][]byte, [][]*x509.Certificate) e
 // is what makes the pin actually hold (gosec G123).
 //
 // It delegates to PinnedVerifier rather than re-deriving the fingerprint: the
-// pin was already written three times in this plugin (here and twice inline in
+// pin was once written three times in this plugin (here and twice inline in
 // workerconn), which is how the same gap came to exist in all three. One rule,
-// one implementation.
+// one implementation — workerconn now pins its relay through these two.
 func PinnedConnectionVerifier(target, want string) func(tls.ConnectionState) error {
 	verify := PinnedVerifier(target, want)
 	return func(cs tls.ConnectionState) error {

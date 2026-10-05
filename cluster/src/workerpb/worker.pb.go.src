@@ -93,7 +93,178 @@ func (x WorkerStatus_Readiness) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WorkerStatus_Readiness.Descriptor instead.
 func (WorkerStatus_Readiness) EnumDescriptor() ([]byte, []int) {
-	return file_worker_proto_rawDescGZIP(), []int{2, 0}
+	return file_worker_proto_rawDescGZIP(), []int{5, 0}
+}
+
+type EnrollReq struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The code, as the operator was shown it.
+	RegistrationCode string `protobuf:"bytes,1,opt,name=registration_code,json=registrationCode,proto3" json:"registration_code,omitempty"`
+	// DER PKCS#10 request for the worker's own key.
+	Csr []byte `protobuf:"bytes,2,opt,name=csr,proto3" json:"csr,omitempty"`
+	// Claims, as on AttachReq: for an operator to read, authorising nothing.
+	Name          string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	DeviceId      string `protobuf:"bytes,4,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnrollReq) Reset() {
+	*x = EnrollReq{}
+	mi := &file_worker_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnrollReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnrollReq) ProtoMessage() {}
+
+func (x *EnrollReq) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnrollReq.ProtoReflect.Descriptor instead.
+func (*EnrollReq) Descriptor() ([]byte, []int) {
+	return file_worker_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *EnrollReq) GetRegistrationCode() string {
+	if x != nil {
+		return x.RegistrationCode
+	}
+	return ""
+}
+
+func (x *EnrollReq) GetCsr() []byte {
+	if x != nil {
+		return x.Csr
+	}
+	return nil
+}
+
+func (x *EnrollReq) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *EnrollReq) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+type RenewReq struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// DER PKCS#10 request for the key of the certificate presented.
+	Csr           []byte `protobuf:"bytes,1,opt,name=csr,proto3" json:"csr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewReq) Reset() {
+	*x = RenewReq{}
+	mi := &file_worker_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewReq) ProtoMessage() {}
+
+func (x *RenewReq) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewReq.ProtoReflect.Descriptor instead.
+func (*RenewReq) Descriptor() ([]byte, []int) {
+	return file_worker_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RenewReq) GetCsr() []byte {
+	if x != nil {
+		return x.Csr
+	}
+	return nil
+}
+
+type Certificate struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// PEM certificate for the requested key.
+	CertificatePem []byte `protobuf:"bytes,1,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
+	// PEM of the relay's CA, for a worker that wants to keep it. The worker
+	// still pins the relay's own certificate; the CA is what the RELAY trusts.
+	CaPem         []byte `protobuf:"bytes,2,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Certificate) Reset() {
+	*x = Certificate{}
+	mi := &file_worker_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Certificate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Certificate) ProtoMessage() {}
+
+func (x *Certificate) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Certificate.ProtoReflect.Descriptor instead.
+func (*Certificate) Descriptor() ([]byte, []int) {
+	return file_worker_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Certificate) GetCertificatePem() []byte {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return nil
+}
+
+func (x *Certificate) GetCaPem() []byte {
+	if x != nil {
+		return x.CaPem
+	}
+	return nil
 }
 
 // WorkerMessage is anything a worker says about itself.
@@ -114,7 +285,7 @@ type WorkerMessage struct {
 
 func (x *WorkerMessage) Reset() {
 	*x = WorkerMessage{}
-	mi := &file_worker_proto_msgTypes[0]
+	mi := &file_worker_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -126,7 +297,7 @@ func (x *WorkerMessage) String() string {
 func (*WorkerMessage) ProtoMessage() {}
 
 func (x *WorkerMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_proto_msgTypes[0]
+	mi := &file_worker_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -139,7 +310,7 @@ func (x *WorkerMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerMessage.ProtoReflect.Descriptor instead.
 func (*WorkerMessage) Descriptor() ([]byte, []int) {
-	return file_worker_proto_rawDescGZIP(), []int{0}
+	return file_worker_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *WorkerMessage) GetMsg() isWorkerMessage_Msg {
@@ -185,7 +356,7 @@ func (*WorkerMessage_Status) isWorkerMessage_Msg() {}
 
 type AttachReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// What the machine calls itself, for the approval screen. A claim.
+	// What the machine calls itself, for the admin's worker list. A claim.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// The machine's own stable id across restarts and renames. Also a claim,
 	// and never used to authorise anything.
@@ -218,7 +389,7 @@ type AttachReq struct {
 
 func (x *AttachReq) Reset() {
 	*x = AttachReq{}
-	mi := &file_worker_proto_msgTypes[1]
+	mi := &file_worker_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -230,7 +401,7 @@ func (x *AttachReq) String() string {
 func (*AttachReq) ProtoMessage() {}
 
 func (x *AttachReq) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_proto_msgTypes[1]
+	mi := &file_worker_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -243,7 +414,7 @@ func (x *AttachReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachReq.ProtoReflect.Descriptor instead.
 func (*AttachReq) Descriptor() ([]byte, []int) {
-	return file_worker_proto_rawDescGZIP(), []int{1}
+	return file_worker_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AttachReq) GetName() string {
@@ -290,7 +461,7 @@ type WorkerStatus struct {
 
 func (x *WorkerStatus) Reset() {
 	*x = WorkerStatus{}
-	mi := &file_worker_proto_msgTypes[2]
+	mi := &file_worker_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -302,7 +473,7 @@ func (x *WorkerStatus) String() string {
 func (*WorkerStatus) ProtoMessage() {}
 
 func (x *WorkerStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_proto_msgTypes[2]
+	mi := &file_worker_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -315,7 +486,7 @@ func (x *WorkerStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerStatus.ProtoReflect.Descriptor instead.
 func (*WorkerStatus) Descriptor() ([]byte, []int) {
-	return file_worker_proto_rawDescGZIP(), []int{2}
+	return file_worker_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *WorkerStatus) GetReadiness() WorkerStatus_Readiness {
@@ -333,11 +504,16 @@ func (x *WorkerStatus) GetNote() string {
 }
 
 // One state change. Exactly one field is set.
+//
+// There used to be a `waiting` event for a machine connected and not yet
+// approved by an operator. Enrolment by registration code replaced approval:
+// a worker that can complete the handshake was already let in by whoever gave
+// it the code, so there is nothing left to wait for. Field 1 stays reserved so
+// no later field reuses its number.
 type AttachEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
 	//
-	//	*AttachEvent_Waiting
 	//	*AttachEvent_Admitted
 	Event         isAttachEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
@@ -346,7 +522,7 @@ type AttachEvent struct {
 
 func (x *AttachEvent) Reset() {
 	*x = AttachEvent{}
-	mi := &file_worker_proto_msgTypes[3]
+	mi := &file_worker_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -358,7 +534,7 @@ func (x *AttachEvent) String() string {
 func (*AttachEvent) ProtoMessage() {}
 
 func (x *AttachEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_proto_msgTypes[3]
+	mi := &file_worker_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -371,21 +547,12 @@ func (x *AttachEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachEvent.ProtoReflect.Descriptor instead.
 func (*AttachEvent) Descriptor() ([]byte, []int) {
-	return file_worker_proto_rawDescGZIP(), []int{3}
+	return file_worker_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AttachEvent) GetEvent() isAttachEvent_Event {
 	if x != nil {
 		return x.Event
-	}
-	return nil
-}
-
-func (x *AttachEvent) GetWaiting() *Waiting {
-	if x != nil {
-		if x, ok := x.Event.(*AttachEvent_Waiting); ok {
-			return x.Waiting
-		}
 	}
 	return nil
 }
@@ -403,60 +570,13 @@ type isAttachEvent_Event interface {
 	isAttachEvent_Event()
 }
 
-type AttachEvent_Waiting struct {
-	Waiting *Waiting `protobuf:"bytes,1,opt,name=waiting,proto3,oneof"`
-}
-
 type AttachEvent_Admitted struct {
 	Admitted *Admitted `protobuf:"bytes,2,opt,name=admitted,proto3,oneof"`
 }
 
-func (*AttachEvent_Waiting) isAttachEvent_Event() {}
-
 func (*AttachEvent_Admitted) isAttachEvent_Event() {}
 
-// Waiting — connected, not approved yet, and doing nothing.
-//
-// It carries no fields and that is deliberate: there is no queue position to
-// report and no estimate to give, because approval is a human looking at a
-// screen. The worker's correct behaviour is to stay connected and be visible.
-type Waiting struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Waiting) Reset() {
-	*x = Waiting{}
-	mi := &file_worker_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Waiting) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Waiting) ProtoMessage() {}
-
-func (x *Waiting) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Waiting.ProtoReflect.Descriptor instead.
-func (*Waiting) Descriptor() ([]byte, []int) {
-	return file_worker_proto_rawDescGZIP(), []int{4}
-}
-
-// Admitted — approved, and may be given work.
+// Admitted — attached, and may be given work.
 type Admitted struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The slot count the relay recorded for this worker.
@@ -475,7 +595,7 @@ type Admitted struct {
 
 func (x *Admitted) Reset() {
 	*x = Admitted{}
-	mi := &file_worker_proto_msgTypes[5]
+	mi := &file_worker_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -487,7 +607,7 @@ func (x *Admitted) String() string {
 func (*Admitted) ProtoMessage() {}
 
 func (x *Admitted) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_proto_msgTypes[5]
+	mi := &file_worker_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -500,7 +620,7 @@ func (x *Admitted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Admitted.ProtoReflect.Descriptor instead.
 func (*Admitted) Descriptor() ([]byte, []int) {
-	return file_worker_proto_rawDescGZIP(), []int{5}
+	return file_worker_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Admitted) GetSlots() uint32 {
@@ -514,7 +634,17 @@ var File_worker_proto protoreflect.FileDescriptor
 
 const file_worker_proto_rawDesc = "" +
 	"\n" +
-	"\fworker.proto\x12\x12w17.cluster.worker\"\x8f\x01\n" +
+	"\fworker.proto\x12\x12w17.cluster.worker\"{\n" +
+	"\tEnrollReq\x12+\n" +
+	"\x11registration_code\x18\x01 \x01(\tR\x10registrationCode\x12\x10\n" +
+	"\x03csr\x18\x02 \x01(\fR\x03csr\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1b\n" +
+	"\tdevice_id\x18\x04 \x01(\tR\bdeviceId\"\x1c\n" +
+	"\bRenewReq\x12\x10\n" +
+	"\x03csr\x18\x01 \x01(\fR\x03csr\"M\n" +
+	"\vCertificate\x12'\n" +
+	"\x0fcertificate_pem\x18\x01 \x01(\fR\x0ecertificatePem\x12\x15\n" +
+	"\x06ca_pem\x18\x02 \x01(\fR\x05caPem\"\x8f\x01\n" +
 	"\rWorkerMessage\x12;\n" +
 	"\bannounce\x18\x01 \x01(\v2\x1d.w17.cluster.worker.AttachReqH\x00R\bannounce\x12:\n" +
 	"\x06status\x18\x02 \x01(\v2 .w17.cluster.worker.WorkerStatusH\x00R\x06statusB\x05\n" +
@@ -530,16 +660,17 @@ const file_worker_proto_rawDesc = "" +
 	"\tReadiness\x12\t\n" +
 	"\x05READY\x10\x00\x12\f\n" +
 	"\bDRAINING\x10\x01\x12\r\n" +
-	"\tUNHEALTHY\x10\x02\"\x8b\x01\n" +
-	"\vAttachEvent\x127\n" +
-	"\awaiting\x18\x01 \x01(\v2\x1b.w17.cluster.worker.WaitingH\x00R\awaiting\x12:\n" +
+	"\tUNHEALTHY\x10\x02\"a\n" +
+	"\vAttachEvent\x12:\n" +
 	"\badmitted\x18\x02 \x01(\v2\x1c.w17.cluster.worker.AdmittedH\x00R\badmittedB\a\n" +
-	"\x05event\"\t\n" +
-	"\aWaiting\" \n" +
+	"\x05eventJ\x04\b\x01\x10\x02R\awaiting\" \n" +
 	"\bAdmitted\x12\x14\n" +
 	"\x05slots\x18\x01 \x01(\rR\x05slots2`\n" +
 	"\fWorkerAttach\x12P\n" +
-	"\x06Attach\x12!.w17.cluster.worker.WorkerMessage\x1a\x1f.w17.cluster.worker.AttachEvent(\x010\x01BJZHgithub.com/wandering-compiler/platform/plugins/cluster/workerpb;workerpbb\x06proto3"
+	"\x06Attach\x12!.w17.cluster.worker.WorkerMessage\x1a\x1f.w17.cluster.worker.AttachEvent(\x010\x012\xa4\x01\n" +
+	"\x10WorkerEnrollment\x12H\n" +
+	"\x06Enroll\x12\x1d.w17.cluster.worker.EnrollReq\x1a\x1f.w17.cluster.worker.Certificate\x12F\n" +
+	"\x05Renew\x12\x1c.w17.cluster.worker.RenewReq\x1a\x1f.w17.cluster.worker.CertificateBJZHgithub.com/wandering-compiler/platform/plugins/cluster/workerpb;workerpbb\x06proto3"
 
 var (
 	file_worker_proto_rawDescOnce sync.Once
@@ -554,30 +685,35 @@ func file_worker_proto_rawDescGZIP() []byte {
 }
 
 var file_worker_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_worker_proto_goTypes = []any{
 	(WorkerStatus_Readiness)(0), // 0: w17.cluster.worker.WorkerStatus.Readiness
-	(*WorkerMessage)(nil),       // 1: w17.cluster.worker.WorkerMessage
-	(*AttachReq)(nil),           // 2: w17.cluster.worker.AttachReq
-	(*WorkerStatus)(nil),        // 3: w17.cluster.worker.WorkerStatus
-	(*AttachEvent)(nil),         // 4: w17.cluster.worker.AttachEvent
-	(*Waiting)(nil),             // 5: w17.cluster.worker.Waiting
-	(*Admitted)(nil),            // 6: w17.cluster.worker.Admitted
+	(*EnrollReq)(nil),           // 1: w17.cluster.worker.EnrollReq
+	(*RenewReq)(nil),            // 2: w17.cluster.worker.RenewReq
+	(*Certificate)(nil),         // 3: w17.cluster.worker.Certificate
+	(*WorkerMessage)(nil),       // 4: w17.cluster.worker.WorkerMessage
+	(*AttachReq)(nil),           // 5: w17.cluster.worker.AttachReq
+	(*WorkerStatus)(nil),        // 6: w17.cluster.worker.WorkerStatus
+	(*AttachEvent)(nil),         // 7: w17.cluster.worker.AttachEvent
+	(*Admitted)(nil),            // 8: w17.cluster.worker.Admitted
 }
 var file_worker_proto_depIdxs = []int32{
-	2, // 0: w17.cluster.worker.WorkerMessage.announce:type_name -> w17.cluster.worker.AttachReq
-	3, // 1: w17.cluster.worker.WorkerMessage.status:type_name -> w17.cluster.worker.WorkerStatus
+	5, // 0: w17.cluster.worker.WorkerMessage.announce:type_name -> w17.cluster.worker.AttachReq
+	6, // 1: w17.cluster.worker.WorkerMessage.status:type_name -> w17.cluster.worker.WorkerStatus
 	0, // 2: w17.cluster.worker.AttachReq.readiness:type_name -> w17.cluster.worker.WorkerStatus.Readiness
 	0, // 3: w17.cluster.worker.WorkerStatus.readiness:type_name -> w17.cluster.worker.WorkerStatus.Readiness
-	5, // 4: w17.cluster.worker.AttachEvent.waiting:type_name -> w17.cluster.worker.Waiting
-	6, // 5: w17.cluster.worker.AttachEvent.admitted:type_name -> w17.cluster.worker.Admitted
-	1, // 6: w17.cluster.worker.WorkerAttach.Attach:input_type -> w17.cluster.worker.WorkerMessage
-	4, // 7: w17.cluster.worker.WorkerAttach.Attach:output_type -> w17.cluster.worker.AttachEvent
-	7, // [7:8] is the sub-list for method output_type
-	6, // [6:7] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	8, // 4: w17.cluster.worker.AttachEvent.admitted:type_name -> w17.cluster.worker.Admitted
+	4, // 5: w17.cluster.worker.WorkerAttach.Attach:input_type -> w17.cluster.worker.WorkerMessage
+	1, // 6: w17.cluster.worker.WorkerEnrollment.Enroll:input_type -> w17.cluster.worker.EnrollReq
+	2, // 7: w17.cluster.worker.WorkerEnrollment.Renew:input_type -> w17.cluster.worker.RenewReq
+	7, // 8: w17.cluster.worker.WorkerAttach.Attach:output_type -> w17.cluster.worker.AttachEvent
+	3, // 9: w17.cluster.worker.WorkerEnrollment.Enroll:output_type -> w17.cluster.worker.Certificate
+	3, // 10: w17.cluster.worker.WorkerEnrollment.Renew:output_type -> w17.cluster.worker.Certificate
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_worker_proto_init() }
@@ -585,12 +721,11 @@ func file_worker_proto_init() {
 	if File_worker_proto != nil {
 		return
 	}
-	file_worker_proto_msgTypes[0].OneofWrappers = []any{
+	file_worker_proto_msgTypes[3].OneofWrappers = []any{
 		(*WorkerMessage_Announce)(nil),
 		(*WorkerMessage_Status)(nil),
 	}
-	file_worker_proto_msgTypes[3].OneofWrappers = []any{
-		(*AttachEvent_Waiting)(nil),
+	file_worker_proto_msgTypes[6].OneofWrappers = []any{
 		(*AttachEvent_Admitted)(nil),
 	}
 	type x struct{}
@@ -599,9 +734,9 @@ func file_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_worker_proto_rawDesc), len(file_worker_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_worker_proto_goTypes,
 		DependencyIndexes: file_worker_proto_depIdxs,

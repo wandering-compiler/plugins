@@ -1,0 +1,153 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
+)
+
+// handleSep joins a relay's registry id and its own reservation id into the
+// handle the project hands out. A dot, because neither half can contain one:
+// registry ids are UUIDs and relay reservation ids are hex.
+const handleSep = "."
+
+// ReserveTask places a reservation on the least-loaded relay, exactly as
+// ScheduleTask chooses — and falls through the same failures — but answers at
+// once with a handle to poll instead of holding a stream.
+//
+// The handle is `<relay_id>.<relay_reservation_id>`. Naming the relay in it is
+// what keeps the control plane stateless: any replica can route the poll, and
+// none has to remember where anything was placed.
+func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.ReserveTaskReq) (*pb.ReservationState, error) {
+	ctx, err := h.withBans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cands, err := h.placeable(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cands.close()
+
+	var lastErr error
+	for _, c := range cands.list {
+		st, err := pb.NewClusterServiceClient(c.conn).ReserveTask(ctx, req)
+		if err == nil {
+			return stampReservation(st, c.Relay), nil
+		}
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		if refusal.ReasonOf(err) == "" {
+			// No reason: the connection that just answered its stats failed
+			// under us. Not this relay's opinion of the request.
+			h.note(ctx, c.Relay, err)
+			err = errors.Join(errUnreachable, err)
+		}
+		if !fallsThrough(err) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, status.Errorf(codes.Unavailable,
+		"cluster: no registered relay could take a reservation (%d enabled, %d placeable); last error: %v",
+		cands.enabled, len(cands.list), lastErr)
+}
+
+// GetReservation polls the relay the handle names.
+//
+// A relay that no longer has a registry row answers `expired` like a
+// reservation the relay forgot: the place cannot be collected either way. A
+// relay that cannot be REACHED is an error, not `expired` — a blip must not
+// cost a client its place, and the relay abandons a reservation that really is
+// unreachable for long enough on its own.
+func (h *ClusterServiceHandler) GetReservation(ctx context.Context, req *pb.GetReservationReq) (*pb.ReservationState, error) {
+	ctx, err := h.withBans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	relay, local, gone, err := h.resolveHandle(ctx, req.GetReservation())
+	if err != nil {
+		return nil, err
+	}
+	if gone {
+		return &pb.ReservationState{
+			Reservation: req.GetReservation(),
+			State: &pb.ReservationState_Expired{Expired: &pb.ReservationExpired{
+				Reason: refusal.ReservationUnknown,
+			}},
+		}, nil
+	}
+	conn, err := h.dialReady(ctx, relay)
+	if err != nil {
+		h.note(ctx, relay, err)
+		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
+	}
+	defer func() { _ = conn.Close() }()
+	st, err := pb.NewClusterServiceClient(conn).GetReservation(ctx, &pb.GetReservationReq{Reservation: local})
+	if err != nil {
+		return nil, err
+	}
+	return stampReservation(st, relay), nil
+}
+
+// CancelReservation forwards a cancellation. Idempotent like the relay's: a
+// handle whose relay is gone has nothing left to cancel.
+func (h *ClusterServiceHandler) CancelReservation(ctx context.Context, req *pb.CancelReservationReq) (*pb.CancelReservationResp, error) {
+	ctx, err := h.withBans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	relay, local, gone, err := h.resolveHandle(ctx, req.GetReservation())
+	if err != nil {
+		return nil, err
+	}
+	if gone {
+		return &pb.CancelReservationResp{}, nil
+	}
+	conn, err := h.dialReady(ctx, relay)
+	if err != nil {
+		h.note(ctx, relay, err)
+		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
+	}
+	defer func() { _ = conn.Close() }()
+	return pb.NewClusterServiceClient(conn).CancelReservation(ctx, &pb.CancelReservationReq{Reservation: local})
+}
+
+// resolveHandle splits a handle and finds its relay. `gone` is a well-formed
+// handle whose relay the registry no longer holds.
+func (h *ClusterServiceHandler) resolveHandle(ctx context.Context, handle string) (Relay, string, bool, error) {
+	relayID, local, ok := strings.Cut(handle, handleSep)
+	if !ok || relayID == "" || local == "" {
+		return Relay{}, "", false, status.Error(codes.InvalidArgument,
+			"cluster: that is not a reservation handle — pass back exactly what ReserveTask returned")
+	}
+	relay, err := h.Relays.Get(ctx, relayID)
+	if errors.Is(err, ErrRelayNotFound) {
+		return Relay{}, "", true, nil
+	}
+	if err != nil {
+		return Relay{}, "", false, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
+	}
+	return relay, local, false, nil
+}
+
+// stampReservation turns a relay's answer into the project's: the handle gains
+// the relay's registry id, and the relay's name goes where a relay cannot put
+// it itself.
+func stampReservation(st *pb.ReservationState, r Relay) *pb.ReservationState {
+	st.Reservation = r.ID + handleSep + st.GetReservation()
+	switch s := st.GetState().(type) {
+	case *pb.ReservationState_Queued:
+		s.Queued.Relay = r.Name
+	case *pb.ReservationState_Granted:
+		s.Granted.Relay = r.Name
+	}
+	return st
+}

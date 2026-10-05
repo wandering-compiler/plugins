@@ -9,6 +9,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
 )
 
 // Backend is a worker picked for one call, and the way to let it go again.
@@ -55,7 +57,12 @@ func Handler(pick Picker) grpc.StreamHandler {
 			&grpc.StreamDesc{ServerStreams: true, ClientStreams: true},
 			method, grpc.ForceCodecV2(rawCodec{}))
 		if err != nil {
-			return err
+			// Nothing reached the worker, so this is the relay failing to
+			// deliver rather than the worker answering — said so with a reason,
+			// because a bare Unavailable is indistinguishable from the caller's
+			// own connection dropping.
+			return refusal.New(codes.Unavailable, refusal.WorkerLost,
+				"relay: the picked worker's tunnel could not carry the call: "+status.Convert(err).Message())
 		}
 
 		// One goroutine per direction. The client→worker copy runs here in the
@@ -155,9 +162,15 @@ func forwardToClient(ss grpc.ServerStream, up grpc.ClientStream) chan error {
 //
 // ForceServerCodecV2 is safe precisely because this server has no services of
 // its own: everything it sees is bytes on their way somewhere else.
+//
+// The set also carries WorkServerOptions — keepalive and the MaxMessage cap.
+// The cap belongs here for the same reason as the codec: left at gRPC's 4 MiB
+// default, the first message of a codegen run or any one large generated file
+// fails at the relay with ResourceExhausted, reading like the caller's fault
+// while the caller allowed 256 MiB.
 func ProxyServerOptions(pick Picker) []grpc.ServerOption {
-	return []grpc.ServerOption{
+	return append(WorkServerOptions(),
 		grpc.ForceServerCodecV2(rawCodec{}),
 		grpc.UnknownServiceHandler(Handler(pick)),
-	}
+	)
 }

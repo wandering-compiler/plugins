@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"context"
-	"sync"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +21,10 @@ type Relay struct {
 	Fingerprint string
 }
 
+// ErrRelayNotFound is RelayStore.Get's answer for an id the registry does not
+// hold.
+var ErrRelayNotFound = errors.New("cluster: no relay with that id")
+
 // RelayStore is the seam onto the plugin's own tables, wired by
 // RegisterPlugin. An interface rather than the generated client directly,
 // because scheduling is worth testing against a store that cannot fail in
@@ -28,6 +32,10 @@ type Relay struct {
 type RelayStore interface {
 	// ListEnabled returns the relays scheduling may consider, in any order.
 	ListEnabled(ctx context.Context) ([]Relay, error)
+	// Get returns one relay by registry id, enabled or not, or
+	// ErrRelayNotFound. Used where an id arrives from outside — an operator's
+	// selection, a reservation handle — rather than from a listing.
+	Get(ctx context.Context, id string) (Relay, error)
 	// RecordReached and RecordFailed maintain the observed-state CACHE on the
 	// row. Both are best-effort: a scheduling decision that succeeded must not
 	// be failed because bookkeeping about it could not be written.
@@ -52,6 +60,14 @@ type Dialer func(target, fingerprint string) (*grpc.ClientConn, error)
 // up as a scheduling bug rather than a compile error. The only thing the relay
 // cannot fill in is its own registry NAME, which it has never been told; this
 // handler stamps it on the way past.
+//
+// # It holds no load of its own
+//
+// Which relay to use is decided from each relay's own RelayStats, asked fresh
+// for every placement. An earlier version counted the callers THIS process was
+// holding open per relay; a grant ends that hold at once, so on a pool below
+// capacity every relay read zero, and no console replica knew what any other
+// had placed. The relay is the one place that sees all of its load.
 type ClusterServiceHandler struct {
 	pb.UnimplementedClusterServiceServer
 
@@ -73,23 +89,6 @@ type ClusterServiceHandler struct {
 	// pool never falling through to a healthy one.
 	DialTimeout time.Duration
 
-	// inflight counts callers this process is currently holding open against a
-	// relay, per relay id. LOCAL knowledge on purpose: this process knows what
-	// it placed and nothing about another console replica.
-	//
-	// ⚠️ IT COUNTS QUEUED CALLERS, NOT RUNNING WORK, and the comment here used
-	// to claim otherwise. `Granted` is terminal for proxyOne, so `leave` runs
-	// the moment a slot is handed out — everything after that happens on the
-	// data path, which the control plane has left by design and cannot see.
-	// A caller that is granted immediately is therefore counted for the
-	// duration of a round trip and then forgotten.
-	//
-	// So on a pool below capacity every relay reads zero, and the choice falls
-	// entirely to the tiebreak. It is still worth having: above capacity the
-	// queues are exactly what this process is holding, and that is real.
-	mu       sync.Mutex
-	inflight map[string]int
-
 	// rotate breaks ties, and carries the spread on an idle pool.
 	//
 	// The tiebreak used to be the relay NAME, which is stable and therefore
@@ -101,25 +100,9 @@ type ClusterServiceHandler struct {
 	rotate atomic.Uint64
 }
 
-func (h *ClusterServiceHandler) enter(id string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.inflight == nil {
-		h.inflight = map[string]int{}
+func (h *ClusterServiceHandler) dialTimeout() time.Duration {
+	if h.DialTimeout <= 0 {
+		return 5 * time.Second
 	}
-	h.inflight[id]++
-}
-
-func (h *ClusterServiceHandler) leave(id string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.inflight[id] > 0 {
-		h.inflight[id]--
-	}
-}
-
-func (h *ClusterServiceHandler) load(id string) int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.inflight[id]
+	return h.DialTimeout
 }

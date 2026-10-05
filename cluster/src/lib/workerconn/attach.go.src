@@ -2,21 +2,15 @@ package workerconn
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
 )
 
@@ -24,25 +18,26 @@ import (
 type State int
 
 const (
-	// Waiting — connected, not approved. The worker does nothing and stays
-	// visible on the operator's screen.
-	Waiting State = iota
-	// Admitted — approved.
-	Admitted
-	// Denied — refused, and refused again on every reconnect.
-	Denied
+	// Admitted — attached, and may be given work.
+	Admitted State = iota
+	// Banned — refused by an operator's ban, and refused again on every
+	// reconnect until it is lifted.
+	Banned
 	// Disconnected — no relay right now; the loop is retrying.
 	Disconnected
+	// Renewed — the certificate was reissued. Not a connection state, but a
+	// transition an operator wants in the log.
+	Renewed
 )
 
 func (s State) String() string {
 	switch s {
-	case Waiting:
-		return "waiting for approval"
 	case Admitted:
 		return "admitted"
-	case Denied:
-		return "denied"
+	case Banned:
+		return "banned"
+	case Renewed:
+		return "certificate renewed"
 	default:
 		return "disconnected"
 	}
@@ -50,10 +45,12 @@ func (s State) String() string {
 
 // Config is what a worker needs to join a pool.
 type Config struct {
-	// RelayAddress is `host:port` of the relay's WORKER listener.
+	// RelayAddress is `host:port` of the relay's WORKER-ATTACH listener —
+	// where the worker attaches, enrols and renews.
 	RelayAddress string
 
-	// RelayFingerprint pins the relay's certificate.
+	// RelayFingerprint pins the relay's certificate (lowercase hex SHA-256 of
+	// its DER), as handed out with the registration code.
 	//
 	// The worker verifies the relay for the same reason the relay verifies the
 	// worker, and it is not symmetry for its own sake: an impostor relay would
@@ -61,7 +58,21 @@ type Config struct {
 	// source or fetches somebody's pages, the work IS the secret.
 	RelayFingerprint string
 
-	Identity identity.Identity
+	// IdentityDir holds this worker's key (generated on first start, never
+	// sent anywhere) and the certificate its relay issued for it. Keep it on a
+	// volume: the key IS the worker's identity, and a worker that lost it is a
+	// new worker needing a new registration code.
+	IdentityDir string
+
+	// RegistrationCode is the one-time code an operator issued for this relay.
+	// Used only when IdentityDir holds no valid certificate, so leaving it in
+	// a deployment's environment after the first start is harmless.
+	RegistrationCode string
+
+	// RenewBefore is how long before expiry the certificate is renewed. Zero
+	// renews with a third of its lifetime left.
+	RenewBefore time.Duration
+
 	Name     string
 	DeviceID string
 
@@ -94,16 +105,40 @@ type Config struct {
 
 	// TunnelAddress is `host:port` of the relay's WORK listener — a separate
 	// port from the one Attach uses, because the two connections carry
-	// different things and only one of them exists before approval.
+	// different things and only one of them exists before enrolment.
 	TunnelAddress string
 
 	// RetryInterval between reconnects. Zero uses a sane default.
 	RetryInterval time.Duration
-	// DeniedRetryInterval is longer: a denial is a decision, and hammering a
+	// BannedRetryInterval is longer: a ban is a decision, and hammering a
 	// relay that has already refused is noise in somebody's logs. Retried at
-	// all because denial can be reversed, and a worker that exited would need
-	// a human to notice and restart it.
-	DeniedRetryInterval time.Duration
+	// all because a ban can be lifted, and a worker that exited would need a
+	// human to notice and restart it.
+	BannedRetryInterval time.Duration
+}
+
+func (cfg Config) retry() time.Duration {
+	if cfg.RetryInterval <= 0 {
+		return 5 * time.Second
+	}
+	return cfg.RetryInterval
+}
+
+func (cfg Config) validateIdentity() error {
+	if strings.TrimSpace(cfg.RelayAddress) == "" {
+		return errors.New("workerconn: RelayAddress is required")
+	}
+	if strings.TrimSpace(cfg.RelayFingerprint) == "" {
+		// Refused rather than defaulted to "trust any relay": without a pin
+		// this worker would hand its work to whoever answered the address.
+		return errors.New(
+			"workerconn: RelayFingerprint is required — without it this worker cannot tell " +
+				"the relay from anything else listening on that address")
+	}
+	if strings.TrimSpace(cfg.IdentityDir) == "" {
+		return errors.New("workerconn: IdentityDir is required — it holds this worker's key, which is its identity")
+	}
+	return nil
 }
 
 // Readiness is what a worker says about its own ability to take work.
@@ -133,20 +168,18 @@ func (r Readiness) proto() workerpb.WorkerStatus_Readiness {
 	}
 }
 
-// Run attaches to the relay and keeps attaching until ctx ends.
+// Run enrols if it must, keeps the certificate renewed, and attaches to the
+// relay — reattaching until ctx ends.
 //
 // onState is called on every transition, including repeats after a reconnect —
 // the caller decides what is worth logging. It must not block.
+//
+// It returns ErrNeedsRegistration when the worker has no usable certificate
+// and no code to get one with: an operator has to act, and a loop retrying
+// the impossible would only hide that.
 func Run(ctx context.Context, cfg Config, onState func(State)) error {
-	if strings.TrimSpace(cfg.RelayAddress) == "" {
-		return errors.New("workerconn: RelayAddress is required")
-	}
-	if strings.TrimSpace(cfg.RelayFingerprint) == "" {
-		// Refused rather than defaulted to "trust any relay": without a pin
-		// this worker would hand its work to whoever answered the address.
-		return errors.New(
-			"workerconn: RelayFingerprint is required — without it this worker cannot tell " +
-				"the relay from anything else listening on that address")
+	if err := cfg.validateIdentity(); err != nil {
+		return err
 	}
 	if cfg.Slots == 0 {
 		return errors.New(
@@ -154,26 +187,50 @@ func Run(ctx context.Context, cfg Config, onState func(State)) error {
 				"take is counted as nothing, and a default would be a capacity claim " +
 				"this package is not entitled to make on the machine's behalf")
 	}
-	retry, denied := cfg.RetryInterval, cfg.DeniedRetryInterval
-	if retry <= 0 {
-		retry = 5 * time.Second
-	}
-	if denied <= 0 {
-		denied = 5 * time.Minute
+	banned := cfg.BannedRetryInterval
+	if banned <= 0 {
+		banned = 5 * time.Minute
 	}
 	if onState == nil {
 		onState = func(State) {}
 	}
 
+	// Enrolment first, retried while the relay is merely unreachable; a
+	// refusal no retry can fix ends Run.
 	for {
-		wait := retry
+		err := EnsureEnrolled(ctx, cfg)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, ErrNeedsRegistration) || refusal.ReasonOf(err) != "" || ctx.Err() != nil {
+			return err
+		}
+		onState(Disconnected)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(cfg.retry()):
+		}
+	}
+
+	renewCtx, stopRenewing := context.WithCancel(ctx)
+	defer stopRenewing()
+	go keepRenewed(renewCtx, cfg,
+		func(time.Time) { onState(Renewed) },
+		func(error) {})
+
+	for {
+		if _, err := certificateUsable(cfg); err != nil {
+			return err
+		}
+		wait := cfg.retry()
 		if err := attachOnce(ctx, cfg, onState); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if status.Code(err) == codes.PermissionDenied {
-				onState(Denied)
-				wait = denied
+			if refusal.ReasonOf(err) == refusal.WorkerBanned || status.Code(err) == codes.PermissionDenied {
+				onState(Banned)
+				wait = banned
 			} else {
 				onState(Disconnected)
 			}
@@ -189,7 +246,7 @@ func Run(ctx context.Context, cfg Config, onState func(State)) error {
 }
 
 func attachOnce(ctx context.Context, cfg Config, onState func(State)) error {
-	conn, err := dialRelay(cfg)
+	conn, err := dialAttach(cfg, true)
 	if err != nil {
 		return err
 	}
@@ -234,11 +291,8 @@ func attachOnce(ctx context.Context, cfg Config, onState func(State)) error {
 		if err != nil {
 			return err
 		}
-		switch ev.GetEvent().(type) {
-		case *workerpb.AttachEvent_Admitted:
+		if ev.GetAdmitted() != nil {
 			onState(Admitted)
-		case *workerpb.AttachEvent_Waiting:
-			onState(Waiting)
 		}
 	}
 }
@@ -286,44 +340,4 @@ func reportReadiness(
 			last = now
 		}
 	}
-}
-
-func dialRelay(cfg Config) (*grpc.ClientConn, error) {
-	crt, err := tls.X509KeyPair(cfg.Identity.CertPEM, cfg.Identity.KeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("workerconn: this worker's own identity does not load: %w", err)
-	}
-	want := strings.ToLower(strings.TrimSpace(cfg.RelayFingerprint))
-	pinRelay := func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-		if len(rawCerts) == 0 {
-			return errors.New("workerconn: the relay presented no certificate")
-		}
-		sum := sha256.Sum256(rawCerts[0])
-		if got := hex.EncodeToString(sum[:]); got != want {
-			return fmt.Errorf(
-				"workerconn: %s presented certificate %s, this worker pins %s — "+
-					"the relay's certificate was rotated, or something else is answering "+
-					"on that address", cfg.RelayAddress, got, want)
-		}
-		return nil
-	}
-	return grpc.NewClient(cfg.RelayAddress, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{crt},
-		MinVersion:   tls.VersionTLS13,
-		// Chain verification off, identity verification below — a relay may be
-		// self-signed, and the pin is narrower than any CA would be.
-		// #nosec G402 -- deliberate; the pin replaces the chain check.
-		InsecureSkipVerify:    true,
-		VerifyPeerCertificate: pinRelay,
-		// A resumed TLS session never reaches VerifyPeerCertificate, so a pin
-		// enforced only there holds for the FIRST connection of a session and
-		// is silently skipped afterwards. VerifyConnection runs on both paths,
-		// which is what makes the pin actually hold (gosec G123).
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("workerconn: the relay presented no certificate")
-			}
-			return pinRelay([][]byte{cs.PeerCertificates[0].Raw}, nil)
-		},
-	})))
 }

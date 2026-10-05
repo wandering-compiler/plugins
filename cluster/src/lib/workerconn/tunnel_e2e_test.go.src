@@ -15,6 +15,7 @@ import (
 
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
@@ -28,6 +29,13 @@ import (
 type fakeWork struct {
 	pb.UnimplementedClusterServiceServer
 	seenTicket []string
+}
+
+// ReserveTask echoes the label back as the reservation, which makes it a
+// payload of any size in BOTH directions: what the caller sends, the worker
+// returns.
+func (f *fakeWork) ReserveTask(_ context.Context, req *pb.ReserveTaskReq) (*pb.ReservationState, error) {
+	return &pb.ReservationState{Reservation: req.GetLabel()}, nil
 }
 
 func (f *fakeWork) CheckWorkers(ctx context.Context, _ *pb.CheckWorkersReq) (*pb.CheckWorkersResp, error) {
@@ -44,20 +52,40 @@ type rig struct {
 	work       *fakeWork
 	workerFP   string
 	stopWorker context.CancelFunc
+	// For a second, hand-made worker: the tunnel listener, the relay pin.
+	tunnelAddr string
+	relayFP    string
+	ca         *identity.CA
+}
+
+// rigOptions bend standUp for the tests that need a different wire.
+type rigOptions struct {
+	// via, if set, is put between the worker and the relay's tunnel listener:
+	// it is handed the listener's address and returns the one the worker dials.
+	via func(addr string) string
+	// relayDial is appended to the relay's options for the tunnel's client
+	// side; workerServe to the worker's for its server side.
+	relayDial   []grpc.DialOption
+	workerServe []grpc.ServerOption
+	// tunnelDone receives what ServeTunnel returned.
+	tunnelDone chan error
 }
 
 // standUp builds a whole relay: a TLS tunnel listener, a schema-blind proxy in
 // front of it, and one worker attached through both.
 func standUp(t *testing.T) *rig {
 	t.Helper()
+	return standUpWith(t, rigOptions{})
+}
+
+func standUpWith(t *testing.T, o rigOptions) *rig {
+	t.Helper()
 	relayID, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerID, err := identity.LoadOrCreateIdentity(t.TempDir(), "w")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := newCA(t)
+	workerDir, workerFP := enrolledDir(t, ca, time.Hour)
 	crt, err := tls.X509KeyPair(relayID.CertPEM, relayID.KeyPEM)
 	if err != nil {
 		t.Fatal(err)
@@ -67,8 +95,7 @@ func standUp(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workers := workeradmit.New()
-	workers.Apply([]string{workerID.Fingerprint}, nil) // approved up front
+	workers := workeradmit.New() // nobody banned
 	backends := relayserver.NewBackends()
 	// The wiring a real relay has: capacity comes from the attached fleet.
 	backends.OnCapacityChange(pool.SetCapacity)
@@ -77,7 +104,7 @@ func standUp(t *testing.T) *rig {
 	// can take is credited with nothing, which is deliberate. Declaring it
 	// directly stands in for the announcement, and keeps this test about the
 	// tunnel.
-	backends.SetProfile(workerID.Fingerprint, backends.NewAttachment(), 2, true)
+	backends.SetProfile(workerFP, backends.NewAttachment(), 2, true)
 
 	// The work listener: TLS, and it must ask for a client certificate —
 	// that handshake is where the worker's identity comes from.
@@ -88,9 +115,12 @@ func standUp(t *testing.T) *rig {
 	tunLis := tls.NewListener(raw, &tls.Config{
 		Certificates: []tls.Certificate{crt},
 		MinVersion:   tls.VersionTLS13,
-		ClientAuth:   tls.RequireAnyClientCert,
+		// As a real relay: REQUIRE a certificate and verify it against the
+		// relay's CA — the tunnel carries work, and nothing enrols on it.
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  ca.Pool(),
 	})
-	go func() { _ = relayserver.ServeTunnels(tunLis, workers, backends, nil) }()
+	go func() { _ = relayserver.ServeTunnels(tunLis, workers, backends, nil, o.relayDial...) }()
 	t.Cleanup(func() { _ = tunLis.Close() })
 
 	// The proxy: NO services of its own, only the unknown-service handler.
@@ -107,12 +137,19 @@ func standUp(t *testing.T) *rig {
 	work := &fakeWork{}
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
+	tunnelAddr := tunLis.Addr().String()
+	if o.via != nil {
+		tunnelAddr = o.via(tunnelAddr)
+	}
 	go func() {
-		_ = ServeTunnel(ctx, Config{
-			TunnelAddress:    tunLis.Addr().String(),
+		err := ServeTunnel(ctx, Config{
+			TunnelAddress:    tunnelAddr,
 			RelayFingerprint: relayID.Fingerprint,
-			Identity:         workerID,
-		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) })
+			IdentityDir:      workerDir,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) }, o.workerServe...)
+		if o.tunnelDone != nil {
+			o.tunnelDone <- err
+		}
 	}()
 
 	for deadline := time.After(10 * time.Second); backends.Capacity() == 0; {
@@ -124,12 +161,25 @@ func standUp(t *testing.T) *rig {
 	}
 	return &rig{pool: pool, workers: workers, backends: backends,
 		proxyAddr: proxyLis.Addr().String(), work: work,
-		workerFP: workerID.Fingerprint, stopWorker: cancel}
+		workerFP: workerFP, stopWorker: cancel,
+		tunnelAddr: tunLis.Addr().String(), relayFP: relayID.Fingerprint, ca: ca}
 }
 
 func callThroughProxy(t *testing.T, r *rig, ticket string) (*pb.CheckWorkersResp, error) {
 	t.Helper()
-	cc, err := grpc.NewClient(r.proxyAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	ctx, c := proxyClient(t, r, ticket)
+	return c.CheckWorkers(ctx, &pb.CheckWorkersReq{})
+}
+
+func proxyClient(t *testing.T, r *rig, ticket string) (context.Context, pb.ClusterServiceClient) {
+	t.Helper()
+	cc, err := grpc.NewClient(r.proxyAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// The CALLER's own limit, raised the way w17ctl raises it. What is under
+		// test is everything between it and the worker.
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(tunnel.MaxMessage),
+			grpc.MaxCallSendMsgSize(tunnel.MaxMessage)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +188,7 @@ func callThroughProxy(t *testing.T, r *rig, ticket string) (*pb.CheckWorkersResp
 	if ticket != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, relayserver.TicketHeader, ticket)
 	}
-	return pb.NewClusterServiceClient(cc).CheckWorkers(ctx, &pb.CheckWorkersReq{})
+	return ctx, pb.NewClusterServiceClient(cc)
 }
 
 // The whole point of the thing: a call made to the RELAY is answered by the
@@ -182,6 +232,11 @@ func TestTunnel_ATicketIsSpentOnFirstUse(t *testing.T) {
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("replaying a ticket gave %v, want PermissionDenied", status.Code(err))
 	}
+	// PermissionDenied is also what "not your project" looks like; the REASON is
+	// what tells a client that a new placement fixes this one.
+	if got := refusal.ReasonOf(err); got != refusal.TicketNotRedeemable {
+		t.Errorf("reason = %q, want %q", got, refusal.TicketNotRedeemable)
+	}
 }
 
 // No ticket at all is refused, and the message says where to get one — the
@@ -194,6 +249,9 @@ func TestTunnel_NoTicketIsRefused(t *testing.T) {
 	}
 	if !contains(err.Error(), "schedule a task") {
 		t.Errorf("the refusal does not say how to get a ticket: %v", err)
+	}
+	if got := refusal.ReasonOf(err); got != refusal.TicketMissing {
+		t.Errorf("reason = %q, want %q", got, refusal.TicketMissing)
 	}
 }
 
@@ -210,13 +268,13 @@ func TestTunnel_TheSlotComesBackWhenTheCallEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	for deadline := time.After(5 * time.Second); ; {
-		if inUse, _, _ := r.pool.Stats(); inUse == 0 {
+		if r.pool.Stats().Held() == 0 {
 			return
 		}
 		select {
 		case <-deadline:
-			inUse, _, capacity := r.pool.Stats()
-			t.Fatalf("inUse = %d of %d after the call ended — the slot leaked", inUse, capacity)
+			st := r.pool.Stats()
+			t.Fatalf("%d slot(s) of %d still held after the call ended — the slot leaked", st.Held(), st.Capacity)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -247,7 +305,7 @@ func TestTunnel_RevokingAWorkerStopsItReceivingWork(t *testing.T) {
 	}
 
 	// The operator denies it while its tunnel is still open.
-	r.workers.Apply(nil, []string{r.workerFP})
+	r.workers.SetBanned([]string{r.workerFP})
 
 	next, err := r.pool.Wait(t.Context(), nil)
 	if err != nil {
@@ -257,15 +315,18 @@ func TestTunnel_RevokingAWorkerStopsItReceivingWork(t *testing.T) {
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable — a revoked worker is still being picked", status.Code(err))
 	}
+	if got := refusal.ReasonOf(err); got != refusal.NoWorker {
+		t.Errorf("reason = %q, want %q", got, refusal.NoWorker)
+	}
 	// And the slot did not leak: the ticket was claimed, then given back when
 	// there turned out to be nobody to run it.
 	for deadline := time.After(3 * time.Second); ; {
-		if inUse, _, _ := r.pool.Stats(); inUse == 0 {
+		if r.pool.Stats().Held() == 0 {
 			break
 		}
 		select {
 		case <-deadline:
-			inUse, _, _ := r.pool.Stats()
+			inUse := r.pool.Stats().Held()
 			t.Fatalf("inUse = %d after a refused pick — the slot leaked", inUse)
 		case <-time.After(10 * time.Millisecond):
 		}
@@ -291,5 +352,30 @@ func TestTunnel_ADeadTunnelStopsBeingABackend(t *testing.T) {
 			t.Fatal("the dead tunnel is still registered as a backend")
 		case <-time.After(20 * time.Millisecond):
 		}
+	}
+}
+
+// A tunnel is opened only with a certificate from THIS relay's CA. A worker of
+// another relay — a perfectly valid certificate, from the wrong authority —
+// never becomes a backend; neither does a banned one.
+func TestTunnel_OnlyThisRelaysUnbannedWorkersBecomeBackends(t *testing.T) {
+	r := standUp(t)
+
+	foreignDir, _ := enrolledDir(t, newCA(t), time.Hour)
+	bannedDir, bannedID := enrolledDir(t, r.ca, time.Hour)
+	r.workers.SetBanned([]string{bannedID})
+
+	for _, dir := range []string{foreignDir, bannedDir} {
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+		_ = ServeTunnel(ctx, Config{
+			TunnelAddress:    r.tunnelAddr,
+			RelayFingerprint: r.relayFP,
+			IdentityDir:      dir,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, &fakeWork{}) })
+		cancel()
+	}
+	if n := r.backends.Count(); n != 1 {
+		t.Fatalf("%d backends, want only the rig's own worker — a foreign or banned "+
+			"certificate opened a tunnel", n)
 	}
 }
