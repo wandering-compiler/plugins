@@ -23,6 +23,13 @@ type workerStore struct {
 	recorded  []string // "<relayID>:<fingerprint>"
 	enrolled  int
 	bannedErr error
+	decisions []decision
+}
+
+type decision struct {
+	ids []string
+	ban bool
+	by  string
 }
 
 func (w *workerStore) Banned(context.Context) ([]string, error) {
@@ -35,6 +42,12 @@ func (w *workerStore) Record(_ context.Context, relayID string, k *pb.KnownWorke
 	defer w.mu.Unlock()
 	w.recorded = append(w.recorded, relayID+":"+k.GetCertFingerprint())
 	w.enrolled++
+	return nil
+}
+func (w *workerStore) Decide(_ context.Context, ids []string, ban bool, by string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.decisions = append(w.decisions, decision{ids: ids, ban: ban, by: by})
 	return nil
 }
 func (w *workerStore) EnrolledCount(context.Context) (int, error) {

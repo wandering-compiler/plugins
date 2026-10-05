@@ -95,6 +95,17 @@ func (s workerRegistry) Record(ctx context.Context, relayID string, w *pb.KnownW
 	return err
 }
 
+func (s workerRegistry) Decide(ctx context.Context, ids []string, ban bool, by string) error {
+	req := &pb.DecideWorkersReq{Ids: ids, DecidedBy: by, At: timestamppb.Now()}
+	var err error
+	if ban {
+		_, err = s.m.BanWorkers(ctx, req)
+	} else {
+		_, err = s.m.UnbanWorkers(ctx, req)
+	}
+	return err
+}
+
 func (s workerRegistry) EnrolledCount(ctx context.Context) (int, error) {
 	resp, err := s.q.CountWorkersByState(ctx, &pb.CountWorkersByStateReq{
 		State: pb.WorkerState_WORKER_STATE_ENROLLED,

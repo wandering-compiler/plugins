@@ -1,5 +1,5 @@
 name: cluster
-version: 0.2.0-rc.4
+version: 0.2.0-rc.5
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -186,12 +186,12 @@ presets:
             label: "Check for workers"
             target: page
           - name: ban
-            source: WorkerMutation.BanWorkers
+            source: ClusterService.BanWorkers
             label: "Ban"
             confirm: "Ban the selected workers? Their relays refuse them on the next placement, drop their connections, and refuse to renew their certificates."
             target: both
           - name: unban
-            source: WorkerMutation.UnbanWorkers
+            source: ClusterService.UnbanWorkers
             label: "Unban"
             confirm: "Lift the ban on the selected workers? A worker whose certificate expired meanwhile still needs a new registration code."
             target: both

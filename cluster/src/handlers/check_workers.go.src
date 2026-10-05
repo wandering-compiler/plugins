@@ -24,6 +24,9 @@ type WorkerStore interface {
 	// EnrolledCount is the number of enrolled, unbanned workers across every
 	// relay.
 	EnrolledCount(ctx context.Context) (int, error)
+	// Decide bans (ban) or unbans the workers with these registry ids,
+	// recording who decided and when.
+	Decide(ctx context.Context, ids []string, ban bool, by string) error
 }
 
 // withBans puts the complete ban set on ctx, for every relay call made under

@@ -91,6 +91,14 @@ service ClusterService {
   // worker, so nothing secret passes through the control plane but the code.
   rpc IssueRegistrationCode(IssueRegistrationCodeReq) returns (IssueRegistrationCodeResp) {}
 
+  // BanWorkers / UnbanWorkers are the admin's ban and unban: the decision on
+  // the selected workers, recorded with WHO took it — the signed-in caller,
+  // read from the verified principal, never from the request — and when.
+  // Answered by the PROJECT. A ban reaches the relays on the next call to
+  // each, and every placement makes one.
+  rpc BanWorkers(DecideWorkersActionReq) returns (DecideWorkersActionResp) {}
+  rpc UnbanWorkers(DecideWorkersActionReq) returns (DecideWorkersActionResp) {}
+
   // RelayStats is answered by a RELAY: what it is carrying right now. The
   // project returns Unimplemented.
   //
@@ -263,6 +271,22 @@ message KnownWorker {
   string cert_fingerprint = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
   string name = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   string device_id = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+}
+
+message DecideWorkersActionReq {
+  // Registry ids of the workers decided on.
+  repeated string ids = 1;
+}
+
+message DecideWorkersActionResp {}
+
+// Caller is the part of the verified principal (the `x-w17-user` envelope the
+// gateway threads, decoded with principal.Envelope) a decision records: the
+// user id. Field 2 is AuthResp.user_id's number in the auth plugin; every
+// other field of the envelope is ignored.
+message Caller {
+  reserved 1;
+  string user_id = 2;
 }
 
 message IssueRegistrationCodeReq {
