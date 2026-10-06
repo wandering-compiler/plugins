@@ -14,8 +14,22 @@ import (
 var zeroDecimalCurrencies = map[string]bool{
 	"bif": true, "clp": true, "djf": true, "gnf": true, "jpy": true,
 	"kmf": true, "krw": true, "mga": true, "pyg": true, "rwf": true,
-	"ugx": true, "vnd": true, "vuv": true, "xaf": true, "xof": true, "xpf": true,
+	"vnd": true, "vuv": true, "xaf": true, "xof": true, "xpf": true,
 }
+
+// wholeUnitsSentAsCents are Stripe's documented special cases: zero-decimal
+// currencies that its API still takes as two-decimal values whose decimal
+// part is always 00 ("to charge 5 UGX, provide an amount value of 500"), and
+// that cannot be charged in fractions. UGX used to sit in the zero-decimal
+// table, so "5" ugx went out as 5 — a hundredth of what was asked.
+var wholeUnitsSentAsCents = map[string]bool{"isk": true, "ugx": true}
+
+// unsupportedCurrencies are the three-decimal currencies. Their scale and
+// rounding on the provider's side is not something this driver can state with
+// certainty, and getting it wrong charges ten times too little or too much —
+// they used to be treated as two-decimal, "5.00" kwd going out as 0.500 KWD.
+// Refused until that is settled, rather than guessed.
+var unsupportedCurrencies = map[string]bool{"bhd": true, "jod": true, "kwd": true, "omr": true, "tnd": true}
 
 // invalidAmount is the error every amount refusal carries: the request
 // cannot succeed as written, so it wraps backend.ErrInvalidRequest.
@@ -35,9 +49,16 @@ func invalidAmount(format string, args ...any) error {
 // refunded) one cent while the caller, and the local row, held the
 // amount it asked for.
 func toMinorUnits(amount, currency string) (int64, error) {
-	scale := 2
-	if zeroDecimalCurrencies[strings.ToLower(strings.TrimSpace(currency))] {
+	cur := strings.ToLower(strings.TrimSpace(currency))
+	if unsupportedCurrencies[cur] {
+		return 0, invalidAmount("stripe: %s is a three-decimal currency, which this driver does not charge", cur)
+	}
+	scale, wire := 2, int64(1)
+	switch {
+	case zeroDecimalCurrencies[cur]:
 		scale = 0
+	case wholeUnitsSentAsCents[cur]:
+		scale, wire = 0, 100
 	}
 	s := strings.TrimSpace(amount)
 	if s == "" {
@@ -88,6 +109,10 @@ func toMinorUnits(amount, currency string) (int64, error) {
 		}
 		n = n*10 + d
 	}
+	if n > math.MaxInt64/wire {
+		return 0, invalidAmount("stripe: amount %q overflows the provider's integer minor units", amount)
+	}
+	n *= wire
 	if neg {
 		n = -n
 	}
