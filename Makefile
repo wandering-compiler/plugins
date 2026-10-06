@@ -13,10 +13,13 @@ GO          ?= go
 # The render a release uses is w17ctl's own, at the version pinned in
 # tools/w17ctl-version (tools/w17ctl.sh installs it); never whatever is on PATH.
 RENDER_W17CTL = $$(tools/w17ctl.sh)
+# golangci-lint at the version pinned in tools/golangci-version, with this
+# repository's config. `go run` builds it once into the Go build cache.
+GOLANGCI = $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(shell tr -d ' \n' < $(CURDIR)/tools/golangci-version) run --config $(CURDIR)/tools/golangci.yml
 
-.PHONY: check plugins-exist test vet fmt gen-pb check-gen-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync check-refs check-names check-tools buf-image release
+.PHONY: check plugins-exist test vet fmt gen-pb check-gen-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release
 
-check: fmt vet test check-modules check-stage check-plugin-msgids check-gen-pb check-render check-published-tests check-refs check-names check-tools
+check: fmt vet lint test check-modules check-stage check-plugin-msgids check-gen-pb check-render check-published-tests check-refs check-names check-tools
 
 # A typo in PLUGIN must not make every check pass over nothing.
 plugins-exist:
@@ -31,6 +34,12 @@ fmt: plugins-exist
 
 vet: plugins-exist
 	@for p in $(PLUGINS); do echo ">> vet $$p"; (cd $$p/src && $(GO) vet ./...) || exit 1; done
+
+# golangci-lint (tools/golangci.yml): what gofmt and vet do not catch —
+# unchecked errors, `==` on errors that may be wrapped, dead code, unnecessary
+# conversions, staticcheck.
+lint: plugins-exist
+	@for p in $(PLUGINS); do echo ">> lint $$p"; (cd $$p/src && $(GOLANGCI) ./...) || exit 1; done
 
 test: plugins-exist
 	@for p in $(PLUGINS); do echo ">> test $$p"; (cd $$p/src && $(GO) test -count=1 -cover ./...) || exit 1; done
@@ -131,12 +140,12 @@ check-names:
 	@cd tools/checknames && $(GO) run . $(CHECKNAMES_FLAGS) "$(CURDIR)"
 
 # The Go that is not a plugin's src module: the checker itself, and any
-# sandbox module a plugin carries.
+# sandbox module a plugin carries: gofmt, vet, lint, tests.
 check-tools:
 	@for m in $$(ls -d tools/*/ | sed 's:/$$::' | while read d; do [ -f $$d/go.mod ] && echo $$d; done) $$(find . -path ./.git -prune -o -name go.mod -path '*/sandboxes/*' -print | xargs -r -n1 dirname); do \
 		echo ">> tools $$m"; \
 		out="$$(gofmt -l $$m)"; [ -z "$$out" ] || { echo "!! not gofmt-clean: $$out"; exit 1; }; \
-		(cd $$m && $(GO) vet ./... && $(GO) test -count=1 ./...) || exit 1; \
+		(cd $$m && $(GO) vet ./... && $(GOLANGCI) ./... && $(GO) test -count=1 ./...) || exit 1; \
 	done
 
 release:

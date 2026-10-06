@@ -98,25 +98,25 @@ func resolveSource(m protoreflect.MethodDescriptor, value string) (protoreflect.
 	case strings.HasPrefix(value, "$response."):
 		msg, path = m.Output(), strings.TrimPrefix(value, "$response.")
 	default:
-		return nil, &sourceErr{value, "not a $request / $response path"}
+		return nil, &sourceError{value, "not a $request / $response path"}
 	}
 	var f protoreflect.FieldDescriptor
 	for _, seg := range strings.Split(path, ".") {
 		if msg == nil {
-			return nil, &sourceErr{value, "walks past a scalar"}
+			return nil, &sourceError{value, "walks past a scalar"}
 		}
 		f = msg.Fields().ByName(protoreflect.Name(seg))
 		if f == nil {
-			return nil, &sourceErr{value, "no field " + seg + " in " + string(msg.FullName())}
+			return nil, &sourceError{value, "no field " + seg + " in " + string(msg.FullName())}
 		}
 		msg = f.Message()
 	}
 	return f, nil
 }
 
-type sourceErr struct{ value, why string }
+type sourceError struct{ value, why string }
 
-func (e *sourceErr) Error() string { return "source " + e.value + ": " + e.why }
+func (e *sourceError) Error() string { return "source " + e.value + ": " + e.why }
 
 func typeName(f protoreflect.FieldDescriptor) string {
 	switch {

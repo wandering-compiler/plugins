@@ -53,6 +53,8 @@ jobs:
         run: make fmt PLUGIN=${{ matrix.plugin }}
       - name: vet
         run: make vet PLUGIN=${{ matrix.plugin }}
+      - name: golangci-lint (pinned in tools/golangci-version)
+        run: make lint PLUGIN=${{ matrix.plugin }}
       - name: go.mod tidy, no local replace
         run: make check-modules PLUGIN=${{ matrix.plugin }}
       - name: no reference across a feature boundary
@@ -92,7 +94,7 @@ jobs:
           cache: false
       - name: no references to the platform's private docs
         run: make check-refs
-      - name: tools and sandboxes build and pass
+      - name: tools and sandboxes build, lint clean and pass
         run: make check-tools
       # The list of names this public repository must not carry is a secret. A
       # fork's pull request does not receive it, so there this FAILS rather than

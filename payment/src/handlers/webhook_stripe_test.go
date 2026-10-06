@@ -13,25 +13,10 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
-
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
-
-// uniqueViolationErr builds the error shape storage returns for a
-// duplicate key: InvalidArgument + a w17.ErrorDetail{code:
-// UNIQUE_VIOLATION} (the real grpcerr.Wrap contract).
-func uniqueViolationErr(t *testing.T) error {
-	t.Helper()
-	st, err := status.New(codes.InvalidArgument, "already exists").
-		WithDetails(&w17pb.ErrorDetail{Code: "UNIQUE_VIOLATION", Message: "already exists"})
-	if err != nil {
-		t.Fatalf("build detail: %v", err)
-	}
-	return st.Err()
-}
 
 const testWebhookSecret = "whsec_test_secret"
 

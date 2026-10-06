@@ -1,0 +1,113 @@
+# golangci-lint configuration for every Go module in this repository: each
+# plugin's src/, the tool modules under tools/, and any plugin sandbox module.
+# `make lint` runs it at the version pinned in tools/golangci-version.
+#
+# A curated set: the default linter set is OFF and only the linters below run.
+# Every carve-out is justified where it is made; nothing is blanket-disabled.
+version: "2"
+
+run:
+  tests: true
+  # Path rules below are relative to the module being linted (its go.mod), not
+  # to this file, so one rule reads the same from every module.
+  relative-path-mode: gomod
+
+# Show every finding. The defaults (max-same-issues: 3, max-issues-per-linter:
+# 50) truncate silently, which hides the true count and makes a cleanup look
+# finished while it is not. Note the plural: `max-same-issue` is accepted in
+# silence and ignored.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: none
+  enable:
+    - govet        # suspicious constructs
+    - staticcheck  # SA/S/ST/QF checks
+    - unused       # zero-caller functions, types, fields (separate from staticcheck in v2)
+    - errcheck     # unchecked error returns
+    - gosec        # security patterns
+    - errorlint    # Go 1.13 error wrapping / comparison (errors.Is / errors.As)
+    - ineffassign  # ineffectual assignments
+    - unconvert    # unnecessary type conversions
+    - bodyclose    # unclosed http.Response.Body
+    - sqlclosecheck # unclosed sql.Rows / sql.Stmt
+    - bidichk      # dangerous unicode bidi runes (trojan source)
+    - makezero     # make([]T, n) then append
+    - rowserrcheck # unchecked sql.Rows.Err()
+    - wastedassign # assignments never read
+    - errname      # error type / sentinel naming (xxxError / ErrXxx)
+    - gocheckcompilerdirectives # valid //go: directives
+    - protogetter  # nil-safe proto .GetX() over direct field access
+    - gocritic     # stable diagnostics: appendAssign, sloppyLen, badCond, …
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain      # a long if-else is often clearer than a switch — opinionated style
+        - singleCaseSwitch # a single-case switch is sometimes an intentional extension point
+    gosec:
+      # Rules that are structurally inapplicable here, each for a stated
+      # reason. High-value rules (crypto, SQL injection, hardcoded credentials)
+      # stay on.
+      excludes:
+        - G115 # integer overflow on conversion: the converted values are bounded
+        - G204 # subprocess with a variable: the arguments are trusted tool arguments
+        - G301 # directory perms > 0750: written trees are ordinary 0755 source/output dirs
+        - G302 # OpenFile perms > 0600: same reason as G306
+        - G304 # file inclusion via a variable path: the code reads the trees it is given
+        - G306 # WriteFile perms > 0600: written files are ordinary 0644 source/output
+        - G702 # taint double-reports paired with G304
+        - G703
+        - G122 # WalkDir symlink TOCTOU: walks a local tree, not an attacker-controlled one
+        - G602 # slice index out of range: false positive on `for i := range xs { xs[i] }`
+    errcheck:
+      # Writes to status / output sinks: a failed write to stdout has nothing
+      # useful to report it to.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+  exclusions:
+    # Skip generated code ("// Code generated … DO NOT EDIT").
+    generated: lax
+    rules:
+      # Test code holds different standards than shipped code: security
+      # scanning of fixtures (test credentials, chmod, SQL literals) and
+      # unclosed bodies in short-lived tests are noise, not risk. Shipped code
+      # keeps the full set.
+      - path: _test\.go
+        linters:
+          - gosec
+          - bodyclose
+          - errorlint   # test assertions compare error identity on purpose
+          - protogetter # tests read messages they just built; a getter adds no nil-safety
+          - gocritic    # style diagnostics on controlled-input test code
+      # QF1001 (apply De Morgan's law) is a style suggestion; the negated-range
+      # form `!(r >= 'a' && r <= 'z')` reads better for character classes.
+      - linters:
+          - staticcheck
+        text: "QF1001"
+      # ST1005 (error strings must not end with punctuation): errors here are
+      # often multi-sentence, user-facing explanations of what went wrong and
+      # how to fix it, where a terminal period is correct English.
+      - linters:
+          - staticcheck
+        text: "ST1005"
+      # G505 (crypto/sha1) in TOTP. RFC 6238 specifies HMAC-SHA1 and every
+      # authenticator app implements it; another hash would not be stronger,
+      # only incompatible. HMAC does not rely on the collision resistance gosec
+      # warns about. Scoped to the one file so the ban stands everywhere else.
+      - path: lib/totp/totp\.go
+        linters:
+          - gosec
+        text: "G505"
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax

@@ -311,7 +311,9 @@ func TestAttach_ReadinessDrivesCapacityForTheLifeOfTheStream(t *testing.T) {
 	r.awaitCapacity(t, 3) // 3, not 99: the identity's claims cannot be re-declared
 
 	cancel()
-	r.awaitEnded(t)
+	if err := r.awaitEnded(t); status.Code(err) != codes.Canceled {
+		t.Fatalf("the attach ended with %v, want Canceled: the worker hung up", err)
+	}
 	if got := r.backends.Capacity(); got != 0 {
 		t.Errorf("capacity = %d after the worker hung up, want 0", got)
 	}
@@ -399,7 +401,9 @@ func TestAttach_AReconnectSurvivesTheOldStreamsUnwind(t *testing.T) {
 
 	r.attachAs(t, t.Context(), w, announce(2, workerpb.WorkerStatus_READY))
 	cancelOld()
-	r.awaitEnded(t)
+	if err := r.awaitEnded(t); status.Code(err) != codes.Canceled {
+		t.Fatalf("the old attach ended with %v, want Canceled: its worker hung up", err)
+	}
 	if got := r.backends.Capacity(); got != 2 {
 		t.Fatalf("capacity = %d after the old stream unwound, want the new stream's 2", got)
 	}

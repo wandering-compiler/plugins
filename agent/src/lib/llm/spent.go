@@ -22,23 +22,23 @@ const StatusFailed = "failed"
 // it failed are the two things this layer exists to prevent.
 var ErrResponseFailed = errors.New("agent: the provider reported the response as failed")
 
-// failedResponse is the error for a failed response. The provider's CODE is
+// failedResponseError is the error for a failed response. The provider's CODE is
 // kept — it is a fixed vocabulary (server_error, rate_limit_exceeded, …) — and
 // its message is not, for the reason ProviderFault gives: provider text can
 // quote the prompt.
-type failedResponse struct{ code string }
+type failedResponseError struct{ code string }
 
-func (f *failedResponse) Error() string {
+func (f *failedResponseError) Error() string {
 	if f.code == "" {
 		return ErrResponseFailed.Error()
 	}
 	return ErrResponseFailed.Error() + " (code " + f.code + ")"
 }
 
-func (f *failedResponse) Is(target error) bool { return target == ErrResponseFailed }
+func (f *failedResponseError) Is(target error) bool { return target == ErrResponseFailed }
 
 func responseFailed(r *responses.Response) error {
-	return &failedResponse{code: string(r.Error.Code)}
+	return &failedResponseError{code: string(r.Error.Code)}
 }
 
 // spentError is a failure that nevertheless SPENT tokens: a run that died on
