@@ -27,13 +27,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PaymentQuery_GetCustomerByUserId_FullMethodName        = "/w17.contrib.payment.PaymentQuery/GetCustomerByUserId"
-	PaymentQuery_GetPayment_FullMethodName                 = "/w17.contrib.payment.PaymentQuery/GetPayment"
-	PaymentQuery_GetCreditBalance_FullMethodName           = "/w17.contrib.payment.PaymentQuery/GetCreditBalance"
-	PaymentQuery_GetCreditTopupByProviderId_FullMethodName = "/w17.contrib.payment.PaymentQuery/GetCreditTopupByProviderId"
-	PaymentQuery_GetUsageMeter_FullMethodName              = "/w17.contrib.payment.PaymentQuery/GetUsageMeter"
-	PaymentQuery_GetPlanBySlug_FullMethodName              = "/w17.contrib.payment.PaymentQuery/GetPlanBySlug"
-	PaymentQuery_GetSubscription_FullMethodName            = "/w17.contrib.payment.PaymentQuery/GetSubscription"
+	PaymentQuery_GetCustomerByUserId_FullMethodName         = "/w17.contrib.payment.PaymentQuery/GetCustomerByUserId"
+	PaymentQuery_GetPayment_FullMethodName                  = "/w17.contrib.payment.PaymentQuery/GetPayment"
+	PaymentQuery_GetPaymentByProviderId_FullMethodName      = "/w17.contrib.payment.PaymentQuery/GetPaymentByProviderId"
+	PaymentQuery_GetRefundByProviderId_FullMethodName       = "/w17.contrib.payment.PaymentQuery/GetRefundByProviderId"
+	PaymentQuery_GetCreditBalance_FullMethodName            = "/w17.contrib.payment.PaymentQuery/GetCreditBalance"
+	PaymentQuery_GetCreditTopupByProviderId_FullMethodName  = "/w17.contrib.payment.PaymentQuery/GetCreditTopupByProviderId"
+	PaymentQuery_GetUsageMeter_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetUsageMeter"
+	PaymentQuery_GetPlanBySlug_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetPlanBySlug"
+	PaymentQuery_GetSubscription_FullMethodName             = "/w17.contrib.payment.PaymentQuery/GetSubscription"
+	PaymentQuery_GetSubscriptionByProviderId_FullMethodName = "/w17.contrib.payment.PaymentQuery/GetSubscriptionByProviderId"
 )
 
 // PaymentQueryClient is the client API for PaymentQuery service.
@@ -47,6 +50,23 @@ type PaymentQueryClient interface {
 	// GetPayment — fetch one Payment by primary key (the REST GET
 	// /payments/{id} surface).
 	GetPayment(ctx context.Context, in *GetPaymentReq, opts ...grpc.CallOption) (*GetPaymentResp, error)
+	// GetPaymentByProviderId — fetch one Payment by the provider's object id.
+	// Two readers, both holding a provider id and no local id:
+	//
+	//   - the create paths (CreatePayment / TopUpCredit): a retry with the
+	//     same idempotency key gets the SAME provider object replayed, and
+	//     the local INSERT hits the unique key — the existing row is the
+	//     answer, not an error;
+	//   - webhook reconciliation, when a transition-guarded UPDATE matched no
+	//     row: a row that exists was already in the target state (redelivery
+	//     or out-of-order event — acknowledge), a row that does not exist is
+	//     not here yet (fail, so the provider redelivers).
+	GetPaymentByProviderId(ctx context.Context, in *GetPaymentByProviderIdReq, opts ...grpc.CallOption) (*GetPaymentByProviderIdResp, error)
+	// GetRefundByProviderId — fetch one Refund by the provider's refund id.
+	// RefundPayment reads it when a retried refund (same idempotency key, so
+	// the provider replays the same refund object) hits the unique key on
+	// its local INSERT.
+	GetRefundByProviderId(ctx context.Context, in *GetRefundByProviderIdReq, opts ...grpc.CallOption) (*GetRefundByProviderIdResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
@@ -65,6 +85,13 @@ type PaymentQueryClient interface {
 	GetPlanBySlug(ctx context.Context, in *GetPlanBySlugReq, opts ...grpc.CallOption) (*GetPlanBySlugResp, error)
 	// GetSubscription — fetch one subscription by id. Gated subscriptions.
 	GetSubscription(ctx context.Context, in *GetSubscriptionReq, opts ...grpc.CallOption) (*GetSubscriptionResp, error)
+	// GetSubscriptionByProviderId — fetch one subscription by the provider's
+	// subscription id. Read by Subscribe when a retried subscribe (same
+	// idempotency key, so the provider replays the same subscription) hits
+	// the unique key, and by the subscription webhook when its guarded
+	// UPDATE matched no row (exists → already CANCELED, acknowledge; absent
+	// → not here yet, fail so the provider redelivers). Gated subscriptions.
+	GetSubscriptionByProviderId(ctx context.Context, in *GetSubscriptionByProviderIdReq, opts ...grpc.CallOption) (*GetSubscriptionByProviderIdResp, error)
 }
 
 type paymentQueryClient struct {
@@ -89,6 +116,26 @@ func (c *paymentQueryClient) GetPayment(ctx context.Context, in *GetPaymentReq, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPaymentResp)
 	err := c.cc.Invoke(ctx, PaymentQuery_GetPayment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) GetPaymentByProviderId(ctx context.Context, in *GetPaymentByProviderIdReq, opts ...grpc.CallOption) (*GetPaymentByProviderIdResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPaymentByProviderIdResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetPaymentByProviderId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) GetRefundByProviderId(ctx context.Context, in *GetRefundByProviderIdReq, opts ...grpc.CallOption) (*GetRefundByProviderIdResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRefundByProviderIdResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetRefundByProviderId_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +192,16 @@ func (c *paymentQueryClient) GetSubscription(ctx context.Context, in *GetSubscri
 	return out, nil
 }
 
+func (c *paymentQueryClient) GetSubscriptionByProviderId(ctx context.Context, in *GetSubscriptionByProviderIdReq, opts ...grpc.CallOption) (*GetSubscriptionByProviderIdResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSubscriptionByProviderIdResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetSubscriptionByProviderId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PaymentQueryServer is the server API for PaymentQuery service.
 // All implementations should embed UnimplementedPaymentQueryServer
 // for forward compatibility.
@@ -156,6 +213,23 @@ type PaymentQueryServer interface {
 	// GetPayment — fetch one Payment by primary key (the REST GET
 	// /payments/{id} surface).
 	GetPayment(context.Context, *GetPaymentReq) (*GetPaymentResp, error)
+	// GetPaymentByProviderId — fetch one Payment by the provider's object id.
+	// Two readers, both holding a provider id and no local id:
+	//
+	//   - the create paths (CreatePayment / TopUpCredit): a retry with the
+	//     same idempotency key gets the SAME provider object replayed, and
+	//     the local INSERT hits the unique key — the existing row is the
+	//     answer, not an error;
+	//   - webhook reconciliation, when a transition-guarded UPDATE matched no
+	//     row: a row that exists was already in the target state (redelivery
+	//     or out-of-order event — acknowledge), a row that does not exist is
+	//     not here yet (fail, so the provider redelivers).
+	GetPaymentByProviderId(context.Context, *GetPaymentByProviderIdReq) (*GetPaymentByProviderIdResp, error)
+	// GetRefundByProviderId — fetch one Refund by the provider's refund id.
+	// RefundPayment reads it when a retried refund (same idempotency key, so
+	// the provider replays the same refund object) hits the unique key on
+	// its local INSERT.
+	GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
@@ -174,6 +248,13 @@ type PaymentQueryServer interface {
 	GetPlanBySlug(context.Context, *GetPlanBySlugReq) (*GetPlanBySlugResp, error)
 	// GetSubscription — fetch one subscription by id. Gated subscriptions.
 	GetSubscription(context.Context, *GetSubscriptionReq) (*GetSubscriptionResp, error)
+	// GetSubscriptionByProviderId — fetch one subscription by the provider's
+	// subscription id. Read by Subscribe when a retried subscribe (same
+	// idempotency key, so the provider replays the same subscription) hits
+	// the unique key, and by the subscription webhook when its guarded
+	// UPDATE matched no row (exists → already CANCELED, acknowledge; absent
+	// → not here yet, fail so the provider redelivers). Gated subscriptions.
+	GetSubscriptionByProviderId(context.Context, *GetSubscriptionByProviderIdReq) (*GetSubscriptionByProviderIdResp, error)
 }
 
 // UnimplementedPaymentQueryServer should be embedded to have
@@ -189,6 +270,12 @@ func (UnimplementedPaymentQueryServer) GetCustomerByUserId(context.Context, *Get
 func (UnimplementedPaymentQueryServer) GetPayment(context.Context, *GetPaymentReq) (*GetPaymentResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPayment not implemented")
 }
+func (UnimplementedPaymentQueryServer) GetPaymentByProviderId(context.Context, *GetPaymentByProviderIdReq) (*GetPaymentByProviderIdResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPaymentByProviderId not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRefundByProviderId not implemented")
+}
 func (UnimplementedPaymentQueryServer) GetCreditBalance(context.Context, *GetCreditBalanceReq) (*GetCreditBalanceResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCreditBalance not implemented")
 }
@@ -203,6 +290,9 @@ func (UnimplementedPaymentQueryServer) GetPlanBySlug(context.Context, *GetPlanBy
 }
 func (UnimplementedPaymentQueryServer) GetSubscription(context.Context, *GetSubscriptionReq) (*GetSubscriptionResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSubscription not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetSubscriptionByProviderId(context.Context, *GetSubscriptionByProviderIdReq) (*GetSubscriptionByProviderIdResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSubscriptionByProviderId not implemented")
 }
 func (UnimplementedPaymentQueryServer) testEmbeddedByValue() {}
 
@@ -256,6 +346,42 @@ func _PaymentQuery_GetPayment_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentQueryServer).GetPayment(ctx, req.(*GetPaymentReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_GetPaymentByProviderId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPaymentByProviderIdReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetPaymentByProviderId(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetPaymentByProviderId_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetPaymentByProviderId(ctx, req.(*GetPaymentByProviderIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_GetRefundByProviderId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRefundByProviderIdReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetRefundByProviderId(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetRefundByProviderId_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetRefundByProviderId(ctx, req.(*GetRefundByProviderIdReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -350,6 +476,24 @@ func _PaymentQuery_GetSubscription_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentQuery_GetSubscriptionByProviderId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSubscriptionByProviderIdReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetSubscriptionByProviderId(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetSubscriptionByProviderId_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetSubscriptionByProviderId(ctx, req.(*GetSubscriptionByProviderIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PaymentQuery_ServiceDesc is the grpc.ServiceDesc for PaymentQuery service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -364,6 +508,14 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPayment",
 			Handler:    _PaymentQuery_GetPayment_Handler,
+		},
+		{
+			MethodName: "GetPaymentByProviderId",
+			Handler:    _PaymentQuery_GetPaymentByProviderId_Handler,
+		},
+		{
+			MethodName: "GetRefundByProviderId",
+			Handler:    _PaymentQuery_GetRefundByProviderId_Handler,
 		},
 		{
 			MethodName: "GetCreditBalance",
@@ -384,6 +536,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSubscription",
 			Handler:    _PaymentQuery_GetSubscription_Handler,
+		},
+		{
+			MethodName: "GetSubscriptionByProviderId",
+			Handler:    _PaymentQuery_GetSubscriptionByProviderId_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
