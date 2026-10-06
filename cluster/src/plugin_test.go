@@ -3,9 +3,11 @@ package cluster
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -122,6 +124,17 @@ type managedRelay struct {
 	fp      string
 	codes   *regcode.Store
 	workers *workeradmit.Registry
+
+	// refusals are the relay-side pin's verdicts against a client, as the
+	// TLS handshake saw them.
+	mu       sync.Mutex
+	refusals []error
+}
+
+func (m *managedRelay) pinRefusals() []error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.refusals)
 }
 
 func serveManagedRelay(t *testing.T, controlPlaneFP string) *managedRelay {
@@ -143,12 +156,22 @@ func serveManagedRelay(t *testing.T, controlPlaneFP string) *managedRelay {
 		t.Fatal(err)
 	}
 	workers := workeradmit.New()
+	m := &managedRelay{fp: relayID.Fingerprint, codes: codes, workers: workers}
+	pin := relaydial.PinnedVerifier("control plane", controlPlaneFP)
 	opts := append(relayserver.BanServerOptions(workers), grpc.Creds(credentials.NewTLS(&tls.Config{
-		Certificates:          []tls.Certificate{crt},
-		MinVersion:            tls.VersionTLS13,
-		ClientAuth:            tls.RequireAnyClientCert,
-		VerifyPeerCertificate: relaydial.PinnedVerifier("control plane", controlPlaneFP),
-		VerifyConnection:      relaydial.PinnedConnectionVerifier("control plane", controlPlaneFP),
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.RequireAnyClientCert,
+		VerifyPeerCertificate: func(raw [][]byte, chains [][]*x509.Certificate) error {
+			err := pin(raw, chains)
+			if err != nil {
+				m.mu.Lock()
+				m.refusals = append(m.refusals, err)
+				m.mu.Unlock()
+			}
+			return err
+		},
+		VerifyConnection: relaydial.PinnedConnectionVerifier("control plane", controlPlaneFP),
 	})))
 	srv := grpc.NewServer(opts...)
 	pb.RegisterClusterServiceServer(srv, &relayserver.Server{
@@ -161,7 +184,8 @@ func serveManagedRelay(t *testing.T, controlPlaneFP string) *managedRelay {
 	}
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
-	return &managedRelay{addr: lis.Addr().String(), fp: relayID.Fingerprint, codes: codes, workers: workers}
+	m.addr = lis.Addr().String()
+	return m
 }
 
 // The whole boot path, against a REAL relay management server: the identity
@@ -218,7 +242,7 @@ func TestRegisterPlugin_TheRegisteredHandlerReachesAPinnedRelay(t *testing.T) {
 // not something that merely parses.
 func TestRegisterPlugin_AnotherIdentityIsRefusedByTheRelay(t *testing.T) {
 	pinnedCert, pinnedKey, pinnedFP := identityFiles(t, "console")
-	otherCert, otherKey, _ := identityFiles(t, "console")
+	otherCert, otherKey, otherFP := identityFiles(t, "console")
 	relay := serveManagedRelay(t, pinnedFP)
 	tb := &tables{relay: &pb.Relay{Id: "r-1", Name: "acme-eu", Url: relay.addr, CertFingerprint: relay.fp}}
 	boot := func(cert, key string) *handlers.ClusterServiceHandler {
@@ -246,18 +270,18 @@ func TestRegisterPlugin_AnotherIdentityIsRefusedByTheRelay(t *testing.T) {
 	if n := relay.codes.Outstanding(); n != minted {
 		t.Errorf("the refused control plane still got %d code(s) minted", n-minted)
 	}
-	// What the relay said, through the plugin's own dialer (the handler
-	// reports only that the relay did not become reachable): it rejected the
-	// certificate this plugin presented. bad_certificate is the pin — the
-	// listener requires a certificate but checks no chain.
-	conn, err := h.Dial(relay.addr, relay.fp)
-	if err != nil {
-		t.Fatal(err)
+	// Why, as the RELAY saw it (the handler reports only that the relay did
+	// not become reachable, and what the client reads of a TLS 1.3 refusal
+	// races with its first write): the pin refused the certificate this
+	// plugin was configured with — not a missing one, not a timeout.
+	refusals := relay.pinRefusals()
+	if len(refusals) == 0 {
+		t.Fatal("the relay's pin never refused anything — the call failed for some other reason")
 	}
-	defer func() { _ = conn.Close() }()
-	_, err = pb.NewClusterServiceClient(conn).RelayStats(t.Context(), &pb.RelayStatsReq{})
-	if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "tls: bad certificate") {
-		t.Fatalf("RelayStats with another identity: %v — want the relay rejecting the certificate (tls: bad certificate)", err)
+	for _, err := range refusals {
+		if !strings.Contains(err.Error(), "presented certificate "+otherFP) {
+			t.Errorf("the relay refused something other than the configured identity: %v", err)
+		}
 	}
 }
 

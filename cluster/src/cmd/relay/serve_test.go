@@ -405,21 +405,40 @@ func TestServe_ManagementRefusesAnyOtherControlPlane(t *testing.T) {
 	if _, err := r.manage(t, cp).RelayStats(ctx, &pb.RelayStatsReq{}); err != nil {
 		t.Fatalf("the pinned control plane was not served: %v", err)
 	}
-	mgmt := r.manage(t, intruder)
 	// The relay aborts the handshake with bad_certificate: a certificate WAS
 	// presented (the listener requires one, without checking a chain) and the
-	// pin rejected it. A refused connection, a timeout or the client's own pin
-	// of the relay would each read differently.
-	refusedByThePin := func(what string, err error) {
+	// pin rejected it. A refused connection, a timeout, a missing certificate
+	// ("certificate required") or the client's own pin of the relay would
+	// each read differently.
+	//
+	// Every attempt must fail Unavailable; the ALERT is waited for, over fresh
+	// connections (a failed one only replays its error until gRPC's backoff),
+	// because in TLS 1.3 the client finishes its side of the handshake before
+	// the server's verdict arrives, and its first write can lose the race to
+	// the server's close ("connection reset by peer") instead of reading it.
+	refusedByThePin := func(what string, call func(pb.ClusterServiceClient) error) {
 		t.Helper()
-		if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "tls: bad certificate") {
-			t.Fatalf("%s as a control plane the relay does not pin: %v — want Unavailable from the relay rejecting its certificate (tls: bad certificate)", what, err)
+		var errs []string
+		for range 20 {
+			err := call(r.manage(t, intruder))
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("%s as a control plane the relay does not pin: %v, want Unavailable", what, err)
+			}
+			if strings.Contains(err.Error(), "tls: bad certificate") {
+				return
+			}
+			errs = append(errs, err.Error())
 		}
+		t.Fatalf("%s as a control plane the relay does not pin never read the relay's bad_certificate alert: %q", what, errs)
 	}
-	_, err := mgmt.IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
-	refusedByThePin("IssueRegistrationCode", err)
-	_, err = mgmt.RelayStats(ctx, &pb.RelayStatsReq{})
-	refusedByThePin("RelayStats", err)
+	refusedByThePin("IssueRegistrationCode", func(mgmt pb.ClusterServiceClient) error {
+		_, err := mgmt.IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
+		return err
+	})
+	refusedByThePin("RelayStats", func(mgmt pb.ClusterServiceClient) error {
+		_, err := mgmt.RelayStats(ctx, &pb.RelayStatsReq{})
+		return err
+	})
 }
 
 // A drain over the management API takes effect in the binary: the relay says
