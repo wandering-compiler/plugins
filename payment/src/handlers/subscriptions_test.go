@@ -39,7 +39,9 @@ func TestCreatePlan(t *testing.T) {
 
 func TestCreatePlan_IdempotentReturnsExisting(t *testing.T) {
 	be := &fakeBackend{priceID: "price_should_not_be_used"}
-	q := &fakeQuery{plan: &pb.Plan{Id: "plan-9", Slug: "pro", ProviderPriceId: "price_old"}}
+	// Stored terms as the DECIMAL(20, 4) column reads them back; the
+	// request's "1" is the same price.
+	q := &fakeQuery{plan: &pb.Plan{Id: "plan-9", Slug: "pro", ProviderPriceId: "price_old", Amount: "1.0000", Currency: "usd", Interval: "month"}}
 	h := subHandler(q, &fakeMutation{}, be)
 	view, err := h.CreatePlan(context.Background(), &pb.DefinePlanReq{Slug: "pro", Amount: "1", Currency: "usd", Interval: "month"})
 	if err != nil {

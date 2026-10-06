@@ -80,7 +80,7 @@ type PaymentMutationClient interface {
 	// Zero rows is ambiguous at the handler — "already SUCCEEDED" vs "no
 	// such provider id yet" (TopUpCredit charges the provider before its
 	// own CreatePayment INSERT, so a fast webhook can outrun it). The
-	// webhook handler discriminates with the dedup ledger's own INSERT;
+	// webhook handler discriminates with PaymentQuery.GetPaymentByProviderId;
 	// see IngestStripe.
 	MarkPaymentSucceeded(ctx context.Context, in *MarkPaymentSucceededReq, opts ...grpc.CallOption) (*MarkPaymentSucceededResp, error)
 	// MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
@@ -120,10 +120,11 @@ type PaymentMutationClient interface {
 	// Because it is written last and never read first, this ledger cannot
 	// prevent a side effect from re-running — the reconciliation
 	// mutations' own transition guards do that. What the ledger still
-	// decides is what a redelivery is TOLD, and it is the discriminator
-	// IngestStripe uses for a guard that matched zero rows: a unique
-	// violation means the event was fully processed before, a clean
-	// insert means it was not.
+	// decides is what a redelivery is TOLD (handled=false). It is NOT the
+	// discriminator for a guard that matched zero rows: an out-of-order
+	// event has its own id, so a clean insert proves nothing about the
+	// row. IngestStripe looks the provider object up instead, and writes
+	// no ledger row when the object has no local row yet.
 	MarkWebhookProcessed(ctx context.Context, in *MarkWebhookProcessedReq, opts ...grpc.CallOption) (*MarkWebhookProcessedResp, error)
 	// ApplyCredit — append a signed ledger entry AND update the
 	// materialized balance, atomically in one transaction (two ops). The
@@ -351,7 +352,7 @@ type PaymentMutationServer interface {
 	// Zero rows is ambiguous at the handler — "already SUCCEEDED" vs "no
 	// such provider id yet" (TopUpCredit charges the provider before its
 	// own CreatePayment INSERT, so a fast webhook can outrun it). The
-	// webhook handler discriminates with the dedup ledger's own INSERT;
+	// webhook handler discriminates with PaymentQuery.GetPaymentByProviderId;
 	// see IngestStripe.
 	MarkPaymentSucceeded(context.Context, *MarkPaymentSucceededReq) (*MarkPaymentSucceededResp, error)
 	// MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
@@ -391,10 +392,11 @@ type PaymentMutationServer interface {
 	// Because it is written last and never read first, this ledger cannot
 	// prevent a side effect from re-running — the reconciliation
 	// mutations' own transition guards do that. What the ledger still
-	// decides is what a redelivery is TOLD, and it is the discriminator
-	// IngestStripe uses for a guard that matched zero rows: a unique
-	// violation means the event was fully processed before, a clean
-	// insert means it was not.
+	// decides is what a redelivery is TOLD (handled=false). It is NOT the
+	// discriminator for a guard that matched zero rows: an out-of-order
+	// event has its own id, so a clean insert proves nothing about the
+	// row. IngestStripe looks the provider object up instead, and writes
+	// no ledger row when the object has no local row yet.
 	MarkWebhookProcessed(context.Context, *MarkWebhookProcessedReq) (*MarkWebhookProcessedResp, error)
 	// ApplyCredit — append a signed ledger entry AND update the
 	// materialized balance, atomically in one transaction (two ops). The

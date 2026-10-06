@@ -12,17 +12,33 @@ driver.**
   `Payment` (one charge, provider-owned status), `Refund`,
   `ProcessedWebhookEvent` (inbound idempotency ledger).
 - **PaymentService** (turnkey, hand-written handlers):
-  - `CreateCustomer` — provider customer + local link.
+  - `CreateCustomer` — provider customer + local link; idempotent per
+    principal (an existing link is returned).
   - `CreatePayment` — ensure customer, create the provider payment
     (idempotency-keyed), persist the local `Payment`. Returns the
-    provider `client_secret` for frontend confirmation.
+    provider `client_secret` for frontend confirmation. A retry with the
+    same `idempotency_key` returns the payment the first attempt recorded;
+    a key already used for another payment is `AlreadyExists`. An empty
+    key gets a random one (no retry safety — send a stable key for that).
   - `RefundPayment` — reverse a payment (full or partial) via the
-    provider + record a local `Refund`. Privileged / internal (not
-    REST-exposed).
+    provider + record a local `Refund`; a retry with the same key returns
+    the recorded refund. Privileged / internal (not REST-exposed).
   - `IngestStripe` — webhook sink (gated `stripe_webhooks`): verify the
     `Stripe-Signature` HMAC (constant-time, multi-`v1`) + timestamp
-    tolerance (5-min replay window), dedup on the event id, dispatch the
-    terminal state to `MarkPaymentSucceeded` / `MarkPaymentFailed`.
+    tolerance (5-min replay window), dispatch the terminal state to
+    `MarkPaymentSucceeded` / `MarkPaymentFailed` (transition-guarded, so a
+    redelivered or out-of-order event changes and emits nothing), then
+    record the event id. An event for an object with no local row yet is
+    answered `NotFound` and NOT recorded, so the provider redelivers it.
+
+**Errors.** A provider failure maps by class: a declined card →
+`FailedPrecondition`; a request the provider (or the driver) refuses as
+invalid — an amount the currency cannot carry, a refund above what is
+left, an idempotency key reused with other parameters → `InvalidArgument`;
+anything else (network, 5xx, rate limit) → `Unavailable`, retryable.
+Amounts are validated against the `NUMERIC(20,4)` columns (≤ 16 integer,
+≤ 4 fractional digits) and currencies must be 3-letter codes — before any
+provider call.
 
 **Reads have no business handler.** Pure reads (`GET /payments/{id}`,
 `/credit/balance`, `/usage/{meter}/{period}`, `/subscriptions/{id}`) are
@@ -68,8 +84,10 @@ follow-up). Off by default.
   guard, not a racy read-then-write).
 - **PaymentService** (gated `prepaid`):
   - `GrantCredit` / `SpendCredit` — apply a signed amount; idempotent on
-    the key (a retry is a no-op); `SpendCredit` returns
-    `FailedPrecondition` when the balance is insufficient.
+    the key, scoped per principal and per operation (a retry is a no-op;
+    the same key on another principal, or a spend reusing a grant's key,
+    is a separate apply); `SpendCredit` returns `FailedPrecondition` when
+    the balance is insufficient.
   - read balance via `GET /credit/balance` → `PaymentQuery.GetCreditBalance`
     (storage-direct); grant/spend are privileged business ops.
 - **Event** — `CreditApplied` (signed delta + new balance).
@@ -87,7 +105,8 @@ quantity carrying `item_ref`/`metadata`) are the SAME operation — one
 - **`RecordUsage` mutation** — appends the record AND increments the
   meter in ONE transaction (UPSERT increment on the composite key).
 - **PaymentService** (gated `usage`):
-  - `ReportUsage` — record consumption; idempotent on the key. Internal /
+  - `ReportUsage` — record consumption; idempotent on the key, scoped per
+    (principal, meter, period). Internal /
     server-to-server (NOT REST-exposed — the service measuring usage
     reports it).
   - read the total via `GET /usage/{meter}/{period}` →
@@ -107,7 +126,9 @@ webhooks). Off by default. This is the one feature that extends
   `Subscription` (status enum, `current_period_end`).
 - **PaymentService** (gated `subscriptions`):
   - `CreatePlan` — define a plan + push the price to the provider
-    (idempotent on slug). Privileged / admin — NOT REST-exposed.
+    (idempotent on slug when the terms match; a slug that exists with a
+    different amount / currency / interval is `AlreadyExists`).
+    Privileged / admin — NOT REST-exposed.
   - `Subscribe` — ensure the customer, start the provider subscription,
     persist the local record (`POST /subscriptions`).
   - read one via `GET /subscriptions/{id}` → `PaymentQuery.GetSubscription`
@@ -138,9 +159,12 @@ there is no compile coupling when a feature is absent):
   events → `MarkSubscriptionStatus` (status + period end), emitting
   `SubscriptionStatusChanged`. The provider is authoritative for status.
 - **Credit top-up** — `PaymentService.TopUpCredit` charges the principal
-  and records a pending `CreditTopup`; on `payment_intent.succeeded` the
-  hook grants matching credit (idempotent — per-charge ledger key +
-  `granted_at` guard) and stamps it granted.
+  in `default_currency` (credit has no currency of its own, so any other
+  currency is refused) and records a pending `CreditTopup`; on
+  `payment_intent.succeeded` the hook grants matching credit (idempotent —
+  per-charge ledger key + `granted_at` guard) and stamps it granted. The
+  hook runs on every delivery of the event until one completes, so a
+  grant that failed transiently is retried by the provider's redelivery.
 
 ## Roadmap (follow-ups)
 

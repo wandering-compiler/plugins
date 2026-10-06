@@ -104,6 +104,13 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return Event{}, fmt.Errorf("stripe: malformed webhook body: %w", err)
 	}
+	// The event id is the dedup ledger's primary key and the type picks
+	// the reconciliation. An event without either cannot be processed
+	// exactly once: an empty id would be recorded as "" and from then on
+	// make every other id-less event read as already processed.
+	if raw.ID == "" || raw.Type == "" {
+		return Event{}, fmt.Errorf("stripe: malformed webhook body: missing event id or type")
+	}
 	return Event{
 		ID:               raw.ID,
 		Type:             raw.Type,

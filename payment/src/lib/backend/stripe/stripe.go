@@ -31,13 +31,32 @@ type Backend struct {
 	httpClient *http.Client
 }
 
+// Option adjusts a Backend at construction.
+type Option func(*Backend)
+
+// WithBaseURL points the driver at another Stripe-compatible API root
+// (a local stripe-mock, or a test server speaking the Stripe wire
+// format).
+func WithBaseURL(u string) Option {
+	return func(b *Backend) { b.baseURL = strings.TrimRight(u, "/") }
+}
+
+// WithHTTPClient replaces the default client (20s timeout).
+func WithHTTPClient(c *http.Client) Option {
+	return func(b *Backend) { b.httpClient = c }
+}
+
 // New builds a Stripe backend from the secret API key (sk_…).
-func New(apiKey string) *Backend {
-	return &Backend{
+func New(apiKey string, opts ...Option) *Backend {
+	b := &Backend{
 		apiKey:     apiKey,
 		baseURL:    defaultAPIBase,
 		httpClient: &http.Client{Timeout: 20 * time.Second},
 	}
+	for _, o := range opts {
+		o(b)
+	}
+	return b
 }
 
 // Name identifies the driver.
@@ -68,7 +87,7 @@ func (b *Backend) EnsureCustomer(ctx context.Context, spec backend.CustomerSpec)
 // sent as the Idempotency-Key header so a retried call returns the same
 // intent instead of creating a second charge.
 func (b *Backend) CreatePayment(ctx context.Context, spec backend.PaymentSpec) (backend.PaymentResult, error) {
-	minor, err := toMinorUnits(spec.Amount.Amount, spec.Amount.Currency)
+	minor, err := positiveMinorUnits(spec.Amount.Amount, spec.Amount.Currency)
 	if err != nil {
 		return backend.PaymentResult{}, err
 	}
@@ -100,7 +119,7 @@ func (b *Backend) RefundPayment(ctx context.Context, providerPaymentID string, a
 	form := url.Values{}
 	form.Set("payment_intent", providerPaymentID)
 	if amount.Amount != "" {
-		minor, err := toMinorUnits(amount.Amount, amount.Currency)
+		minor, err := positiveMinorUnits(amount.Amount, amount.Currency)
 		if err != nil {
 			return backend.RefundResult{}, err
 		}
@@ -117,7 +136,7 @@ func (b *Backend) RefundPayment(ctx context.Context, providerPaymentID string, a
 // for the plan and returns its id. v1 always creates; search-or-reuse
 // is a follow-up (the local Plan.provider_price_id is the dedup anchor).
 func (b *Backend) UpsertPlan(ctx context.Context, spec backend.PlanSpec) (string, error) {
-	minor, err := toMinorUnits(spec.Amount.Amount, spec.Amount.Currency)
+	minor, err := positiveMinorUnits(spec.Amount.Amount, spec.Amount.Currency)
 	if err != nil {
 		return "", err
 	}
@@ -186,15 +205,41 @@ func (b *Backend) post(ctx context.Context, path string, form url.Values, idemKe
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var e apiError
 		_ = json.Unmarshal(body, &e)
+		detail := fmt.Sprintf("http %d", resp.StatusCode)
 		if e.Error.Message != "" {
-			return fmt.Errorf("stripe: %s: %s (%s)", path, e.Error.Message, e.Error.Type)
+			detail = fmt.Sprintf("%s (%s)", e.Error.Message, e.Error.Type)
 		}
-		return fmt.Errorf("stripe: %s: http %d", path, resp.StatusCode)
+		if class := classifyAPIError(resp.StatusCode, e.Error.Type); class != nil {
+			return fmt.Errorf("stripe: %s: %s: %w", path, detail, class)
+		}
+		return fmt.Errorf("stripe: %s: %s", path, detail)
 	}
 	if out != nil {
 		if err := json.Unmarshal(body, out); err != nil {
 			return fmt.Errorf("stripe: %s: decode response: %w", path, err)
 		}
+	}
+	return nil
+}
+
+// classifyAPIError maps a Stripe error response onto the provider-
+// neutral failure classes (nil = transient, the caller may retry).
+//
+//   - card_error / 402: the charge was declined → backend.ErrDeclined.
+//   - 400 / 404 (invalid_request_error, an idempotency key reused with
+//     different parameters, a refund above the unrefunded amount): the
+//     request is wrong and fails the same way every time →
+//     backend.ErrInvalidRequest.
+//   - everything else stays transient: 409 (a concurrent request on the
+//     same idempotency key is still in flight), 429 and 5xx clear on a
+//     retry; 401 / 403 (a bad or under-privileged API key) are the
+//     operator's to fix, not the caller's request.
+func classifyAPIError(status int, errType string) error {
+	switch {
+	case errType == "card_error" || status == http.StatusPaymentRequired:
+		return backend.ErrDeclined
+	case status == http.StatusBadRequest || status == http.StatusNotFound:
+		return backend.ErrInvalidRequest
 	}
 	return nil
 }

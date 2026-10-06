@@ -238,7 +238,7 @@ service PaymentMutation {
   // Zero rows is ambiguous at the handler — "already SUCCEEDED" vs "no
   // such provider id yet" (TopUpCredit charges the provider before its
   // own CreatePayment INSERT, so a fast webhook can outrun it). The
-  // webhook handler discriminates with the dedup ledger's own INSERT;
+  // webhook handler discriminates with PaymentQuery.GetPaymentByProviderId;
   // see IngestStripe.
   rpc MarkPaymentSucceeded(MarkPaymentSucceededReq) returns (MarkPaymentSucceededResp) {
     option (w17.db.method) = {
@@ -356,10 +356,11 @@ service PaymentMutation {
   // Because it is written last and never read first, this ledger cannot
   // prevent a side effect from re-running — the reconciliation
   // mutations' own transition guards do that. What the ledger still
-  // decides is what a redelivery is TOLD, and it is the discriminator
-  // IngestStripe uses for a guard that matched zero rows: a unique
-  // violation means the event was fully processed before, a clean
-  // insert means it was not.
+  // decides is what a redelivery is TOLD (handled=false). It is NOT the
+  // discriminator for a guard that matched zero rows: an out-of-order
+  // event has its own id, so a clean insert proves nothing about the
+  // row. IngestStripe looks the provider object up instead, and writes
+  // no ledger row when the object has no local row yet.
   rpc MarkWebhookProcessed(MarkWebhookProcessedReq) returns (MarkWebhookProcessedResp) {
     option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
     option (w17.db.method) = {
