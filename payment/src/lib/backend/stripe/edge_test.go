@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 // ── amounts ──────────────────────────────────────────────────────────

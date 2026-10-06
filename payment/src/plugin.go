@@ -12,10 +12,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wandering-compiler/platform/plugins/payment/gen"
-	"github.com/wandering-compiler/platform/plugins/payment/handlers"
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
+	"github.com/wandering-compiler/plugins/payment/gen"
+	"github.com/wandering-compiler/plugins/payment/handlers"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 )
 
 // RegisterPlugin wires the PaymentService handler:

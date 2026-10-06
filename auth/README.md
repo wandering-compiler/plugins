@@ -13,7 +13,7 @@ Layout:
 
 ```
 plugins/auth/
-├── go.mod              ← module github.com/wandering-compiler/platform/plugins/auth
+├── go.mod              ← module github.com/wandering-compiler/plugins/auth
 ├── plugin.yaml         ← manifest (go_module field is v3-new)
 ├── proto/              ← schema source (same content as v2)
 │   ├── types/

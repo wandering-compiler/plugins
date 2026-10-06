@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"

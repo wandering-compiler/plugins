@@ -9,7 +9,7 @@ import (
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // constraintErr builds the InvalidArgument + ErrorDetail{code} shape

@@ -25,7 +25,7 @@ import (
 	"context"
 	"github.com/wandering-compiler/sdk/go/service/secret"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 )
 
 // EnvConfig is the plugin's typed configuration, one field per `env:` entry in

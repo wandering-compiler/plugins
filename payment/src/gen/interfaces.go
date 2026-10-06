@@ -18,7 +18,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/service/secret"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // EnvConfig is the typed view of the activation's env-var inputs. One

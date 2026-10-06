@@ -177,8 +177,8 @@ const file_queries_relay_query_proto_rawDesc = "" +
 	"ListRelays\x12\".w17.contrib.cluster.ListRelaysReq\x1a#.w17.contrib.cluster.ListRelaysResp\"\xde\x02\xf2\xf3\x18\xd9\x02B\xd6\x02\n" +
 	"\x04main\x12\xcd\x02SELECT r.id AS id,        r.name AS name,        r.url AS url,        r.cert_fingerprint AS cert_fingerprint,        r.enabled AS enabled,        r.created_at AS created_at,        r.last_seen_at AS last_seen_at,        r.last_error AS last_error FROM @module.Relay r WHERE (:enabled_only = false OR r.enabled = true) ORDER BY r.name\x12\xf8\x02\n" +
 	"\bGetRelay\x12 .w17.contrib.cluster.GetRelayReq\x1a\x1a.w17.contrib.cluster.Relay\"\xad\x02\xf2\xf3\x18\xa8\x02B\xa5\x02\n" +
-	"\x04main\x12\x9c\x02SELECT r.id AS id,        r.name AS name,        r.url AS url,        r.cert_fingerprint AS cert_fingerprint,        r.enabled AS enabled,        r.created_at AS created_at,        r.last_seen_at AS last_seen_at,        r.last_error AS last_error FROM @module.Relay r WHERE r.id = :idB\xd7\x01\n" +
-	"\x17com.w17.contrib.clusterB\x0fRelayQueryProtoP\x01Z=github.com/wandering-compiler/platform/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
+	"\x04main\x12\x9c\x02SELECT r.id AS id,        r.name AS name,        r.url AS url,        r.cert_fingerprint AS cert_fingerprint,        r.enabled AS enabled,        r.created_at AS created_at,        r.last_seen_at AS last_seen_at,        r.last_error AS last_error FROM @module.Relay r WHERE r.id = :idB\xce\x01\n" +
+	"\x17com.w17.contrib.clusterB\x0fRelayQueryProtoP\x01Z4github.com/wandering-compiler/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
 
 var (
 	file_queries_relay_query_proto_rawDescOnce sync.Once

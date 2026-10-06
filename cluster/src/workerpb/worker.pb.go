@@ -670,7 +670,7 @@ const file_worker_proto_rawDesc = "" +
 	"\x06Attach\x12!.w17.cluster.worker.WorkerMessage\x1a\x1f.w17.cluster.worker.AttachEvent(\x010\x012\xa4\x01\n" +
 	"\x10WorkerEnrollment\x12H\n" +
 	"\x06Enroll\x12\x1d.w17.cluster.worker.EnrollReq\x1a\x1f.w17.cluster.worker.Certificate\x12F\n" +
-	"\x05Renew\x12\x1c.w17.cluster.worker.RenewReq\x1a\x1f.w17.cluster.worker.CertificateBJZHgithub.com/wandering-compiler/platform/plugins/cluster/workerpb;workerpbb\x06proto3"
+	"\x05Renew\x12\x1c.w17.cluster.worker.RenewReq\x1a\x1f.w17.cluster.worker.CertificateBAZ?github.com/wandering-compiler/plugins/cluster/workerpb;workerpbb\x06proto3"
 
 var (
 	file_worker_proto_rawDescOnce sync.Once

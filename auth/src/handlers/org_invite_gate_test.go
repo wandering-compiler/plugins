@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 // gateQuery answers the ONE query the sign-up gate makes. Embedding the

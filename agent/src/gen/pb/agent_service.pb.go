@@ -1252,8 +1252,8 @@ const file_business_agent_service_proto_rawDesc = "" +
 	"\fAgentService\x12K\n" +
 	"\bComplete\x12\x1e.w17.contrib.agent.CompleteReq\x1a\x1f.w17.contrib.agent.CompleteResp\x12T\n" +
 	"\x0eCompleteStream\x12\x1e.w17.contrib.agent.CompleteReq\x1a .w17.contrib.agent.CompleteEvent0\x01\x12P\n" +
-	"\bRunAgent\x12\x1e.w17.contrib.agent.RunAgentReq\x1a .w17.contrib.agent.RunAgentEvent(\x010\x01B\xcd\x01\n" +
-	"\x15com.w17.contrib.agentB\x11AgentServiceProtoP\x01Z;github.com/wandering-compiler/platform/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
+	"\bRunAgent\x12\x1e.w17.contrib.agent.RunAgentReq\x1a .w17.contrib.agent.RunAgentEvent(\x010\x01B\xc4\x01\n" +
+	"\x15com.w17.contrib.agentB\x11AgentServiceProtoP\x01Z2github.com/wandering-compiler/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
 
 var (
 	file_business_agent_service_proto_rawDescOnce sync.Once

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 // deviceMock satisfies both client interfaces (embedded nil) and records

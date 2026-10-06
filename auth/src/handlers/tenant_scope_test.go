@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

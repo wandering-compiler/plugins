@@ -13,10 +13,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/wandering-compiler/platform/plugins/auth/lib/secretbox"
-	"github.com/wandering-compiler/platform/plugins/auth/lib/totp"
+	"github.com/wandering-compiler/plugins/auth/lib/secretbox"
+	"github.com/wandering-compiler/plugins/auth/lib/totp"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 // This file implements the `two_factor` feature. It is staged into a

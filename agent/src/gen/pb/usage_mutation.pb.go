@@ -912,8 +912,8 @@ const file_mutations_usage_mutation_proto_rawDesc = "" +
 	"\x10RecordModelPrice\x12&.w17.contrib.agent.RecordModelPriceReq\x1a'.w17.contrib.agent.RecordModelPriceResp\"\xb7\x02\xf2\xf3\x18\xb2\x02B\xaf\x02\n" +
 	"\x04main\x12\xa6\x02INSERT INTO @module.ModelPrice SET model_id = :model_id, valid_from = :valid_from, input_per_million_minor = :input_per_million_minor, output_per_million_minor = :output_per_million_minor, cached_input_per_million_minor = :cached_input_per_million_minor, currency = :currency RETURNING id AS id\x12\x96\x02\n" +
 	"\rSetScopeLimit\x12#.w17.contrib.agent.SetScopeLimitReq\x1a$.w17.contrib.agent.SetScopeLimitResp\"\xb9\x01\xf2\xf3\x18\xb4\x01B\xb1\x01\n" +
-	"\x04main\x12\xa8\x01INSERT INTO @module.ScopeLimit SET scope_id = :scope_id, window = :window, limit_minor = :limit_minor, currency = :currency, valid_from = :valid_from RETURNING id AS id\x1a\x15\x82\xf5\x18\x11usage_persistenceB\xce\x01\n" +
-	"\x15com.w17.contrib.agentB\x12UsageMutationProtoP\x01Z;github.com/wandering-compiler/platform/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
+	"\x04main\x12\xa8\x01INSERT INTO @module.ScopeLimit SET scope_id = :scope_id, window = :window, limit_minor = :limit_minor, currency = :currency, valid_from = :valid_from RETURNING id AS id\x1a\x15\x82\xf5\x18\x11usage_persistenceB\xc5\x01\n" +
+	"\x15com.w17.contrib.agentB\x12UsageMutationProtoP\x01Z2github.com/wandering-compiler/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
 
 var (
 	file_mutations_usage_mutation_proto_rawDescOnce sync.Once

@@ -3,8 +3,8 @@ package handlers
 import (
 	"context"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 )
 
 // Cross-feature webhook hooks. The webhook ingestion handler

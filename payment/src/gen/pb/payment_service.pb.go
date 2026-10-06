@@ -1339,8 +1339,8 @@ const file_business_payment_service_proto_rawDesc = "" +
 	"\vReportUsage\x12#.w17.contrib.payment.ReportUsageReq\x1a\x1e.w17.contrib.payment.UsageView\"\t\x8a\xf5\x18\x05usage\x12b\n" +
 	"\n" +
 	"CreatePlan\x12\".w17.contrib.payment.DefinePlanReq\x1a\x1d.w17.contrib.payment.PlanView\"\x11\x8a\xf5\x18\rsubscriptions\x12h\n" +
-	"\tSubscribe\x12!.w17.contrib.payment.SubscribeReq\x1a%.w17.contrib.payment.SubscriptionView\"\x11\x8a\xf5\x18\rsubscriptionsB\xdb\x01\n" +
-	"\x17com.w17.contrib.paymentB\x13PaymentServiceProtoP\x01Z=github.com/wandering-compiler/platform/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
+	"\tSubscribe\x12!.w17.contrib.payment.SubscribeReq\x1a%.w17.contrib.payment.SubscriptionView\"\x11\x8a\xf5\x18\rsubscriptionsB\xd2\x01\n" +
+	"\x17com.w17.contrib.paymentB\x13PaymentServiceProtoP\x01Z4github.com/wandering-compiler/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
 
 var (
 	file_business_payment_service_proto_rawDescOnce sync.Once

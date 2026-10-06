@@ -15,11 +15,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/regcode"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/regcode"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 const (

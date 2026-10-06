@@ -3,7 +3,7 @@ package handlers
 import (
 	"context"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 // The tenant half of `sign_up_confirmation`, staged only when `tenant_scope`

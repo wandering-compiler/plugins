@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 // A worker configured with a name or device id the registry cannot record

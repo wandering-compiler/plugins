@@ -17,9 +17,9 @@ import (
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
 	"github.com/openai/openai-go/v2/responses"
-	gen "github.com/wandering-compiler/platform/plugins/agent/gen"
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+	gen "github.com/wandering-compiler/plugins/agent/gen"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/plugins/agent/lib/llm"
 )
 
 type capturingSink struct{ events []UsageEvent }

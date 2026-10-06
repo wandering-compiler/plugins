@@ -1840,8 +1840,8 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"/\n" +
 	"\n" +
 	"changed_at\x12!$response.subscription.updated_at\xf2\xf3\x18\xc0\x04B\xbd\x04\n" +
-	"\x04main\x12\xb4\x04UPDATE @module.Subscription SET status = :status, current_period_end = :current_period_end, provider_event_at = :provider_event_at, updated_at = NOW() WHERE provider_subscription_id = :provider_subscription_id AND status <> 4 AND (provider_event_at IS NULL OR provider_event_at <= :provider_event_at) RETURNING id AS subscription.id,           provider_subscription_id AS subscription.provider_subscription_id,           status AS subscription.status,           current_period_end AS subscription.current_period_end,           updated_at AS subscription.updated_at\x8a\xf5\x18\rsubscriptionsB\xdc\x01\n" +
-	"\x17com.w17.contrib.paymentB\x14PaymentMutationProtoP\x01Z=github.com/wandering-compiler/platform/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
+	"\x04main\x12\xb4\x04UPDATE @module.Subscription SET status = :status, current_period_end = :current_period_end, provider_event_at = :provider_event_at, updated_at = NOW() WHERE provider_subscription_id = :provider_subscription_id AND status <> 4 AND (provider_event_at IS NULL OR provider_event_at <= :provider_event_at) RETURNING id AS subscription.id,           provider_subscription_id AS subscription.provider_subscription_id,           status AS subscription.status,           current_period_end AS subscription.current_period_end,           updated_at AS subscription.updated_at\x8a\xf5\x18\rsubscriptionsB\xd3\x01\n" +
+	"\x17com.w17.contrib.paymentB\x14PaymentMutationProtoP\x01Z4github.com/wandering-compiler/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
 
 var (
 	file_mutations_payment_mutation_proto_rawDescOnce sync.Once

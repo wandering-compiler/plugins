@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
 )
 
 // mint is `relay mint`: make (or keep) a pinned identity in a directory and

@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
 )
 
 // Fingerprint is the lowercase hex SHA-256 of a certificate's DER bytes — the

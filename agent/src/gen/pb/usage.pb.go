@@ -883,9 +883,9 @@ const file_types_usage_proto_rawDesc = "" +
 	"\x18LIMIT_WINDOW_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10LIMIT_WINDOW_DAY\x10\x01\x12\x16\n" +
 	"\x12LIMIT_WINDOW_MONTH\x10\x02\x12\x16\n" +
-	"\x12LIMIT_WINDOW_TOTAL\x10\x03B\xc6\x01\n" +
+	"\x12LIMIT_WINDOW_TOTAL\x10\x03B\xbd\x01\n" +
 	"\x15com.w17.contrib.agentB\n" +
-	"UsageProtoP\x01Z;github.com/wandering-compiler/platform/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
+	"UsageProtoP\x01Z2github.com/wandering-compiler/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
 
 var (
 	file_types_usage_proto_rawDescOnce sync.Once

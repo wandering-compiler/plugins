@@ -7,9 +7,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
 )
 
 // ReserveTask takes a place in this relay's queue and answers at once.

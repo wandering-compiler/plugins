@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 // toleranceSeconds bounds how far the signed timestamp may be from now

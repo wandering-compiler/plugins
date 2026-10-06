@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/agent/gen"
-	"github.com/wandering-compiler/platform/plugins/agent/handlers"
-	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+	"github.com/wandering-compiler/plugins/agent/gen"
+	"github.com/wandering-compiler/plugins/agent/handlers"
+	"github.com/wandering-compiler/plugins/agent/lib/llm"
 )
 
 // defaultMaxOutputTokens mirrors plugin.yaml's default so a bundle whose env

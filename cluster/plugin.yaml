@@ -1,11 +1,11 @@
 name: cluster
-version: 0.2.0-rc.6
+version: 0.2.0-rc.7
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
 # per-activation pb path.
-go_module: github.com/wandering-compiler/platform/plugins/cluster
+go_module: github.com/wandering-compiler/plugins/cluster
 
 description: "Control plane for a pool of relays that place work on workers the control plane never talks to. Registers relays, picks one, and hands the caller an address and a single-use ticket. Deliberately knows NOTHING about what the workers do — activate it as `codegen` for compile workers, as `browser` for headless-browser workers, and the same plugin serves both."
 license: "Apache-2.0"

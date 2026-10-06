@@ -417,8 +417,8 @@ const file_types_models_proto_rawDesc = "" +
 	"\vWorkerState\x12\x1c\n" +
 	"\x18WORKER_STATE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15WORKER_STATE_ENROLLED\x10\x01\x12\x17\n" +
-	"\x13WORKER_STATE_BANNED\x10\x02B\xd3\x01\n" +
-	"\x17com.w17.contrib.clusterB\vModelsProtoP\x01Z=github.com/wandering-compiler/platform/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
+	"\x13WORKER_STATE_BANNED\x10\x02B\xca\x01\n" +
+	"\x17com.w17.contrib.clusterB\vModelsProtoP\x01Z4github.com/wandering-compiler/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
 
 var (
 	file_types_models_proto_rawDescOnce sync.Once

@@ -8,8 +8,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/auth/lib/passwordhash"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 

@@ -7844,8 +7844,8 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\x19\n" +
 	"\x06org_id\x12\x0f$request.org_id\xf2\xf3\x18\x85\x01B\x82\x01\n" +
 	"\x04main\x12zDELETE FROM @module.OrgInvite WHERE id = :invite_id AND org_id = :org_id AND accepted_at IS NULL RETURNING id AS invite_id\x8a\xf5\x18\n" +
-	"org_inviteB\xc7\x01\n" +
-	"\x14com.w17.contrib.authB\x11AuthMutationProtoP\x01Z:github.com/wandering-compiler/platform/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
+	"org_inviteB\xbe\x01\n" +
+	"\x14com.w17.contrib.authB\x11AuthMutationProtoP\x01Z1github.com/wandering-compiler/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
 
 var (
 	file_mutations_auth_mutation_proto_rawDescOnce sync.Once

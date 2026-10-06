@@ -15,9 +15,9 @@ import (
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // uniqueViolationErr builds the error shape storage returns for a

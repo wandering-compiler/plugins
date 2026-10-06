@@ -7,9 +7,9 @@ import (
 
 	"errors"
 
-	gen "github.com/wandering-compiler/platform/plugins/agent/gen"
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+	gen "github.com/wandering-compiler/plugins/agent/gen"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/plugins/agent/lib/llm"
 )
 
 // CallOutcome mirrors the proto CallStatus, and exists because this file is

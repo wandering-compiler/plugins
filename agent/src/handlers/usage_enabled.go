@@ -3,9 +3,9 @@ package handlers
 import (
 	"context"
 
-	gen "github.com/wandering-compiler/platform/plugins/agent/gen"
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/agent/lib/usage"
+	gen "github.com/wandering-compiler/plugins/agent/gen"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/plugins/agent/lib/usage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

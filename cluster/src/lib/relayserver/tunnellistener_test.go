@@ -13,10 +13,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 // tunnelRig is the relay's TUNNEL listener on real TCP. clientAuth is what the

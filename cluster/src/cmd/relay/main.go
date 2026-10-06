@@ -43,15 +43,15 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/regcode"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
-	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/regcode"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/workerpb"
 )
 
 type config struct {

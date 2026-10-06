@@ -15,7 +15,7 @@ syntax = "proto3";
 // only two programs that know it exists.
 package w17.cluster.worker;
 
-option go_package = "github.com/wandering-compiler/platform/plugins/cluster/workerpb;workerpb";
+option go_package = "github.com/wandering-compiler/plugins/cluster/workerpb;workerpb";
 
 // WorkerAttach is how a machine offers itself to a relay.
 service WorkerAttach {

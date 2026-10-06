@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	gen "github.com/wandering-compiler/platform/plugins/agent/gen"
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/agent/handlers"
+	gen "github.com/wandering-compiler/plugins/agent/gen"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/plugins/agent/handlers"
 	"github.com/wandering-compiler/sdk/go/service/secret"
 )
 

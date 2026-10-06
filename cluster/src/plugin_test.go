@@ -18,15 +18,15 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/gen"
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/handlers"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/regcode"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/gen"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/handlers"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/regcode"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 // registry is the bundle's half of gen.HandlerRegistry: it keeps what the

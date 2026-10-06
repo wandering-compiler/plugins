@@ -2037,8 +2037,8 @@ const file_events_auth_events_proto_rawDesc = "" +
 	"\tinvite_id\x18\x01 \x01(\tR\binviteId\x12\x15\n" +
 	"\x06org_id\x18\x02 \x01(\tR\x05orgId:3\x92\xbd\x18!\n" +
 	"\x06events\x12\x17auth.org_invite.revoked\xfa\xf4\x18\n" +
-	"org_inviteB\xc5\x01\n" +
-	"\x14com.w17.contrib.authB\x0fAuthEventsProtoP\x01Z:github.com/wandering-compiler/platform/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
+	"org_inviteB\xbc\x01\n" +
+	"\x14com.w17.contrib.authB\x0fAuthEventsProtoP\x01Z1github.com/wandering-compiler/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
 
 var (
 	file_events_auth_events_proto_rawDescOnce sync.Once

@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 )
 
 const fakeStripeKey = "sk_test_fake"

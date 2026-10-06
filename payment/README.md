@@ -72,6 +72,8 @@ credit, idempotency / error-contract mapping, webhook verify) keep a
 
 ## Upgrading from 0.1.0-rc.2 or earlier
 
+**Module path.** The Go module path changed from `github.com/wandering-compiler/platform/plugins/payment` to `github.com/wandering-compiler/plugins/payment`. Generated code needs nothing: `w17ctl plugin update` re-vendors the plugin, and codegen rewrites the imports. Hand-written code that imports the plugin's packages directly must update its import paths, and any `replace` directive in its own `go.mod`.
+
 - **Do not run mixed versions.** Stop or drain every rc.2 (or earlier)
   replica before an instance of this version serves traffic — a rolling
   deploy that runs both side by side is not safe. This version recognises

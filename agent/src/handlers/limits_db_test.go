@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 )
 
 func newTestLimiter(t *testing.T) (*usageStore, *dbLimiter) {

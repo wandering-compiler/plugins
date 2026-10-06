@@ -3006,8 +3006,8 @@ const file_types_models_proto_rawDesc = "" +
 	"\x0eSELF_CONFIRMED\x10\x02*!\n" +
 	"\vAccountKind\x12\t\n" +
 	"\x05HUMAN\x10\x00\x12\a\n" +
-	"\x03BOT\x10\x01B\xc1\x01\n" +
-	"\x14com.w17.contrib.authB\vModelsProtoP\x01Z:github.com/wandering-compiler/platform/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
+	"\x03BOT\x10\x01B\xb8\x01\n" +
+	"\x14com.w17.contrib.authB\vModelsProtoP\x01Z1github.com/wandering-compiler/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
 
 var (
 	file_types_models_proto_rawDescOnce sync.Once

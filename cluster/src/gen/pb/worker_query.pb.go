@@ -374,8 +374,8 @@ const file_queries_worker_query_proto_rawDesc = "" +
 	"\x13FingerprintsByState\x12+.w17.contrib.cluster.FingerprintsByStateReq\x1a,.w17.contrib.cluster.FingerprintsByStateResp\"s\xf2\xf3\x18oBm\n" +
 	"\x04main\x12eSELECT ROWS_TO_ARRAY(w.cert_fingerprint) AS fingerprints FROM @module.Worker w WHERE w.state = :state\x12\xc8\x01\n" +
 	"\x13CountWorkersByState\x12+.w17.contrib.cluster.CountWorkersByStateReq\x1a,.w17.contrib.cluster.CountWorkersByStateResp\"V\xf2\xf3\x18RBP\n" +
-	"\x04main\x12HSELECT COUNT(w.id) AS total FROM @module.Worker w WHERE w.state = :stateB\xd8\x01\n" +
-	"\x17com.w17.contrib.clusterB\x10WorkerQueryProtoP\x01Z=github.com/wandering-compiler/platform/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
+	"\x04main\x12HSELECT COUNT(w.id) AS total FROM @module.Worker w WHERE w.state = :stateB\xcf\x01\n" +
+	"\x17com.w17.contrib.clusterB\x10WorkerQueryProtoP\x01Z4github.com/wandering-compiler/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
 
 var (
 	file_queries_worker_query_proto_rawDescOnce sync.Once

@@ -10,10 +10,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 // workerStore is a registry in memory. Guarded: relays are polled in parallel.

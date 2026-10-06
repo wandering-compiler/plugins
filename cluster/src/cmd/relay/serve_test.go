@@ -23,13 +23,13 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workerconn"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/lib/workerconn"
 )
 
 // quiet sends the relay's log (fingerprint banner, listener shutdowns) to the

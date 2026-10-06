@@ -8,9 +8,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // The provider forgets an idempotency key after a day. A refund retried

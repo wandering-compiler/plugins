@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/mem"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 )
 
 // The raw codec announces "proto": the WORKER picks its codec by that

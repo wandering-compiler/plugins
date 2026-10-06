@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
-	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/workerpb"
 )
 
 // A worker's name and device id must be something the control plane's
