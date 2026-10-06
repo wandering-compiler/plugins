@@ -18,7 +18,7 @@ func TestRegisterPlugin_WiresConfigIntoTheHandler(t *testing.T) {
 	reg := &fakeRegistry{}
 	cfg := &gen.EnvConfig{
 		PaymentProvider:      " Stripe ",
-		ProviderApiKey:       secret.New("sk_test_fake"),
+		ProviderAPIKey:       secret.New("sk_test_fake"),
 		WebhookSigningSecret: secret.New("whsec_test_fake"),
 		DefaultCurrency:      " EUR ",
 	}
@@ -66,7 +66,7 @@ func (nilClients) PaymentMutation() pb.PaymentMutationClient { return nil }
 // Unwired storage clients fail at boot, not on the first request.
 func TestRegisterPlugin_UnwiredClientsFailLoud(t *testing.T) {
 	reg := &fakeRegistry{}
-	cfg := &gen.EnvConfig{ProviderApiKey: secret.New("sk_test_fake")}
+	cfg := &gen.EnvConfig{ProviderAPIKey: secret.New("sk_test_fake")}
 	if err := RegisterPlugin(cfg, reg, nilClients{}); err == nil {
 		t.Fatal("registered with nil storage clients")
 	}
