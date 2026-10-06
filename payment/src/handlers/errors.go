@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -184,14 +185,18 @@ func idempotencyKeyTooLong(key string) error {
 }
 
 // scopedKey derives the stored ledger key from its scope and the
-// caller's key: "v2:" + hex(sha256(parts joined by NUL)). Fixed length
-// (67 bytes, inside every key column), and two applies share a stored
-// key only when every part matches. NUL never occurs in a gRPC string
-// field that is valid UTF-8 text from a caller, so parts cannot shift
-// across the separator.
+// caller's key: "v2:" + hex(sha256 of the parts, each length-prefixed).
+// Fixed length (67 bytes, inside every key column), and two applies share
+// a stored key only when every part matches. Length-prefixed rather than
+// joined by a separator: any byte, NUL included, is valid in a caller's
+// string, so with a separator ("u\x00v", "k") and ("u", "v\x00k") would
+// hash alike.
 func scopedKey(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return "v2:" + hex.EncodeToString(sum[:])
+	h := sha256.New()
+	for _, p := range parts {
+		fmt.Fprintf(h, "%d:%s", len(p), p)
+	}
+	return "v2:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func orDefault(s, def string) string {
