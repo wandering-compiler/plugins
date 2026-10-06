@@ -1,19 +1,24 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/openai/openai-go/v2/azure"
 	"github.com/openai/openai-go/v2/option"
+	"github.com/openai/openai-go/v2/packages/ssestream"
 	"github.com/openai/openai-go/v2/responses"
 )
 
 // Client is both halves of the model seam at once. *responses.ResponseService
-// satisfies it, which is what NewClient returns.
+// satisfies it; NewClient returns one wrapped in the per-call deadline.
 type Client interface {
 	Completer
 	StreamCompleter
@@ -79,7 +84,66 @@ func NewClient(cfg Config) (Client, error) {
 		azure.WithAPIKey(key),
 		option.WithRequestTimeout(timeout),
 	)
-	return &svc, nil
+	return &deadlineClient{svc: &svc, timeout: timeout}, nil
+}
+
+// deadlineClient makes the configured timeout a deadline for the whole CALL.
+//
+// The SDK's request timeout is per ATTEMPT, and it retries a 5xx, a 429 or a
+// dropped connection twice on its own — so a provider failing slowly held one
+// call for three timeouts plus backoff: six minutes on the default, for a knob
+// the manifest documents as a per-call deadline. The per-attempt option stays
+// (it can only be the shorter of the two); this adds the bound around all of
+// them.
+//
+// One gap it cannot close: the SDK sleeps between retries without watching the
+// context, so a provider's Retry-After (honoured up to a minute) can still
+// overrun the deadline by that sleep before the next attempt fails at once.
+type deadlineClient struct {
+	svc     *responses.ResponseService
+	timeout time.Duration
+}
+
+func (c *deadlineClient) New(ctx context.Context, body responses.ResponseNewParams, opts ...option.RequestOption) (*responses.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.svc.New(ctx, body, opts...)
+}
+
+// NewStreaming bounds the stream the same way, which takes more care: the
+// stream is READ after this returns, so the deadline cannot be released here.
+// It is handed to the successful response's body and released when the stream
+// is closed — every caller closes it (streamTurn defers it). A failed attempt's
+// body is closed by the SDK before it retries, so only a 2xx carries it;
+// anything else releases it before returning.
+func (c *deadlineClient) NewStreaming(ctx context.Context, body responses.ResponseNewParams, opts ...option.RequestOption) *ssestream.Stream[responses.ResponseStreamEventUnion] {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	var handedOff atomic.Bool
+	carry := option.WithMiddleware(func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		res, err := next(r)
+		if err == nil && res != nil && res.StatusCode < http.StatusMultipleChoices {
+			res.Body = &releaseOnClose{ReadCloser: res.Body, release: cancel}
+			handedOff.Store(true)
+		}
+		return res, err
+	})
+	stream := c.svc.NewStreaming(ctx, body, append(append([]option.RequestOption(nil), opts...), carry)...)
+	if !handedOff.Load() || stream.Err() != nil {
+		cancel()
+	}
+	return stream
+}
+
+// releaseOnClose ends a stream's deadline when its body is closed.
+type releaseOnClose struct {
+	io.ReadCloser
+	release context.CancelFunc
+}
+
+func (b *releaseOnClose) Close() error {
+	err := b.ReadCloser.Close()
+	b.release()
+	return err
 }
 
 // NewCallID mints the id a tool call is answered under. Here rather than in

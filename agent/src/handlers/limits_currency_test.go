@@ -23,22 +23,23 @@ func minor(v int64) *int64 { return &v }
 // third result nobody intended.
 func TestTotalSpend(t *testing.T) {
 	cases := []struct {
-		name  string
-		lines []*pb.ScopeSpendLine
-		want  int64
-		ok    bool
+		name     string
+		lines    []*pb.ScopeSpendLine
+		want     int64
+		ok       bool
+		currency string
 	}{
 		{
 			name:  "one currency adds up",
 			lines: []*pb.ScopeSpendLine{line(minor(7580), "USD", 3), line(minor(300), "USD", 1)},
-			want:  7880, ok: true,
+			want:  7880, ok: true, currency: "USD",
 		},
 		{
 			// The original case, still contributing nothing: a model nobody
 			// priced must not make a scope look cheap OR expensive.
 			name:  "nothing priced contributes nothing",
 			lines: []*pb.ScopeSpendLine{line(minor(500), "USD", 2), line(nil, "", 0)},
-			want:  500, ok: true,
+			want:  500, ok: true, currency: "USD",
 		},
 		{
 			// #79/3 itself. Absent cost WITH priced calls is a line whose spend
@@ -63,9 +64,12 @@ func TestTotalSpend(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := totalSpend(tc.lines)
+			got, currency, ok := totalSpend(tc.lines)
 			if ok != tc.ok {
 				t.Fatalf("totallable = %v, want %v (got %d)", ok, tc.ok, got)
+			}
+			if ok && currency != tc.currency {
+				t.Errorf("currency = %q, want %q — a total is only comparable with a limit in the same currency", currency, tc.currency)
 			}
 			if ok && got != tc.want {
 				t.Errorf("total = %d, want %d", got, tc.want)

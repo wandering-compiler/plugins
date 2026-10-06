@@ -244,6 +244,11 @@ func Complete(ctx context.Context, client Completer, m Model, instructions strin
 	if res == nil {
 		return nil, ErrNoResponse
 	}
+	if string(res.Status) == StatusFailed {
+		// Not an answer, whatever text it carries — see ErrResponseFailed. The
+		// usage it reports is still spend, so it travels on the error.
+		return nil, withSpent(responseFailed(res), usageFrom(res))
+	}
 	return &Completion{
 		Text:             textOf(res),
 		Status:           string(res.Status),
@@ -341,6 +346,15 @@ func ProviderLogLine(err error) string {
 }
 
 func ProviderFault(err error) (summary string, ok bool) {
+	// A response the provider itself marked failed is the provider speaking
+	// too, only inside a 200: its code is the classification.
+	var failed *failedResponse
+	if errors.As(err, &failed) {
+		if failed.code == "" {
+			return "response failed", true
+		}
+		return "response failed, code " + failed.code, true
+	}
 	var apiErr *openai.Error
 	if !errors.As(err, &apiErr) {
 		return "", false

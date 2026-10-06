@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -38,11 +39,20 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	// sends is serialised: the loop runs read-only tools in parallel, so
 	// several goroutines reach Send at once and a gRPC stream is not safe for
 	// concurrent sends.
+	//
+	// The first send failure is KEPT: it is the caller's side of the stream
+	// failing, and a run that ends because of it must not be reported as the
+	// model failing — see callerLeft.
 	var sendMu sync.Mutex
+	var sendErr error
 	send := func(e *pb.RunAgentEvent) error {
 		sendMu.Lock()
 		defer sendMu.Unlock()
-		return srv.Send(e)
+		err := srv.Send(e)
+		if err != nil && sendErr == nil {
+			sendErr = err
+		}
+		return err
 	}
 
 	pending := newPendingCalls()
@@ -96,8 +106,9 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	}
 
 	runStartedAt := time.Now()
+	model := h.modelForSpec(start.GetModel())
 	out, runErr := llm.Run(srv.Context(), h.StreamClient,
-		h.modelForSpec(start.GetModel()), start.GetInstructions(),
+		model, start.GetInstructions(),
 		messagesFrom(start.GetMessages()), tools, limitsFrom(start.GetLimits()),
 		func(e llm.RunEvent) error { return sendRunEvent(send, e) })
 
@@ -118,8 +129,19 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	// separately visible here — `out.Usage` is what the run reports in total —
 	// so this records what the plugin can actually observe rather than
 	// inventing per-turn numbers it does not have.
+	//
+	// Recorded on EVERY ending, the caller hanging up included: what the turns
+	// before the hang-up spent was paid for whether or not anyone is left to
+	// hear about it.
 	h.recordUsageFor(start.GetUsageScope(), start.GetUsageLabels(),
-		h.modelForSpec(start.GetModel()).ID, out, runOutcome(runErr, out), runStartedAt)
+		model.ID, spentOn(out, runErr), runOutcome(runErr, out), runStartedAt)
+
+	// Read BEFORE the belt-and-braces failAll below, which would otherwise be
+	// the first error the pending set holds.
+	sendMu.Lock()
+	sentErr := sendErr
+	sendMu.Unlock()
+	recvErr := pending.failure()
 
 	// Belt and braces. The reader already calls failAll on every Recv error, and
 	// that is the path a disconnect actually takes — break-proofing confirmed
@@ -129,7 +151,22 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	pending.failAll(io.EOF)
 
 	if runErr != nil {
-		return runError(runErr)
+		// The caller going away is not the model failing. It used to reach
+		// runError's default — `Unavailable`, "the run failed" — for a client
+		// that hung up or whose own deadline passed: the wrong code, and an
+		// operator reading it would look at the provider for something the
+		// provider did not do. CompleteStream had the same defect and the same
+		// fix.
+		if left := callerLeft(srv.Context(), runErr, sentErr, recvErr); left != nil {
+			return left
+		}
+		mapped := runError(runErr)
+		if status.Code(mapped) == codes.Unavailable {
+			// As in Complete and CompleteStream: the classification and URL to
+			// the log, never the body, which can quote the prompt.
+			log.Printf("agent: model run failed (model %q): %s", model.ID, llm.ProviderLogLine(runErr))
+		}
+		return mapped
 	}
 	return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Finished{Finished: &pb.Finished{
 		Text:             out.Text,
@@ -180,7 +217,11 @@ func (t *remoteTool) Call(ctx context.Context, args string) (string, error) {
 
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		// FATAL, like the send failure above. The run's context ending is not
+		// something the model can act on; returned plain, it became a tool
+		// result ("The tool failed: context canceled") and the loop went on to
+		// ask the model another turn for a caller who had already left.
+		return "", llm.Fatal(ctx.Err())
 	case res := <-wait:
 		if res.err != nil {
 			return "", llm.Fatal(res.err)
@@ -233,8 +274,18 @@ func (p *pendingCalls) drop(id string) {
 }
 
 func (p *pendingCalls) deliver(r *pb.RunAgentReq_ToolResult) {
+	// Claimed and REMOVED in one step: a call is answered once.
+	//
+	// It used to stay registered until its waiter dropped it, so a SECOND
+	// result for the same id — a caller retrying a send, a duplicated message —
+	// found the channel again. The buffer holds one reply; if the waiter had
+	// not yet taken the first, the second send blocked forever, and the
+	// goroutine blocked was the single Recv reader: every other outstanding
+	// call stopped being answered, and a disconnect was no longer noticed, so
+	// nothing released them either.
 	p.mu.Lock()
 	c, ok := p.ch[r.GetCallId()]
+	delete(p.ch, r.GetCallId())
 	p.mu.Unlock()
 	if !ok {
 		// A result for a call nobody is waiting for: a late answer to a
@@ -243,6 +294,13 @@ func (p *pendingCalls) deliver(r *pb.RunAgentReq_ToolResult) {
 		return
 	}
 	c <- toolReply{result: r.GetResult(), failed: r.GetFailed()}
+}
+
+// failure is the first error failAll was given, or nil.
+func (p *pendingCalls) failure() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.done
 }
 
 // failAll releases every waiter. Without it a caller that disconnects leaves
@@ -284,6 +342,26 @@ func sendRunEvent(send func(*pb.RunAgentEvent) error, e llm.RunEvent) error {
 	return nil
 }
 
+// callerLeft returns the error to answer with when a run ended because the
+// CALLER went away — their stream context ended (a hang-up, their own
+// deadline), or the stream itself failed on their side (a Send or a Recv the
+// transport refused) — and nil when the run ended for any other reason.
+//
+// The caller's own error comes back as-is: there is nobody to tell anything
+// else, and re-coding it would only mislabel the log of whoever reads the
+// server side.
+func callerLeft(ctx context.Context, runErr error, streamErrs ...error) error {
+	for _, e := range streamErrs {
+		if e != nil && e != io.EOF && errors.Is(runErr, e) {
+			return e
+		}
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return status.FromContextError(ctxErr).Err()
+	}
+	return nil
+}
+
 func runError(err error) error {
 	switch {
 	case errors.Is(err, llm.ErrBudgetExhausted):
@@ -296,7 +374,12 @@ func runError(err error) error {
 		// The caller left. There is nobody to tell.
 		return err
 	default:
-		return status.Error(codes.Unavailable, "agent: the run failed")
+		// The same rendering as Complete and CompleteStream. A run used to
+		// answer every model failure with the bare "agent: the run failed",
+		// so a response the provider marked failed lost its CODE on this path
+		// alone — the one path whose failures are the most expensive to
+		// reproduce.
+		return status.Error(codes.Unavailable, modelCallFailure(err))
 	}
 }
 

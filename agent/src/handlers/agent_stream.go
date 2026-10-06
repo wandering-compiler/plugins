@@ -33,15 +33,22 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 	m := h.modelFor(req)
 
 	startedAt := time.Now()
+	// The transport's own failure, kept so it can be told apart from the
+	// model's below.
+	var sendErr error
 	out, err := llm.CompleteStream(srv.Context(), h.StreamClient, m,
 		req.GetInstructions(), messagesFrom(req.GetMessages()),
 		func(text string) error {
 			// A send failure is the client going away, and it is returned so
 			// the call ABORTS: continuing would keep paying the provider for
 			// tokens with nowhere to put them.
-			return srv.Send(&pb.CompleteEvent{
+			if sErr := srv.Send(&pb.CompleteEvent{
 				Event: &pb.CompleteEvent_Delta{Delta: &pb.TextDelta{Text: text}},
-			})
+			}); sErr != nil {
+				sendErr = sErr
+				return sErr
+			}
+			return nil
 		})
 	if err != nil {
 		// BEFORE the usage row, not after it. A preflight refusal never reached
@@ -56,9 +63,18 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 		// Recorded before the error is shaped: a stream that died mid-flight
 		// has already paid for whatever the provider produced, and a runaway
 		// guard stopping it does not make those tokens free.
-		h.recordUsage(req, m.ID, out, OutcomeFailed, startedAt)
+		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
 		// A send failure travelling back out of onDelta is not ours to
 		// re-wrap: the client is gone and there is nobody to tell.
+		//
+		// This comment stood over code that DID re-wrap it — the send error
+		// fell through to the Unavailable below, with a log line blaming the
+		// model for a client that hung up. The test's own comment said "the
+		// error is the transport's and is returned as-is", and asserted only
+		// that some error came back.
+		if sendErr != nil && errors.Is(err, sendErr) {
+			return sendErr
+		}
 		if errors.Is(err, llm.ErrRunawayOutput) {
 			return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")
 		}

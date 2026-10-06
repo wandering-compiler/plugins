@@ -156,6 +156,12 @@ func streamTurn(
 		// it, and it returns directly.
 		return nil, nil, ErrNoTerminalEvent
 	}
+	if string(final.Status) == StatusFailed {
+		// The terminal event said the response FAILED. Reading it as an
+		// answer recorded the call as OK and handed the caller a Finished
+		// event that never said so. What it spent is still spend.
+		return nil, nil, withSpent(responseFailed(final), usageFrom(final))
+	}
 	return &Completion{
 		// OUR accumulation, not the finished response's text. They agree,
 		// except in the one case that matters: the answer is what the reader
