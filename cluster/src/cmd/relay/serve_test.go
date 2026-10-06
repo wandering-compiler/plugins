@@ -438,6 +438,49 @@ func TestServe_ManagementRefusesAnyOtherControlPlane(t *testing.T) {
 		_, err := mgmt.RelayStats(ctx, &pb.RelayStatsReq{})
 		return err
 	})
+	// In the RELAY's words: the pin it expects, and the flag and variable
+	// that set it — not relaydial's advice about a registry row, which is the
+	// control plane's and sent an operator to the wrong machine.
+	got := logs.String()
+	for _, want := range []string{"this relay expects " + cpFP, "--control-plane-fingerprint", "RELAY_CONTROL_PLANE_FINGERPRINT"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the refusal does not say %q; log:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "registry pins") || strings.Contains(got, "its row") {
+		t.Errorf("the relay's refusal gives the control plane's advice about a registry row:\n%s", got)
+	}
+}
+
+// The wording, for every way a pin can fail: what was presented (a
+// fingerprint, none, an unparseable one), what this relay expects, and where
+// that expectation is configured.
+func TestControlPlaneRefused_NamesThePinAndWhereItIsSet(t *testing.T) {
+	_, fp := controlPlane(t)
+	other, err := identity.LoadOrCreateIdentity(t.TempDir(), "console")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherLeaf, err := identity.ParseCertificatePEM(other.CertPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		leaf      []byte
+		presented string
+	}{
+		{"another control plane", otherLeaf.Raw, "presented certificate " + other.Fingerprint},
+		{"no certificate", nil, "presented certificate none"},
+		{"unparseable", []byte("nope"), "presented certificate an unparseable one"},
+	} {
+		msg := controlPlaneRefused(tc.leaf, fp).Error()
+		for _, want := range []string{tc.presented, "this relay expects " + fp, "--control-plane-fingerprint", "RELAY_CONTROL_PLANE_FINGERPRINT"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s: %q does not say %q", tc.name, msg, want)
+			}
+		}
+	}
 }
 
 // captureLog is quiet, keeping a copy of what the relay logged for the test

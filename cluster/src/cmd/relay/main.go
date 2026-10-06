@@ -267,14 +267,33 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	// common cause is not an intruder but a console whose identity was
 	// re-minted without updating --control-plane-fingerprint — which an
 	// operator can only diagnose by comparing the two fingerprints.
-	logRefusal := func(err error) error {
-		if err != nil {
-			log.Printf("refused a management connection: %v", err)
-		}
-		return err
-	}
+	//
+	// In THIS side's words: relaydial's own message is written for the
+	// control plane pinning a relay ("registry pins …, the relay's
+	// certificate was rotated without updating its row"), and on a relay it
+	// sent the operator to a registry row that has nothing to do with it.
 	pinCert := relaydial.PinnedVerifier("control plane", controlPin)
 	pinConn := relaydial.PinnedConnectionVerifier("control plane", controlPin)
+	verifyCert := func(raw [][]byte, chains [][]*x509.Certificate) error {
+		if pinCert(raw, chains) != nil {
+			var leaf []byte
+			if len(raw) > 0 {
+				leaf = raw[0]
+			}
+			return logControlPlaneRefused(leaf, controlPin)
+		}
+		return nil
+	}
+	verifyConn := func(cs tls.ConnectionState) error {
+		if pinConn(cs) != nil {
+			var leaf []byte
+			if len(cs.PeerCertificates) > 0 {
+				leaf = cs.PeerCertificates[0].Raw
+			}
+			return logControlPlaneRefused(leaf, controlPin)
+		}
+		return nil
+	}
 	// Every server here takes tunnel.ServerKeepalive: it pings its peers on
 	// the cluster schedule and accepts their pings (lib/tunnel/keepalive.go).
 	// The management server also applies the ban set every control-plane call
@@ -287,13 +306,11 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		// exactly as it pins this relay's — symmetric, and neither side needs
 		// a CA. Workers are the opposite case (a fleet that comes and goes)
 		// and are verified against this relay's CA on their own listeners.
-		ClientAuth: tls.RequireAnyClientCert,
-		VerifyPeerCertificate: func(raw [][]byte, chains [][]*x509.Certificate) error {
-			return logRefusal(pinCert(raw, chains))
-		},
+		ClientAuth:            tls.RequireAnyClientCert,
+		VerifyPeerCertificate: verifyCert,
 		// A resumed session never reaches VerifyPeerCertificate; this hook runs
 		// on both paths, so the pin holds past the first connection (G123).
-		VerifyConnection: func(cs tls.ConnectionState) error { return logRefusal(pinConn(cs)) },
+		VerifyConnection: verifyConn,
 	})))...)
 	backends := relayserver.NewBackends()
 	// Capacity comes from the FLEET, and this is the wire that carries it: a
@@ -566,4 +583,37 @@ func relayCA(cfg config) (*identity.CA, error) {
 	return nil, errors.New(
 		"this relay has no worker CA: pass --ca-cert/--ca-key, or --identity-dir to keep one there — " +
 			"without it no worker can enrol")
+}
+
+// controlPlaneRefused is the relay's account of refusing a control plane by
+// its pin: the fingerprint it presented, the one this relay pins, and where
+// that pin comes from — --control-plane-fingerprint or
+// RELAY_CONTROL_PLANE_FINGERPRINT — so an operator whose console identity was
+// re-minted knows what to change, and one who did not knows this was not their
+// control plane. leaf is the presented leaf certificate, DER, or nil.
+//
+// relaydial's error is deliberately not wrapped in: its advice is about a
+// registry row, which a relay does not have. Everything it said that applies
+// here — no certificate, an unparseable one, which fingerprint — is said
+// below.
+func controlPlaneRefused(leaf []byte, want string) error {
+	presented := "none"
+	if leaf != nil {
+		presented = "an unparseable one"
+		if cert, err := x509.ParseCertificate(leaf); err == nil {
+			presented = relaydial.Fingerprint(cert)
+		}
+	}
+	return fmt.Errorf("refused a management connection: the control plane presented certificate %s, "+
+		"this relay expects %s (--control-plane-fingerprint / RELAY_CONTROL_PLANE_FINGERPRINT) — "+
+		"if the control plane's identity was re-minted, set that to its new fingerprint after checking it; "+
+		"otherwise this is not the control plane this relay serves", presented, want)
+}
+
+// logControlPlaneRefused logs controlPlaneRefused and returns it, for the TLS
+// layer to refuse the handshake with.
+func logControlPlaneRefused(leaf []byte, want string) error {
+	err := controlPlaneRefused(leaf, want)
+	log.Print(err)
+	return err
 }
