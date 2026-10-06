@@ -36,11 +36,15 @@ driver.**
     redelivered or out-of-order event changes and emits nothing; CANCELED
     and REFUNDED are terminal, and an older subscription event never
     overwrites a newer one), then record the event id. Every object the
-    plugin creates carries `metadata[w17_payment]`; an event for such an
-    object with no local row yet is answered `NotFound` and NOT recorded,
-    so the provider redelivers it. An event for an object the plugin did
-    not create (a subscription invoice's payment, a dashboard charge) is
-    acknowledged.
+    plugin creates carries `metadata[w17_payment]` (what it is) and
+    `metadata[w17_install]` (which installation made it: a keyed hash of
+    the webhook signing secret); an event for an object THIS installation
+    made with no local row yet is answered `NotFound` and NOT recorded, so
+    the provider redelivers it. An event for an object it did not make (a
+    subscription invoice's payment, a dashboard charge, another
+    installation sharing the provider account) is acknowledged. Rotating
+    the signing secret changes the installation id: rotate while no
+    charge is in flight.
 
 **Errors.** A provider failure maps by class: a declined card →
 `FailedPrecondition`; a request the provider (or the driver) refuses as
@@ -48,9 +52,9 @@ invalid — an amount the currency cannot carry, a refund above what is
 left, an idempotency key reused with other parameters → `InvalidArgument`;
 anything else (network, 5xx, rate limit) → `Unavailable`, retryable.
 Amounts are validated against the `NUMERIC(20,4)` columns (≤ 16 integer,
-≤ 4 fractional digits) and currencies must be 3-letter codes (ISK and UGX are whole units only;
-the three-decimal BHD/JOD/KWD/OMR/TND are refused) — before any
-provider call.
+≤ 4 fractional digits) and currencies must be 3-letter codes (ISK and UGX
+are whole units only; the three-decimal BHD/JOD/KWD/OMR/TND are refused) —
+before any provider call.
 
 **Reads have no business handler.** Pure reads (`GET /payments/{id}`,
 `/credit/balance`, `/usage/{meter}/{period}`, `/subscriptions/{id}`) are
@@ -65,6 +69,37 @@ credit, idempotency / error-contract mapping, webhook verify) keep a
   `CreatePayment`, `RefundPayment` over the Stripe REST API (no vendored
   SDK), plus webhook signature verification. Exact money handling
   (decimal string → integer minor units, no float64).
+
+## Upgrading from 0.1.0-rc.2 or earlier
+
+- **Migration.** New nullable columns: `Refund.idempotency_key` (the kept
+  refund key) and `Subscription.provider_event_at` (event ordering). Rows
+  written before the upgrade hold NULL there.
+- **Three-decimal currencies are refused** (BHD, JOD, KWD, OMR, TND —
+  earlier versions sent them as two-decimal amounts, ten times off). A
+  payment made in one of them before the upgrade cannot be refunded
+  through the plugin; refund it in the provider dashboard.
+- **UGX payments made by earlier versions were charged at 1/100** of the
+  amount asked (UGX went out as a zero-decimal amount; the provider takes
+  it in hundredths). Their local rows hold the amount asked, and a refund
+  through the plugin is computed from it: a full refund asks for 100× what
+  was charged and is refused, a partial one refunds the wrong amount.
+  Refund them in the provider dashboard.
+- **Subscription status values added** — `INCOMPLETE`, `PAUSED`, `UNPAID`,
+  `UNRECOGNIZED_STATUS` (5–8; existing numbers unchanged). Earlier versions
+  stored `incomplete` / `paused` / unknown provider statuses as `ACTIVE` and
+  `unpaid` as `PAST_DUE`; such a row keeps that status until the provider's
+  next `customer.subscription.*` event for it. Only `TRIALING` and `ACTIVE`
+  mean paid up.
+- **Refund keys.** A refund made before the upgrade has no stored key: a
+  retry of it within the provider's 24h is still a provider replay (the
+  key is sent verbatim, as before) and returns the recorded refund; a
+  retry after that is not recognised. One refund key now names one refund
+  across all payments — reusing it on another payment is
+  `InvalidArgument`.
+- **Credit keys.** Grants and spends are stored under a scoped key now; one
+  made before the upgrade and retried after it is still recognised under
+  its raw key (see the prepaid section).
 
 ## Money
 
