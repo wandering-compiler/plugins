@@ -2,8 +2,8 @@
 # the plugin's Go module and shares its generated pb with the handlers — one
 # copy of the contract, so the two sides cannot drift:
 #
-#   docker build -f plugins/cluster/sandboxes/relay/Dockerfile \
-#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev plugins/cluster
+#   docker build -f cluster/sandboxes/relay/Dockerfile \
+#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev cluster   (from a clone of github.com/wandering-compiler/plugins)
 #
 # The tag is WORKSPACE-PREFIXED. An image tag is build output, and a fixed one
 # on a shared docker daemon is a name every checkout overwrites.

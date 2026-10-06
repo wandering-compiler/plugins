@@ -1,9 +1,9 @@
 # Dev-only fake OIDC provider image for the auth plugin's `oauth`
 # sandbox. Build locally:
 #
-#   docker build -t w17-fakeidp:dev plugins/auth/sandboxes/fakeidp
+#   docker build -t ${W17_WORKSPACE:-w17}-w17-fakeidp:dev auth/sandboxes/fakeidp   (from a clone of this repository)
 #
-# The auth plugin's plugin.yaml references the `w17-fakeidp:dev` tag;
+# The auth plugin's plugin.yaml references the `${W17_WORKSPACE:-w17}-w17-fakeidp:dev` tag;
 # codegen wires it into the consuming project's compose.w17.yaml. This
 # image is NEVER shipped to production — a sandbox is throwaway dev
 # infra, started only by a project's dev compose.

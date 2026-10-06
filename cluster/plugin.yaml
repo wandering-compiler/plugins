@@ -55,8 +55,8 @@ env:
 #
 # Build the image from the plugin directory (it shares the plugin's Go module,
 # so the relay and the handlers carry one copy of the contract):
-#   docker build -f plugins/cluster/sandboxes/relay/Dockerfile \
-#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev plugins/cluster
+#   docker build -f cluster/sandboxes/relay/Dockerfile \
+#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev cluster   (from a clone of github.com/wandering-compiler/plugins)
 #
 # ⚠️ IT MINTS ITS OWN IDENTITY AND PRINTS THE FINGERPRINT AT STARTUP. Read it
 # out of the container log and paste it into the relay's row — the same

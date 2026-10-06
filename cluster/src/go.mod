@@ -3,8 +3,8 @@ module github.com/wandering-compiler/platform/plugins/cluster
 go 1.26
 
 require (
-	github.com/wandering-compiler/sdk/go v0.1.0-rc.10
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d
+	github.com/wandering-compiler/sdk/go v0.0.0-20260923221209-69e99b91ba68
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )

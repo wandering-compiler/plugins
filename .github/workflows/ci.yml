@@ -47,12 +47,18 @@ jobs:
         with:
           go-version: '1.26.x'
           cache-dependency-path: ${{ matrix.plugin }}/src/go.sum
-      - name: install the pinned w17ctl (the render releases and commit installs use)
-        run: go install "github.com/wandering-compiler/w17ctl@$(cat tools/w17ctl-version)"
+      - name: install the pinned w17ctl (the render releases use)
+        run: tools/w17ctl.sh
       - name: gofmt
         run: make fmt PLUGIN=${{ matrix.plugin }}
       - name: vet
         run: make vet PLUGIN=${{ matrix.plugin }}
+      - name: go.mod tidy, no local replace
+        run: make check-modules PLUGIN=${{ matrix.plugin }}
+      - name: no reference across a feature boundary
+        run: make check-stage PLUGIN=${{ matrix.plugin }}
+      - name: msgids in plugin.yaml match the Go
+        run: make check-plugin-msgids PLUGIN=${{ matrix.plugin }}
       - name: test
         working-directory: ${{ matrix.plugin }}/src
         run: |
@@ -73,6 +79,8 @@ jobs:
         run: make check-gen-pb PLUGIN=${{ matrix.plugin }}
       - name: the release form renders
         run: make check-render PLUGIN=${{ matrix.plugin }}
+      - name: the tests pass from the release form
+        run: make check-published-tests PLUGIN=${{ matrix.plugin }}
 
   repo:
     runs-on: ubuntu-latest

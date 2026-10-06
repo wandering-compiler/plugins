@@ -21,11 +21,11 @@ A consumer installs a tag:
 w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0-rc.16
 ```
 
-To try an unreleased change, install a commit of `main` (`…#auth@<sha>`). The
-client renders the author tree with the same `w17ctl plugin render` a release
-uses, so it lands what a release of that commit would, unsigned. This needs a
-w17ctl that renders an author tree on install. An older one places the raw tree,
-tests and generated pb included.
+To try an unreleased change, install a commit of `main` (`…#auth@<sha>`). It
+lands unsigned. A w17ctl that renders an author tree on install (newer than
+v0.1.0-rc.65) places what a release of that commit would. v0.1.0-rc.65 and older
+place the raw author tree, with its generated pb, sandboxes and a live go.mod
+(tests are dropped). Prefer a tag until that w17ctl is released.
 
 ## Working on a plugin
 
