@@ -91,6 +91,32 @@ func TestRun_AFailedRunStillCarriesWhatItSpent(t *testing.T) {
 			t.Errorf("SpentBy = %+v, %v — want both turns: 105 + 7", spent, ok)
 		}
 	})
+	// A turn that was SENT and never reported its usage makes the whole run
+	// unmeasured. Measured used to mean "any turn was measured", so this run
+	// was recorded measured=true with only the first turn's tokens — a floor
+	// presented as the full bill. The first turn's tokens are still carried:
+	// unmeasured-with-tokens is "at least this much".
+	t.Run("a dropped stream on the second turn makes the run unmeasured", func(t *testing.T) {
+		_, err := runWith(t, [][]map[string]any{
+			{usageTurn([][3]string{{"c1", "search", `{}`}}, 100, 5)},
+			{delta("half")},
+		}, []Tool{&testTool{name: "search"}}, Limits{}, nil)
+		if !errors.Is(err, ErrNoTerminalEvent) {
+			t.Fatalf("err = %v, want ErrNoTerminalEvent", err)
+		}
+		spent, ok := SpentBy(err)
+		if !ok || spent.Measured || spent.TotalTokens != 105 || spent.Model != "gpt-4o-2024-08-06" {
+			t.Errorf("SpentBy = %+v, %v — want measured=false with the first turn's 105 tokens as a floor", spent, ok)
+		}
+	})
+	t.Run("every turn reported means measured", func(t *testing.T) {
+		_, err := runWith(t, [][]map[string]any{
+			{usageTurn([][3]string{{"c1", "search", `{}`}}, 100, 5)},
+		}, []Tool{&testTool{name: "search"}}, Limits{MaxTurns: 2}, nil)
+		if spent, ok := SpentBy(err); !ok || !spent.Measured || spent.TotalTokens != 210 {
+			t.Errorf("SpentBy = %+v, %v — both turns reported, want measured with 210 tokens", spent, ok)
+		}
+	})
 	t.Run("nothing finished means nothing is claimed", func(t *testing.T) {
 		_, err := runWith(t, [][]map[string]any{{delta("half")}}, nil, Limits{}, nil)
 		if !errors.Is(err, ErrNoTerminalEvent) {
@@ -268,7 +294,10 @@ func TestRun_RunawayToolArgumentsAreRefused(t *testing.T) {
 
 // The stuck-model guard on the tool path: the run ends with what was written
 // and an EMPTY status, which is how the handler knows to say "stopped
-// repeating" — and the run is still billed for the turns before.
+// repeating" — and the run is still billed for the turns before. Billed as a
+// FLOOR: the stopped turn never reported its usage, so the run is unmeasured
+// while still carrying the first turn's tokens (it used to say measured=true,
+// presenting the floor as the whole bill).
 func TestRun_TheGuardStopsALoopingAnswer(t *testing.T) {
 	looping := []map[string]any{delta("Cena je 5 900 000 Kč. ")}
 	for i := 0; i < 30; i++ {
@@ -284,8 +313,9 @@ func TestRun_TheGuardStopsALoopingAnswer(t *testing.T) {
 	if out.Status != "" || !strings.HasPrefix(out.Text, "Cena je") {
 		t.Errorf("status = %q text = %q", out.Status, head(out.Text, 40))
 	}
-	if !out.Usage.Measured || out.Usage.TotalTokens != 105 {
-		t.Errorf("usage = %+v — the first turn was paid for and must not vanish with the second", out.Usage)
+	if out.Usage.Measured || out.Usage.TotalTokens != 105 {
+		t.Errorf("usage = %+v — the first turn was paid for and must not vanish with the second, "+
+			"and the unreported second turn makes the total unmeasured", out.Usage)
 	}
 }
 

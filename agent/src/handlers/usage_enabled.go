@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"sync"
 
 	gen "github.com/wandering-compiler/platform/plugins/agent/gen"
 	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
@@ -79,14 +78,16 @@ func (s *dbUsageSink) Close(ctx context.Context) { s.writer.Close(ctx) }
 type dbFlusher struct {
 	mut pb.UsageMutationClient
 
-	// Ids are stable for the life of a row, so a resolved one is cached for
-	// the life of the process. The cache is what keeps a steady stream of
-	// calls from the same tenant on the same model down to ONE insert per
-	// call rather than three.
-	mu     sync.Mutex
-	scopes map[string]int64
-	models map[string]int64
-	labels map[[2]string]int64
+	// Ids are stable for the life of a row, so a resolved one is cached. The
+	// cache is what keeps a steady stream of calls from the same tenant on the
+	// same model down to ONE insert per call rather than three.
+	//
+	// Bounded (idCache): every key here is the caller's, and a label carrying
+	// a run id is a new key on every run — unbounded, these maps grew for the
+	// life of the process.
+	scopes idCache[string]
+	models idCache[string]
+	labels idCache[[2]string]
 }
 
 // Flush records every event it CAN, and reports the ones it could not.
@@ -99,34 +100,45 @@ type dbFlusher struct {
 // That is the "empty scope took its whole batch down" failure again, one
 // constraint over.
 func (f *dbFlusher) Flush(ctx context.Context, batch []usage.Event) error {
-	failed := 0
+	failed, unlabelled := 0, 0
 	var first error
 	for _, ev := range batch {
-		if err := f.flushOne(ctx, ev); err != nil {
+		rowErr, labelErr := f.flushOne(ctx, ev)
+		switch {
+		case rowErr != nil:
 			failed++
 			if first == nil {
-				first = err
+				first = rowErr
+			}
+		case labelErr != nil:
+			unlabelled++
+			if first == nil {
+				first = labelErr
 			}
 		}
 	}
-	if failed == 0 {
+	if failed == 0 && unlabelled == 0 {
 		return nil
 	}
-	return &usage.PartialFlushError{Failed: failed, Err: first}
+	return &usage.PartialFlushError{Failed: failed, Unlabelled: unlabelled, Err: first}
 }
 
-// flushOne writes one event: its row, then its labels. An event whose row
-// landed but one of whose labels did not is reported as failed — it is not
-// recorded as the caller described it — and the remaining labels are still
-// attached, because a partial attribution is worth more than none.
-func (f *dbFlusher) flushOne(ctx context.Context, ev usage.Event) error {
+// flushOne writes one event: its row, then its labels.
+//
+// The two errors are kept apart because they mean different things to whoever
+// reads the count. rowErr is "this spend is not in the table". labelErr is
+// "the spend IS in the table, some attribution is not" — and reporting that as
+// a failed event told the operator the call was not recorded, which is the cue
+// to re-enter it and bill it twice. The remaining labels are still attached
+// after a bad one, because a partial attribution is worth more than none.
+func (f *dbFlusher) flushOne(ctx context.Context, ev usage.Event) (rowErr, labelErr error) {
 	scopeID, err := f.internScope(ctx, ev.Scope)
 	if err != nil {
-		return err
+		return err, nil
 	}
 	modelID, err := f.internModel(ctx, ev.Model)
 	if err != nil {
-		return err
+		return err, nil
 	}
 	resp, err := f.mut.RecordUsage(ctx, &pb.RecordUsageReq{
 		ScopeId:           scopeID,
@@ -141,9 +153,8 @@ func (f *dbFlusher) flushOne(ctx context.Context, ev usage.Event) error {
 		DurationMs:        ev.DurationMs,
 	})
 	if err != nil {
-		return err
+		return err, nil
 	}
-	var labelErr error
 	for k, v := range ev.Labels {
 		labelID, lErr := f.internLabel(ctx, k, v)
 		if lErr != nil {
@@ -159,66 +170,40 @@ func (f *dbFlusher) flushOne(ctx context.Context, ev usage.Event) error {
 			labelErr = aErr
 		}
 	}
-	return labelErr
+	return nil, labelErr
 }
 
 func (f *dbFlusher) internScope(ctx context.Context, name string) (int64, error) {
-	f.mu.Lock()
-	if f.scopes == nil {
-		f.scopes = map[string]int64{}
-	}
-	if id, ok := f.scopes[name]; ok {
-		f.mu.Unlock()
-		return id, nil
-	}
-	f.mu.Unlock()
-	resp, err := f.mut.InternScope(ctx, &pb.InternScopeReq{ExternalId: name})
-	if err != nil {
-		return 0, err
-	}
-	f.mu.Lock()
-	f.scopes[name] = resp.GetId()
-	f.mu.Unlock()
-	return resp.GetId(), nil
+	return intern(&f.scopes, name, func() (int64, error) {
+		resp, err := f.mut.InternScope(ctx, &pb.InternScopeReq{ExternalId: name})
+		return resp.GetId(), err
+	})
 }
 
 func (f *dbFlusher) internModel(ctx context.Context, name string) (int64, error) {
-	f.mu.Lock()
-	if f.models == nil {
-		f.models = map[string]int64{}
-	}
-	if id, ok := f.models[name]; ok {
-		f.mu.Unlock()
-		return id, nil
-	}
-	f.mu.Unlock()
-	resp, err := f.mut.InternModel(ctx, &pb.InternModelReq{Name: name})
-	if err != nil {
-		return 0, err
-	}
-	f.mu.Lock()
-	f.models[name] = resp.GetId()
-	f.mu.Unlock()
-	return resp.GetId(), nil
+	return intern(&f.models, name, func() (int64, error) {
+		resp, err := f.mut.InternModel(ctx, &pb.InternModelReq{Name: name})
+		return resp.GetId(), err
+	})
 }
 
 func (f *dbFlusher) internLabel(ctx context.Context, k, v string) (int64, error) {
-	key := [2]string{k, v}
-	f.mu.Lock()
-	if f.labels == nil {
-		f.labels = map[[2]string]int64{}
-	}
-	if id, ok := f.labels[key]; ok {
-		f.mu.Unlock()
+	return intern(&f.labels, [2]string{k, v}, func() (int64, error) {
+		resp, err := f.mut.InternLabel(ctx, &pb.InternLabelReq{Key: k, Value: v})
+		return resp.GetId(), err
+	})
+}
+
+// intern serves an id from the cache or asks for it. A failure is not cached:
+// the next flush asks again.
+func intern[K comparable](c *idCache[K], k K, ask func() (int64, error)) (int64, error) {
+	if id, ok := c.get(k); ok {
 		return id, nil
 	}
-	f.mu.Unlock()
-	resp, err := f.mut.InternLabel(ctx, &pb.InternLabelReq{Key: k, Value: v})
+	id, err := ask()
 	if err != nil {
 		return 0, err
 	}
-	f.mu.Lock()
-	f.labels[key] = resp.GetId()
-	f.mu.Unlock()
-	return resp.GetId(), nil
+	c.put(k, id)
+	return id, nil
 }

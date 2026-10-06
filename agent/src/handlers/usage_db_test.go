@@ -143,7 +143,10 @@ func TestFlush_TheWriterCountsAPartialBatchExactly(t *testing.T) {
 	}
 }
 
-// A label the table refuses costs that label, not the row or the other labels.
+// A label the table refuses costs that label, not the row or the other labels —
+// and it is reported as a missing LABEL, not as a missing row. Counting it in
+// Failed said "not recorded" about spend that is in the table, which is the
+// cue for an operator to re-enter it and bill the call twice.
 func TestFlush_ABadLabelKeepsTheRowAndTheOtherLabels(t *testing.T) {
 	store, clients := serveUsageStore(t)
 	f := &dbFlusher{mut: clients.UsageMutation()}
@@ -152,8 +155,8 @@ func TestFlush_ABadLabelKeepsTheRowAndTheOtherLabels(t *testing.T) {
 		Labels: map[string]string{"run": "r1", "note": strings.Repeat("v", 300)},
 	}})
 	var partial *usage.PartialFlushError
-	if !errors.As(err, &partial) || partial.Failed != 1 {
-		t.Errorf("err = %v — an event whose attribution did not fully land is reported", err)
+	if !errors.As(err, &partial) || partial.Failed != 0 || partial.Unlabelled != 1 {
+		t.Errorf("err = %v — want 0 events unrecorded and 1 recorded without all its labels", err)
 	}
 	rows := store.usageRows()
 	if len(rows) != 1 {
@@ -164,9 +167,30 @@ func TestFlush_ABadLabelKeepsTheRowAndTheOtherLabels(t *testing.T) {
 	}
 }
 
-// A transient failure is not cached: the next flush interns again and lands.
-// And an attach failure is reported like any other.
-func TestFlush_ATransientFailureIsRetriedOnTheNextBatch(t *testing.T) {
+// …and through the writer: the row counts as Written, never as FailedEvents, and
+// the missing label has its own counter.
+func TestFlush_TheWriterCountsABadLabelAsWrittenNotLost(t *testing.T) {
+	store, clients := serveUsageStore(t)
+	w := usage.New(usage.Config{BatchSize: 2, FlushInterval: time.Hour}, &dbFlusher{mut: clients.UsageMutation()})
+	w.Record(usage.Event{Scope: "tenant-a", Model: "gpt-4o",
+		Labels: map[string]string{"note": strings.Repeat("v", 300)}})
+	w.Record(usage.Event{Scope: "tenant-b", Model: "gpt-4o"})
+	w.Close(context.Background())
+	st := w.Stats()
+	if st.Written != 2 || st.FailedEvents != 0 || st.FailedBatches != 0 || st.Unlabelled != 1 {
+		t.Errorf("stats = %+v, want 2 written (1 of them unlabelled), nothing failed", st)
+	}
+	if n := len(store.usageRows()); n != 2 {
+		t.Errorf("rows = %d, want both spends in the table", n)
+	}
+}
+
+// Interning failures are not CACHED: a flush that failed on a transient error
+// leaves no poisoned id behind, so the next flush of the same event interns
+// again and lands. The writer itself never retries a batch — this test
+// re-flushes by hand to prove only that nothing stale is remembered. Every
+// stage's failure, attach included, is also reported rather than swallowed.
+func TestFlush_ATransientInternFailureIsNotCached(t *testing.T) {
 	store, clients := serveUsageStore(t)
 	f := &dbFlusher{mut: clients.UsageMutation()}
 	ev := usage.Event{Scope: "tenant-a", Model: "gpt-4o", Labels: map[string]string{"run": "r1"}}
@@ -184,6 +208,29 @@ func TestFlush_ATransientFailureIsRetriedOnTheNextBatch(t *testing.T) {
 	last := rows[len(rows)-1]
 	if last.row.GetScopeId() != store.scopeIDOf("tenant-a") || last.labels["run"] != "r1" {
 		t.Errorf("the recovered flush wrote %+v / %v", last.row, last.labels)
+	}
+}
+
+// The flusher's intern caches are bounded: a label carrying a run id is a new
+// key on every run, and the maps used to keep every one for the life of the
+// process. Rows still land after a reset.
+func TestFlush_TheInternCachesAreBounded(t *testing.T) {
+	store, clients := serveUsageStore(t)
+	f := &dbFlusher{mut: clients.UsageMutation()}
+	f.labels.max, f.scopes.max = 2, 2
+	for i := 0; i < 10; i++ {
+		run := "r" + string(rune('a'+i))
+		if err := f.Flush(context.Background(), []usage.Event{{
+			Scope: "tenant-" + run, Model: "gpt-4o", Labels: map[string]string{"run": run},
+		}}); err != nil {
+			t.Fatalf("Flush: %v", err)
+		}
+		if f.labels.len() > 2 || f.scopes.len() > 2 {
+			t.Fatalf("after %d runs: %d labels, %d scopes cached — want at most 2 each", i+1, f.labels.len(), f.scopes.len())
+		}
+	}
+	if rows := store.usageRows(); len(rows) != 10 || rows[9].labels["run"] != "rj" {
+		t.Errorf("rows = %d, last labels %v — a reset must not cost a row", len(rows), rows[len(rows)-1].labels)
 	}
 }
 

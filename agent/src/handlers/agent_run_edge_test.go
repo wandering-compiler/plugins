@@ -108,27 +108,30 @@ func TestRunAgent_RecordsTheSpendOfEveryTurn(t *testing.T) {
 }
 
 // A run that fails mid-way is recorded as FAILED with what its finished turns
-// spent — and each failure has its own code.
+// spent — and each failure has its own code. The row is MEASURED only when
+// every turn sent reported its usage: a turn cut off before its terminal event
+// leaves the tokens as a floor with measured=false.
 func TestRunAgent_FailuresAreCodedAndStillBilled(t *testing.T) {
 	var runaway []map[string]any
 	for i := 0; i < 3000; i++ {
 		runaway = append(runaway, delta(fmt.Sprintf("%012d", i*7919)))
 	}
 	for _, tc := range []struct {
-		name   string
-		turns  [][]map[string]any
-		limits *pb.Limits
-		code   codes.Code
-		tokens int64
+		name     string
+		turns    [][]map[string]any
+		limits   *pb.Limits
+		code     codes.Code
+		tokens   int64
+		measured bool
 	}{
 		{"out of turns", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}},
-			&pb.Limits{MaxTurns: 2}, codes.DeadlineExceeded, 22},
+			&pb.Limits{MaxTurns: 2}, codes.DeadlineExceeded, 22, true},
 		{"over the tool budget", [][]map[string]any{{spendTurn([][3]string{{"a", "search", `{}`}, {"b", "search", `{}`}}, 10, 1)}},
-			&pb.Limits{MaxToolCalls: 1}, codes.ResourceExhausted, 11},
+			&pb.Limits{MaxToolCalls: 1}, codes.ResourceExhausted, 11, true},
 		{"runaway output on turn two", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}, runaway},
-			nil, codes.ResourceExhausted, 11},
+			nil, codes.ResourceExhausted, 11, false},
 		{"the provider failing on turn two", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}, {delta("half")}},
-			nil, codes.Unavailable, 11},
+			nil, codes.Unavailable, 11, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &syncSink{}
@@ -150,8 +153,9 @@ func TestRunAgent_FailuresAreCodedAndStillBilled(t *testing.T) {
 			if len(evs) != 1 || evs[0].Status != OutcomeFailed {
 				t.Fatalf("recorded %+v, want one FAILED row", evs)
 			}
-			if got := evs[0].InputTokens + evs[0].OutputTokens; got != tc.tokens || !evs[0].Measured {
-				t.Errorf("billed %d tokens (measured %v), want %d — the turns that finished were paid for", got, evs[0].Measured, tc.tokens)
+			if got := evs[0].InputTokens + evs[0].OutputTokens; got != tc.tokens || evs[0].Measured != tc.measured {
+				t.Errorf("billed %d tokens (measured %v), want %d (measured %v) — the turns that finished were paid for, "+
+					"and a turn that never reported makes the total a floor", got, evs[0].Measured, tc.tokens, tc.measured)
 			}
 			for _, e := range b.events() {
 				if e.GetFinished() != nil {
@@ -488,4 +492,109 @@ func (r *recordingStreamer) NewStreaming(ctx context.Context, body responses.Res
 	r.tools = append(r.tools, body.Tools)
 	r.mu.Unlock()
 	return r.multiTurn.NewStreaming(ctx, body, opts...)
+}
+
+// A caller who goes away mid-run gets their own error back — never the
+// `Unavailable` "the run failed" that blames the model — no model-failure log
+// line is written, and what the run spent before they left is still billed.
+//
+// Three ways a caller leaves: their side of the stream refuses a Send (a
+// hang-up the transport reports as a status), their own deadline passes while
+// a tool call waits, and their side of the stream fails a Recv while a tool
+// call waits.
+func TestRunAgent_ACallerWhoLeftIsNotAModelFailure(t *testing.T) {
+	hungUp := status.Error(codes.Canceled, "client hung up")
+	recvGone := status.Error(codes.Canceled, "stream reset by the client")
+	for _, tc := range []struct {
+		name  string
+		setup func(b *bidi) (context.CancelFunc, error)
+		code  codes.Code
+	}{
+		{"a send refused", func(b *bidi) (context.CancelFunc, error) {
+			b.fail = hungUp
+			return func() {}, hungUp
+		}, codes.Canceled},
+		{"the caller's deadline", func(b *bidi) (context.CancelFunc, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			b.ctx = ctx
+			return cancel, nil
+		}, codes.DeadlineExceeded},
+		{"a recv refused while a tool waits", func(b *bidi) (context.CancelFunc, error) {
+			b.recvErr = recvGone
+			b.onSend = func(e *pb.RunAgentEvent) {
+				if e.GetToolCall() != nil {
+					close(b.incoming)
+				}
+			}
+			return func() {}, recvGone
+		}, codes.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLog(t)
+			sink := &syncSink{}
+			h := &AgentServiceHandler{StreamClient: &multiTurn{turns: [][]map[string]any{
+				{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)},
+			}}, Usage: sink}
+			b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 8)}
+			b.incoming <- startMsg(&pb.ToolSpec{Name: "search"})
+			cancel, want := tc.setup(b)
+			defer cancel()
+
+			err := runWithin(t, h, b)
+			if status.Code(err) != tc.code {
+				t.Fatalf("err = %v (%v), want %v — the caller left, the model did not fail", err, status.Code(err), tc.code)
+			}
+			if want != nil && err != want {
+				t.Errorf("err = %v, want the caller's own error as-is", err)
+			}
+			if strings.Contains(logs.String(), "model run failed") {
+				t.Errorf("a caller leaving was logged as a model failure: %q", logs.String())
+			}
+			evs := sink.all()
+			if len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens+evs[0].OutputTokens != 11 {
+				t.Errorf("recorded %+v, want one FAILED row billing the 11 tokens spent before the caller left", evs)
+			}
+		})
+	}
+}
+
+// A response the provider marked FAILED keeps its code on the RunAgent path,
+// as it does on Complete and CompleteStream. RunAgent used to answer it with
+// the bare "agent: the run failed", so the one path that loops — and whose
+// failures cost the most to reproduce — was the one that did not say why.
+func TestRunAgent_AFailedResponseNamesTheProvidersCode(t *testing.T) {
+	logs := captureLog(t)
+	failed := map[string]any{"type": "response.failed", "response": map[string]any{
+		"status": "failed", "model": "gpt-4o-2024-08-06",
+		"error": map[string]any{"code": "server_error", "message": "the prompt said: secret"},
+		"usage": map[string]any{"input_tokens": 7, "output_tokens": 0, "total_tokens": 7},
+	}}
+	sink := &syncSink{}
+	h := &AgentServiceHandler{StreamClient: &multiTurn{turns: [][]map[string]any{
+		{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)},
+		{failed},
+	}}, Usage: sink}
+	b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 8)}
+	answerEvery(b, func(tc *pb.ToolCall) []*pb.RunAgentReq {
+		return []*pb.RunAgentReq{toolResult(tc.GetCallId(), "r", false)}
+	})
+	b.incoming <- startMsg(&pb.ToolSpec{Name: "search"})
+
+	err := runWithin(t, h, b)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("err = %v, want Unavailable", err)
+	}
+	msg := status.Convert(err).Message()
+	if !strings.Contains(msg, "code server_error") {
+		t.Errorf("message = %q, want it to name the provider's failure code", msg)
+	}
+	if strings.Contains(msg, "secret") || strings.Contains(logs.String(), "secret") {
+		t.Errorf("the provider's message travelled: %q / %q", msg, logs.String())
+	}
+	if !strings.Contains(logs.String(), "model run failed") {
+		t.Errorf("log = %q, want the model failure logged", logs.String())
+	}
+	if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens != 17 || !evs[0].Measured {
+		t.Errorf("recorded %+v, want one FAILED measured row of 17 input tokens", evs)
+	}
 }

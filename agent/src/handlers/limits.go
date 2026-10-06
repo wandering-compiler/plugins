@@ -67,8 +67,14 @@ func NewLimiter(clients any) Limiter { return newLimiter(clients) }
 // CURRENCY next to the amount: a figure in minor units means nothing without
 // one, and comparing a limit with a spend that are in different currencies is
 // the defect totalSpend exists to refuse.
+//
+// Bounded like idCache, and for the same reason: the key is the caller's
+// scope, so one entry per scope ever asked about would otherwise stay for the
+// life of the process — expired entries were never evicted.
 type spendCache[V any] struct {
 	ttl time.Duration
+	// max caps the entries held; zero means maxCachedKeys.
+	max int
 
 	mu      sync.Mutex
 	value   map[string]V
@@ -89,10 +95,63 @@ func (c *spendCache[V]) get(scope string, now time.Time) (V, bool) {
 func (c *spendCache[V]) put(scope string, v V, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.value == nil {
+	if _, known := c.value[scope]; c.value == nil || (!known && len(c.value) >= capOf(c.max)) {
+		// Full: start over rather than track recency. See idCache.
 		c.value = map[string]V{}
 		c.fetched = map[string]time.Time{}
 	}
 	c.value[scope] = v
 	c.fetched[scope] = now
+}
+
+// maxCachedKeys bounds every per-key cache in this package.
+//
+// The keys are the CALLER's — a scope, a model name, a label pair — so a cache
+// that keeps one entry per key ever seen grows for the life of the process
+// with whatever callers choose to send: a label carrying a run id is a new key
+// on every run. Ten thousand entries is far beyond any steady working set the
+// caches exist to serve, and small enough not to matter if it is reached.
+const maxCachedKeys = 10_000
+
+func capOf(max int) int {
+	if max <= 0 {
+		return maxCachedKeys
+	}
+	return max
+}
+
+// idCache maps a key to a database id, bounded.
+//
+// When full it is RESET, not evicted entry by entry: an id is a cheap thing to
+// ask for again (one idempotent intern), so the only cost of a reset is a
+// burst of re-interning, while an LRU would cost bookkeeping on every hit to
+// save that burst. What matters is that the size has a ceiling.
+type idCache[K comparable] struct {
+	// max caps the entries held; zero means maxCachedKeys.
+	max int
+
+	mu  sync.Mutex
+	ids map[K]int64
+}
+
+func (c *idCache[K]) get(k K) (int64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, ok := c.ids[k]
+	return id, ok
+}
+
+func (c *idCache[K]) put(k K, id int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, known := c.ids[k]; c.ids == nil || (!known && len(c.ids) >= capOf(c.max)) {
+		c.ids = map[K]int64{}
+	}
+	c.ids[k] = id
+}
+
+func (c *idCache[K]) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.ids)
 }

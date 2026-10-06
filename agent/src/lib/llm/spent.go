@@ -77,24 +77,49 @@ func SpentBy(err error) (Usage, bool) {
 	return Usage{}, false
 }
 
-// addUsage folds one turn's usage into a run's total.
+// runSpend is what a run has spent so far, across turns.
 //
-// Measured is true when ANY turn was measured: a run whose last turn was cut
-// short by the repetition guard still paid for the turns before it, and saying
-// "unmeasured" would drop those from the bill entirely. The run's own outcome
-// (UNKNOWN for a guard stop) is what tells a reader the total is a floor.
+// Measured is true only when EVERY turn that reached the provider reported its
+// usage. It used to be true when ANY turn had: a run whose second turn's
+// stream dropped before its terminal event was recorded measured=true with
+// only the first turn's tokens — a floor presented as the full measure, which
+// is exactly the "complete bill for tokens it actually spent" that `measured`
+// exists to rule out. Now one unreported turn makes the whole run unmeasured,
+// and the tokens that WERE reported are still summed: measured=false with
+// non-zero tokens reads "at least this much", never "this much" and never
+// "nothing".
+type runSpend struct {
+	total Usage
+	// turns is how many turns were folded in; unreported is how many of them
+	// the provider reported no usage for.
+	turns      int
+	unreported int
+}
+
+// add folds one turn's usage in. Call it once per turn that was SENT — a turn
+// refused before the request (a preflight error) cost nothing and is not a
+// turn.
 //
 // Model is the latest one the provider named — every turn of a run asks for the
 // same model, so they differ only when the provider answers with a dated id.
-func addUsage(total, turn Usage) Usage {
-	if turn.Model != "" {
-		total.Model = turn.Model
+func (r *runSpend) add(turn Usage) {
+	r.turns++
+	if !turn.Measured {
+		r.unreported++
 	}
-	total.Measured = total.Measured || turn.Measured
-	total.InputTokens += turn.InputTokens
-	total.OutputTokens += turn.OutputTokens
-	total.TotalTokens += turn.TotalTokens
-	total.CachedInputTokens += turn.CachedInputTokens
-	total.ReasoningTokens += turn.ReasoningTokens
-	return total
+	if turn.Model != "" {
+		r.total.Model = turn.Model
+	}
+	r.total.InputTokens += turn.InputTokens
+	r.total.OutputTokens += turn.OutputTokens
+	r.total.TotalTokens += turn.TotalTokens
+	r.total.CachedInputTokens += turn.CachedInputTokens
+	r.total.ReasoningTokens += turn.ReasoningTokens
+}
+
+// usage is the run's total so far.
+func (r *runSpend) usage() Usage {
+	u := r.total
+	u.Measured = r.turns > 0 && r.unreported == 0
+	return u
 }

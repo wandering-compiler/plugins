@@ -68,7 +68,8 @@ func Run(
 		// before any model call. They were plain errors, so the handler read
 		// them as failed provider calls — a usage row for a call that never
 		// happened, and `Unavailable` for what is an invalid argument (the
-		// shape #74/3 fixed for the token budget and the JSON precondition).
+		// same mistake the token-budget and JSON-object checks had made, and
+		// were fixed for, before these two).
 		if t == nil || t.Name() == "" {
 			return nil, preflight("a tool has no name")
 		}
@@ -93,8 +94,9 @@ func Run(
 	// asked for tools (each re-sending the whole growing input) were never
 	// recorded at all. A run that FAILED billed nothing, though every turn
 	// before the failure had been paid for. The error paths carry the total
-	// too: see SpentBy.
-	var spent Usage
+	// too: see SpentBy. Whether the total is MEASURED is runSpend's call: only
+	// when every turn sent reported its usage.
+	var spent runSpend
 
 	for turn := 0; turn < limits.maxTurns(); turn++ {
 		// The LAST permitted turn runs with no tools offered. Dispatching on it
@@ -108,16 +110,24 @@ func Run(
 
 		res, calls, err := completeTurn(ctx, client, m, instructions, history, input, offer, sink)
 		if err != nil {
-			if u, ok := SpentBy(err); ok {
-				spent = addUsage(spent, u)
+			switch u, ok := SpentBy(err); {
+			case ok:
+				spent.add(u)
+			case IsPreflight(err):
+				// Refused before the request: no turn was sent.
+			default:
+				// Sent, and the provider never reported what it cost — a
+				// dropped stream, a runaway cut off, a transport error. The
+				// run's total is then a floor, and says so.
+				spent.add(Usage{})
 			}
-			return nil, withSpent(err, spent)
+			return nil, withSpent(err, spent.usage())
 		}
-		spent = addUsage(spent, res.Usage)
+		spent.add(res.Usage)
 
 		if len(calls) == 0 {
 			answer := *res
-			answer.Usage = spent
+			answer.Usage = spent.usage()
 			return &answer, nil
 		}
 
@@ -128,7 +138,7 @@ func Run(
 
 		out, err := dispatch(ctx, calls, byName, b, limits.maxParallel(), sink)
 		if err != nil {
-			return nil, withSpent(err, spent)
+			return nil, withSpent(err, spent.usage())
 		}
 		for i, tc := range calls {
 			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(tc.ID, out[i]))
@@ -138,7 +148,7 @@ func Run(
 	// Out of turns with the model still asking. Returning the last completion
 	// alongside the error would invite a caller to show it: it is a tool
 	// request, not an answer. What the turns cost travels on the error.
-	return nil, withSpent(ErrTurnsExhausted, spent)
+	return nil, withSpent(ErrTurnsExhausted, spent.usage())
 }
 
 // dispatch runs one round of tool calls.

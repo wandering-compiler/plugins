@@ -52,15 +52,32 @@ type Flusher interface {
 // that carries on past a bad event needs a way to say how many it lost, or the
 // writer counts the whole batch as failed and the written rows vanish from
 // Written. Any other error counts the whole batch, as before.
+//
+// Unlabelled is the other half of "partly": an event whose ROW landed but one
+// or more of whose labels did not. It is WRITTEN — the spend is in the table —
+// and counting it with Failed made the writer say "not recorded" about a row
+// that exists, which is the line an operator re-enters spend from. Re-entering
+// it bills the call twice. So the two are reported apart: a missing row is
+// lost spend, a missing label is lost attribution.
 type PartialFlushError struct {
-	// Failed is how many events of the batch were not recorded.
+	// Failed is how many events of the batch were not recorded: no row.
 	Failed int
+	// Unlabelled is how many events were recorded (their row exists) with one
+	// or more labels missing. Disjoint from Failed.
+	Unlabelled int
 	// Err is the first failure, for the log.
 	Err error
 }
 
 func (e *PartialFlushError) Error() string {
-	return fmt.Sprintf("%d event(s) not recorded; first failure: %v", e.Failed, e.Err)
+	if e.Failed == 0 {
+		return fmt.Sprintf("%d event(s) recorded without all their labels; first failure: %v", e.Unlabelled, e.Err)
+	}
+	if e.Unlabelled == 0 {
+		return fmt.Sprintf("%d event(s) not recorded; first failure: %v", e.Failed, e.Err)
+	}
+	return fmt.Sprintf("%d event(s) not recorded, %d recorded without all their labels; first failure: %v",
+		e.Failed, e.Unlabelled, e.Err)
 }
 
 func (e *PartialFlushError) Unwrap() error { return e.Err }
@@ -107,8 +124,12 @@ type Stats struct {
 	FailedBatches uint64
 	// FailedEvents — events in those batches.
 	FailedEvents uint64
-	// Written — events a flush accepted.
+	// Written — events a flush accepted: their row exists.
 	Written uint64
+	// Unlabelled — events counted in Written whose row landed with one or more
+	// labels missing. Never part of FailedEvents: the spend IS recorded, and
+	// re-entering it would bill it twice.
+	Unlabelled uint64
 }
 
 // Writer is the queue. The zero value is not usable; call New.
@@ -121,6 +142,7 @@ type Writer struct {
 	failedBatches atomic.Uint64
 	failedEvents  atomic.Uint64
 	written       atomic.Uint64
+	unlabelled    atomic.Uint64
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -174,6 +196,7 @@ func (w *Writer) Stats() Stats {
 		FailedBatches: w.failedBatches.Load(),
 		FailedEvents:  w.failedEvents.Load(),
 		Written:       w.written.Load(),
+		Unlabelled:    w.unlabelled.Load(),
 	}
 }
 
@@ -195,9 +218,9 @@ func (w *Writer) Close(ctx context.Context) {
 	// One line at teardown saying what was and was not recorded. Silence here
 	// is indistinguishable from a quiet month, which is the failure this whole
 	// layer exists to make impossible.
-	if st := w.Stats(); st.Dropped > 0 || st.FailedEvents > 0 {
-		log.Printf("agent usage: %d event(s) written, %d dropped (queue full), %d lost in %d failed flush(es)",
-			st.Written, st.Dropped, st.FailedEvents, st.FailedBatches)
+	if st := w.Stats(); st.Dropped > 0 || st.FailedEvents > 0 || st.Unlabelled > 0 {
+		log.Printf("agent usage: %d event(s) written (%d of them missing labels), %d dropped (queue full), %d lost in %d failed flush(es)",
+			st.Written, st.Unlabelled, st.Dropped, st.FailedEvents, st.FailedBatches)
 	}
 }
 
@@ -217,19 +240,28 @@ func (w *Writer) loop() {
 		if err != nil {
 			failed := len(batch)
 			var partial *PartialFlushError
-			if errors.As(err, &partial) && partial.Failed >= 0 && partial.Failed <= len(batch) {
+			if errors.As(err, &partial) && partial.Failed >= 0 && partial.Unlabelled >= 0 &&
+				partial.Failed+partial.Unlabelled <= len(batch) {
 				failed = partial.Failed
 				w.written.Add(uint64(len(batch) - failed))
+				if partial.Unlabelled > 0 {
+					w.unlabelled.Add(uint64(partial.Unlabelled))
+					// Its own line, and NOT "not recorded": the rows exist.
+					log.Printf("agent usage: %d event(s) recorded without all their labels (the spend is written; only attribution is missing): %v",
+						partial.Unlabelled, partial.Err)
+				}
 			}
-			w.failedBatches.Add(1)
-			w.failedEvents.Add(uint64(failed))
-			// SAY so. The counters existed and nothing read them, so the only
-			// way to learn that a bill had a hole in it was to query the table
-			// and find it empty — which is what a consumer did, after
-			// hundreds of calls, with no error anywhere. A best-effort layer
-			// may lose a batch; it may not lose it quietly.
-			log.Printf("agent usage: flush of %d event(s) failed for %d of them: %v (%d batch(es) failed so far)",
-				len(batch), failed, err, w.failedBatches.Load())
+			if failed > 0 {
+				w.failedBatches.Add(1)
+				w.failedEvents.Add(uint64(failed))
+				// SAY so. The counters existed and nothing read them, so the only
+				// way to learn that a bill had a hole in it was to query the table
+				// and find it empty — which is what a consumer did, after
+				// hundreds of calls, with no error anywhere. A best-effort layer
+				// may lose a batch; it may not lose it quietly.
+				log.Printf("agent usage: flush of %d event(s) failed for %d of them: %v (%d batch(es) failed so far)",
+					len(batch), failed, err, w.failedBatches.Load())
+			}
 		} else {
 			w.written.Add(uint64(len(batch)))
 		}

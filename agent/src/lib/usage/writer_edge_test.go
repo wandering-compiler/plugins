@@ -66,13 +66,32 @@ func TestRecordRacingCloseLosesNothingUncounted(t *testing.T) {
 
 // partialFlusher writes all but `fail` events of every batch.
 type partialFlusher struct {
-	fail  int
-	calls chan struct{}
+	fail       int
+	unlabelled int
+	calls      chan struct{}
 }
 
 func (p *partialFlusher) Flush(_ context.Context, batch []Event) error {
 	defer func() { p.calls <- struct{}{} }()
-	return &PartialFlushError{Failed: p.fail, Err: errors.New("scope too long")}
+	return &PartialFlushError{Failed: p.fail, Unlabelled: p.unlabelled, Err: errors.New("scope too long")}
+}
+
+// An event whose row landed without all its labels is WRITTEN: it is not a
+// failed event and its batch is not a failed batch, and the gap has its own
+// counter. Counting it as failed told the operator to re-enter spend that is
+// already in the table.
+func TestAnUnlabelledEventCountsAsWritten(t *testing.T) {
+	p := &partialFlusher{unlabelled: 1, calls: make(chan struct{}, 4)}
+	w := New(Config{BatchSize: 3, FlushInterval: time.Hour}, p)
+	for i := 0; i < 3; i++ {
+		w.Record(Event{Scope: "tenant-a"})
+	}
+	<-p.calls
+	w.Close(context.Background())
+	st := w.Stats()
+	if st.Written != 3 || st.Unlabelled != 1 || st.FailedEvents != 0 || st.FailedBatches != 0 {
+		t.Errorf("stats = %+v, want 3 written (1 unlabelled), nothing failed", st)
+	}
 }
 
 // A flusher that wrote PART of a batch says how much, and the counters follow:

@@ -268,10 +268,13 @@ type Usage struct {
 	Id      int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
 	ScopeId int64                  `protobuf:"varint,2,opt,name=scope_id,json=scopeId,proto3" json:"scope_id,omitempty"`
 	ModelId int64                  `protobuf:"varint,3,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
-	// measured=false means the PROVIDER reported no usage, and that is not the
+	// measured=false means the PROVIDER did not report the usage — for a run,
+	// that at least one of its turns went unreported — and that is not the
 	// same as a call that cost nothing. Both used to be "no row", which is how a
 	// run can report a complete bill for tokens it actually spent. The row
-	// exists either way; this field is what separates them.
+	// exists either way; this field is what separates them. Tokens on an
+	// unmeasured row are what WAS reported (the run's other turns): a floor,
+	// never the full measure.
 	Measured bool `protobuf:"varint,4,opt,name=measured,proto3" json:"measured,omitempty"`
 	// The four kinds are separate columns rather than separate rows because
 	// two of them are SUBSETS: cached input is part of input, reasoning is part

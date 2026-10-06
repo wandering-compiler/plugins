@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"strings"
-	"sync"
 	"time"
 
 	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
@@ -69,14 +68,17 @@ type dbLimiter struct {
 	spend  *spendCache[scopeSpend]
 	limits *spendCache[scopeLimit]
 
-	// Scope ids, cached for the life of the process: an id is stable for the
-	// life of its row. Without this every model call ran an UPSERT — a write —
-	// in front of the provider, which is the per-call database round trip this
-	// whole design exists to avoid; the comment on scopeID claimed the id was
-	// cached "by that path too", and the path it meant was the writer's, a
-	// different cache this one never reads.
-	idMu sync.Mutex
-	ids  map[string]int64
+	// Scope ids, cached: an id is stable for the life of its row. Without this
+	// every model call ran an UPSERT — a write — in front of the provider,
+	// which is the per-call database round trip this whole design exists to
+	// avoid; the comment on scopeID claimed the id was cached "by that path
+	// too", and the path it meant was the writer's, a different cache this one
+	// never reads.
+	//
+	// BOUNDED (idCache): the key is whatever scope a caller sends, so an
+	// unbounded map grew by one entry per distinct scope for the life of the
+	// process.
+	ids idCache[string]
 }
 
 const (
@@ -184,25 +186,17 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 }
 
 // scopeID interns the scope so a limit can be looked up by id, once per scope
-// for the life of the process. A failure is not cached: the next call asks
+// while the bounded cache holds it. A failure is not cached: the next call asks
 // again.
 func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
-	l.idMu.Lock()
-	id, ok := l.ids[scope]
-	l.idMu.Unlock()
-	if ok {
+	if id, ok := l.ids.get(scope); ok {
 		return id, nil
 	}
 	resp, err := l.m.InternScope(ctx, &pb.InternScopeReq{ExternalId: scope})
 	if err != nil {
 		return 0, err
 	}
-	l.idMu.Lock()
-	if l.ids == nil {
-		l.ids = map[string]int64{}
-	}
-	l.ids[scope] = resp.GetId()
-	l.idMu.Unlock()
+	l.ids.put(scope, resp.GetId())
 	return resp.GetId(), nil
 }
 

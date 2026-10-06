@@ -327,3 +327,50 @@ func TestDBLimiter_ConcurrentCallers(t *testing.T) {
 		}
 	}
 }
+
+// The scope-id cache is BOUNDED. Its key is whatever scope a caller sends, and
+// it used to keep one entry per distinct scope for the life of the process.
+// Past the cap it starts over, and a scope it has dropped is simply interned
+// again — the answer stays right.
+func TestDBLimiter_TheScopeIDCacheIsBounded(t *testing.T) {
+	store, l := newTestLimiter(t)
+	l.ids.max = 3
+	store.setLimit("tenant-0", 0, "USD")
+	for i := 0; i < 20; i++ {
+		l.Allow(context.Background(), "tenant-"+strconv.Itoa(i))
+		if n := l.ids.len(); n > 3 {
+			t.Fatalf("after %d scopes the id cache holds %d, want at most 3", i+1, n)
+		}
+	}
+	// Dropped by a reset, and still answered correctly.
+	if l.Allow(context.Background(), "tenant-0").Allowed {
+		t.Error("a scope re-interned after a reset lost its cap")
+	}
+	// Within the cap the steady state still asks nothing.
+	before := store.count("InternScope")
+	l.Allow(context.Background(), "tenant-0")
+	if store.count("InternScope") != before {
+		t.Error("a cached scope was interned again")
+	}
+}
+
+// The spend and limit caches are bounded the same way: expired entries were
+// never evicted, so every scope ever asked about stayed.
+func TestSpendCacheIsBounded(t *testing.T) {
+	c := &spendCache[int64]{ttl: time.Minute, max: 2}
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		c.put("s"+strconv.Itoa(i), int64(i), now)
+		if n := len(c.value); n > 2 || len(c.fetched) != n {
+			t.Fatalf("after %d puts the cache holds %d values / %d times, want at most 2 of each", i+1, n, len(c.fetched))
+		}
+	}
+	if v, ok := c.get("s9", now); !ok || v != 9 {
+		t.Errorf("the newest entry was lost: %d, %v", v, ok)
+	}
+	// Re-putting a key it holds is not growth and does not reset.
+	c.put("s9", 10, now)
+	if v, ok := c.get("s8", now); !ok || v != 8 {
+		t.Errorf("updating a held key reset the cache: %d, %v", v, ok)
+	}
+}
