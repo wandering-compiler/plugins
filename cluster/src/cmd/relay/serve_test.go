@@ -393,9 +393,9 @@ func TestServe_ABanOnAManagementCallRemovesTheWorker(t *testing.T) {
 // that is perfectly valid but not the pinned one gets nothing — not stats, not
 // a registration code.
 func TestServe_ManagementRefusesAnyOtherControlPlane(t *testing.T) {
-	quiet(t)
+	logs := captureLog(t)
 	cp, cpFP := controlPlane(t)
-	intruder, _ := controlPlane(t)
+	intruder, intruderFP := controlPlane(t)
 	r := startRelay(t, cpFP)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -405,31 +405,30 @@ func TestServe_ManagementRefusesAnyOtherControlPlane(t *testing.T) {
 	if _, err := r.manage(t, cp).RelayStats(ctx, &pb.RelayStatsReq{}); err != nil {
 		t.Fatalf("the pinned control plane was not served: %v", err)
 	}
-	// The relay aborts the handshake with bad_certificate: a certificate WAS
-	// presented (the listener requires one, without checking a chain) and the
-	// pin rejected it. A refused connection, a timeout, a missing certificate
-	// ("certificate required") or the client's own pin of the relay would
-	// each read differently.
-	//
-	// Every attempt must fail Unavailable; the ALERT is waited for, over fresh
-	// connections (a failed one only replays its error until gRPC's backoff),
-	// because in TLS 1.3 the client finishes its side of the handshake before
-	// the server's verdict arrives, and its first write can lose the race to
-	// the server's close ("connection reset by peer") instead of reading it.
+	if n := strings.Count(logs.String(), "refused a management connection"); n != 0 {
+		t.Fatalf("the pinned control plane was logged as refused %d time(s):\n%s", n, logs.String())
+	}
+	// The refusal is read where it is CERTAIN: the relay's own log of its pin
+	// refusing, naming the fingerprint the intruder presented. The client's
+	// error is not: in TLS 1.3 the client finishes its side of the handshake
+	// before the server's verdict arrives, so its first write can lose the
+	// race to the server's close and read "connection reset by peer" (or
+	// another code) instead of the bad_certificate alert. All the client side
+	// has to show is that it was not served.
+	refused := 0
 	refusedByThePin := func(what string, call func(pb.ClusterServiceClient) error) {
 		t.Helper()
-		var errs []string
-		for range 20 {
-			err := call(r.manage(t, intruder))
-			if status.Code(err) != codes.Unavailable {
-				t.Fatalf("%s as a control plane the relay does not pin: %v, want Unavailable", what, err)
-			}
-			if strings.Contains(err.Error(), "tls: bad certificate") {
-				return
-			}
-			errs = append(errs, err.Error())
+		if err := call(r.manage(t, intruder)); err == nil {
+			t.Fatalf("%s as a control plane the relay does not pin was SERVED", what)
 		}
-		t.Fatalf("%s as a control plane the relay does not pin never read the relay's bad_certificate alert: %q", what, errs)
+		refused++
+		deadline := time.Now().Add(10 * time.Second)
+		for strings.Count(logs.String(), "presented certificate "+intruderFP) < refused {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the relay never logged its pin refusing %s; log:\n%s", what, intruderFP, logs.String())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	refusedByThePin("IssueRegistrationCode", func(mgmt pb.ClusterServiceClient) error {
 		_, err := mgmt.IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
@@ -439,6 +438,36 @@ func TestServe_ManagementRefusesAnyOtherControlPlane(t *testing.T) {
 		_, err := mgmt.RelayStats(ctx, &pb.RelayStatsReq{})
 		return err
 	})
+}
+
+// captureLog is quiet, keeping a copy of what the relay logged for the test
+// to read.
+func captureLog(t *testing.T) *lockedLog {
+	t.Helper()
+	l := &lockedLog{w: testWriter{t}}
+	prev := log.Writer()
+	log.SetOutput(l)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return l
+}
+
+type lockedLog struct {
+	w  testWriter
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	l.b.Write(p)
+	l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 // A drain over the management API takes effect in the binary: the relay says

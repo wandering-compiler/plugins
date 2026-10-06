@@ -262,6 +262,19 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	workers := workeradmit.New()
 
 	controlPin := strings.ToLower(strings.TrimSpace(cfg.controlPin))
+	// A refused control plane is LOGGED, with the fingerprint it presented.
+	// The handshake failure is otherwise invisible on this side, and the
+	// common cause is not an intruder but a console whose identity was
+	// re-minted without updating --control-plane-fingerprint — which an
+	// operator can only diagnose by comparing the two fingerprints.
+	logRefusal := func(err error) error {
+		if err != nil {
+			log.Printf("refused a management connection: %v", err)
+		}
+		return err
+	}
+	pinCert := relaydial.PinnedVerifier("control plane", controlPin)
+	pinConn := relaydial.PinnedConnectionVerifier("control plane", controlPin)
 	// Every server here takes tunnel.ServerKeepalive: it pings its peers on
 	// the cluster schedule and accepts their pings (lib/tunnel/keepalive.go).
 	// The management server also applies the ban set every control-plane call
@@ -274,11 +287,13 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		// exactly as it pins this relay's — symmetric, and neither side needs
 		// a CA. Workers are the opposite case (a fleet that comes and goes)
 		// and are verified against this relay's CA on their own listeners.
-		ClientAuth:            tls.RequireAnyClientCert,
-		VerifyPeerCertificate: relaydial.PinnedVerifier("control plane", controlPin),
+		ClientAuth: tls.RequireAnyClientCert,
+		VerifyPeerCertificate: func(raw [][]byte, chains [][]*x509.Certificate) error {
+			return logRefusal(pinCert(raw, chains))
+		},
 		// A resumed session never reaches VerifyPeerCertificate; this hook runs
 		// on both paths, so the pin holds past the first connection (G123).
-		VerifyConnection: relaydial.PinnedConnectionVerifier("control plane", controlPin),
+		VerifyConnection: func(cs tls.ConnectionState) error { return logRefusal(pinConn(cs)) },
 	})))...)
 	backends := relayserver.NewBackends()
 	// Capacity comes from the FLEET, and this is the wire that carries it: a
