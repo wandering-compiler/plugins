@@ -157,6 +157,23 @@ func (h *AgentServiceHandler) recordUsageFor(scope string, labels map[string]str
 	h.Usage.Record(ev)
 }
 
+// spentOn is the completion to BILL for a call that may have failed.
+//
+// A failed call returns no Completion — a non-nil one beside an error invites
+// somebody to show it — but it can still have spent: a run that died on its
+// third turn paid for two, and a response the provider marked failed reports
+// its own usage. That spend rides on the error (llm.SpentBy), and recording
+// `out` alone wrote those calls down as unmeasured, i.e. as nothing.
+func spentOn(out *llm.Completion, err error) *llm.Completion {
+	if out != nil || err == nil {
+		return out
+	}
+	if u, ok := llm.SpentBy(err); ok {
+		return &llm.Completion{Usage: u}
+	}
+	return nil
+}
+
 // runOutcome maps a run's ending onto the recorded status.
 //
 // A run that errored is FAILED; one that ended without a terminal status — the

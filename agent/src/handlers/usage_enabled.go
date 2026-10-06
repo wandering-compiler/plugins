@@ -89,45 +89,77 @@ type dbFlusher struct {
 	labels map[[2]string]int64
 }
 
+// Flush records every event it CAN, and reports the ones it could not.
+//
+// It used to return at the first failure, which dropped the rest of the batch
+// unwritten — and a batch is up to 64 calls from every tenant the process
+// served. One caller's scope longer than the column allows, one model id the
+// table refuses, sank the spend of everybody queued behind it, and the writer
+// then counted the whole batch as lost, including the rows that HAD landed.
+// That is the "empty scope took its whole batch down" failure again, one
+// constraint over.
 func (f *dbFlusher) Flush(ctx context.Context, batch []usage.Event) error {
+	failed := 0
+	var first error
 	for _, ev := range batch {
-		scopeID, err := f.internScope(ctx, ev.Scope)
-		if err != nil {
-			return err
-		}
-		modelID, err := f.internModel(ctx, ev.Model)
-		if err != nil {
-			return err
-		}
-		resp, err := f.mut.RecordUsage(ctx, &pb.RecordUsageReq{
-			ScopeId:           scopeID,
-			ModelId:           modelID,
-			Measured:          ev.Measured,
-			InputTokens:       ev.InputTokens,
-			OutputTokens:      ev.OutputTokens,
-			CachedInputTokens: ev.CachedInputTokens,
-			ReasoningTokens:   ev.ReasoningTokens,
-			Status:            pb.CallStatus(ev.Status),
-			StartedAt:         timestamppb.New(ev.StartedAt),
-			DurationMs:        ev.DurationMs,
-		})
-		if err != nil {
-			return err
-		}
-		for k, v := range ev.Labels {
-			labelID, lErr := f.internLabel(ctx, k, v)
-			if lErr != nil {
-				return lErr
-			}
-			if _, aErr := f.mut.AttachUsageLabel(ctx, &pb.AttachUsageLabelReq{
-				UsageId: resp.GetId(),
-				LabelId: labelID,
-			}); aErr != nil {
-				return aErr
+		if err := f.flushOne(ctx, ev); err != nil {
+			failed++
+			if first == nil {
+				first = err
 			}
 		}
 	}
-	return nil
+	if failed == 0 {
+		return nil
+	}
+	return &usage.PartialFlushError{Failed: failed, Err: first}
+}
+
+// flushOne writes one event: its row, then its labels. An event whose row
+// landed but one of whose labels did not is reported as failed — it is not
+// recorded as the caller described it — and the remaining labels are still
+// attached, because a partial attribution is worth more than none.
+func (f *dbFlusher) flushOne(ctx context.Context, ev usage.Event) error {
+	scopeID, err := f.internScope(ctx, ev.Scope)
+	if err != nil {
+		return err
+	}
+	modelID, err := f.internModel(ctx, ev.Model)
+	if err != nil {
+		return err
+	}
+	resp, err := f.mut.RecordUsage(ctx, &pb.RecordUsageReq{
+		ScopeId:           scopeID,
+		ModelId:           modelID,
+		Measured:          ev.Measured,
+		InputTokens:       ev.InputTokens,
+		OutputTokens:      ev.OutputTokens,
+		CachedInputTokens: ev.CachedInputTokens,
+		ReasoningTokens:   ev.ReasoningTokens,
+		Status:            pb.CallStatus(ev.Status),
+		StartedAt:         timestamppb.New(ev.StartedAt),
+		DurationMs:        ev.DurationMs,
+	})
+	if err != nil {
+		return err
+	}
+	var labelErr error
+	for k, v := range ev.Labels {
+		labelID, lErr := f.internLabel(ctx, k, v)
+		if lErr != nil {
+			if labelErr == nil {
+				labelErr = lErr
+			}
+			continue
+		}
+		if _, aErr := f.mut.AttachUsageLabel(ctx, &pb.AttachUsageLabelReq{
+			UsageId: resp.GetId(),
+			LabelId: labelID,
+		}); aErr != nil && labelErr == nil {
+			labelErr = aErr
+		}
+	}
+	return labelErr
 }
 
 func (f *dbFlusher) internScope(ctx context.Context, name string) (int64, error) {

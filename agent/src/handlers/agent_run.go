@@ -119,7 +119,7 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	// so this records what the plugin can actually observe rather than
 	// inventing per-turn numbers it does not have.
 	h.recordUsageFor(start.GetUsageScope(), start.GetUsageLabels(),
-		h.modelForSpec(start.GetModel()).ID, out, runOutcome(runErr, out), runStartedAt)
+		h.modelForSpec(start.GetModel()).ID, spentOn(out, runErr), runOutcome(runErr, out), runStartedAt)
 
 	// Belt and braces. The reader already calls failAll on every Recv error, and
 	// that is the path a disconnect actually takes — break-proofing confirmed
@@ -180,7 +180,11 @@ func (t *remoteTool) Call(ctx context.Context, args string) (string, error) {
 
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		// FATAL, like the send failure above. The run's context ending is not
+		// something the model can act on; returned plain, it became a tool
+		// result ("The tool failed: context canceled") and the loop went on to
+		// ask the model another turn for a caller who had already left.
+		return "", llm.Fatal(ctx.Err())
 	case res := <-wait:
 		if res.err != nil {
 			return "", llm.Fatal(res.err)
@@ -233,8 +237,18 @@ func (p *pendingCalls) drop(id string) {
 }
 
 func (p *pendingCalls) deliver(r *pb.RunAgentReq_ToolResult) {
+	// Claimed and REMOVED in one step: a call is answered once.
+	//
+	// It used to stay registered until its waiter dropped it, so a SECOND
+	// result for the same id — a caller retrying a send, a duplicated message —
+	// found the channel again. The buffer holds one reply; if the waiter had
+	// not yet taken the first, the second send blocked forever, and the
+	// goroutine blocked was the single Recv reader: every other outstanding
+	// call stopped being answered, and a disconnect was no longer noticed, so
+	// nothing released them either.
 	p.mu.Lock()
 	c, ok := p.ch[r.GetCallId()]
+	delete(p.ch, r.GetCallId())
 	p.mu.Unlock()
 	if !ok {
 		// A result for a call nobody is waiting for: a late answer to a

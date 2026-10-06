@@ -62,31 +62,37 @@ func NewLimiter(clients any) Limiter { return newLimiter(clients) }
 // slack multiplies by the replica count. Removing that needs a shared counter
 // consulted per call, which is the round trip this avoids. The trade is the
 // design, not an oversight.
-type spendCache struct {
+//
+// Generic over what is cached because two things are, and both need their
+// CURRENCY next to the amount: a figure in minor units means nothing without
+// one, and comparing a limit with a spend that are in different currencies is
+// the defect totalSpend exists to refuse.
+type spendCache[V any] struct {
 	ttl time.Duration
 
 	mu      sync.Mutex
-	minor   map[string]int64
+	value   map[string]V
 	fetched map[string]time.Time
 }
 
-func (c *spendCache) get(scope string, now time.Time) (int64, bool) {
+func (c *spendCache[V]) get(scope string, now time.Time) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	at, ok := c.fetched[scope]
 	if !ok || now.Sub(at) > c.ttl {
-		return 0, false
+		var zero V
+		return zero, false
 	}
-	return c.minor[scope], true
+	return c.value[scope], true
 }
 
-func (c *spendCache) put(scope string, minor int64, now time.Time) {
+func (c *spendCache[V]) put(scope string, v V, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.minor == nil {
-		c.minor = map[string]int64{}
+	if c.value == nil {
+		c.value = map[string]V{}
 		c.fetched = map[string]time.Time{}
 	}
-	c.minor[scope] = minor
+	c.value[scope] = v
 	c.fetched[scope] = now
 }

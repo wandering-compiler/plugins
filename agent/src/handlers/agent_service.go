@@ -82,7 +82,7 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		if llm.IsPreflight(err) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		h.recordUsage(req, m.ID, out, OutcomeFailed, startedAt)
+		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
 		// The provider's own text is NOT forwarded whole: it renders the
 		// deployment URL and, on some failures, fragments of the prompt, and
 		// neither belongs in an answer travelling back to whoever asked.
@@ -119,6 +119,13 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 // deployment's defaults for whatever it leaves empty.
 func (h *AgentServiceHandler) modelFor(req *pb.CompleteReq) llm.Model {
 	m := llm.Model{ID: h.DefaultModel, MaxTokens: h.DefaultMaxTokens}
+	// The response format is a property of the REQUEST, not of the model spec,
+	// so it is read before the spec is. It used to be set below the early
+	// return, which meant a caller who relied on the deployment's default model
+	// — no ModelSpec at all — and asked for JSON_OBJECT got neither the
+	// provider's enforcement nor the preflight that guards it: free text where
+	// a JSON object was promised, and no error saying so.
+	m.JSONObject = req.GetResponseFormat() == pb.ResponseFormat_RESPONSE_FORMAT_JSON_OBJECT
 	spec := req.GetModel()
 	if spec == nil {
 		return m
@@ -132,7 +139,6 @@ func (h *AgentServiceHandler) modelFor(req *pb.CompleteReq) llm.Model {
 		m.MaxTokens = int64(spec.GetMaxTokens())
 	}
 	m.Effort = effortName(spec.GetEffort())
-	m.JSONObject = req.GetResponseFormat() == pb.ResponseFormat_RESPONSE_FORMAT_JSON_OBJECT
 	if spec.Temperature != nil {
 		t := spec.GetTemperature()
 		m.Temperature = &t
