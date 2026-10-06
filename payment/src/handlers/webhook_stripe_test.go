@@ -98,54 +98,53 @@ func noRowsErr() error {
 // dedup ledger, and accepts that a redelivered event reaches the
 // reconciliation mutation a second time. What that trade missed is the
 // EVENT. The generated emit wrapper fires after every SUCCESSFUL inner
-// call (`if err != nil { return nil, err }` sits between the call and
-// the emit — see any generated `w17/services/*/src/eventbus/wrap.go`),
-// and the reconciliation UPDATE used to be unconditional, so it matched
-// the already-SUCCEEDED row on every redelivery and PaymentSucceeded
-// was emitted again. Any non-idempotent subscriber (ship the order,
-// grant the entitlement, send the receipt) then acted twice.
+// call, and the reconciliation UPDATE used to be unconditional, so it
+// matched the already-SUCCEEDED row on every redelivery and
+// PaymentSucceeded was emitted again. Any non-idempotent subscriber (ship
+// the order, grant the entitlement, send the receipt) then acted twice.
 //
 // The fix is a transition guard in the DQL (`AND status <> 3`), which
-// makes a redelivery match zero rows → NotFound → no emit. This test
-// pins the HANDLER half of that contract:
+// makes a redelivery match zero rows → NotFound → no emit. This test pins
+// the HANDLER half of that contract, against the stateful store (guards,
+// unique keys and emits as the DQL has them) and over a real first
+// delivery followed by the redelivery:
 //
-//   - NotFound from a reconciliation mutation must not fail the webhook
-//     when the dedup ledger confirms the event was already processed;
-//   - the cross-feature side effect must NOT run again;
-//   - the answer stays handled=false so the provider stops retrying.
+//   - NotFound from the guard must not fail the redelivery;
+//   - no second PaymentSucceeded, no second CreditApplied, balance
+//     unchanged (the top-up hook DOES run again — that is what heals a
+//     grant whose first attempt failed — and its per-charge ledger key
+//     and granted_at stamp make it a no-op);
+//   - the answer is handled=false so the provider stops retrying.
 //
-// It replaces TestIngestStripe_DuplicateIsNoOp, which asserted only
-// resp.Handled == false — and therefore stayed green while both the
-// side effect and the emission ran a second time.
+// It replaces a version that primed per-call fakes with a refused guard,
+// a seen-before ledger AND a never-granted top-up — a state no real
+// sequence reaches — and asserted that ApplyCredit was never called,
+// which pinned the very rule (hook only on a fresh transition) that
+// stranded failed grants.
 func TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing(t *testing.T) {
-	m := &fakeMutation{
-		succeededErr:     noRowsErr(),           // the guard refused the transition
-		markProcessedErr: uniqueViolationErr(t), // …and the ledger says: seen before
-	}
-	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}}
-	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
-	body := []byte(`{"id":"evt_1","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42"}}}`)
+	r := newRig(t)
+	top := r.topUp("user-a", "20.00", "topup-1")
+	body := eventJSON("evt_1", "payment_intent.succeeded", top.GetProviderPaymentId(), nil)
 
-	resp, err := h.IngestStripe(ctxWithSig(body), &pb.IngestStripeReq{RawPayload: body})
+	first, err := r.deliver(body)
+	if err != nil || !first.GetHandled() {
+		t.Fatalf("first delivery: handled=%v err=%v", first.GetHandled(), err)
+	}
+	resp, err := r.deliver(body)
 	if err != nil {
 		t.Fatalf("a redelivery of an already-processed event must not fail the webhook: %v", err)
 	}
 	if resp.GetHandled() {
 		t.Error("duplicate must report handled=false")
 	}
-	// The event half: the mutation refused the transition, so it returned
-	// an error, so the emit wrapper could not fire. Nothing to assert on
-	// the fake beyond "the handler did not treat it as a state change".
-	if m.succeededFor != "" {
-		t.Errorf("the guard refused the transition — no state change may be recorded, got %q", m.succeededFor)
+	if n := r.store.events("PaymentSucceeded"); n != 1 {
+		t.Errorf("PaymentSucceeded emitted %d times, want exactly 1", n)
 	}
-	// The side-effect half: the top-up grant is the cross-feature hook
-	// that used to re-run on every redelivery.
-	if m.lastApply != nil {
-		t.Errorf("redelivery granted credit a second time: %+v", m.lastApply)
+	if n := r.store.events("CreditApplied"); n != 1 {
+		t.Errorf("CreditApplied emitted %d times, want exactly 1 — redelivery granted again", n)
 	}
-	if m.markGrantedFor != "" {
-		t.Errorf("redelivery re-stamped the top-up as granted (%q)", m.markGrantedFor)
+	if got := r.store.balance(t, "user-a"); got != "20.0000" {
+		t.Errorf("balance = %s, want 20.0000 (granted once)", got)
 	}
 }
 
@@ -154,20 +153,16 @@ func TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing(t *testing.T) {
 //
 // A guarded UPDATE that matches nothing is ambiguous: either the row is
 // already in the target state (a redelivery — above), or the local
-// Payment row does not exist yet. The second is a REAL race:
-// TopUpCredit calls the provider before its own CreatePayment INSERT
-// (prepaid.go), so a fast `payment_intent.succeeded` can outrun it.
-// That case must keep failing, so the provider redelivers and the
-// reconciliation eventually lands — swallowing it loses the payment.
-//
-// The discriminator is the dedup ledger's own INSERT: a UNIQUE
-// violation means we fully processed this event id before (redelivery);
-// a fresh insert means we did not, so the provider id is unknown here.
+// Payment row does not exist yet. The second must keep failing, so the
+// provider redelivers and the reconciliation eventually lands —
+// swallowing it loses the payment. The provider-id lookup tells them
+// apart, and the failing branch must NOT write the dedup ledger, or the
+// next delivery is acknowledged as a duplicate.
 func TestIngestStripe_UnknownProviderPayment_MustNotAcknowledge(t *testing.T) {
-	m := &fakeMutation{succeededErr: noRowsErr()} // ledger insert succeeds: first sighting
-	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}}
+	m := &fakeMutation{succeededErr: noRowsErr()}
+	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}} // no payment row
 	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
-	body := []byte(`{"id":"evt_new","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42"}}}`)
+	body := []byte(`{"id":"evt_new","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42","metadata":{"w17_payment":"topup"}}}}`)
 
 	_, err := h.IngestStripe(ctxWithSig(body), &pb.IngestStripeReq{RawPayload: body})
 	if status.Code(err) != codes.NotFound {
@@ -175,6 +170,9 @@ func TestIngestStripe_UnknownProviderPayment_MustNotAcknowledge(t *testing.T) {
 	}
 	if m.lastApply != nil {
 		t.Errorf("no credit may be granted for a payment that was never reconciled: %+v", m.lastApply)
+	}
+	if m.markedProcessed {
+		t.Error("an unreconciled event must not be recorded as processed — its redelivery would be acknowledged as a duplicate")
 	}
 }
 

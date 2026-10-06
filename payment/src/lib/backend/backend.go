@@ -14,7 +14,28 @@
 // provider's unit (e.g. integer minor units) at its boundary.
 package backend
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// Provider-failure classes. A driver wraps its errors with one of these
+// (errors.Is) when it KNOWS the failure is not transient; anything else
+// is treated as transient (network, 5xx, rate limit) and the caller may
+// retry. The distinction matters because a gRPC client retry policy
+// retries UNAVAILABLE automatically: a request the provider refused as
+// invalid, or a card it declined, fails identically on every retry.
+var (
+	// ErrInvalidRequest — the request itself is wrong (an amount the
+	// currency cannot represent, a refund larger than the charge, an
+	// idempotency key reused with different parameters). Retrying it
+	// unchanged cannot succeed.
+	ErrInvalidRequest = errors.New("payment provider rejected the request as invalid")
+	// ErrDeclined — the provider refused the charge itself (card
+	// declined, insufficient funds). A retry needs a different payment
+	// method, not a second attempt.
+	ErrDeclined = errors.New("payment declined by the provider")
+)
 
 // Money is a currency amount as a decimal string (e.g. "19.99") plus a
 // lowercase ISO-4217 currency code. String carrier = exact, lossless —
@@ -36,7 +57,24 @@ type PaymentSpec struct {
 	Amount             Money
 	IdempotencyKey     string
 	Description        string
+	// Origin marks the provider object as this plugin's (OriginCharge,
+	// OriginTopup), so a webhook for it can tell "ours, local row not
+	// landed yet" from "not ours at all".
+	Origin string
 }
+
+// OriginMetadataKey is the provider metadata key carrying the Origin of an
+// object this plugin created. A webhook names objects the plugin never made
+// too — a subscription's invoice payments, a dashboard charge, another app on
+// the same account — and those have no local row and never will: only an
+// object carrying this key is worth failing (and so redelivering) until its
+// row lands.
+const (
+	OriginMetadataKey  = "w17_payment"
+	OriginCharge       = "charge"
+	OriginTopup        = "topup"
+	OriginSubscription = "subscription"
+)
 
 // PaymentResult is what the provider returns for a created payment.
 type PaymentResult struct {

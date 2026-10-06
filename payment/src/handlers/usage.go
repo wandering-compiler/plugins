@@ -27,7 +27,15 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 	if req.GetIdempotencyKey() == "" {
 		return nil, invalidArg("idempotency_key is required (the report must be idempotent)")
 	}
+	if err := idempotencyKeyTooLong(req.GetIdempotencyKey()); err != nil {
+		return nil, err
+	}
 
+	// The stored key is scoped by (principal, meter, period):
+	// UsageRecord.idempotency_key is one table-wide UNIQUE, and a duplicate
+	// is answered with success. With the raw key stored, a report for
+	// user-b (or for another meter) under a key already used elsewhere
+	// recorded nothing and still succeeded — usage silently never billed.
 	resp, err := h.Mutation.RecordUsage(ctx, &pb.RecordUsageReq{
 		UserId:         req.GetUserId(),
 		Meter:          req.GetMeter(),
@@ -35,7 +43,7 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 		Quantity:       req.GetQuantity(),
 		ItemRef:        req.GetItemRef(),
 		Metadata:       req.GetMetadata(),
-		IdempotencyKey: req.GetIdempotencyKey(),
+		IdempotencyKey: scopedKey("usage", req.GetUserId(), req.GetMeter(), req.GetPeriod(), req.GetIdempotencyKey()),
 	})
 	if err != nil {
 		if constraintCode(err) == codeUniqueViolation {
@@ -55,7 +63,7 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 
 func (h *PaymentServiceHandler) currentMeter(ctx context.Context, userID, meter, period string) (*pb.UsageView, error) {
 	got, err := h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: userID, Meter: meter, Period: period})
-	if err != nil {
+	if err != nil && !absent(err) { // nothing metered yet: zero
 		return nil, err
 	}
 	view := &pb.UsageView{UserId: userID, Meter: meter, Period: period}

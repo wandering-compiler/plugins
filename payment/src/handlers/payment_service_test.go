@@ -68,6 +68,8 @@ type fakeQuery struct {
 	plan         *pb.Plan          // subscriptions
 	subscription *pb.Subscription
 	creditTopup  *pb.CreditTopup // prepaid top-up
+
+	paymentByProvider *pb.Payment // GetPaymentByProviderId answer
 }
 
 func (q *fakeQuery) GetCustomerByUserId(_ context.Context, _ *pb.GetCustomerByUserIdReq, _ ...grpc.CallOption) (*pb.GetCustomerByUserIdResp, error) {
@@ -87,6 +89,18 @@ func (q *fakeQuery) GetPlanBySlug(_ context.Context, _ *pb.GetPlanBySlugReq, _ .
 }
 func (q *fakeQuery) GetSubscription(_ context.Context, _ *pb.GetSubscriptionReq, _ ...grpc.CallOption) (*pb.GetSubscriptionResp, error) {
 	return &pb.GetSubscriptionResp{Subscription: q.subscription}, nil
+}
+func (q *fakeQuery) GetPaymentByProviderId(_ context.Context, _ *pb.GetPaymentByProviderIdReq, _ ...grpc.CallOption) (*pb.GetPaymentByProviderIdResp, error) {
+	return &pb.GetPaymentByProviderIdResp{Payment: q.paymentByProvider}, nil
+}
+func (q *fakeQuery) GetRefundByProviderId(_ context.Context, _ *pb.GetRefundByProviderIdReq, _ ...grpc.CallOption) (*pb.GetRefundByProviderIdResp, error) {
+	return &pb.GetRefundByProviderIdResp{}, nil
+}
+func (q *fakeQuery) GetRefundByIdempotencyKey(_ context.Context, _ *pb.GetRefundByIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.GetRefundByIdempotencyKeyResp, error) {
+	return nil, status.Error(codes.NotFound, "sql: no rows in result set")
+}
+func (q *fakeQuery) GetSubscriptionByProviderId(_ context.Context, _ *pb.GetSubscriptionByProviderIdReq, _ ...grpc.CallOption) (*pb.GetSubscriptionByProviderIdResp, error) {
+	return &pb.GetSubscriptionByProviderIdResp{}, nil
 }
 func (q *fakeQuery) GetCreditTopupByProviderId(_ context.Context, _ *pb.GetCreditTopupByProviderIdReq, _ ...grpc.CallOption) (*pb.GetCreditTopupByProviderIdResp, error) {
 	return &pb.GetCreditTopupByProviderIdResp{Topup: q.creditTopup}, nil

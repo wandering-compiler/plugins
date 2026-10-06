@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
 )
 
 // toleranceSeconds bounds how far the signed timestamp may be from now
@@ -39,7 +41,13 @@ type Event struct {
 	// CurrentPeriodEnd is data.object.current_period_end (Unix seconds)
 	// on subscription events; 0 otherwise.
 	CurrentPeriodEnd int64
-	Raw              []byte
+	// Created is the event's own creation time (Unix seconds) — the
+	// provider's order of events, which delivery order is not.
+	Created int64
+	// Origin is data.object.metadata[backend.OriginMetadataKey]: set on
+	// objects this plugin created, empty on everything else.
+	Origin string
+	Raw    []byte
 }
 
 // ErrBadSignature is returned when the Stripe-Signature HMAC does not
@@ -104,6 +112,13 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return Event{}, fmt.Errorf("stripe: malformed webhook body: %w", err)
 	}
+	// The event id is the dedup ledger's primary key and the type picks
+	// the reconciliation. An event without either cannot be processed
+	// exactly once: an empty id would be recorded as "" and from then on
+	// make every other id-less event read as already processed.
+	if raw.ID == "" || raw.Type == "" {
+		return Event{}, fmt.Errorf("stripe: malformed webhook body: missing event id or type")
+	}
 	return Event{
 		ID:               raw.ID,
 		Type:             raw.Type,
@@ -111,6 +126,8 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 		PaymentIntentID:  raw.Data.Object.ID,
 		ObjectStatus:     raw.Data.Object.Status,
 		CurrentPeriodEnd: raw.Data.Object.CurrentPeriodEnd,
+		Created:          raw.Created,
+		Origin:           raw.Data.Object.Metadata[backend.OriginMetadataKey],
 		Raw:              payload,
 	}, nil
 }

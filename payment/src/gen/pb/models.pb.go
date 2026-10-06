@@ -374,8 +374,13 @@ type Refund struct {
 	Amount           string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
 	Currency         string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`
 	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// The caller's refund key, scoped by payment (see RefundPayment). Looked up
+	// BEFORE the provider is asked: the provider forgets an idempotency key
+	// after a day, and a retry after that would refund a second time. NULL on
+	// rows written before the key was kept.
+	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Refund) Reset() {
@@ -448,6 +453,13 @@ func (x *Refund) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *Refund) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
 }
 
 // ProcessedWebhookEvent — the inbound-idempotency ledger. The webhook
@@ -1100,8 +1112,11 @@ type Subscription struct {
 	CurrentPeriodEnd       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=current_period_end,json=currentPeriodEnd,proto3" json:"current_period_end,omitempty"`
 	CreatedAt              *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt              *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// When the provider created the last event applied to this row. Events
+	// arrive out of order; an older one must not overwrite a newer status.
+	ProviderEventAt *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=provider_event_at,json=providerEventAt,proto3" json:"provider_event_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Subscription) Reset() {
@@ -1190,6 +1205,13 @@ func (x *Subscription) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Subscription) GetProviderEventAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ProviderEventAt
+	}
+	return nil
+}
+
 var File_types_models_proto protoreflect.FileDescriptor
 
 const file_types_models_proto_rawDesc = "" +
@@ -1226,7 +1248,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"\x06FAILED\x10\x04\x12\f\n" +
 	"\bCANCELED\x10\x05\x12\f\n" +
-	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\xaa\x02\n" +
+	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\xe2\x02\n" +
 	"\x06Refund\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\n" +
@@ -1235,7 +1257,8 @@ const file_types_models_proto_rawDesc = "" +
 	"\x06amount\x18\x04 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x06amount\x12$\n" +
 	"\bcurrency\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x12F\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x04\xc2\xf3\x18\x00\"\xdf\x01\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x126\n" +
+	"\x0fidempotency_key\x18\a \x01(\tB\r\xca\xf3\x18\t\b\x01(\x018\x01@\xff\x01R\x0eidempotencyKey:\x04\xc2\xf3\x18\x00\"\xdf\x01\n" +
 	"\x15ProcessedWebhookEvent\x127\n" +
 	"\x11provider_event_id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x01\x10\x01@\xff\x01R\x0fproviderEventId\x12*\n" +
 	"\n" +
@@ -1307,7 +1330,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\x11provider_price_id\x18\a \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xff\x01R\x0fproviderPriceId\x12!\n" +
 	"\aenabled\x18\b \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1eR\aenabled\x12F\n" +
 	"\n" +
-	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptions\"\xdd\x04\n" +
+	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptions\"\xaf\x05\n" +
 	"\fSubscription\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12-\n" +
 	"\vcustomer_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\n" +
@@ -1319,7 +1342,8 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12D\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt\"V\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt\x12P\n" +
+	"\x11provider_event_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x0fproviderEventAt\"V\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\f\n" +
 	"\bTRIALING\x10\x01\x12\n" +
@@ -1377,11 +1401,12 @@ var file_types_models_proto_depIdxs = []int32{
 	13, // 14: w17.contrib.payment.Subscription.current_period_end:type_name -> google.protobuf.Timestamp
 	13, // 15: w17.contrib.payment.Subscription.created_at:type_name -> google.protobuf.Timestamp
 	13, // 16: w17.contrib.payment.Subscription.updated_at:type_name -> google.protobuf.Timestamp
-	17, // [17:17] is the sub-list for method output_type
-	17, // [17:17] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	13, // 17: w17.contrib.payment.Subscription.provider_event_at:type_name -> google.protobuf.Timestamp
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_types_models_proto_init() }

@@ -47,7 +47,7 @@ func TestEnsureCustomer(t *testing.T) {
 }
 
 func TestCreatePayment(t *testing.T) {
-	var gotAmount, gotCurrency, gotCustomer, gotIdem string
+	var gotAmount, gotCurrency, gotCustomer, gotIdem, gotOrigin string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/payment_intents" {
 			t.Errorf("unexpected path %s", r.URL.Path)
@@ -56,6 +56,7 @@ func TestCreatePayment(t *testing.T) {
 		gotAmount = r.Form.Get("amount")
 		gotCurrency = r.Form.Get("currency")
 		gotCustomer = r.Form.Get("customer")
+		gotOrigin = r.Form.Get("metadata[w17_payment]")
 		gotIdem = r.Header.Get("Idempotency-Key")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"pi_1","status":"requires_confirmation","client_secret":"pi_1_secret"}`))
@@ -67,6 +68,7 @@ func TestCreatePayment(t *testing.T) {
 		Amount:             backend.Money{Amount: "19.99", Currency: "USD"},
 		IdempotencyKey:     "idem-1",
 		Description:        "pro",
+		Origin:             backend.OriginTopup,
 	})
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -82,6 +84,9 @@ func TestCreatePayment(t *testing.T) {
 	}
 	if gotIdem != "idem-1" {
 		t.Errorf("idempotency-key = %q", gotIdem)
+	}
+	if gotOrigin != "topup" {
+		t.Errorf("metadata[w17_payment] = %q, want topup — the webhook tells the plugin's objects apart by it", gotOrigin)
 	}
 	if res.ProviderPaymentID != "pi_1" || res.ClientSecret != "pi_1_secret" || res.Status != "requires_confirmation" {
 		t.Errorf("result = %+v", res)
@@ -145,7 +150,7 @@ func TestUpsertPlan(t *testing.T) {
 }
 
 func TestStartSubscription(t *testing.T) {
-	var customer, price, idem string
+	var customer, price, idem, origin string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/subscriptions" {
 			t.Errorf("path = %s", r.URL.Path)
@@ -153,6 +158,7 @@ func TestStartSubscription(t *testing.T) {
 		_ = r.ParseForm()
 		customer = r.Form.Get("customer")
 		price = r.Form.Get("items[0][price]")
+		origin = r.Form.Get("metadata[w17_payment]")
 		idem = r.Header.Get("Idempotency-Key")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"sub_1","status":"active","current_period_end":1893456000}`))
@@ -165,8 +171,8 @@ func TestStartSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSubscription: %v", err)
 	}
-	if customer != "cus_1" || price != "price_1" || idem != "sub:u1:pro" {
-		t.Errorf("form: customer=%q price=%q idem=%q", customer, price, idem)
+	if customer != "cus_1" || price != "price_1" || idem != "sub:u1:pro" || origin != "subscription" {
+		t.Errorf("form: customer=%q price=%q idem=%q origin=%q", customer, price, idem, origin)
 	}
 	if res.ProviderSubscriptionID != "sub_1" || res.Status != "active" || res.CurrentPeriodEnd != 1893456000 {
 		t.Errorf("result = %+v", res)
