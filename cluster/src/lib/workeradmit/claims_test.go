@@ -20,6 +20,9 @@ func TestCheckClaims(t *testing.T) {
 		{"DEL", "", "a\x7fb", "control character U+007F"},
 		{"C1 control", "a\u0085b", "", "control character U+0085"},
 		{"invalid UTF-8", "a\xffb", "", "not valid UTF-8"},
+		{"right-to-left override", "acme-\u202e1", "", "format character U+202E"},
+		{"zero-width space", "", "dev\u200b1", "format character U+200B"},
+		{"byte order mark", "\ufeffacme-1", "", "format character U+FEFF"},
 	} {
 		err := CheckClaims(tc.claim, tc.device)
 		switch {
@@ -45,6 +48,7 @@ func TestSanitizeClaim(t *testing.T) {
 		{strings.Repeat("ř", MaxClaimLen+5), strings.Repeat("ř", MaxClaimLen), true},
 		{"a\x00b\nc", "a\uFFFDb\uFFFDc", true},
 		{"a\xffb", "a\uFFFDb", true},
+		{"acme-\u202e1\u200b", "acme-\uFFFD1\uFFFD", true},
 	} {
 		got, changed := SanitizeClaim(tc.in)
 		if got != tc.want || changed != tc.changed {

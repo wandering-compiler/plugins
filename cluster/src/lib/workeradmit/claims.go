@@ -21,6 +21,13 @@ const MaxClaimLen = 128
 // sweep as an Internal error, indistinguishable there from the database being
 // down, and so aborts every sweep for as long as that worker is attached.
 //
+// A Unicode FORMAT character (category Cf: U+202E RIGHT-TO-LEFT OVERRIDE, the
+// zero-width space, joiner and non-joiner, U+FEFF) is refused with them. The
+// registry would store one, but a name is what an operator reads to decide
+// whom to ban, and an invisible or reordering character makes two different
+// claims print alike — "acme-1" and "acme-1" with a zero-width space — or one
+// print as another.
+//
 // A worker checks its own configuration with it before it enrols, and a relay
 // refuses an enrolment that breaks it; see SanitizeClaim for a worker that is
 // ALREADY enrolled.
@@ -37,12 +44,17 @@ func CheckClaims(name, deviceID string) error {
 			r, _ := utf8.DecodeRuneInString(c.v[i:])
 			return fmt.Errorf("the worker's %s contains the control character %U — configure one without", c.what, r)
 		}
+		if i := strings.IndexFunc(c.v, isFormat); i >= 0 {
+			r, _ := utf8.DecodeRuneInString(c.v[i:])
+			return fmt.Errorf("the worker's %s contains the invisible format character %U — configure one without", c.what, r)
+		}
 	}
 	return nil
 }
 
 // SanitizeClaim makes a claim the registry can record: every control
-// character and invalid byte becomes U+FFFD, and what remains is cut to
+// character, format character (see CheckClaims) and invalid byte becomes
+// U+FFFD, and what remains is cut to
 // MaxClaimLen characters. changed says whether anything was altered.
 //
 // For a worker that already HOLDS a certificate, whose claims were never
@@ -62,7 +74,7 @@ func SanitizeClaim(s string) (clean string, changed bool) {
 				changed = true
 			}
 		}
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || isFormat(r) {
 			r, changed = utf8.RuneError, true
 		}
 		b.WriteRune(r)
@@ -70,3 +82,7 @@ func SanitizeClaim(s string) (clean string, changed bool) {
 	}
 	return b.String(), changed
 }
+
+// isFormat reports a Unicode format character (category Cf): invisible, or
+// changing how the text around it is ordered or joined.
+func isFormat(r rune) bool { return unicode.Is(unicode.Cf, r) }

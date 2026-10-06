@@ -75,16 +75,17 @@ func (s *WorkerServer) Attach(
 	// would take a machine that served fine out of the fleet on an upgrade,
 	// for a label: its identity is its key. What the control plane is told
 	// is what its registry can record (at most 128 characters, no control
-	// character — a NUL alone aborted every sweep), so nothing it is passed
-	// fails there. New workers are refused at Enroll instead, where they can
-	// be told to fix their configuration.
+	// character — a NUL alone aborted every sweep — and no invisible format
+	// character), so nothing it is passed fails there. New workers are
+	// refused at Enroll instead, where they can be told to fix their
+	// configuration.
 	name, nameChanged := workeradmit.SanitizeClaim(req.GetName())
 	device, deviceChanged := workeradmit.SanitizeClaim(req.GetDeviceId())
 	if nameChanged || deviceChanged {
 		// The originals by LENGTH only: a claim is whatever the worker sent,
 		// up to a whole gRPC message, on every reconnect.
 		log.Printf("relay: worker %s claims a name (%d bytes) or device id (%d bytes) the control plane cannot "+
-			"record — over %d characters or with a control character; recorded as %q and %q",
+			"record — over %d characters or with a control or format character; recorded as %q and %q",
 			id, len(req.GetName()), len(req.GetDeviceId()), workeradmit.MaxClaimLen, name, device)
 	}
 	// Recorded before the ban check, so a banned worker that keeps knocking

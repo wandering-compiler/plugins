@@ -139,6 +139,28 @@ func TestEnroll_ABannedKeyIsRefused(t *testing.T) {
 	}
 }
 
+// A banned key is told it is BANNED even when its claims are also unusable —
+// the ban is the answer that matters, and checking the claims first sent the
+// worker off to fix a name only to be refused again for its key. Neither
+// refusal spends the code.
+func TestEnroll_ABannedKeyHearsTheBanBeforeItsClaims(t *testing.T) {
+	r := newEnrolRig(t)
+	keyPEM, _, _ := identity.NewKeyAndCSR("a")
+	csr, _ := identity.CSRFor(keyPEM, "a")
+	parsed, _ := identity.ParseCSR(csr)
+	id, _ := identity.PublicKeyID(parsed.PublicKey)
+	r.reg.SetBanned([]string{id})
+	code := r.code(t)
+	_, err := r.e.Enroll(withPeer(nil), &workerpb.EnrollReq{RegistrationCode: code, Csr: csr, Name: "acme\x001"})
+	if got := refusal.ReasonOf(err); got != refusal.WorkerBanned {
+		t.Fatalf("a banned key with a bad name: %v (reason %q), want %s", err, got, refusal.WorkerBanned)
+	}
+	_, csr2, _ := identity.NewKeyAndCSR("b")
+	if _, err := r.e.Enroll(withPeer(nil), &workerpb.EnrollReq{RegistrationCode: code, Csr: csr2, Name: "acme-2"}); err != nil {
+		t.Errorf("the banned key's refusal spent the code: %v", err)
+	}
+}
+
 // Renewal keeps the KEY, so the identity survives it — the registry row and
 // any ban keep pointing at this worker.
 func TestRenew_KeepsTheIdentity(t *testing.T) {

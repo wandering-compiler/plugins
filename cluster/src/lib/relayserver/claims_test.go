@@ -34,6 +34,8 @@ func TestEnroll_AClaimTheRegistryCannotRecordIsRefused(t *testing.T) {
 		{"device id over the limit", "acme-1", long, false, "the most a relay accepts is 128"},
 		{"NUL in the name", "acme\x001", "", false, "control character U+0000"},
 		{"newline in the device id", "acme-1", "dev\n1", false, "control character U+000A"},
+		{"right-to-left override in the name", "acme-\u202e1", "", false, "format character U+202E"},
+		{"zero-width space in the device id", "acme-1", "dev\u200b1", false, "format character U+200B"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newEnrolRig(t)
@@ -85,6 +87,8 @@ func TestAttach_AClaimTheRegistryCannotRecordIsSanitizedNotRefused(t *testing.T)
 			wantName: "vps-1", wantDev: strings.Repeat("ř", 128)},
 		{name: "NUL in the name", req: &workerpb.AttachReq{Name: "vps\x001", DeviceId: "dev\t1", Slots: 1},
 			wantName: "vps\uFFFD1", wantDev: "dev\uFFFD1"},
+		{name: "format characters", req: &workerpb.AttachReq{Name: "vps-\u202e1", DeviceId: "dev\u200d1", Slots: 1},
+			wantName: "vps-\uFFFD1", wantDev: "dev\uFFFD1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := serveWorkers(t)

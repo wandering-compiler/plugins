@@ -66,12 +66,15 @@ func (e *Enrollment) Enroll(_ context.Context, req *workerpb.EnrollReq) (*worker
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "relay: "+err.Error())
 	}
-	if err := checkClaims(req.GetName(), req.GetDeviceId()); err != nil {
-		return nil, err
-	}
 	if !e.Workers.Admitted(id) {
 		return nil, refusal.New(codes.PermissionDenied, refusal.WorkerBanned,
 			"relay: the key in this request ("+id+") is banned — enrol with a new key")
+	}
+	// Claims after the ban, still before the code is spent: a banned key is
+	// told it is BANNED whatever it claims. The other order told it to fix its
+	// name, and a worker that obeyed came back only to learn the real answer.
+	if err := checkClaims(req.GetName(), req.GetDeviceId()); err != nil {
+		return nil, err
 	}
 	if err := e.Codes.Redeem(req.GetRegistrationCode()); err != nil {
 		if errors.Is(err, regcode.ErrInvalid) {
@@ -130,7 +133,7 @@ func (e *Enrollment) Renew(ctx context.Context, req *workerpb.RenewReq) (*worker
 
 // checkClaims refuses, at ENROLMENT, a worker's name or device id that the
 // control plane's registry could not record (workeradmit.CheckClaims: too
-// long, or a control character such as NUL).
+// long, a control character such as NUL, or an invisible format character).
 //
 // Refused at the edge, where the worker can be told, rather than met and
 // passed on: a claim the registry cannot hold used to reach the control
