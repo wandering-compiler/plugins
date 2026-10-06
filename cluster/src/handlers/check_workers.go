@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"slices"
 	"sort"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
 // WorkerStore is the seam onto the worker registry, wired by RegisterPlugin.
@@ -85,17 +89,27 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	}
 
 	var unreachable []string
-	for _, r := range relays {
-		if err := h.exchangeOne(ctx, r); err != nil {
+	for i, r := range relays {
+		rejected, err := h.exchangeOne(ctx, r)
+		if err != nil {
 			if errors.Is(err, errRecording) {
 				// The RELAY answered; it is this control plane's own registry
-				// that failed. Not the relay's fault, so neither listed as
-				// unreachable nor written onto its row — which would send an
-				// operator to debug a healthy machine — and fatal, because
-				// every other relay's workers would fail to record the same
-				// way. The upsert is idempotent: pressing again is the retry.
+				// that failed — the database is down or refusing writes, not
+				// one worker's row being bad (that is `rejected`, below). Not
+				// the relay's fault, so neither listed as unreachable nor
+				// written onto its row — which would send an operator to debug
+				// a healthy machine — and fatal, because every other relay's
+				// workers would fail to record the same way. The upsert is
+				// idempotent: pressing again is the retry.
+				//
+				// What the sweep already learnt is not thrown away: the rows
+				// recorded so far stay recorded, unreachable relays were
+				// already noted on their rows, and the message names them and
+				// the relays never asked, so the operator does not have to
+				// press again just to find out.
 				return nil, status.Errorf(codes.Unavailable,
-					"cluster: cannot record the workers relay %q reported: %v", r.Name, err)
+					"cluster: cannot record the workers relay %q reported: %v%s",
+					r.Name, err, sweepSoFar(unreachable, relays[i+1:]))
 			}
 			// Reported, not returned. One unreachable relay must not hide the
 			// workers every other relay is holding — which is exactly the
@@ -103,6 +117,13 @@ func (h *ClusterServiceHandler) CheckWorkers(
 			unreachable = append(unreachable, r.Name)
 			h.note(ctx, r, err)
 			continue
+		}
+		for _, w := range rejected {
+			// Logged rather than failing the sweep: the response has no field
+			// for it, and the alternative — aborting — is what let one worker
+			// with an over-long hostname hide the whole fleet.
+			log.Printf("cluster: relay %q reported worker %s (name %q, device %q) and the registry refused it: %v",
+				r.Name, w.worker.GetCertFingerprint(), w.worker.GetName(), w.worker.GetDeviceId(), w.err)
 		}
 		h.noteOK(ctx, r)
 	}
@@ -126,17 +147,25 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	}, nil
 }
 
-func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) error {
+// rejectedWorker is one worker the registry refused to record because of
+// what the worker itself claimed.
+type rejectedWorker struct {
+	worker *pb.KnownWorker
+	err    error
+}
+
+func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) ([]rejectedWorker, error) {
 	conn, err := h.dialReady(ctx, r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
 
 	resp, err := newRelayClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{})
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var rejected []rejectedWorker
 	for _, w := range resp.GetWorkers() {
 		if w.GetCertFingerprint() == "" {
 			// No fingerprint, no identity to ban. Skipped rather than stored:
@@ -144,15 +173,70 @@ func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) error 
 			continue
 		}
 		if err := h.Workers.Record(ctx, r.ID, w); err != nil {
-			return fmt.Errorf("%w: %w", errRecording, err)
+			if refusedForItsOwnData(err) {
+				// ONE worker's claims do not fit the registry (a name longer
+				// than the column, a constraint on its own row). That is about
+				// this worker, not about the relay nor the registry, so the
+				// rest of this relay's workers — and every other relay's —
+				// are still recorded. It used to abort the whole sweep: one
+				// machine with a 200-character hostname made fleet discovery
+				// fail on every press, for every relay.
+				rejected = append(rejected, rejectedWorker{worker: w, err: err})
+				continue
+			}
+			return rejected, fmt.Errorf("%w: %w", errRecording, err)
 		}
 	}
-	return nil
+	return rejected, nil
+}
+
+// refusedForItsOwnData tells a registry that refused ONE row — validation of
+// the request, or a constraint the row broke — from a registry that cannot
+// write at all (Unavailable, Internal, a deadline, a transport error).
+//
+// The generated storage answers both a failed field validation and a mapped
+// constraint violation with InvalidArgument, and a mapped violation also
+// carries a w17 ErrorDetail; either is enough. Everything else is treated as
+// registry-wide, because skipping on a registry that is actually down would
+// report a "successful" sweep that recorded nothing.
+func refusedForItsOwnData(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case codes.InvalidArgument, codes.OutOfRange:
+		return true
+	}
+	for _, d := range st.Details() {
+		if _, ok := d.(*w17pb.ErrorDetail); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // errRecording marks a failure to WRITE what a relay reported, as opposed to a
 // failure to reach the relay.
 var errRecording = errors.New("recording a worker")
+
+// sweepSoFar renders what an aborted sweep had already found, for its error.
+func sweepSoFar(unreachable []string, notAsked []Relay) string {
+	var b strings.Builder
+	if len(unreachable) > 0 {
+		sorted := slices.Clone(unreachable)
+		sort.Strings(sorted)
+		fmt.Fprintf(&b, "; unreachable so far: %s", strings.Join(sorted, ", "))
+	}
+	if len(notAsked) > 0 {
+		names := make([]string, 0, len(notAsked))
+		for _, r := range notAsked {
+			names = append(names, r.Name)
+		}
+		fmt.Fprintf(&b, "; not asked: %s", strings.Join(names, ", "))
+	}
+	return b.String()
+}
 
 // ExchangeWorkers is a RELAY's method. The project holds the decisions; it has
 // no relay to be one for.

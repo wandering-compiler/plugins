@@ -69,6 +69,11 @@ func (s *WorkerServer) Attach(
 		return status.Error(codes.InvalidArgument,
 			"relay: the first message on an attach stream must be the announcement")
 	}
+	// Before it is met: a claim the control plane's registry cannot hold must
+	// never be passed on to it.
+	if err := checkClaims(req.GetName(), req.GetDeviceId()); err != nil {
+		return err
+	}
 	// Recorded before the ban check, so a banned worker that keeps knocking
 	// is still visible to an operator reading the registry.
 	s.Workers.Met(workeradmit.Worker{ID: id, Name: req.GetName(), DeviceID: req.GetDeviceId()})
