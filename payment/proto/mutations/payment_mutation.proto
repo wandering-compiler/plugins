@@ -58,6 +58,12 @@ message CreateRefundReq {
 }
 message CreateRefundResp { Refund refund = 1; }
 
+message SetRefundIdempotencyKeyReq {
+  string id              = 1 [(w17.field) = { type: UUID }];
+  string idempotency_key = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message SetRefundIdempotencyKeyResp { string id = 1; }
+
 message MarkWebhookProcessedReq {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
   string provider_event_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
@@ -345,6 +351,27 @@ service PaymentMutation {
     };
   }
 
+  // SetRefundIdempotencyKey — stamp the kept refund key on a Refund row an
+  // earlier version wrote without one. RefundPayment calls it when a retry
+  // under the raw key is replayed by the provider onto such a row: unstamped,
+  // the row stays invisible to the key lookup, and a retry after the
+  // provider's day refunds a second time.
+  //
+  // GUARDED (`idempotency_key IS NULL`): a row that already holds a key keeps
+  // it, and the guard's refusal is a no-row result. A key another row already
+  // holds is a UNIQUE_VIOLATION.
+  rpc SetRefundIdempotencyKey(SetRefundIdempotencyKeyReq) returns (SetRefundIdempotencyKeyResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Refund SET idempotency_key = :idempotency_key "
+          "WHERE id = :id AND idempotency_key IS NULL "
+          "RETURNING id"
+      }
+    };
+  }
+
   // MarkWebhookProcessed — INSERT the provider event id into the
   // idempotency ledger AFTER the side effects have been applied
   // (Q43-pay-1 inverted the original order; recording it first stranded
@@ -573,15 +600,17 @@ service PaymentMutation {
           { key: "customer_id",              value: "$response.subscription.customer_id" },
           { key: "plan_id",                  value: "$response.subscription.plan_id" },
           { key: "provider_subscription_id", value: "$response.subscription.provider_subscription_id" },
-          { key: "started_at",               value: "$response.subscription.created_at" }
+          { key: "started_at",               value: "$response.subscription.created_at" },
+          { key: "status",                   value: "$response.subscription.status" }
         ]
       }
     };
   }
 
   // MarkSubscriptionStatus — reconcile the lifecycle status +
-  // current_period_end from a provider webhook (ACTIVE / PAST_DUE /
-  // CANCELED). Gated subscriptions. Emits SubscriptionStatusChanged.
+  // current_period_end from a provider webhook (any Subscription.Status:
+  // TRIALING / ACTIVE / INCOMPLETE / PAST_DUE / UNPAID / PAUSED / CANCELED).
+  // Gated subscriptions. Emits SubscriptionStatusChanged.
   //
   // TRANSITION-GUARDED (`AND status <> 4`): CANCELED is terminal for a
   // given provider subscription id — the provider never revives one, a

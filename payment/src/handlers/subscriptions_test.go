@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -171,3 +173,46 @@ func TestSubscribe_DistinctKeysNotCollapsed(t *testing.T) {
 
 // Note: reading a subscription is now a direct storage query
 // (PaymentQuery.GetSubscription via REST preset) — no business handler.
+
+// A subscription whose first payment has not gone through is INCOMPLETE, not
+// ACTIVE — and so is every other status the provider reports that does not
+// mean "paid up". The mapping used to round incomplete, paused and anything
+// unknown up to ACTIVE, and a consumer granting access on ACTIVE gave it
+// away.
+func TestFlow_SubscriptionStatus_NeverRoundedUpToActive(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Name: "Pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+		t.Fatal(err)
+	}
+	r.stripe.subStatus = "incomplete" // the first invoice still needs payment
+	sv, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "pro", IdempotencyKey: "s-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sv.GetSubscription().GetStatus(); got != pb.Subscription_INCOMPLETE {
+		t.Fatalf("a subscription whose first payment has not gone through = %v, want INCOMPLETE", got)
+	}
+	sid := sv.GetSubscription().GetProviderSubscriptionId()
+	for i, c := range []struct {
+		provider string
+		want     pb.Subscription_Status
+	}{
+		{"paused", pb.Subscription_PAUSED},
+		{"unpaid", pb.Subscription_UNPAID},
+		{"a_status_added_next_year", pb.Subscription_UNRECOGNIZED_STATUS},
+		{"active", pb.Subscription_ACTIVE},
+		{"incomplete_expired", pb.Subscription_CANCELED},
+	} {
+		body := withCreated(t, eventJSON(fmt.Sprintf("evt_st_%d", i), "customer.subscription.updated", sid, map[string]any{"status": c.provider}), time.Now().Unix()+int64(i))
+		if _, err := r.deliver(body); err != nil {
+			t.Fatalf("%s: %v", c.provider, err)
+		}
+		got, err := r.store.GetSubscriptionByProviderId(bg, &pb.GetSubscriptionByProviderIdReq{ProviderSubscriptionId: sid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.GetSubscription().GetStatus() != c.want {
+			t.Errorf("provider %q → %v, want %v", c.provider, got.GetSubscription().GetStatus(), c.want)
+		}
+	}
+}

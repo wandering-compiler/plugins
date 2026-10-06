@@ -107,14 +107,25 @@ func (Payment_Status) EnumDescriptor() ([]byte, []int) {
 	return file_types_models_proto_rawDescGZIP(), []int{1, 0}
 }
 
+// Status is the provider's lifecycle, mapped one to one — never rounded
+// up to ACTIVE. Only TRIALING and ACTIVE mean "paid up"; a consumer that
+// grants access should grant it on those two and nothing else. Values
+// are appended, never renumbered (the column stores the number).
 type Subscription_Status int32
 
 const (
 	Subscription_STATUS_UNSPECIFIED Subscription_Status = 0
 	Subscription_TRIALING           Subscription_Status = 1
 	Subscription_ACTIVE             Subscription_Status = 2
-	Subscription_PAST_DUE           Subscription_Status = 3
-	Subscription_CANCELED           Subscription_Status = 4
+	Subscription_PAST_DUE           Subscription_Status = 3 // a renewal payment failed; the provider retries
+	Subscription_CANCELED           Subscription_Status = 4 // terminal (also the provider's incomplete_expired)
+	Subscription_INCOMPLETE         Subscription_Status = 5 // created, first payment not (yet) made
+	Subscription_PAUSED             Subscription_Status = 6 // collection paused (e.g. a trial ended without a payment method)
+	Subscription_UNPAID             Subscription_Status = 7 // retries exhausted; the subscription stays open, unpaid
+	// A provider status this plugin version does not know. Not entitling.
+	// (STATUS_UNSPECIFIED cannot be stored: the column's CHECK excludes the
+	// zero sentinel.)
+	Subscription_UNRECOGNIZED_STATUS Subscription_Status = 8
 )
 
 // Enum value maps for Subscription_Status.
@@ -125,13 +136,21 @@ var (
 		2: "ACTIVE",
 		3: "PAST_DUE",
 		4: "CANCELED",
+		5: "INCOMPLETE",
+		6: "PAUSED",
+		7: "UNPAID",
+		8: "UNRECOGNIZED_STATUS",
 	}
 	Subscription_Status_value = map[string]int32{
-		"STATUS_UNSPECIFIED": 0,
-		"TRIALING":           1,
-		"ACTIVE":             2,
-		"PAST_DUE":           3,
-		"CANCELED":           4,
+		"STATUS_UNSPECIFIED":  0,
+		"TRIALING":            1,
+		"ACTIVE":              2,
+		"PAST_DUE":            3,
+		"CANCELED":            4,
+		"INCOMPLETE":          5,
+		"PAUSED":              6,
+		"UNPAID":              7,
+		"UNRECOGNIZED_STATUS": 8,
 	}
 )
 
@@ -374,10 +393,11 @@ type Refund struct {
 	Amount           string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
 	Currency         string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`
 	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	// The caller's refund key, scoped by payment (see RefundPayment). Looked up
-	// BEFORE the provider is asked: the provider forgets an idempotency key
-	// after a day, and a retry after that would refund a second time. NULL on
-	// rows written before the key was kept.
+	// The caller's refund key, hashed ("v2:" + sha256; see refundKey). One key
+	// names one refund across all payments — the scope the provider gives the
+	// raw key it is sent. Looked up BEFORE the provider is asked: the provider
+	// forgets an idempotency key after a day, and a retry after that would
+	// refund a second time. NULL on rows written before the key was kept.
 	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1330,7 +1350,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\x11provider_price_id\x18\a \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xff\x01R\x0fproviderPriceId\x12!\n" +
 	"\aenabled\x18\b \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1eR\aenabled\x12F\n" +
 	"\n" +
-	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptions\"\xaf\x05\n" +
+	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptions\"\xf1\x05\n" +
 	"\fSubscription\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12-\n" +
 	"\vcustomer_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\n" +
@@ -1343,14 +1363,21 @@ const file_types_models_proto_rawDesc = "" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12D\n" +
 	"\n" +
 	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt\x12P\n" +
-	"\x11provider_event_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x0fproviderEventAt\"V\n" +
+	"\x11provider_event_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x0fproviderEventAt\"\x97\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\f\n" +
 	"\bTRIALING\x10\x01\x12\n" +
 	"\n" +
 	"\x06ACTIVE\x10\x02\x12\f\n" +
 	"\bPAST_DUE\x10\x03\x12\f\n" +
-	"\bCANCELED\x10\x04:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptionsB\xd3\x01\n" +
+	"\bCANCELED\x10\x04\x12\x0e\n" +
+	"\n" +
+	"INCOMPLETE\x10\x05\x12\n" +
+	"\n" +
+	"\x06PAUSED\x10\x06\x12\n" +
+	"\n" +
+	"\x06UNPAID\x10\a\x12\x17\n" +
+	"\x13UNRECOGNIZED_STATUS\x10\b:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptionsB\xd3\x01\n" +
 	"\x17com.w17.contrib.paymentB\vModelsProtoP\x01Z=github.com/wandering-compiler/platform/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
 
 var (

@@ -31,6 +31,14 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 		return nil, err
 	}
 
+	dup, err := h.reportedUnderRawKey(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if dup {
+		return h.currentMeter(ctx, req.GetUserId(), req.GetMeter(), req.GetPeriod())
+	}
+
 	// The stored key is scoped by (principal, meter, period):
 	// UsageRecord.idempotency_key is one table-wide UNIQUE, and a duplicate
 	// is answered with success. With the raw key stored, a report for
@@ -59,6 +67,40 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 		Period: resp.GetPeriod(),
 		Total:  resp.GetTotal(),
 	}, nil
+}
+
+// reportedUnderRawKey reports whether this report was already recorded by a
+// version that stored the caller's RAW key (rc.2 and earlier).
+//
+// The scoped key cannot find such a record: a report made before the upgrade
+// and retried after it would be counted a second time — usage billed twice.
+// So before recording under the scoped key the records are read under the
+// raw key too (one extra single-row read per report), and a row there is
+// THIS report when it is the same principal, meter, period and quantity. A
+// row that differs in any of them is the cross-principal / cross-meter
+// collision the scoped key exists to fix, and the report proceeds under the
+// scoped key.
+//
+// Keys shaped "v2:…" are not looked up: that is the scoped-key namespace
+// (scopedKey), so a row there is some other report's scoped record and never
+// a raw key an earlier version stored for this one.
+func (h *PaymentServiceHandler) reportedUnderRawKey(ctx context.Context, req *pb.ReportUsageReq) (bool, error) {
+	if strings.HasPrefix(req.GetIdempotencyKey(), scopedKeyPrefix) {
+		return false, nil
+	}
+	got, err := h.Query.GetUsageRecordByKey(ctx, &pb.GetUsageRecordByKeyReq{IdempotencyKey: req.GetIdempotencyKey()})
+	if err != nil {
+		if absent(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	r := got.GetRecord()
+	return r != nil &&
+		r.GetUserId() == req.GetUserId() &&
+		r.GetMeter() == req.GetMeter() &&
+		r.GetPeriod() == req.GetPeriod() &&
+		r.GetQuantity() == req.GetQuantity(), nil
 }
 
 func (h *PaymentServiceHandler) currentMeter(ctx context.Context, userID, meter, period string) (*pb.UsageView, error) {

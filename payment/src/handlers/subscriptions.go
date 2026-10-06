@@ -48,9 +48,10 @@ func reconcileSubscriptionWebhook(ctx context.Context, h *PaymentServiceHandler,
 	if lerr != nil && !guardRefused(lerr) {
 		return lerr
 	}
-	if got.GetSubscription() == nil && ev.Origin != "" {
-		// This plugin's subscription, its row not landed yet. One it did not
-		// create (no origin mark) has no row and never will: acknowledged.
+	if got.GetSubscription() == nil && h.madeHere(ev) {
+		// This installation's subscription, its row not landed yet. One it
+		// did not create (no origin mark, or another installation's) has no
+		// row and never will: acknowledged.
 		return errNoLocalRecord
 	}
 	return nil
@@ -130,16 +131,6 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 	return &pb.PlanView{Plan: created.GetPlan()}, nil
 }
 
-// sameDecimal compares two non-negative decimal strings by value, so the
-// DECIMAL(20, 4) column's "29.0000" equals a request's "29" / "29.00".
-func sameDecimal(a, b string) bool {
-	norm := func(s string) string {
-		i, f, _ := strings.Cut(strings.TrimSpace(s), ".")
-		return strings.TrimLeft(i, "0") + "." + strings.TrimRight(f, "0")
-	}
-	return norm(a) == norm(b)
-}
-
 // Subscribe enrolls the principal's customer on a plan via the provider,
 // then persists the local Subscription. The provider customer is
 // ensured first (reusing the core resolveCustomer path).
@@ -186,6 +177,7 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 		ProviderCustomerID: cust.GetProviderCustomerId(),
 		ProviderPriceID:    plan.GetProviderPriceId(),
 		IdempotencyKey:     req.GetIdempotencyKey(),
+		Install:            h.installID(),
 	})
 	if err != nil {
 		return nil, providerFailure(err)
@@ -218,20 +210,34 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 }
 
 // mapSubscriptionStatus maps the provider status string onto the local
-// Subscription.Status enum. Unknown → ACTIVE (the subscription was
-// created; a webhook reconciles the precise terminal state).
+// Subscription.Status enum, one to one. Only TRIALING and ACTIVE mean
+// "paid up".
+//
+// It used to round everything it did not name — incomplete, paused, any
+// status the provider adds later — up to ACTIVE, so a subscription whose
+// first payment had not gone through read as active, and a consumer
+// granting access on ACTIVE gave it away. An unknown status is now
+// UNRECOGNIZED_STATUS: not entitling, and storable (STATUS_UNSPECIFIED is
+// not — the column's CHECK excludes the zero sentinel, so a webhook carrying
+// it would fail on every redelivery).
 func mapSubscriptionStatus(providerStatus string) pb.Subscription_Status {
 	switch providerStatus {
 	case "trialing":
 		return pb.Subscription_TRIALING
 	case "active":
 		return pb.Subscription_ACTIVE
-	case "past_due", "unpaid":
+	case "incomplete":
+		return pb.Subscription_INCOMPLETE
+	case "past_due":
 		return pb.Subscription_PAST_DUE
-	case "canceled", "incomplete_expired":
+	case "unpaid":
+		return pb.Subscription_UNPAID
+	case "paused":
+		return pb.Subscription_PAUSED
+	case "canceled", "incomplete_expired": // both terminal at the provider
 		return pb.Subscription_CANCELED
 	default:
-		return pb.Subscription_ACTIVE
+		return pb.Subscription_UNRECOGNIZED_STATUS
 	}
 }
 

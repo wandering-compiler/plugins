@@ -79,17 +79,17 @@ func providerFailure(cause error) error {
 	return status.Errorf(code, "payment provider error: %v", cause)
 }
 
-// guardRefused reports whether err is the shape a transition-guarded
-// statement produces when its WHERE matched no row: the generated
-// single-row RETURNING scan gets sql.ErrNoRows and grpcerr.Wrap maps it
-// to NotFound. Here (always staged) because both the webhook handler and
-// the feature-gated hooks read it.
 // absent reports a single-row read that found nothing. Generated storage
 // answers such a read with NotFound (QueryRow+Scan, sql.ErrNoRows mapped by
 // grpcerr), never with an empty response — every lookup that may
 // legitimately find nothing has to treat it as "no row", not as a failure.
 func absent(err error) bool { return status.Code(err) == codes.NotFound }
 
+// guardRefused reports whether err is the shape a transition-guarded
+// statement produces when its WHERE matched no row: the generated
+// single-row RETURNING scan gets sql.ErrNoRows and grpcerr.Wrap maps it
+// to NotFound. Here (always staged) because both the webhook handler and
+// the feature-gated hooks read it.
 func guardRefused(err error) bool {
 	return err != nil && status.Code(err) == codes.NotFound
 }
@@ -161,6 +161,17 @@ func isPositiveDecimal(s string) bool {
 	return nonZero
 }
 
+// sameDecimal compares two non-negative decimal strings by value, so the
+// DECIMAL(20, 4) column's "29.0000" equals a request's "29" / "29.00". Here,
+// not in subscriptions.go: RefundPayment (always staged) reads it too.
+func sameDecimal(a, b string) bool {
+	norm := func(s string) string {
+		i, f, _ := strings.Cut(strings.TrimSpace(s), ".")
+		return strings.TrimLeft(i, "0") + "." + strings.TrimRight(f, "0")
+	}
+	return norm(a) == norm(b)
+}
+
 // isCurrencyCode reports whether c (already trimmed + lowercased) has
 // the ISO-4217 shape: exactly three ASCII letters. The currency column
 // is CHAR(3); a longer code used to reach the provider first and fail
@@ -202,8 +213,13 @@ func scopedKey(parts ...string) string {
 	for _, p := range parts {
 		fmt.Fprintf(h, "%d:%s", len(p), p)
 	}
-	return "v2:" + hex.EncodeToString(h.Sum(nil))
+	return scopedKeyPrefix + hex.EncodeToString(h.Sum(nil))
 }
+
+// scopedKeyPrefix starts every scoped key. A caller's raw key with this
+// prefix can equal a stored scoped key, so the lookups for keys stored raw by
+// earlier versions skip it.
+const scopedKeyPrefix = "v2:"
 
 func orDefault(s, def string) string {
 	if strings.TrimSpace(s) == "" {

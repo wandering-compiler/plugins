@@ -201,6 +201,17 @@ func decimal4(s string) (*big.Rat, error) {
 
 func fmt4(r *big.Rat) string { return r.FloatString(4) }
 
+// subscriptionStatusCheck is the Subscription.status column's CHECK IN: the
+// enum's declared numbers WITHOUT the zero sentinel (the migrator excludes
+// it), so STATUS_UNSPECIFIED — or a number the enum does not declare — is
+// refused like the database refuses it.
+func subscriptionStatusCheck(st int32) error {
+	if _, ok := pb.Subscription_Status_name[st]; !ok || st == 0 {
+		return storeConstraintErr(codeInvalidValue, fmt.Sprintf("subscription status %d violates its CHECK", st))
+	}
+	return nil
+}
+
 // noRow is what generated storage answers for a single-row read that finds
 // nothing: the SELECT is QueryRow+Scan and grpcerr.Wrap maps sql.ErrNoRows to
 // NotFound. An empty response here instead hid every handler that treated "no
@@ -307,6 +318,17 @@ func (s *memStore) GetCreditBalance(_ context.Context, in *pb.GetCreditBalanceRe
 	return &pb.GetCreditBalanceResp{Balance: out}, s.leave("GetCreditBalance", nil)
 }
 
+func (s *memStore) GetCreditLedgerByKey(_ context.Context, in *pb.GetCreditLedgerByKeyReq, _ ...grpc.CallOption) (*pb.GetCreditLedgerByKeyResp, error) {
+	if err := s.enter("GetCreditLedgerByKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	e, ok := s.ledger[in.GetIdempotencyKey()]
+	if !ok {
+		return nil, s.leave("GetCreditLedgerByKey", noRow())
+	}
+	return &pb.GetCreditLedgerByKeyResp{Entry: clone(e)}, s.leave("GetCreditLedgerByKey", nil)
+}
+
 func (s *memStore) GetCreditTopupByProviderId(_ context.Context, in *pb.GetCreditTopupByProviderIdReq, _ ...grpc.CallOption) (*pb.GetCreditTopupByProviderIdResp, error) {
 	if err := s.enter("GetCreditTopupByProviderId"); err != nil {
 		return nil, s.leave("", err)
@@ -335,6 +357,17 @@ func (s *memStore) GetUsageMeter(_ context.Context, in *pb.GetUsageMeterReq, _ .
 		return nil, s.leave("GetUsageMeter", noRow())
 	}
 	return &pb.GetUsageMeterResp{Meter: out}, s.leave("GetUsageMeter", nil)
+}
+
+func (s *memStore) GetUsageRecordByKey(_ context.Context, in *pb.GetUsageRecordByKeyReq, _ ...grpc.CallOption) (*pb.GetUsageRecordByKeyResp, error) {
+	if err := s.enter("GetUsageRecordByKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	r, ok := s.usage[in.GetIdempotencyKey()]
+	if !ok {
+		return nil, s.leave("GetUsageRecordByKey", noRow())
+	}
+	return &pb.GetUsageRecordByKeyResp{Record: clone(r)}, s.leave("GetUsageRecordByKey", nil)
 }
 
 func (s *memStore) GetPlanBySlug(_ context.Context, in *pb.GetPlanBySlugReq, _ ...grpc.CallOption) (*pb.GetPlanBySlugResp, error) {
@@ -477,6 +510,25 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 	return &pb.CreateRefundResp{Refund: clone(r)}, s.leave("CreateRefund", nil)
 }
 
+// SetRefundIdempotencyKey: `WHERE id = :id AND idempotency_key IS NULL`,
+// and the column is UNIQUE.
+func (s *memStore) SetRefundIdempotencyKey(_ context.Context, in *pb.SetRefundIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.SetRefundIdempotencyKeyResp, error) {
+	if err := s.enter("SetRefundIdempotencyKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	r, ok := s.refunds[in.GetId()]
+	if !ok || r.GetIdempotencyKey() != "" {
+		return nil, s.leave("SetRefundIdempotencyKey", noRows("SetRefundIdempotencyKey"))
+	}
+	for _, o := range s.refunds {
+		if o.GetIdempotencyKey() == in.GetIdempotencyKey() {
+			return nil, s.leave("SetRefundIdempotencyKey", uniqueErr("idempotency_key"))
+		}
+	}
+	r.IdempotencyKey = in.GetIdempotencyKey()
+	return &pb.SetRefundIdempotencyKeyResp{Id: r.Id}, s.leave("SetRefundIdempotencyKey", nil)
+}
+
 func (s *memStore) MarkWebhookProcessed(_ context.Context, in *pb.MarkWebhookProcessedReq, _ ...grpc.CallOption) (*pb.MarkWebhookProcessedResp, error) {
 	if err := s.enter("MarkWebhookProcessed"); err != nil {
 		return nil, s.leave("", err)
@@ -582,6 +634,9 @@ func (s *memStore) CreateSubscription(_ context.Context, in *pb.CreateSubscripti
 	if err := s.enter("CreateSubscription"); err != nil {
 		return nil, s.leave("", err)
 	}
+	if err := subscriptionStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("CreateSubscription", err)
+	}
 	for _, sub := range s.subs {
 		if sub.GetProviderSubscriptionId() == in.GetProviderSubscriptionId() {
 			return nil, s.leave("CreateSubscription", uniqueErr("provider_subscription_id"))
@@ -596,6 +651,9 @@ func (s *memStore) CreateSubscription(_ context.Context, in *pb.CreateSubscripti
 func (s *memStore) MarkSubscriptionStatus(_ context.Context, in *pb.MarkSubscriptionStatusReq, _ ...grpc.CallOption) (*pb.MarkSubscriptionStatusResp, error) {
 	if err := s.enter("MarkSubscriptionStatus"); err != nil {
 		return nil, s.leave("", err)
+	}
+	if err := subscriptionStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("MarkSubscriptionStatus", err)
 	}
 	for _, sub := range s.subs {
 		if sub.GetProviderSubscriptionId() != in.GetProviderSubscriptionId() {
@@ -658,6 +716,8 @@ func (s *memStore) count(table string) int {
 		return len(s.subs)
 	case "plans":
 		return len(s.plans)
+	case "usage":
+		return len(s.usage)
 	}
 	panic("unknown table " + table)
 }

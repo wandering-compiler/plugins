@@ -47,7 +47,7 @@ func TestEnsureCustomer(t *testing.T) {
 }
 
 func TestCreatePayment(t *testing.T) {
-	var gotAmount, gotCurrency, gotCustomer, gotIdem, gotOrigin string
+	var gotAmount, gotCurrency, gotCustomer, gotIdem, gotOrigin, gotInstall string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/payment_intents" {
 			t.Errorf("unexpected path %s", r.URL.Path)
@@ -57,6 +57,7 @@ func TestCreatePayment(t *testing.T) {
 		gotCurrency = r.Form.Get("currency")
 		gotCustomer = r.Form.Get("customer")
 		gotOrigin = r.Form.Get("metadata[w17_payment]")
+		gotInstall = r.Form.Get("metadata[w17_install]")
 		gotIdem = r.Header.Get("Idempotency-Key")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"pi_1","status":"requires_confirmation","client_secret":"pi_1_secret"}`))
@@ -69,6 +70,7 @@ func TestCreatePayment(t *testing.T) {
 		IdempotencyKey:     "idem-1",
 		Description:        "pro",
 		Origin:             backend.OriginTopup,
+		Install:            "0123456789abcdef",
 	})
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -87,6 +89,9 @@ func TestCreatePayment(t *testing.T) {
 	}
 	if gotOrigin != "topup" {
 		t.Errorf("metadata[w17_payment] = %q, want topup — the webhook tells the plugin's objects apart by it", gotOrigin)
+	}
+	if gotInstall != "0123456789abcdef" {
+		t.Errorf("metadata[w17_install] = %q — without it another installation on the account cannot tell the object is not its own", gotInstall)
 	}
 	if res.ProviderPaymentID != "pi_1" || res.ClientSecret != "pi_1_secret" || res.Status != "requires_confirmation" {
 		t.Errorf("result = %+v", res)
@@ -150,7 +155,7 @@ func TestUpsertPlan(t *testing.T) {
 }
 
 func TestStartSubscription(t *testing.T) {
-	var customer, price, idem, origin string
+	var customer, price, idem, origin, install string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/subscriptions" {
 			t.Errorf("path = %s", r.URL.Path)
@@ -159,6 +164,7 @@ func TestStartSubscription(t *testing.T) {
 		customer = r.Form.Get("customer")
 		price = r.Form.Get("items[0][price]")
 		origin = r.Form.Get("metadata[w17_payment]")
+		install = r.Form.Get("metadata[w17_install]")
 		idem = r.Header.Get("Idempotency-Key")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"sub_1","status":"active","current_period_end":1893456000}`))
@@ -166,13 +172,13 @@ func TestStartSubscription(t *testing.T) {
 	defer srv.Close()
 
 	res, err := testBackend(srv).StartSubscription(context.Background(), backend.SubscriptionSpec{
-		ProviderCustomerID: "cus_1", ProviderPriceID: "price_1", IdempotencyKey: "sub:u1:pro",
+		ProviderCustomerID: "cus_1", ProviderPriceID: "price_1", IdempotencyKey: "sub:u1:pro", Install: "fedcba9876543210",
 	})
 	if err != nil {
 		t.Fatalf("StartSubscription: %v", err)
 	}
-	if customer != "cus_1" || price != "price_1" || idem != "sub:u1:pro" || origin != "subscription" {
-		t.Errorf("form: customer=%q price=%q idem=%q origin=%q", customer, price, idem, origin)
+	if customer != "cus_1" || price != "price_1" || idem != "sub:u1:pro" || origin != "subscription" || install != "fedcba9876543210" {
+		t.Errorf("form: customer=%q price=%q idem=%q origin=%q install=%q", customer, price, idem, origin, install)
 	}
 	if res.ProviderSubscriptionID != "sub_1" || res.Status != "active" || res.CurrentPeriodEnd != 1893456000 {
 		t.Errorf("result = %+v", res)

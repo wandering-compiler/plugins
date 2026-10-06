@@ -69,11 +69,16 @@ message RefundPaymentReq {
   string amount     = 2;
   // idempotency_key — caller-supplied retry guard, REQUIRED. It is the
   // provider Idempotency-Key for the refund, so it must be UNIQUE per
-  // distinct refund and STABLE across retries of the same one. Deriving
-  // it from (payment_id, amount) — as the handler used to — collides two
-  // legitimate same-amount partial refunds into one provider replay,
-  // silently shorting the customer; so the caller now owns it (mirrors
-  // prepaid GrantCredit / usage ReportUsage, which also require it).
+  // distinct refund and STABLE across retries of the same one. One key
+  // names ONE refund across ALL payments (the scope the provider gives it):
+  // reused on another payment it is InvalidArgument; reused on the same
+  // payment for a different amount it is AlreadyExists; a retry of the same
+  // refund returns the recorded refund, also after the provider has
+  // forgotten the key. Deriving it from (payment_id, amount) — as the
+  // handler used to — collides two legitimate same-amount partial refunds
+  // into one provider replay, silently shorting the customer; so the caller
+  // owns it (mirrors prepaid GrantCredit / usage ReportUsage, which also
+  // require it).
   string idempotency_key = 3;
 }
 message RefundPaymentResp { Refund refund = 1; }

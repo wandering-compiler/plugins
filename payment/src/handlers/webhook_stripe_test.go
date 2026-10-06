@@ -15,6 +15,8 @@ import (
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
+	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+
 	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
 )
 
@@ -162,7 +164,7 @@ func TestIngestStripe_UnknownProviderPayment_MustNotAcknowledge(t *testing.T) {
 	m := &fakeMutation{succeededErr: noRowsErr()}
 	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}} // no payment row
 	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
-	body := []byte(`{"id":"evt_new","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42","metadata":{"w17_payment":"topup"}}}}`)
+	body := []byte(`{"id":"evt_new","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42","metadata":{"w17_payment":"topup","w17_install":"` + backend.InstallID(testWebhookSecret) + `"}}}}`)
 
 	_, err := h.IngestStripe(ctxWithSig(body), &pb.IngestStripeReq{RawPayload: body})
 	if status.Code(err) != codes.NotFound {

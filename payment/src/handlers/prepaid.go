@@ -89,6 +89,15 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 	if err := idempotencyKeyTooLong(idem); err != nil {
 		return nil, err
 	}
+	if kind != creditTopup {
+		dup, err := h.appliedUnderRawKey(ctx, userID, amount, kind, idem)
+		if err != nil {
+			return nil, err
+		}
+		if dup {
+			return h.currentBalance(ctx, userID)
+		}
+	}
 	delta := amount
 	if kind == creditSpend {
 		delta = "-" + amount
@@ -110,6 +119,47 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 		return nil, err
 	}
 	return &pb.CreditView{UserId: resp.GetUserId(), Balance: resp.GetBalance()}, nil
+}
+
+// appliedUnderRawKey reports whether this grant / spend was already applied
+// by a version that stored the caller's RAW key (rc.2 and earlier).
+//
+// The scoped key cannot find such an apply: a grant or spend made before the
+// upgrade and retried after it would land a second time — credit granted
+// twice, or a service paid for twice. So before applying under the scoped
+// key the ledger is read under the raw key too (one extra single-row read per
+// apply), and a row there is THIS apply when it is the same principal, the
+// same direction (grant +, spend −) and the same amount. A row that differs
+// in any of them is the cross-principal / cross-kind collision the scoped key
+// exists to fix, and the apply proceeds under the scoped key.
+//
+// Keys in the "topup:" namespace are not looked up: that is where the
+// webhook writes a top-up's grant (every version has), so a row there is a
+// top-up and never a caller's earlier apply — matching one would turn a
+// caller grant into a silent no-op. Keys in the "v2:" namespace are not
+// either, for the same reason: that is where scoped keys are stored, so a
+// caller key shaped "v2:<hex>" can equal another apply's stored scoped key.
+func (h *PaymentServiceHandler) appliedUnderRawKey(ctx context.Context, userID, amount string, kind creditKind, rawKey string) (bool, error) {
+	if strings.HasPrefix(rawKey, "topup:") || strings.HasPrefix(rawKey, scopedKeyPrefix) {
+		return false, nil
+	}
+	got, err := h.Query.GetCreditLedgerByKey(ctx, &pb.GetCreditLedgerByKeyReq{IdempotencyKey: rawKey})
+	if err != nil {
+		if absent(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	e := got.GetEntry()
+	if e == nil || e.GetUserId() != userID {
+		return false, nil
+	}
+	delta := strings.TrimSpace(e.GetDelta())
+	debit := strings.HasPrefix(delta, "-")
+	if debit != (kind == creditSpend) {
+		return false, nil
+	}
+	return sameDecimal(strings.TrimPrefix(delta, "-"), amount), nil
 }
 
 func (h *PaymentServiceHandler) currentBalance(ctx context.Context, userID string) (*pb.CreditView, error) {
@@ -192,7 +242,7 @@ func grantTopupOnPaymentSuccess(ctx context.Context, h *PaymentServiceHandler, e
 	}
 	topup := got.GetTopup()
 	if topup == nil {
-		if ev.Origin == backend.OriginTopup {
+		if ev.Origin == backend.OriginTopup && h.madeHere(ev) {
 			// A top-up whose CreditTopup row has not landed yet — the
 			// success can arrive between the Payment INSERT and the
 			// top-up's. Acknowledging it would strand the credit for good.
