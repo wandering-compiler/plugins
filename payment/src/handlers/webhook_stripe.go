@@ -107,8 +107,8 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 			ProviderPaymentId: ev.PaymentIntentID,
 		})
 		if guardRefused(err) {
-			// Already SUCCEEDED (the guard is `status <> 3`), or absent.
-			err = h.requirePayment(ctx, ev.PaymentIntentID)
+			// Already in a state the guard protects, or absent.
+			err = h.requirePayment(ctx, ev)
 		}
 		if err != nil {
 			return err
@@ -126,7 +126,7 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 		if guardRefused(err) {
 			// Already FAILED (redelivery) or SUCCEEDED (a late failure of
 			// an earlier attempt — SUCCEEDED is absorbing), or absent.
-			err = h.requirePayment(ctx, ev.PaymentIntentID)
+			err = h.requirePayment(ctx, ev)
 		}
 		return err
 	case strings.HasPrefix(ev.Type, "customer.subscription."):
@@ -143,18 +143,21 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 }
 
 // requirePayment resolves a refused payment guard: nil when the local
-// Payment exists (it is already in a state the guard protects), else
-// errNoLocalRecord.
-func (h *PaymentServiceHandler) requirePayment(ctx context.Context, providerPaymentID string) error {
-	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: providerPaymentID})
-	if err != nil && !guardRefused(err) {
+// Payment exists (it is already in a state the guard protects);
+// errNoLocalRecord when the object is this plugin's and its row has not
+// landed yet; nil — acknowledged — when the object is not this plugin's at
+// all. The provider sends events for objects the plugin never made (a
+// subscription's invoice payments, dashboard charges, another app on the
+// account); failing those would have them redelivered for days.
+func (h *PaymentServiceHandler) requirePayment(ctx context.Context, ev stripe.Event) error {
+	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: ev.PaymentIntentID})
+	if err != nil && !absent(err) {
 		return err
 	}
-	// An empty result and a NotFound status both mean "no such row".
-	if got.GetPayment() == nil {
-		return errNoLocalRecord
+	if got.GetPayment() != nil || ev.Origin == "" {
+		return nil
 	}
-	return nil
+	return errNoLocalRecord
 }
 
 // metadataValue reads the first value for a lowercase metadata key from

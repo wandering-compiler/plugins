@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
 	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
 
 	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
@@ -29,6 +30,19 @@ func (h *PaymentServiceHandler) GrantCredit(ctx context.Context, req *pb.GrantCr
 // rejects the overdraw and the transaction rolls back).
 func (h *PaymentServiceHandler) SpendCredit(ctx context.Context, req *pb.SpendCreditReq) (*pb.CreditView, error) {
 	return h.applyCredit(ctx, req.GetUserId(), req.GetAmount(), creditSpend, orDefault(req.GetReason(), "spend"), req.GetRef(), req.GetIdempotencyKey())
+}
+
+// ledgerKey is the stored CreditLedger key for one apply. A caller's grant
+// or spend key is scoped by (kind, principal) — see applyCredit. A top-up's
+// is the provider payment id, globally unique, under the "topup:" key every
+// earlier version wrote: a grant that committed and then failed to stamp is
+// retried by redelivery, and a retry under a NEW key would grant twice.
+// Scoped caller keys ("v2:" + hash) cannot collide with it.
+func ledgerKey(kind creditKind, userID, idem string) string {
+	if kind == creditTopup {
+		return "topup:" + idem
+	}
+	return scopedKey("credit", string(kind), userID, idem)
 }
 
 // creditKind is what an apply does; it signs the delta and scopes the
@@ -84,7 +98,7 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 		Delta:          delta,
 		Reason:         reason,
 		Ref:            ref,
-		IdempotencyKey: scopedKey("credit", string(kind), userID, idem),
+		IdempotencyKey: ledgerKey(kind, userID, idem),
 	})
 	if err != nil {
 		switch constraintCode(err) {
@@ -143,7 +157,7 @@ func (h *PaymentServiceHandler) TopUpCredit(ctx context.Context, req *pb.TopUpCr
 	if err != nil {
 		return nil, err
 	}
-	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, idempotencyKeyOrNew(req.GetIdempotencyKey()), "credit top-up")
+	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, idempotencyKeyOrNew(req.GetIdempotencyKey()), "credit top-up", backend.OriginTopup)
 	if err != nil {
 		return nil, err
 	}
@@ -177,9 +191,23 @@ func grantTopupOnPaymentSuccess(ctx context.Context, h *PaymentServiceHandler, e
 		return err
 	}
 	topup := got.GetTopup()
-	if topup == nil || topup.GetGrantedAt() != nil {
-		return nil // not a top-up, or already granted
+	if topup == nil {
+		if ev.Origin == backend.OriginTopup {
+			// A top-up whose CreditTopup row has not landed yet — the
+			// success can arrive between the Payment INSERT and the
+			// top-up's. Acknowledging it would strand the credit for good.
+			return errNoLocalRecord
+		}
+		return nil // not a top-up
 	}
+	if topup.GetGrantedAt() != nil {
+		return nil // already granted
+	}
+	// The ledger key stays "topup:<provider payment id>", the key every
+	// earlier version wrote. A grant whose first attempt committed under it
+	// and then failed to stamp is retried by redelivery; under any other key
+	// that retry would grant the credit a second time. The provider id is
+	// unique on its own, so the key needs no principal scoping.
 	if _, err := h.applyCredit(ctx, topup.GetUserId(), topup.GetAmount(), creditTopup, "topup", pid, pid); err != nil {
 		return err
 	}

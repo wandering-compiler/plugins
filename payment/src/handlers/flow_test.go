@@ -414,7 +414,8 @@ func TestFlow_FailureThenRetriedSuccess(t *testing.T) {
 // success was lost for good.
 func TestFlow_WebhookOutrunsLocalRow_FailsUntilTheRowLands(t *testing.T) {
 	r := newRig(t)
-	body := eventJSON("evt_fast", "payment_intent.succeeded", "pi_not_yet", nil)
+	// The plugin's own intent (origin-marked), whose local row has not landed.
+	body := eventJSON("evt_fast", "payment_intent.succeeded", "pi_not_yet", map[string]any{"metadata": map[string]string{"w17_payment": "charge"}})
 	for i := 1; i <= 2; i++ {
 		_, err := r.deliver(body)
 		wantCode(t, err, codes.NotFound, "delivery before the row exists")
@@ -432,8 +433,8 @@ func TestFlow_WebhookOutrunsLocalRow_FailsUntilTheRowLands(t *testing.T) {
 	if st := r.store.paymentStatus(t, "pi_not_yet"); st != pb.Payment_SUCCEEDED {
 		t.Errorf("status = %v", st)
 	}
-	// Same for a failure event.
-	_, err = r.deliver(eventJSON("evt_fail_unknown", "payment_intent.payment_failed", "pi_ghost", nil))
+	// Same for a failure event about one of the plugin's own intents.
+	_, err = r.deliver(eventJSON("evt_fail_unknown", "payment_intent.payment_failed", "pi_ghost", map[string]any{"metadata": map[string]string{"w17_payment": "charge"}}))
 	wantCode(t, err, codes.NotFound, "failure for an unknown intent")
 }
 
@@ -794,11 +795,21 @@ func TestFlow_SubscriptionLifecycle_OutOfOrderAndUnknown(t *testing.T) {
 	if n := r.store.events("SubscriptionStatusChanged"); n != 2 {
 		t.Errorf("SubscriptionStatusChanged = %d, want 2 (update + delete)", n)
 	}
-	// Unknown subscription: fail unrecorded, so the provider redelivers.
-	_, err = r.deliver(eventJSON("evt_ghost", "customer.subscription.updated", "sub_ghost", map[string]any{"status": "active"}))
+	// The plugin's own subscription with no row yet: fail unrecorded, so
+	// the provider redelivers.
+	_, err = r.deliver(eventJSON("evt_ghost", "customer.subscription.updated", "sub_ghost",
+		map[string]any{"status": "active", "metadata": map[string]string{"w17_payment": "subscription"}}))
 	wantCode(t, err, codes.NotFound, "unknown subscription")
 	if r.store.isProcessed("evt_ghost") {
 		t.Error("unknown subscription event recorded")
+	}
+	// One the plugin never created (no origin mark) has no row and never
+	// will: acknowledged once, not failed for days of redelivery.
+	if _, err := r.deliver(eventJSON("evt_foreign_sub", "customer.subscription.updated", "sub_foreign", map[string]any{"status": "active"})); err != nil {
+		t.Fatalf("a subscription the plugin never created must be acknowledged: %v", err)
+	}
+	if !r.store.isProcessed("evt_foreign_sub") {
+		t.Error("the foreign subscription event was not recorded")
 	}
 	// An event without an object id is acknowledged (nothing to do).
 	if _, err := r.deliver(eventJSON("evt_noobj", "customer.subscription.updated", "", nil)); err != nil {

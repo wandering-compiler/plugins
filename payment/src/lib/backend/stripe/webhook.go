@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
 )
 
 // toleranceSeconds bounds how far the signed timestamp may be from now
@@ -39,7 +41,13 @@ type Event struct {
 	// CurrentPeriodEnd is data.object.current_period_end (Unix seconds)
 	// on subscription events; 0 otherwise.
 	CurrentPeriodEnd int64
-	Raw              []byte
+	// Created is the event's own creation time (Unix seconds) — the
+	// provider's order of events, which delivery order is not.
+	Created int64
+	// Origin is data.object.metadata[backend.OriginMetadataKey]: set on
+	// objects this plugin created, empty on everything else.
+	Origin string
+	Raw    []byte
 }
 
 // ErrBadSignature is returned when the Stripe-Signature HMAC does not
@@ -118,6 +126,8 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 		PaymentIntentID:  raw.Data.Object.ID,
 		ObjectStatus:     raw.Data.Object.Status,
 		CurrentPeriodEnd: raw.Data.Object.CurrentPeriodEnd,
+		Created:          raw.Created,
+		Origin:           raw.Data.Object.Metadata[backend.OriginMetadataKey],
 		Raw:              payload,
 	}, nil
 }

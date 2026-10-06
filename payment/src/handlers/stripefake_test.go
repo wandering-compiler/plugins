@@ -47,7 +47,8 @@ type stripeFake struct {
 	intents   map[string]*fakeIntent
 	declined  map[string]bool // customer id → card declines
 	failQueue []int
-	requests  map[string]int // path → requests that reached the handler logic
+	requests  map[string]int    // path → requests that reached the handler logic
+	origins   map[string]string // object id → metadata[w17_payment] it was created with
 }
 
 type idemEntry struct {
@@ -59,6 +60,7 @@ type idemEntry struct {
 type fakeIntent struct {
 	id, customer, currency string
 	amount, refunded       int64
+	origin                 string // metadata[w17_payment], as sent
 }
 
 func newStripeFake(t *testing.T) *stripeFake {
@@ -69,6 +71,7 @@ func newStripeFake(t *testing.T) *stripeFake {
 		intents:  map[string]*fakeIntent{},
 		declined: map[string]bool{},
 		requests: map[string]int{},
+		origins:  map[string]string{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -216,8 +219,9 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 		if f.declined[cus] {
 			return stripeErr(w, http.StatusPaymentRequired, "card_error", "Your card was declined.")
 		}
-		in := &fakeIntent{id: f.id("pi"), customer: cus, currency: cur, amount: amount}
+		in := &fakeIntent{id: f.id("pi"), customer: cus, currency: cur, amount: amount, origin: r.PostForm.Get("metadata[w17_payment]")}
 		f.intents[in.id] = in
+		f.origins[in.id] = in.origin
 		return okJSON(map[string]any{
 			"id": in.id, "object": "payment_intent", "amount": amount, "currency": cur,
 			"status": "requires_payment_method", "client_secret": in.id + "_secret_fake",
@@ -254,7 +258,9 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 		if r.PostForm.Get("customer") == "" || r.PostForm.Get("items[0][price]") == "" {
 			return stripeErr(w, http.StatusBadRequest, "invalid_request_error", "Missing required param")
 		}
-		return okJSON(map[string]any{"id": f.id("sub"), "object": "subscription", "status": "active", "current_period_end": 1893456000})
+		id := f.id("sub")
+		f.origins[id] = r.PostForm.Get("metadata[w17_payment]")
+		return okJSON(map[string]any{"id": id, "object": "subscription", "status": "active", "current_period_end": 1893456000})
 	}
 	return stripeErr(w, http.StatusNotFound, "invalid_request_error", "Unrecognized request URL")
 }
@@ -286,4 +292,23 @@ func eventJSON(id, typ, objectID string, extra map[string]any) []byte {
 		"data": map[string]any{"object": obj},
 	})
 	return b
+}
+
+// objectEvent renders an event for an object the fake created, carrying the
+// metadata Stripe would echo on it — the origin mark the plugin set.
+func (f *stripeFake) objectEvent(id, typ, objectID string, extra map[string]any) []byte {
+	f.mu.Lock()
+	origin, ok := f.origins[objectID]
+	f.mu.Unlock()
+	if !ok {
+		f.t.Fatalf("objectEvent: the fake created no object %q", objectID)
+	}
+	obj := map[string]any{}
+	for k, v := range extra {
+		obj[k] = v
+	}
+	if origin != "" {
+		obj["metadata"] = map[string]string{"w17_payment": origin}
+	}
+	return eventJSON(id, typ, objectID, obj)
 }

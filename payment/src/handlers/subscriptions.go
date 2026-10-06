@@ -46,7 +46,9 @@ func reconcileSubscriptionWebhook(ctx context.Context, h *PaymentServiceHandler,
 	if lerr != nil && !guardRefused(lerr) {
 		return lerr
 	}
-	if got.GetSubscription() == nil {
+	if got.GetSubscription() == nil && ev.Origin != "" {
+		// This plugin's subscription, its row not landed yet. One it did not
+		// create (no origin mark) has no row and never will: acknowledged.
 		return errNoLocalRecord
 	}
 	return nil

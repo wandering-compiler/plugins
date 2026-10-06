@@ -57,7 +57,24 @@ type PaymentSpec struct {
 	Amount             Money
 	IdempotencyKey     string
 	Description        string
+	// Origin marks the provider object as this plugin's (OriginCharge,
+	// OriginTopup), so a webhook for it can tell "ours, local row not
+	// landed yet" from "not ours at all".
+	Origin string
 }
+
+// OriginMetadataKey is the provider metadata key carrying the Origin of an
+// object this plugin created. A webhook names objects the plugin never made
+// too — a subscription's invoice payments, a dashboard charge, another app on
+// the same account — and those have no local row and never will: only an
+// object carrying this key is worth failing (and so redelivering) until its
+// row lands.
+const (
+	OriginMetadataKey  = "w17_payment"
+	OriginCharge       = "charge"
+	OriginTopup        = "topup"
+	OriginSubscription = "subscription"
+)
 
 // PaymentResult is what the provider returns for a created payment.
 type PaymentResult struct {

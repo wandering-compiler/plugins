@@ -54,13 +54,15 @@ type apiError struct {
 // customer.subscription.* it is the subscription id (+ status /
 // current_period_end).
 type webhookEnvelope struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Data struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Created int64  `json:"created"`
+	Data    struct {
 		Object struct {
-			ID               string `json:"id"`
-			Status           string `json:"status"`
-			CurrentPeriodEnd int64  `json:"current_period_end"`
+			ID               string            `json:"id"`
+			Status           string            `json:"status"`
+			CurrentPeriodEnd int64             `json:"current_period_end"`
+			Metadata         map[string]string `json:"metadata"`
 		} `json:"object"`
 	} `json:"data"`
 }

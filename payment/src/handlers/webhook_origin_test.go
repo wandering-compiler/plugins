@@ -1,0 +1,110 @@
+package handlers
+
+import (
+	"testing"
+
+	"google.golang.org/grpc/codes"
+
+	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+)
+
+// Stripe sends events for objects this plugin never made: a subscription's
+// invoice payments, a dashboard charge, another app on the same account.
+// They have no local row and never will. Failing them (as a missing row of
+// the plugin's OWN is failed) had each redelivered for days.
+func TestFlow_AForeignPaymentIsAcknowledgedOnce(t *testing.T) {
+	r := newRig(t)
+	for _, typ := range []string{"payment_intent.succeeded", "payment_intent.payment_failed"} {
+		id := "evt_foreign_" + typ
+		resp, err := r.deliver(eventJSON(id, typ, "pi_not_ours", nil))
+		if err != nil {
+			t.Fatalf("%s for a payment the plugin never created must be acknowledged, got %v", typ, err)
+		}
+		if !resp.GetHandled() || !r.store.isProcessed(id) {
+			t.Errorf("%s: not recorded (handled=%v)", typ, resp.GetHandled())
+		}
+	}
+}
+
+// The plugin marks what it creates, and Stripe echoes the mark on every
+// event about the object.
+func TestFlow_CreatedObjectsCarryTheOriginMark(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "10", "k1")
+	tp := r.topUp("user-a", "5", "k2")
+	if got := r.stripe.origins[p.GetProviderPaymentId()]; got != "charge" {
+		t.Errorf("a charge's intent carries origin %q, want charge", got)
+	}
+	if got := r.stripe.origins[tp.GetProviderPaymentId()]; got != "topup" {
+		t.Errorf("a top-up's intent carries origin %q, want topup", got)
+	}
+}
+
+// With prepaid on, an ORDINARY payment's success must not wait for a
+// top-up row that will never exist (every delivery used to fail).
+func TestFlow_PrepaidOn_AnOrdinaryPaymentSucceeds(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "10", "k1")
+	if _, err := r.deliver(r.stripe.objectEvent("evt_ok", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
+		t.Fatalf("an ordinary payment's success failed: %v", err)
+	}
+	if !r.store.isProcessed("evt_ok") {
+		t.Error("not recorded")
+	}
+}
+
+// The success can arrive between the Payment INSERT and the CreditTopup
+// INSERT. Acknowledging it then ("not a top-up") stranded the credit for
+// good; the origin mark says it IS one, so it fails until the row lands.
+func TestFlow_TopUpSuccessBeforeItsTopupRow_IsRetriedNotLost(t *testing.T) {
+	r := newRig(t)
+	tp := r.topUp("user-a", "5", "k1")
+	pid := tp.GetProviderPaymentId()
+	saved := r.store.topups[pid]
+	delete(r.store.topups, pid) // as if its INSERT had not landed yet
+
+	body := r.stripe.objectEvent("evt_early", "payment_intent.succeeded", pid, nil)
+	_, err := r.deliver(body)
+	wantCode(t, err, codes.NotFound, "a top-up whose row has not landed")
+	if r.store.isProcessed("evt_early") {
+		t.Fatal("recorded before the credit was granted")
+	}
+
+	r.store.topups[pid] = saved
+	if _, err := r.deliver(body); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+	bal, err := r.h.currentBalance(bg, "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal.GetBalance() != "5.0000" {
+		t.Errorf("balance = %q, want 5.0000", bal.GetBalance())
+	}
+}
+
+// A grant that committed under an earlier version's key and then failed to
+// stamp is retried by redelivery after an upgrade. It must find that key —
+// any other key grants the credit a second time.
+func TestFlow_TopUpGrantKeepsTheKeyEarlierVersionsWrote(t *testing.T) {
+	r := newRig(t)
+	tp := r.topUp("user-a", "5", "k1")
+	pid := tp.GetProviderPaymentId()
+	if got := ledgerKey(creditTopup, "user-a", pid); got != "topup:"+pid {
+		t.Fatalf("top-up ledger key = %q, want topup:%s", got, pid)
+	}
+	// The earlier version's committed grant, unstamped.
+	if _, err := r.store.ApplyCredit(bg, &pb.ApplyCreditReq{UserId: "user-a", Delta: "5", Reason: "topup", Ref: pid, IdempotencyKey: "topup:" + pid}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.deliver(r.stripe.objectEvent("evt_after_upgrade", "payment_intent.succeeded", pid, nil)); err != nil {
+		t.Fatal(err)
+	}
+	bal, err := r.h.currentBalance(bg, "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal.GetBalance() != "5.0000" {
+		t.Errorf("balance = %q — the redelivery granted the top-up twice", bal.GetBalance())
+	}
+}

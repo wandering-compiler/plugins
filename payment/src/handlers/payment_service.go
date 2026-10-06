@@ -128,7 +128,7 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	if err != nil {
 		return nil, err
 	}
-	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, idempotencyKeyOrNew(req.GetIdempotencyKey()), req.GetDescription())
+	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, idempotencyKeyOrNew(req.GetIdempotencyKey()), req.GetDescription(), backend.OriginCharge)
 	if err != nil {
 		return nil, err
 	}
@@ -166,12 +166,13 @@ func (h *PaymentServiceHandler) chargeCurrency(reqCurrency string) (string, erro
 // else (the key reused after the provider's own idempotency window
 // expired, so the provider minted a NEW object while the key still
 // names an older local row) is AlreadyExists — never another payment.
-func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, amount, currency, idemKey, description string) (*pb.Payment, string, error) {
+func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, amount, currency, idemKey, description, origin string) (*pb.Payment, string, error) {
 	pr, err := h.Backend.CreatePayment(ctx, backend.PaymentSpec{
 		ProviderCustomerID: cust.GetProviderCustomerId(),
 		Amount:             backend.Money{Amount: amount, Currency: currency},
 		IdempotencyKey:     idemKey,
 		Description:        description,
+		Origin:             origin,
 	})
 	if err != nil {
 		return nil, "", providerFailure(err)
