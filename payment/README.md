@@ -99,7 +99,10 @@ follow-up). Off by default.
     the key, scoped per principal and per operation (a retry is a no-op;
     the same key on another principal, or a spend reusing a grant's key,
     is a separate apply); `SpendCredit` returns `FailedPrecondition` when
-    the balance is insufficient.
+    the balance is insufficient. An apply made by rc.2 or earlier (which
+    stored the raw key) and retried after the upgrade is recognised — same
+    principal, direction and amount under the raw key — and not applied
+    again; this costs one extra ledger read per apply.
   - read balance via `GET /credit/balance` → `PaymentQuery.GetCreditBalance`
     (storage-direct); grant/spend are privileged business ops.
 - **Event** — `CreditApplied` (signed delta + new balance).

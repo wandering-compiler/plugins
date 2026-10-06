@@ -33,6 +33,7 @@ const (
 	PaymentQuery_GetRefundByProviderId_FullMethodName       = "/w17.contrib.payment.PaymentQuery/GetRefundByProviderId"
 	PaymentQuery_GetRefundByIdempotencyKey_FullMethodName   = "/w17.contrib.payment.PaymentQuery/GetRefundByIdempotencyKey"
 	PaymentQuery_GetCreditBalance_FullMethodName            = "/w17.contrib.payment.PaymentQuery/GetCreditBalance"
+	PaymentQuery_GetCreditLedgerByKey_FullMethodName        = "/w17.contrib.payment.PaymentQuery/GetCreditLedgerByKey"
 	PaymentQuery_GetCreditTopupByProviderId_FullMethodName  = "/w17.contrib.payment.PaymentQuery/GetCreditTopupByProviderId"
 	PaymentQuery_GetUsageMeter_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetUsageMeter"
 	PaymentQuery_GetPlanBySlug_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetPlanBySlug"
@@ -75,6 +76,12 @@ type PaymentQueryClient interface {
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
 	GetCreditBalance(ctx context.Context, in *GetCreditBalanceReq, opts ...grpc.CallOption) (*GetCreditBalanceResp, error)
+	// GetCreditLedgerByKey — one ledger entry by its stored idempotency key
+	// (UNIQUE). GrantCredit / SpendCredit read it before applying under the
+	// scoped key: rc.2 and earlier stored the caller's RAW key, so an apply
+	// made by one of them and retried after the upgrade is found only under
+	// that raw key. Gated prepaid.
+	GetCreditLedgerByKey(ctx context.Context, in *GetCreditLedgerByKeyReq, opts ...grpc.CallOption) (*GetCreditLedgerByKeyResp, error)
 	// GetCreditTopupByProviderId — resolve a pending top-up from a
 	// payment-succeeded webhook (maps the charge back to the credit grant).
 	// Gated prepaid.
@@ -166,6 +173,16 @@ func (c *paymentQueryClient) GetCreditBalance(ctx context.Context, in *GetCredit
 	return out, nil
 }
 
+func (c *paymentQueryClient) GetCreditLedgerByKey(ctx context.Context, in *GetCreditLedgerByKeyReq, opts ...grpc.CallOption) (*GetCreditLedgerByKeyResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCreditLedgerByKeyResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetCreditLedgerByKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *paymentQueryClient) GetCreditTopupByProviderId(ctx context.Context, in *GetCreditTopupByProviderIdReq, opts ...grpc.CallOption) (*GetCreditTopupByProviderIdResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCreditTopupByProviderIdResp)
@@ -251,6 +268,12 @@ type PaymentQueryServer interface {
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
 	GetCreditBalance(context.Context, *GetCreditBalanceReq) (*GetCreditBalanceResp, error)
+	// GetCreditLedgerByKey — one ledger entry by its stored idempotency key
+	// (UNIQUE). GrantCredit / SpendCredit read it before applying under the
+	// scoped key: rc.2 and earlier stored the caller's RAW key, so an apply
+	// made by one of them and retried after the upgrade is found only under
+	// that raw key. Gated prepaid.
+	GetCreditLedgerByKey(context.Context, *GetCreditLedgerByKeyReq) (*GetCreditLedgerByKeyResp, error)
 	// GetCreditTopupByProviderId — resolve a pending top-up from a
 	// payment-succeeded webhook (maps the charge back to the credit grant).
 	// Gated prepaid.
@@ -298,6 +321,9 @@ func (UnimplementedPaymentQueryServer) GetRefundByIdempotencyKey(context.Context
 }
 func (UnimplementedPaymentQueryServer) GetCreditBalance(context.Context, *GetCreditBalanceReq) (*GetCreditBalanceResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCreditBalance not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetCreditLedgerByKey(context.Context, *GetCreditLedgerByKeyReq) (*GetCreditLedgerByKeyResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCreditLedgerByKey not implemented")
 }
 func (UnimplementedPaymentQueryServer) GetCreditTopupByProviderId(context.Context, *GetCreditTopupByProviderIdReq) (*GetCreditTopupByProviderIdResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCreditTopupByProviderId not implemented")
@@ -442,6 +468,24 @@ func _PaymentQuery_GetCreditBalance_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentQuery_GetCreditLedgerByKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCreditLedgerByKeyReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetCreditLedgerByKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetCreditLedgerByKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetCreditLedgerByKey(ctx, req.(*GetCreditLedgerByKeyReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PaymentQuery_GetCreditTopupByProviderId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetCreditTopupByProviderIdReq)
 	if err := dec(in); err != nil {
@@ -562,6 +606,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCreditBalance",
 			Handler:    _PaymentQuery_GetCreditBalance_Handler,
+		},
+		{
+			MethodName: "GetCreditLedgerByKey",
+			Handler:    _PaymentQuery_GetCreditLedgerByKey_Handler,
 		},
 		{
 			MethodName: "GetCreditTopupByProviderId",

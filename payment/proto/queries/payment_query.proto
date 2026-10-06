@@ -45,6 +45,15 @@ message GetCreditBalanceResp {
   CreditBalance balance = 1;
 }
 
+message GetCreditLedgerByKeyReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetCreditLedgerByKeyResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  CreditLedger entry = 1;
+}
+
 message GetCreditTopupByProviderIdReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
@@ -217,6 +226,29 @@ service PaymentQuery {
           "       b.balance AS balance.balance, "
           "       b.updated_at AS balance.updated_at "
           "FROM @module.CreditBalance b WHERE b.user_id = :user_id"
+      }
+    };
+  }
+
+  // GetCreditLedgerByKey — one ledger entry by its stored idempotency key
+  // (UNIQUE). GrantCredit / SpendCredit read it before applying under the
+  // scoped key: rc.2 and earlier stored the caller's RAW key, so an apply
+  // made by one of them and retried after the upgrade is found only under
+  // that raw key. Gated prepaid.
+  rpc GetCreditLedgerByKey(GetCreditLedgerByKeyReq) returns (GetCreditLedgerByKeyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT l.id AS entry.id, "
+          "       l.user_id AS entry.user_id, "
+          "       l.delta AS entry.delta, "
+          "       l.reason AS entry.reason, "
+          "       l.ref AS entry.ref, "
+          "       l.idempotency_key AS entry.idempotency_key, "
+          "       l.created_at AS entry.created_at "
+          "FROM @module.CreditLedger l WHERE l.idempotency_key = :idempotency_key"
       }
     };
   }

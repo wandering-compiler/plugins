@@ -318,6 +318,17 @@ func (s *memStore) GetCreditBalance(_ context.Context, in *pb.GetCreditBalanceRe
 	return &pb.GetCreditBalanceResp{Balance: out}, s.leave("GetCreditBalance", nil)
 }
 
+func (s *memStore) GetCreditLedgerByKey(_ context.Context, in *pb.GetCreditLedgerByKeyReq, _ ...grpc.CallOption) (*pb.GetCreditLedgerByKeyResp, error) {
+	if err := s.enter("GetCreditLedgerByKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	e, ok := s.ledger[in.GetIdempotencyKey()]
+	if !ok {
+		return nil, s.leave("GetCreditLedgerByKey", noRow())
+	}
+	return &pb.GetCreditLedgerByKeyResp{Entry: clone(e)}, s.leave("GetCreditLedgerByKey", nil)
+}
+
 func (s *memStore) GetCreditTopupByProviderId(_ context.Context, in *pb.GetCreditTopupByProviderIdReq, _ ...grpc.CallOption) (*pb.GetCreditTopupByProviderIdResp, error) {
 	if err := s.enter("GetCreditTopupByProviderId"); err != nil {
 		return nil, s.leave("", err)

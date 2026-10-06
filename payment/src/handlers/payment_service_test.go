@@ -73,7 +73,8 @@ type fakeQuery struct {
 	usageMeter   *pb.UsageMeter    // usage
 	plan         *pb.Plan          // subscriptions
 	subscription *pb.Subscription
-	creditTopup  *pb.CreditTopup // prepaid top-up
+	creditTopup  *pb.CreditTopup  // prepaid top-up
+	ledgerEntry  *pb.CreditLedger // GetCreditLedgerByKey answer (prepaid)
 
 	paymentByProvider *pb.Payment // GetPaymentByProviderId answer
 }
@@ -128,6 +129,12 @@ func (q *fakeQuery) GetRefundByIdempotencyKey(_ context.Context, _ *pb.GetRefund
 }
 func (q *fakeQuery) GetSubscriptionByProviderId(_ context.Context, _ *pb.GetSubscriptionByProviderIdReq, _ ...grpc.CallOption) (*pb.GetSubscriptionByProviderIdResp, error) {
 	return nil, noRow()
+}
+func (q *fakeQuery) GetCreditLedgerByKey(_ context.Context, _ *pb.GetCreditLedgerByKeyReq, _ ...grpc.CallOption) (*pb.GetCreditLedgerByKeyResp, error) {
+	if q.ledgerEntry == nil {
+		return nil, noRow()
+	}
+	return &pb.GetCreditLedgerByKeyResp{Entry: q.ledgerEntry}, nil
 }
 func (q *fakeQuery) GetCreditTopupByProviderId(_ context.Context, _ *pb.GetCreditTopupByProviderIdReq, _ ...grpc.CallOption) (*pb.GetCreditTopupByProviderIdResp, error) {
 	if q.creditTopup == nil {
