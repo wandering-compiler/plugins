@@ -1,0 +1,4 @@
+w17-plugin-sig-file/1
+platform=1.7
+keyid=ed25519:d1f1f31adf965af1
+sig=0e639333396db9f780922c60dcec0a9adf3e6a0bb0fa8d30ad70b6f612f4ea28f8e9c7af339e26c895386bda2947b0a6db411985eb3d20d08644e2debffb090d

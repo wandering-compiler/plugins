@@ -1,5 +1,5 @@
 name: cluster
-version: 0.2.0-rc.5
+version: 0.2.0-rc.6
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -142,13 +142,18 @@ presets:
           # code — shown once, and replaced by pressing again if lost.
           #
           # The code is the action's RESPONSE, so the action declares a
-          # The admin does not display the code yet: showing an action's
-          # response needs a console newer than the one that signs this
-          # release. Until then enrol workers with `relay issue-worker`.
+          # SECRET result: the admin shows these fields once, with a copy
+          # button, keeps them nowhere, and the handler answers no-store.
+          # The fingerprint and expiry ride along because the worker tool
+          # needs the fingerprint too, and the operator needs to know how
+          # long the code lasts.
           - name: issue_registration_code
             source: ClusterService.IssueRegistrationCode
             label: "Issue a registration code"
             target: detail
+            result:
+              fields: [code, relay_fingerprint, expires_at, relay]
+              secret: true
           # Maintenance without an outage: the relay takes no new work, sends
           # its queue elsewhere, and lets everything running finish. One-way —
           # a drained relay comes back by being restarted.
