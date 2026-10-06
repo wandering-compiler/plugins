@@ -57,7 +57,7 @@ func resolveBackend(cfg *gen.EnvConfig) (backend.Backend, error) {
 	}
 	switch provider {
 	case "stripe":
-		key := cfg.ProviderApiKey.Reveal()
+		key := cfg.ProviderAPIKey.Reveal()
 		if key == "" {
 			return nil, fmt.Errorf("payment plugin: provider_api_key is required for the stripe backend")
 		}
