@@ -185,7 +185,7 @@ service PaymentQuery {
     };
   }
 
-  // GetRefundByIdempotencyKey — the refund a caller's (payment-scoped) key
+  // GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
   // already produced, looked up before the provider is asked again.
   rpc GetRefundByIdempotencyKey(GetRefundByIdempotencyKeyReq) returns (GetRefundByIdempotencyKeyResp) {
     option (w17.db.method) = {

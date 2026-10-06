@@ -161,6 +161,17 @@ func isPositiveDecimal(s string) bool {
 	return nonZero
 }
 
+// sameDecimal compares two non-negative decimal strings by value, so the
+// DECIMAL(20, 4) column's "29.0000" equals a request's "29" / "29.00". Here,
+// not in subscriptions.go: RefundPayment (always staged) reads it too.
+func sameDecimal(a, b string) bool {
+	norm := func(s string) string {
+		i, f, _ := strings.Cut(strings.TrimSpace(s), ".")
+		return strings.TrimLeft(i, "0") + "." + strings.TrimRight(f, "0")
+	}
+	return norm(a) == norm(b)
+}
+
 // isCurrencyCode reports whether c (already trimmed + lowercased) has
 // the ISO-4217 shape: exactly three ASCII letters. The currency column
 // is CHAR(3); a longer code used to reach the provider first and fail

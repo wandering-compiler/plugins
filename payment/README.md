@@ -21,11 +21,14 @@ driver.**
     a key already used for another payment is `AlreadyExists`. An empty
     key gets a random one (no retry safety — send a stable key for that).
   - `RefundPayment` — reverse a payment (full or partial) via the
-    provider + record a local `Refund`; a retry with the same key returns
-    the recorded refund — the key is kept (scoped by payment) and looked up
-    before the provider is asked, so a retry after the provider has
-    forgotten its idempotency key does not refund twice. Privileged /
-    internal (not REST-exposed).
+    provider + record a local `Refund`. The `idempotency_key` names ONE
+    refund across all payments (it is the provider's idempotency key,
+    sent verbatim): a retry with the same key, payment and amount returns
+    the recorded refund; the same key with another amount is
+    `AlreadyExists`, on another payment `InvalidArgument`. The key is kept
+    and looked up before the provider is asked, so a retry after the
+    provider has forgotten its idempotency key does not refund twice.
+    Privileged / internal (not REST-exposed).
   - `IngestStripe` — webhook sink (gated `stripe_webhooks`): verify the
     `Stripe-Signature` HMAC (constant-time, multi-`v1`) + timestamp
     tolerance (5-min replay window), dispatch the terminal state to

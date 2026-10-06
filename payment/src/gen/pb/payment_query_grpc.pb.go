@@ -68,7 +68,7 @@ type PaymentQueryClient interface {
 	// the provider replays the same refund object) hits the unique key on
 	// its local INSERT.
 	GetRefundByProviderId(ctx context.Context, in *GetRefundByProviderIdReq, opts ...grpc.CallOption) (*GetRefundByProviderIdResp, error)
-	// GetRefundByIdempotencyKey — the refund a caller's (payment-scoped) key
+	// GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
 	// already produced, looked up before the provider is asked again.
 	GetRefundByIdempotencyKey(ctx context.Context, in *GetRefundByIdempotencyKeyReq, opts ...grpc.CallOption) (*GetRefundByIdempotencyKeyResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a
@@ -244,7 +244,7 @@ type PaymentQueryServer interface {
 	// the provider replays the same refund object) hits the unique key on
 	// its local INSERT.
 	GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error)
-	// GetRefundByIdempotencyKey — the refund a caller's (payment-scoped) key
+	// GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
 	// already produced, looked up before the provider is asked again.
 	GetRefundByIdempotencyKey(context.Context, *GetRefundByIdempotencyKeyReq) (*GetRefundByIdempotencyKeyResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a

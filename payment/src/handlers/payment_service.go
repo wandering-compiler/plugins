@@ -244,16 +244,28 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	// The key is looked up HERE, before the provider is asked. The provider
 	// remembers an idempotency key for a day; a retry after that used to
 	// refund a second time — the local row was found only by the provider's
-	// NEW refund id, which matched nothing. Scoped by payment, so one
-	// caller key may name a refund on each of several payments.
-	storedKey := scopedKey("refund", payment.GetId(), req.GetIdempotencyKey())
+	// NEW refund id, which matched nothing.
+	storedKey := refundKey(req.GetIdempotencyKey())
 	if prior, err := h.refundByKey(ctx, storedKey); err != nil || prior != nil {
 		if err != nil {
 			return nil, err
 		}
-		return &pb.RefundPaymentResp{Refund: prior}, nil
+		return sameRefund(prior, payment, amount)
 	}
 
+	// The provider gets the caller's key VERBATIM, so one key names one
+	// refund account-wide, and the stored key (refundKey) has the same scope.
+	//
+	// Not a payment-scoped key, although that would let one caller key name
+	// a refund on each of several payments: every released version sent the
+	// raw key, and its only replay protection was the provider's memory of
+	// that key. A refund made before an upgrade and retried after it (within
+	// the provider's day) would reach the provider under a NEW key, and the
+	// provider would refund a second time — the pre-upgrade row has no stored
+	// key to stop it. The raw key keeps that retry a replay. The cost is only
+	// a refusal: a key reused on another payment is InvalidArgument (from the
+	// lookup above, or — while the first refund's row is missing — from the
+	// provider's own idempotency check), never money.
 	res, err := h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
 		backend.Money{Amount: amount, Currency: payment.GetCurrency()},
 		req.GetIdempotencyKey())
@@ -269,10 +281,11 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		IdempotencyKey:   storedKey,
 	})
 	if err != nil {
-		// A concurrent call with the same key recorded it first.
+		// A concurrent call with the same key recorded it first: its refund
+		// is the answer only when it is the refund this request asks for.
 		if constraintCode(err) == codeUniqueViolation {
 			if prior, gerr := h.refundByKey(ctx, storedKey); gerr == nil && prior != nil {
-				return &pb.RefundPaymentResp{Refund: prior}, nil
+				return sameRefund(prior, payment, amount)
 			}
 		}
 		// A retried refund (same key) gets the same provider refund
@@ -293,8 +306,31 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
 }
 
-// refundByKey returns the refund a stored (payment-scoped) key already
-// produced, or nil.
+// refundKey is the stored Refund.idempotency_key for a caller's refund key.
+// Its scope is the caller's key alone — the scope the provider gives the key
+// it is sent (see RefundPayment) — so a key reused on another payment is
+// found here and refused, not only when the provider still remembers it.
+func refundKey(callerKey string) string {
+	return scopedKey("refund", callerKey)
+}
+
+// sameRefund answers a request whose key already names a recorded refund:
+// that refund, when it is the one the request asks for (same payment, same
+// amount by value — a full refund's amount is the payment's); otherwise a
+// refusal. Returning it regardless (as the lookup used to) answered a retry
+// for 6 under the key of a refund of 4 with the refund of 4 and no error —
+// the caller believed 6 had gone back.
+func sameRefund(prior *pb.Refund, payment *pb.Payment, amount string) (*pb.RefundPaymentResp, error) {
+	if prior.GetPaymentId() != payment.GetId() {
+		return nil, invalidArg("idempotency_key already used for a refund of another payment (a refund key must be unique per refund, across all payments)")
+	}
+	if !sameDecimal(prior.GetAmount(), amount) {
+		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
+	}
+	return &pb.RefundPaymentResp{Refund: prior}, nil
+}
+
+// refundByKey returns the refund a stored key already produced, or nil.
 func (h *PaymentServiceHandler) refundByKey(ctx context.Context, storedKey string) (*pb.Refund, error) {
 	got, err := h.Query.GetRefundByIdempotencyKey(ctx, &pb.GetRefundByIdempotencyKeyReq{IdempotencyKey: storedKey})
 	if err != nil && !absent(err) {

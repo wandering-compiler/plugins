@@ -131,16 +131,6 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 	return &pb.PlanView{Plan: created.GetPlan()}, nil
 }
 
-// sameDecimal compares two non-negative decimal strings by value, so the
-// DECIMAL(20, 4) column's "29.0000" equals a request's "29" / "29.00".
-func sameDecimal(a, b string) bool {
-	norm := func(s string) string {
-		i, f, _ := strings.Cut(strings.TrimSpace(s), ".")
-		return strings.TrimLeft(i, "0") + "." + strings.TrimRight(f, "0")
-	}
-	return norm(a) == norm(b)
-}
-
 // Subscribe enrolls the principal's customer on a plan via the provider,
 // then persists the local Subscription. The provider customer is
 // ensured first (reusing the core resolveCustomer path).

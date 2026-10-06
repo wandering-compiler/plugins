@@ -374,10 +374,11 @@ type Refund struct {
 	Amount           string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
 	Currency         string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`
 	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	// The caller's refund key, scoped by payment (see RefundPayment). Looked up
-	// BEFORE the provider is asked: the provider forgets an idempotency key
-	// after a day, and a retry after that would refund a second time. NULL on
-	// rows written before the key was kept.
+	// The caller's refund key, hashed ("v2:" + sha256; see refundKey). One key
+	// names one refund across all payments — the scope the provider gives the
+	// raw key it is sent. Looked up BEFORE the provider is asked: the provider
+	// forgets an idempotency key after a day, and a retry after that would
+	// refund a second time. NULL on rows written before the key was kept.
 	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
