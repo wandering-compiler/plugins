@@ -57,8 +57,8 @@ linters:
         - G302 # OpenFile perms > 0600: same reason as G306
         - G304 # file inclusion via a variable path: the code reads the trees it is given
         - G306 # WriteFile perms > 0600: written files are ordinary 0644 source/output
-        - G702 # taint double-reports paired with G304
-        - G703
+        - G702 # command injection, taint analysis: the same finding as G204 (excluded above, same reason)
+        - G703 # path traversal, taint analysis: the same finding as G304 (excluded above, same reason)
         - G122 # WalkDir symlink TOCTOU: walks a local tree, not an attacker-controlled one
         - G602 # slice index out of range: false positive on `for i := range xs { xs[i] }`
     errcheck:

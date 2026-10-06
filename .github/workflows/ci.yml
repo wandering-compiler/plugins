@@ -46,7 +46,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
-          cache-dependency-path: ${{ matrix.plugin }}/src/go.sum
+          # The golangci-lint pin is part of the key: lint builds it with `go run`,
+          # and a key that ignored it would restore a cache saved before the
+          # pin and never save the built linter.
+          cache-dependency-path: |
+            ${{ matrix.plugin }}/src/go.sum
+            tools/golangci-version
       - name: install the pinned w17ctl (the render releases use)
         run: tools/w17ctl.sh
       - name: gofmt
