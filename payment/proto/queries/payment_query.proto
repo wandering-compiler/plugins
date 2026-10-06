@@ -74,6 +74,15 @@ message GetUsageMeterResp {
   UsageMeter meter = 1;
 }
 
+message GetUsageRecordByKeyReq {
+  option (w17.contrib.plugin_feature) = "usage";
+  string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetUsageRecordByKeyResp {
+  option (w17.contrib.plugin_feature) = "usage";
+  UsageRecord record = 1;
+}
+
 message GetPlanBySlugReq {
   option (w17.contrib.plugin_feature) = "subscriptions";
   string slug = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
@@ -290,6 +299,30 @@ service PaymentQuery {
           "       m.updated_at AS meter.updated_at "
           "FROM @module.UsageMeter m "
           "WHERE m.user_id = :user_id AND m.meter = :meter AND m.period = :period"
+      }
+    };
+  }
+
+  // GetUsageRecordByKey — one usage record by its stored idempotency key
+  // (UNIQUE). ReportUsage reads it before recording under the scoped key:
+  // rc.2 and earlier stored the caller's RAW key, so a report made by one of
+  // them and retried after the upgrade is found only under that raw key.
+  // Gated usage.
+  rpc GetUsageRecordByKey(GetUsageRecordByKeyReq) returns (GetUsageRecordByKeyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "usage";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS record.id, "
+          "       r.user_id AS record.user_id, "
+          "       r.meter AS record.meter, "
+          "       r.period AS record.period, "
+          "       r.quantity AS record.quantity, "
+          "       r.item_ref AS record.item_ref, "
+          "       r.idempotency_key AS record.idempotency_key, "
+          "       r.created_at AS record.created_at "
+          "FROM @module.UsageRecord r WHERE r.idempotency_key = :idempotency_key"
       }
     };
   }

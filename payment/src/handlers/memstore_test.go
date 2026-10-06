@@ -359,6 +359,17 @@ func (s *memStore) GetUsageMeter(_ context.Context, in *pb.GetUsageMeterReq, _ .
 	return &pb.GetUsageMeterResp{Meter: out}, s.leave("GetUsageMeter", nil)
 }
 
+func (s *memStore) GetUsageRecordByKey(_ context.Context, in *pb.GetUsageRecordByKeyReq, _ ...grpc.CallOption) (*pb.GetUsageRecordByKeyResp, error) {
+	if err := s.enter("GetUsageRecordByKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	r, ok := s.usage[in.GetIdempotencyKey()]
+	if !ok {
+		return nil, s.leave("GetUsageRecordByKey", noRow())
+	}
+	return &pb.GetUsageRecordByKeyResp{Record: clone(r)}, s.leave("GetUsageRecordByKey", nil)
+}
+
 func (s *memStore) GetPlanBySlug(_ context.Context, in *pb.GetPlanBySlugReq, _ ...grpc.CallOption) (*pb.GetPlanBySlugResp, error) {
 	if err := s.enter("GetPlanBySlug"); err != nil {
 		return nil, s.leave("", err)
@@ -686,6 +697,8 @@ func (s *memStore) count(table string) int {
 		return len(s.subs)
 	case "plans":
 		return len(s.plans)
+	case "usage":
+		return len(s.usage)
 	}
 	panic("unknown table " + table)
 }

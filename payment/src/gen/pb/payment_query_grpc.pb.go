@@ -36,6 +36,7 @@ const (
 	PaymentQuery_GetCreditLedgerByKey_FullMethodName        = "/w17.contrib.payment.PaymentQuery/GetCreditLedgerByKey"
 	PaymentQuery_GetCreditTopupByProviderId_FullMethodName  = "/w17.contrib.payment.PaymentQuery/GetCreditTopupByProviderId"
 	PaymentQuery_GetUsageMeter_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetUsageMeter"
+	PaymentQuery_GetUsageRecordByKey_FullMethodName         = "/w17.contrib.payment.PaymentQuery/GetUsageRecordByKey"
 	PaymentQuery_GetPlanBySlug_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetPlanBySlug"
 	PaymentQuery_GetSubscription_FullMethodName             = "/w17.contrib.payment.PaymentQuery/GetSubscription"
 	PaymentQuery_GetSubscriptionByProviderId_FullMethodName = "/w17.contrib.payment.PaymentQuery/GetSubscriptionByProviderId"
@@ -90,6 +91,12 @@ type PaymentQueryClient interface {
 	// (principal, meter, period). Empty result = no usage recorded yet.
 	// Gated usage.
 	GetUsageMeter(ctx context.Context, in *GetUsageMeterReq, opts ...grpc.CallOption) (*GetUsageMeterResp, error)
+	// GetUsageRecordByKey — one usage record by its stored idempotency key
+	// (UNIQUE). ReportUsage reads it before recording under the scoped key:
+	// rc.2 and earlier stored the caller's RAW key, so a report made by one of
+	// them and retried after the upgrade is found only under that raw key.
+	// Gated usage.
+	GetUsageRecordByKey(ctx context.Context, in *GetUsageRecordByKeyReq, opts ...grpc.CallOption) (*GetUsageRecordByKeyResp, error)
 	// GetPlanBySlug — resolve a plan by its stable local slug (the
 	// Subscribe handler reads plan_id + provider_price_id from it).
 	// Gated subscriptions.
@@ -203,6 +210,16 @@ func (c *paymentQueryClient) GetUsageMeter(ctx context.Context, in *GetUsageMete
 	return out, nil
 }
 
+func (c *paymentQueryClient) GetUsageRecordByKey(ctx context.Context, in *GetUsageRecordByKeyReq, opts ...grpc.CallOption) (*GetUsageRecordByKeyResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUsageRecordByKeyResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetUsageRecordByKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *paymentQueryClient) GetPlanBySlug(ctx context.Context, in *GetPlanBySlugReq, opts ...grpc.CallOption) (*GetPlanBySlugResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPlanBySlugResp)
@@ -282,6 +299,12 @@ type PaymentQueryServer interface {
 	// (principal, meter, period). Empty result = no usage recorded yet.
 	// Gated usage.
 	GetUsageMeter(context.Context, *GetUsageMeterReq) (*GetUsageMeterResp, error)
+	// GetUsageRecordByKey — one usage record by its stored idempotency key
+	// (UNIQUE). ReportUsage reads it before recording under the scoped key:
+	// rc.2 and earlier stored the caller's RAW key, so a report made by one of
+	// them and retried after the upgrade is found only under that raw key.
+	// Gated usage.
+	GetUsageRecordByKey(context.Context, *GetUsageRecordByKeyReq) (*GetUsageRecordByKeyResp, error)
 	// GetPlanBySlug — resolve a plan by its stable local slug (the
 	// Subscribe handler reads plan_id + provider_price_id from it).
 	// Gated subscriptions.
@@ -330,6 +353,9 @@ func (UnimplementedPaymentQueryServer) GetCreditTopupByProviderId(context.Contex
 }
 func (UnimplementedPaymentQueryServer) GetUsageMeter(context.Context, *GetUsageMeterReq) (*GetUsageMeterResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetUsageMeter not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetUsageRecordByKey(context.Context, *GetUsageRecordByKeyReq) (*GetUsageRecordByKeyResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUsageRecordByKey not implemented")
 }
 func (UnimplementedPaymentQueryServer) GetPlanBySlug(context.Context, *GetPlanBySlugReq) (*GetPlanBySlugResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPlanBySlug not implemented")
@@ -522,6 +548,24 @@ func _PaymentQuery_GetUsageMeter_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentQuery_GetUsageRecordByKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUsageRecordByKeyReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetUsageRecordByKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetUsageRecordByKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetUsageRecordByKey(ctx, req.(*GetUsageRecordByKeyReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PaymentQuery_GetPlanBySlug_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetPlanBySlugReq)
 	if err := dec(in); err != nil {
@@ -618,6 +662,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetUsageMeter",
 			Handler:    _PaymentQuery_GetUsageMeter_Handler,
+		},
+		{
+			MethodName: "GetUsageRecordByKey",
+			Handler:    _PaymentQuery_GetUsageRecordByKey_Handler,
 		},
 		{
 			MethodName: "GetPlanBySlug",

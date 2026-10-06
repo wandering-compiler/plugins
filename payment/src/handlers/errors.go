@@ -213,8 +213,13 @@ func scopedKey(parts ...string) string {
 	for _, p := range parts {
 		fmt.Fprintf(h, "%d:%s", len(p), p)
 	}
-	return "v2:" + hex.EncodeToString(h.Sum(nil))
+	return scopedKeyPrefix + hex.EncodeToString(h.Sum(nil))
 }
+
+// scopedKeyPrefix starts every scoped key. A caller's raw key with this
+// prefix can equal a stored scoped key, so the lookups for keys stored raw by
+// earlier versions skip it.
+const scopedKeyPrefix = "v2:"
 
 func orDefault(s, def string) string {
 	if strings.TrimSpace(s) == "" {

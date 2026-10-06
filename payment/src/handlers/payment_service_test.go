@@ -136,6 +136,9 @@ func (q *fakeQuery) GetCreditLedgerByKey(_ context.Context, _ *pb.GetCreditLedge
 	}
 	return &pb.GetCreditLedgerByKeyResp{Entry: q.ledgerEntry}, nil
 }
+func (q *fakeQuery) GetUsageRecordByKey(_ context.Context, _ *pb.GetUsageRecordByKeyReq, _ ...grpc.CallOption) (*pb.GetUsageRecordByKeyResp, error) {
+	return nil, noRow()
+}
 func (q *fakeQuery) GetCreditTopupByProviderId(_ context.Context, _ *pb.GetCreditTopupByProviderIdReq, _ ...grpc.CallOption) (*pb.GetCreditTopupByProviderIdResp, error) {
 	if q.creditTopup == nil {
 		return nil, noRow()

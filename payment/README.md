@@ -97,9 +97,10 @@ credit, idempotency / error-contract mapping, webhook verify) keep a
   retry after that is not recognised. One refund key now names one refund
   across all payments — reusing it on another payment is
   `InvalidArgument`.
-- **Credit keys.** Grants and spends are stored under a scoped key now; one
-  made before the upgrade and retried after it is still recognised under
-  its raw key (see the prepaid section).
+- **Credit and usage keys.** Grants, spends and usage reports are stored
+  under a scoped key now; one made before the upgrade and retried after it
+  is still recognised under its raw key (see the prepaid and usage
+  sections).
 
 ## Money
 
@@ -156,7 +157,10 @@ quantity carrying `item_ref`/`metadata`) are the SAME operation — one
   meter in ONE transaction (UPSERT increment on the composite key).
 - **PaymentService** (gated `usage`):
   - `ReportUsage` — record consumption; idempotent on the key, scoped per
-    (principal, meter, period). Internal /
+    (principal, meter, period). A report made by rc.2 or earlier (which
+    stored the raw key) and retried after the upgrade is recognised — same
+    principal, meter, period and quantity under the raw key — and not
+    counted again; this costs one extra record read per report. Internal /
     server-to-server (NOT REST-exposed — the service measuring usage
     reports it).
   - read the total via `GET /usage/{meter}/{period}` →
