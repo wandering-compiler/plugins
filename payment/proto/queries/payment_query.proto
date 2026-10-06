@@ -33,6 +33,9 @@ message GetPaymentByProviderIdResp { Payment payment = 1; }
 message GetRefundByProviderIdReq  { string provider_refund_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
 message GetRefundByProviderIdResp { Refund refund = 1; }
 
+message GetRefundByIdempotencyKeyReq  { string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message GetRefundByIdempotencyKeyResp { Refund refund = 1; }
+
 message GetCreditBalanceReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -178,6 +181,25 @@ service PaymentQuery {
           "       r.currency AS refund.currency, "
           "       r.created_at AS refund.created_at "
           "FROM @module.Refund r WHERE r.provider_refund_id = :provider_refund_id"
+      }
+    };
+  }
+
+  // GetRefundByIdempotencyKey — the refund a caller's (payment-scoped) key
+  // already produced, looked up before the provider is asked again.
+  rpc GetRefundByIdempotencyKey(GetRefundByIdempotencyKeyReq) returns (GetRefundByIdempotencyKeyResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS refund.id, "
+          "       r.payment_id AS refund.payment_id, "
+          "       r.provider_refund_id AS refund.provider_refund_id, "
+          "       r.amount AS refund.amount, "
+          "       r.currency AS refund.currency, "
+          "       r.created_at AS refund.created_at, "
+          "       r.idempotency_key AS refund.idempotency_key "
+          "FROM @module.Refund r WHERE r.idempotency_key = :idempotency_key"
       }
     };
   }

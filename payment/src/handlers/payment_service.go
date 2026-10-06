@@ -240,6 +240,19 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		amount = payment.GetAmount() // full refund
 	}
 
+	// The key is looked up HERE, before the provider is asked. The provider
+	// remembers an idempotency key for a day; a retry after that used to
+	// refund a second time — the local row was found only by the provider's
+	// NEW refund id, which matched nothing. Scoped by payment, so one
+	// caller key may name a refund on each of several payments.
+	storedKey := scopedKey("refund", payment.GetId(), req.GetIdempotencyKey())
+	if prior, err := h.refundByKey(ctx, storedKey); err != nil || prior != nil {
+		if err != nil {
+			return nil, err
+		}
+		return &pb.RefundPaymentResp{Refund: prior}, nil
+	}
+
 	res, err := h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
 		backend.Money{Amount: amount, Currency: payment.GetCurrency()},
 		req.GetIdempotencyKey())
@@ -252,8 +265,15 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		ProviderRefundId: res.ProviderRefundID,
 		Amount:           amount,
 		Currency:         payment.GetCurrency(),
+		IdempotencyKey:   storedKey,
 	})
 	if err != nil {
+		// A concurrent call with the same key recorded it first.
+		if constraintCode(err) == codeUniqueViolation {
+			if prior, gerr := h.refundByKey(ctx, storedKey); gerr == nil && prior != nil {
+				return &pb.RefundPaymentResp{Refund: prior}, nil
+			}
+		}
 		// A retried refund (same key) gets the same provider refund
 		// replayed, and its local row already exists: that row is the
 		// answer. Only when it belongs to THIS payment.
@@ -270,6 +290,16 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		return nil, err
 	}
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
+}
+
+// refundByKey returns the refund a stored (payment-scoped) key already
+// produced, or nil.
+func (h *PaymentServiceHandler) refundByKey(ctx context.Context, storedKey string) (*pb.Refund, error) {
+	got, err := h.Query.GetRefundByIdempotencyKey(ctx, &pb.GetRefundByIdempotencyKeyReq{IdempotencyKey: storedKey})
+	if err != nil && !absent(err) {
+		return nil, err
+	}
+	return got.GetRefund(), nil
 }
 
 // resolveCustomer returns the principal's Customer row, creating it (and

@@ -62,7 +62,7 @@ type PaymentMutationClient interface {
 	// during webhook reconciliation. RETURNING the row lets the emit
 	// carry full context. Emits PaymentSucceeded.
 	//
-	// TRANSITION-GUARDED (`AND status <> 3`), and the guard is what makes
+	// TRANSITION-GUARDED (`status <> 3 AND <> 5 AND <> 6`), and the guard is what makes
 	// the emission correct rather than the write. The write on its own is
 	// idempotent — 3 → 3 changes nothing — but the row still MATCHED, so
 	// the method still returned successfully, and the generated emit
@@ -75,7 +75,8 @@ type PaymentMutationClient interface {
 	// NotFound → no emit. It also makes SUCCEEDED absorbing: a
 	// `payment_intent.payment_failed` from an earlier attempt that Stripe
 	// delivers late can no longer un-succeed the charge (see
-	// MarkPaymentFailed).
+	// MarkPaymentFailed). CANCELED (5) and REFUNDED (6) are terminal too: a
+	// late success for an intent recorded as canceled must not resurrect it.
 	//
 	// Zero rows is ambiguous at the handler — "already SUCCEEDED" vs "no
 	// such provider id yet" (TopUpCredit charges the provider before its
@@ -86,7 +87,7 @@ type PaymentMutationClient interface {
 	// MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
 	// PaymentFailed.
 	//
-	// TRANSITION-GUARDED (`AND status <> 3 AND status <> 4`). One
+	// TRANSITION-GUARDED (`status <> 3, 4, 5, 6`). One
 	// PaymentIntent whose first charge attempt fails and whose second
 	// succeeds produces `payment_intent.payment_failed` and
 	// `payment_intent.succeeded` as two DISTINCT event ids, so the dedup
@@ -98,8 +99,8 @@ type PaymentMutationClient interface {
 	// `status <> 3` makes SUCCEEDED absorbing (correct for a provider
 	// whose succeeded PaymentIntent is terminal — a reversal is a Refund,
 	// a separate object); `status <> 4` makes a redelivered failure a
-	// no-op, so it emits once. FAILED → SUCCEEDED stays open: a retried
-	// attempt must still be able to succeed.
+	// no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
+	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
 	MarkPaymentFailed(ctx context.Context, in *MarkPaymentFailedReq, opts ...grpc.CallOption) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.
@@ -334,7 +335,7 @@ type PaymentMutationServer interface {
 	// during webhook reconciliation. RETURNING the row lets the emit
 	// carry full context. Emits PaymentSucceeded.
 	//
-	// TRANSITION-GUARDED (`AND status <> 3`), and the guard is what makes
+	// TRANSITION-GUARDED (`status <> 3 AND <> 5 AND <> 6`), and the guard is what makes
 	// the emission correct rather than the write. The write on its own is
 	// idempotent — 3 → 3 changes nothing — but the row still MATCHED, so
 	// the method still returned successfully, and the generated emit
@@ -347,7 +348,8 @@ type PaymentMutationServer interface {
 	// NotFound → no emit. It also makes SUCCEEDED absorbing: a
 	// `payment_intent.payment_failed` from an earlier attempt that Stripe
 	// delivers late can no longer un-succeed the charge (see
-	// MarkPaymentFailed).
+	// MarkPaymentFailed). CANCELED (5) and REFUNDED (6) are terminal too: a
+	// late success for an intent recorded as canceled must not resurrect it.
 	//
 	// Zero rows is ambiguous at the handler — "already SUCCEEDED" vs "no
 	// such provider id yet" (TopUpCredit charges the provider before its
@@ -358,7 +360,7 @@ type PaymentMutationServer interface {
 	// MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
 	// PaymentFailed.
 	//
-	// TRANSITION-GUARDED (`AND status <> 3 AND status <> 4`). One
+	// TRANSITION-GUARDED (`status <> 3, 4, 5, 6`). One
 	// PaymentIntent whose first charge attempt fails and whose second
 	// succeeds produces `payment_intent.payment_failed` and
 	// `payment_intent.succeeded` as two DISTINCT event ids, so the dedup
@@ -370,8 +372,8 @@ type PaymentMutationServer interface {
 	// `status <> 3` makes SUCCEEDED absorbing (correct for a provider
 	// whose succeeded PaymentIntent is terminal — a reversal is a Refund,
 	// a separate object); `status <> 4` makes a redelivered failure a
-	// no-op, so it emits once. FAILED → SUCCEEDED stays open: a retried
-	// attempt must still be able to succeed.
+	// no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
+	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
 	MarkPaymentFailed(context.Context, *MarkPaymentFailedReq) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.

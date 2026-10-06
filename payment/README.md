@@ -22,14 +22,22 @@ driver.**
     key gets a random one (no retry safety — send a stable key for that).
   - `RefundPayment` — reverse a payment (full or partial) via the
     provider + record a local `Refund`; a retry with the same key returns
-    the recorded refund. Privileged / internal (not REST-exposed).
+    the recorded refund — the key is kept (scoped by payment) and looked up
+    before the provider is asked, so a retry after the provider has
+    forgotten its idempotency key does not refund twice. Privileged /
+    internal (not REST-exposed).
   - `IngestStripe` — webhook sink (gated `stripe_webhooks`): verify the
     `Stripe-Signature` HMAC (constant-time, multi-`v1`) + timestamp
     tolerance (5-min replay window), dispatch the terminal state to
     `MarkPaymentSucceeded` / `MarkPaymentFailed` (transition-guarded, so a
-    redelivered or out-of-order event changes and emits nothing), then
-    record the event id. An event for an object with no local row yet is
-    answered `NotFound` and NOT recorded, so the provider redelivers it.
+    redelivered or out-of-order event changes and emits nothing; CANCELED
+    and REFUNDED are terminal, and an older subscription event never
+    overwrites a newer one), then record the event id. Every object the
+    plugin creates carries `metadata[w17_payment]`; an event for such an
+    object with no local row yet is answered `NotFound` and NOT recorded,
+    so the provider redelivers it. An event for an object the plugin did
+    not create (a subscription invoice's payment, a dashboard charge) is
+    acknowledged.
 
 **Errors.** A provider failure maps by class: a declined card →
 `FailedPrecondition`; a request the provider (or the driver) refuses as
@@ -37,7 +45,8 @@ invalid — an amount the currency cannot carry, a refund above what is
 left, an idempotency key reused with other parameters → `InvalidArgument`;
 anything else (network, 5xx, rate limit) → `Unavailable`, retryable.
 Amounts are validated against the `NUMERIC(20,4)` columns (≤ 16 integer,
-≤ 4 fractional digits) and currencies must be 3-letter codes — before any
+≤ 4 fractional digits) and currencies must be 3-letter codes (ISK and UGX are whole units only;
+the three-decimal BHD/JOD/KWD/OMR/TND are refused) — before any
 provider call.
 
 **Reads have no business handler.** Pure reads (`GET /payments/{id}`,

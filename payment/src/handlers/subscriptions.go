@@ -34,12 +34,14 @@ func reconcileSubscriptionWebhook(ctx context.Context, h *PaymentServiceHandler,
 		ProviderSubscriptionId: ev.ObjectID,
 		Status:                 int32(mapSubscriptionStatus(ev.ObjectStatus)),
 		CurrentPeriodEnd:       unixToTimestamp(ev.CurrentPeriodEnd),
+		ProviderEventAt:        eventTime(ev.Created),
 	})
 	if !guardRefused(err) {
 		return err
 	}
-	// The guard (`status <> 4`) matched nothing: the subscription is
-	// already CANCELED — a late update after the deletion, acknowledge —
+	// The guard matched nothing: the subscription is already CANCELED (a
+	// late update after the deletion) or holds a NEWER event than this
+	// one (out-of-order delivery) — acknowledge either —
 	// or it has no local row yet, which must fail unrecorded so the
 	// provider redelivers (see IngestStripe).
 	got, lerr := h.Query.GetSubscriptionByProviderId(ctx, &pb.GetSubscriptionByProviderIdReq{ProviderSubscriptionId: ev.ObjectID})
@@ -240,4 +242,14 @@ func unixToTimestamp(sec int64) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(time.Unix(sec, 0).UTC())
+}
+
+// eventTime is the provider's creation time of an event — its order, which
+// delivery order is not. An event without one (the provider always sends it)
+// counts as now.
+func eventTime(unix int64) *timestamppb.Timestamp {
+	if unix <= 0 {
+		return timestamppb.Now()
+	}
+	return timestamppb.New(time.Unix(unix, 0))
 }

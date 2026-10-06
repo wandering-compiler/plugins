@@ -312,3 +312,18 @@ func (f *stripeFake) objectEvent(id, typ, objectID string, extra map[string]any)
 	}
 	return eventJSON(id, typ, objectID, obj)
 }
+
+// withCreated rewrites an event's created time.
+func withCreated(t *testing.T, body []byte, created int64) []byte {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["created"] = created
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

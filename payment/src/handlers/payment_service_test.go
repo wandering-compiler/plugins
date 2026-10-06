@@ -96,6 +96,9 @@ func (q *fakeQuery) GetPaymentByProviderId(_ context.Context, _ *pb.GetPaymentBy
 func (q *fakeQuery) GetRefundByProviderId(_ context.Context, _ *pb.GetRefundByProviderIdReq, _ ...grpc.CallOption) (*pb.GetRefundByProviderIdResp, error) {
 	return &pb.GetRefundByProviderIdResp{}, nil
 }
+func (q *fakeQuery) GetRefundByIdempotencyKey(_ context.Context, _ *pb.GetRefundByIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.GetRefundByIdempotencyKeyResp, error) {
+	return nil, status.Error(codes.NotFound, "sql: no rows in result set")
+}
 func (q *fakeQuery) GetSubscriptionByProviderId(_ context.Context, _ *pb.GetSubscriptionByProviderIdReq, _ ...grpc.CallOption) (*pb.GetSubscriptionByProviderIdResp, error) {
 	return &pb.GetSubscriptionByProviderIdResp{}, nil
 }

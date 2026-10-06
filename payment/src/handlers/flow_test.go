@@ -1171,7 +1171,7 @@ func TestFlow_ReplayLookupFailureSurfaces(t *testing.T) {
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: "rk"}); err != nil {
 		t.Fatal(err)
 	}
-	r.store.injectBefore("GetRefundByProviderId", errTransient)
+	r.store.injectBefore("GetRefundByIdempotencyKey", errTransient)
 	_, err = r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: "rk"})
 	wantCode(t, err, codes.Unavailable, "refund lookup failure")
 	if errors.Is(err, errNoLocalRecord) {

@@ -31,6 +31,7 @@ const (
 	PaymentQuery_GetPayment_FullMethodName                  = "/w17.contrib.payment.PaymentQuery/GetPayment"
 	PaymentQuery_GetPaymentByProviderId_FullMethodName      = "/w17.contrib.payment.PaymentQuery/GetPaymentByProviderId"
 	PaymentQuery_GetRefundByProviderId_FullMethodName       = "/w17.contrib.payment.PaymentQuery/GetRefundByProviderId"
+	PaymentQuery_GetRefundByIdempotencyKey_FullMethodName   = "/w17.contrib.payment.PaymentQuery/GetRefundByIdempotencyKey"
 	PaymentQuery_GetCreditBalance_FullMethodName            = "/w17.contrib.payment.PaymentQuery/GetCreditBalance"
 	PaymentQuery_GetCreditTopupByProviderId_FullMethodName  = "/w17.contrib.payment.PaymentQuery/GetCreditTopupByProviderId"
 	PaymentQuery_GetUsageMeter_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetUsageMeter"
@@ -67,6 +68,9 @@ type PaymentQueryClient interface {
 	// the provider replays the same refund object) hits the unique key on
 	// its local INSERT.
 	GetRefundByProviderId(ctx context.Context, in *GetRefundByProviderIdReq, opts ...grpc.CallOption) (*GetRefundByProviderIdResp, error)
+	// GetRefundByIdempotencyKey — the refund a caller's (payment-scoped) key
+	// already produced, looked up before the provider is asked again.
+	GetRefundByIdempotencyKey(ctx context.Context, in *GetRefundByIdempotencyKeyReq, opts ...grpc.CallOption) (*GetRefundByIdempotencyKeyResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
@@ -136,6 +140,16 @@ func (c *paymentQueryClient) GetRefundByProviderId(ctx context.Context, in *GetR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetRefundByProviderIdResp)
 	err := c.cc.Invoke(ctx, PaymentQuery_GetRefundByProviderId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) GetRefundByIdempotencyKey(ctx context.Context, in *GetRefundByIdempotencyKeyReq, opts ...grpc.CallOption) (*GetRefundByIdempotencyKeyResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRefundByIdempotencyKeyResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetRefundByIdempotencyKey_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -230,6 +244,9 @@ type PaymentQueryServer interface {
 	// the provider replays the same refund object) hits the unique key on
 	// its local INSERT.
 	GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error)
+	// GetRefundByIdempotencyKey — the refund a caller's (payment-scoped) key
+	// already produced, looked up before the provider is asked again.
+	GetRefundByIdempotencyKey(context.Context, *GetRefundByIdempotencyKeyReq) (*GetRefundByIdempotencyKeyResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
@@ -275,6 +292,9 @@ func (UnimplementedPaymentQueryServer) GetPaymentByProviderId(context.Context, *
 }
 func (UnimplementedPaymentQueryServer) GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRefundByProviderId not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetRefundByIdempotencyKey(context.Context, *GetRefundByIdempotencyKeyReq) (*GetRefundByIdempotencyKeyResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRefundByIdempotencyKey not implemented")
 }
 func (UnimplementedPaymentQueryServer) GetCreditBalance(context.Context, *GetCreditBalanceReq) (*GetCreditBalanceResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCreditBalance not implemented")
@@ -382,6 +402,24 @@ func _PaymentQuery_GetRefundByProviderId_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentQueryServer).GetRefundByProviderId(ctx, req.(*GetRefundByProviderIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_GetRefundByIdempotencyKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRefundByIdempotencyKeyReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetRefundByIdempotencyKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetRefundByIdempotencyKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetRefundByIdempotencyKey(ctx, req.(*GetRefundByIdempotencyKeyReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -516,6 +554,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRefundByProviderId",
 			Handler:    _PaymentQuery_GetRefundByProviderId_Handler,
+		},
+		{
+			MethodName: "GetRefundByIdempotencyKey",
+			Handler:    _PaymentQuery_GetRefundByIdempotencyKey_Handler,
 		},
 		{
 			MethodName: "GetCreditBalance",

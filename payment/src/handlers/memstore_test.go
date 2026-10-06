@@ -277,6 +277,22 @@ func (s *memStore) GetRefundByProviderId(_ context.Context, in *pb.GetRefundByPr
 	return &pb.GetRefundByProviderIdResp{Refund: out}, s.leave("GetRefundByProviderId", nil)
 }
 
+func (s *memStore) GetRefundByIdempotencyKey(_ context.Context, in *pb.GetRefundByIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.GetRefundByIdempotencyKeyResp, error) {
+	if err := s.enter("GetRefundByIdempotencyKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	var out *pb.Refund
+	for _, r := range s.refunds {
+		if r.GetIdempotencyKey() != "" && r.GetIdempotencyKey() == in.GetIdempotencyKey() {
+			out = clone(r)
+		}
+	}
+	if out == nil {
+		return nil, s.leave("GetRefundByIdempotencyKey", noRow())
+	}
+	return &pb.GetRefundByIdempotencyKeyResp{Refund: out}, s.leave("GetRefundByIdempotencyKey", nil)
+}
+
 func (s *memStore) GetCreditBalance(_ context.Context, in *pb.GetCreditBalanceReq, _ ...grpc.CallOption) (*pb.GetCreditBalanceResp, error) {
 	if err := s.enter("GetCreditBalance"); err != nil {
 		return nil, s.leave("", err)
@@ -420,7 +436,7 @@ func (s *memStore) MarkPaymentSucceeded(_ context.Context, in *pb.MarkPaymentSuc
 	if err := s.enter("MarkPaymentSucceeded"); err != nil {
 		return nil, s.leave("", err)
 	}
-	p, err := s.setPaymentStatus("MarkPaymentSucceeded", in.GetProviderPaymentId(), pb.Payment_SUCCEEDED, pb.Payment_SUCCEEDED)
+	p, err := s.setPaymentStatus("MarkPaymentSucceeded", in.GetProviderPaymentId(), pb.Payment_SUCCEEDED, pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
 	if err != nil {
 		return nil, s.leave("MarkPaymentSucceeded", err)
 	}
@@ -432,7 +448,7 @@ func (s *memStore) MarkPaymentFailed(_ context.Context, in *pb.MarkPaymentFailed
 	if err := s.enter("MarkPaymentFailed"); err != nil {
 		return nil, s.leave("", err)
 	}
-	p, err := s.setPaymentStatus("MarkPaymentFailed", in.GetProviderPaymentId(), pb.Payment_FAILED, pb.Payment_SUCCEEDED, pb.Payment_FAILED)
+	p, err := s.setPaymentStatus("MarkPaymentFailed", in.GetProviderPaymentId(), pb.Payment_FAILED, pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
 	if err != nil {
 		return nil, s.leave("MarkPaymentFailed", err)
 	}
@@ -452,8 +468,11 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 		if r.GetProviderRefundId() == in.GetProviderRefundId() {
 			return nil, s.leave("CreateRefund", uniqueErr("provider_refund_id"))
 		}
+		if in.GetIdempotencyKey() != "" && r.GetIdempotencyKey() == in.GetIdempotencyKey() {
+			return nil, s.leave("CreateRefund", uniqueErr("idempotency_key"))
+		}
 	}
-	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now()}
+	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(), IdempotencyKey: in.GetIdempotencyKey()}
 	s.refunds[r.Id] = r
 	return &pb.CreateRefundResp{Refund: clone(r)}, s.leave("CreateRefund", nil)
 }
@@ -585,8 +604,13 @@ func (s *memStore) MarkSubscriptionStatus(_ context.Context, in *pb.MarkSubscrip
 		if sub.GetStatus() == pb.Subscription_CANCELED {
 			break
 		}
+		// provider_event_at IS NULL OR provider_event_at <= :provider_event_at
+		if at := sub.GetProviderEventAt(); at != nil && at.AsTime().After(in.GetProviderEventAt().AsTime()) {
+			break
+		}
 		sub.Status = pb.Subscription_Status(in.GetStatus())
 		sub.CurrentPeriodEnd = in.GetCurrentPeriodEnd()
+		sub.ProviderEventAt = in.GetProviderEventAt()
 		s.emitted = append(s.emitted, "SubscriptionStatusChanged")
 		return &pb.MarkSubscriptionStatusResp{Subscription: clone(sub)}, s.leave("MarkSubscriptionStatus", nil)
 	}
