@@ -749,8 +749,8 @@ func TestFlow_Refund_ReplayLookupChecksThePayment(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refund recorded for another payment was returned as this one's")
 	}
-	if constraintCode(err) != codeUniqueViolation {
-		t.Errorf("want the original unique violation, got %v", err)
+	if status.Code(err) != codes.AlreadyExists || !strings.Contains(err.Error(), "different refund") {
+		t.Errorf("want AlreadyExists naming the key's other refund, got %v", err)
 	}
 }
 
@@ -840,8 +840,8 @@ func TestFlow_Subscribe_ReplayLookupChecksTheCustomer(t *testing.T) {
 		_, _ = r.store.CreateSubscription(bg, &pb.CreateSubscriptionReq{CustomerId: "cust-other", PlanId: "p", ProviderSubscriptionId: "sub_fake0003", Status: 2})
 	})
 	_, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "pro", IdempotencyKey: "sx"})
-	if constraintCode(err) != codeUniqueViolation {
-		t.Fatalf("want the unique violation surfaced, got %v", err)
+	if status.Code(err) != codes.AlreadyExists || !strings.Contains(err.Error(), "different subscription") {
+		t.Fatalf("want AlreadyExists naming the key's other subscription, got %v", err)
 	}
 }
 

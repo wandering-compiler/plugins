@@ -63,7 +63,7 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 
 func (h *PaymentServiceHandler) currentMeter(ctx context.Context, userID, meter, period string) (*pb.UsageView, error) {
 	got, err := h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: userID, Meter: meter, Period: period})
-	if err != nil {
+	if err != nil && !absent(err) { // nothing metered yet: zero
 		return nil, err
 	}
 	view := &pb.UsageView{UserId: userID, Meter: meter, Period: period}

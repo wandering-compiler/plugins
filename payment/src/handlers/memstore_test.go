@@ -201,6 +201,12 @@ func decimal4(s string) (*big.Rat, error) {
 
 func fmt4(r *big.Rat) string { return r.FloatString(4) }
 
+// noRow is what generated storage answers for a single-row read that finds
+// nothing: the SELECT is QueryRow+Scan and grpcerr.Wrap maps sql.ErrNoRows to
+// NotFound. An empty response here instead hid every handler that treated "no
+// row" as a failure — CreateCustomer for a new user among them.
+func noRow() error { return status.Error(codes.NotFound, "sql: no rows in result set") }
+
 func clone[T proto.Message](m T) T { return proto.Clone(m).(T) }
 
 // ── PaymentQuery ──────────────────────────────────────────────────────
@@ -215,6 +221,9 @@ func (s *memStore) GetCustomerByUserId(_ context.Context, in *pb.GetCustomerByUs
 			out = clone(c)
 		}
 	}
+	if out == nil {
+		return nil, s.leave("GetCustomerByUserId", noRow())
+	}
 	return &pb.GetCustomerByUserIdResp{Customer: out}, s.leave("GetCustomerByUserId", nil)
 }
 
@@ -226,6 +235,9 @@ func (s *memStore) GetPayment(_ context.Context, in *pb.GetPaymentReq, _ ...grpc
 	if p, ok := s.payments[in.GetId()]; ok {
 		out = clone(p)
 	}
+	if out == nil {
+		return nil, s.leave("GetPayment", noRow())
+	}
 	return &pb.GetPaymentResp{Payment: out}, s.leave("GetPayment", nil)
 }
 
@@ -233,7 +245,11 @@ func (s *memStore) GetPaymentByProviderId(_ context.Context, in *pb.GetPaymentBy
 	if err := s.enter("GetPaymentByProviderId"); err != nil {
 		return nil, s.leave("", err)
 	}
-	return &pb.GetPaymentByProviderIdResp{Payment: s.paymentByProvider(in.GetProviderPaymentId())}, s.leave("GetPaymentByProviderId", nil)
+	out := s.paymentByProvider(in.GetProviderPaymentId())
+	if out == nil {
+		return nil, s.leave("GetPaymentByProviderId", noRow())
+	}
+	return &pb.GetPaymentByProviderIdResp{Payment: out}, s.leave("GetPaymentByProviderId", nil)
 }
 
 func (s *memStore) paymentByProvider(pid string) *pb.Payment {
@@ -255,6 +271,9 @@ func (s *memStore) GetRefundByProviderId(_ context.Context, in *pb.GetRefundByPr
 			out = clone(r)
 		}
 	}
+	if out == nil {
+		return nil, s.leave("GetRefundByProviderId", noRow())
+	}
 	return &pb.GetRefundByProviderIdResp{Refund: out}, s.leave("GetRefundByProviderId", nil)
 }
 
@@ -266,6 +285,9 @@ func (s *memStore) GetCreditBalance(_ context.Context, in *pb.GetCreditBalanceRe
 	if b, ok := s.balances[in.GetUserId()]; ok {
 		out = &pb.CreditBalance{UserId: in.GetUserId(), Balance: fmt4(b)}
 	}
+	if out == nil {
+		return nil, s.leave("GetCreditBalance", noRow())
+	}
 	return &pb.GetCreditBalanceResp{Balance: out}, s.leave("GetCreditBalance", nil)
 }
 
@@ -276,6 +298,9 @@ func (s *memStore) GetCreditTopupByProviderId(_ context.Context, in *pb.GetCredi
 	var out *pb.CreditTopup
 	if t, ok := s.topups[in.GetProviderPaymentId()]; ok {
 		out = clone(t)
+	}
+	if out == nil {
+		return nil, s.leave("GetCreditTopupByProviderId", noRow())
 	}
 	return &pb.GetCreditTopupByProviderIdResp{Topup: out}, s.leave("GetCreditTopupByProviderId", nil)
 }
@@ -290,6 +315,9 @@ func (s *memStore) GetUsageMeter(_ context.Context, in *pb.GetUsageMeterReq, _ .
 	if m, ok := s.meters[meterKey(in.GetUserId(), in.GetMeter(), in.GetPeriod())]; ok {
 		out = clone(m)
 	}
+	if out == nil {
+		return nil, s.leave("GetUsageMeter", noRow())
+	}
 	return &pb.GetUsageMeterResp{Meter: out}, s.leave("GetUsageMeter", nil)
 }
 
@@ -300,6 +328,9 @@ func (s *memStore) GetPlanBySlug(_ context.Context, in *pb.GetPlanBySlugReq, _ .
 	var out *pb.Plan
 	if p, ok := s.plans[in.GetSlug()]; ok {
 		out = clone(p)
+	}
+	if out == nil {
+		return nil, s.leave("GetPlanBySlug", noRow())
 	}
 	return &pb.GetPlanBySlugResp{Plan: out}, s.leave("GetPlanBySlug", nil)
 }
@@ -313,6 +344,9 @@ func (s *memStore) GetSubscriptionByProviderId(_ context.Context, in *pb.GetSubs
 		if sub.GetProviderSubscriptionId() == in.GetProviderSubscriptionId() {
 			out = clone(sub)
 		}
+	}
+	if out == nil {
+		return nil, s.leave("GetSubscriptionByProviderId", noRow())
 	}
 	return &pb.GetSubscriptionByProviderIdResp{Subscription: out}, s.leave("GetSubscriptionByProviderId", nil)
 }

@@ -60,7 +60,7 @@ func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewC
 		return nil, invalidArg("user_id is required")
 	}
 	got, err := h.Query.GetCustomerByUserId(ctx, &pb.GetCustomerByUserIdReq{UserId: req.GetUserId()})
-	if err != nil {
+	if err != nil && !absent(err) {
 		return nil, err
 	}
 	if c := got.GetCustomer(); c != nil {
@@ -193,7 +193,7 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 		return nil, "", err
 	}
 	got, gerr := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: pr.ProviderPaymentID})
-	if gerr != nil {
+	if gerr != nil && !absent(gerr) {
 		return nil, "", gerr
 	}
 	if p := got.GetPayment(); p != nil && p.GetIdempotencyKey() == idemKey && p.GetCustomerId() == cust.GetId() {
@@ -258,12 +258,13 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		// answer. Only when it belongs to THIS payment.
 		if constraintCode(err) == codeUniqueViolation {
 			r, gerr := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: res.ProviderRefundID})
-			if gerr != nil {
+			if gerr != nil && !absent(gerr) {
 				return nil, gerr
 			}
 			if r.GetRefund() != nil && r.GetRefund().GetPaymentId() == payment.GetId() {
 				return &pb.RefundPaymentResp{Refund: r.GetRefund()}, nil
 			}
+			return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
 		}
 		return nil, err
 	}
@@ -274,7 +275,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 // the provider customer object) on first charge.
 func (h *PaymentServiceHandler) resolveCustomer(ctx context.Context, userID string) (*pb.Customer, error) {
 	got, err := h.Query.GetCustomerByUserId(ctx, &pb.GetCustomerByUserIdReq{UserId: userID})
-	if err != nil {
+	if err != nil && !absent(err) {
 		return nil, err
 	}
 	if got.GetCustomer() != nil {

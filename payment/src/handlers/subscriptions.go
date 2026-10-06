@@ -89,7 +89,7 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 	}
 
 	// Idempotent: if the plan already exists, return it (no second push).
-	if existing, err := h.Query.GetPlanBySlug(ctx, &pb.GetPlanBySlugReq{Slug: slug}); err != nil {
+	if existing, err := h.Query.GetPlanBySlug(ctx, &pb.GetPlanBySlugReq{Slug: slug}); err != nil && !absent(err) {
 		return nil, err
 	} else if existing.GetPlan() != nil {
 		return sameTerms(existing.GetPlan())
@@ -162,7 +162,7 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 	}
 
 	planResp, err := h.Query.GetPlanBySlug(ctx, &pb.GetPlanBySlugReq{Slug: slug})
-	if err != nil {
+	if err != nil && !absent(err) {
 		return nil, err
 	}
 	plan := planResp.GetPlan()
@@ -200,12 +200,13 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 		// row is the answer — only when it is this customer's.
 		if constraintCode(err) == codeUniqueViolation {
 			got, gerr := h.Query.GetSubscriptionByProviderId(ctx, &pb.GetSubscriptionByProviderIdReq{ProviderSubscriptionId: res.ProviderSubscriptionID})
-			if gerr != nil {
+			if gerr != nil && !absent(gerr) {
 				return nil, gerr
 			}
 			if sub := got.GetSubscription(); sub != nil && sub.GetCustomerId() == cust.GetId() {
 				return &pb.SubscriptionView{Subscription: sub}, nil
 			}
+			return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different subscription")
 		}
 		return nil, err
 	}

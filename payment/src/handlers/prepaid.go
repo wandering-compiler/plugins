@@ -100,7 +100,7 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 
 func (h *PaymentServiceHandler) currentBalance(ctx context.Context, userID string) (*pb.CreditView, error) {
 	got, err := h.Query.GetCreditBalance(ctx, &pb.GetCreditBalanceReq{UserId: userID})
-	if err != nil {
+	if err != nil && !absent(err) { // no balance row yet: zero
 		return nil, err
 	}
 	balance := "0"
@@ -173,7 +173,7 @@ func grantTopupOnPaymentSuccess(ctx context.Context, h *PaymentServiceHandler, e
 		return nil
 	}
 	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: pid})
-	if err != nil {
+	if err != nil && !absent(err) {
 		return err
 	}
 	topup := got.GetTopup()

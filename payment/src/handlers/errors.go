@@ -84,6 +84,12 @@ func providerFailure(cause error) error {
 // single-row RETURNING scan gets sql.ErrNoRows and grpcerr.Wrap maps it
 // to NotFound. Here (always staged) because both the webhook handler and
 // the feature-gated hooks read it.
+// absent reports a single-row read that found nothing. Generated storage
+// answers such a read with NotFound (QueryRow+Scan, sql.ErrNoRows mapped by
+// grpcerr), never with an empty response — every lookup that may
+// legitimately find nothing has to treat it as "no row", not as a failure.
+func absent(err error) bool { return status.Code(err) == codes.NotFound }
+
 func guardRefused(err error) bool {
 	return err != nil && status.Code(err) == codes.NotFound
 }
