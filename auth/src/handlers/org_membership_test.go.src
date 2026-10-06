@@ -44,7 +44,10 @@ func (m *orgMock) GetUserOrgBySlug(ctx context.Context, in *pb.GetUserOrgBySlugR
 	if r := m.bySlug[in.GetUserId()+"|"+in.GetSlug()]; r != nil {
 		return r, nil
 	}
-	return &pb.GetUserOrgBySlugResp{}, nil // empty org_id = not a member
+	// Not a member: what a generated single-row read answers for no row —
+	// NotFound, not an empty response. The fake used to answer empty, which
+	// is why resolveOrgScope's `return err` on NotFound never showed here.
+	return nil, status.Error(codes.NotFound, "no rows")
 }
 
 // GetOwnedOrgBySlug is the ownership fallback resolveOrgScope reaches for when
@@ -55,7 +58,10 @@ func (m *orgMock) GetOwnedOrgBySlug(ctx context.Context, in *pb.GetOwnedOrgBySlu
 	if m.ownedErr != nil {
 		return nil, m.ownedErr
 	}
-	return &pb.GetOwnedOrgBySlugResp{OrgId: m.owned[in.GetUserId()+"|"+in.GetSlug()]}, nil
+	if id := m.owned[in.GetUserId()+"|"+in.GetSlug()]; id != "" {
+		return &pb.GetOwnedOrgBySlugResp{OrgId: id}, nil
+	}
+	return nil, status.Error(codes.NotFound, "no rows")
 }
 
 // ctxWithOrg sets only the active-org selector (resolveOrgScope takes the

@@ -51,6 +51,12 @@ var signupCreateUser = func(ctx context.Context, h *AuthServiceHandler, _ *pb.Si
 	return resp.GetUser().GetId(), nil
 }
 
+// signUpConfirmation, when set, replaces SignUp's account creation with a
+// pending registration that ConfirmSignUp completes. handlers/signup_confirm.go
+// installs it; it lives here because its signature names pb.SignUpReq, which
+// exists only with `sign_up_turnkey` — the feature this file is staged with.
+var signUpConfirmation func(ctx context.Context, h *AuthServiceHandler, req *pb.SignUpReq) (*pb.SignUpResp, error)
+
 // SignUp is the canonical register-and-issue-token flow, made ATOMIC via the
 // distributed transaction:
 //
@@ -72,8 +78,17 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 	// expensive, so hashing first would let an uninvited caller spend the
 	// server's CPU on every attempt — and a refusal that costs the
 	// attacker nothing and the server plenty is a way in of its own.
+	if err := signUpAllowlistGate(h, normalizeEmail(req.GetEmail())); err != nil {
+		return nil, err
+	}
 	if err := signupInviteGate(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken()); err != nil {
 		return nil, err
+	}
+
+	// `sign_up_confirmation`: park the registration and mail a code instead
+	// of creating the account. After the gates, so they decide for both.
+	if signUpConfirmation != nil {
+		return signUpConfirmation(ctx, h, req)
 	}
 
 	hashed, err := h.PasswordHash.Hash(req.GetPassword())
@@ -127,6 +142,15 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 	}
 	userID, err := signupCreateUser(txCtx, h, req, normalizeEmail(req.GetEmail()), hashed)
 	if err != nil {
+		// The unique index on the address. Without this the caller read the
+		// generic AlreadyExists sentence — "Another change reached this first.
+		// Please try again." — and a person who already has an account was sent
+		// round the form again instead of to sign-in. Plain SignUp creates the
+		// account on the spot, so saying the address is taken tells nobody more
+		// than the outcome already does.
+		if isEmailTaken(err) {
+			return nil, emailTaken(txCtx)
+		}
 		return nil, err
 	}
 	if err := signupAssignRoleIDs(txCtx, h, userID, roleIDs); err != nil {

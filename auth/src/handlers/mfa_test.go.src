@@ -44,6 +44,9 @@ type mfaMock struct {
 	recordHook  func()
 	verifyCount int
 
+	// disabled: the account was disabled between the password step and this one.
+	disabled bool
+
 	// challenge state (single challenge)
 	chUserID    string
 	chCodeHash  string
@@ -101,7 +104,11 @@ func (m *mfaMock) GetMfaChallenge(ctx context.Context, in *pb.GetMfaChallengeReq
 	return &pb.GetMfaChallengeResp{Challenge: ch}, nil
 }
 func (m *mfaMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Email: m.userEmail}}, nil
+	u := &pb.User{Id: in.GetUserId(), Email: m.userEmail}
+	if m.disabled {
+		u.DisabledAt = timestamppb.Now()
+	}
+	return &pb.GetUserByIdResp{User: u}, nil
 }
 func (m *mfaMock) GetDeviceByIdentifier(ctx context.Context, in *pb.GetDeviceByIdentifierReq, _ ...grpc.CallOption) (*pb.GetDeviceByIdentifierResp, error) {
 	return &pb.GetDeviceByIdentifierResp{}, nil // not found → create
@@ -706,5 +713,49 @@ func TestEnrollTotp_BothWritesGoThroughOneSeam(t *testing.T) {
 	}
 	if !strings.Contains(fn, "distx.Begin(") {
 		t.Error("EnrollTotp opens no transaction — the seam exists but nothing wraps it")
+	}
+}
+
+// A challenge opened before the account was disabled does not finish into a
+// session: the second step re-runs SignIn's account gates. It used to issue
+// one (found live by examples/auth-proof).
+func TestVerifyMfa_ADisabledAccountGetsNoSession(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	h.TwoFactorTOTP = false
+	ctx := ctxWithCaller("u1")
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false); !challenged {
+		t.Fatal("expected challenge")
+	}
+	m.disabled = true
+	resp, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: m.createdChallenge.GetCode()})
+	if status.Code(err) != codes.Unauthenticated || resp.GetToken() != "" {
+		t.Fatalf("a disabled account finished its sign-in: %v %v", resp, err)
+	}
+}
+
+// With the built-in authenticator off, or no seed key, enrolment is a clear
+// refusal: it used to store an authenticator VerifyMfa would never consult
+// (TOTP off), or answer 500 (no key) — found live by examples/auth-proof.
+func TestEnrollTotp_RefusedWhenTheAuthenticatorIsOff(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	h.TwoFactorTOTP = false
+	for _, call := range []func() error{
+		func() error { _, err := h.EnrollTotp(ctxWithCaller("u1"), &pb.EnrollTotpReq{}); return err },
+		func() error {
+			_, err := h.ConfirmTotp(ctxWithCaller("u1"), &pb.ConfirmTotpReq{Code: "123456"})
+			return err
+		},
+	} {
+		err := call()
+		if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeTotpUnavailable {
+			t.Errorf("want FailedPrecondition/%s, got %v", CodeTotpUnavailable, err)
+		}
+	}
+	h.TwoFactorTOTP = true
+	h.TwoFactorSecretKey = ""
+	if _, err := h.EnrollTotp(ctxWithCaller("u1"), &pb.EnrollTotpReq{}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("no seed key: want FailedPrecondition, got %v", err)
 	}
 }

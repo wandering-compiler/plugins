@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.13
+version: 0.1.0-rc.15
 requires_w17: ">=1.7"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -73,7 +73,15 @@ env:
   - name: email_proof_required
     type: string
     default: "none"
-    description: "How much proof an address needs before AcceptOrgInvite will admit it (org_invite). Three values, ordered weakest to strongest, and they read as a FLOOR on User.email_proof: 'none' asks nothing and is today's behaviour; 'derived' accepts an address a BOUND invitation named (the invitation said this address and the secret link reached whoever registered — no round trip asked of anybody), and also accepts a self-confirmed one; 'full' accepts only an address whose owner completed the email_verification flow themselves. ⚠️ Defaults to 'none' on purpose, which is NOT this plugin's usual 'the unsafe state is the one you opt into': every account that exists today is UNPROVEN, so a stricter default would refuse invitations those people were legitimately sent — a default that reads as safe and is really a breaking change is worse than an honest knob, which is the same reasoning the boolean this replaces carried. 'derived' is the setting most deployments want once they are past onboarding: it closes the address-guessing hole without asking anyone for a round trip, because an OPEN invitation cannot derive anything (the registrant picks the address) and is therefore refused by it. Replaces `invite_requires_verified_email`, a boolean that could not express 'derived' at all."
+    description: "How much proof an address needs before AcceptOrgInvite will admit it (org_invite). Three values, ordered weakest to strongest, and they read as a FLOOR on User.email_proof: 'none' asks nothing and is today's behaviour; 'derived' accepts an address a BOUND invitation named (the invitation said this address and the secret link reached whoever registered — no round trip asked of anybody), and also accepts a self-confirmed one; 'full' accepts only an address whose owner proved it by a round trip — the email_verification link, a sign_up_confirmation code, or an OAuth provider asserting email_verified=true (the provider made that round trip; the same assertion OAuth already relies on to link an existing account). ⚠️ Defaults to 'none' on purpose, which is NOT this plugin's usual 'the unsafe state is the one you opt into': every account that exists today is UNPROVEN, so a stricter default would refuse invitations those people were legitimately sent — a default that reads as safe and is really a breaking change is worse than an honest knob, which is the same reasoning the boolean this replaces carried. 'derived' is the setting most deployments want once they are past onboarding: it closes the address-guessing hole without asking anyone for a round trip, because an OPEN invitation cannot derive anything (the registrant picks the address) and is therefore refused by it. Replaces `invite_requires_verified_email`, a boolean that could not express 'derived' at all."
+  - name: sign_up_allowlist
+    type: string
+    default: ""
+    description: "Who may register at all, for a service that is not open yet: a comma- or space-separated list of addresses (ceo@example.com) and whole domains (@example.com). Empty = no restriction. Checked by SignUp, by ConfirmSignUp (again, on the address being confirmed) and by the OAuth sign-up, before anything is written; an address outside it is refused with the same answer whether or not it has an account or an invitation, so the list cannot be probed. Accounts an administrator creates are not affected. An entry that is neither an address nor @domain fails the boot."
+  - name: sign_up_confirmation_ttl_seconds
+    type: int
+    default: "900"
+    description: "How long a sign_up_confirmation code stays valid, in seconds. Default 900 = 15 minutes. <= 0 falls back to 900."
   - name: org_invite_ttl_hours
     type: int
     default: "168"
@@ -108,6 +116,14 @@ features:
     default: true
     go_files:
       - handlers/signup.go
+  - name: sign_up_confirmation
+    requires:
+      # It changes what SignUp does, so there must be a SignUp to change.
+      - sign_up_turnkey
+    description: "SignUp proves the address before it creates the account. SignUp parks the registration in PendingSignUp (hashed password, hashed code, expiry) and emits SignUpConfirmationRequested with a code for a hand-written delivery channel, which must mail it to that address; it answers confirmation_required + pending_id and NO token. ConfirmSignUp(pending_id, code) creates the User, marks the address SELF_CONFIRMED (when email_verification is on), deletes the address's other pending registrations and issues the session. Why a pending table and not an unverified User: a User row holds its address (the email is unique), so a registration abandoned before the code — by its owner, or on purpose by someone who knows the address — would block that address for good. Pending rows hold nothing; any number may exist for one address, none can sign in, each dies at sign_up_confirmation_ttl_seconds. Guessing is bounded by the code, not by a cap on the address: eight base32 characters (32^8 ≈ 10^12) and five attempts per pending row, so a stranger needs about 10^11 registrations — each one a mail to the address — for an even chance. There is deliberately NO per-address limit on how many codes are sent: anybody can exhaust such a limit, which would block the address again, renewably; floods are bounded per caller by the gateway's limiter on unauthenticated methods. The invite and allowlist gates run when the code is requested; the allowlist is checked again at confirmation. SignUp does not say whether the address already has an account: a taken address is answered exactly like a new one (same work, a code mailed to it), and only ConfirmSignUp, with that code, answers AlreadyExists — so only the address's owner learns it, and a delivery channel should word the mail so it also makes sense to someone who already has an account. Off by default."
+    default: false
+    go_files:
+      - handlers/signup_confirm.go
   - name: sign_in_turnkey
     description: "AuthService.SignIn — authored Go handler chaining GetUserByEmail + passwordhash.VerifyAndRotate + IssueToken. Emits opaque Unauthenticated on every failure (anti-enumeration). Disable for custom sign-in flows (MFA, rate limit, lockout, federated identity)."
     default: true
@@ -278,6 +294,10 @@ features:
 go_files_combined:
   - features: [service_account, tenant_scope]
     files: [handlers/service_account_tenant.go]
+  # The pending registration carries the tenant SignUp resolved; the fields
+  # that hold it exist only when both features do.
+  - features: [sign_up_confirmation, tenant_scope]
+    files: [handlers/signup_confirm_tenant.go]
 
 # Preset surfaces this plugin injects into a consuming project's
 # gateway at activation time. On by default when the gating feature
@@ -298,6 +318,11 @@ presets:
       - { name: X-Device-Trust, feature: devices } # C2 — server-issued device-trust token replay
       - { name: User-Agent,      feature: devices }
       - { name: X-Forwarded-For, feature: devices }
+      # tenant_scope resolves a registration's tenant from the request's Host
+      # (Tenant.domain). restgw forwards it as x-forwarded-host — the gRPC hop
+      # has an :authority of its own. Without this the Host never left the
+      # gateway and every tenant_scope sign-up was refused (examples/auth-proof).
+      - { name: Host, feature: tenant_scope }
       # The active-org selector — a slug the client sends to scope a request
       # into one of its orgs. NOT in the reserved x-w17-* namespace (that's
       # for VERIFIED auth/scope metadata only — a client header there could
@@ -319,6 +344,7 @@ presets:
         endpoints:
           - { ref: AuthService.SignIn, method: POST, path: /login,    exclude_auth: true, feature: sign_in_turnkey }
           - { ref: AuthService.SignUp, method: POST, path: /register, exclude_auth: true, feature: sign_up_turnkey }
+          - { ref: AuthService.ConfirmSignUp, method: POST, path: /register/confirm, exclude_auth: true, feature: sign_up_confirmation }
           - { ref: AuthService.WhoAmI, method: GET,  path: /whoami,                        feature: authenticate_turnkey }
           # Logout revokes the caller's CURRENT session token (bearer-
           # authenticated). Base-tier — no `devices` feature needed;
@@ -768,10 +794,14 @@ sandboxes:
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
   - "A token cannot expire in the past. Choose a later date."
+  - "An account with this address already exists. Sign in instead."
   - "Authentication is temporarily unavailable. Please try again shortly."
+  - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Confirm your email address before accepting this invitation."
   - "That expiry date is not a valid date."
+  - "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
   - "There is no organization role named {role}."
+  - "This address does not belong to any organization here. Check the address you registered on."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
   - "This request names two different organizations. Name one."

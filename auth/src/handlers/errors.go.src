@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -123,6 +124,30 @@ const (
 	// W17-Org it authenticates); a gRPC caller can send one org in the field
 	// and another in its metadata, and acting in either would be a guess.
 	CodeOrgMismatch = "ORG_MISMATCH"
+
+	// CodeEmailTaken: registration of an address that already has an account.
+	// Said where the caller already proved the address or could learn it
+	// anyway: plain SignUp creates the account on the spot, so the outcome IS
+	// the answer; under sign_up_confirmation only ConfirmSignUp says it, to
+	// whoever holds the code mailed to that address.
+	CodeEmailTaken = "EMAIL_TAKEN"
+
+	// CodeRoleAboveCaller: a role the caller tried to hand out (an invitation,
+	// a grant) carries permissions the caller does not hold. Reached only by a
+	// caller already allowed to grant at all, so it names a rule they can act
+	// on — and without it they read the generic "You do not have access to
+	// this." about an endpoint they DO have access to.
+	CodeRoleAboveCaller = "ROLE_ABOVE_CALLER"
+
+	// CodeTenantUnknown: under tenant_scope, a registration whose host (or
+	// {tenant_slug}) names no tenant. Not a credential refusal and not the
+	// server's fault — the request came in on an address this deployment
+	// does not serve.
+	CodeTenantUnknown = "TENANT_UNKNOWN"
+
+	// CodeTotpUnavailable: this deployment offers no authenticator app
+	// (two_factor_totp=false, or no seed key configured).
+	CodeTotpUnavailable = "TOTP_UNAVAILABLE"
 )
 
 // The sentences a person reads, and the ONE place each is written.
@@ -153,7 +178,58 @@ const (
 	MsgOrgNotMember = "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
 
 	MsgOrgMismatch = "This request names two different organizations. Name one."
+
+	// Not "try again": the generic AlreadyExists sentence ("Another change
+	// reached this first. Please try again.") sent a person who already has an
+	// account round the registration form instead of to sign-in.
+	MsgEmailTaken = "An account with this address already exists. Sign in instead."
+
+	MsgRoleAboveCaller = "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
+
+	MsgTenantUnknown = "This address does not belong to any organization here. Check the address you registered on."
+
+	MsgTotpUnavailable = "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
 )
+
+// isEmailTaken reports whether creating an account failed on the address's
+// unique index.
+//
+// Storage reports a unique violation as InvalidArgument carrying an
+// ErrorDetail{code: UNIQUE_VIOLATION} (grpcerr C-3 folded every
+// validation-class violation into InvalidArgument), never as AlreadyExists.
+// A check for AlreadyExists alone therefore never fired against a real store:
+// the handler tests passed because their fake store answered AlreadyExists,
+// and live the caller read "The request could not be accepted as sent." (found
+// by examples/auth-proof). AlreadyExists is still accepted, for a store that
+// answers that way.
+//
+// The field is the address — or, under tenant_scope, the composite that
+// includes it; a unique violation on some other column is not this refusal.
+func isEmailTaken(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case codes.AlreadyExists:
+		return true
+	case codes.InvalidArgument:
+		for _, d := range st.Details() {
+			if ed, ok := d.(*w17pb.ErrorDetail); ok && ed.GetCode() == "UNIQUE_VIOLATION" &&
+				(ed.GetField() == "" || strings.Contains(ed.GetField(), "email")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// emailTaken is the refusal for registering an address that has an account.
+func emailTaken(ctx context.Context) error {
+	return refusal(ctx, codes.AlreadyExists,
+		"an account with this address already exists — sign in instead",
+		CodeEmailTaken, "email", MsgEmailTaken, nil)
+}
 
 // withUserDetail attaches the pair a REST gateway renders for a person.
 //

@@ -1686,6 +1686,12 @@ service AuthQuery {
           // including verified accounts (reported by a consumer). Third instance of the
           // shape GetUserByEmail's comment already names.
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
+          // disabled_at (`user_admin`): every path that issues a session for
+          // an EXISTING account re-checks it through this read
+          // (refuseUnsignableAccount). Left out, the second sign-in step,
+          // the OAuth callback and the CLI exchange issued sessions to an
+          // account disabled after its password step (examples/auth-proof).
+          "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           "       u.created_at AS user.created_at "
           "FROM @module.User u WHERE u.id = :user_id"
       }

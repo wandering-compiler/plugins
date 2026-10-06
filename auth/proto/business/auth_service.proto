@@ -210,6 +210,24 @@ message SignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_turnkey";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string token   = 2;
+  // With `sign_up_confirmation` SignUp creates no account yet: user_id and
+  // token stay empty, confirmation_required is true, and pending_id is what
+  // ConfirmSignUp takes together with the code mailed to the address.
+  bool   confirmation_required = 3 [(w17.contrib.plugin_feature_field) = "sign_up_confirmation"];
+  string pending_id            = 4 [(w17.contrib.plugin_feature_field) = "sign_up_confirmation"];
+}
+
+// ConfirmSignUp — the second step of a `sign_up_confirmation` registration:
+// the code from the mail turns the pending registration into the account.
+message ConfirmSignUpReq {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string pending_id = 1 [(w17.field) = { type: UUID }];
+  string code       = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+}
+message ConfirmSignUpResp {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string token   = 2;
 }
 
 // WhoAmIReq / WhoAmIResp — current-principal probe. The FE calls
@@ -653,7 +671,14 @@ message AssignableRole {
 
 message InviteToOrgReq {
   option (w17.contrib.plugin_feature) = "org_invite";
-  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // EMPTY is a real request: an OPEN invitation, where whoever holds the link
+  // registers with an address of their choosing — the link is the whole
+  // authorisation, and acceptance spends it once. Non-empty BINDS the
+  // invitation to that address. `blank: true` is what lets the empty value past
+  // the generated validation — without it the open path the handler supports
+  // was refused before the handler ran (REQUIRED_VIOLATION), and nothing caught
+  // it because the handler tests call the handler directly.
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320, blank: true }];
   // A Role.name from the RBAC catalogue, not free text. Validated to
   // exist when the invitation is made, so a typo is the inviter's error
   // at the moment they make it rather than a failure the invitee runs
@@ -799,6 +824,12 @@ service AuthService {
   }
   rpc SignUp(SignUpReq) returns (SignUpResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_turnkey";
+  }
+  // ConfirmSignUp — create the account a `sign_up_confirmation` SignUp parked,
+  // once the mailed code comes back. Unauthenticated, like SignUp: there is no
+  // account yet to authenticate as.
+  rpc ConfirmSignUp(ConfirmSignUpReq) returns (ConfirmSignUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
   }
   // WhoAmI — verify the current bearer + return the principal.
   // Authenticated like any non-excluded endpoint; the body is

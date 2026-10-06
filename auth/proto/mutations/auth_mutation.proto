@@ -305,6 +305,74 @@ message RecordMfaAttemptResp {
   int64 attempts = 1;
 }
 
+// ── sign_up_confirmation request/response messages ───────────
+//
+// CreatePendingSignUp stores the HASHES (password, code) and the expiry; the
+// plaintext code is event-only (no w17.field) so it rides the
+// SignUpConfirmationRequested emit without becoming a column.
+message CreatePendingSignUpReq {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string email         = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  string password_hash = 2 [(w17.field) = { type: PASSWORD }];
+  string code_hash     = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+  // event-only (no w17.field → not persisted, not validated):
+  string code = 5;
+  string tenant_id = 6 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.contrib.plugin_feature_field) = "tenant_scope"
+  ];
+}
+message CreatePendingSignUpResp {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  PendingSignUp pending = 1;
+}
+
+// RecordPendingSignUpAttempt claims one guess and hands back what checking it
+// needs, in ONE statement: attempts is the NEW count (0 = no live row — wrong
+// id, expired, or already confirmed), code_hash the hash to check against.
+message RecordPendingSignUpAttemptReq {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string pending_id = 1 [(w17.field) = { type: UUID }];
+}
+message RecordPendingSignUpAttemptResp {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  int64  attempts  = 1;
+  string code_hash = 2;
+  string email     = 3;
+}
+
+// ClaimPendingSignUp spends the registration: DELETE … RETURNING is the
+// single-use guard, so two confirmations racing on one row get one account.
+message ClaimPendingSignUpReq {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string pending_id = 1 [(w17.field) = { type: UUID }];
+}
+message ClaimPendingSignUpResp {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string email         = 1;
+  string password_hash = 2;
+  string tenant_id     = 3 [(w17.contrib.plugin_feature_field) = "tenant_scope"];
+}
+
+// DeletePendingSignUpsForEmail clears the other registrations of an address
+// once one of them became the account, and the expired ones before a new one
+// is parked.
+message DeletePendingSignUpsForEmailReq {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message DeletePendingSignUpsForEmailResp {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+}
+message PurgeExpiredPendingSignUpsReq {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message PurgeExpiredPendingSignUpsResp {
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+}
+
 // ── password_reset request/response messages (E1) ───────────
 //
 // CreatePasswordResetToken stores ONLY the token hash + expiry; the
@@ -485,6 +553,19 @@ message DeleteDeviceReq {
 message DeleteDeviceResp {
   option (w17.contrib.plugin_feature) = "devices";
   string device_id = 1;
+}
+
+// DeleteUndevicedSessionsReq — the user's SESSIONS that no device holds,
+// except keep_token_id (the caller's own, for "log out the others"; the nil
+// UUID keeps none).
+message DeleteUndevicedSessionsReq {
+  option (w17.contrib.plugin_feature) = "devices";
+  string user_id       = 1 [(w17.field) = { type: UUID }];
+  string keep_token_id = 2 [(w17.field) = { type: UUID }];
+}
+message DeleteUndevicedSessionsResp {
+  option (w17.contrib.plugin_feature) = "devices";
+  string user_id = 1;
 }
 
 message DeleteAllUserTokensReq {
@@ -921,9 +1002,14 @@ message ConsumeOrgInviteByTokenReq {
   // sha256 hex of the token the link carried. The plaintext never reaches the
   // database, the same way it never does for a password reset.
   string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // event-only (no w17.field → not persisted, not validated): the account
+  // accepting, which OrgInviteAccepted names and the row does not hold.
+  string user_id = 2;
 }
 message ConsumeOrgInviteByTokenResp {
   option (w17.contrib.plugin_feature) = "org_invite";
+  // The invitation spent — OrgInviteAccepted names it.
+  string invite_id = 6;
   // Populated on a successful claim. Nothing matched — expired, already spent, or
   // never there — arrives as NOT_FOUND, because the statement carries RETURNING and
   // the generated write reports zero rows as an error. One answer for all three
@@ -1363,6 +1449,86 @@ service AuthMutation {
     };
   }
 
+  // ── sign_up_confirmation ─────────────────────────────────────
+  //
+  // CreatePendingSignUp parks a registration and emits the code for delivery.
+  rpc CreatePendingSignUp(CreatePendingSignUpReq) returns (CreatePendingSignUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.PendingSignUp SET "
+          "email = :email, "
+          "password_hash = :password_hash, "
+          "code_hash = :code_hash, "
+          "expires_at = :expires_at, "
+          "?feature(tenant_scope) tenant_id = :tenant_id "
+          "RETURNING id AS pending.id, "
+          "          email AS pending.email, "
+          "          expires_at AS pending.expires_at, "
+          "          created_at AS pending.created_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "SignUpConfirmationRequested"
+      payload: {
+        fields: [
+          { key: "pending_id", value: "$response.pending.id" },
+          { key: "email",      value: "$request.email" },
+          { key: "code",       value: "$request.code" },
+          { key: "expires_at", value: "$request.expires_at" }
+        ]
+      }
+    };
+  }
+
+  // RecordPendingSignUpAttempt — claim one guess; see its request message.
+  // `expires_at > NOW()` in the WHERE, so an expired row answers like a
+  // missing one and nothing has to sweep the table first.
+  rpc RecordPendingSignUpAttempt(RecordPendingSignUpAttemptReq) returns (RecordPendingSignUpAttemptResp) {
+    option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.PendingSignUp SET "
+          "attempts = attempts + 1 "
+          "WHERE id = :pending_id AND expires_at > NOW() "
+          "RETURNING attempts AS attempts, code_hash AS code_hash, email AS email"
+      }
+    };
+  }
+
+  // ClaimPendingSignUp — spend the registration (single-use DELETE).
+  rpc ClaimPendingSignUp(ClaimPendingSignUpReq) returns (ClaimPendingSignUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "DELETE FROM @module.PendingSignUp "
+          "WHERE id = :pending_id AND expires_at > NOW() "
+          "RETURNING email AS email, password_hash AS password_hash, "
+          "?feature(tenant_scope) tenant_id AS tenant_id"
+      }
+    };
+  }
+
+  rpc DeletePendingSignUpsForEmail(DeletePendingSignUpsForEmailReq) returns (DeletePendingSignUpsForEmailResp) {
+    option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
+    option (w17.db.method) = {
+      ops: { name: "main" dql: "DELETE FROM @module.PendingSignUp WHERE email = :email" }
+    };
+  }
+
+  rpc PurgeExpiredPendingSignUps(PurgeExpiredPendingSignUpsReq) returns (PurgeExpiredPendingSignUpsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
+    option (w17.db.method) = {
+      ops: { name: "main" dql: "DELETE FROM @module.PendingSignUp WHERE email = :email AND expires_at <= NOW()" }
+    };
+  }
+
   // ConsumeMfaChallenge — mark a challenge used (single-use guard:
   // consumed_at IS NULL). RETURNING user_id is the proof of an actual
   // consume (empty → already used / not found). Emits MfaVerified.
@@ -1510,6 +1676,26 @@ service AuthMutation {
   // (the "log out this device" primitive). Ownership-guarded by
   // user_id so a caller can't drop another user's sessions.
   // Idempotent.
+  // DeleteUndevicedSessions — DELETE the user's session tokens that carry no
+  // device. Not every session is device-bound: SignUp, ConfirmSignUp, the
+  // OAuth callback and CliToken issue a session with no device, so "log out
+  // everywhere" swept device by device and left those standing (found live by
+  // examples/auth-proof). API tokens are spared — they are not sessions, and
+  // are removed only through RevokeApiToken.
+  rpc DeleteUndevicedSessions(DeleteUndevicedSessionsReq) returns (DeleteUndevicedSessionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "devices";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "DELETE FROM @module.UserToken "
+          "WHERE user_id = :user_id AND device_id IS NULL AND id <> :keep_token_id "
+          "AND ?feature(api_token) token_type = 1 "
+          "RETURNING user_id"
+      }
+    };
+  }
+
   rpc DeleteDeviceTokens(DeleteDeviceTokensReq) returns (DeleteDeviceTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
@@ -2528,7 +2714,25 @@ service AuthMutation {
           "UPDATE @module.OrgInvite SET "
           "accepted_at = NOW() "
           "WHERE token_hash = :token_hash AND accepted_at IS NULL AND expires_at > NOW() "
-          "RETURNING org_id, role, email, metadata, role_snapshot"
+          "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot"
+      }
+    };
+    // The acceptance's announcement. OrgInviteAccepted was declared and
+    // nothing emitted it: acceptance moved to this token-keyed claim and the
+    // emit stayed behind with nobody (MarkOrgInviteAccepted, never called),
+    // so a subscriber waiting for "joined" never fired (found live by
+    // examples/auth-proof). Emitted after commit, so a claim the
+    // transaction rolls back — a role that moved since the invitation —
+    // announces nothing.
+    option (w17.event_emit) = {
+      event: "OrgInviteAccepted"
+      payload: {
+        fields: [
+          { key: "invite_id", value: "$response.invite_id" },
+          { key: "org_id",    value: "$response.org_id" },
+          { key: "user_id",   value: "$request.user_id" },
+          { key: "role",      value: "$response.role" }
+        ]
       }
     };
   }

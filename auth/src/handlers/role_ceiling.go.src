@@ -134,7 +134,8 @@ func (h *AuthServiceHandler) checkMayGrantRole(ctx context.Context, roleID strin
 		return "", err
 	}
 	if !grantable[roleID] {
-		return "", status.Error(codes.PermissionDenied, errRoleAboveCaller.Error())
+		return "", refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
+			CodeRoleAboveCaller, "role", MsgRoleAboveCaller, nil)
 	}
 	catalogue, err := h.roleCatalogue(ctx)
 	if err != nil {

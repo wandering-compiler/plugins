@@ -85,6 +85,28 @@ func (h *AuthServiceHandler) totpCipher() (*secretbox.Cipher, error) {
 	return secretbox.NewFromBase64(h.TwoFactorSecretKey)
 }
 
+// enrolmentCipher is the cipher an authenticator is enrolled under, or the
+// refusal when this deployment does not offer one.
+//
+// two_factor_totp=false means the built-in authenticator is OFF: VerifyMfa
+// ignores a stored secret and mails a code instead. Enrolling anyway stored
+// an authenticator nothing would ever ask for, so a person believed it
+// protected them; without a key, enrolling answered 500 "Something went
+// wrong on our side" (found live by examples/auth-proof). Both are a
+// configuration the caller can be told about.
+func (h *AuthServiceHandler) enrolmentCipher(ctx context.Context) (*secretbox.Cipher, error) {
+	if !h.TwoFactorTOTP {
+		return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: the built-in authenticator is off (two_factor_totp=false)",
+			CodeTotpUnavailable, "", MsgTotpUnavailable, nil)
+	}
+	cipher, err := h.totpCipher()
+	if err != nil {
+		return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: TOTP secret encryption not configured: "+err.Error(),
+			CodeTotpUnavailable, "", MsgTotpUnavailable, nil)
+	}
+	return cipher, nil
+}
+
 func (h *AuthServiceHandler) mfaTTL() time.Duration {
 	if h.MfaCodeTTLSeconds > 0 {
 		return time.Duration(h.MfaCodeTTLSeconds) * time.Second
@@ -303,9 +325,9 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	cipher, err := h.totpCipher()
+	cipher, err := h.enrolmentCipher(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("two_factor: TOTP secret encryption not configured: %w", err)
+		return nil, err
 	}
 	secret, err := totp.GenerateSecret()
 	if err != nil {
@@ -362,13 +384,13 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	cipher, err := h.enrolmentCipher(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := h.Query.GetTotpSecret(ctx, &pb.GetTotpSecretReq{UserId: userID})
 	if err != nil || resp.GetSecret() == nil {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
-	}
-	cipher, err := h.totpCipher()
-	if err != nil {
-		return nil, fmt.Errorf("two_factor: TOTP secret encryption not configured: %w", err)
 	}
 	plain, err := cipher.Open(resp.GetSecret().GetSecret())
 	if err != nil {
@@ -408,7 +430,10 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	if enrolled {
 		cipher, err := h.totpCipher()
 		if err != nil {
-			return nil, fmt.Errorf("two_factor: TOTP secret encryption not configured: %w", err)
+			// Not a 500: the deployment lost its seed key, and the caller can be
+			// told an authenticator cannot be checked here.
+			return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: TOTP secret encryption not configured: "+err.Error(),
+				CodeTotpUnavailable, "", MsgTotpUnavailable, nil)
 		}
 		plain, err := cipher.Open(encSecret)
 		if err != nil {
@@ -525,6 +550,9 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
 	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+		return nil, err
 	}
 	token, trustToken, err := issueSession(ctx, h, userID, deviceID)
 	if err != nil {

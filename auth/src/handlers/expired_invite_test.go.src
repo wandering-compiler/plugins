@@ -32,6 +32,10 @@ func (m *inviteMock) ListRoleGrants(_ context.Context, _ *pb.ListRoleGrantsReq, 
 
 func (m *inviteMock) ClearExpiredOrgInvite(ctx context.Context, in *pb.ClearExpiredOrgInviteReq, _ ...grpc.CallOption) (*pb.ClearExpiredOrgInviteResp, error) {
 	m.clearCalls++
+	// The request field is a required EMAIL: a real store refuses "".
+	if in.GetEmail() == "" {
+		return nil, status.Error(codes.InvalidArgument, "email: is required")
+	}
 	if m.clearErr != nil {
 		return nil, m.clearErr
 	}
@@ -106,5 +110,20 @@ func TestInviteToOrg_ClearFailureStopsTheWrite(t *testing.T) {
 	}
 	if m.createCalls != 0 {
 		t.Fatal("the invitation was written after the clear failed")
+	}
+}
+
+// An OPEN invitation (no address) is written without the lapsed-invite clear:
+// a NULL address never collides in the unique index, and the clear's request
+// requires an address, so calling it refused every open invitation (found
+// live by examples/auth-proof after the request field itself was fixed).
+func TestInviteToOrg_AnOpenInvitationSkipsTheClear(t *testing.T) {
+	m := &inviteMock{}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if _, err := h.InviteToOrg(inviterCtx("u1", "org-1"), &pb.InviteToOrgReq{Email: "", Role: "org-worker"}); err != nil {
+		t.Fatalf("an open invitation was refused: %v", err)
+	}
+	if m.clearCalls != 0 || m.createCalls != 1 {
+		t.Fatalf("clear ran %d, create ran %d — want 0 and 1", m.clearCalls, m.createCalls)
 	}
 }

@@ -28,7 +28,11 @@ var attached = map[*Backends][]struct {
 	c  *grpc.ClientConn
 }{}
 
+var attachedMu sync.Mutex
+
 func connOf(b *Backends, fp string) *grpc.ClientConn {
+	attachedMu.Lock()
+	defer attachedMu.Unlock()
 	for _, a := range attached[b] {
 		if a.fp == fp {
 			return a.c
@@ -43,10 +47,12 @@ func connOf(b *Backends, fp string) *grpc.ClientConn {
 func attach(t *testing.T, b *Backends, fp string, slots uint32, ready bool) uint64 {
 	t.Helper()
 	c := conn(t)
+	attachedMu.Lock()
 	attached[b] = append(attached[b], struct {
 		fp string
 		c  *grpc.ClientConn
 	}{fp, c})
+	attachedMu.Unlock()
 	b.Add(fp, c)
 	gen := b.NewAttachment()
 	b.SetProfile(fp, gen, slots, ready)
@@ -370,5 +376,40 @@ func TestAttachment_CapacityNeedsApprovalAndReadinessBoth(t *testing.T) {
 	att.setAdmitted(false)
 	if got := b.Capacity(); got != 0 {
 		t.Errorf("a worker whose approval was withdrawn contributes %d, want 0", got)
+	}
+}
+
+// Capacity changes racing from different goroutines must leave the pool at the
+// CURRENT total: the sink's last value equals Capacity() once they settle.
+func TestBackends_ConcurrentChangesPublishTheCurrentTotal(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		b := NewBackends()
+		var mu sync.Mutex
+		last := -1
+		b.OnCapacityChange(func(n int) {
+			time.Sleep(time.Microsecond) // widen the window between compute and deliver
+			mu.Lock()
+			last = n
+			mu.Unlock()
+		})
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				fp := string(rune('a' + i))
+				gen := attach(t, b, fp, 1, true)
+				if i%2 == 0 {
+					b.ClearProfile(fp, gen)
+				}
+			}(i)
+		}
+		wg.Wait()
+		mu.Lock()
+		got := last
+		mu.Unlock()
+		if want := b.Capacity(); got != want {
+			t.Fatalf("round %d: the pool was last told %d, the fleet carries %d", round, got, want)
+		}
 	}
 }

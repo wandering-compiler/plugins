@@ -33,6 +33,8 @@ const (
 	FeatureServiceAccount = false
 	// FeatureSignInTurnkey — "sign_in_turnkey".
 	FeatureSignInTurnkey = true
+	// FeatureSignUpConfirmation — "sign_up_confirmation".
+	FeatureSignUpConfirmation = false
 	// FeatureSignUpTurnkey — "sign_up_turnkey".
 	FeatureSignUpTurnkey = true
 	// FeatureTenantScope — "tenant_scope".
@@ -74,6 +76,8 @@ func FeatureActive(name string) bool {
 		return FeatureServiceAccount
 	case "sign_in_turnkey":
 		return FeatureSignInTurnkey
+	case "sign_up_confirmation":
+		return FeatureSignUpConfirmation
 	case "sign_up_turnkey":
 		return FeatureSignUpTurnkey
 	case "tenant_scope":

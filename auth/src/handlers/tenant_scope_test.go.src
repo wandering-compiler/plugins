@@ -7,6 +7,9 @@ import (
 
 	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type tenantScopeMock struct {
@@ -74,5 +77,40 @@ func TestResolveTenantScope_LookupErrorPropagates(t *testing.T) {
 	err := resolveTenantScope(context.Background(), h, "u1", nil, map[string]string{}, map[string]string{})
 	if !errors.Is(err, boom) {
 		t.Fatalf("want the raw lookup error, got %v", err)
+	}
+}
+
+func (m *tenantScopeMock) GetTenantByDomain(_ context.Context, in *pb.GetTenantByDomainReq, _ ...grpc.CallOption) (*pb.GetTenantByDomainResp, error) {
+	if id, ok := m.tenantByUser["domain:"+in.GetDomain()]; ok {
+		return &pb.GetTenantByDomainResp{TenantId: id}, nil
+	}
+	// What a generated single-row read answers for no row.
+	return nil, status.Error(codes.NotFound, "no rows")
+}
+
+// The REST gateway forwards the request's Host as x-forwarded-host; a port on
+// it does not change the tenant, and an address that names no tenant is a
+// clear refusal — it reached a REST caller as 500 "Something went wrong on our
+// side" (found live by examples/auth-proof).
+func TestResolveSignupTenant_ByForwardedHost(t *testing.T) {
+	h := &AuthServiceHandler{Query: &tenantScopeMock{tenantByUser: map[string]string{"domain:alpha.example": "t-alpha"}}}
+	at := func(md ...string) context.Context {
+		return metadata.NewIncomingContext(context.Background(), metadata.Pairs(md...))
+	}
+	for _, md := range [][]string{
+		{"x-forwarded-host", "alpha.example"},
+		{"x-forwarded-host", "alpha.example:8443"},
+		{"host", "alpha.example"},
+	} {
+		got, err := resolveSignupTenant(at(md...), h, &pb.SignUpReq{})
+		if err != nil || got != "t-alpha" {
+			t.Errorf("%v: tenant = %q, %v; want t-alpha", md, got, err)
+		}
+	}
+	for _, md := range [][]string{{"x-forwarded-host", "nowhere.example"}, {}} {
+		_, err := resolveSignupTenant(at(md...), h, &pb.SignUpReq{})
+		if status.Code(err) != codes.InvalidArgument || detailOf(t, err).GetCode() != CodeTenantUnknown {
+			t.Errorf("%v: want InvalidArgument/%s, got %v", md, CodeTenantUnknown, err)
+		}
 	}
 }

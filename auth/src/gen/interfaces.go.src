@@ -89,6 +89,9 @@ type EnvConfig struct {
 	EmailProofRequired string // email_proof_required: none | derived | full (default "none")
 	OrgInviteTtlHours  int    // org_invite_ttl_hours (default 168)
 
+	SignUpAllowlist              string // sign_up_allowlist (default "": no restriction)
+	SignUpConfirmationTtlSeconds int    // sign_up_confirmation_ttl_seconds (default 900)
+
 	APITokenDefaultTtlHours int // api_token_default_ttl_hours (default 2160; 0 = never)
 }
 

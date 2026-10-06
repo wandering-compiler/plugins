@@ -31,6 +31,12 @@ type deviceMock struct {
 	deletedDevs   []*pb.DeleteDeviceReq
 	allTokensFor  string
 	allDevsFor    string
+	undeviced     []*pb.DeleteUndevicedSessionsReq
+}
+
+func (m *deviceMock) DeleteUndevicedSessions(ctx context.Context, in *pb.DeleteUndevicedSessionsReq, _ ...grpc.CallOption) (*pb.DeleteUndevicedSessionsResp, error) {
+	m.undeviced = append(m.undeviced, in)
+	return &pb.DeleteUndevicedSessionsResp{UserId: in.GetUserId()}, nil
 }
 
 func devKey(user, ident string) string { return user + "|" + ident }
@@ -340,6 +346,9 @@ func (notFoundMock) DeleteDeviceTokens(ctx context.Context, in *pb.DeleteDeviceT
 func (notFoundMock) DeleteDevice(ctx context.Context, in *pb.DeleteDeviceReq, _ ...grpc.CallOption) (*pb.DeleteDeviceResp, error) {
 	return nil, status.Error(codes.NotFound, "not found")
 }
+func (notFoundMock) DeleteUndevicedSessions(ctx context.Context, in *pb.DeleteUndevicedSessionsReq, _ ...grpc.CallOption) (*pb.DeleteUndevicedSessionsResp, error) {
+	return nil, status.Error(codes.NotFound, "not found")
+}
 func (notFoundMock) DeleteAllUserTokens(ctx context.Context, in *pb.DeleteAllUserTokensReq, _ ...grpc.CallOption) (*pb.DeleteAllUserTokensResp, error) {
 	return nil, status.Error(codes.NotFound, "not found")
 }
@@ -355,5 +364,55 @@ func TestRevokeDevice_IdempotentOnMissing(t *testing.T) {
 	}
 	if _, err := h.RevokeAllDevices(ctxWithCaller("u1"), &pb.RevokeAllDevicesReq{}); err != nil {
 		t.Errorf("revoke-all on a token-less user must be a no-op, got %v", err)
+	}
+}
+
+// Not every session is device-bound — SignUp, ConfirmSignUp, the OAuth
+// callback and CliToken issue one with no device — so "log out everywhere"
+// must sweep those too, keeping none; "log out the others" keeps only the
+// caller's own. Found live by examples/auth-proof: a registration's session
+// survived RevokeAllDevices.
+func TestRevokeDevices_SweepSessionsNoDeviceHolds(t *testing.T) {
+	m := &deviceMock{listResult: []*pb.Device{{Id: "dev-a", Identifier: "laptop-a"}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if _, err := h.RevokeAllDevices(ctxWithDeviceHeaders("u1", "laptop-a", "UA", "1.1.1.1"), &pb.RevokeAllDevicesReq{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.undeviced) != 1 || m.undeviced[0].GetUserId() != "u1" || m.undeviced[0].GetKeepTokenId() != noTokenKept {
+		t.Fatalf("revoke-all: device-less sessions not swept, keeping none: %+v", m.undeviced)
+	}
+	m.undeviced = nil
+	if _, err := h.RevokeOtherDevices(ctxWithDeviceHeaders("u1", "laptop-a", "UA", "1.1.1.1"), &pb.RevokeOtherDevicesReq{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.undeviced) != 1 || m.undeviced[0].GetUserId() != "u1" {
+		t.Fatalf("revoke-others: device-less sessions not swept: %+v", m.undeviced)
+	}
+	// Nothing to sweep is the ordinary case, not a failure.
+	nf := &notFoundMock{}
+	hn := &AuthServiceHandler{Query: nf, Mutation: nf}
+	if _, err := hn.RevokeAllDevices(ctxWithDeviceHeaders("u1", "x", "UA", "1.1.1.1"), &pb.RevokeAllDevicesReq{}); err != nil {
+		t.Fatalf("an empty sweep must not fail revoke-all: %v", err)
+	}
+}
+
+// The browser's User-Agent arrives as x-forwarded-user-agent (the gRPC hop
+// overwrites user-agent with its own); it labels the device and feeds the
+// fingerprint. user-agent stays the fallback.
+func TestResolveDeviceIdentity_PrefersTheForwardedUserAgent(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"user-agent", "grpc-go/1.83.2", "x-forwarded-user-agent", "Firefox/140", "x-forwarded-for", "10.0.0.1"))
+	di := resolveDeviceIdentity(ctx)
+	if di.label != "Firefox/140" {
+		t.Fatalf("label = %q, want the browser's UA", di.label)
+	}
+	other := resolveDeviceIdentity(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"user-agent", "grpc-go/1.83.2", "x-forwarded-user-agent", "Safari/18", "x-forwarded-for", "10.0.0.1")))
+	if other.identifier == di.identifier {
+		t.Fatal("two browsers on one address fingerprint as one device")
+	}
+	fallback := resolveDeviceIdentity(metadata.NewIncomingContext(context.Background(), metadata.Pairs("user-agent", "curl/8")))
+	if fallback.label != "curl/8" {
+		t.Fatalf("fallback label = %q", fallback.label)
 	}
 }

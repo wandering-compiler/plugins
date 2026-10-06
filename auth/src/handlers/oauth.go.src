@@ -19,6 +19,8 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 )
 
 // This file implements the `oauth` feature — generic OAuth2 / OIDC sign-in.
@@ -142,6 +144,9 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
 	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+		return nil, err
 	}
 	token, trustToken, err := issueSession(ctx, h, userID, deviceID)
 	if err != nil {
@@ -441,6 +446,9 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 	// Carrying the token through an IdP round trip means putting it in the OAuth
 	// `state`, which is a bigger change than this one and is not smuggled in;
 	// it stays a known gap.
+	if err := signUpAllowlistGate(h, email); err != nil {
+		return "", err
+	}
 	if err := signupInviteGate(ctx, h, email, ""); err != nil {
 		return "", err
 	}
@@ -465,11 +473,55 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 	// constraint at runtime. Making OAuth tenant-aware needs a tenant
 	// source of its own (per-provider binding, or the callback URL) and is
 	// its own change.
-	created, err := h.Mutation.CreateUser(ctx, &pb.CreateUserReq{Email: email, PasswordHash: hash})
+	// The account an OAuth sign-up creates is a full account: the same turnkey
+	// roles SignUp links (`default` / `first_user`), and the address marked
+	// confirmed when the provider asserted email_verified — in ONE transaction,
+	// so it never exists without them. It used to be a bare CreateUser: the
+	// account held no role, so every endpoint answered 403 MISSING_PERMISSION,
+	// and the provider's verification was thrown away, so the address-proof
+	// floor on invitations refused it (found live by examples/auth-proof).
+	roleIDs, err := signupResolveRoleIDs(ctx, h)
 	if err != nil {
 		return "", err
 	}
-	return created.GetUser().GetId(), nil
+	txCtx := ctx
+	var tx *distx.TxHandle
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return "", err
+		}
+	}
+	userID, err := h.createOAuthUserTx(txCtx, email, hash, roleIDs, emailVerified)
+	if err != nil {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return "", err
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+	}
+	return userID, nil
+}
+
+func (h *AuthServiceHandler) createOAuthUserTx(txCtx context.Context, email, hash string, roleIDs []string, emailVerified bool) (string, error) {
+	created, err := h.Mutation.CreateUser(txCtx, &pb.CreateUserReq{Email: email, PasswordHash: hash})
+	if err != nil {
+		return "", err
+	}
+	userID := created.GetUser().GetId()
+	if err := signupAssignRoleIDs(txCtx, h, userID, roleIDs); err != nil {
+		return "", err
+	}
+	// The provider vouched for the address the way a returned code does.
+	if emailVerified {
+		if err := markEmailConfirmed(txCtx, h, userID); err != nil {
+			return "", err
+		}
+	}
+	return userID, nil
 }
 
 // isSafeRelativeRedirect reports whether a caller-supplied redirect_after

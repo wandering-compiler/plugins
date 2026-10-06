@@ -286,6 +286,25 @@ message PasswordResetRequested {
   google.protobuf.Timestamp expires_at = 4;
 }
 
+// sign_up_confirmation — emitted by CreatePendingSignUp when SignUp parks a
+// registration until its address is proved. Carries the PLAINTEXT code (only
+// its hash is stored) for a hand-written delivery channel, which must be
+// e-mail to the address below: delivering it there is the proof the
+// confirmation stands for. The person types the code into ConfirmSignUp
+// together with pending_id.
+message SignUpConfirmationRequested {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.sign_up.confirmation_requested"
+  };
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+
+  string                    pending_id = 1;
+  string                    email      = 2; // where the code must go
+  string                    code       = 3; // plaintext; NEVER persisted
+  google.protobuf.Timestamp expires_at = 4;
+}
+
 // email_verification lifecycle — emitted by CreateEmailVerificationToken
 // when a verification is requested (e.g. just after sign-up). Same shape
 // + single-plaintext-delivery contract as PasswordResetRequested. E1.

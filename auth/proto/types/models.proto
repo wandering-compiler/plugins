@@ -179,7 +179,9 @@ enum EmailProof {
   // A bound invitation: the invitation named this address, and the secret link
   // reached the person who registered. No round trip asked of them.
   DERIVED_FROM_INVITE = 1;
-  // The person completed the `email_verification` flow themselves.
+  // The address made a round trip: the `email_verification` link, a
+  // `sign_up_confirmation` code, or an OAuth provider asserting
+  // email_verified=true for the account it created.
   SELF_CONFIRMED = 2;
 }
 
@@ -464,6 +466,44 @@ message MfaChallenge {
   // lockout threshold, so a 6-digit second factor can't be brute-forced
   // within the TTL (Q43-auth-mfa).
   int64 attempts     = 6 [(w17.field) = { type: COUNTER, default_int: 0 }];
+}
+
+// PendingSignUp — a registration that has not yet proved its address
+// (`sign_up_confirmation`).
+//
+// SignUp writes this row INSTEAD of a User and mails a code; ConfirmSignUp
+// turns it into the User once the code comes back. The reason it is a table of
+// its own rather than an unverified User: a User row HOLDS its address (the
+// email is unique), so a registration abandoned before the code — by the owner,
+// or on purpose by someone who knows the address — would block that address for
+// good. Pending rows hold nothing: any number may exist for one address, none
+// of them can sign in, and each dies at expires_at. The first one confirmed
+// becomes the account and the rest are deleted with it.
+//
+// Only hashes are stored: the password the User will get, and the code (the
+// plaintext travels once, in SignUpConfirmationRequested).
+message PendingSignUp {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "sign_up_confirmation";
+
+  string id            = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string email         = 2 [(w17.field) = { type: EMAIL, max_len: 320 }, (w17.db.column) = { index: true }];
+  string password_hash = 3 [(w17.field) = { type: PASSWORD }];
+  string code_hash     = 4 [(w17.field) = { type: CHAR, max_len: 255 }];
+  // attempts — codes tried against this row. ConfirmSignUp claims one in the
+  // same statement that counts it, so concurrent guesses cannot share a budget
+  // (the RecordMfaAttempt shape).
+  int64  attempts      = 5 [(w17.field) = { type: COUNTER, default_int: 0 }];
+  google.protobuf.Timestamp expires_at = 6 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp created_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // tenant_id — the tenant SignUp resolved, so the account is created where
+  // the person registered, not wherever the confirmation request arrives.
+  // Nullable here: the row is not the account, and the User insert is what
+  // enforces a tenant.
+  string tenant_id     = 8 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.contrib.plugin_feature_field) = "tenant_scope"
+  ];
 }
 
 // PasswordResetToken — a single-use, time-bounded credential the

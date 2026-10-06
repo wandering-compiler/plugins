@@ -198,8 +198,13 @@ func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.Li
 // object, because the column is JSON NOT NULL and ” is not a document.
 //
 // Only whitespace counts as nothing. Anything else is the consumer's document and
-// is stored byte for byte — including a value this plugin would not have chosen,
+// is stored as given — including a value this plugin would not have chosen,
 // because the column is theirs and nothing here reads it.
+//
+// As a JSON DOCUMENT, not as bytes: Postgres keeps the column as jsonb, so what
+// comes back (list, acceptance) is the same value re-serialised — key order and
+// whitespace are the database's (measured by examples/auth-proof). A consumer
+// that compares or signs it must parse it, not compare strings.
 func metadataOrEmptyObject(m string) string {
 	if strings.TrimSpace(m) == "" {
 		return "{}"
@@ -261,11 +266,19 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	// NOT_FOUND here is the ORDINARY answer: nothing had lapsed. Treating it
 	// as a failure would refuse every first invitation to an address, which is
 	// the same unreachable-branch mistake D13-7 shipped one function away.
-	if _, cerr := h.Mutation.ClearExpiredOrgInvite(ctx, &pb.ClearExpiredOrgInviteReq{
-		OrgId: orgID,
-		Email: email,
-	}); cerr != nil && status.Code(cerr) != codes.NotFound {
-		return nil, cerr
+	//
+	// Only for a BOUND invitation. An open one stores NULL, which the unique
+	// index never compares, so nothing can block it — and the clear's own
+	// request requires the address, so calling it with "" refused every open
+	// invitation with REQUIRED_VIOLATION before it was written (found live by
+	// examples/auth-proof, after the request field itself had been fixed).
+	if email != "" {
+		if _, cerr := h.Mutation.ClearExpiredOrgInvite(ctx, &pb.ClearExpiredOrgInviteReq{
+			OrgId: orgID,
+			Email: email,
+		}); cerr != nil && status.Code(cerr) != codes.NotFound {
+			return nil, cerr
+		}
 	}
 
 	created, err := h.Mutation.CreateOrgInvite(ctx, &pb.CreateOrgInviteReq{
@@ -275,7 +288,8 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		InvitedBy: inviter,
 		ExpiresAt: timestamppb.New(time.Now().Add(h.orgInviteTTL())),
 		TokenHash: sha256Hex(token),
-		// Stored exactly as given and never read here. The plugin has no opinion
+		// Stored as given (as a JSON value — see metadataOrEmptyObject) and never
+		// read here. The plugin has no opinion
 		// about the shape; see OrgInvite.metadata for why that is what makes an
 		// opaque column answerable without deciding the general plugin-model
 		// question.
@@ -482,6 +496,7 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 	// advisory rather than a decision this relies on.
 	claimed, err := h.Mutation.ConsumeOrgInviteByToken(txCtx, &pb.ConsumeOrgInviteByTokenReq{
 		TokenHash: tokenHash,
+		UserId:    userID,
 	})
 	// A claim that matches nothing arrives as NotFound, not as an empty
 	// response: the mutation carries RETURNING, and the generated write

@@ -616,3 +616,7 @@ func TestCliAuthorize_RefusesAPlaintextRegisteredCallback(t *testing.T) {
 		t.Error("a plaintext non-loopback callback was authorised because a row existed for it")
 	}
 }
+
+func (m *cliMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+}

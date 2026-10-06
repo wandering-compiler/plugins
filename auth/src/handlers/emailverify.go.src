@@ -123,6 +123,15 @@ func (h *AuthServiceHandler) consumeAndMarkVerified(txCtx context.Context, token
 func init() {
 	inviteVerifiedEmailGate = inviteVerifiedEmailGateImpl
 	markEmailDerived = markEmailDerivedImpl
+	markEmailConfirmed = markEmailConfirmedImpl
+}
+
+// markEmailConfirmedImpl records a SELF_CONFIRMED address through the same
+// mutation VerifyEmail uses: a sign_up_confirmation code returned from the
+// address proves it exactly as a verification link clicked from it does.
+func markEmailConfirmedImpl(ctx context.Context, h *AuthServiceHandler, userID string) error {
+	_, err := h.Mutation.MarkEmailVerified(ctx, &pb.MarkEmailVerifiedReq{UserId: userID})
+	return err
 }
 
 // markEmailDerivedImpl stamps EmailProof.DERIVED_FROM_INVITE.

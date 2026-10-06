@@ -181,6 +181,9 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 			return nil, err
 		}
 	}
+	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+		return nil, err
+	}
 	resp, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
 		UserId:    userID,
 		ExpiresAt: h.sessionTokenExpiry(),

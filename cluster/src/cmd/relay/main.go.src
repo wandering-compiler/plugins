@@ -85,6 +85,9 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "issue-worker" {
 		return issueWorker(os.Args[2:], os.Stdout)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "mint" {
+		return mint(os.Args[2:], os.Stdout)
+	}
 	cfg := config{}
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
 	fs.StringVar(&cfg.listen, "listen", envOr("RELAY_LISTEN", ":13444"),

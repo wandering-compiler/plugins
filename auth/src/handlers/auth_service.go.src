@@ -200,6 +200,16 @@ type AuthServiceHandler struct {
 	// an explicit expires_at (api_token_default_ttl_hours). 0 = never expires;
 	// negative falls back to the 90-day default. See apiTokenExpiry.
 	APITokenDefaultTTLHours int
+
+	// SignUpAllowlist is who may register at all (sign_up_allowlist): addresses
+	// and @domains, comma- or space-separated; empty = everyone. Read through
+	// parseSignUpAllowlist at every gate rather than parsed once into hidden
+	// state, so a handler built without ValidateConfig enforces the same list.
+	SignUpAllowlist string
+
+	// sign_up_confirmation_ttl_seconds (read only by handlers/signup_confirm.go).
+	// <= 0 → the file's default.
+	SignUpConfirmationTTLSeconds int
 }
 
 // scopeDecorator augments the AuthResp scope + label maps for an
@@ -390,6 +400,66 @@ func ValidateConfig(h *AuthServiceHandler) error {
 	if h.APITokenDefaultTTLHours > maxAPITokenTTLHours {
 		return fmt.Errorf("auth plugin: api_token_default_ttl_hours=%d is longer than %d (100 years) — use 0 for tokens that never expire", h.APITokenDefaultTTLHours, maxAPITokenTTLHours)
 	}
+	// At boot, because the failure is silent otherwise: an entry that matches
+	// no address keeps out exactly the people it was written for.
+	if _, err := parseSignUpAllowlist(h.SignUpAllowlist); err != nil {
+		return err
+	}
+	return nil
+}
+
+// parseSignUpAllowlist reads sign_up_allowlist: addresses (`ceo@example.com`)
+// and whole domains (`@example.com`), separated by commas or whitespace,
+// lower-cased. Anything else is an error naming the entry.
+func parseSignUpAllowlist(raw string) ([]string, error) {
+	var out []string
+	for _, entry := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		e := strings.ToLower(strings.TrimSpace(entry))
+		at := strings.LastIndex(e, "@")
+		domain := e[at+1:]
+		if at < 0 || domain == "" || !strings.Contains(domain, ".") || strings.Count(e, "@") != 1 {
+			return nil, fmt.Errorf("auth plugin: sign_up_allowlist entry %q is neither an address (name@example.com) nor a domain (@example.com)", entry)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// errSignUpClosed is the refusal for an address outside sign_up_allowlist.
+// The same answer whatever else is true of the address — an account, an
+// invitation — so the form cannot be used to read the list.
+var errSignUpClosed = status.Error(codes.PermissionDenied,
+	"registration is not open for this address")
+
+// signUpAllowlistGate refuses an address sign_up_allowlist does not name. It
+// is called by every door that creates an account for whoever is knocking —
+// SignUp, ConfirmSignUp and the OAuth sign-up — and not by the administrator's
+// paths, which create accounts on purpose. A malformed list refuses everyone
+// rather than no one: ValidateConfig already failed the boot for it, so this
+// is reached only by a handler built around that check.
+func signUpAllowlistGate(h *AuthServiceHandler, email string) error {
+	allow, err := parseSignUpAllowlist(h.SignUpAllowlist)
+	if err != nil {
+		return errSignUpClosed
+	}
+	if len(allow) == 0 {
+		return nil
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	at := strings.LastIndex(email, "@")
+	for _, a := range allow {
+		if a == email || (strings.HasPrefix(a, "@") && at >= 0 && email[at:] == a) {
+			return nil
+		}
+	}
+	return errSignUpClosed
+}
+
+// markEmailConfirmed records that the person proved the address themselves —
+// a sign_up_confirmation code came back from it. A seam for markEmailDerived's
+// reason: the columns it writes exist only with `email_verification`, and
+// without that feature there is nothing to record and nothing to refuse.
+var markEmailConfirmed = func(_ context.Context, _ *AuthServiceHandler, _ string) error {
 	return nil
 }
 
@@ -781,6 +851,28 @@ var signInDisabledGate = func(user *pb.User) error { return nil }
 // Returns a non-nil error so SignIn emits the opaque Unauthenticated: a caller
 // must not learn that an address belongs to a bot.
 var signInBotGate = func(user *pb.User) error { return nil }
+
+// refuseUnsignableAccount runs SignIn's account gates — disabled, machine —
+// for a path that issues a session to an EXISTING account without passing
+// through SignIn's lookup: the second sign-in step, the OAuth callback, the CLI
+// exchange. Each of those is reached with a user id decided earlier (a
+// challenge, a linked identity, a code minted from a session), and the account
+// may have changed since: SignIn refused a disabled account, but a challenge
+// opened before the disable still issued a session (found live by
+// examples/auth-proof). Refused with the opaque Unauthenticated, as SignIn is.
+func refuseUnsignableAccount(ctx context.Context, h *AuthServiceHandler, userID string) error {
+	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
+	if err != nil {
+		return Unauthenticated(err)
+	}
+	if err := signInDisabledGate(got.GetUser()); err != nil {
+		return Unauthenticated(err)
+	}
+	if err := signInBotGate(got.GetUser()); err != nil {
+		return Unauthenticated(err)
+	}
+	return nil
+}
 
 // normalizeEmail canonicalises an email for both storage and lookup: trim +
 // lowercase. Emails are treated case-insensitively in practice, but the

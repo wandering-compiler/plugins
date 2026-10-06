@@ -89,7 +89,7 @@ func (s *roundTripStore) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq
 // Console features, for the record: rbac, authenticate_turnkey,
 // sign_in_turnkey, sign_up_turnkey, cli_login, org_membership, org_invite,
 // password_change, api_token, user_admin, service_account. No devices, no
-// two_factor, no tenant_scope.
+// two_factor, no tenant_scope, no sign_up_confirmation.
 func pinConsoleActivation(t *testing.T) {
 	t.Helper()
 	origDevice := resolveSignInDevice
@@ -103,6 +103,11 @@ func pinConsoleActivation(t *testing.T) {
 		return nil, false, nil
 	}
 	t.Cleanup(func() { signInMfaGate = origMfa })
+
+	// No sign_up_confirmation on the console: SignUp creates the account.
+	origConfirm := signUpConfirmation
+	signUpConfirmation = nil
+	t.Cleanup(func() { signUpConfirmation = origConfirm })
 
 	pinTenantlessSignup(t)
 }

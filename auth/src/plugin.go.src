@@ -95,6 +95,9 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		EmailProofRequired: cfg.EmailProofRequired,
 		OrgInviteTTLHours:  cfg.OrgInviteTtlHours,
 
+		SignUpAllowlist:              cfg.SignUpAllowlist,
+		SignUpConfirmationTTLSeconds: cfg.SignUpConfirmationTtlSeconds,
+
 		// api_token: the lifetime of a token minted without an expiry.
 		APITokenDefaultTTLHours: cfg.APITokenDefaultTtlHours,
 	}

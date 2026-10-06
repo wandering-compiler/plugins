@@ -331,3 +331,7 @@ func TestMfaIssuance_CapHoldsUnderConcurrency(t *testing.T) {
 		t.Fatal("nothing was issued at all — this test is not exercising the path")
 	}
 }
+
+func (m *lockingIssuanceMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+}

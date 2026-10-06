@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"net"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 
 	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
@@ -23,6 +25,18 @@ import (
 // header names + strips an X- prefix; "Host" → "host"). Host-based
 // tenancy reads it at SignUp.
 const signupHostMetadataKey = "host"
+
+// forwardedHostMetadataKey is where restgw puts the HTTP request's Host.
+const forwardedHostMetadataKey = "x-forwarded-host"
+
+// hostWithoutPort: a Tenant.domain names a host, and a browser on a
+// non-default port sends `app.example:8443`.
+func hostWithoutPort(h string) string {
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		return host
+	}
+	return h
+}
 
 // init wires the tenant_scope behaviour on package load: the
 // Authenticate scope decorator (per-request tenant_id) AND the SignUp
@@ -68,25 +82,33 @@ func createUserWithResolvedTenant(ctx context.Context, h *AuthServiceHandler, re
 func resolveSignupTenant(ctx context.Context, h *AuthServiceHandler, req *pb.SignUpReq) (string, error) {
 	if slug := req.GetTenantSlug(); slug != "" {
 		resp, err := h.Query.GetTenantBySlug(ctx, &pb.GetTenantBySlugReq{Slug: slug})
-		if err != nil {
+		if notFoundOK(err) != nil {
 			return "", err
 		}
-		if tid := resp.GetTenantId(); tid != "" {
+		if tid := resp.GetTenantId(); err == nil && tid != "" {
 			return tid, nil
 		}
-		return "", fmt.Errorf("signup: no tenant for slug %q", slug)
+		return "", tenantUnknown(ctx, fmt.Sprintf("signup: no tenant for slug %q", slug))
 	}
 	if host := hostFromContext(ctx); host != "" {
 		resp, err := h.Query.GetTenantByDomain(ctx, &pb.GetTenantByDomainReq{Domain: host})
-		if err != nil {
+		if notFoundOK(err) != nil {
 			return "", err
 		}
-		if tid := resp.GetTenantId(); tid != "" {
+		if tid := resp.GetTenantId(); err == nil && tid != "" {
 			return tid, nil
 		}
-		return "", fmt.Errorf("signup: no tenant for host %q", host)
+		return "", tenantUnknown(ctx, fmt.Sprintf("signup: no tenant for host %q", host))
 	}
-	return "", fmt.Errorf("signup: tenant_scope on but request carries no tenant (need a URL {tenant_slug} or a forwarded Host)")
+	return "", tenantUnknown(ctx, "signup: tenant_scope on but request carries no tenant (need a URL {tenant_slug} or a forwarded Host)")
+}
+
+// tenantUnknown refuses a registration that names no tenant this activation
+// has. It used to be a bare fmt.Errorf, which reaches a REST caller as 500
+// "Something went wrong on our side." — for a request that simply came in on
+// the wrong address (found live by examples/auth-proof).
+func tenantUnknown(ctx context.Context, dev string) error {
+	return refusal(ctx, codes.InvalidArgument, dev, CodeTenantUnknown, "", MsgTenantUnknown, nil)
 }
 
 // hostFromContext reads the gateway-forwarded Host header from the
@@ -96,8 +118,13 @@ func hostFromContext(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	if v := md.Get(signupHostMetadataKey); len(v) > 0 {
-		return v[0]
+	// The REST gateway forwards the browser's Host under x-forwarded-host: a
+	// gRPC hop has a :authority of its own (the backend's address), so the
+	// request's host has to travel under a key the transport does not own.
+	for _, key := range []string{forwardedHostMetadataKey, signupHostMetadataKey} {
+		if v := md.Get(key); len(v) > 0 && v[0] != "" {
+			return hostWithoutPort(v[0])
+		}
 	}
 	return ""
 }

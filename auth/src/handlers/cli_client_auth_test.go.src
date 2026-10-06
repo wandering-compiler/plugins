@@ -245,3 +245,7 @@ func (m *registerMock) RegisterAuthClient(ctx context.Context, in *pb.RegisterAu
 		RedirectUri: in.GetRedirectUri(),
 	}}, nil
 }
+
+func (m *clientAuthMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+}

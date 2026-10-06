@@ -26,6 +26,27 @@ type oauthMock struct {
 	userByEmail  *pb.User          // existing account by email (nil = none)
 	createdUser  *pb.CreateUserReq
 	createdIdent *pb.CreateOAuthIdentityReq
+	// What an OAuth sign-up must give the account it creates, like SignUp.
+	assigned []*pb.AssignRoleToUserReq
+	verified []string
+}
+
+func (m *oauthMock) CountUsers(context.Context, *pb.CountUsersReq, ...grpc.CallOption) (*pb.CountUsersResp, error) {
+	return &pb.CountUsersResp{Count: 1}, nil
+}
+func (m *oauthMock) GetFirstUserRoles(context.Context, *pb.GetFirstUserRolesReq, ...grpc.CallOption) (*pb.GetFirstUserRolesResp, error) {
+	return &pb.GetFirstUserRolesResp{RoleIds: []string{"r-first"}}, nil
+}
+func (m *oauthMock) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq, ...grpc.CallOption) (*pb.GetDefaultRolesResp, error) {
+	return &pb.GetDefaultRolesResp{RoleIds: []string{"r-account"}}, nil
+}
+func (m *oauthMock) AssignRoleToUser(_ context.Context, in *pb.AssignRoleToUserReq, _ ...grpc.CallOption) (*pb.AssignRoleToUserResp, error) {
+	m.assigned = append(m.assigned, in)
+	return &pb.AssignRoleToUserResp{}, nil
+}
+func (m *oauthMock) MarkEmailVerified(_ context.Context, in *pb.MarkEmailVerifiedReq, _ ...grpc.CallOption) (*pb.MarkEmailVerifiedResp, error) {
+	m.verified = append(m.verified, in.GetUserId())
+	return &pb.MarkEmailVerifiedResp{}, nil
 }
 
 func (m *oauthMock) GetProviderByName(ctx context.Context, in *pb.GetProviderByNameReq, _ ...grpc.CallOption) (*pb.GetProviderByNameResp, error) {
@@ -241,6 +262,35 @@ func TestOAuthCallback_UserinfoPath_CreatesUser(t *testing.T) {
 	if m.createdIdent == nil || m.createdIdent.GetExternalId() != "ext-1" {
 		t.Errorf("expected an identity for ext-1, got %+v", m.createdIdent)
 	}
+	// The account is a full account: the turnkey default roles, like SignUp's.
+	// It used to hold none, and every endpoint answered 403 (examples/auth-proof).
+	if len(m.assigned) != 1 || m.assigned[0].GetRoleId() != "r-account" {
+		t.Errorf("the OAuth-created account got roles %+v, want the default role", m.assigned)
+	}
+	// The provider did not assert email_verified, so nothing is recorded.
+	if len(m.verified) != 0 {
+		t.Errorf("an unasserted address was marked verified: %v", m.verified)
+	}
+}
+
+// A provider that asserts email_verified vouches for the address the way a
+// returned code does; the account it creates records that, so an
+// address-proof floor on invitations admits it.
+func TestOAuthCallback_AProviderVerifiedAddressIsRecorded(t *testing.T) {
+	srv := fakeIdP(t, map[string]any{"sub": "ext-2", "email": "bob@idp.com", "email_verified": true}, "")
+	m := &oauthMock{provider: &pb.OAuthProvider{
+		Id: "p1", Name: "google", ClientId: "cid", ClientSecret: "csec",
+		TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
+	}}
+	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
+	state, _ := signOAuthState("csec", "google", "")
+	resp, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "google", Code: "auth-code", State: state})
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	if len(m.verified) != 1 || m.verified[0] != resp.GetUserId() {
+		t.Fatalf("the provider-verified address was not recorded for the new account: %v (user %s)", m.verified, resp.GetUserId())
+	}
 }
 
 func TestOAuthCallback_IDTokenPath(t *testing.T) {
@@ -376,4 +426,8 @@ func TestOAuthCallback_VerifiedEmail_LinksToExisting(t *testing.T) {
 	if m.createdIdent == nil || m.createdIdent.GetUserId() != "user-77" {
 		t.Errorf("identity should bind to existing user-77, got %+v", m.createdIdent)
 	}
+}
+
+func (m *oauthMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
 }

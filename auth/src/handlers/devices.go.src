@@ -31,10 +31,12 @@ import (
 // fingerprint fallback, so a misconfigured project still tracks devices
 // coarsely rather than crashing.
 const (
-	deviceIDMetadataKey    = "x-device-id"     // stable client-managed device id
-	deviceTrustMetadataKey = "x-device-trust"  // C2: server-issued device-trust token (replayed by the client)
-	userAgentMetadataKey   = "user-agent"      // → Device.label (friendly name)
-	clientIPMetadataKey    = "x-forwarded-for" // → Device.ip (first hop)
+	deviceIDMetadataKey    = "x-device-id"    // stable client-managed device id
+	deviceTrustMetadataKey = "x-device-trust" // C2: server-issued device-trust token (replayed by the client)
+	userAgentMetadataKey   = "user-agent"     // → Device.label (friendly name)
+	// forwardedUserAgentMetadataKey — where restgw puts the BROWSER's UA.
+	forwardedUserAgentMetadataKey = "x-forwarded-user-agent"
+	clientIPMetadataKey           = "x-forwarded-for" // → Device.ip (first hop)
 )
 
 const (
@@ -89,7 +91,15 @@ type deviceIdentity struct {
 // trust, distinct from the X-Device-Id which only names the device.
 func resolveDeviceIdentity(ctx context.Context) deviceIdentity {
 	md, _ := metadata.FromIncomingContext(ctx)
-	ua := firstMeta(md, userAgentMetadataKey)
+	// The browser's User-Agent travels under x-forwarded-user-agent: the gRPC
+	// hop from the gateway replaces user-agent with its own ("grpc-go/…"), so
+	// read there every device was labelled grpc-go and the UA+IP fingerprint
+	// collapsed every browser of a user into one device (found live by
+	// examples/auth-proof). user-agent stays the fallback for an in-process call.
+	ua := firstMeta(md, forwardedUserAgentMetadataKey)
+	if ua == "" {
+		ua = firstMeta(md, userAgentMetadataKey)
+	}
 	ip := firstHop(firstMeta(md, clientIPMetadataKey))
 
 	di := deviceIdentity{
@@ -312,6 +322,9 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 			return nil, err
 		}
 	}
+	if err := revokeUndevicedSessions(ctx, h, userID, callerSessionTokenID(ctx)); err != nil {
+		return nil, err
+	}
 	return &pb.RevokeOtherDevicesResp{}, nil
 }
 
@@ -323,9 +336,9 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 // DeleteAllUserTokens. DeleteAllUserTokens has no token_type filter (that
 // column is api_token-gated, Q64-auth-1), so it would ALSO delete the user's
 // API tokens — credentials that aren't device-bound (device_id NULL) and must
-// only be removed via RevokeApiToken. Every interactive session is device-bound
-// (the devices feature stamps device_id on the issued token), so the
-// per-device sweep covers all sessions while sparing API tokens. Mirrors
+// only be removed via RevokeApiToken. "Every interactive session is device-bound"
+// was the premise here, and it is false — see revokeUndevicedSessions, which
+// now sweeps the rest while still sparing API tokens. Mirrors
 // RevokeOtherDevices, but includes the caller's current device.
 func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.RevokeAllDevicesReq) (*pb.RevokeAllDevicesResp, error) {
 	userID, err := callerUserID(ctx)
@@ -341,7 +354,28 @@ func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.Revok
 			return nil, err
 		}
 	}
+	if err := revokeUndevicedSessions(ctx, h, userID, ""); err != nil {
+		return nil, err
+	}
 	return &pb.RevokeAllDevicesResp{}, nil
+}
+
+// noTokenKept is the keep_token_id that keeps none (the column is a UUID, so
+// the empty string would not bind).
+const noTokenKept = "00000000-0000-0000-0000-000000000000"
+
+// revokeUndevicedSessions ends the user's sessions that no device holds, all
+// but keep (the caller's own, or none). The per-device sweep cannot reach
+// them: SignUp, ConfirmSignUp, the OAuth callback and CliToken issue a session
+// with no device, so the "every interactive session is device-bound" premise
+// this file once rested on was false, and "log out everywhere" left a
+// registration's session standing (found live by examples/auth-proof).
+func revokeUndevicedSessions(ctx context.Context, h *AuthServiceHandler, userID, keep string) error {
+	if keep == "" {
+		keep = noTokenKept
+	}
+	_, err := h.Mutation.DeleteUndevicedSessions(ctx, &pb.DeleteUndevicedSessionsReq{UserId: userID, KeepTokenId: keep})
+	return notFoundOK(err)
 }
 
 // revokeOneDevice deletes a device's tokens then the Device row, both

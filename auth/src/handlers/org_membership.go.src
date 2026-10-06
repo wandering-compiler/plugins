@@ -204,8 +204,14 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	if slug == "" {
 		return inferSoleOrgScope(ctx, h, userID, scopes, labels)
 	}
+	// NotFound is "not a member", not a failure: a generated single-row read
+	// reports no row as NotFound. Returned as an error it skipped both the
+	// owner fallback below — so an owner whose membership row was gone could
+	// not reach their own org — and the ORG_NOT_MEMBER answer, so a caller who
+	// named the wrong org read "You are not signed in." (found live by
+	// examples/auth-proof).
 	resp, err := h.Query.GetUserOrgBySlug(ctx, &pb.GetUserOrgBySlugReq{UserId: userID, Slug: slug})
-	if err != nil {
+	if notFoundOK(err) != nil {
 		return err
 	}
 	orgID := resp.GetOrgId()
@@ -224,7 +230,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 		// that grants nothing — the column would be decorative for exactly
 		// the case it exists to serve.
 		owned, oerr := h.Query.GetOwnedOrgBySlug(ctx, &pb.GetOwnedOrgBySlugReq{UserId: userID, Slug: slug})
-		if oerr != nil {
+		if notFoundOK(oerr) != nil {
 			return oerr
 		}
 		orgID = owned.GetOrgId()

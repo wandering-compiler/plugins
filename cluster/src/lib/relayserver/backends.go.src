@@ -35,7 +35,10 @@ const TicketHeader = "w17-cluster-ticket"
 // are connected AND ready is what the pool may grant, which is what stops an
 // empty relay handing out tickets against nobody.
 type Backends struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// pubMu orders capacity publishes (see publishLocked). Taken BEFORE mu,
+	// never inside it.
+	pubMu    sync.Mutex
 	conns    map[string]*backend      // fingerprint → tunnel
 	profiles map[string]workerProfile // fingerprint → what the worker said
 	order    []string                 // rotation cursor over conns
@@ -134,12 +137,25 @@ func (b *Backends) removeLocked(fingerprint string) {
 // The sink is the pool, and the pool promotes queued callers synchronously.
 // Calling it while holding this mutex would run pool code under a relay lock
 // for no reason and invites an ordering nobody can see.
+//
+// The returned func re-reads the total when it runs, under pubMu, rather than
+// carrying the value computed here: publishes run AFTER b.mu is released and
+// from different goroutines (attach streams, tunnel watchers), and a value
+// captured early could reach the pool after a newer one — leaving it at, say,
+// capacity 0 with a ready worker attached, and nothing queued ever promoted.
+// Serialised and re-read, the last publish always carries the current total.
 func (b *Backends) publishLocked() func() {
-	n, f := b.capacityLocked(), b.onCapacity
-	if f == nil {
+	if b.onCapacity == nil {
 		return func() {}
 	}
-	return func() { f(n) }
+	return func() {
+		b.pubMu.Lock()
+		defer b.pubMu.Unlock()
+		b.mu.Lock()
+		n, f := b.capacityLocked(), b.onCapacity
+		b.mu.Unlock()
+		f(n)
+	}
 }
 
 // SetProfile records what a worker says it can take and whether it wants work.

@@ -87,3 +87,7 @@ func TestOAuthAutoLink_LinksIntoAVerifiedLocalAccount(t *testing.T) {
 		t.Errorf("linked to %q, want real-owner", id)
 	}
 }
+
+func (m *autolinkMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+}
