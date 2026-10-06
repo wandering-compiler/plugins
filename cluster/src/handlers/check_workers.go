@@ -91,12 +91,22 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	var unreachable []string
 	skipped := 0
 	for i, r := range relays {
-		rejected, err := h.exchangeOne(ctx, r)
+		rejected, attempted, err := h.exchangeOne(ctx, r)
 		// Logged BEFORE the error is looked at: a relay whose exchange failed
 		// part-way may already have had workers refused, and an abort that
 		// returned first used to drop exactly the lines that said which.
 		logRejected(r, rejected)
 		skipped += len(rejected)
+		if err == nil && attempted > 0 && len(rejected) == attempted {
+			// Every worker refused, each for "its own" data, is more likely one
+			// cause on the relay's side — a relay version that sends something
+			// the registry does not take — than that many bad machines. Not an
+			// abort (each refusal really was per row, and the other relays'
+			// workers still count), but said once, about the relay, so an
+			// operator does not go through the workers one by one.
+			log.Printf("cluster: the registry refused EVERY worker relay %q reported (%d of %d) — "+
+				"check that relay's version before the workers themselves", r.Name, len(rejected), attempted)
+		}
 		if err != nil {
 			if errors.Is(err, errRecording) {
 				// The RELAY answered; it is this control plane's own registry
@@ -120,8 +130,10 @@ func (h *ClusterServiceHandler) CheckWorkers(
 			// Reported, not returned. One unreachable relay must not hide the
 			// workers every other relay is holding — which is exactly the
 			// moment an operator is most likely to be pressing this button.
-			// A relay the registry refused to file workers under (errRelayRow)
-			// lands here too: it is that relay's fault, not the fleet's.
+			// A relay that ANSWERED but whose own data the registry refused
+			// (errRelayRow: its id, a fingerprint it computed) is listed with
+			// them: unreachable_relays is "relays this sweep failed on", and
+			// the reason written onto the relay's row says which of the two.
 			unreachable = append(unreachable, r.Name)
 			h.note(ctx, r, err)
 			continue
@@ -156,24 +168,30 @@ type rejectedWorker struct {
 	err    error
 }
 
-func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) ([]rejectedWorker, error) {
+// exchangeOne asks one relay for its workers and records them. It returns the
+// workers the registry refused for their own data, how many it tried to
+// record, and why the relay failed, if it did.
+func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) ([]rejectedWorker, int, error) {
 	conn, err := h.dialReady(ctx, r)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() { _ = conn.Close() }()
 
 	resp, err := newRelayClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var rejected []rejectedWorker
+	attempted := 0
 	for _, w := range resp.GetWorkers() {
 		if w.GetCertFingerprint() == "" {
 			// No fingerprint, no identity to ban. Skipped rather than stored:
 			// a row an operator cannot act on is worse than no row.
 			continue
 		}
+		w = sanitizeReported(r, w)
+		attempted++
 		err := h.Workers.Record(ctx, r.ID, w)
 		switch classifyRecordError(err) {
 		case recorded:
@@ -190,17 +208,45 @@ func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) ([]rej
 		case refusedRelay:
 			// The registry refused the RELAY this worker would be filed
 			// under — its row is gone (deleted since the relay list was
-			// read) or its id is not one the registry takes. Every other
+			// read), its id is not one the registry takes, or the fingerprint
+			// it computed is not in a shape the registry takes. Every other
 			// worker of this relay would be refused the same way, so it is
 			// this relay that failed, not each of its workers; skipping them
 			// one by one used to log every worker as "refused" and then mark
 			// the relay reached.
-			return rejected, fmt.Errorf("%w: %w", errRelayRow, err)
+			return rejected, attempted, fmt.Errorf("%w: %w", errRelayRow, err)
 		default:
-			return rejected, fmt.Errorf("%w: %w", errRecording, err)
+			return rejected, attempted, fmt.Errorf("%w: %w", errRecording, err)
 		}
 	}
-	return rejected, nil
+	return rejected, attempted, nil
+}
+
+// sanitizeReported makes what a relay reported about a worker something the
+// registry can record (workeradmit.SanitizeClaim): at most MaxClaimLen
+// characters, no control or format character.
+//
+// HERE, not only on the relay. A current relay sanitizes at attach and
+// refuses at enrolment, but the control plane cannot know which relay version
+// it is talking to, and a relay that passes a NUL through (an old one, a buggy
+// one) makes Postgres refuse the row with SQLSTATE 22021. The storage wrapper
+// maps that to Internal — it is not one of the data exceptions it reports as
+// InvalidArgument — so classifyRecordError reads it as the registry being
+// down and every sweep aborts, for as long as that worker stays attached. The
+// worker's identity is its key; its name is a label, and a shortened or
+// patched label loses nothing an operator acts on.
+func sanitizeReported(r Relay, w *pb.KnownWorker) *pb.KnownWorker {
+	name, nameChanged := workeradmit.SanitizeClaim(w.GetName())
+	device, deviceChanged := workeradmit.SanitizeClaim(w.GetDeviceId())
+	if !nameChanged && !deviceChanged {
+		return w
+	}
+	// The originals by LENGTH only: they are whatever reached the relay, and
+	// a log line is no place to replay a control character.
+	log.Printf("cluster: relay %q reported worker %s with a name (%d bytes) or device id (%d bytes) the registry "+
+		"cannot record — over %d characters or with a control or format character; recorded sanitized",
+		r.Name, w.GetCertFingerprint(), len(w.GetName()), len(w.GetDeviceId()), workeradmit.MaxClaimLen)
+	return &pb.KnownWorker{CertFingerprint: w.GetCertFingerprint(), Name: name, DeviceId: device}
 }
 
 // logRejected says which workers the registry refused to record, and why.
@@ -231,9 +277,12 @@ const (
 	registryDown
 )
 
-// relayIDField is RecordWorkerReq's relay_id, as the generated storage names
-// it in an ErrorDetail's field.
-const relayIDField = "relay_id"
+// relayLevelFields are the RecordWorkerReq fields the RELAY supplies rather
+// than the worker claims, as the generated storage names them in an
+// ErrorDetail's field: relay_id is the relay's own id, and cert_fingerprint is
+// computed by the relay from the key the worker proved it holds. A refusal of
+// either is about the relay, not about one worker's configuration.
+var relayLevelFields = []string{"relay_id", "cert_fingerprint"}
 
 // classifyRecordError tells a registry that refused ONE row from one that
 // cannot write at all — by the gRPC CODE, never by whether a detail is
@@ -249,11 +298,13 @@ const relayIDField = "relay_id"
 //
 // Only InvalidArgument and OutOfRange are about the request — a failed field
 // validation, a mapped constraint, a value the column cannot hold. Of those,
-// one whose detail names relay_id is about the RELAY's id, not the worker's
-// claims (a relay_id foreign key or a malformed id): today's schema has no
-// foreign key on Worker.relay_id, so that is defensive, but an operator would
-// otherwise read every worker of a vanished relay as individually refused.
-// Everything else aborts.
+// one whose detail names a field the RELAY supplies (relayLevelFields) is
+// about the relay, not the worker's claims: a relay_id foreign key or a
+// malformed id (today's schema has no foreign key on Worker.relay_id, so that
+// is defensive, but an operator would otherwise read every worker of a
+// vanished relay as individually refused), or a fingerprint the relay
+// computed in a shape the registry does not take — every worker of that relay
+// would be refused the same way. Everything else aborts.
 func classifyRecordError(err error) recordOutcome {
 	if err == nil {
 		return recorded
@@ -268,7 +319,7 @@ func classifyRecordError(err error) recordOutcome {
 		return registryDown
 	}
 	for _, d := range st.Details() {
-		if ed, ok := d.(*w17pb.ErrorDetail); ok && ed.GetField() == relayIDField {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok && slices.Contains(relayLevelFields, ed.GetField()) {
 			return refusedRelay
 		}
 	}
@@ -279,8 +330,10 @@ func classifyRecordError(err error) recordOutcome {
 // failure to reach the relay.
 var errRecording = errors.New("recording a worker")
 
-// errRelayRow marks a relay the registry would not file workers under.
-var errRelayRow = errors.New("the registry refused this relay's id")
+// errRelayRow marks a relay the registry would not file workers under: it
+// refused something the relay itself supplied (its id, or a fingerprint it
+// computed).
+var errRelayRow = errors.New("the registry refused what this relay supplied (its id or a worker fingerprint it computed)")
 
 // sweepSoFar renders what an aborted sweep had already found, for its error.
 func sweepSoFar(unreachable []string, notAsked []Relay, skipped int) string {

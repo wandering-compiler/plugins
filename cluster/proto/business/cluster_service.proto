@@ -242,14 +242,17 @@ message CheckWorkersResp {
   int32 discovered = 1;
   // Workers enrolled and not banned, across every relay.
   int32 enrolled_total = 2;
-  // Relays that could not be reached, by name. Reported rather than failed:
-  // one unreachable relay must not hide the workers every other relay is
-  // holding.
+  // Relays this sweep failed on, by name: ones that could not be reached, and
+  // ones that answered but whose OWN data the registry refused (the relay's
+  // id, or a worker fingerprint the relay computed) — the reason written onto
+  // each relay's row says which. Reported rather than failed: one failing
+  // relay must not hide the workers every other relay is holding.
   repeated string unreachable_relays = 3;
-  // Workers a relay reported that the registry refused to record because of
-  // their OWN claims (a name or device id the registry cannot hold). Counted
-  // here so an operator sees that the sweep left someone out; which workers,
-  // and why, is in the control plane's log.
+  // Workers a relay reported that the registry refused for the worker's own
+  // data (InvalidArgument other than a relay-level field: not the relay's id,
+  // not the fingerprint the relay computed). Counted here so an operator sees
+  // that the sweep left someone out; which workers, and why, is in the
+  // control plane's log.
   int32 skipped_workers = 4;
 }
 

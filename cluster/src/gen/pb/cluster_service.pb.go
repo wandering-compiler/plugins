@@ -633,14 +633,17 @@ type CheckWorkersResp struct {
 	Discovered int32 `protobuf:"varint,1,opt,name=discovered,proto3" json:"discovered,omitempty"`
 	// Workers enrolled and not banned, across every relay.
 	EnrolledTotal int32 `protobuf:"varint,2,opt,name=enrolled_total,json=enrolledTotal,proto3" json:"enrolled_total,omitempty"`
-	// Relays that could not be reached, by name. Reported rather than failed:
-	// one unreachable relay must not hide the workers every other relay is
-	// holding.
+	// Relays this sweep failed on, by name: ones that could not be reached, and
+	// ones that answered but whose OWN data the registry refused (the relay's
+	// id, or a worker fingerprint the relay computed) — the reason written onto
+	// each relay's row says which. Reported rather than failed: one failing
+	// relay must not hide the workers every other relay is holding.
 	UnreachableRelays []string `protobuf:"bytes,3,rep,name=unreachable_relays,json=unreachableRelays,proto3" json:"unreachable_relays,omitempty"`
-	// Workers a relay reported that the registry refused to record because of
-	// their OWN claims (a name or device id the registry cannot hold). Counted
-	// here so an operator sees that the sweep left someone out; which workers,
-	// and why, is in the control plane's log.
+	// Workers a relay reported that the registry refused for the worker's own
+	// data (InvalidArgument other than a relay-level field: not the relay's id,
+	// not the fingerprint the relay computed). Counted here so an operator sees
+	// that the sweep left someone out; which workers, and why, is in the
+	// control plane's log.
 	SkippedWorkers int32 `protobuf:"varint,4,opt,name=skipped_workers,json=skippedWorkers,proto3" json:"skipped_workers,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
