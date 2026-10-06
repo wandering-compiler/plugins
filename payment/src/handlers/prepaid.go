@@ -192,7 +192,7 @@ func grantTopupOnPaymentSuccess(ctx context.Context, h *PaymentServiceHandler, e
 	}
 	topup := got.GetTopup()
 	if topup == nil {
-		if ev.Origin == backend.OriginTopup {
+		if ev.Origin == backend.OriginTopup && h.madeHere(ev) {
 			// A top-up whose CreditTopup row has not landed yet — the
 			// success can arrive between the Payment INSERT and the
 			// top-up's. Acknowledging it would strand the credit for good.

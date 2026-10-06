@@ -48,9 +48,10 @@ func reconcileSubscriptionWebhook(ctx context.Context, h *PaymentServiceHandler,
 	if lerr != nil && !guardRefused(lerr) {
 		return lerr
 	}
-	if got.GetSubscription() == nil && ev.Origin != "" {
-		// This plugin's subscription, its row not landed yet. One it did not
-		// create (no origin mark) has no row and never will: acknowledged.
+	if got.GetSubscription() == nil && h.madeHere(ev) {
+		// This installation's subscription, its row not landed yet. One it
+		// did not create (no origin mark, or another installation's) has no
+		// row and never will: acknowledged.
 		return errNoLocalRecord
 	}
 	return nil
@@ -186,6 +187,7 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 		ProviderCustomerID: cust.GetProviderCustomerId(),
 		ProviderPriceID:    plan.GetProviderPriceId(),
 		IdempotencyKey:     req.GetIdempotencyKey(),
+		Install:            h.installID(),
 	})
 	if err != nil {
 		return nil, providerFailure(err)

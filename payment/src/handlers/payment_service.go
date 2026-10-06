@@ -173,6 +173,7 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 		IdempotencyKey:     idemKey,
 		Description:        description,
 		Origin:             origin,
+		Install:            h.installID(),
 	})
 	if err != nil {
 		return nil, "", providerFailure(err)

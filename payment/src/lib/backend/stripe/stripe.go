@@ -103,6 +103,9 @@ func (b *Backend) CreatePayment(ctx context.Context, spec backend.PaymentSpec) (
 	if spec.Origin != "" {
 		form.Set("metadata["+backend.OriginMetadataKey+"]", spec.Origin)
 	}
+	if spec.Install != "" {
+		form.Set("metadata["+backend.InstallMetadataKey+"]", spec.Install)
+	}
 	var resp paymentIntentResp
 	if err := b.post(ctx, "/v1/payment_intents", form, spec.IdempotencyKey, &resp); err != nil {
 		return backend.PaymentResult{}, err
@@ -168,6 +171,9 @@ func (b *Backend) StartSubscription(ctx context.Context, spec backend.Subscripti
 	form.Set("customer", spec.ProviderCustomerID)
 	form.Set("items[0][price]", spec.ProviderPriceID)
 	form.Set("metadata["+backend.OriginMetadataKey+"]", backend.OriginSubscription)
+	if spec.Install != "" {
+		form.Set("metadata["+backend.InstallMetadataKey+"]", spec.Install)
+	}
 	var resp subscriptionResp
 	if err := b.post(ctx, "/v1/subscriptions", form, spec.IdempotencyKey, &resp); err != nil {
 		return backend.SubscriptionResult{}, err

@@ -107,7 +107,9 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 			ProviderPaymentId: ev.PaymentIntentID,
 		})
 		if guardRefused(err) {
-			// Already in a state the guard protects, or absent.
+			// Already in a state the guard protects (SUCCEEDED, or the
+			// terminal CANCELED / REFUNDED), or absent: not landed yet, or
+			// not this installation's object.
 			err = h.requirePayment(ctx, ev)
 		}
 		if err != nil {
@@ -124,8 +126,10 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 			ProviderPaymentId: ev.PaymentIntentID,
 		})
 		if guardRefused(err) {
-			// Already FAILED (redelivery) or SUCCEEDED (a late failure of
-			// an earlier attempt — SUCCEEDED is absorbing), or absent.
+			// Already in a state the guard protects — FAILED (redelivery),
+			// SUCCEEDED (a late failure of an earlier attempt; SUCCEEDED is
+			// absorbing), or the terminal CANCELED / REFUNDED — or absent:
+			// not landed yet, or not this installation's object.
 			err = h.requirePayment(ctx, ev)
 		}
 		return err
@@ -144,17 +148,18 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 
 // requirePayment resolves a refused payment guard: nil when the local
 // Payment exists (it is already in a state the guard protects);
-// errNoLocalRecord when the object is this plugin's and its row has not
-// landed yet; nil — acknowledged — when the object is not this plugin's at
-// all. The provider sends events for objects the plugin never made (a
-// subscription's invoice payments, dashboard charges, another app on the
-// account); failing those would have them redelivered for days.
+// errNoLocalRecord when this installation made the object and its row has
+// not landed yet; nil — acknowledged — when it did not (madeHere). The
+// provider sends events for objects the plugin never made (a subscription's
+// invoice payments, dashboard charges, another app on the account) and for
+// objects ANOTHER installation on the same account made; failing those
+// would have them redelivered for days.
 func (h *PaymentServiceHandler) requirePayment(ctx context.Context, ev stripe.Event) error {
 	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: ev.PaymentIntentID})
 	if err != nil && !absent(err) {
 		return err
 	}
-	if got.GetPayment() != nil || ev.Origin == "" {
+	if got.GetPayment() != nil || !h.madeHere(ev) {
 		return nil
 	}
 	return errNoLocalRecord

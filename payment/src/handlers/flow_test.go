@@ -415,7 +415,7 @@ func TestFlow_FailureThenRetriedSuccess(t *testing.T) {
 func TestFlow_WebhookOutrunsLocalRow_FailsUntilTheRowLands(t *testing.T) {
 	r := newRig(t)
 	// The plugin's own intent (origin-marked), whose local row has not landed.
-	body := eventJSON("evt_fast", "payment_intent.succeeded", "pi_not_yet", map[string]any{"metadata": map[string]string{"w17_payment": "charge"}})
+	body := eventJSON("evt_fast", "payment_intent.succeeded", "pi_not_yet", map[string]any{"metadata": ownMark("charge")})
 	for i := 1; i <= 2; i++ {
 		_, err := r.deliver(body)
 		wantCode(t, err, codes.NotFound, "delivery before the row exists")
@@ -434,7 +434,7 @@ func TestFlow_WebhookOutrunsLocalRow_FailsUntilTheRowLands(t *testing.T) {
 		t.Errorf("status = %v", st)
 	}
 	// Same for a failure event about one of the plugin's own intents.
-	_, err = r.deliver(eventJSON("evt_fail_unknown", "payment_intent.payment_failed", "pi_ghost", map[string]any{"metadata": map[string]string{"w17_payment": "charge"}}))
+	_, err = r.deliver(eventJSON("evt_fail_unknown", "payment_intent.payment_failed", "pi_ghost", map[string]any{"metadata": ownMark("charge")}))
 	wantCode(t, err, codes.NotFound, "failure for an unknown intent")
 }
 
@@ -798,7 +798,7 @@ func TestFlow_SubscriptionLifecycle_OutOfOrderAndUnknown(t *testing.T) {
 	// The plugin's own subscription with no row yet: fail unrecorded, so
 	// the provider redelivers.
 	_, err = r.deliver(eventJSON("evt_ghost", "customer.subscription.updated", "sub_ghost",
-		map[string]any{"status": "active", "metadata": map[string]string{"w17_payment": "subscription"}}))
+		map[string]any{"status": "active", "metadata": ownMark("subscription")}))
 	wantCode(t, err, codes.NotFound, "unknown subscription")
 	if r.store.isProcessed("evt_ghost") {
 		t.Error("unknown subscription event recorded")

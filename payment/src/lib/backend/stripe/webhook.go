@@ -47,7 +47,11 @@ type Event struct {
 	// Origin is data.object.metadata[backend.OriginMetadataKey]: set on
 	// objects this plugin created, empty on everything else.
 	Origin string
-	Raw    []byte
+	// Install is data.object.metadata[backend.InstallMetadataKey]: the
+	// installation that created the object (backend.InstallID); empty on
+	// objects no installation marked.
+	Install string
+	Raw     []byte
 }
 
 // ErrBadSignature is returned when the Stripe-Signature HMAC does not
@@ -128,6 +132,7 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 		CurrentPeriodEnd: raw.Data.Object.CurrentPeriodEnd,
 		Created:          raw.Created,
 		Origin:           raw.Data.Object.Metadata[backend.OriginMetadataKey],
+		Install:          raw.Data.Object.Metadata[backend.InstallMetadataKey],
 		Raw:              payload,
 	}, nil
 }

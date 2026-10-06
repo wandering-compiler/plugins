@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
 	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
 )
 
@@ -49,6 +50,7 @@ type stripeFake struct {
 	failQueue []int
 	requests  map[string]int    // path → requests that reached the handler logic
 	origins   map[string]string // object id → metadata[w17_payment] it was created with
+	installs  map[string]string // object id → metadata[w17_install] it was created with
 }
 
 type idemEntry struct {
@@ -72,6 +74,7 @@ func newStripeFake(t *testing.T) *stripeFake {
 		declined: map[string]bool{},
 		requests: map[string]int{},
 		origins:  map[string]string{},
+		installs: map[string]string{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -222,6 +225,7 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 		in := &fakeIntent{id: f.id("pi"), customer: cus, currency: cur, amount: amount, origin: r.PostForm.Get("metadata[w17_payment]")}
 		f.intents[in.id] = in
 		f.origins[in.id] = in.origin
+		f.installs[in.id] = r.PostForm.Get("metadata[w17_install]")
 		return okJSON(map[string]any{
 			"id": in.id, "object": "payment_intent", "amount": amount, "currency": cur,
 			"status": "requires_payment_method", "client_secret": in.id + "_secret_fake",
@@ -260,6 +264,7 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 		}
 		id := f.id("sub")
 		f.origins[id] = r.PostForm.Get("metadata[w17_payment]")
+		f.installs[id] = r.PostForm.Get("metadata[w17_install]")
 		return okJSON(map[string]any{"id": id, "object": "subscription", "status": "active", "current_period_end": 1893456000})
 	}
 	return stripeErr(w, http.StatusNotFound, "invalid_request_error", "Unrecognized request URL")
@@ -295,10 +300,12 @@ func eventJSON(id, typ, objectID string, extra map[string]any) []byte {
 }
 
 // objectEvent renders an event for an object the fake created, carrying the
-// metadata Stripe would echo on it — the origin mark the plugin set.
+// metadata Stripe would echo on it — the origin and install marks the plugin
+// set.
 func (f *stripeFake) objectEvent(id, typ, objectID string, extra map[string]any) []byte {
 	f.mu.Lock()
 	origin, ok := f.origins[objectID]
+	install := f.installs[objectID]
 	f.mu.Unlock()
 	if !ok {
 		f.t.Fatalf("objectEvent: the fake created no object %q", objectID)
@@ -307,10 +314,23 @@ func (f *stripeFake) objectEvent(id, typ, objectID string, extra map[string]any)
 	for k, v := range extra {
 		obj[k] = v
 	}
+	md := map[string]string{}
 	if origin != "" {
-		obj["metadata"] = map[string]string{"w17_payment": origin}
+		md["w17_payment"] = origin
+	}
+	if install != "" {
+		md["w17_install"] = install
+	}
+	if len(md) > 0 {
+		obj["metadata"] = md
 	}
 	return eventJSON(id, typ, objectID, obj)
+}
+
+// ownMark is the metadata this installation (WebhookSecret =
+// testWebhookSecret) writes on an object it creates with the given origin.
+func ownMark(origin string) map[string]string {
+	return map[string]string{"w17_payment": origin, "w17_install": backend.InstallID(testWebhookSecret)}
 }
 
 // withCreated rewrites an event's created time.
