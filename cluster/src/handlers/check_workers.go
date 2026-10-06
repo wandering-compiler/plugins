@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 
 	"google.golang.org/grpc/codes"
@@ -86,6 +87,16 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	var unreachable []string
 	for _, r := range relays {
 		if err := h.exchangeOne(ctx, r); err != nil {
+			if errors.Is(err, errRecording) {
+				// The RELAY answered; it is this control plane's own registry
+				// that failed. Not the relay's fault, so neither listed as
+				// unreachable nor written onto its row — which would send an
+				// operator to debug a healthy machine — and fatal, because
+				// every other relay's workers would fail to record the same
+				// way. The upsert is idempotent: pressing again is the retry.
+				return nil, status.Errorf(codes.Unavailable,
+					"cluster: cannot record the workers relay %q reported: %v", r.Name, err)
+			}
 			// Reported, not returned. One unreachable relay must not hide the
 			// workers every other relay is holding — which is exactly the
 			// moment an operator is most likely to be pressing this button.
@@ -133,11 +144,15 @@ func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) error 
 			continue
 		}
 		if err := h.Workers.Record(ctx, r.ID, w); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", errRecording, err)
 		}
 	}
 	return nil
 }
+
+// errRecording marks a failure to WRITE what a relay reported, as opposed to a
+// failure to reach the relay.
+var errRecording = errors.New("recording a worker")
 
 // ExchangeWorkers is a RELAY's method. The project holds the decisions; it has
 // no relay to be one for.

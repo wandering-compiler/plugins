@@ -38,6 +38,17 @@ type attachRig struct {
 
 func serveAttach(t *testing.T, lifetime time.Duration) *attachRig {
 	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serveAttachOn(t, lifetime, lis)
+}
+
+// serveAttachOn is serveAttach on a listener the test controls — one that can
+// refuse connections for a while, say.
+func serveAttachOn(t *testing.T, lifetime time.Duration, lis net.Listener) *attachRig {
+	t.Helper()
 	relayID, err := identity.LoadOrCreateIdentity(t.TempDir(), "relay")
 	if err != nil {
 		t.Fatal(err)
@@ -48,10 +59,6 @@ func serveAttach(t *testing.T, lifetime time.Duration) *attachRig {
 	}
 	r := &attachRig{relayFP: relayID.Fingerprint, ca: newCA(t), reg: workeradmit.New(), backends: relayserver.NewBackends()}
 	r.codes, err = regcode.New(time.Minute, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

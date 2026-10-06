@@ -30,10 +30,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -88,8 +90,27 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "mint" {
 		return mint(os.Args[2:], os.Stdout)
 	}
+	cfg, err := parseConfig(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	return serve(cfg, stop, nil)
+}
+
+// parseConfig reads the flags, each defaulted from its environment variable.
+// Split from serve so the relay's wiring can be run in-process by a test, on
+// ports it chose, without going through os.Args.
+func parseConfig(args []string, out io.Writer) (config, error) {
 	cfg := config{}
-	fs := flag.NewFlagSet("relay", flag.ExitOnError)
+	env := &envReader{}
+	envOr, envInt, envDuration := env.str, env.int, env.duration
+	fs := flag.NewFlagSet("relay", flag.ContinueOnError)
+	fs.SetOutput(out)
 	fs.StringVar(&cfg.listen, "listen", envOr("RELAY_LISTEN", ":13444"),
 		"address the MANAGEMENT gRPC listens on — the half the control plane dials")
 	fs.StringVar(&cfg.attachListen, "attach-listen", envOr("RELAY_ATTACH_LISTEN", ":13446"),
@@ -130,9 +151,42 @@ func run() error {
 		"how often a client holding a polled reservation is told to ask again")
 	fs.DurationVar(&cfg.pollTimeout, "poll-timeout", envDuration("RELAY_POLL_TIMEOUT", relaycore.DefaultPollTimeout),
 		"how long a polled reservation survives without a poll before it is abandoned — a few poll intervals")
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		return err
+	if err := errors.Join(env.errs...); err != nil {
+		return config{}, err
 	}
+	if err := fs.Parse(args); err != nil {
+		return config{}, err
+	}
+	if fs.NArg() > 0 {
+		// A stray word is almost always a flag that lost its dashes or a
+		// subcommand misspelt; starting anyway would run a relay on defaults
+		// the operator believes they changed.
+		return config{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	return cfg, nil
+}
+
+// listening is where a started relay's four listeners actually bound — what a
+// test needs when it asked for port 0.
+type listening struct {
+	management, attach, tunnels, proxy net.Addr
+}
+
+// serve runs the relay until a value arrives on stop, then drains and shuts
+// down (shutdownPlan). started, if set, is told the bound addresses once every
+// listener is up.
+//
+// A start that FAILS part-way stops whatever it had already started before
+// returning, so nothing keeps serving behind an error.
+func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err error) {
+	var undo []func()
+	defer func() {
+		if err != nil {
+			for i := len(undo) - 1; i >= 0; i-- {
+				undo[i]()
+			}
+		}
+	}()
 
 	// Every one of these is refused rather than defaulted. A relay that starts
 	// with no proxy address hands out grants naming nowhere; one with no pin
@@ -245,6 +299,7 @@ func run() error {
 		return fmt.Errorf("listening for worker tunnels on %s: %w", cfg.tunnelListen, err)
 	}
 	tunnelLis := tls.NewListener(tunnelRaw, tunnelTLS)
+	undo = append(undo, func() { _ = tunnelLis.Close() })
 	go func() {
 		err := relayserver.ServeTunnels(tunnelLis, workers, backends, func(e error) {
 			// Logged and dropped. A refused tunnel is one machine's problem,
@@ -278,6 +333,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listening for worker attach on %s: %w", cfg.attachListen, err)
 	}
+	// The listener is closed HERE as well as by Stop: Serve runs in a goroutine
+	// that may not have registered it yet, and a server stopped before Serve
+	// closes the listener only when Serve gets round to it — after serve has
+	// already returned, with the port still held.
+	undo = append(undo, func() { attachSrv.Stop(); _ = attachLis.Close() })
 	go func() {
 		if err := attachSrv.Serve(attachLis); err != nil {
 			log.Printf("attach listener stopped: %v", err)
@@ -302,6 +362,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listening for callers on %s: %w", cfg.proxyListen, err)
 	}
+	undo = append(undo, func() { proxy.Stop(); _ = proxyLis.Close() })
 	go func() {
 		if err := proxy.Serve(proxyLis); err != nil {
 			log.Printf("proxy stopped: %v", err)
@@ -312,14 +373,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", cfg.listen, err)
 	}
+	undo = append(undo, func() { srv.Stop(); _ = lis.Close() })
 	log.Printf("management %s · attach %s · tunnels %s · callers %s · capacity %d · advertised %s",
 		cfg.listen, cfg.attachListen, cfg.tunnelListen, cfg.proxyListen, cfg.capacity, cfg.proxyAddress)
 
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(lis) }()
+	if started != nil {
+		started(listening{management: lis.Addr(), attach: attachLis.Addr(), tunnels: tunnelLis.Addr(), proxy: proxyLis.Addr()})
+	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case err := <-served:
 		// The management listener failed on its own: nothing can manage this
@@ -341,26 +404,49 @@ func run() error {
 	return nil
 }
 
-func envOr(k, def string) string {
+// envReader supplies the flags' defaults from RELAY_* variables.
+//
+// An UNSET (or blank) variable is the default. A SET one that does not parse
+// is an error, collected and refused by parseConfig — never quietly replaced
+// by the default: RELAY_CAPACITY=8x used to mean "no ceiling at all" and
+// RELAY_TICKET_TTL=60 (no unit) a 30 s TTL, each a relay running on a value
+// its operator believes they changed.
+type envReader struct{ errs []error }
+
+func (e *envReader) str(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		return v
 	}
 	return def
 }
 
-func envInt(k string, def int) int {
-	var n int
-	if _, err := fmt.Sscanf(os.Getenv(k), "%d", &n); err == nil && n > 0 {
-		return n
+// int reads a count where 0 is meaningful (RELAY_CAPACITY: no ceiling) and a
+// negative one is not.
+func (e *envReader) int(k string, def int) int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
 	}
-	return def
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		e.errs = append(e.errs, fmt.Errorf("%s=%q is not a whole number of zero or more", k, v))
+		return def
+	}
+	return n
 }
 
-func envDuration(k string, def time.Duration) time.Duration {
-	if d, err := time.ParseDuration(os.Getenv(k)); err == nil && d > 0 {
-		return d
+// duration reads a positive Go duration ("30s", "15m").
+func (e *envReader) duration(k string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
 	}
-	return def
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		e.errs = append(e.errs, fmt.Errorf("%s=%q is not a positive duration with a unit, like 30s or 15m", k, v))
+		return def
+	}
+	return d
 }
 
 // relayIdentity resolves the relay's own key pair from whichever of the two
