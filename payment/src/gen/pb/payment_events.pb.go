@@ -604,8 +604,8 @@ const file_events_payment_events_proto_rawDesc = "" +
 	"\x06status\x18\x03 \x01(\x0e2(.w17.contrib.payment.Subscription.StatusR\x06status\x129\n" +
 	"\n" +
 	"changed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tchangedAt:B\x92\xbd\x18-\n" +
-	"\x06events\x12#payment.subscription.status_changed\xfa\xf4\x18\rsubscriptionsB\xda\x01\n" +
-	"\x17com.w17.contrib.paymentB\x12PaymentEventsProtoP\x01Z=github.com/wandering-compiler/platform/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
+	"\x06events\x12#payment.subscription.status_changed\xfa\xf4\x18\rsubscriptionsB\xd1\x01\n" +
+	"\x17com.w17.contrib.paymentB\x12PaymentEventsProtoP\x01Z4github.com/wandering-compiler/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
 
 var (
 	file_events_payment_events_proto_rawDescOnce sync.Once

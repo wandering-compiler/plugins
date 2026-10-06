@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
 )
 
 // The production shape of issue-worker: the CA comes from mounted secrets,

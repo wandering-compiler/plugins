@@ -3,7 +3,7 @@ package handlers
 import (
 	"errors"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 // This file implements the `user_admin` feature — turnkey admin user

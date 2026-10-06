@@ -1377,8 +1377,8 @@ const file_types_models_proto_rawDesc = "" +
 	"\x06PAUSED\x10\x06\x12\n" +
 	"\n" +
 	"\x06UNPAID\x10\a\x12\x17\n" +
-	"\x13UNRECOGNIZED_STATUS\x10\b:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptionsB\xd3\x01\n" +
-	"\x17com.w17.contrib.paymentB\vModelsProtoP\x01Z=github.com/wandering-compiler/platform/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
+	"\x13UNRECOGNIZED_STATUS\x10\b:\x15\xc2\xf3\x18\x00\xfa\xf4\x18\rsubscriptionsB\xca\x01\n" +
+	"\x17com.w17.contrib.paymentB\vModelsProtoP\x01Z4github.com/wandering-compiler/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
 
 var (
 	file_types_models_proto_rawDescOnce sync.Once

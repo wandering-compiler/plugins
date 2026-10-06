@@ -10,7 +10,7 @@ import (
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // Every (w17.event_emit) payload, read from the generated descriptors (the

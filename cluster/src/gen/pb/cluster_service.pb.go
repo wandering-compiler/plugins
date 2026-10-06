@@ -1519,8 +1519,8 @@ const file_business_cluster_service_proto_rawDesc = "" +
 	"DrainRelay\x12\".w17.contrib.cluster.DrainRelayReq\x1a#.w17.contrib.cluster.DrainRelayResp\"\x00\x12[\n" +
 	"\vReserveTask\x12#.w17.contrib.cluster.ReserveTaskReq\x1a%.w17.contrib.cluster.ReservationState\"\x00\x12a\n" +
 	"\x0eGetReservation\x12&.w17.contrib.cluster.GetReservationReq\x1a%.w17.contrib.cluster.ReservationState\"\x00\x12l\n" +
-	"\x11CancelReservation\x12).w17.contrib.cluster.CancelReservationReq\x1a*.w17.contrib.cluster.CancelReservationResp\"\x00B\xdb\x01\n" +
-	"\x17com.w17.contrib.clusterB\x13ClusterServiceProtoP\x01Z=github.com/wandering-compiler/platform/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
+	"\x11CancelReservation\x12).w17.contrib.cluster.CancelReservationReq\x1a*.w17.contrib.cluster.CancelReservationResp\"\x00B\xd2\x01\n" +
+	"\x17com.w17.contrib.clusterB\x13ClusterServiceProtoP\x01Z4github.com/wandering-compiler/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
 
 var (
 	file_business_cluster_service_proto_rawDescOnce sync.Once

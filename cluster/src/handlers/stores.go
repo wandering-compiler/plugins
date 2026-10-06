@@ -7,7 +7,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 )
 
 // NewRelayStore adapts the bundle's generated clients to the seam the

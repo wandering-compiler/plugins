@@ -10,9 +10,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/gen"
-	"github.com/wandering-compiler/platform/plugins/cluster/handlers"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/gen"
+	"github.com/wandering-compiler/plugins/cluster/handlers"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
 )
 
 // RegisterPlugin wires the control plane's half of the cluster.

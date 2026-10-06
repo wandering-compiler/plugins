@@ -1,4 +1,4 @@
-module github.com/wandering-compiler/platform/plugins/cluster
+module github.com/wandering-compiler/plugins/cluster
 
 go 1.26
 

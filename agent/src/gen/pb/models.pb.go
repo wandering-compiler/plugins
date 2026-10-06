@@ -537,8 +537,8 @@ const file_types_models_proto_rawDesc = "" +
 	"\x10IncompleteReason\x12!\n" +
 	"\x1dINCOMPLETE_REASON_UNSPECIFIED\x10\x00\x12'\n" +
 	"#INCOMPLETE_REASON_MAX_OUTPUT_TOKENS\x10\x01\x12$\n" +
-	" INCOMPLETE_REASON_CONTENT_FILTER\x10\x02B\xc7\x01\n" +
-	"\x15com.w17.contrib.agentB\vModelsProtoP\x01Z;github.com/wandering-compiler/platform/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
+	" INCOMPLETE_REASON_CONTENT_FILTER\x10\x02B\xbe\x01\n" +
+	"\x15com.w17.contrib.agentB\vModelsProtoP\x01Z2github.com/wandering-compiler/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
 
 var (
 	file_types_models_proto_rawDescOnce sync.Once

@@ -5,9 +5,9 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/service/secret"
 
-	"github.com/wandering-compiler/platform/plugins/payment/gen"
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/payment/handlers"
+	"github.com/wandering-compiler/plugins/payment/gen"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
+	"github.com/wandering-compiler/plugins/payment/handlers"
 )
 
 // The registered handler must carry exactly the configured secrets and

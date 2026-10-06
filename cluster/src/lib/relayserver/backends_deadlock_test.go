@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
 )
 
 // oneConn is a listener that hands out one connection, then blocks.

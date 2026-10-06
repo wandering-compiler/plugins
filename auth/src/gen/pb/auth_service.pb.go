@@ -5522,8 +5522,8 @@ const file_business_auth_service_proto_rawDesc = "" +
 	"org_invite\x12n\n" +
 	"\x0fAcceptOrgInvite\x12$.w17.contrib.auth.AcceptOrgInviteReq\x1a%.w17.contrib.auth.AcceptOrgInviteResp\"\x0e\x8a\xf5\x18\n" +
 	"org_invite\x12p\n" +
-	"\x0eChangePassword\x12#.w17.contrib.auth.ChangePasswordReq\x1a$.w17.contrib.auth.ChangePasswordResp\"\x13\x8a\xf5\x18\x0fpassword_changeB\xc6\x01\n" +
-	"\x14com.w17.contrib.authB\x10AuthServiceProtoP\x01Z:github.com/wandering-compiler/platform/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
+	"\x0eChangePassword\x12#.w17.contrib.auth.ChangePasswordReq\x1a$.w17.contrib.auth.ChangePasswordResp\"\x13\x8a\xf5\x18\x0fpassword_changeB\xbd\x01\n" +
+	"\x14com.w17.contrib.authB\x10AuthServiceProtoP\x01Z1github.com/wandering-compiler/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
 
 var (
 	file_business_auth_service_proto_rawDescOnce sync.Once

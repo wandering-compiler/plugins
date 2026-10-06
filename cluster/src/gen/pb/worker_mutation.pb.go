@@ -273,8 +273,8 @@ const file_mutations_worker_mutation_proto_rawDesc = "" +
 	"BanWorkers\x12%.w17.contrib.cluster.DecideWorkersReq\x1a&.w17.contrib.cluster.DecideWorkersResp\"p\xf2\xf3\x18lBj\n" +
 	"\x04main\x12bUPDATE @module.Worker SET state = 2, decided_at = :at, decided_by = :decided_by WHERE id IN (:ids)\x12\xcf\x01\n" +
 	"\fUnbanWorkers\x12%.w17.contrib.cluster.DecideWorkersReq\x1a&.w17.contrib.cluster.DecideWorkersResp\"p\xf2\xf3\x18lBj\n" +
-	"\x04main\x12bUPDATE @module.Worker SET state = 1, decided_at = :at, decided_by = :decided_by WHERE id IN (:ids)B\xdb\x01\n" +
-	"\x17com.w17.contrib.clusterB\x13WorkerMutationProtoP\x01Z=github.com/wandering-compiler/platform/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
+	"\x04main\x12bUPDATE @module.Worker SET state = 1, decided_at = :at, decided_by = :decided_by WHERE id IN (:ids)B\xd2\x01\n" +
+	"\x17com.w17.contrib.clusterB\x13WorkerMutationProtoP\x01Z4github.com/wandering-compiler/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
 
 var (
 	file_mutations_worker_mutation_proto_rawDescOnce sync.Once

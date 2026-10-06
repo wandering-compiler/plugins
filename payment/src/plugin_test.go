@@ -6,8 +6,8 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/service/secret"
 
-	"github.com/wandering-compiler/platform/plugins/payment/gen"
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	"github.com/wandering-compiler/plugins/payment/gen"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // fake DI surface — non-nil typed clients so ValidateConfig passes.

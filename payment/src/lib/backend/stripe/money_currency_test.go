@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 // Stripe's documented special cases: ISK and UGX are zero-decimal but sent as

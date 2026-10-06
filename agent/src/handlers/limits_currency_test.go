@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 )
 
 func line(cost *int64, currency string, priced int64) *pb.ScopeSpendLine {

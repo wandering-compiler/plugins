@@ -558,8 +558,8 @@ const file_mutations_relay_mutation_proto_rawDesc = "" +
 	"\x12RecordRelayReached\x12*.w17.contrib.cluster.RecordRelayReachedReq\x1a+.w17.contrib.cluster.RecordRelayReachedResp\"Y\xf2\xf3\x18UBS\n" +
 	"\x04main\x12KUPDATE @module.Relay SET last_seen_at = :at, last_error = '' WHERE id = :id\x12\xb5\x01\n" +
 	"\x11RecordRelayFailed\x12).w17.contrib.cluster.RecordRelayFailedReq\x1a*.w17.contrib.cluster.RecordRelayFailedResp\"I\xf2\xf3\x18EBC\n" +
-	"\x04main\x12;UPDATE @module.Relay SET last_error = :error WHERE id = :idB\xda\x01\n" +
-	"\x17com.w17.contrib.clusterB\x12RelayMutationProtoP\x01Z=github.com/wandering-compiler/platform/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
+	"\x04main\x12;UPDATE @module.Relay SET last_error = :error WHERE id = :idB\xd1\x01\n" +
+	"\x17com.w17.contrib.clusterB\x12RelayMutationProtoP\x01Z4github.com/wandering-compiler/plugins/cluster/gen/pb\xa2\x02\x03WCC\xaa\x02\x13W17.Contrib.Cluster\xca\x02\x13W17\\Contrib\\Cluster\xe2\x02\x1fW17\\Contrib\\Cluster\\GPBMetadata\xea\x02\x15W17::Contrib::Clusterb\x06proto3"
 
 var (
 	file_mutations_relay_mutation_proto_rawDescOnce sync.Once

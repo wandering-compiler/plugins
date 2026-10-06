@@ -24,7 +24,7 @@ package gen
 import (
 	"context"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 )
 
 // EnvConfig is the plugin's typed configuration, one field per `env:` entry in

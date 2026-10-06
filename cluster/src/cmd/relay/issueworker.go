@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/plugins/cluster/lib/relayserver"
 )
 
 // issueWorker is `relay issue-worker`: enrol a worker without a registration

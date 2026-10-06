@@ -7,10 +7,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // init wires the payment-succeeded webhook hook to the top-up grant.

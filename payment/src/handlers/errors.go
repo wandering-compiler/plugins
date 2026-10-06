@@ -13,7 +13,7 @@ import (
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 // Storage constraint-violation detail codes (srcgo/lib/validation

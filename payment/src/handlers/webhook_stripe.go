@@ -9,9 +9,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
+	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // stripeSignatureMetadataKey is the lowercase gRPC-metadata key the

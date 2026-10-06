@@ -3,8 +3,8 @@ package handlers
 import (
 	"testing"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/plugins/agent/lib/llm"
 )
 
 // Every enum value the contract offers maps onto the provider's vocabulary, and

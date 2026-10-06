@@ -1,4 +1,4 @@
-module github.com/wandering-compiler/platform/plugins/agent
+module github.com/wandering-compiler/plugins/agent
 
 go 1.26
 

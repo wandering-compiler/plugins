@@ -5,9 +5,9 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // Stripe sends events for objects this plugin never made: a subscription's

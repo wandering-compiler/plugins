@@ -33,9 +33,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/wandering-compiler/platform/plugins/auth/lib/passwordhash"
+	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"

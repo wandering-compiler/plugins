@@ -19,10 +19,10 @@ package auth
 import (
 	"fmt"
 
-	"github.com/wandering-compiler/platform/plugins/auth/lib/passwordhash"
+	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
 
-	"github.com/wandering-compiler/platform/plugins/auth/gen"
-	"github.com/wandering-compiler/platform/plugins/auth/handlers"
+	"github.com/wandering-compiler/plugins/auth/gen"
+	"github.com/wandering-compiler/plugins/auth/handlers"
 )
 
 // RegisterPlugin is the v4 plugin entry point. The bundle's

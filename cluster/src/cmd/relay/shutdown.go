@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
 )
 
 // stopper is what a shutdown needs of a *grpc.Server.

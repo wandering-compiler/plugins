@@ -1,4 +1,4 @@
-module github.com/wandering-compiler/platform/plugins/auth
+module github.com/wandering-compiler/plugins/auth
 
 go 1.26.1
 

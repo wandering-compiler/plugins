@@ -6075,8 +6075,8 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\x12\xf1\x03\n" +
 	"\x1aListPendingInvitesForEmail\x12/.w17.contrib.auth.ListPendingInvitesForEmailReq\x1a0.w17.contrib.auth.ListPendingInvitesForEmailResp\"\xef\x02\xf2\xf3\x18\xdc\x02B\xd9\x02\n" +
 	"\x04main\x12\xd0\x02SELECT i.id AS invite_id,        i.org_id AS org_id,        o.slug AS org_slug,        o.name AS org_name,        i.role AS role,        i.expires_at AS expires_at FROM @module.OrgInvite i JOIN @module.Organization o ON o.id = i.org_id WHERE i.email = :email AND i.accepted_at IS NULL AND i.expires_at > NOW() ORDER BY i.created_at DESC\x8a\xf5\x18\n" +
-	"org_inviteB\xc4\x01\n" +
-	"\x14com.w17.contrib.authB\x0eAuthQueryProtoP\x01Z:github.com/wandering-compiler/platform/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
+	"org_inviteB\xbb\x01\n" +
+	"\x14com.w17.contrib.authB\x0eAuthQueryProtoP\x01Z1github.com/wandering-compiler/plugins/auth/gen/pb\xa2\x02\x03WCA\xaa\x02\x10W17.Contrib.Auth\xca\x02\x10W17\\Contrib\\Auth\xe2\x02\x1cW17\\Contrib\\Auth\\GPBMetadata\xea\x02\x12W17::Contrib::Authb\x06proto3"
 
 var (
 	file_queries_auth_query_proto_rawDescOnce sync.Once

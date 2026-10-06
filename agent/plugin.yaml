@@ -1,11 +1,11 @@
 name: agent
-version: 0.1.0-rc.3
+version: 0.1.0-rc.4
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
 # per-activation pb path.
-go_module: github.com/wandering-compiler/platform/plugins/agent
+go_module: github.com/wandering-compiler/plugins/agent
 
 description: "LLM calls for a w17 project: one model call in, text + token usage out. An ENGINE — no conversation, no history, no user; your own service holds those and calls this. Phase 1 is a single non-streaming completion; streaming, tool-calling and agent delegation follow."
 license: "Apache-2.0"

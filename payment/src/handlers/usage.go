@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // ReportUsage records metered consumption: append a UsageRecord and

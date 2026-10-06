@@ -893,8 +893,8 @@ const file_queries_usage_query_proto_rawDesc = "" +
 	"\x0fListModelPrices\x12%.w17.contrib.agent.ListModelPricesReq\x1a&.w17.contrib.agent.ListModelPricesResp\"\x94\x03\xf2\xf3\x18\x8f\x03B\x8c\x03\n" +
 	"\x04main\x12\x83\x03SELECT p.id AS id, p.valid_from AS valid_from,        p.input_per_million_minor AS input_per_million_minor,        p.output_per_million_minor AS output_per_million_minor,        p.cached_input_per_million_minor AS cached_input_per_million_minor,        p.currency AS currency, p.recorded_at AS recorded_at FROM @module.ModelPrice p WHERE p.model_id = :model_id ORDER BY p.valid_from DESC\x12\xb4\x02\n" +
 	"\rGetScopeLimit\x12#.w17.contrib.agent.GetScopeLimitReq\x1a$.w17.contrib.agent.GetScopeLimitResp\"\xd7\x01\xf2\xf3\x18\xd2\x01B\xcf\x01\n" +
-	"\x04main\x12\xc6\x01SELECT l.limit_minor AS limit_minor, l.currency AS currency FROM @module.ScopeLimit l WHERE l.scope_id = :scope_id AND l.window = :window   AND l.valid_from <= :at ORDER BY l.valid_from DESC LIMIT 1\x1a\x15\x82\xf5\x18\x11usage_persistenceB\xcb\x01\n" +
-	"\x15com.w17.contrib.agentB\x0fUsageQueryProtoP\x01Z;github.com/wandering-compiler/platform/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
+	"\x04main\x12\xc6\x01SELECT l.limit_minor AS limit_minor, l.currency AS currency FROM @module.ScopeLimit l WHERE l.scope_id = :scope_id AND l.window = :window   AND l.valid_from <= :at ORDER BY l.valid_from DESC LIMIT 1\x1a\x15\x82\xf5\x18\x11usage_persistenceB\xc2\x01\n" +
+	"\x15com.w17.contrib.agentB\x0fUsageQueryProtoP\x01Z2github.com/wandering-compiler/plugins/agent/gen/pb\xa2\x02\x03WCA\xaa\x02\x11W17.Contrib.Agent\xca\x02\x11W17\\Contrib\\Agent\xe2\x02\x1dW17\\Contrib\\Agent\\GPBMetadata\xea\x02\x13W17::Contrib::Agentb\x06proto3"
 
 var (
 	file_queries_usage_query_proto_rawDescOnce sync.Once

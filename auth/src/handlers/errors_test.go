@@ -8,7 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/auth/handlers"
+	"github.com/wandering-compiler/plugins/auth/handlers"
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )

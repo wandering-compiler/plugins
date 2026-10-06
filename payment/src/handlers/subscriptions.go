@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend/stripe"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // init wires the subscription webhook reconciler. Present only when the

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 )
 
 // Backend is a worker picked for one call, and the way to let it go again.

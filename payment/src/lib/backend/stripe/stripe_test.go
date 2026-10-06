@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 // testBackend points a real *Backend at an httptest server (same-package
