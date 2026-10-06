@@ -22,7 +22,10 @@ w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0-
 ```
 
 To try an unreleased change, install a commit of `main` (`…#auth@<sha>`). The
-client renders the author tree exactly as a release would, unsigned.
+client renders the author tree with the same `w17ctl plugin render` a release
+uses, so it lands what a release of that commit would, unsigned. This needs a
+w17ctl that renders an author tree on install. An older one places the raw tree,
+tests and generated pb included.
 
 ## Working on a plugin
 

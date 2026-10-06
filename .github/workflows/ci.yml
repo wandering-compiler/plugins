@@ -12,6 +12,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# `shell: bash` runs with -eo pipefail. The runner's implicit default does not,
+# and `go test … | tee` then reports tee's exit status — a failing test turned
+# the job green.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # Every directory with a plugin.yaml is a plugin; nothing to keep in sync.
   plugins:
@@ -23,6 +30,7 @@ jobs:
       - id: list
         run: |
           list="$(ls -d */plugin.yaml | cut -d/ -f1 | jq -R . | jq -cs .)"
+          [ "$list" != "[]" ] || { echo "no plugin found"; exit 1; }
           echo "list=$list" >> "$GITHUB_OUTPUT"
           echo "plugins: $list"
 
@@ -39,6 +47,8 @@ jobs:
         with:
           go-version: '1.26.x'
           cache-dependency-path: ${{ matrix.plugin }}/src/go.sum
+      - name: install the pinned w17ctl (the render releases and commit installs use)
+        run: go install "github.com/wandering-compiler/w17ctl@$(cat tools/w17ctl-version)"
       - name: gofmt
         run: make fmt PLUGIN=${{ matrix.plugin }}
       - name: vet
@@ -47,24 +57,24 @@ jobs:
         working-directory: ${{ matrix.plugin }}/src
         run: |
           go test -count=1 -coverprofile=cover.out ./... | tee test.out
+          # Generated code is not ours to cover; leave it out of the total.
+          { head -1 cover.out; tail -n +2 cover.out | grep -vE '/gen/|/workerpb/' || true; } > cover.own.out
           {
             echo "### ${{ matrix.plugin }} — coverage"
             echo
             echo '| package | coverage |'
             echo '|---|---|'
-            grep -E '^ok .*coverage:' test.out | grep -v '/gen/' \
-              | awk '{for(i=1;i<=NF;i++) if($i=="coverage:") c=$(i+1); print "| `" $2 "` | " c " |"}'
+            grep -E '^ok .*coverage:' test.out | grep -vE '/gen/|/workerpb' \
+              | awk '{for(i=1;i<=NF;i++) if($i=="coverage:") c=$(i+1); print "| `" $2 "` | " c " |"}' || true
             echo
-            echo "**total:** $(go tool cover -func=cover.out | grep -v '/gen/' | tail -1 | awk '{print $NF}')"
+            echo "**total (hand-written code):** $(go tool cover -func=cover.own.out | tail -1 | awk '{print $NF}')"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: committed pb matches its proto
         run: make check-gen-pb PLUGIN=${{ matrix.plugin }}
       - name: the release form renders
         run: make check-render PLUGIN=${{ matrix.plugin }}
 
-  # Names this public repository must not carry. The list is a secret: a fork's
-  # pull request does not receive it, so there the check reports itself skipped.
-  names:
+  repo:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,22 +82,26 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
-      - name: check names
+      - name: no references to the platform's private docs
+        run: make check-refs
+      - name: tools and sandboxes build and pass
+        run: make check-tools
+      # The list of names this public repository must not carry is a secret. A
+      # fork's pull request does not receive it, so there this FAILS rather than
+      # passing unchecked: a maintainer brings the branch into this repository
+      # (or re-runs it from one) to get the check.
+      - name: no file names a real project
         env:
           W17_DENIED_NAMES: ${{ secrets.W17_DENIED_NAMES }}
-          FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository && github.event_name == 'pull_request' }}
-        run: |
-          flags=-require
-          [ "$FROM_FORK" = "true" ] && flags=
-          make check-names CHECKNAMES_FLAGS="$flags"
+        run: make check-names CHECKNAMES_FLAGS=-require
 
-  # The one check branch protection requires: it is green only when every job
-  # above is, whatever the plugin list grows to.
+  # The one check branch protection requires: green only when every job above
+  # is, whatever the plugin list grows to.
   ci-ok:
     if: always()
-    needs: [plugin, names]
+    needs: [plugin, repo]
     runs-on: ubuntu-latest
     steps:
       - run: |
-          [ "${{ needs.plugin.result }}" = success ] && [ "${{ needs.names.result }}" = success ] \
-            || { echo "plugin=${{ needs.plugin.result }} names=${{ needs.names.result }}"; exit 1; }
+          [ "${{ needs.plugin.result }}" = success ] && [ "${{ needs.repo.result }}" = success ] \
+            || { echo "plugin=${{ needs.plugin.result }} repo=${{ needs.repo.result }}"; exit 1; }

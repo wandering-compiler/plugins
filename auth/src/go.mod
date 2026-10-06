@@ -42,6 +42,6 @@ require (
 )
 
 require (
-	github.com/wandering-compiler/sdk/go v0.0.0-20260922225050-410f0d2303c1
+	github.com/wandering-compiler/sdk/go v0.1.0-rc.10
 	google.golang.org/protobuf v1.36.11
 )

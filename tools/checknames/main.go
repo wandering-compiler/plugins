@@ -8,8 +8,15 @@
 // variable (a CI secret): comma-separated `sha256-of-lowercased-name:length`
 // pairs, the same form the w17 platform's own gate uses.
 //
-// A finding prints the file and line only, never the line itself, because the
-// line holds the name and CI logs are public.
+// EVERY tracked file is read, whatever its extension (only binary files are
+// skipped), and every tracked PATH is checked too. A finding prints the file and
+// line, never the line itself, because the line holds the name and CI logs are
+// public; a name in a path is reported by the file's position in
+// `git ls-files`, since printing the path would print the name.
+//
+// Words are split on anything not a letter or digit and on camelCase, and every
+// pair of adjacent words is also tried joined, so `acmeClient`, `Acme-Corp` and
+// `acme_corp` all reach a list entry `acme` or `acmecorp`.
 //
 //	usage: checknames [-require] [repo-root]
 //
@@ -29,12 +36,6 @@ import (
 	"strings"
 	"unicode"
 )
-
-var scanExts = map[string]bool{
-	".go": true, ".proto": true, ".md": true, ".yaml": true, ".yml": true,
-	".sh": true, ".ts": true, ".tsx": true, ".json": true, ".tmpl": true,
-	".src": true, ".mod": true, ".txt": true, "": true,
-}
 
 func main() {
 	require := flag.Bool("require", false, "fail when W17_DENIED_NAMES is not set")
@@ -61,25 +62,34 @@ func main() {
 		fmt.Fprintln(os.Stderr, "checknames: git ls-files:", err)
 		os.Exit(2)
 	}
+	match := func(text string) bool {
+		for _, tok := range tokens(text) {
+			if lengths[len(tok)] {
+				if want, ok := denied[hash(tok)]; ok && want == len(tok) {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	var scanned, hits int
-	for _, rel := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if rel == "" || !scanExts[strings.ToLower(filepath.Ext(rel))] {
+	for i, rel := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if rel == "" {
 			continue
 		}
+		if match(rel) {
+			hits++
+			fmt.Printf("tracked file #%d (git ls-files order) has a PATH that names a project this repository must not name — rename it\n", i+1)
+		}
 		body, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
+		if err != nil || isBinary(body) {
 			continue
 		}
 		scanned++
 		for n, line := range strings.Split(string(body), "\n") {
-			for _, tok := range tokens(line) {
-				if !lengths[len(tok)] {
-					continue
-				}
-				if want, ok := denied[hash(tok)]; ok && want == len(tok) {
-					hits++
-					fmt.Printf("%s:%d names a project this repository must not name — say what happened instead, or use an obviously fake name\n", rel, n+1)
-				}
+			if match(line) {
+				hits++
+				fmt.Printf("%s:%d names a project this repository must not name — say what happened instead, or use an obviously fake name\n", rel, n+1)
 			}
 		}
 	}
@@ -107,10 +117,52 @@ func parseDenied(env string) (map[string]int, map[int]bool, error) {
 	return denied, lengths, nil
 }
 
+// tokens are the lowercased words of a line — split on anything not a letter or
+// digit and on camelCase boundaries — plus every adjacent pair joined.
 func tokens(line string) []string {
-	return strings.FieldsFunc(strings.ToLower(line), func(r rune) bool {
+	var words []string
+	for _, field := range strings.FieldsFunc(line, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+	}) {
+		words = append(words, strings.ToLower(field))
+		if parts := camelParts(field); len(parts) > 1 {
+			words = append(words, parts...)
+		}
+	}
+	out := append([]string(nil), words...)
+	for i := 0; i+1 < len(words); i++ {
+		out = append(out, words[i]+words[i+1])
+	}
+	return out
+}
+
+// camelParts splits `acmeClient` / `ACMEClient` into lowercased words.
+func camelParts(s string) []string {
+	rs := []rune(s)
+	var parts []string
+	start := 0
+	for i := 1; i < len(rs); i++ {
+		lowerToUpper := unicode.IsLower(rs[i-1]) && unicode.IsUpper(rs[i])
+		acronymEnd := i+1 < len(rs) && unicode.IsUpper(rs[i-1]) && unicode.IsUpper(rs[i]) && unicode.IsLower(rs[i+1])
+		if lowerToUpper || acronymEnd {
+			parts = append(parts, strings.ToLower(string(rs[start:i])))
+			start = i
+		}
+	}
+	return append(parts, strings.ToLower(string(rs[start:])))
+}
+
+func isBinary(b []byte) bool {
+	n := len(b)
+	if n > 8000 {
+		n = 8000
+	}
+	for _, c := range b[:n] {
+		if c == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func hash(tok string) string {

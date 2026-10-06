@@ -232,7 +232,7 @@ func TestUnauthenticatedSignIn_AllGatesRenderIdentically(t *testing.T) {
 // sentence: "Wrong email or password." for a missing bearer token or an
 // expired reset link is simply false, and it is the failure this guard exists
 // to catch, because attaching the pair in the shared constructor is the
-// obvious-looking shortcut (caught in review on PR #6).
+// obvious-looking shortcut (caught in review on w17 platform PR #6).
 func TestUnauthenticated_GenericCarriesNoFlowSentence(t *testing.T) {
 	if got := detailOf(t, handlers.Unauthenticated(errors.New("missing bearer header"))); got != nil {
 		t.Errorf("generic refusal carried %q/%q; flows that did not ask for a sentence must get none",

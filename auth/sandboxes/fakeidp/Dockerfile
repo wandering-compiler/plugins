@@ -6,7 +6,7 @@
 # The auth plugin's plugin.yaml references the `w17-fakeidp:dev` tag;
 # codegen wires it into the consuming project's compose.w17.yaml. This
 # image is NEVER shipped to production — a sandbox is throwaway dev
-# infra (see docs/specs/plugins/sandbox-services.md).
+# infra, started only by a project's dev compose.
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY . .

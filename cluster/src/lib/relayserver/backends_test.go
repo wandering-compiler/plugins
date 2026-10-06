@@ -212,7 +212,7 @@ func TestBackends_TakeSkipsAWorkerThatIsNoLongerAdmitted(t *testing.T) {
 	}
 }
 
-// ── the five review findings on PR #9, each as a guard ──────────────────────
+// ── the five review findings on w17 platform PR #9, each as a guard ──────────────────────
 
 // A PENDING worker must not raise the relay's capacity.
 //

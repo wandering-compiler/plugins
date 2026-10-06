@@ -19,12 +19,15 @@ A release is cut by hand from `main` as merged:
 It then does four things:
 1. Runs `make check` for the plugin. `SKIP_CHECK=1` replaces this run with a
    check that CI's `ci-ok` passed on that exact commit.
-2. Renders the installable form onto the `releases` branch.
+2. Renders the plugin as committed (`git archive`, so nothing untracked can reach
+   a release) with `w17ctl plugin render`, onto the `releases` branch.
 3. Signs it through `w17ctl plugin sign`. The console holds the key, and an
    unsigned release is never tagged.
 4. Commits, tags `<plugin>/<version>`, and pushes the `releases` branch and the
-   tag. It never pushes `main`.
+   tag **atomically**: both land, or neither does. It never pushes `main`. A
+   tag that failed to push is deleted locally, so a retry starts clean. Whether
+   a tag is published is decided by the remote, not by a local leftover.
 
-`DRY_RUN=1` does everything except push.
+`DRY_RUN=1` renders and commits locally, without signing (that asks the console) or pushing.
 
 A published tag is never moved. A fix ships as the next version.

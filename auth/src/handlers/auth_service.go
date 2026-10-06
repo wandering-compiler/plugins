@@ -493,7 +493,7 @@ var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userI
 // verification and no invitations staged the assignment without the
 // declaration and failed the bundle build on an undefined identifier —
 // breaking a combination that has nothing to do with invitations (caught in
-// review on PR #11).
+// review on w17 platform PR #11).
 //
 // The fix is not to make `email_verification` require `org_invite`: that would
 // force invitations on every project that only wants to confirm addresses.
