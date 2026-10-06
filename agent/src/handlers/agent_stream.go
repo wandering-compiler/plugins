@@ -64,16 +64,19 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 		// has already paid for whatever the provider produced, and a runaway
 		// guard stopping it does not make those tokens free.
 		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
-		// A send failure travelling back out of onDelta is not ours to
-		// re-wrap: the client is gone and there is nobody to tell.
+		// The client going away is not ours to re-wrap: there is nobody to
+		// tell. The same rule as RunAgent (callerLeft): a Send that failed
+		// because the client is gone comes back as-is, and so does the
+		// stream's own context ending — the client hanging up, or its own
+		// deadline passing, while the provider was still talking. Both used to
+		// fall through to the Unavailable below, with a log line blaming the
+		// model for something the client did; the deadline case survived the
+		// first fix because only the send path was covered.
 		//
-		// This comment stood over code that DID re-wrap it — the send error
-		// fell through to the Unavailable below, with a log line blaming the
-		// model for a client that hung up. The test's own comment said "the
-		// error is the transport's and is returned as-is", and asserted only
-		// that some error came back.
-		if sendErr != nil && errors.Is(err, sendErr) {
-			return sendErr
+		// A Send that failed on THIS side (an oversized or unmarshalable
+		// message) is not the client leaving and goes on to the failure below.
+		if left := callerLeft(srv.Context(), err, sendErr, nil); left != nil {
+			return left
 		}
 		if errors.Is(err, llm.ErrRunawayOutput) {
 			return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")

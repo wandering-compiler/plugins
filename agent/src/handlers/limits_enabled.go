@@ -211,8 +211,9 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 // Three kinds of line, and the middle one is what a consumer reported:
 //
 //	cost present            counted, under its own currency
-//	cost absent, priced > 0 UNTOTALLABLE. #74/1 gave absence a second meaning —
-//	                        the currencies inside this line disagreed — and the
+//	cost absent, priced > 0 UNTOTALLABLE. The usage rollup gave absence a
+//	                        second meaning — the currencies inside this line
+//	                        disagreed, so no single amount exists — and the
 //	                        old `if CostMinor != nil` skipped it, so real spend
 //	                        vanished and a scope priced in two currencies never
 //	                        reached its cap.
@@ -222,7 +223,8 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 //
 // A pure function because the decision is the thing worth pinning, and the
 // generated clients around it are not: there was no test on this file at all
-// when #79/3 arrived, which is how two correct changes met and nobody noticed.
+// when the rollup started leaving mixed-currency lines without a cost, which is
+// how two correct changes met and nobody noticed.
 func totalSpend(lines []*pb.ScopeSpendLine) (int64, string, bool) {
 	byCurrency := map[string]int64{}
 	for _, line := range lines {

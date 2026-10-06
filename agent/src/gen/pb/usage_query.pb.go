@@ -107,8 +107,8 @@ type ScopeSpendLine struct {
 	// That is the one shape an absent cost cannot warn about: absent means
 	// "nothing here was priced", and this is "some of it was".
 	//
-	// The consumer's metering carries a bool on the whole bill for this and
-	// calls it property #5 — "tokens nobody priced are not free". A count is
+	// The consumer's metering carries a bool on the whole bill for this, under
+	// the rule "tokens nobody priced are not free". A count is
 	// what this compiler can express (see the service comment) and it is
 	// strictly more: it says how short, and which line is short.
 	PricedCalls       int64   `protobuf:"varint,9,opt,name=priced_calls,json=pricedCalls,proto3" json:"priced_calls,omitempty"`

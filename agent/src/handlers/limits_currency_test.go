@@ -14,8 +14,9 @@ func minor(v int64) *int64 { return &v }
 
 // a consumer — the two changes that met.
 //
-// #74/1 made an absent `cost_minor` mean a SECOND thing: not only "nothing here
-// was priced" but also "the currencies inside this line disagreed". The limiter's
+// The usage rollup's currency fix made an absent `cost_minor` mean a SECOND
+// thing: not only "nothing here was priced" but also "the currencies inside
+// this line disagreed". The limiter's
 // `if CostMinor != nil { total += … }` skipped both, so a scope priced in two
 // currencies never reached its cap — real money, past a limit somebody set.
 //
@@ -42,8 +43,8 @@ func TestTotalSpend(t *testing.T) {
 			want:  500, ok: true, currency: "USD",
 		},
 		{
-			// #79/3 itself. Absent cost WITH priced calls is a line whose spend
-			// is real and whose amount cannot be expressed.
+			// The reported case itself. Absent cost WITH priced calls is a line
+			// whose spend is real and whose amount cannot be expressed.
 			name:  "a line whose currencies disagreed cannot be totalled",
 			lines: []*pb.ScopeSpendLine{line(minor(500), "USD", 2), line(nil, "", 4)},
 			ok:    false,
@@ -51,7 +52,7 @@ func TestTotalSpend(t *testing.T) {
 		{
 			// The sharper half, which the report did not name: the limiter was
 			// adding minor units ACROSS lines in different currencies — the same
-			// defect #74/1 fixed inside one.
+			// defect the rollup's currency fix closed inside one.
 			name:  "two currencies across lines cannot be totalled",
 			lines: []*pb.ScopeSpendLine{line(minor(1000), "USD", 1), line(minor(1000), "EUR", 1)},
 			ok:    false,

@@ -73,38 +73,44 @@ func NewLimiter(clients any) Limiter { return newLimiter(clients) }
 // life of the process — expired entries were never evicted.
 type spendCache[V any] struct {
 	ttl time.Duration
-	// max caps the entries held; zero means maxCachedKeys.
+	// max caps the entries held per generation; zero means maxCachedKeys.
 	max int
 
 	mu      sync.Mutex
-	value   map[string]V
-	fetched map[string]time.Time
+	entries generations[string, fetchedValue[V]]
+}
+
+// fetchedValue is a cached figure and when it was read.
+type fetchedValue[V any] struct {
+	v  V
+	at time.Time
 }
 
 func (c *spendCache[V]) get(scope string, now time.Time) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	at, ok := c.fetched[scope]
-	if !ok || now.Sub(at) > c.ttl {
+	e, ok := c.entries.get(scope, capOf(c.max))
+	if !ok || now.Sub(e.at) > c.ttl {
 		var zero V
 		return zero, false
 	}
-	return c.value[scope], true
+	return e.v, true
 }
 
 func (c *spendCache[V]) put(scope string, v V, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, known := c.value[scope]; c.value == nil || (!known && len(c.value) >= capOf(c.max)) {
-		// Full: start over rather than track recency. See idCache.
-		c.value = map[string]V{}
-		c.fetched = map[string]time.Time{}
-	}
-	c.value[scope] = v
-	c.fetched[scope] = now
+	c.entries.put(scope, fetchedValue[V]{v: v, at: now}, capOf(c.max))
 }
 
-// maxCachedKeys bounds every per-key cache in this package.
+func (c *spendCache[V]) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.entries.len()
+}
+
+// maxCachedKeys bounds every per-key cache in this package, per generation (see
+// generations: a cache holds at most twice this).
 //
 // The keys are the CALLER's — a scope, a model name, a label pair — so a cache
 // that keeps one entry per key ever seen grows for the life of the process
@@ -120,38 +126,78 @@ func capOf(max int) int {
 	return max
 }
 
-// idCache maps a key to a database id, bounded.
+// generations is a bounded map that keeps what is USED: two generations,
+// current and previous. Writes go to current; when current is full, it becomes
+// previous (the old previous is dropped whole) and a new current starts. A
+// read that finds its key only in previous promotes it back into current.
 //
-// When full it is RESET, not evicted entry by entry: an id is a cheap thing to
-// ask for again (one idempotent intern), so the only cost of a reset is a
-// burst of re-interning, while an LRU would cost bookkeeping on every hit to
-// save that burst. What matters is that the size has a ceiling.
+// It replaced a reset-at-cap map, which dropped EVERY entry the moment the
+// cap was reached. Past ten thousand active keys that was a reset every ten
+// thousand new keys — and because the keys are the callers', anyone sending
+// random scopes could keep emptying the cache under every legitimate tenant,
+// turning each of their calls into a database round trip. Here a key in use
+// survives any flood of new ones as long as it is read once per generation,
+// and the size is still bounded: at most 2×max.
+//
+// A miss costs only a refetch from the database; an LRU would cost bookkeeping
+// on every hit to save that, and this needs none. Not safe for concurrent use:
+// the owning cache holds the lock.
+type generations[K comparable, V any] struct {
+	cur, prev map[K]V
+}
+
+func (g *generations[K, V]) get(k K, max int) (V, bool) {
+	if v, ok := g.cur[k]; ok {
+		return v, true
+	}
+	v, ok := g.prev[k]
+	if ok {
+		delete(g.prev, k)
+		g.put(k, v, max)
+	}
+	return v, ok
+}
+
+func (g *generations[K, V]) put(k K, v V, max int) {
+	if g.cur == nil {
+		g.cur = map[K]V{}
+	}
+	if _, known := g.cur[k]; !known && len(g.cur) >= max {
+		g.prev, g.cur = g.cur, map[K]V{}
+	}
+	// A newer value supersedes any copy left in the previous generation, which
+	// a later promotion would otherwise resurrect.
+	delete(g.prev, k)
+	g.cur[k] = v
+}
+
+func (g *generations[K, V]) len() int { return len(g.cur) + len(g.prev) }
+
+// idCache maps a key to a database id, bounded by generations: an id is a
+// cheap thing to ask for again (one idempotent intern), so a dropped one costs
+// a single re-intern, and one in use is never dropped.
 type idCache[K comparable] struct {
-	// max caps the entries held; zero means maxCachedKeys.
+	// max caps the entries held per generation; zero means maxCachedKeys.
 	max int
 
 	mu  sync.Mutex
-	ids map[K]int64
+	ids generations[K, int64]
 }
 
 func (c *idCache[K]) get(k K) (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	id, ok := c.ids[k]
-	return id, ok
+	return c.ids.get(k, capOf(c.max))
 }
 
 func (c *idCache[K]) put(k K, id int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, known := c.ids[k]; c.ids == nil || (!known && len(c.ids) >= capOf(c.max)) {
-		c.ids = map[K]int64{}
-	}
-	c.ids[k] = id
+	c.ids.put(k, id, capOf(c.max))
 }
 
 func (c *idCache[K]) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.ids)
+	return c.ids.len()
 }

@@ -97,8 +97,8 @@ type runSpend struct {
 }
 
 // add folds one turn's usage in. Call it once per turn that was SENT — a turn
-// refused before the request (a preflight error) cost nothing and is not a
-// turn.
+// refused before the request (a preflight error), or not attempted because the
+// run's context had already ended, cost nothing and is not a turn.
 //
 // Model is the latest one the provider named — every turn of a run asks for the
 // same model, so they differ only when the provider answers with a dated id.
