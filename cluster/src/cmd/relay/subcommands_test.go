@@ -36,7 +36,7 @@ func TestIssueWorker_FromAMountedCA(t *testing.T) {
 	if err := ca.Verify(leaf, time.Now()); err != nil {
 		t.Errorf("the worker does not chain to the mounted CA: %v", err)
 	}
-	if life := leaf.NotAfter.Sub(time.Now()); life > 2*time.Hour || life < time.Hour {
+	if life := time.Until(leaf.NotAfter); life > 2*time.Hour || life < time.Hour {
 		t.Errorf("certificate valid for %s, want the --lifetime of 2h", life)
 	}
 	if !strings.Contains(out.String(), "acme-1") || !strings.Contains(out.String(), workerDir) {

@@ -836,3 +836,25 @@ func TestCallerGone(t *testing.T) {
 		}
 	}
 }
+
+// A Recv io.EOF is the caller half-closing, never the caller leaving and never
+// a failure on this side — and that holds for an io.EOF a stream wrapper (an
+// interceptor around RecvMsg, say) wrapped on the way up, too. Both helpers
+// compared with `!= io.EOF`, which sees only the bare sentinel: a wrapped EOF
+// the run's error also carried was answered as the caller hanging up
+// (callerLeft) or as an Internal "could not be received" (streamFailure).
+func TestRunAgent_AWrappedRecvEOFIsAHalfClose(t *testing.T) {
+	recvErr := fmt.Errorf("stream wrapper: %w", io.EOF)
+	runErr := fmt.Errorf("run: %w", recvErr)
+
+	if left := callerLeft(context.Background(), runErr, nil, recvErr); left != nil {
+		t.Errorf("callerLeft = %v, want nil: a half-close is not the caller leaving", left)
+	}
+	logs := captureLog(t)
+	if f := streamFailure("gpt-4o", runErr, nil, recvErr); f != nil {
+		t.Errorf("streamFailure = %v, want nil: a half-close is not a failure on this side", f)
+	}
+	if strings.Contains(logs.String(), "receiving from the caller failed") {
+		t.Errorf("a half-close was logged as a recv failure: %q", logs.String())
+	}
+}

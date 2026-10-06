@@ -348,7 +348,7 @@ func ProviderLogLine(err error) string {
 func ProviderFault(err error) (summary string, ok bool) {
 	// A response the provider itself marked failed is the provider speaking
 	// too, only inside a 200: its code is the classification.
-	var failed *failedResponse
+	var failed *failedResponseError
 	if errors.As(err, &failed) {
 		if failed.code == "" {
 			return "response failed", true

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -300,7 +301,7 @@ func TestHandler_AServerStreamArrivesInOrder(t *testing.T) {
 		}
 		switch e := ev.GetEvent().(type) {
 		case *pb.ScheduleTaskEvent_Queued:
-			got = append(got, "q"+string(rune('0'+e.Queued.GetPosition())))
+			got = append(got, "q"+strconv.Itoa(int(e.Queued.GetPosition())))
 		case *pb.ScheduleTaskEvent_Granted:
 			got = append(got, "granted:"+e.Granted.GetTicket())
 		}

@@ -392,7 +392,7 @@ func callerLeft(ctx context.Context, runErr, sendErr, recvErr error) error {
 	// ResourceExhausted "received message larger than max", an oversized
 	// ToolResult from a caller who is still connected, came back as if they
 	// had hung up, with nothing logged.
-	if recvErr != nil && recvErr != io.EOF && errors.Is(runErr, recvErr) && callerGone(ctx, recvErr) {
+	if recvErr != nil && !errors.Is(recvErr, io.EOF) && errors.Is(runErr, recvErr) && callerGone(ctx, recvErr) {
 		return recvErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -437,7 +437,7 @@ func streamFailure(model string, runErr, sendErr, recvErr error) error {
 	case sendErr != nil && errors.Is(runErr, sendErr):
 		log.Printf("agent: sending to the caller failed (model %q): %v", model, sendErr)
 		return ownSideFailure(sendErr, "agent: an event could not be sent to the caller")
-	case recvErr != nil && recvErr != io.EOF && errors.Is(runErr, recvErr):
+	case recvErr != nil && !errors.Is(recvErr, io.EOF) && errors.Is(runErr, recvErr):
 		log.Printf("agent: receiving from the caller failed (model %q): %v", model, recvErr)
 		return ownSideFailure(recvErr, "agent: a message from the caller could not be received")
 	}

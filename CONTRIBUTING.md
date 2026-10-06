@@ -9,7 +9,7 @@
 ├── proto/               the plugin's declarations (types/, queries/, mutations/, business/, …)
 └── src/                 the Go module: handlers, libraries, tests
     └── gen/pb/          generated from proto/ — committed, never edited by hand
-tools/                   gen-pb, release, the names check, the pinned w17ctl version
+tools/                   gen-pb, release, the names check, the pinned w17ctl and golangci-lint versions, the lint config
 ```
 
 ## The checks
@@ -21,6 +21,7 @@ green. Run them locally with Go and docker:
 |---|---|
 | `make fmt` | gofmt over the hand-written Go |
 | `make vet` / `make test` | `go vet`, and the tests with coverage |
+| `make lint` | golangci-lint with `tools/golangci.yml`, at the version pinned in `tools/golangci-version`: unchecked errors, `==` on errors that may be wrapped, dead code, staticcheck, gosec and the rest of the set the config names |
 | `make check-gen-pb` | the committed `src/gen/pb` is exactly what `proto/` generates; regenerate with `make gen-pb` |
 | `make check-modules` | each `go.mod` is tidy, with no `replace` onto a local path |
 | `make check-stage` | no Go file references a declaration that only another feature's files bring — a consumer enabling one feature without the other would not build |
@@ -29,7 +30,7 @@ green. Run them locally with Go and docker:
 | `make check-published-tests` | the tests pass from the rendered form too, rehydrated as a reader would |
 | `make check-refs` | nothing cites the w17 platform's private docs — state the reason in place |
 | `make check-names` | no file, and no file path, names a real project (see below) |
-| `make check-tools` | the repository's tool modules and any plugin sandbox module build and pass |
+| `make check-tools` | the repository's tool modules and any plugin sandbox module are gofmt-, vet- and lint-clean, and pass |
 
 `make check` runs them all, and `PLUGIN=<name>` narrows any of them to one plugin.
 

@@ -243,7 +243,7 @@ func TestNewLimiter_NeedsBothClients(t *testing.T) {
 	} else if _, ok := l.(*dbLimiter); !ok {
 		t.Errorf("NewLimiter(both) = %T, want the database limiter", l)
 	}
-	for _, c := range []any{nil, struct{}{}, mutationOnly{conn: clients.conn}} {
+	for _, c := range []any{nil, struct{}{}, mutationOnly(clients)} {
 		if l := NewLimiter(c); l != (allowAllLimiter{}) {
 			t.Errorf("NewLimiter(%T) = %T, want allow-all", c, l)
 		}

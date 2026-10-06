@@ -32,6 +32,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type config struct {
@@ -99,7 +100,10 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	log.Printf("fakeidp: listening on :%s (issuer=%s sub=%s email=%s)", cfg.Port, cfg.Issuer, cfg.Subject, cfg.Email)
-	if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
+	// A header timeout, so a client that opens a connection and never finishes
+	// its request cannot hold it open forever.
+	srv := &http.Server{Addr: ":" + cfg.Port, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("fakeidp: %v", err)
 	}
 }
