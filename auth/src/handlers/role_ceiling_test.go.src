@@ -48,6 +48,11 @@ func TestRoleWithinCeiling(t *testing.T) {
 		// everything, so without the explicit refusal the most powerful role
 		// would be grantable by anyone.
 		{"a wildcard with no lock to expand", &pb.RoleGrant{AllPermissions: true}, nil, false},
+		// A domain with no endpoint catalogue: its lock exists and allocates
+		// nothing, so "everything" is nothing — known, and within anyone's
+		// ceiling. It used to read as unexpandable, and an invitation to such a
+		// role could never be accepted (reported by a consumer, 2026-10-06).
+		{"a wildcard over an empty catalogue", &pb.RoleGrant{AllPermissions: true}, &acllock.Lock{Version: 1}, true},
 	}
 	for _, c := range cases {
 		carried := expandRoleGrant(c.g, c.lock)
@@ -224,5 +229,22 @@ func TestAcceptOrgInvite_RefusesARoleWidenedSinceTheInvitation(t *testing.T) {
 				t.Error("the grant was written for a role the inviter never covered")
 			}
 		})
+	}
+}
+
+// The snapshot an invitation stores for a wildcard role in an empty-catalogue
+// domain is accepted against the same role at acceptance.
+func TestRoleSnapshot_AWildcardOverAnEmptyCatalogueRoundTrips(t *testing.T) {
+	carried := expandRoleGrant(&pb.RoleGrant{AllPermissions: true}, &acllock.Lock{Version: 1})
+	if carried == nil {
+		t.Fatal("a wildcard over an empty catalogue expanded to nil (unexpandable)")
+	}
+	snap := encodeRoleSnapshot("r-tenant-admin", carried)
+	_, snapPerms, ok := decodeRoleSnapshot(snap)
+	if !ok {
+		t.Fatalf("decode %q failed", snap)
+	}
+	if !allHeld(carried, snapPerms) {
+		t.Fatalf("the role no longer fits its own snapshot %q", snap)
 	}
 }

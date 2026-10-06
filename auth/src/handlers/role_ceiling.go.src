@@ -106,9 +106,23 @@ func (h *AuthServiceHandler) roleCatalogue(ctx context.Context) (map[string][]in
 
 // expandRoleGrant returns what a role carries — never nil for a role whose
 // contents are known, nil for a wildcard that cannot be expanded.
+//
+// A wildcard over a lock that EXISTS but allocates nothing — a domain with no
+// endpoint catalogue — is known: "everything" here is nothing, the empty list.
+// GrantAll answers nil for both an absent lock and an empty one, and read as
+// "cannot be expanded" that refused every acceptance of an invitation to an
+// all_permissions role in such a domain, and wrote snapshots that never
+// matched (reported by a consumer, 2026-10-06). nil stays for the case it
+// means: no lock at all.
 func expandRoleGrant(g *pb.RoleGrant, lock *acllock.Lock) []int32 {
 	if g.GetAllPermissions() {
-		return acllock.GrantAll(lock)
+		if lock == nil {
+			return nil
+		}
+		if ids := acllock.GrantAll(lock); ids != nil {
+			return ids
+		}
+		return []int32{}
 	}
 	if g.GetPermissionIds() == nil {
 		return []int32{}
