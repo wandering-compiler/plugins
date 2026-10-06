@@ -511,3 +511,28 @@ func TestRun_AContextEndedBeforeATurnIsNotAnUnreportedTurn(t *testing.T) {
 		t.Errorf("the provider was asked %d times, want 1 — a request whose context had ended was attempted", st.calls)
 	}
 }
+
+// A run whose context had ended before its FIRST turn sent nothing, so its
+// cost is known: zero. It used to come back with no usage attached at all
+// (Measured required at least one turn, and withSpent drops an unmeasured,
+// model-less total), which the handler recorded as measured=false — "unknown
+// cost" for a run that provably cost nothing.
+func TestRun_AContextEndedBeforeTheFirstTurnIsMeasuredAtZero(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	st := &ctxStreamer{scriptedStreamer: scriptedStreamer{turns: [][]map[string]any{
+		{delta("never"), usageTurn(nil, 1, 1)},
+	}}}
+	_, err := Run(ctx, st, Model{ID: "gpt-4o", MaxTokens: 100}, "", []Message{{Text: "q"}},
+		nil, Limits{}, silent)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	spent, ok := SpentBy(err)
+	if !ok || !spent.Measured || spent.TotalTokens != 0 || spent.InputTokens != 0 || spent.OutputTokens != 0 {
+		t.Errorf("SpentBy = %+v, %v — want measured=true at zero tokens: no turn was sent", spent, ok)
+	}
+	if st.calls != 0 {
+		t.Errorf("the provider was asked %d times, want 0", st.calls)
+	}
+}

@@ -89,8 +89,15 @@ type fetchedValue[V any] struct {
 func (c *spendCache[V]) get(scope string, now time.Time) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries.get(scope, capOf(c.max))
-	if !ok || now.Sub(e.at) > c.ttl {
+	// The TTL is checked BEFORE a previous-generation entry is promoted. It
+	// used to be checked after: an expired entry was copied back into the
+	// current generation first — taking a slot there, and when current was
+	// full, ROTATING it, which dropped the whole previous generation of live
+	// entries — only to be reported a miss and overwritten by the refetch.
+	e, ok := c.entries.getIf(scope, capOf(c.max), func(e fetchedValue[V]) bool {
+		return now.Sub(e.at) <= c.ttl
+	})
+	if !ok {
 		var zero V
 		return zero, false
 	}
@@ -147,15 +154,31 @@ type generations[K comparable, V any] struct {
 }
 
 func (g *generations[K, V]) get(k K, max int) (V, bool) {
+	return g.getIf(k, max, nil)
+}
+
+// getIf is get for values that can go stale: a value `fresh` rejects is a miss,
+// and one found in the previous generation is DROPPED rather than promoted —
+// promoting it would spend a slot in current (and possibly rotate it) on an
+// entry about to be replaced. A nil `fresh` accepts everything.
+func (g *generations[K, V]) getIf(k K, max int, fresh func(V) bool) (V, bool) {
+	var zero V
 	if v, ok := g.cur[k]; ok {
+		if fresh != nil && !fresh(v) {
+			return zero, false
+		}
 		return v, true
 	}
 	v, ok := g.prev[k]
-	if ok {
-		delete(g.prev, k)
-		g.put(k, v, max)
+	if !ok {
+		return zero, false
 	}
-	return v, ok
+	delete(g.prev, k)
+	if fresh != nil && !fresh(v) {
+		return zero, false
+	}
+	g.put(k, v, max)
+	return v, true
 }
 
 func (g *generations[K, V]) put(k K, v V, max int) {

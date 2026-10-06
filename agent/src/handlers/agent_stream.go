@@ -74,9 +74,16 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 		// first fix because only the send path was covered.
 		//
 		// A Send that failed on THIS side (an oversized or unmarshalable
-		// message) is not the client leaving and goes on to the failure below.
+		// message) is not the client leaving…
 		if left := callerLeft(srv.Context(), err, sendErr, nil); left != nil {
 			return left
+		}
+		// …and goes HERE: the send's own status (ResourceExhausted stays
+		// ResourceExhausted), logged as a send failure. It used to reach the
+		// Unavailable below, logged as the model failing, and a caller
+		// retrying on Unavailable hit the same oversize every time.
+		if f := streamFailure(m.ID, err, sendErr, nil); f != nil {
+			return f
 		}
 		if errors.Is(err, llm.ErrRunawayOutput) {
 			return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")

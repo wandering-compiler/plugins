@@ -423,3 +423,33 @@ func TestGenerations_AnUpdateIsNotResurrectedByPromotion(t *testing.T) {
 		t.Errorf("get = %d, %v — want the updated 2", v, ok)
 	}
 }
+
+// An EXPIRED entry in the previous generation is a miss and is not promoted.
+//
+// get used to promote first and check the TTL after, so reading a stale key
+// copied it into a FULL current generation — rotating it, which threw away the
+// whole previous generation of live entries — only to answer "miss" anyway.
+func TestSpendCache_AnExpiredEntryIsNotPromoted(t *testing.T) {
+	c := &spendCache[int64]{ttl: time.Minute, max: 2}
+	old := time.Now()
+	now := old.Add(time.Hour)
+	c.put("stale", 1, old)
+	c.put("live-a", 2, now) // current: stale, live-a
+	c.put("live-b", 3, now) // rotates: previous = {stale, live-a}, current = {live-b}
+	c.put("live-c", 4, now) // current: live-b, live-c — full
+
+	if _, ok := c.get("stale", now); ok {
+		t.Fatal("an expired entry was served")
+	}
+	// Had "stale" been promoted into the full current generation, current would
+	// have rotated into previous and live-a — still fresh — would be gone.
+	if v, ok := c.get("live-a", now); !ok || v != 2 {
+		t.Errorf("live-a = %d, %v — reading an expired key evicted a live one", v, ok)
+	}
+	if v, ok := c.get("live-b", now); !ok || v != 3 {
+		t.Errorf("live-b = %d, %v", v, ok)
+	}
+	if n := c.len(); n != 3 {
+		t.Errorf("the cache holds %d entries, want 3 — the expired one dropped, nothing else", n)
+	}
+}

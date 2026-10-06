@@ -166,6 +166,15 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		if errors.Is(runErr, errCallerClosedSend) {
 			return status.Error(codes.FailedPrecondition, errCallerClosedSend.Error())
 		}
+		// The stream failed on OUR side while the caller is still there — a
+		// Send of an event over the size limit, a Recv of a ToolResult over
+		// it, a message that would not marshal. Not the model: these used to
+		// reach runError's Unavailable "the model call failed", logged as a
+		// model failure, and a caller retrying on Unavailable hit the same
+		// oversize every time.
+		if f := streamFailure(model.ID, runErr, sentErr, recvErr); f != nil {
+			return f
+		}
 		mapped := runError(runErr)
 		if status.Code(mapped) == codes.Unavailable {
 			// As in Complete and CompleteStream: the classification and URL to
@@ -369,16 +378,21 @@ var errCallerClosedSend = errors.New("agent: the caller closed its side of the s
 // else, and re-coding it would only mislabel the log of whoever reads the
 // server side.
 //
-// A Send error counts only when it is the caller leaving (see sendGone). A
-// Send can also fail on THIS side — a message over the size limit, one that
-// would not marshal — and returning that as "the caller left" would hide a
-// server-side defect behind a hang-up nobody made. Recv's io.EOF does not count
-// either: it is the caller half-closing, not leaving.
+// A Send or Recv error counts only when it is the caller leaving (see
+// callerGone). Either can also fail on THIS side — a message over the size
+// limit, one that would not marshal — and returning that as "the caller left"
+// would hide a server-side defect behind a hang-up nobody made; streamFailure
+// answers those. Recv's io.EOF does not count either: it is the caller
+// half-closing, not leaving.
 func callerLeft(ctx context.Context, runErr, sendErr, recvErr error) error {
-	if sendErr != nil && errors.Is(runErr, sendErr) && sendGone(ctx, sendErr) {
+	if sendErr != nil && errors.Is(runErr, sendErr) && callerGone(ctx, sendErr) {
 		return sendErr
 	}
-	if recvErr != nil && recvErr != io.EOF && errors.Is(runErr, recvErr) {
+	// The same filter for Recv. It used to be any Recv error but io.EOF — so a
+	// ResourceExhausted "received message larger than max", an oversized
+	// ToolResult from a caller who is still connected, came back as if they
+	// had hung up, with nothing logged.
+	if recvErr != nil && recvErr != io.EOF && errors.Is(runErr, recvErr) && callerGone(ctx, recvErr) {
 		return recvErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -387,12 +401,14 @@ func callerLeft(ctx context.Context, runErr, sendErr, recvErr error) error {
 	return nil
 }
 
-// sendGone reports whether a failed Send means the caller is gone: the stream's
-// context has ended, the transport reported the stream cancelled, past its
-// deadline or closing, or the send hit the end of the stream. Anything else —
-// ResourceExhausted for an oversized message, Internal for one that would not
-// marshal — is the server failing, and belongs on the normal failure path.
-func sendGone(ctx context.Context, err error) bool {
+// callerGone reports whether a failed Send or Recv means the caller is gone:
+// the stream's context has ended, the transport reported the stream cancelled,
+// past its deadline or closing, or a send hit the end of the stream. Anything
+// else — ResourceExhausted for an oversized message, Internal for one that
+// would not marshal — is the stream failing on THIS side, and belongs to
+// streamFailure. (Recv's io.EOF never gets here: callerLeft excludes it, as
+// the caller half-closing.)
+func callerGone(ctx context.Context, err error) bool {
 	if ctx.Err() != nil || errors.Is(err, io.EOF) {
 		return true
 	}
@@ -403,6 +419,37 @@ func sendGone(ctx context.Context, err error) bool {
 		return true
 	}
 	return false
+}
+
+// streamFailure is the answer for a run that ended because a Send or a Recv
+// failed on THIS side of a stream whose caller is still connected — callerLeft
+// has already answered every case where they are not. Nil when the run ended
+// for another reason.
+//
+// The stream's own status is kept where it says something the caller can act
+// on: ResourceExhausted, a message over the size limit, stays that — retrying
+// it is pointless, which is exactly what the Unavailable it used to become
+// invited. Anything else is our defect: Internal, with a short message. Logged
+// as what it is, a stream failure, never a model failure; the run's spend was
+// already recorded once, before this.
+func streamFailure(model string, runErr, sendErr, recvErr error) error {
+	switch {
+	case sendErr != nil && errors.Is(runErr, sendErr):
+		log.Printf("agent: sending to the caller failed (model %q): %v", model, sendErr)
+		return ownSideFailure(sendErr, "agent: an event could not be sent to the caller")
+	case recvErr != nil && recvErr != io.EOF && errors.Is(runErr, recvErr):
+		log.Printf("agent: receiving from the caller failed (model %q): %v", model, recvErr)
+		return ownSideFailure(recvErr, "agent: a message from the caller could not be received")
+	}
+	return nil
+}
+
+// ownSideFailure codes a stream failure on this side: see streamFailure.
+func ownSideFailure(err error, msg string) error {
+	if status.Code(err) == codes.ResourceExhausted {
+		return err
+	}
+	return status.Error(codes.Internal, msg)
 }
 
 func runError(err error) error {

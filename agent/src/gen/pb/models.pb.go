@@ -401,7 +401,7 @@ type ModelUsage struct {
 	// False when the provider did not report the usage — for a run, when any
 	// turn it SENT went unreported (a turn never sent — refused before the
 	// request, or not attempted because the run had already ended — does not
-	// count). Without this a free call and an unreported one are the same row of
+	// count, and a run that sent none is measured at zero). Without this a free call and an unreported one are the same row of
 	// zeros, and a caller summing them cannot tell which they have. The token
 	// counts beside a false are what WAS reported: a floor.
 	Measured     bool  `protobuf:"varint,2,opt,name=measured,proto3" json:"measured,omitempty"`

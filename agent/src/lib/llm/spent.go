@@ -57,8 +57,10 @@ func (e *spentError) Error() string { return e.err.Error() }
 func (e *spentError) Unwrap() error { return e.err }
 
 // withSpent attaches what was spent to err. Nothing is attached when nothing is
-// known — no turn finished, so there is no usage to report — which keeps
-// "unmeasured" the honest answer for a call that reached no terminal event.
+// known — a turn was sent and none reported, so there is no usage to report —
+// which keeps "unmeasured" the honest answer for a call that reached no
+// terminal event. A run that sent NOTHING is known: it is attached, measured,
+// at zero (see runSpend.usage).
 func withSpent(err error, u Usage) error {
 	if err == nil || (!u.Measured && u.Model == "") {
 		return err
@@ -90,9 +92,8 @@ func SpentBy(err error) (Usage, bool) {
 // "nothing".
 type runSpend struct {
 	total Usage
-	// turns is how many turns were folded in; unreported is how many of them
-	// the provider reported no usage for.
-	turns      int
+	// unreported is how many of the turns folded in the provider reported no
+	// usage for.
 	unreported int
 }
 
@@ -103,7 +104,6 @@ type runSpend struct {
 // Model is the latest one the provider named — every turn of a run asks for the
 // same model, so they differ only when the provider answers with a dated id.
 func (r *runSpend) add(turn Usage) {
-	r.turns++
 	if !turn.Measured {
 		r.unreported++
 	}
@@ -118,8 +118,16 @@ func (r *runSpend) add(turn Usage) {
 }
 
 // usage is the run's total so far.
+//
+// A run that sent no turn at all — its context had ended before the first
+// request — is MEASURED at zero. It used to be unmeasured (a turn count was part
+// of the rule), and withSpent then dropped the zero total, so the run was
+// recorded as a FAILED row with measured=false: "unknown cost" for a run whose
+// cost is known exactly, because nothing was sent. Unmeasured means a turn
+// went out and its cost did not come back; with no turn out, there is nothing
+// unreported.
 func (r *runSpend) usage() Usage {
 	u := r.total
-	u.Measured = r.turns > 0 && r.unreported == 0
+	u.Measured = r.unreported == 0
 	return u
 }

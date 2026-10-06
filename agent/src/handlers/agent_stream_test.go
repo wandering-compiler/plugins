@@ -239,16 +239,39 @@ func TestCompleteStream_TheCallersDeadlineIsNotAModelFailure(t *testing.T) {
 }
 
 // A Send that fails on the SERVER's side is not the client leaving, on this
-// path either: it takes the normal failure path, logged.
+// path either — and it is not the MODEL failing. It used to come back as
+// Unavailable "the model call failed", logged as "model stream failed": the
+// wrong label, and a caller retrying on Unavailable hit the same oversize
+// every time. Now the Send's own status comes back — ResourceExhausted stays
+// ResourceExhausted, anything else is Internal — logged as a send failure,
+// and the call is billed once.
 func TestCompleteStream_AServerSideSendFailureIsNotTheClientLeaving(t *testing.T) {
-	logs := captureLog(t)
-	tooLarge := status.Error(codes.ResourceExhausted, "grpc: trying to send message larger than max")
-	err := streamHandler([]map[string]any{delta("a"), delta("b"), completedEvent(3)}).
-		CompleteStream(&pb.CompleteReq{}, &recorder{failAt: 1, sendErr: tooLarge})
-	if err == tooLarge {
-		t.Fatalf("a server-side send failure came back as-is, as if the client had left")
-	}
-	if status.Code(err) != codes.Unavailable || !strings.Contains(logs.String(), "model stream failed") {
-		t.Errorf("err = %v, log = %q — want the normal, logged failure path", err, logs.String())
+	for _, tc := range []struct {
+		name    string
+		sendErr error
+		code    codes.Code
+	}{
+		{"too large", status.Error(codes.ResourceExhausted, "grpc: trying to send message larger than max"), codes.ResourceExhausted},
+		{"would not marshal", status.Error(codes.Internal, "grpc: error while marshaling: boom"), codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLog(t)
+			sink := &syncSink{}
+			h := streamHandler([]map[string]any{delta("a"), delta("b"), completedEvent(3)})
+			h.Usage = sink
+			err := h.CompleteStream(&pb.CompleteReq{}, &recorder{failAt: 1, sendErr: tc.sendErr})
+			if status.Code(err) != tc.code {
+				t.Fatalf("err = %v (%v), want %v — the send's own failure, not the model's", err, status.Code(err), tc.code)
+			}
+			if strings.Contains(logs.String(), "model stream failed") {
+				t.Errorf("a send failure was logged as a model failure: %q", logs.String())
+			}
+			if !strings.Contains(logs.String(), "sending to the caller failed") {
+				t.Errorf("log = %q, want the send failure logged", logs.String())
+			}
+			if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed {
+				t.Errorf("recorded %+v, want one FAILED row", evs)
+			}
+		})
 	}
 }

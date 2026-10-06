@@ -695,29 +695,125 @@ func TestRunAgent_AHalfCloseWhileAResultIsOwed(t *testing.T) {
 // that would not marshal — is not the caller leaving, and is not returned as if
 // it were. callerLeft used to return any first Send error as-is, hiding a
 // server-side failure behind a hang-up nobody made, with no log line.
+//
+// Nor is it the model failing. It then went to runError's Unavailable "the
+// model call failed", logged as "model run failed" — and a caller retrying on
+// Unavailable hit the same oversize every time. Now the Send's own status:
+// ResourceExhausted stays ResourceExhausted, anything else is Internal, logged
+// as a send failure, the run billed once.
 func TestRunAgent_AServerSideSendFailureIsNotTheCallerLeaving(t *testing.T) {
-	logs := captureLog(t)
-	tooLarge := status.Error(codes.ResourceExhausted, "grpc: trying to send message larger than max (5000000 vs. 4194304)")
-	h := &AgentServiceHandler{StreamClient: &multiTurn{turns: [][]map[string]any{
-		{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)},
-	}}, Usage: &syncSink{}}
-	b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 2), fail: tooLarge}
-	b.incoming <- startMsg(&pb.ToolSpec{Name: "search"})
+	for _, tc := range []struct {
+		name    string
+		sendErr error
+		code    codes.Code
+	}{
+		{"too large", status.Error(codes.ResourceExhausted, "grpc: trying to send message larger than max (5000000 vs. 4194304)"), codes.ResourceExhausted},
+		{"would not marshal", status.Error(codes.Internal, "grpc: error while marshaling: boom"), codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLog(t)
+			sink := &syncSink{}
+			h := &AgentServiceHandler{StreamClient: &multiTurn{turns: [][]map[string]any{
+				{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)},
+			}}, Usage: sink}
+			b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 2), fail: tc.sendErr}
+			b.incoming <- startMsg(&pb.ToolSpec{Name: "search"})
 
-	err := runWithin(t, h, b)
-	if err == tooLarge {
-		t.Fatalf("a server-side send failure came back as-is, as if the caller had left: %v", err)
-	}
-	if status.Code(err) != codes.Unavailable {
-		t.Errorf("err = %v (%v), want the normal failure path (Unavailable)", err, status.Code(err))
-	}
-	if !strings.Contains(logs.String(), "model run failed") || !strings.Contains(logs.String(), "larger than max") {
-		t.Errorf("log = %q, want the failure logged with its cause", logs.String())
+			err := runWithin(t, h, b)
+			if status.Code(err) != tc.code {
+				t.Fatalf("err = %v (%v), want %v — the send's own failure, not the model's", err, status.Code(err), tc.code)
+			}
+			if strings.Contains(logs.String(), "model run failed") {
+				t.Errorf("a send failure was logged as a model failure: %q", logs.String())
+			}
+			if !strings.Contains(logs.String(), "sending to the caller failed") || !strings.Contains(logs.String(), tc.sendErr.Error()) {
+				t.Errorf("log = %q, want the send failure logged with its cause", logs.String())
+			}
+			if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens+evs[0].OutputTokens != 11 {
+				t.Errorf("recorded %+v, want one FAILED row billing the 11 tokens", evs)
+			}
+		})
 	}
 }
 
-// sendGone: which Send failures are the caller leaving.
-func TestSendGone(t *testing.T) {
+// A Recv that fails on THIS side while the caller is still connected — an
+// oversized ToolResult, "received message larger than max" — is not the caller
+// leaving. callerLeft used to return every Recv error but io.EOF as-is, as if
+// they had hung up, with nothing logged.
+func TestRunAgent_AServerSideRecvFailureIsNotTheCallerLeaving(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		recvErr error
+		code    codes.Code
+	}{
+		{"too large", status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5000000 vs. 4194304)"), codes.ResourceExhausted},
+		{"would not unmarshal", status.Error(codes.Internal, "grpc: failed to unmarshal the received message: boom"), codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLog(t)
+			sink := &syncSink{}
+			h := &AgentServiceHandler{StreamClient: &multiTurn{turns: [][]map[string]any{
+				{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)},
+			}}, Usage: sink}
+			b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 2), recvErr: tc.recvErr}
+			b.onSend = func(e *pb.RunAgentEvent) {
+				if e.GetToolCall() != nil {
+					close(b.incoming) // the next Recv returns recvErr
+				}
+			}
+			b.incoming <- startMsg(&pb.ToolSpec{Name: "search"})
+
+			err := runWithin(t, h, b)
+			if err == tc.recvErr && tc.code == codes.Internal {
+				t.Fatalf("a server-side recv failure came back as-is, as if the caller had left: %v", err)
+			}
+			if status.Code(err) != tc.code {
+				t.Fatalf("err = %v (%v), want %v", err, status.Code(err), tc.code)
+			}
+			if strings.Contains(logs.String(), "model run failed") {
+				t.Errorf("a recv failure was logged as a model failure: %q", logs.String())
+			}
+			if !strings.Contains(logs.String(), "receiving from the caller failed") || !strings.Contains(logs.String(), tc.recvErr.Error()) {
+				t.Errorf("log = %q, want the recv failure logged with its cause", logs.String())
+			}
+			if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens+evs[0].OutputTokens != 11 {
+				t.Errorf("recorded %+v, want one FAILED row billing the 11 tokens", evs)
+			}
+		})
+	}
+}
+
+// A run whose caller's context had already ended before the first turn sent
+// nothing: one FAILED row, MEASURED at zero tokens. It was recorded
+// measured=false — "unknown cost" for a run whose cost is known to be zero.
+func TestRunAgent_ARunThatSentNothingIsMeasuredAtZero(t *testing.T) {
+	sink := &syncSink{}
+	mt := &multiTurn{turns: [][]map[string]any{{spendTurn(nil, 10, 1)}}}
+	h := &AgentServiceHandler{StreamClient: mt, Usage: sink}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b := &bidi{ctx: ctx, incoming: make(chan *pb.RunAgentReq, 2)}
+	b.incoming <- startMsg(&pb.ToolSpec{Name: "search"})
+
+	err := runWithin(t, h, b)
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("err = %v (%v), want Canceled", err, status.Code(err))
+	}
+	if mt.i != 0 {
+		t.Fatalf("the provider was asked %d times, want 0", mt.i)
+	}
+	evs := sink.all()
+	if len(evs) != 1 {
+		t.Fatalf("recorded %d rows, want 1", len(evs))
+	}
+	ev := evs[0]
+	if !ev.Measured || ev.InputTokens != 0 || ev.OutputTokens != 0 || ev.Status != OutcomeFailed || ev.Model != "gpt-4o" {
+		t.Errorf("row = %+v, want FAILED, measured=true, zero tokens, the requested model", ev)
+	}
+}
+
+// callerGone: which Send and Recv failures are the caller leaving.
+func TestCallerGone(t *testing.T) {
 	done, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, tc := range []struct {
@@ -735,8 +831,8 @@ func TestSendGone(t *testing.T) {
 		{"marshal failure", context.Background(), status.Error(codes.Internal, "grpc: error while marshaling"), false},
 		{"a plain error", context.Background(), errors.New("boom"), false},
 	} {
-		if got := sendGone(tc.ctx, tc.err); got != tc.want {
-			t.Errorf("%s: sendGone = %v, want %v", tc.name, got, tc.want)
+		if got := callerGone(tc.ctx, tc.err); got != tc.want {
+			t.Errorf("%s: callerGone = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

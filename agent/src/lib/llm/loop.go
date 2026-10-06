@@ -116,7 +116,9 @@ func Run(
 		// the whole run unmeasured, a floor where the bill was in fact
 		// complete. (A context that ends after this check, while the SDK is
 		// building or sending, is still counted as sent: the conservative
-		// side, an unmeasured row rather than a free one.)
+		// side, an unmeasured row rather than a free one.) Before turn 0 this
+		// is a run that sent nothing at all, and its total is MEASURED at
+		// zero: the cost is known, because nothing went out.
 		if err := ctx.Err(); err != nil {
 			return nil, withSpent(err, spent.usage())
 		}
