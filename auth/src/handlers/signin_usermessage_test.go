@@ -22,7 +22,7 @@ import (
 // if it were switched back to the generic Unauthenticated, and the existing
 // gate tests only assert "refused" or "code is Unauthenticated", so all of
 // them stay green while the message a person reads silently disappears.
-// Raised in review on PR #8.
+// Raised in review on w17 platform PR #8.
 //
 // This is also the anti-enumeration assertion that counts. The rule is about
 // what a PROBER observes from the outside, and the outside is this seam.

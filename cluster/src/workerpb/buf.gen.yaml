@@ -1,0 +1,10 @@
+# Local plugins only — the buf image carries protoc-gen-go and
+# protoc-gen-go-grpc, so generation needs no network and no remote registry.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: .
+    opt: paths=source_relative

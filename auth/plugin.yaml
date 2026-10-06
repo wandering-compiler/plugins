@@ -762,8 +762,8 @@ sandboxes:
   # when the activation enables that feature. Reachable in-network at
   # `http://fakeidp:8080` — seed an OAuthProvider row whose
   # authorize/token/userinfo URLs point there. The image is built
-  # locally from plugins/auth/sandboxes/fakeidp:
-  #   docker build -t ${W17_WORKSPACE:-w17}-w17-fakeidp:dev plugins/auth/sandboxes/fakeidp
+  # locally from a clone of github.com/wandering-compiler/plugins:
+  #   docker build -t ${W17_WORKSPACE:-w17}-w17-fakeidp:dev auth/sandboxes/fakeidp
   # The tag is WORKSPACE-PREFIXED: an image tag is build output, and a fixed
   # one on a shared docker daemon is a name every checkout overwrites.
   - name: fakeidp
