@@ -73,6 +73,18 @@ type config struct {
 	caKeyPath    string
 	certLifetime time.Duration
 	codeTTL      time.Duration
+
+	// netListen opens every listener; nil is net.Listen. A test seam, never
+	// set from flags: it lets a test make one bind fail deterministically
+	// instead of racing for a port it freed.
+	netListen func(network, address string) (net.Listener, error)
+}
+
+func (c config) bind(address string) (net.Listener, error) {
+	if c.netListen != nil {
+		return c.netListen("tcp", address)
+	}
+	return net.Listen("tcp", address)
 }
 
 func main() {
@@ -308,7 +320,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	}
 	attachTLS := tunnelTLS.Clone()
 	attachTLS.ClientAuth = tls.VerifyClientCertIfGiven
-	tunnelRaw, err := net.Listen("tcp", cfg.tunnelListen)
+	tunnelRaw, err := cfg.bind(cfg.tunnelListen)
 	if err != nil {
 		return fmt.Errorf("listening for worker tunnels on %s: %w", cfg.tunnelListen, err)
 	}
@@ -343,7 +355,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		Workers:  workers,
 		Lifetime: cfg.certLifetime,
 	})
-	attachLis, err := net.Listen("tcp", cfg.attachListen)
+	attachLis, err := cfg.bind(cfg.attachListen)
 	if err != nil {
 		return fmt.Errorf("listening for worker attach on %s: %w", cfg.attachListen, err)
 	}
@@ -372,7 +384,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 			Certificates: []tls.Certificate{crt},
 			MinVersion:   tls.VersionTLS13,
 		})))...)
-	proxyLis, err := net.Listen("tcp", cfg.proxyListen)
+	proxyLis, err := cfg.bind(cfg.proxyListen)
 	if err != nil {
 		return fmt.Errorf("listening for callers on %s: %w", cfg.proxyListen, err)
 	}
@@ -383,7 +395,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		}
 	}()
 
-	lis, err := net.Listen("tcp", cfg.listen)
+	lis, err := cfg.bind(cfg.listen)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", cfg.listen, err)
 	}

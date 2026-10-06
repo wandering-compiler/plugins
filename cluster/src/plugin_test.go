@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/platform/plugins/cluster/gen"
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
@@ -215,20 +217,47 @@ func TestRegisterPlugin_TheRegisteredHandlerReachesAPinnedRelay(t *testing.T) {
 // is refused by the relay — the plugin presents what it was configured with,
 // not something that merely parses.
 func TestRegisterPlugin_AnotherIdentityIsRefusedByTheRelay(t *testing.T) {
-	_, _, pinnedFP := identityFiles(t, "console")
+	pinnedCert, pinnedKey, pinnedFP := identityFiles(t, "console")
 	otherCert, otherKey, _ := identityFiles(t, "console")
 	relay := serveManagedRelay(t, pinnedFP)
 	tb := &tables{relay: &pb.Relay{Id: "r-1", Name: "acme-eu", Url: relay.addr, CertFingerprint: relay.fp}}
-	reg := &registry{}
-	if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: otherCert, ClientKeyPath: otherKey, DialTimeoutSeconds: 2}, reg, clientSet{tb}); err != nil {
+	boot := func(cert, key string) *handlers.ClusterServiceHandler {
+		t.Helper()
+		reg := &registry{}
+		if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: cert, ClientKeyPath: key, DialTimeoutSeconds: 2}, reg, clientSet{tb}); err != nil {
+			t.Fatal(err)
+		}
+		return reg.impl.(*handlers.ClusterServiceHandler)
+	}
+
+	// The control: the pinned identity, against the same relay row, is served.
+	// So what the other identity meets below is not a wrong address, a wrong
+	// relay fingerprint, or a relay that is down.
+	pinned := boot(pinnedCert, pinnedKey)
+	if _, err := pinned.IssueRegistrationCode(t.Context(), &pb.IssueRegistrationCodeReq{Ids: []string{"r-1"}}); err != nil {
+		t.Fatalf("the pinned identity was refused: %v", err)
+	}
+	minted := relay.codes.Outstanding()
+
+	h := boot(otherCert, otherKey)
+	if _, err := h.IssueRegistrationCode(t.Context(), &pb.IssueRegistrationCodeReq{Ids: []string{"r-1"}}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("a relay pinned to another control plane: %v, want Unavailable", err)
+	}
+	if n := relay.codes.Outstanding(); n != minted {
+		t.Errorf("the refused control plane still got %d code(s) minted", n-minted)
+	}
+	// What the relay said, through the plugin's own dialer (the handler
+	// reports only that the relay did not become reachable): it rejected the
+	// certificate this plugin presented. bad_certificate is the pin — the
+	// listener requires a certificate but checks no chain.
+	conn, err := h.Dial(relay.addr, relay.fp)
+	if err != nil {
 		t.Fatal(err)
 	}
-	h := reg.impl.(*handlers.ClusterServiceHandler)
-	if _, err := h.IssueRegistrationCode(t.Context(), &pb.IssueRegistrationCodeReq{Ids: []string{"r-1"}}); err == nil {
-		t.Fatal("a relay pinned to another control plane issued a code to this one")
-	}
-	if n := relay.codes.Outstanding(); n != 0 {
-		t.Errorf("the refused control plane still got %d code(s) minted", n)
+	defer func() { _ = conn.Close() }()
+	_, err = pb.NewClusterServiceClient(conn).RelayStats(t.Context(), &pb.RelayStatsReq{})
+	if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "tls: bad certificate") {
+		t.Fatalf("RelayStats with another identity: %v — want the relay rejecting the certificate (tls: bad certificate)", err)
 	}
 }
 
