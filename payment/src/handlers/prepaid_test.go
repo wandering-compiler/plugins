@@ -180,3 +180,21 @@ func TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce(t *testing.T) {
 		t.Error("applied although the legacy lookup failed")
 	}
 }
+
+// A caller key shaped like a scoped key ("v2:" + hex) is not looked up raw:
+// it can equal ANOTHER apply's stored scoped key, and matching that row
+// would answer a new grant as a retry and grant nothing.
+func TestFlow_Credit_CallerKeyShapedLikeAScopedKey_IsNotAMatch(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	stored := ledgerKey(creditGrant, "user-a", "x")
+	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: stored})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.GetBalance() != "6.0000" {
+		t.Errorf("balance = %s, want 6.0000 — a grant under a key equal to another's stored scoped key was taken for a retry", v.GetBalance())
+	}
+}

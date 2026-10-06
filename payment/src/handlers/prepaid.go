@@ -136,9 +136,11 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 // Keys in the "topup:" namespace are not looked up: that is where the
 // webhook writes a top-up's grant (every version has), so a row there is a
 // top-up and never a caller's earlier apply — matching one would turn a
-// caller grant into a silent no-op.
+// caller grant into a silent no-op. Keys in the "v2:" namespace are not
+// either, for the same reason: that is where scoped keys are stored, so a
+// caller key shaped "v2:<hex>" can equal another apply's stored scoped key.
 func (h *PaymentServiceHandler) appliedUnderRawKey(ctx context.Context, userID, amount string, kind creditKind, rawKey string) (bool, error) {
-	if strings.HasPrefix(rawKey, "topup:") {
+	if strings.HasPrefix(rawKey, "topup:") || strings.HasPrefix(rawKey, scopedKeyPrefix) {
 		return false, nil
 	}
 	got, err := h.Query.GetCreditLedgerByKey(ctx, &pb.GetCreditLedgerByKeyReq{IdempotencyKey: rawKey})
