@@ -89,13 +89,19 @@ func (h *ClusterServiceHandler) CheckWorkers(
 	}
 
 	var unreachable []string
+	skipped := 0
 	for i, r := range relays {
 		rejected, err := h.exchangeOne(ctx, r)
+		// Logged BEFORE the error is looked at: a relay whose exchange failed
+		// part-way may already have had workers refused, and an abort that
+		// returned first used to drop exactly the lines that said which.
+		logRejected(r, rejected)
+		skipped += len(rejected)
 		if err != nil {
 			if errors.Is(err, errRecording) {
 				// The RELAY answered; it is this control plane's own registry
 				// that failed — the database is down or refusing writes, not
-				// one worker's row being bad (that is `rejected`, below). Not
+				// one worker's row being bad (that is `rejected`, above). Not
 				// the relay's fault, so neither listed as unreachable nor
 				// written onto its row — which would send an operator to debug
 				// a healthy machine — and fatal, because every other relay's
@@ -109,21 +115,16 @@ func (h *ClusterServiceHandler) CheckWorkers(
 				// press again just to find out.
 				return nil, status.Errorf(codes.Unavailable,
 					"cluster: cannot record the workers relay %q reported: %v%s",
-					r.Name, err, sweepSoFar(unreachable, relays[i+1:]))
+					r.Name, err, sweepSoFar(unreachable, relays[i+1:], skipped))
 			}
 			// Reported, not returned. One unreachable relay must not hide the
 			// workers every other relay is holding — which is exactly the
 			// moment an operator is most likely to be pressing this button.
+			// A relay the registry refused to file workers under (errRelayRow)
+			// lands here too: it is that relay's fault, not the fleet's.
 			unreachable = append(unreachable, r.Name)
 			h.note(ctx, r, err)
 			continue
-		}
-		for _, w := range rejected {
-			// Logged rather than failing the sweep: the response has no field
-			// for it, and the alternative — aborting — is what let one worker
-			// with an over-long hostname hide the whole fleet.
-			log.Printf("cluster: relay %q reported worker %s (name %q, device %q) and the registry refused it: %v",
-				r.Name, w.worker.GetCertFingerprint(), w.worker.GetName(), w.worker.GetDeviceId(), w.err)
 		}
 		h.noteOK(ctx, r)
 	}
@@ -144,6 +145,7 @@ func (h *ClusterServiceHandler) CheckWorkers(
 		Discovered:        int32(discovered),
 		EnrolledTotal:     int32(after),
 		UnreachableRelays: unreachable,
+		SkippedWorkers:    int32(skipped),
 	}, nil
 }
 
@@ -172,57 +174,120 @@ func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) ([]rej
 			// a row an operator cannot act on is worse than no row.
 			continue
 		}
-		if err := h.Workers.Record(ctx, r.ID, w); err != nil {
-			if refusedForItsOwnData(err) {
-				// ONE worker's claims do not fit the registry (a name longer
-				// than the column, a constraint on its own row). That is about
-				// this worker, not about the relay nor the registry, so the
-				// rest of this relay's workers — and every other relay's —
-				// are still recorded. It used to abort the whole sweep: one
-				// machine with a 200-character hostname made fleet discovery
-				// fail on every press, for every relay.
-				rejected = append(rejected, rejectedWorker{worker: w, err: err})
-				continue
-			}
+		err := h.Workers.Record(ctx, r.ID, w)
+		switch classifyRecordError(err) {
+		case recorded:
+			continue
+		case refusedWorker:
+			// ONE worker's claims do not fit the registry (a name longer
+			// than the column, a constraint on its own row). That is about
+			// this worker, not about the relay nor the registry, so the
+			// rest of this relay's workers — and every other relay's —
+			// are still recorded. It used to abort the whole sweep: one
+			// machine with a 200-character hostname made fleet discovery
+			// fail on every press, for every relay.
+			rejected = append(rejected, rejectedWorker{worker: w, err: err})
+		case refusedRelay:
+			// The registry refused the RELAY this worker would be filed
+			// under — its row is gone (deleted since the relay list was
+			// read) or its id is not one the registry takes. Every other
+			// worker of this relay would be refused the same way, so it is
+			// this relay that failed, not each of its workers; skipping them
+			// one by one used to log every worker as "refused" and then mark
+			// the relay reached.
+			return rejected, fmt.Errorf("%w: %w", errRelayRow, err)
+		default:
 			return rejected, fmt.Errorf("%w: %w", errRecording, err)
 		}
 	}
 	return rejected, nil
 }
 
-// refusedForItsOwnData tells a registry that refused ONE row — validation of
-// the request, or a constraint the row broke — from a registry that cannot
-// write at all (Unavailable, Internal, a deadline, a transport error).
+// logRejected says which workers the registry refused to record, and why.
 //
-// The generated storage answers both a failed field validation and a mapped
-// constraint violation with InvalidArgument, and a mapped violation also
-// carries a w17 ErrorDetail; either is enough. Everything else is treated as
-// registry-wide, because skipping on a registry that is actually down would
-// report a "successful" sweep that recorded nothing.
-func refusedForItsOwnData(err error) bool {
+// Logged per worker, and counted in CheckWorkersResp.skipped_workers: the
+// count is what an operator pressing the button sees, the log is where the
+// names and reasons are.
+func logRejected(r Relay, rejected []rejectedWorker) {
+	for _, w := range rejected {
+		log.Printf("cluster: relay %q reported worker %s (name %q, device %q) and the registry refused it: %v",
+			r.Name, w.worker.GetCertFingerprint(), w.worker.GetName(), w.worker.GetDeviceId(), w.err)
+	}
+}
+
+// recordOutcome is what one refused (or accepted) RecordWorker means for the
+// sweep.
+type recordOutcome int
+
+const (
+	// recorded — the row was written.
+	recorded recordOutcome = iota
+	// refusedWorker — the worker's OWN claims do not fit; skip it.
+	refusedWorker
+	// refusedRelay — the relay it would be filed under is the problem; that
+	// relay failed.
+	refusedRelay
+	// registryDown — the registry cannot write at all; abort the sweep.
+	registryDown
+)
+
+// relayIDField is RecordWorkerReq's relay_id, as the generated storage names
+// it in an ErrorDetail's field.
+const relayIDField = "relay_id"
+
+// classifyRecordError tells a registry that refused ONE row from one that
+// cannot write at all — by the gRPC CODE, never by whether a detail is
+// attached.
+//
+// The generated storage's error wrapper (sdk core/grpcerr) attaches a w17
+// ErrorDetail to EVERY error it returns: Internal for a database it cannot
+// reach (code INTERNAL), Aborted for a serialization failure, Canceled,
+// DeadlineExceeded, FailedPrecondition for an unmapped constraint. So "a
+// detail is present" says nothing about whose fault it was; an earlier
+// version read it as "the worker's own data", and a Postgres outage then
+// skipped every worker of every relay and reported the sweep a success.
+//
+// Only InvalidArgument and OutOfRange are about the request — a failed field
+// validation, a mapped constraint, a value the column cannot hold. Of those,
+// one whose detail names relay_id is about the RELAY's id, not the worker's
+// claims (a relay_id foreign key or a malformed id): today's schema has no
+// foreign key on Worker.relay_id, so that is defensive, but an operator would
+// otherwise read every worker of a vanished relay as individually refused.
+// Everything else aborts.
+func classifyRecordError(err error) recordOutcome {
+	if err == nil {
+		return recorded
+	}
 	st, ok := status.FromError(err)
 	if !ok {
-		return false
+		return registryDown
 	}
 	switch st.Code() {
 	case codes.InvalidArgument, codes.OutOfRange:
-		return true
+	default:
+		return registryDown
 	}
 	for _, d := range st.Details() {
-		if _, ok := d.(*w17pb.ErrorDetail); ok {
-			return true
+		if ed, ok := d.(*w17pb.ErrorDetail); ok && ed.GetField() == relayIDField {
+			return refusedRelay
 		}
 	}
-	return false
+	return refusedWorker
 }
 
 // errRecording marks a failure to WRITE what a relay reported, as opposed to a
 // failure to reach the relay.
 var errRecording = errors.New("recording a worker")
 
+// errRelayRow marks a relay the registry would not file workers under.
+var errRelayRow = errors.New("the registry refused this relay's id")
+
 // sweepSoFar renders what an aborted sweep had already found, for its error.
-func sweepSoFar(unreachable []string, notAsked []Relay) string {
+func sweepSoFar(unreachable []string, notAsked []Relay, skipped int) string {
 	var b strings.Builder
+	if skipped > 0 {
+		fmt.Fprintf(&b, "; %d worker(s) skipped for their own claims (logged)", skipped)
+	}
 	if len(unreachable) > 0 {
 		sorted := slices.Clone(unreachable)
 		sort.Strings(sorted)

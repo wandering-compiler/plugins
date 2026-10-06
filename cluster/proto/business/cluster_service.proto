@@ -246,6 +246,11 @@ message CheckWorkersResp {
   // one unreachable relay must not hide the workers every other relay is
   // holding.
   repeated string unreachable_relays = 3;
+  // Workers a relay reported that the registry refused to record because of
+  // their OWN claims (a name or device id the registry cannot hold). Counted
+  // here so an operator sees that the sweep left someone out; which workers,
+  // and why, is in the control plane's log.
+  int32 skipped_workers = 4;
 }
 
 // ExchangeWorkersReq carries nothing in its body: the ban set travels in the

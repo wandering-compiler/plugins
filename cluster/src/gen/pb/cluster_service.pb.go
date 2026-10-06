@@ -637,8 +637,13 @@ type CheckWorkersResp struct {
 	// one unreachable relay must not hide the workers every other relay is
 	// holding.
 	UnreachableRelays []string `protobuf:"bytes,3,rep,name=unreachable_relays,json=unreachableRelays,proto3" json:"unreachable_relays,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Workers a relay reported that the registry refused to record because of
+	// their OWN claims (a name or device id the registry cannot hold). Counted
+	// here so an operator sees that the sweep left someone out; which workers,
+	// and why, is in the control plane's log.
+	SkippedWorkers int32 `protobuf:"varint,4,opt,name=skipped_workers,json=skippedWorkers,proto3" json:"skipped_workers,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CheckWorkersResp) Reset() {
@@ -690,6 +695,13 @@ func (x *CheckWorkersResp) GetUnreachableRelays() []string {
 		return x.UnreachableRelays
 	}
 	return nil
+}
+
+func (x *CheckWorkersResp) GetSkippedWorkers() int32 {
+	if x != nil {
+		return x.SkippedWorkers
+	}
+	return 0
 }
 
 // ExchangeWorkersReq carries nothing in its body: the ban set travels in the
@@ -1443,13 +1455,14 @@ const file_business_cluster_service_proto_rawDesc = "" +
 	"\x03ids\x18\x01 \x03(\tR\x03ids\"?\n" +
 	"\x0eDrainRelayResp\x12-\n" +
 	"\x12unreachable_relays\x18\x01 \x03(\tR\x11unreachableRelays\"\x11\n" +
-	"\x0fCheckWorkersReq\"\x88\x01\n" +
+	"\x0fCheckWorkersReq\"\xb1\x01\n" +
 	"\x10CheckWorkersResp\x12\x1e\n" +
 	"\n" +
 	"discovered\x18\x01 \x01(\x05R\n" +
 	"discovered\x12%\n" +
 	"\x0eenrolled_total\x18\x02 \x01(\x05R\renrolledTotal\x12-\n" +
-	"\x12unreachable_relays\x18\x03 \x03(\tR\x11unreachableRelays\"L\n" +
+	"\x12unreachable_relays\x18\x03 \x03(\tR\x11unreachableRelays\x12'\n" +
+	"\x0fskipped_workers\x18\x04 \x01(\x05R\x0eskippedWorkers\"L\n" +
 	"\x12ExchangeWorkersReqJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x15approved_fingerprintsR\x13denied_fingerprints\"Q\n" +
 	"\x13ExchangeWorkersResp\x12:\n" +
 	"\aworkers\x18\x01 \x03(\v2 .w17.contrib.cluster.KnownWorkerR\aworkers\"\x8d\x01\n" +
