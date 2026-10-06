@@ -213,7 +213,7 @@ func TestFlush_ATransientInternFailureIsNotCached(t *testing.T) {
 
 // The flusher's intern caches are bounded: a label carrying a run id is a new
 // key on every run, and the maps used to keep every one for the life of the
-// process. Rows still land after a reset.
+// process. Rows still land after a key is dropped.
 func TestFlush_TheInternCachesAreBounded(t *testing.T) {
 	store, clients := serveUsageStore(t)
 	f := &dbFlusher{mut: clients.UsageMutation()}
@@ -225,12 +225,12 @@ func TestFlush_TheInternCachesAreBounded(t *testing.T) {
 		}}); err != nil {
 			t.Fatalf("Flush: %v", err)
 		}
-		if f.labels.len() > 2 || f.scopes.len() > 2 {
-			t.Fatalf("after %d runs: %d labels, %d scopes cached — want at most 2 each", i+1, f.labels.len(), f.scopes.len())
+		if f.labels.len() > 4 || f.scopes.len() > 4 {
+			t.Fatalf("after %d runs: %d labels, %d scopes cached — want at most 4 each (two generations of 2)", i+1, f.labels.len(), f.scopes.len())
 		}
 	}
 	if rows := store.usageRows(); len(rows) != 10 || rows[9].labels["run"] != "rj" {
-		t.Errorf("rows = %d, last labels %v — a reset must not cost a row", len(rows), rows[len(rows)-1].labels)
+		t.Errorf("rows = %d, last labels %v — a dropped key must not cost a row", len(rows), rows[len(rows)-1].labels)
 	}
 }
 

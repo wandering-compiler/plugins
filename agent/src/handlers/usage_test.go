@@ -44,7 +44,8 @@ func TestAFailedCallIsStillRecorded(t *testing.T) {
 	// failingCompleter is never called — so this test asserted that "a failed
 	// call is recorded" while exercising a path where no call happened. It
 	// passed because every error was treated as a failed call, which is the
-	// defect a consumer reported (#74/3). The budget makes it reach the fake.
+	// defect a consumer reported: a refusal before the provider recorded as a
+	// failed call. The budget makes it reach the fake.
 	h := &AgentServiceHandler{Client: failingCompleter{}, Usage: sink, DefaultModel: "gpt-x", DefaultMaxTokens: 100}
 
 	_, err := h.Complete(context.Background(), &pb.CompleteReq{

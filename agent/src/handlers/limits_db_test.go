@@ -330,21 +330,21 @@ func TestDBLimiter_ConcurrentCallers(t *testing.T) {
 
 // The scope-id cache is BOUNDED. Its key is whatever scope a caller sends, and
 // it used to keep one entry per distinct scope for the life of the process.
-// Past the cap it starts over, and a scope it has dropped is simply interned
-// again — the answer stays right.
+// It holds at most two generations of the cap, and a scope it has dropped is
+// simply interned again — the answer stays right.
 func TestDBLimiter_TheScopeIDCacheIsBounded(t *testing.T) {
 	store, l := newTestLimiter(t)
 	l.ids.max = 3
 	store.setLimit("tenant-0", 0, "USD")
 	for i := 0; i < 20; i++ {
 		l.Allow(context.Background(), "tenant-"+strconv.Itoa(i))
-		if n := l.ids.len(); n > 3 {
-			t.Fatalf("after %d scopes the id cache holds %d, want at most 3", i+1, n)
+		if n := l.ids.len(); n > 6 {
+			t.Fatalf("after %d scopes the id cache holds %d, want at most 6 (two generations of 3)", i+1, n)
 		}
 	}
-	// Dropped by a reset, and still answered correctly.
+	// Dropped by the generations rolling over, and still answered correctly.
 	if l.Allow(context.Background(), "tenant-0").Allowed {
-		t.Error("a scope re-interned after a reset lost its cap")
+		t.Error("a scope re-interned after being dropped lost its cap")
 	}
 	// Within the cap the steady state still asks nothing.
 	before := store.count("InternScope")
@@ -361,8 +361,8 @@ func TestSpendCacheIsBounded(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		c.put("s"+strconv.Itoa(i), int64(i), now)
-		if n := len(c.value); n > 2 || len(c.fetched) != n {
-			t.Fatalf("after %d puts the cache holds %d values / %d times, want at most 2 of each", i+1, n, len(c.fetched))
+		if n := c.len(); n > 4 {
+			t.Fatalf("after %d puts the cache holds %d, want at most 4 (two generations of 2)", i+1, n)
 		}
 	}
 	if v, ok := c.get("s9", now); !ok || v != 9 {
@@ -372,5 +372,84 @@ func TestSpendCacheIsBounded(t *testing.T) {
 	c.put("s9", 10, now)
 	if v, ok := c.get("s8", now); !ok || v != 8 {
 		t.Errorf("updating a held key reset the cache: %d, %v", v, ok)
+	}
+}
+
+// A key in USE survives a flood of new ones, and the size stays bounded.
+//
+// The caches used to RESET at the cap: past it, every new key emptied the
+// whole map once per cap's worth of keys — and since the keys are the
+// callers', anyone sending random scopes could keep evicting every legitimate
+// tenant's entry, turning each of their calls into a database round trip.
+func TestCaches_AHotKeySurvivesAFlood(t *testing.T) {
+	const max = 3
+	ids := &idCache[string]{max: max}
+	spend := &spendCache[int64]{ttl: time.Hour, max: max}
+	now := time.Now()
+	ids.put("hot", 42)
+	spend.put("hot", 42, now)
+	for i := 0; i < 1000; i++ {
+		k := "flood-" + strconv.Itoa(i)
+		ids.put(k, int64(i))
+		spend.put(k, int64(i), now)
+		if id, ok := ids.get("hot"); !ok || id != 42 {
+			t.Fatalf("idCache: the hot key was evicted after %d flood keys (%d, %v)", i+1, id, ok)
+		}
+		if v, ok := spend.get("hot", now); !ok || v != 42 {
+			t.Fatalf("spendCache: the hot key was evicted after %d flood keys (%d, %v)", i+1, v, ok)
+		}
+		if n := ids.len(); n > 2*max {
+			t.Fatalf("idCache holds %d after %d flood keys, want at most %d", n, i+1, 2*max)
+		}
+		if n := spend.len(); n > 2*max {
+			t.Fatalf("spendCache holds %d after %d flood keys, want at most %d", n, i+1, 2*max)
+		}
+	}
+	// A cold key does fall out: bounded means something is dropped.
+	if _, ok := ids.get("flood-0"); ok {
+		t.Error("a key never read again survived a thousand newer ones — the cache is not bounded")
+	}
+}
+
+// A promoted key keeps the value it was last PUT with: an update that lands in
+// the current generation is not undone by an older copy in the previous one.
+func TestGenerations_AnUpdateIsNotResurrectedByPromotion(t *testing.T) {
+	var g generations[string, int]
+	g.put("k", 1, 2)
+	g.put("a", 0, 2)
+	g.put("b", 0, 2) // rotates: k is now in the previous generation
+	g.put("k", 2, 2)
+	if v, ok := g.get("k", 2); !ok || v != 2 {
+		t.Errorf("get = %d, %v — want the updated 2", v, ok)
+	}
+}
+
+// An EXPIRED entry in the previous generation is a miss and is not promoted.
+//
+// get used to promote first and check the TTL after, so reading a stale key
+// copied it into a FULL current generation — rotating it, which threw away the
+// whole previous generation of live entries — only to answer "miss" anyway.
+func TestSpendCache_AnExpiredEntryIsNotPromoted(t *testing.T) {
+	c := &spendCache[int64]{ttl: time.Minute, max: 2}
+	old := time.Now()
+	now := old.Add(time.Hour)
+	c.put("stale", 1, old)
+	c.put("live-a", 2, now) // current: stale, live-a
+	c.put("live-b", 3, now) // rotates: previous = {stale, live-a}, current = {live-b}
+	c.put("live-c", 4, now) // current: live-b, live-c — full
+
+	if _, ok := c.get("stale", now); ok {
+		t.Fatal("an expired entry was served")
+	}
+	// Had "stale" been promoted into the full current generation, current would
+	// have rotated into previous and live-a — still fresh — would be gone.
+	if v, ok := c.get("live-a", now); !ok || v != 2 {
+		t.Errorf("live-a = %d, %v — reading an expired key evicted a live one", v, ok)
+	}
+	if v, ok := c.get("live-b", now); !ok || v != 3 {
+		t.Errorf("live-b = %d, %v", v, ok)
+	}
+	if n := c.len(); n != 3 {
+		t.Errorf("the cache holds %d entries, want 3 — the expired one dropped, nothing else", n)
 	}
 }

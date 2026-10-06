@@ -87,10 +87,13 @@ message Usage {
   ];
 
   // measured=false means the PROVIDER did not report the usage — for a run,
-  // that at least one of its turns went unreported — and that is not the
-  // same as a call that cost nothing. Both used to be "no row", which is how a
-  // run can report a complete bill for tokens it actually spent. The row
-  // exists either way; this field is what separates them. Tokens on an
+  // that at least one turn it SENT went unreported — and that is not the same
+  // as a call that cost nothing. A turn never sent (refused before the
+  // request, or not attempted because the run had already ended) is not a
+  // turn and does not make a run unmeasured; a run that sent NO turn is
+  // measured at zero tokens — its cost is known. Both used to be "no row", which
+  // is how a run can report a complete bill for tokens it actually spent. The
+  // row exists either way; this field is what separates them. Tokens on an
   // unmeasured row are what WAS reported (the run's other turns): a floor,
   // never the full measure.
   bool measured = 4;

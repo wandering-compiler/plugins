@@ -12,8 +12,8 @@ import (
 
 // a consumer — the third path.
 //
-// #74/3 established it: a request the LLM layer refuses BEFORE the provider is
-// not a failed call. Recording one invents spend, and `Unavailable` sends the
+// The rule, established on the unary path: a request the LLM layer refuses
+// BEFORE the provider is not a failed call. Recording one invents spend, and `Unavailable` sends the
 // caller to the provider's status page for what is an invalid argument. It was
 // fixed on `Complete` and on the streaming path and missed on `RunAgent` — which
 // is the one that makes the MOST model calls per invocation, because it loops.

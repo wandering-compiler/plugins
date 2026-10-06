@@ -100,8 +100,9 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		// Not the whole error, which is what this said and did for a day. The
 		// full text also carries the response BODY, and llm.go records that it
 		// sometimes quotes the prompt — so `%v` put user input into a log that
-		// is shipped, aggregated and kept far longer than the request (a consumer
-		// #74/2). The justification covered the URL and the body rode along.
+		// is shipped, aggregated and kept far longer than the request (a
+		// consumer reported it). The justification covered the URL and the
+		// body rode along.
 		log.Printf("agent: model call failed (model %q): %s", m.ID, llm.ProviderLogLine(err))
 		return nil, status.Error(codes.Unavailable, modelCallFailure(err))
 	}

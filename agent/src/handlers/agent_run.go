@@ -112,13 +112,13 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		messagesFrom(start.GetMessages()), tools, limitsFrom(start.GetLimits()),
 		func(e llm.RunEvent) error { return sendRunEvent(send, e) })
 
-	// ⚠️ a consumer. A request the LLM layer refused BEFORE calling the provider
-	// is not a failed call: no tokens were spent and nothing was unavailable, so
+	// ⚠️ A request the LLM layer refused BEFORE calling the provider is not a
+	// failed call: no tokens were spent and nothing was unavailable, so
 	// recording a usage row invents spend and the error sends the caller to the
-	// provider's status page for what is an invalid argument. That is #74/3, and
-	// it was fixed on the two unary paths (agent_service.go, agent_stream.go)
-	// and missed here — the tool-calling path, which is the one that reaches the
-	// provider most often.
+	// provider's status page for what is an invalid argument. A consumer
+	// reported exactly that, and the fix landed on the two unary paths
+	// (agent_service.go, agent_stream.go) and missed here — the tool-calling
+	// path, which is the one that reaches the provider most often.
 	//
 	// Before recordUsageFor, not after: the point is that no row is written.
 	if llm.IsPreflight(runErr) {
@@ -155,10 +155,25 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		// runError's default — `Unavailable`, "the run failed" — for a client
 		// that hung up or whose own deadline passed: the wrong code, and an
 		// operator reading it would look at the provider for something the
-		// provider did not do. CompleteStream had the same defect and the same
-		// fix.
+		// provider did not do. CompleteStream asks the same callerLeft.
 		if left := callerLeft(srv.Context(), runErr, sentErr, recvErr); left != nil {
 			return left
+		}
+		// The caller is still there but closed its SENDING side while a tool
+		// result was owed. That is a protocol mistake on their side, not a
+		// model failure and not a hang-up: it used to come back as a bare
+		// codes.Unknown "EOF", which told them nothing about what they did.
+		if errors.Is(runErr, errCallerClosedSend) {
+			return status.Error(codes.FailedPrecondition, errCallerClosedSend.Error())
+		}
+		// The stream failed on OUR side while the caller is still there — a
+		// Send of an event over the size limit, a Recv of a ToolResult over
+		// it, a message that would not marshal. Not the model: these used to
+		// reach runError's Unavailable "the model call failed", logged as a
+		// model failure, and a caller retrying on Unavailable hit the same
+		// oversize every time.
+		if f := streamFailure(model.ID, runErr, sentErr, recvErr); f != nil {
+			return f
 		}
 		mapped := runError(runErr)
 		if status.Code(mapped) == codes.Unavailable {
@@ -223,6 +238,14 @@ func (t *remoteTool) Call(ctx context.Context, args string) (string, error) {
 		// ask the model another turn for a caller who had already left.
 		return "", llm.Fatal(ctx.Err())
 	case res := <-wait:
+		if errors.Is(res.err, io.EOF) {
+			// Recv's io.EOF is the caller half-closing: "no more messages".
+			// Named here, where it is still certain what it means — by the
+			// time it reaches the handler an io.EOF could equally be a
+			// provider's dropped connection (net/http's error for a reused
+			// keep-alive the server closed wraps io.EOF).
+			return "", llm.Fatal(errCallerClosedSend)
+		}
 		if res.err != nil {
 			return "", llm.Fatal(res.err)
 		}
@@ -342,6 +365,10 @@ func sendRunEvent(send func(*pb.RunAgentEvent) error, e llm.RunEvent) error {
 	return nil
 }
 
+// errCallerClosedSend ends a run whose caller half-closed the stream — Recv
+// returned io.EOF — while a tool call was still waiting for its result.
+var errCallerClosedSend = errors.New("agent: the caller closed its side of the stream while a tool result was still owed")
+
 // callerLeft returns the error to answer with when a run ended because the
 // CALLER went away — their stream context ended (a hang-up, their own
 // deadline), or the stream itself failed on their side (a Send or a Recv the
@@ -350,16 +377,79 @@ func sendRunEvent(send func(*pb.RunAgentEvent) error, e llm.RunEvent) error {
 // The caller's own error comes back as-is: there is nobody to tell anything
 // else, and re-coding it would only mislabel the log of whoever reads the
 // server side.
-func callerLeft(ctx context.Context, runErr error, streamErrs ...error) error {
-	for _, e := range streamErrs {
-		if e != nil && e != io.EOF && errors.Is(runErr, e) {
-			return e
-		}
+//
+// A Send or Recv error counts only when it is the caller leaving (see
+// callerGone). Either can also fail on THIS side — a message over the size
+// limit, one that would not marshal — and returning that as "the caller left"
+// would hide a server-side defect behind a hang-up nobody made; streamFailure
+// answers those. Recv's io.EOF does not count either: it is the caller
+// half-closing, not leaving.
+func callerLeft(ctx context.Context, runErr, sendErr, recvErr error) error {
+	if sendErr != nil && errors.Is(runErr, sendErr) && callerGone(ctx, sendErr) {
+		return sendErr
+	}
+	// The same filter for Recv. It used to be any Recv error but io.EOF — so a
+	// ResourceExhausted "received message larger than max", an oversized
+	// ToolResult from a caller who is still connected, came back as if they
+	// had hung up, with nothing logged.
+	if recvErr != nil && recvErr != io.EOF && errors.Is(runErr, recvErr) && callerGone(ctx, recvErr) {
+		return recvErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return status.FromContextError(ctxErr).Err()
 	}
 	return nil
+}
+
+// callerGone reports whether a failed Send or Recv means the caller is gone:
+// the stream's context has ended, the transport reported the stream cancelled,
+// past its deadline or closing, or a send hit the end of the stream. Anything
+// else — ResourceExhausted for an oversized message, Internal for one that
+// would not marshal — is the stream failing on THIS side, and belongs to
+// streamFailure. (Recv's io.EOF never gets here: callerLeft excludes it, as
+// the caller half-closing.)
+func callerGone(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, io.EOF) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Canceled, codes.DeadlineExceeded, codes.Unavailable:
+		// Unavailable is grpc-go's code for a write on a transport that is
+		// closing — the connection under the caller going away.
+		return true
+	}
+	return false
+}
+
+// streamFailure is the answer for a run that ended because a Send or a Recv
+// failed on THIS side of a stream whose caller is still connected — callerLeft
+// has already answered every case where they are not. Nil when the run ended
+// for another reason.
+//
+// The stream's own status is kept where it says something the caller can act
+// on: ResourceExhausted, a message over the size limit, stays that — retrying
+// it is pointless, which is exactly what the Unavailable it used to become
+// invited. Anything else is our defect: Internal, with a short message. Logged
+// as what it is, a stream failure, never a model failure; the run's spend was
+// already recorded once, before this.
+func streamFailure(model string, runErr, sendErr, recvErr error) error {
+	switch {
+	case sendErr != nil && errors.Is(runErr, sendErr):
+		log.Printf("agent: sending to the caller failed (model %q): %v", model, sendErr)
+		return ownSideFailure(sendErr, "agent: an event could not be sent to the caller")
+	case recvErr != nil && recvErr != io.EOF && errors.Is(runErr, recvErr):
+		log.Printf("agent: receiving from the caller failed (model %q): %v", model, recvErr)
+		return ownSideFailure(recvErr, "agent: a message from the caller could not be received")
+	}
+	return nil
+}
+
+// ownSideFailure codes a stream failure on this side: see streamFailure.
+func ownSideFailure(err error, msg string) error {
+	if status.Code(err) == codes.ResourceExhausted {
+		return err
+	}
+	return status.Error(codes.Internal, msg)
 }
 
 func runError(err error) error {
@@ -370,10 +460,16 @@ func runError(err error) error {
 		return status.Error(codes.DeadlineExceeded, "agent: the model did not finish within the turn limit")
 	case errors.Is(err, llm.ErrRunawayOutput):
 		return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")
-	case errors.Is(err, io.EOF), errors.Is(err, context.Canceled):
-		// The caller left. There is nobody to tell.
-		return err
 	default:
+		// No "the caller left" case here. callerLeft runs first and answers
+		// every ending the caller caused, so an io.EOF or context.Canceled that
+		// reaches this switch came from somewhere else while the caller was
+		// still connected — typically the provider's transport: net/http
+		// reports a keep-alive connection the provider closed as
+		// `Post "<deployment url>": EOF`. Returned as-is it reached the caller
+		// as codes.Unknown with the deployment URL in the text, and nothing
+		// was logged.
+		//
 		// The same rendering as Complete and CompleteStream. A run used to
 		// answer every model failure with the bare "agent: the run failed",
 		// so a response the provider marked failed lost its CODE on this path

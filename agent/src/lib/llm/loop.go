@@ -108,6 +108,21 @@ func Run(
 			offer = nil
 		}
 
+		// A context that has already ended means no request can leave: the
+		// SDK fails before sending anything. That ending is returned HERE,
+		// rather than by asking the SDK and reading its failure, because the
+		// failure branch below cannot tell "never sent" from "sent and never
+		// reported" — and counting a turn that never left as unreported made
+		// the whole run unmeasured, a floor where the bill was in fact
+		// complete. (A context that ends after this check, while the SDK is
+		// building or sending, is still counted as sent: the conservative
+		// side, an unmeasured row rather than a free one.) Before turn 0 this
+		// is a run that sent nothing at all, and its total is MEASURED at
+		// zero: the cost is known, because nothing went out.
+		if err := ctx.Err(); err != nil {
+			return nil, withSpent(err, spent.usage())
+		}
+
 		res, calls, err := completeTurn(ctx, client, m, instructions, history, input, offer, sink)
 		if err != nil {
 			switch u, ok := SpentBy(err); {
@@ -336,8 +351,9 @@ func assistantToolCalls(calls []toolCall) []responses.ResponseInputItemUnionPara
 // validate ALIKE. They did not: the JSON-object precondition and the preflight
 // marker were added to paramsFor only, so RunAgent went on answering a request
 // the provider is documented to refuse with a plain `Unavailable` and a usage
-// row for a call that never happened (a consumer and #74/4, on the path they did
-// not test). `history` is the caller's own turns, which is what the guard reads.
+// row for a call that never happened (a consumer reported it, on the path they
+// did not test). `history` is the caller's own turns, which is what the guard
+// reads.
 func paramsForInput(m Model, instructions string, history []Message, input []responses.ResponseInputItemUnionParam) (*responses.ResponseNewParams, error) {
 	if strings.TrimSpace(m.ID) == "" {
 		return nil, preflight("no model id")
