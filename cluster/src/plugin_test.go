@@ -3,16 +3,20 @@ package cluster
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/platform/plugins/cluster/gen"
 	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
@@ -120,6 +124,17 @@ type managedRelay struct {
 	fp      string
 	codes   *regcode.Store
 	workers *workeradmit.Registry
+
+	// refusals are the relay-side pin's verdicts against a client, as the
+	// TLS handshake saw them.
+	mu       sync.Mutex
+	refusals []error
+}
+
+func (m *managedRelay) pinRefusals() []error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.refusals)
 }
 
 func serveManagedRelay(t *testing.T, controlPlaneFP string) *managedRelay {
@@ -141,12 +156,22 @@ func serveManagedRelay(t *testing.T, controlPlaneFP string) *managedRelay {
 		t.Fatal(err)
 	}
 	workers := workeradmit.New()
+	m := &managedRelay{fp: relayID.Fingerprint, codes: codes, workers: workers}
+	pin := relaydial.PinnedVerifier("control plane", controlPlaneFP)
 	opts := append(relayserver.BanServerOptions(workers), grpc.Creds(credentials.NewTLS(&tls.Config{
-		Certificates:          []tls.Certificate{crt},
-		MinVersion:            tls.VersionTLS13,
-		ClientAuth:            tls.RequireAnyClientCert,
-		VerifyPeerCertificate: relaydial.PinnedVerifier("control plane", controlPlaneFP),
-		VerifyConnection:      relaydial.PinnedConnectionVerifier("control plane", controlPlaneFP),
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.RequireAnyClientCert,
+		VerifyPeerCertificate: func(raw [][]byte, chains [][]*x509.Certificate) error {
+			err := pin(raw, chains)
+			if err != nil {
+				m.mu.Lock()
+				m.refusals = append(m.refusals, err)
+				m.mu.Unlock()
+			}
+			return err
+		},
+		VerifyConnection: relaydial.PinnedConnectionVerifier("control plane", controlPlaneFP),
 	})))
 	srv := grpc.NewServer(opts...)
 	pb.RegisterClusterServiceServer(srv, &relayserver.Server{
@@ -159,7 +184,8 @@ func serveManagedRelay(t *testing.T, controlPlaneFP string) *managedRelay {
 	}
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
-	return &managedRelay{addr: lis.Addr().String(), fp: relayID.Fingerprint, codes: codes, workers: workers}
+	m.addr = lis.Addr().String()
+	return m
 }
 
 // The whole boot path, against a REAL relay management server: the identity
@@ -215,20 +241,47 @@ func TestRegisterPlugin_TheRegisteredHandlerReachesAPinnedRelay(t *testing.T) {
 // is refused by the relay — the plugin presents what it was configured with,
 // not something that merely parses.
 func TestRegisterPlugin_AnotherIdentityIsRefusedByTheRelay(t *testing.T) {
-	_, _, pinnedFP := identityFiles(t, "console")
-	otherCert, otherKey, _ := identityFiles(t, "console")
+	pinnedCert, pinnedKey, pinnedFP := identityFiles(t, "console")
+	otherCert, otherKey, otherFP := identityFiles(t, "console")
 	relay := serveManagedRelay(t, pinnedFP)
 	tb := &tables{relay: &pb.Relay{Id: "r-1", Name: "acme-eu", Url: relay.addr, CertFingerprint: relay.fp}}
-	reg := &registry{}
-	if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: otherCert, ClientKeyPath: otherKey, DialTimeoutSeconds: 2}, reg, clientSet{tb}); err != nil {
-		t.Fatal(err)
+	boot := func(cert, key string) *handlers.ClusterServiceHandler {
+		t.Helper()
+		reg := &registry{}
+		if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: cert, ClientKeyPath: key, DialTimeoutSeconds: 2}, reg, clientSet{tb}); err != nil {
+			t.Fatal(err)
+		}
+		return reg.impl.(*handlers.ClusterServiceHandler)
 	}
-	h := reg.impl.(*handlers.ClusterServiceHandler)
-	if _, err := h.IssueRegistrationCode(t.Context(), &pb.IssueRegistrationCodeReq{Ids: []string{"r-1"}}); err == nil {
-		t.Fatal("a relay pinned to another control plane issued a code to this one")
+
+	// The control: the pinned identity, against the same relay row, is served.
+	// So what the other identity meets below is not a wrong address, a wrong
+	// relay fingerprint, or a relay that is down.
+	pinned := boot(pinnedCert, pinnedKey)
+	if _, err := pinned.IssueRegistrationCode(t.Context(), &pb.IssueRegistrationCodeReq{Ids: []string{"r-1"}}); err != nil {
+		t.Fatalf("the pinned identity was refused: %v", err)
 	}
-	if n := relay.codes.Outstanding(); n != 0 {
-		t.Errorf("the refused control plane still got %d code(s) minted", n)
+	minted := relay.codes.Outstanding()
+
+	h := boot(otherCert, otherKey)
+	if _, err := h.IssueRegistrationCode(t.Context(), &pb.IssueRegistrationCodeReq{Ids: []string{"r-1"}}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("a relay pinned to another control plane: %v, want Unavailable", err)
+	}
+	if n := relay.codes.Outstanding(); n != minted {
+		t.Errorf("the refused control plane still got %d code(s) minted", n-minted)
+	}
+	// Why, as the RELAY saw it (the handler reports only that the relay did
+	// not become reachable, and what the client reads of a TLS 1.3 refusal
+	// races with its first write): the pin refused the certificate this
+	// plugin was configured with — not a missing one, not a timeout.
+	refusals := relay.pinRefusals()
+	if len(refusals) == 0 {
+		t.Fatal("the relay's pin never refused anything — the call failed for some other reason")
+	}
+	for _, err := range refusals {
+		if !strings.Contains(err.Error(), "presented certificate "+otherFP) {
+			t.Errorf("the relay refused something other than the configured identity: %v", err)
+		}
 	}
 }
 

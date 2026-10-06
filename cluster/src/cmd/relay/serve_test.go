@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"flag"
 	"io"
 	"log"
 	"net"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -390,19 +393,124 @@ func TestServe_ABanOnAManagementCallRemovesTheWorker(t *testing.T) {
 // that is perfectly valid but not the pinned one gets nothing — not stats, not
 // a registration code.
 func TestServe_ManagementRefusesAnyOtherControlPlane(t *testing.T) {
-	quiet(t)
-	_, cpFP := controlPlane(t)
-	intruder, _ := controlPlane(t)
+	logs := captureLog(t)
+	cp, cpFP := controlPlane(t)
+	intruder, intruderFP := controlPlane(t)
 	r := startRelay(t, cpFP)
-	mgmt := r.manage(t, intruder)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if _, err := mgmt.IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{}); err == nil {
-		t.Fatal("a control plane the relay does not pin was issued a registration code")
+	// The control: the pinned control plane, on the same address, is served.
+	// So whatever the intruder meets below is not a wrong address nor a relay
+	// that is down.
+	if _, err := r.manage(t, cp).RelayStats(ctx, &pb.RelayStatsReq{}); err != nil {
+		t.Fatalf("the pinned control plane was not served: %v", err)
 	}
-	if _, err := mgmt.RelayStats(ctx, &pb.RelayStatsReq{}); err == nil {
-		t.Fatal("a control plane the relay does not pin read its stats")
+	if n := strings.Count(logs.String(), "refused a management connection"); n != 0 {
+		t.Fatalf("the pinned control plane was logged as refused %d time(s):\n%s", n, logs.String())
 	}
+	// The refusal is read where it is CERTAIN: the relay's own log of its pin
+	// refusing, naming the fingerprint the intruder presented. The client's
+	// error is not: in TLS 1.3 the client finishes its side of the handshake
+	// before the server's verdict arrives, so its first write can lose the
+	// race to the server's close and read "connection reset by peer" (or
+	// another code) instead of the bad_certificate alert. All the client side
+	// has to show is that it was not served.
+	refused := 0
+	refusedByThePin := func(what string, call func(pb.ClusterServiceClient) error) {
+		t.Helper()
+		if err := call(r.manage(t, intruder)); err == nil {
+			t.Fatalf("%s as a control plane the relay does not pin was SERVED", what)
+		}
+		refused++
+		deadline := time.Now().Add(10 * time.Second)
+		for strings.Count(logs.String(), "presented certificate "+intruderFP) < refused {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the relay never logged its pin refusing %s; log:\n%s", what, intruderFP, logs.String())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	refusedByThePin("IssueRegistrationCode", func(mgmt pb.ClusterServiceClient) error {
+		_, err := mgmt.IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
+		return err
+	})
+	refusedByThePin("RelayStats", func(mgmt pb.ClusterServiceClient) error {
+		_, err := mgmt.RelayStats(ctx, &pb.RelayStatsReq{})
+		return err
+	})
+	// In the RELAY's words: the pin it expects, and the flag and variable
+	// that set it — not relaydial's advice about a registry row, which is the
+	// control plane's and sent an operator to the wrong machine.
+	got := logs.String()
+	for _, want := range []string{"this relay expects " + cpFP, "--control-plane-fingerprint", "RELAY_CONTROL_PLANE_FINGERPRINT"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the refusal does not say %q; log:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "registry pins") || strings.Contains(got, "its row") {
+		t.Errorf("the relay's refusal gives the control plane's advice about a registry row:\n%s", got)
+	}
+}
+
+// The wording, for every way a pin can fail: what was presented (a
+// fingerprint, none, an unparseable one), what this relay expects, and where
+// that expectation is configured.
+func TestControlPlaneRefused_NamesThePinAndWhereItIsSet(t *testing.T) {
+	_, fp := controlPlane(t)
+	other, err := identity.LoadOrCreateIdentity(t.TempDir(), "console")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherLeaf, err := identity.ParseCertificatePEM(other.CertPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		leaf      []byte
+		presented string
+	}{
+		{"another control plane", otherLeaf.Raw, "presented certificate " + other.Fingerprint},
+		{"no certificate", nil, "presented certificate none"},
+		{"unparseable", []byte("nope"), "presented certificate an unparseable one"},
+	} {
+		msg := controlPlaneRefused(tc.leaf, fp).Error()
+		for _, want := range []string{tc.presented, "this relay expects " + fp, "--control-plane-fingerprint", "RELAY_CONTROL_PLANE_FINGERPRINT"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s: %q does not say %q", tc.name, msg, want)
+			}
+		}
+	}
+}
+
+// captureLog is quiet, keeping a copy of what the relay logged for the test
+// to read.
+func captureLog(t *testing.T) *lockedLog {
+	t.Helper()
+	l := &lockedLog{w: testWriter{t}}
+	prev := log.Writer()
+	log.SetOutput(l)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return l
+}
+
+type lockedLog struct {
+	w  testWriter
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	l.b.Write(p)
+	l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 // A drain over the management API takes effect in the binary: the relay says
@@ -569,25 +677,18 @@ func TestServe_RefusesToStartMisconfigured(t *testing.T) {
 func TestServe_AFailedStartReleasesWhatItBound(t *testing.T) {
 	quiet(t)
 	_, cpFP := controlPlane(t)
-	busy, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = busy.Close() }()
-	// The listeners bind in the order tunnel, attach, proxy, management: with
-	// the management port taken, the other three were already up.
-	ports := make([]string, 3)
-	for i := range ports {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		ports[i] = l.Addr().String()
-		_ = l.Close()
-	}
+	// The listeners bind in the order tunnel, attach, proxy, management: the
+	// management bind is made to fail, so the other three were already up.
+	// Each is a real listener on a port the kernel chose, held by the test
+	// until serve closes it — nothing here frees a port and hopes to get it
+	// back, which raced with every other process on the machine.
+	var (
+		mu     sync.Mutex
+		opened []*trackedListener
+	)
 	args := []string{
-		"--tunnel-listen", ports[0], "--attach-listen", ports[1], "--proxy-listen", ports[2],
-		"--listen", busy.Addr().String(),
+		"--tunnel-listen", "tunnel", "--attach-listen", "attach", "--proxy-listen", "proxy",
+		"--listen", "management",
 		"--proxy-address", "relay.example.com:9000", "--control-plane-fingerprint", cpFP,
 		"--identity-dir", t.TempDir(),
 	}
@@ -595,17 +696,51 @@ func TestServe_AFailedStartReleasesWhatItBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := serve(cfg, make(chan os.Signal), nil); err == nil || !strings.Contains(err.Error(), "listening on") {
-		t.Fatalf("serve with the management port taken: %v", err)
-	}
-	for _, p := range ports {
-		l, err := net.Listen("tcp", p)
+	cfg.netListen = func(network, address string) (net.Listener, error) {
+		if address == "management" {
+			return nil, errors.New("address already in use")
+		}
+		l, err := net.Listen(network, "127.0.0.1:0")
 		if err != nil {
-			t.Errorf("port %s is still held after the failed start: %v", p, err)
+			return nil, err
+		}
+		tl := &trackedListener{Listener: l, name: address}
+		mu.Lock()
+		opened = append(opened, tl)
+		mu.Unlock()
+		return tl, nil
+	}
+	if err := serve(cfg, make(chan os.Signal), nil); err == nil || !strings.Contains(err.Error(), "listening on management") {
+		t.Fatalf("serve with the management bind failing: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(opened) != 3 {
+		t.Fatalf("%d listeners were opened before the failing one, want 3", len(opened))
+	}
+	for _, l := range opened {
+		if !l.closed.Load() {
+			t.Errorf("the %s listener is still open after the failed start", l.name)
+			_ = l.Listener.Close() // or Accept below would wait forever
 			continue
 		}
-		_ = l.Close()
+		// Closed for real, not merely flagged: the port is free again.
+		if _, err := l.Accept(); !errors.Is(err, net.ErrClosed) {
+			t.Errorf("the %s listener still accepts: %v", l.name, err)
+		}
 	}
+}
+
+// trackedListener records that it was closed.
+type trackedListener struct {
+	net.Listener
+	name   string
+	closed atomic.Bool
+}
+
+func (l *trackedListener) Close() error {
+	l.closed.Store(true)
+	return l.Listener.Close()
 }
 
 // The flags' defaults come from RELAY_* variables, which is how the sandbox and
@@ -652,25 +787,31 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 }
 
+// malformedVariables are RELAY_* values that do not parse, each with the flag
+// that overrides the variable and a valid value for it.
+var malformedVariables = []struct{ key, val, flag, good string }{
+	{"RELAY_CAPACITY", "8x", "--capacity", "5"},
+	{"RELAY_CAPACITY", "-2", "--capacity", "5"},
+	{"RELAY_TICKET_TTL", "60", "--ticket-ttl", "1m"},
+	{"RELAY_TICKET_TTL", "0s", "--ticket-ttl", "1m"},
+	{"RELAY_DRAIN_TIMEOUT", "-1m", "--drain-timeout", "1m"},
+	{"RELAY_POLL_INTERVAL", "soon", "--poll-interval", "1s"},
+	{"RELAY_POLL_TIMEOUT", "1h30", "--poll-timeout", "1m"},
+	{"RELAY_WORKER_CERT_LIFETIME", "30d", "--worker-cert-lifetime", "720h"},
+	{"RELAY_REGISTRATION_CODE_TTL", "15", "--registration-code-ttl", "15m"},
+}
+
 // A variable that is SET but does not parse is refused, naming the variable.
 //
-// It used to be replaced by the default without a word: RELAY_CAPACITY=8x
-// removed the operator's ceiling entirely (0 is "no ceiling"), and
-// RELAY_TICKET_TTL=60 — no unit — ran a 30 s TTL. Both are a relay running on
-// a value its operator believes they changed.
+// It used to be read as something else without a word: RELAY_CAPACITY=8x as
+// a capacity of 8 (the old scan stopped at the first non-digit and called
+// that success), RELAY_CAPACITY=-2 as no ceiling at all (anything not
+// positive fell back to the default, 0), and RELAY_TICKET_TTL=60 — no unit —
+// as the default 30 s. Each is a relay running on a value its operator did
+// not write.
 func TestParseConfig_RefusesAMalformedVariable(t *testing.T) {
 	quiet(t)
-	for _, tc := range []struct{ key, val string }{
-		{"RELAY_CAPACITY", "8x"},
-		{"RELAY_CAPACITY", "-2"},
-		{"RELAY_TICKET_TTL", "60"},
-		{"RELAY_TICKET_TTL", "0s"},
-		{"RELAY_DRAIN_TIMEOUT", "-1m"},
-		{"RELAY_POLL_INTERVAL", "soon"},
-		{"RELAY_POLL_TIMEOUT", "1h30"},
-		{"RELAY_WORKER_CERT_LIFETIME", "30d"},
-		{"RELAY_REGISTRATION_CODE_TTL", "15"},
-	} {
+	for _, tc := range malformedVariables {
 		t.Run(tc.key+"="+tc.val, func(t *testing.T) {
 			t.Setenv(tc.key, tc.val)
 			_, err := parseConfig(nil, io.Discard)
@@ -681,6 +822,51 @@ func TestParseConfig_RefusesAMalformedVariable(t *testing.T) {
 				t.Errorf("the refusal does not name %s: %v", tc.key, err)
 			}
 		})
+	}
+}
+
+// A flag given on the command line replaces its variable, so a malformed
+// variable under an explicit flag is not a reason to refuse: the operator
+// said what they want. It used to be checked BEFORE the flags were parsed,
+// and `RELAY_CAPACITY=8x relay --capacity 5` was refused.
+//
+// Every other malformed variable is still refused — the flag excuses only its
+// own variable.
+func TestParseConfig_AnExplicitFlagExcusesItsOwnVariable(t *testing.T) {
+	quiet(t)
+	for _, tc := range malformedVariables {
+		t.Run(tc.flag+" over "+tc.key+"="+tc.val, func(t *testing.T) {
+			t.Setenv(tc.key, tc.val)
+			if _, err := parseConfig([]string{tc.flag, tc.good}, io.Discard); err != nil {
+				t.Fatalf("%s %s with %s=%q: %v, want the flag to win", tc.flag, tc.good, tc.key, tc.val, err)
+			}
+			other := "RELAY_POLL_INTERVAL"
+			if tc.key == other {
+				other = "RELAY_DRAIN_TIMEOUT"
+			}
+			t.Setenv(other, "soon")
+			_, err := parseConfig([]string{tc.flag, tc.good}, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), other) || strings.Contains(err.Error(), tc.key) {
+				t.Errorf("with %s=soon too: %v, want only %s refused", other, err, other)
+			}
+		})
+	}
+}
+
+// `-h` is usage, whatever the environment holds. It used to print the
+// environment's error instead, and no usage at all.
+func TestParseConfig_HelpIsUsageWhateverTheEnvironment(t *testing.T) {
+	quiet(t)
+	t.Setenv("RELAY_CAPACITY", "8x")
+	for _, arg := range []string{"-h", "--help"} {
+		var out strings.Builder
+		_, err := parseConfig([]string{arg}, &out)
+		if !errors.Is(err, flag.ErrHelp) {
+			t.Errorf("%s with RELAY_CAPACITY=8x: %v, want flag.ErrHelp", arg, err)
+		}
+		if !strings.Contains(out.String(), "-capacity") {
+			t.Errorf("%s printed no usage: %q", arg, out.String())
+		}
 	}
 }
 

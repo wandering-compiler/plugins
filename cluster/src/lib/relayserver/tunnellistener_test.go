@@ -182,7 +182,13 @@ func TestServeTunnels_AnAdmittedTunnelIsABackendUntilItCloses(t *testing.T) {
 	if n := r.backends.Count(); n != 1 {
 		t.Fatalf("%d backends, want the one worker", n)
 	}
-	srv.Stop() // the worker goes away
+	// The worker goes away: its server stops AND its socket closes. Stop
+	// alone is not a hang-up when it wins the race with Serve — Serve then
+	// returns without ever taking the connection, nothing closes it, and the
+	// relay's side sits in Connecting waiting for a preface (about 1 run in
+	// 30 under -race, until gRPC's 20 s connect timeout).
+	srv.Stop()
+	_ = c.Close()
 	r.awaitCapacity(t, 0)
 	if n := r.backends.Count(); n != 0 {
 		t.Errorf("%d backends after the worker hung up, want 0", n)
