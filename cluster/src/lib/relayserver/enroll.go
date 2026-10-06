@@ -3,10 +3,8 @@ package relayserver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -130,26 +128,23 @@ func (e *Enrollment) Renew(ctx context.Context, req *workerpb.RenewReq) (*worker
 	return &workerpb.Certificate{CertificatePem: certPEM, CaPem: e.CA.CertPEM}, nil
 }
 
-// maxClaimLen is the longest worker name or device id a relay accepts, in
-// characters: the width of the control plane's registry columns
-// (RecordWorkerReq.name / device_id, max_len 128).
+// checkClaims refuses, at ENROLMENT, a worker's name or device id that the
+// control plane's registry could not record (workeradmit.CheckClaims: too
+// long, or a control character such as NUL).
 //
 // Refused at the edge, where the worker can be told, rather than met and
 // passed on: a claim the registry cannot hold used to reach the control
 // plane's sweep, where the only thing that could happen to it was a failure
-// nobody on the worker's machine would ever see.
-const maxClaimLen = 128
-
-// checkClaims refuses a worker's name or device id that the registry could
-// not record. InvalidArgument, like every other malformed request a worker
-// sends: it is the worker's to fix (a shorter name), not a decision about it.
+// nobody on the worker's machine would ever see. A refusal with a REASON,
+// not a bare InvalidArgument: a worker ends on a reasoned refusal and shows
+// the message, where a bare status was retried every few seconds forever
+// behind "disconnected".
+//
+// Attach does NOT use it — a worker that already holds a certificate has its
+// claims sanitized instead (see WorkerServer.Attach).
 func checkClaims(name, deviceID string) error {
-	for _, c := range []struct{ what, v string }{{"name", name}, {"device id", deviceID}} {
-		if n := utf8.RuneCountInString(c.v); n > maxClaimLen {
-			return status.Error(codes.InvalidArgument, fmt.Sprintf(
-				"relay: the worker's %s is %d characters long, the most a relay accepts is %d — configure a shorter one",
-				c.what, n, maxClaimLen))
-		}
+	if err := workeradmit.CheckClaims(name, deviceID); err != nil {
+		return refusal.New(codes.InvalidArgument, refusal.WorkerClaimInvalid, "relay: "+err.Error())
 	}
 	return nil
 }

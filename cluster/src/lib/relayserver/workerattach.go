@@ -3,6 +3,7 @@ package relayserver
 import (
 	"context"
 	"crypto/x509"
+	"log"
 	"sync"
 	"time"
 
@@ -69,14 +70,27 @@ func (s *WorkerServer) Attach(
 		return status.Error(codes.InvalidArgument,
 			"relay: the first message on an attach stream must be the announcement")
 	}
-	// Before it is met: a claim the control plane's registry cannot hold must
-	// never be passed on to it.
-	if err := checkClaims(req.GetName(), req.GetDeviceId()); err != nil {
-		return err
+	// Sanitized, not refused. This worker HOLDS a certificate, so it enrolled
+	// — possibly before a relay checked claims at all — and refusing it here
+	// would take a machine that served fine out of the fleet on an upgrade,
+	// for a label: its identity is its key. What the control plane is told
+	// is what its registry can record (at most 128 characters, no control
+	// character — a NUL alone aborted every sweep), so nothing it is passed
+	// fails there. New workers are refused at Enroll instead, where they can
+	// be told to fix their configuration.
+	name, nameChanged := workeradmit.SanitizeClaim(req.GetName())
+	device, deviceChanged := workeradmit.SanitizeClaim(req.GetDeviceId())
+	if nameChanged || deviceChanged {
+		// The originals by LENGTH only: a claim is whatever the worker sent,
+		// up to a whole gRPC message, on every reconnect.
+		log.Printf("relay: worker %s claims a name (%d bytes) or device id (%d bytes) the control plane cannot "+
+			"record — over %d characters or with a control character; recorded as %q and %q",
+			id, len(req.GetName()), len(req.GetDeviceId()), workeradmit.MaxClaimLen, name, device)
 	}
 	// Recorded before the ban check, so a banned worker that keeps knocking
-	// is still visible to an operator reading the registry.
-	s.Workers.Met(workeradmit.Worker{ID: id, Name: req.GetName(), DeviceID: req.GetDeviceId()})
+	// is still visible to an operator reading the registry — whatever it
+	// claims to be called.
+	s.Workers.Met(workeradmit.Worker{ID: id, Name: name, DeviceID: device})
 	if !s.Workers.Admitted(id) {
 		// The message names the identity on purpose: a banned machine's
 		// operator is usually its owner, and "you were banned" without saying

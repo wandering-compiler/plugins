@@ -210,7 +210,11 @@ type WorkerEnrollmentClient interface {
 	// does not cost the operator a code.
 	//
 	// Refusals carry cluster.w17 reasons: REGISTRATION_CODE_INVALID (unknown,
-	// spent or expired), WORKER_BANNED (the request's key is banned).
+	// spent or expired), WORKER_BANNED (the request's key is banned),
+	// WORKER_CLAIM_INVALID (a name or device id the control plane's registry
+	// cannot record: over 128 characters, or a control character — the code is
+	// not spent). Attach never refuses a claim: a worker that holds a
+	// certificate is recorded under its claims shortened and sanitized.
 	Enroll(ctx context.Context, in *EnrollReq, opts ...grpc.CallOption) (*Certificate, error)
 	// Renew reissues the caller's certificate for the SAME key, so the worker's
 	// identity — the SPKI fingerprint — survives it.
@@ -272,7 +276,11 @@ type WorkerEnrollmentServer interface {
 	// does not cost the operator a code.
 	//
 	// Refusals carry cluster.w17 reasons: REGISTRATION_CODE_INVALID (unknown,
-	// spent or expired), WORKER_BANNED (the request's key is banned).
+	// spent or expired), WORKER_BANNED (the request's key is banned),
+	// WORKER_CLAIM_INVALID (a name or device id the control plane's registry
+	// cannot record: over 128 characters, or a control character — the code is
+	// not spent). Attach never refuses a claim: a worker that holds a
+	// certificate is recorded under its claims shortened and sanitized.
 	Enroll(context.Context, *EnrollReq) (*Certificate, error)
 	// Renew reissues the caller's certificate for the SAME key, so the worker's
 	// identity — the SPKI fingerprint — survives it.
