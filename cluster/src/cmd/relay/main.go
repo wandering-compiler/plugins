@@ -108,7 +108,10 @@ func run() error {
 func parseConfig(args []string, out io.Writer) (config, error) {
 	cfg := config{}
 	env := &envReader{}
-	envOr, envInt, envDuration := env.str, env.int, env.duration
+	envOr := env.str
+	// The number and duration readers take the FLAG their variable defaults,
+	// so a malformed variable is only an error when that flag was not given.
+	envInt, envDuration := env.int, env.duration
 	fs := flag.NewFlagSet("relay", flag.ContinueOnError)
 	fs.SetOutput(out)
 	fs.StringVar(&cfg.listen, "listen", envOr("RELAY_LISTEN", ":13444"),
@@ -134,26 +137,26 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 		"PEM certificate of the CA this relay issues WORKER certificates from (production: a secret)")
 	fs.StringVar(&cfg.caKeyPath, "ca-key", os.Getenv("RELAY_CA_KEY"), "PEM private key for --ca-cert")
 	fs.DurationVar(&cfg.certLifetime, "worker-cert-lifetime",
-		envDuration("RELAY_WORKER_CERT_LIFETIME", relayserver.DefaultWorkerCertLifetime),
+		envDuration("worker-cert-lifetime", "RELAY_WORKER_CERT_LIFETIME", relayserver.DefaultWorkerCertLifetime),
 		"how long an issued worker certificate lasts; workers renew well before, and a forgotten ban runs out with it")
-	fs.DurationVar(&cfg.codeTTL, "registration-code-ttl", envDuration("RELAY_REGISTRATION_CODE_TTL", 15*time.Minute),
+	fs.DurationVar(&cfg.codeTTL, "registration-code-ttl", envDuration("registration-code-ttl", "RELAY_REGISTRATION_CODE_TTL", 15*time.Minute),
 		"how long a one-time registration code stays usable")
 	fs.StringVar(&cfg.controlPin, "control-plane-fingerprint", os.Getenv("RELAY_CONTROL_PLANE_FINGERPRINT"),
 		"lowercase hex SHA-256 of the control plane's client certificate; nothing else may manage this relay")
-	fs.IntVar(&cfg.capacity, "capacity", envInt("RELAY_CAPACITY", 0),
+	fs.IntVar(&cfg.capacity, "capacity", envInt("capacity", "RELAY_CAPACITY", 0),
 		"OPTIONAL ceiling on concurrent tasks; 0 means whatever the attached workers add up to")
-	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("RELAY_TICKET_TTL", 30*time.Second),
+	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("ticket-ttl", "RELAY_TICKET_TTL", 30*time.Second),
 		"how long a granted ticket stays claimable — TIME TO CLAIM, not a cap on how long work may run")
-	fs.DurationVar(&cfg.drainTimeout, "drain-timeout", envDuration("RELAY_DRAIN_TIMEOUT", 15*time.Minute),
+	fs.DurationVar(&cfg.drainTimeout, "drain-timeout", envDuration("drain-timeout", "RELAY_DRAIN_TIMEOUT", 15*time.Minute),
 		"on SIGTERM, how long to wait for running work after draining before stopping anyway — at "+
 			"least the longest task this pool runs; the supervisor's kill timeout must be longer still")
-	fs.DurationVar(&cfg.pollInterval, "poll-interval", envDuration("RELAY_POLL_INTERVAL", relaycore.DefaultPollInterval),
+	fs.DurationVar(&cfg.pollInterval, "poll-interval", envDuration("poll-interval", "RELAY_POLL_INTERVAL", relaycore.DefaultPollInterval),
 		"how often a client holding a polled reservation is told to ask again")
-	fs.DurationVar(&cfg.pollTimeout, "poll-timeout", envDuration("RELAY_POLL_TIMEOUT", relaycore.DefaultPollTimeout),
+	fs.DurationVar(&cfg.pollTimeout, "poll-timeout", envDuration("poll-timeout", "RELAY_POLL_TIMEOUT", relaycore.DefaultPollTimeout),
 		"how long a polled reservation survives without a poll before it is abandoned — a few poll intervals")
-	if err := errors.Join(env.errs...); err != nil {
-		return config{}, err
-	}
+	// The command line first: `-h` is usage whatever the environment holds,
+	// and a flag given explicitly replaces its variable — so the variable
+	// being malformed does not matter and is not a reason to refuse.
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -162,6 +165,17 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 		// subcommand misspelt; starting anyway would run a relay on defaults
 		// the operator believes they changed.
 		return config{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	var errs []error
+	for _, e := range env.errs {
+		if !set[e.flag] {
+			errs = append(errs, e.err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return config{}, err
 	}
 	return cfg, nil
 }
@@ -407,11 +421,21 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 // envReader supplies the flags' defaults from RELAY_* variables.
 //
 // An UNSET (or blank) variable is the default. A SET one that does not parse
-// is an error, collected and refused by parseConfig — never quietly replaced
-// by the default: RELAY_CAPACITY=8x used to mean "no ceiling at all" and
-// RELAY_TICKET_TTL=60 (no unit) a 30 s TTL, each a relay running on a value
-// its operator believes they changed.
-type envReader struct{ errs []error }
+// is an error, collected and refused by parseConfig unless its flag was given
+// on the command line — never quietly read as something else. It used to be:
+// RELAY_CAPACITY=8x was read as 8 (the old scan stopped at the first
+// non-digit and called that success), RELAY_CAPACITY=-2 as no ceiling at all
+// (anything not positive fell back to the default, 0), and
+// RELAY_TICKET_TTL=60 (no unit) as the default 30 s — each a relay running on
+// a value its operator did not write.
+type envReader struct{ errs []envError }
+
+// envError is a malformed variable, and the flag that would have overridden
+// it.
+type envError struct {
+	flag string
+	err  error
+}
 
 func (e *envReader) str(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
@@ -422,28 +446,28 @@ func (e *envReader) str(k, def string) string {
 
 // int reads a count where 0 is meaningful (RELAY_CAPACITY: no ceiling) and a
 // negative one is not.
-func (e *envReader) int(k string, def int) int {
+func (e *envReader) int(flagName, k string, def int) int {
 	v := strings.TrimSpace(os.Getenv(k))
 	if v == "" {
 		return def
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
-		e.errs = append(e.errs, fmt.Errorf("%s=%q is not a whole number of zero or more", k, v))
+		e.errs = append(e.errs, envError{flagName, fmt.Errorf("%s=%q is not a whole number of zero or more", k, v)})
 		return def
 	}
 	return n
 }
 
 // duration reads a positive Go duration ("30s", "15m").
-func (e *envReader) duration(k string, def time.Duration) time.Duration {
+func (e *envReader) duration(flagName, k string, def time.Duration) time.Duration {
 	v := strings.TrimSpace(os.Getenv(k))
 	if v == "" {
 		return def
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil || d <= 0 {
-		e.errs = append(e.errs, fmt.Errorf("%s=%q is not a positive duration with a unit, like 30s or 15m", k, v))
+		e.errs = append(e.errs, envError{flagName, fmt.Errorf("%s=%q is not a positive duration with a unit, like 30s or 15m", k, v)})
 		return def
 	}
 	return d

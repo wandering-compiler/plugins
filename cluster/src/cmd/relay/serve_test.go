@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"flag"
 	"io"
 	"log"
 	"net"
@@ -652,25 +654,31 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 }
 
+// malformedVariables are RELAY_* values that do not parse, each with the flag
+// that overrides the variable and a valid value for it.
+var malformedVariables = []struct{ key, val, flag, good string }{
+	{"RELAY_CAPACITY", "8x", "--capacity", "5"},
+	{"RELAY_CAPACITY", "-2", "--capacity", "5"},
+	{"RELAY_TICKET_TTL", "60", "--ticket-ttl", "1m"},
+	{"RELAY_TICKET_TTL", "0s", "--ticket-ttl", "1m"},
+	{"RELAY_DRAIN_TIMEOUT", "-1m", "--drain-timeout", "1m"},
+	{"RELAY_POLL_INTERVAL", "soon", "--poll-interval", "1s"},
+	{"RELAY_POLL_TIMEOUT", "1h30", "--poll-timeout", "1m"},
+	{"RELAY_WORKER_CERT_LIFETIME", "30d", "--worker-cert-lifetime", "720h"},
+	{"RELAY_REGISTRATION_CODE_TTL", "15", "--registration-code-ttl", "15m"},
+}
+
 // A variable that is SET but does not parse is refused, naming the variable.
 //
-// It used to be replaced by the default without a word: RELAY_CAPACITY=8x
-// removed the operator's ceiling entirely (0 is "no ceiling"), and
-// RELAY_TICKET_TTL=60 — no unit — ran a 30 s TTL. Both are a relay running on
-// a value its operator believes they changed.
+// It used to be read as something else without a word: RELAY_CAPACITY=8x as
+// a capacity of 8 (the old scan stopped at the first non-digit and called
+// that success), RELAY_CAPACITY=-2 as no ceiling at all (anything not
+// positive fell back to the default, 0), and RELAY_TICKET_TTL=60 — no unit —
+// as the default 30 s. Each is a relay running on a value its operator did
+// not write.
 func TestParseConfig_RefusesAMalformedVariable(t *testing.T) {
 	quiet(t)
-	for _, tc := range []struct{ key, val string }{
-		{"RELAY_CAPACITY", "8x"},
-		{"RELAY_CAPACITY", "-2"},
-		{"RELAY_TICKET_TTL", "60"},
-		{"RELAY_TICKET_TTL", "0s"},
-		{"RELAY_DRAIN_TIMEOUT", "-1m"},
-		{"RELAY_POLL_INTERVAL", "soon"},
-		{"RELAY_POLL_TIMEOUT", "1h30"},
-		{"RELAY_WORKER_CERT_LIFETIME", "30d"},
-		{"RELAY_REGISTRATION_CODE_TTL", "15"},
-	} {
+	for _, tc := range malformedVariables {
 		t.Run(tc.key+"="+tc.val, func(t *testing.T) {
 			t.Setenv(tc.key, tc.val)
 			_, err := parseConfig(nil, io.Discard)
@@ -681,6 +689,51 @@ func TestParseConfig_RefusesAMalformedVariable(t *testing.T) {
 				t.Errorf("the refusal does not name %s: %v", tc.key, err)
 			}
 		})
+	}
+}
+
+// A flag given on the command line replaces its variable, so a malformed
+// variable under an explicit flag is not a reason to refuse: the operator
+// said what they want. It used to be checked BEFORE the flags were parsed,
+// and `RELAY_CAPACITY=8x relay --capacity 5` was refused.
+//
+// Every other malformed variable is still refused — the flag excuses only its
+// own variable.
+func TestParseConfig_AnExplicitFlagExcusesItsOwnVariable(t *testing.T) {
+	quiet(t)
+	for _, tc := range malformedVariables {
+		t.Run(tc.flag+" over "+tc.key+"="+tc.val, func(t *testing.T) {
+			t.Setenv(tc.key, tc.val)
+			if _, err := parseConfig([]string{tc.flag, tc.good}, io.Discard); err != nil {
+				t.Fatalf("%s %s with %s=%q: %v, want the flag to win", tc.flag, tc.good, tc.key, tc.val, err)
+			}
+			other := "RELAY_POLL_INTERVAL"
+			if tc.key == other {
+				other = "RELAY_DRAIN_TIMEOUT"
+			}
+			t.Setenv(other, "soon")
+			_, err := parseConfig([]string{tc.flag, tc.good}, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), other) || strings.Contains(err.Error(), tc.key) {
+				t.Errorf("with %s=soon too: %v, want only %s refused", other, err, other)
+			}
+		})
+	}
+}
+
+// `-h` is usage, whatever the environment holds. It used to print the
+// environment's error instead, and no usage at all.
+func TestParseConfig_HelpIsUsageWhateverTheEnvironment(t *testing.T) {
+	quiet(t)
+	t.Setenv("RELAY_CAPACITY", "8x")
+	for _, arg := range []string{"-h", "--help"} {
+		var out strings.Builder
+		_, err := parseConfig([]string{arg}, &out)
+		if !errors.Is(err, flag.ErrHelp) {
+			t.Errorf("%s with RELAY_CAPACITY=8x: %v, want flag.ErrHelp", arg, err)
+		}
+		if !strings.Contains(out.String(), "-capacity") {
+			t.Errorf("%s printed no usage: %q", arg, out.String())
+		}
 	}
 }
 
