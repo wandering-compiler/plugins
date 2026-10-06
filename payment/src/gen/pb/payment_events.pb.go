@@ -362,7 +362,13 @@ func (x *UsageRecorded) GetRecordedAt() *timestamppb.Timestamp {
 }
 
 // SubscriptionStarted — emitted on CreateSubscription (subscriptions
-// feature). A subscriber might grant plan entitlements / send a welcome.
+// feature): the local record of a new provider subscription, in whatever
+// state the provider created it. That is often NOT paid up — Stripe's
+// default payment_behavior (allow_incomplete) creates a subscription
+// INCOMPLETE until its first invoice is paid. Grant plan entitlements only
+// on TRIALING or ACTIVE: this event's status when it already is, otherwise
+// the SubscriptionStatusChanged that moves it there. A welcome needs no
+// such wait.
 type SubscriptionStarted struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	SubscriptionId         string                 `protobuf:"bytes,1,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
@@ -370,8 +376,11 @@ type SubscriptionStarted struct {
 	PlanId                 string                 `protobuf:"bytes,3,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
 	ProviderSubscriptionId string                 `protobuf:"bytes,4,opt,name=provider_subscription_id,json=providerSubscriptionId,proto3" json:"provider_subscription_id,omitempty"`
 	StartedAt              *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// The status the subscription was created in — Subscription.Status, as
+	// SubscriptionStatusChanged.status (see there for why the model's enum).
+	Status        Subscription_Status `protobuf:"varint,6,opt,name=status,proto3,enum=w17.contrib.payment.Subscription_Status" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubscriptionStarted) Reset() {
@@ -437,6 +446,13 @@ func (x *SubscriptionStarted) GetStartedAt() *timestamppb.Timestamp {
 		return x.StartedAt
 	}
 	return nil
+}
+
+func (x *SubscriptionStarted) GetStatus() Subscription_Status {
+	if x != nil {
+		return x.Status
+	}
+	return Subscription_STATUS_UNSPECIFIED
 }
 
 // SubscriptionStatusChanged — emitted on MarkSubscriptionStatus when a
@@ -571,7 +587,7 @@ const file_events_payment_events_proto_rawDesc = "" +
 	"\tnew_total\x18\x05 \x01(\x03R\bnewTotal\x12;\n" +
 	"\vrecorded_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"recordedAt:-\x92\xbd\x18 \n" +
-	"\x06events\x12\x16payment.usage.recorded\xfa\xf4\x18\x05usage\"\xaa\x02\n" +
+	"\x06events\x12\x16payment.usage.recorded\xfa\xf4\x18\x05usage\"\xec\x02\n" +
 	"\x13SubscriptionStarted\x12'\n" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
@@ -579,7 +595,8 @@ const file_events_payment_events_proto_rawDesc = "" +
 	"\aplan_id\x18\x03 \x01(\tR\x06planId\x128\n" +
 	"\x18provider_subscription_id\x18\x04 \x01(\tR\x16providerSubscriptionId\x129\n" +
 	"\n" +
-	"started_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt:;\x92\xbd\x18&\n" +
+	"started_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12@\n" +
+	"\x06status\x18\x06 \x01(\x0e2(.w17.contrib.payment.Subscription.StatusR\x06status:;\x92\xbd\x18&\n" +
 	"\x06events\x12\x1cpayment.subscription.started\xfa\xf4\x18\rsubscriptions\"\xbf\x02\n" +
 	"\x19SubscriptionStatusChanged\x12'\n" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x128\n" +
@@ -619,13 +636,14 @@ var file_events_payment_events_proto_depIdxs = []int32{
 	6, // 2: w17.contrib.payment.CreditApplied.applied_at:type_name -> google.protobuf.Timestamp
 	6, // 3: w17.contrib.payment.UsageRecorded.recorded_at:type_name -> google.protobuf.Timestamp
 	6, // 4: w17.contrib.payment.SubscriptionStarted.started_at:type_name -> google.protobuf.Timestamp
-	7, // 5: w17.contrib.payment.SubscriptionStatusChanged.status:type_name -> w17.contrib.payment.Subscription.Status
-	6, // 6: w17.contrib.payment.SubscriptionStatusChanged.changed_at:type_name -> google.protobuf.Timestamp
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	7, // 5: w17.contrib.payment.SubscriptionStarted.status:type_name -> w17.contrib.payment.Subscription.Status
+	7, // 6: w17.contrib.payment.SubscriptionStatusChanged.status:type_name -> w17.contrib.payment.Subscription.Status
+	6, // 7: w17.contrib.payment.SubscriptionStatusChanged.changed_at:type_name -> google.protobuf.Timestamp
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_events_payment_events_proto_init() }

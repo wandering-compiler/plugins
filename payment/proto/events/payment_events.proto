@@ -16,8 +16,9 @@ syntax = "proto3";
 package w17.contrib.payment;
 
 import "google/protobuf/timestamp.proto";
-// For Subscription.Status, which SubscriptionStatusChanged carries — the event
-// says what its source is rather than flattening it to an int32.
+// For Subscription.Status, which SubscriptionStarted and
+// SubscriptionStatusChanged carry — each event says what its source is rather
+// than flattening it to an int32.
 import "@self/types/models.proto";
 import "w17/contrib.proto";
 import "w17/event.proto";
@@ -93,7 +94,13 @@ message UsageRecorded {
 }
 
 // SubscriptionStarted — emitted on CreateSubscription (subscriptions
-// feature). A subscriber might grant plan entitlements / send a welcome.
+// feature): the local record of a new provider subscription, in whatever
+// state the provider created it. That is often NOT paid up — Stripe's
+// default payment_behavior (allow_incomplete) creates a subscription
+// INCOMPLETE until its first invoice is paid. Grant plan entitlements only
+// on TRIALING or ACTIVE: this event's status when it already is, otherwise
+// the SubscriptionStatusChanged that moves it there. A welcome needs no
+// such wait.
 message SubscriptionStarted {
   option (w17.event) = {
     channel: "events"
@@ -106,6 +113,9 @@ message SubscriptionStarted {
   string                    plan_id                  = 3;
   string                    provider_subscription_id = 4;
   google.protobuf.Timestamp started_at               = 5;
+  // The status the subscription was created in — Subscription.Status, as
+  // SubscriptionStatusChanged.status (see there for why the model's enum).
+  Subscription.Status       status                   = 6;
 }
 
 // SubscriptionStatusChanged — emitted on MarkSubscriptionStatus when a

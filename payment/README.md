@@ -197,7 +197,13 @@ webhooks). Off by default. This is the one feature that extends
     (storage-direct).
 - **`MarkSubscriptionStatus` mutation** — reconcile lifecycle from a
   provider webhook (ready; the webhook dispatch wiring is a follow-up).
-- **Events** — `SubscriptionStarted`, `SubscriptionStatusChanged`.
+- **Events** — `SubscriptionStarted` (carries the `status` the subscription
+  was created in) and `SubscriptionStatusChanged`. A new subscription is
+  often NOT paid up: the provider's default creates it `INCOMPLETE` until
+  the first invoice is paid. Grant plan entitlements only on `TRIALING` /
+  `ACTIVE` — `SubscriptionStarted.status` when it already is one, otherwise
+  the `SubscriptionStatusChanged` that moves it there; never on
+  `SubscriptionStarted` alone.
 
 ## Features
 

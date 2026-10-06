@@ -600,7 +600,8 @@ service PaymentMutation {
           { key: "customer_id",              value: "$response.subscription.customer_id" },
           { key: "plan_id",                  value: "$response.subscription.plan_id" },
           { key: "provider_subscription_id", value: "$response.subscription.provider_subscription_id" },
-          { key: "started_at",               value: "$response.subscription.created_at" }
+          { key: "started_at",               value: "$response.subscription.created_at" },
+          { key: "status",                   value: "$response.subscription.status" }
         ]
       }
     };

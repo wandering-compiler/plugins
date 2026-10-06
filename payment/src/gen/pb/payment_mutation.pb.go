@@ -1735,7 +1735,7 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x12current_period_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10currentPeriodEnd\x12F\n" +
 	"\x11provider_event_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0fproviderEventAt:\x11\xfa\xf4\x18\rsubscriptions\"v\n" +
 	"\x1aMarkSubscriptionStatusResp\x12E\n" +
-	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\x87E\n" +
+	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\xb0E\n" +
 	"\x0fPaymentMutation\x12\xba\x03\n" +
 	"\x0eCreateCustomer\x12&.w17.contrib.payment.CreateCustomerReq\x1a'.w17.contrib.payment.CreateCustomerResp\"\xd6\x02\xf2\xf3\x18\xd1\x02B\xce\x02\n" +
 	"\x04main\x12\xc5\x02INSERT INTO @module.Customer SET user_id = :user_id, provider_customer_id = :provider_customer_id, email = :email RETURNING id AS customer.id,           user_id AS customer.user_id,           provider_customer_id AS customer.provider_customer_id,           email AS customer.email,           created_at AS customer.created_at\x12\x85\x06\n" +
@@ -1812,9 +1812,9 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x05meter\x12\xa7\x02UPSERT INTO @module.UsageMeter SET user_id = :user_id, meter = :meter, period = :period, total = :quantity, reported_total = 0, updated_at = NOW() ON CONFLICT (user_id, meter, period) DO UPDATE SET total = total + :quantity, updated_at = NOW() RETURNING user_id, meter, period, total, updated_at\x8a\xf5\x18\x05usage\x12\xd7\x04\n" +
 	"\n" +
 	"CreatePlan\x12\".w17.contrib.payment.CreatePlanReq\x1a#.w17.contrib.payment.CreatePlanResp\"\xff\x03\xf2\xf3\x18\xe9\x03B\xe6\x03\n" +
-	"\x04main\x12\xdd\x03INSERT INTO @module.Plan SET slug = :slug, name = :name, amount = :amount, currency = :currency, interval = :interval, provider_price_id = :provider_price_id RETURNING id AS plan.id,           slug AS plan.slug,           name AS plan.name,           amount AS plan.amount,           currency AS plan.currency,           interval AS plan.interval,           provider_price_id AS plan.provider_price_id,           enabled AS plan.enabled,           created_at AS plan.created_at\x8a\xf5\x18\rsubscriptions\x12\x95\b\n" +
-	"\x12CreateSubscription\x12*.w17.contrib.payment.CreateSubscriptionReq\x1a+.w17.contrib.payment.CreateSubscriptionResp\"\xa5\a\x9a\xbd\x18\xa2\x02\n" +
-	"\x13SubscriptionStarted\x12\x8a\x02\n" +
+	"\x04main\x12\xdd\x03INSERT INTO @module.Plan SET slug = :slug, name = :name, amount = :amount, currency = :currency, interval = :interval, provider_price_id = :provider_price_id RETURNING id AS plan.id,           slug AS plan.slug,           name AS plan.name,           amount AS plan.amount,           currency AS plan.currency,           interval AS plan.interval,           provider_price_id AS plan.provider_price_id,           enabled AS plan.enabled,           created_at AS plan.created_at\x8a\xf5\x18\rsubscriptions\x12\xbe\b\n" +
+	"\x12CreateSubscription\x12*.w17.contrib.payment.CreateSubscriptionReq\x1a+.w17.contrib.payment.CreateSubscriptionResp\"\xce\a\x9a\xbd\x18\xcb\x02\n" +
+	"\x13SubscriptionStarted\x12\xb3\x02\n" +
 	",\n" +
 	"\x0fsubscription_id\x12\x19$response.subscription.id\n" +
 	"1\n" +
@@ -1825,7 +1825,9 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x18provider_subscription_id\x12/$response.subscription.provider_subscription_id\n" +
 	"/\n" +
 	"\n" +
-	"started_at\x12!$response.subscription.created_at\xf2\xf3\x18\xe8\x04B\xe5\x04\n" +
+	"started_at\x12!$response.subscription.created_at\n" +
+	"'\n" +
+	"\x06status\x12\x1d$response.subscription.status\xf2\xf3\x18\xe8\x04B\xe5\x04\n" +
 	"\x04main\x12\xdc\x04INSERT INTO @module.Subscription SET customer_id = :customer_id, plan_id = :plan_id, provider_subscription_id = :provider_subscription_id, status = :status, current_period_end = :current_period_end RETURNING id AS subscription.id,           customer_id AS subscription.customer_id,           plan_id AS subscription.plan_id,           provider_subscription_id AS subscription.provider_subscription_id,           status AS subscription.status,           current_period_end AS subscription.current_period_end,           created_at AS subscription.created_at,           updated_at AS subscription.updated_at\x8a\xf5\x18\rsubscriptions\x12\xca\a\n" +
 	"\x16MarkSubscriptionStatus\x12..w17.contrib.payment.MarkSubscriptionStatusReq\x1a/.w17.contrib.payment.MarkSubscriptionStatusResp\"\xce\x06\x9a\xbd\x18\xf3\x01\n" +
 	"\x19SubscriptionStatusChanged\x12\xd5\x01\n" +
