@@ -93,8 +93,11 @@ credit, idempotency / error-contract mapping, webhook verify) keep a
   mean paid up.
 - **Refund keys.** A refund made before the upgrade has no stored key: a
   retry of it within the provider's 24h is still a provider replay (the
-  key is sent verbatim, as before) and returns the recorded refund; a
-  retry after that is not recognised. One refund key now names one refund
+  key is sent verbatim, as before), returns the recorded refund, and
+  stores the key on that row — from then on the retry is recognised
+  locally, after the 24h too. A pre-upgrade refund that is NOT retried
+  within the 24h never gets its key, and a retry after that is not
+  recognised (it refunds again). One refund key now names one refund
   across all payments — reusing it on another payment is
   `InvalidArgument`.
 - **Credit and usage keys.** Grants, spends and usage reports are stored

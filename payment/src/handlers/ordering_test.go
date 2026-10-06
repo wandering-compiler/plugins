@@ -134,6 +134,71 @@ func TestFlow_RefundMadeBeforeTheUpgrade_RetriedAfterIt_RefundsOnce(t *testing.T
 	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 400 {
 		t.Errorf("provider refunded %d minor units, want 400 — the retry refunded again", got)
 	}
+
+	// The replay stamped the kept key on the pre-upgrade row, so a retry
+	// after the provider forgets the key is still found locally. Unstamped,
+	// it reached the provider as a NEW refund and the money went back twice.
+	r.stripe.forgetKeys() // a day later
+	before := r.stripe.count("/v1/refunds")
+	late, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "legacy-r1"})
+	if err != nil {
+		t.Fatalf("retry after the provider forgot the key: %v", err)
+	}
+	if late.GetRefund().GetId() != legacy.GetRefund().GetId() {
+		t.Errorf("the late retry answered refund %s, want the pre-upgrade %s", late.GetRefund().GetId(), legacy.GetRefund().GetId())
+	}
+	if n := r.stripe.count("/v1/refunds"); n != before {
+		t.Errorf("the late retry reached the provider again (%d → %d requests) — a second refund", before, n)
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 400 {
+		t.Errorf("provider refunded %d minor units, want 400 — the late retry refunded again", got)
+	}
+	if n := r.store.count("refunds"); n != 1 {
+		t.Errorf("refund rows = %d, want 1", n)
+	}
+}
+
+// Stamping the kept key on a pre-upgrade refund: a guard refusal (the row
+// already holds a key) is nothing to do; a key another row holds is a
+// different refund (AlreadyExists); any other failure surfaces.
+func TestFlow_RefundMadeBeforeTheUpgrade_StampOutcomes(t *testing.T) {
+	legacyRetry := func(t *testing.T, r *rig, key string) (*pb.Refund, error) {
+		t.Helper()
+		p := r.charge("user-a", "10", "k-"+key)
+		res, err := r.h.Backend.RefundPayment(bg, p.GetProviderPaymentId(), backend.Money{Amount: "4", Currency: "usd"}, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy, err := r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: res.ProviderRefundID, Amount: "4", Currency: "usd"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: key})
+		if err == nil && got.GetRefund().GetId() != legacy.GetRefund().GetId() {
+			t.Errorf("answered refund %s, want the pre-upgrade %s", got.GetRefund().GetId(), legacy.GetRefund().GetId())
+		}
+		return got.GetRefund(), err
+	}
+
+	t.Run("guard refused", func(t *testing.T) {
+		r := newRig(t)
+		r.store.injectBefore("SetRefundIdempotencyKey", noRows("SetRefundIdempotencyKey"))
+		if _, err := legacyRetry(t, r, "legacy-g"); err != nil {
+			t.Errorf("a guard refusal failed the replay: %v", err)
+		}
+	})
+	t.Run("key held by another row", func(t *testing.T) {
+		r := newRig(t)
+		r.store.injectBefore("SetRefundIdempotencyKey", uniqueErr("idempotency_key"))
+		_, err := legacyRetry(t, r, "legacy-u")
+		wantCode(t, err, codes.AlreadyExists, "stamp hit the unique key")
+	})
+	t.Run("transient", func(t *testing.T) {
+		r := newRig(t)
+		r.store.injectBefore("SetRefundIdempotencyKey", errTransient)
+		_, err := legacyRetry(t, r, "legacy-t")
+		wantCode(t, err, codes.Unavailable, "stamp failed")
+	})
 }
 
 // A concurrent request under the same key recorded its refund first: that

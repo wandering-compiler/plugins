@@ -297,6 +297,9 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 				return nil, gerr
 			}
 			if r.GetRefund() != nil && r.GetRefund().GetPaymentId() == payment.GetId() {
+				if err := h.stampRefundKey(ctx, r.GetRefund().GetId(), storedKey); err != nil {
+					return nil, err
+				}
 				return &pb.RefundPaymentResp{Refund: r.GetRefund()}, nil
 			}
 			return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
@@ -304,6 +307,26 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		return nil, err
 	}
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
+}
+
+// stampRefundKey records the kept key on a refund row the key lookup could
+// not find — one an earlier version wrote with no key, found here because the
+// provider replayed it. Unstamped, the row stays invisible to the lookup, and
+// a retry after the provider forgets the key (a day) refunds a second time.
+//
+// A row that already holds a key keeps it (the guard refuses; nothing to
+// do). A key another row already holds names a different refund: refused as
+// AlreadyExists, like every other key collision here. Any other failure
+// surfaces — the caller's retry is a provider replay that stamps again.
+func (h *PaymentServiceHandler) stampRefundKey(ctx context.Context, refundID, storedKey string) error {
+	_, err := h.Mutation.SetRefundIdempotencyKey(ctx, &pb.SetRefundIdempotencyKeyReq{Id: refundID, IdempotencyKey: storedKey})
+	switch {
+	case err == nil, guardRefused(err):
+		return nil
+	case constraintCode(err) == codeUniqueViolation:
+		return status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
+	}
+	return err
 }
 
 // refundKey is the stored Refund.idempotency_key for a caller's refund key.

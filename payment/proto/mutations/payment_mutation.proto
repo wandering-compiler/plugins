@@ -58,6 +58,12 @@ message CreateRefundReq {
 }
 message CreateRefundResp { Refund refund = 1; }
 
+message SetRefundIdempotencyKeyReq {
+  string id              = 1 [(w17.field) = { type: UUID }];
+  string idempotency_key = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message SetRefundIdempotencyKeyResp { string id = 1; }
+
 message MarkWebhookProcessedReq {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
   string provider_event_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
@@ -341,6 +347,27 @@ service PaymentMutation {
           "          currency AS refund.currency, "
           "          created_at AS refund.created_at, "
           "          idempotency_key AS refund.idempotency_key"
+      }
+    };
+  }
+
+  // SetRefundIdempotencyKey — stamp the kept refund key on a Refund row an
+  // earlier version wrote without one. RefundPayment calls it when a retry
+  // under the raw key is replayed by the provider onto such a row: unstamped,
+  // the row stays invisible to the key lookup, and a retry after the
+  // provider's day refunds a second time.
+  //
+  // GUARDED (`idempotency_key IS NULL`): a row that already holds a key keeps
+  // it, and the guard's refusal is a no-row result. A key another row already
+  // holds is a UNIQUE_VIOLATION.
+  rpc SetRefundIdempotencyKey(SetRefundIdempotencyKeyReq) returns (SetRefundIdempotencyKeyResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Refund SET idempotency_key = :idempotency_key "
+          "WHERE id = :id AND idempotency_key IS NULL "
+          "RETURNING id"
       }
     };
   }

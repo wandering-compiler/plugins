@@ -510,6 +510,25 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 	return &pb.CreateRefundResp{Refund: clone(r)}, s.leave("CreateRefund", nil)
 }
 
+// SetRefundIdempotencyKey: `WHERE id = :id AND idempotency_key IS NULL`,
+// and the column is UNIQUE.
+func (s *memStore) SetRefundIdempotencyKey(_ context.Context, in *pb.SetRefundIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.SetRefundIdempotencyKeyResp, error) {
+	if err := s.enter("SetRefundIdempotencyKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	r, ok := s.refunds[in.GetId()]
+	if !ok || r.GetIdempotencyKey() != "" {
+		return nil, s.leave("SetRefundIdempotencyKey", noRows("SetRefundIdempotencyKey"))
+	}
+	for _, o := range s.refunds {
+		if o.GetIdempotencyKey() == in.GetIdempotencyKey() {
+			return nil, s.leave("SetRefundIdempotencyKey", uniqueErr("idempotency_key"))
+		}
+	}
+	r.IdempotencyKey = in.GetIdempotencyKey()
+	return &pb.SetRefundIdempotencyKeyResp{Id: r.Id}, s.leave("SetRefundIdempotencyKey", nil)
+}
+
 func (s *memStore) MarkWebhookProcessed(_ context.Context, in *pb.MarkWebhookProcessedReq, _ ...grpc.CallOption) (*pb.MarkWebhookProcessedResp, error) {
 	if err := s.enter("MarkWebhookProcessed"); err != nil {
 		return nil, s.leave("", err)

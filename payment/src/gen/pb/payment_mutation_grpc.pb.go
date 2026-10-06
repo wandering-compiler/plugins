@@ -29,19 +29,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PaymentMutation_CreateCustomer_FullMethodName         = "/w17.contrib.payment.PaymentMutation/CreateCustomer"
-	PaymentMutation_CreatePayment_FullMethodName          = "/w17.contrib.payment.PaymentMutation/CreatePayment"
-	PaymentMutation_MarkPaymentSucceeded_FullMethodName   = "/w17.contrib.payment.PaymentMutation/MarkPaymentSucceeded"
-	PaymentMutation_MarkPaymentFailed_FullMethodName      = "/w17.contrib.payment.PaymentMutation/MarkPaymentFailed"
-	PaymentMutation_CreateRefund_FullMethodName           = "/w17.contrib.payment.PaymentMutation/CreateRefund"
-	PaymentMutation_MarkWebhookProcessed_FullMethodName   = "/w17.contrib.payment.PaymentMutation/MarkWebhookProcessed"
-	PaymentMutation_ApplyCredit_FullMethodName            = "/w17.contrib.payment.PaymentMutation/ApplyCredit"
-	PaymentMutation_CreateCreditTopup_FullMethodName      = "/w17.contrib.payment.PaymentMutation/CreateCreditTopup"
-	PaymentMutation_MarkTopupGranted_FullMethodName       = "/w17.contrib.payment.PaymentMutation/MarkTopupGranted"
-	PaymentMutation_RecordUsage_FullMethodName            = "/w17.contrib.payment.PaymentMutation/RecordUsage"
-	PaymentMutation_CreatePlan_FullMethodName             = "/w17.contrib.payment.PaymentMutation/CreatePlan"
-	PaymentMutation_CreateSubscription_FullMethodName     = "/w17.contrib.payment.PaymentMutation/CreateSubscription"
-	PaymentMutation_MarkSubscriptionStatus_FullMethodName = "/w17.contrib.payment.PaymentMutation/MarkSubscriptionStatus"
+	PaymentMutation_CreateCustomer_FullMethodName          = "/w17.contrib.payment.PaymentMutation/CreateCustomer"
+	PaymentMutation_CreatePayment_FullMethodName           = "/w17.contrib.payment.PaymentMutation/CreatePayment"
+	PaymentMutation_MarkPaymentSucceeded_FullMethodName    = "/w17.contrib.payment.PaymentMutation/MarkPaymentSucceeded"
+	PaymentMutation_MarkPaymentFailed_FullMethodName       = "/w17.contrib.payment.PaymentMutation/MarkPaymentFailed"
+	PaymentMutation_CreateRefund_FullMethodName            = "/w17.contrib.payment.PaymentMutation/CreateRefund"
+	PaymentMutation_SetRefundIdempotencyKey_FullMethodName = "/w17.contrib.payment.PaymentMutation/SetRefundIdempotencyKey"
+	PaymentMutation_MarkWebhookProcessed_FullMethodName    = "/w17.contrib.payment.PaymentMutation/MarkWebhookProcessed"
+	PaymentMutation_ApplyCredit_FullMethodName             = "/w17.contrib.payment.PaymentMutation/ApplyCredit"
+	PaymentMutation_CreateCreditTopup_FullMethodName       = "/w17.contrib.payment.PaymentMutation/CreateCreditTopup"
+	PaymentMutation_MarkTopupGranted_FullMethodName        = "/w17.contrib.payment.PaymentMutation/MarkTopupGranted"
+	PaymentMutation_RecordUsage_FullMethodName             = "/w17.contrib.payment.PaymentMutation/RecordUsage"
+	PaymentMutation_CreatePlan_FullMethodName              = "/w17.contrib.payment.PaymentMutation/CreatePlan"
+	PaymentMutation_CreateSubscription_FullMethodName      = "/w17.contrib.payment.PaymentMutation/CreateSubscription"
+	PaymentMutation_MarkSubscriptionStatus_FullMethodName  = "/w17.contrib.payment.PaymentMutation/MarkSubscriptionStatus"
 )
 
 // PaymentMutationClient is the client API for PaymentMutation service.
@@ -105,6 +106,16 @@ type PaymentMutationClient interface {
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.
 	CreateRefund(ctx context.Context, in *CreateRefundReq, opts ...grpc.CallOption) (*CreateRefundResp, error)
+	// SetRefundIdempotencyKey — stamp the kept refund key on a Refund row an
+	// earlier version wrote without one. RefundPayment calls it when a retry
+	// under the raw key is replayed by the provider onto such a row: unstamped,
+	// the row stays invisible to the key lookup, and a retry after the
+	// provider's day refunds a second time.
+	//
+	// GUARDED (`idempotency_key IS NULL`): a row that already holds a key keeps
+	// it, and the guard's refusal is a no-row result. A key another row already
+	// holds is a UNIQUE_VIOLATION.
+	SetRefundIdempotencyKey(ctx context.Context, in *SetRefundIdempotencyKeyReq, opts ...grpc.CallOption) (*SetRefundIdempotencyKeyResp, error)
 	// MarkWebhookProcessed — INSERT the provider event id into the
 	// idempotency ledger AFTER the side effects have been applied
 	// (Q43-pay-1 inverted the original order; recording it first stranded
@@ -232,6 +243,16 @@ func (c *paymentMutationClient) CreateRefund(ctx context.Context, in *CreateRefu
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateRefundResp)
 	err := c.cc.Invoke(ctx, PaymentMutation_CreateRefund_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentMutationClient) SetRefundIdempotencyKey(ctx context.Context, in *SetRefundIdempotencyKeyReq, opts ...grpc.CallOption) (*SetRefundIdempotencyKeyResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetRefundIdempotencyKeyResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_SetRefundIdempotencyKey_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -379,6 +400,16 @@ type PaymentMutationServer interface {
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.
 	CreateRefund(context.Context, *CreateRefundReq) (*CreateRefundResp, error)
+	// SetRefundIdempotencyKey — stamp the kept refund key on a Refund row an
+	// earlier version wrote without one. RefundPayment calls it when a retry
+	// under the raw key is replayed by the provider onto such a row: unstamped,
+	// the row stays invisible to the key lookup, and a retry after the
+	// provider's day refunds a second time.
+	//
+	// GUARDED (`idempotency_key IS NULL`): a row that already holds a key keeps
+	// it, and the guard's refusal is a no-row result. A key another row already
+	// holds is a UNIQUE_VIOLATION.
+	SetRefundIdempotencyKey(context.Context, *SetRefundIdempotencyKeyReq) (*SetRefundIdempotencyKeyResp, error)
 	// MarkWebhookProcessed — INSERT the provider event id into the
 	// idempotency ledger AFTER the side effects have been applied
 	// (Q43-pay-1 inverted the original order; recording it first stranded
@@ -475,6 +506,9 @@ func (UnimplementedPaymentMutationServer) MarkPaymentFailed(context.Context, *Ma
 }
 func (UnimplementedPaymentMutationServer) CreateRefund(context.Context, *CreateRefundReq) (*CreateRefundResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateRefund not implemented")
+}
+func (UnimplementedPaymentMutationServer) SetRefundIdempotencyKey(context.Context, *SetRefundIdempotencyKeyReq) (*SetRefundIdempotencyKeyResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetRefundIdempotencyKey not implemented")
 }
 func (UnimplementedPaymentMutationServer) MarkWebhookProcessed(context.Context, *MarkWebhookProcessedReq) (*MarkWebhookProcessedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MarkWebhookProcessed not implemented")
@@ -606,6 +640,24 @@ func _PaymentMutation_CreateRefund_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentMutationServer).CreateRefund(ctx, req.(*CreateRefundReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentMutation_SetRefundIdempotencyKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetRefundIdempotencyKeyReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).SetRefundIdempotencyKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_SetRefundIdempotencyKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).SetRefundIdempotencyKey(ctx, req.(*SetRefundIdempotencyKeyReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -780,6 +832,10 @@ var PaymentMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateRefund",
 			Handler:    _PaymentMutation_CreateRefund_Handler,
+		},
+		{
+			MethodName: "SetRefundIdempotencyKey",
+			Handler:    _PaymentMutation_SetRefundIdempotencyKey_Handler,
 		},
 		{
 			MethodName: "MarkWebhookProcessed",
