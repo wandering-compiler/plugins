@@ -72,9 +72,22 @@ credit, idempotency / error-contract mapping, webhook verify) keep a
 
 ## Upgrading from 0.1.0-rc.2 or earlier
 
+- **Do not run mixed versions.** Stop or drain every rc.2 (or earlier)
+  replica before an instance of this version serves traffic — a rolling
+  deploy that runs both side by side is not safe. This version recognises
+  a credit grant / spend or a usage report that an earlier version made by
+  READING under the raw key before it applies under the scoped one; an
+  earlier replica still writing raw keys can record the same request (a
+  client retry routed to it) after that read, and it is then applied
+  twice — credit granted or spent twice, usage counted twice.
 - **Migration.** New nullable columns: `Refund.idempotency_key` (the kept
   refund key) and `Subscription.provider_event_at` (event ordering). Rows
-  written before the upgrade hold NULL there.
+  written before the upgrade hold NULL there. The `Subscription.status`
+  enum (and the column's CHECK) is widened — new values below. The
+  `SubscriptionStarted` event gains a `status` field (field 6,
+  `Subscription.Status`); a consumer decoding it with an older schema just
+  ignores it, but one that grants entitlements on the event should start
+  reading it (see the subscriptions section).
 - **Three-decimal currencies are refused** (BHD, JOD, KWD, OMR, TND —
   earlier versions sent them as two-decimal amounts, ten times off). A
   payment made in one of them before the upgrade cannot be refunded
