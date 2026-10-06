@@ -54,6 +54,9 @@ mkdir -p "$WORK/proto"
 	sed 's|@self/||g' "$PLUGIN_DIR/proto/$rel" > "$WORK/proto/$rel"
 done
 cp -R "$VOCAB_DIR/w17" "$WORK/proto/w17"
+# The Go module cache is read-only; a copy keeps that, and the cleanup trap
+# then cannot remove it.
+chmod -R u+w "$WORK/proto/w17"
 
 # 2. managed mode, one go_package override per PLUGIN proto — never for the
 #    vocabulary, which keeps its own.
