@@ -162,8 +162,10 @@ func TestMapInitialStatus(t *testing.T) {
 func TestMapSubscriptionStatus(t *testing.T) {
 	for in, want := range map[string]pb.Subscription_Status{
 		"trialing": pb.Subscription_TRIALING, "active": pb.Subscription_ACTIVE, "past_due": pb.Subscription_PAST_DUE,
-		"unpaid": pb.Subscription_PAST_DUE, "canceled": pb.Subscription_CANCELED, "incomplete_expired": pb.Subscription_CANCELED,
-		"incomplete": pb.Subscription_ACTIVE, "": pb.Subscription_ACTIVE,
+		"unpaid": pb.Subscription_UNPAID, "canceled": pb.Subscription_CANCELED, "incomplete_expired": pb.Subscription_CANCELED,
+		"incomplete": pb.Subscription_INCOMPLETE, "paused": pb.Subscription_PAUSED,
+		// Unknown → not entitling, and never the unstorable zero sentinel.
+		"": pb.Subscription_UNRECOGNIZED_STATUS, "some_future_status": pb.Subscription_UNRECOGNIZED_STATUS,
 	} {
 		if got := mapSubscriptionStatus(in); got != want {
 			t.Errorf("mapSubscriptionStatus(%q) = %v, want %v", in, got, want)

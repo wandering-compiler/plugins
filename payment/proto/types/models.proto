@@ -264,12 +264,23 @@ message Subscription {
   option (w17.db.table) = {};
   option (w17.contrib.plugin_feature) = "subscriptions";
 
+  // Status is the provider's lifecycle, mapped one to one — never rounded
+  // up to ACTIVE. Only TRIALING and ACTIVE mean "paid up"; a consumer that
+  // grants access should grant it on those two and nothing else. Values
+  // are appended, never renumbered (the column stores the number).
   enum Status {
     STATUS_UNSPECIFIED = 0;
     TRIALING           = 1;
     ACTIVE             = 2;
-    PAST_DUE           = 3;
-    CANCELED           = 4;
+    PAST_DUE           = 3;  // a renewal payment failed; the provider retries
+    CANCELED           = 4;  // terminal (also the provider's incomplete_expired)
+    INCOMPLETE         = 5;  // created, first payment not (yet) made
+    PAUSED             = 6;  // collection paused (e.g. a trial ended without a payment method)
+    UNPAID             = 7;  // retries exhausted; the subscription stays open, unpaid
+    // A provider status this plugin version does not know. Not entitling.
+    // (STATUS_UNSPECIFIED cannot be stored: the column's CHECK excludes the
+    // zero sentinel.)
+    UNRECOGNIZED_STATUS = 8;
   }
 
   string id                      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];

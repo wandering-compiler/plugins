@@ -113,6 +113,8 @@ message SubscriptionStarted {
 // canceled). status IS Subscription.Status — the comment said "the numeric
 // Subscription.Status" while the field said int32, and the two disagreed until
 // something generated this plugin and the generator refused the payload.
+// Only TRIALING and ACTIVE mean "paid up" (INCOMPLETE, PAUSED and UNPAID
+// were reported as ACTIVE by earlier versions; they no longer are).
 message SubscriptionStatusChanged {
   option (w17.event) = {
     channel: "events"

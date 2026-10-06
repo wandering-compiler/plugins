@@ -135,7 +135,12 @@ webhooks). Off by default. This is the one feature that extends
 `backend.Backend` (`UpsertPlan`, `StartSubscription`).
 
 - **Models** — `Plan` (slug-keyed catalogue, `provider_price_id`) +
-  `Subscription` (status enum, `current_period_end`).
+  `Subscription` (status enum, `current_period_end`). The status is the
+  provider's, mapped one to one: `TRIALING`, `ACTIVE`, `INCOMPLETE` (first
+  payment not made), `PAST_DUE`, `UNPAID`, `PAUSED`, `CANCELED` (also the
+  provider's `incomplete_expired`; terminal), and `UNRECOGNIZED_STATUS` for
+  a status this version does not know. **Only `TRIALING` and `ACTIVE` mean
+  paid up** — grant access on those two, nothing else.
 - **PaymentService** (gated `subscriptions`):
   - `CreatePlan` — define a plan + push the price to the provider
     (idempotent on slug when the terms match; a slug that exists with a

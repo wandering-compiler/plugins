@@ -444,6 +444,8 @@ func (x *SubscriptionStarted) GetStartedAt() *timestamppb.Timestamp {
 // canceled). status IS Subscription.Status — the comment said "the numeric
 // Subscription.Status" while the field said int32, and the two disagreed until
 // something generated this plugin and the generator refused the payload.
+// Only TRIALING and ACTIVE mean "paid up" (INCOMPLETE, PAUSED and UNPAID
+// were reported as ACTIVE by earlier versions; they no longer are).
 type SubscriptionStatusChanged struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	SubscriptionId         string                 `protobuf:"bytes,1,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`

@@ -49,6 +49,7 @@ type stripeFake struct {
 	declined  map[string]bool // customer id → card declines
 	failQueue []int
 	requests  map[string]int    // path → requests that reached the handler logic
+	subStatus string            // status a created subscription reports ("" = active)
 	origins   map[string]string // object id → metadata[w17_payment] it was created with
 	installs  map[string]string // object id → metadata[w17_install] it was created with
 }
@@ -265,7 +266,11 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 		id := f.id("sub")
 		f.origins[id] = r.PostForm.Get("metadata[w17_payment]")
 		f.installs[id] = r.PostForm.Get("metadata[w17_install]")
-		return okJSON(map[string]any{"id": id, "object": "subscription", "status": "active", "current_period_end": 1893456000})
+		st := f.subStatus
+		if st == "" {
+			st = "active"
+		}
+		return okJSON(map[string]any{"id": id, "object": "subscription", "status": st, "current_period_end": 1893456000})
 	}
 	return stripeErr(w, http.StatusNotFound, "invalid_request_error", "Unrecognized request URL")
 }

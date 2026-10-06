@@ -210,20 +210,34 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 }
 
 // mapSubscriptionStatus maps the provider status string onto the local
-// Subscription.Status enum. Unknown → ACTIVE (the subscription was
-// created; a webhook reconciles the precise terminal state).
+// Subscription.Status enum, one to one. Only TRIALING and ACTIVE mean
+// "paid up".
+//
+// It used to round everything it did not name — incomplete, paused, any
+// status the provider adds later — up to ACTIVE, so a subscription whose
+// first payment had not gone through read as active, and a consumer
+// granting access on ACTIVE gave it away. An unknown status is now
+// UNRECOGNIZED_STATUS: not entitling, and storable (STATUS_UNSPECIFIED is
+// not — the column's CHECK excludes the zero sentinel, so a webhook carrying
+// it would fail on every redelivery).
 func mapSubscriptionStatus(providerStatus string) pb.Subscription_Status {
 	switch providerStatus {
 	case "trialing":
 		return pb.Subscription_TRIALING
 	case "active":
 		return pb.Subscription_ACTIVE
-	case "past_due", "unpaid":
+	case "incomplete":
+		return pb.Subscription_INCOMPLETE
+	case "past_due":
 		return pb.Subscription_PAST_DUE
-	case "canceled", "incomplete_expired":
+	case "unpaid":
+		return pb.Subscription_UNPAID
+	case "paused":
+		return pb.Subscription_PAUSED
+	case "canceled", "incomplete_expired": // both terminal at the provider
 		return pb.Subscription_CANCELED
 	default:
-		return pb.Subscription_ACTIVE
+		return pb.Subscription_UNRECOGNIZED_STATUS
 	}
 }
 

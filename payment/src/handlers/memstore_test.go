@@ -201,6 +201,17 @@ func decimal4(s string) (*big.Rat, error) {
 
 func fmt4(r *big.Rat) string { return r.FloatString(4) }
 
+// subscriptionStatusCheck is the Subscription.status column's CHECK IN: the
+// enum's declared numbers WITHOUT the zero sentinel (the migrator excludes
+// it), so STATUS_UNSPECIFIED — or a number the enum does not declare — is
+// refused like the database refuses it.
+func subscriptionStatusCheck(st int32) error {
+	if _, ok := pb.Subscription_Status_name[st]; !ok || st == 0 {
+		return storeConstraintErr(codeInvalidValue, fmt.Sprintf("subscription status %d violates its CHECK", st))
+	}
+	return nil
+}
+
 // noRow is what generated storage answers for a single-row read that finds
 // nothing: the SELECT is QueryRow+Scan and grpcerr.Wrap maps sql.ErrNoRows to
 // NotFound. An empty response here instead hid every handler that treated "no
@@ -582,6 +593,9 @@ func (s *memStore) CreateSubscription(_ context.Context, in *pb.CreateSubscripti
 	if err := s.enter("CreateSubscription"); err != nil {
 		return nil, s.leave("", err)
 	}
+	if err := subscriptionStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("CreateSubscription", err)
+	}
 	for _, sub := range s.subs {
 		if sub.GetProviderSubscriptionId() == in.GetProviderSubscriptionId() {
 			return nil, s.leave("CreateSubscription", uniqueErr("provider_subscription_id"))
@@ -596,6 +610,9 @@ func (s *memStore) CreateSubscription(_ context.Context, in *pb.CreateSubscripti
 func (s *memStore) MarkSubscriptionStatus(_ context.Context, in *pb.MarkSubscriptionStatusReq, _ ...grpc.CallOption) (*pb.MarkSubscriptionStatusResp, error) {
 	if err := s.enter("MarkSubscriptionStatus"); err != nil {
 		return nil, s.leave("", err)
+	}
+	if err := subscriptionStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("MarkSubscriptionStatus", err)
 	}
 	for _, sub := range s.subs {
 		if sub.GetProviderSubscriptionId() != in.GetProviderSubscriptionId() {

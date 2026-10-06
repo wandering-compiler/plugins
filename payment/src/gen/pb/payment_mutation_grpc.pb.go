@@ -160,8 +160,9 @@ type PaymentMutationClient interface {
 	// SubscriptionStarted.
 	CreateSubscription(ctx context.Context, in *CreateSubscriptionReq, opts ...grpc.CallOption) (*CreateSubscriptionResp, error)
 	// MarkSubscriptionStatus — reconcile the lifecycle status +
-	// current_period_end from a provider webhook (ACTIVE / PAST_DUE /
-	// CANCELED). Gated subscriptions. Emits SubscriptionStatusChanged.
+	// current_period_end from a provider webhook (any Subscription.Status:
+	// TRIALING / ACTIVE / INCOMPLETE / PAST_DUE / UNPAID / PAUSED / CANCELED).
+	// Gated subscriptions. Emits SubscriptionStatusChanged.
 	//
 	// TRANSITION-GUARDED (`AND status <> 4`): CANCELED is terminal for a
 	// given provider subscription id — the provider never revives one, a
@@ -433,8 +434,9 @@ type PaymentMutationServer interface {
 	// SubscriptionStarted.
 	CreateSubscription(context.Context, *CreateSubscriptionReq) (*CreateSubscriptionResp, error)
 	// MarkSubscriptionStatus — reconcile the lifecycle status +
-	// current_period_end from a provider webhook (ACTIVE / PAST_DUE /
-	// CANCELED). Gated subscriptions. Emits SubscriptionStatusChanged.
+	// current_period_end from a provider webhook (any Subscription.Status:
+	// TRIALING / ACTIVE / INCOMPLETE / PAST_DUE / UNPAID / PAUSED / CANCELED).
+	// Gated subscriptions. Emits SubscriptionStatusChanged.
 	//
 	// TRANSITION-GUARDED (`AND status <> 4`): CANCELED is terminal for a
 	// given provider subscription id — the provider never revives one, a
