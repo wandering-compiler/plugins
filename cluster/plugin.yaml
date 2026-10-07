@@ -1,6 +1,6 @@
 name: cluster
-version: 0.2.0-rc.9
-requires_w17: ">=1.5"
+version: 0.2.0-rc.10
+requires_w17: ">=1.8"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -108,6 +108,85 @@ sandboxes:
       - name: RELAY_CONTROL_PLANE_FINGERPRINT
         value: ""
         description: "REQUIRED, and deliberately empty: the relay refuses to start without it. Set it to the fingerprint of the client certificate this project's control plane presents (OPS_CLUSTER_CLIENT_CERT_PATH). Nothing else may manage this relay."
+
+# Production: what this plugin runs beside a project, and the ceremony a deploy
+# performs for it. The building blocks only — the PROJECT decides whether an
+# environment runs them and which image the worker is (a codegen worker is not a
+# browser worker), in its lock's infra block. One machine, one internal
+# network, and the encryption stays: every certificate is minted here, at
+# deploy time, so nobody handles one by hand.
+deploy:
+  services:
+    - name: relay
+      description: "The pool's relay: places work on the workers attached to it."
+      build: cmd/relay
+      user: 10001
+      state: /var/lib/relay
+      ports:
+        # The CALLER port is the only one published: a caller is told this
+        # address in its grant and pins the relay by the fingerprint beside it.
+        # Management, attach and tunnels stay on the internal network, where
+        # the control plane and the workers of this machine reach them.
+        - { name: callers, port: 9000, publish: 50052 }
+        - { name: management, port: 13444 }
+        - { name: tunnels, port: 13445 }
+        - { name: attach, port: 13446 }
+      env:
+        - { name: RELAY_CERT, value: "{state}/relay.crt" }
+        - { name: RELAY_KEY, value: "{state}/relay.key" }
+        - { name: RELAY_CA_CERT, value: "{state}/ca.crt" }
+        - { name: RELAY_CA_KEY, value: "{state}/ca.key" }
+        - name: RELAY_PROXY_ADDRESS
+          value: "{public:relay.callers}"
+          description: "What callers are told to dial, as the internet reaches it."
+        - name: RELAY_CONTROL_PLANE_FINGERPRINT
+          value: "{fingerprint:control-plane}"
+          description: "Only the control plane's client certificate may manage this relay."
+    - name: worker
+      description: "One worker of the pool, enrolled with this relay at deploy time. Its image is the project's: whatever the pool runs."
+      adopter: true
+      state: /var/lib/worker
+      env:
+        - { name: "W17_{ACTIVATION}_RELAY_ATTACH", value: "{address:relay.attach}" }
+        - { name: "W17_{ACTIVATION}_RELAY_TUNNEL", value: "{address:relay.tunnels}" }
+        - { name: "W17_{ACTIVATION}_RELAY_FINGERPRINT", value: "{fingerprint:relay}" }
+        - { name: "W17_{ACTIVATION}_IDENTITY_DIR", value: "{state}" }
+        - { name: "W17_{ACTIVATION}_WORKER_NAME", value: "{env}-worker-1" }
+  identities:
+    # Every command keeps an identity that exists: a new key would break every
+    # pin on the old one, and a new CA every worker enrolled with it.
+    - name: relay
+      into: relay
+      image_of: relay
+      args: [mint, --dir, "{dir}", --name, relay, --ca]
+      fingerprint: true
+    - name: control-plane
+      into: host
+      image_of: relay
+      args: [mint, --dir, "{dir}", --name, control-plane]
+      fingerprint: true
+      host_env:
+        client_cert_path: "{dir}/control-plane.crt"
+        client_key_path: "{dir}/control-plane.key"
+    # Enrolled without a registration code: the deploy holds the relay's CA,
+    # so it issues the worker's certificate directly.
+    - name: worker
+      into: worker
+      image_of: relay
+      reads: [relay]
+      args: [issue-worker, --ca-cert, "{dir:relay}/ca.crt", --ca-key, "{dir:relay}/ca.key", --out, "{dir}", --name, "{env}-worker-1"]
+  # The relay of this machine is the row `local`, addressed by its internal
+  # name and pinned to the certificate minted above; a re-mint follows it.
+  register:
+    sql: >-
+      INSERT INTO {activation}_relay (name, url, cert_fingerprint, enabled)
+      VALUES ('local', '{address:relay.management}', '{fingerprint:relay}', true)
+      ON CONFLICT (name) DO UPDATE SET url = EXCLUDED.url, cert_fingerprint = EXCLUDED.cert_fingerprint
+    # When an environment stops deploying the relay, its row goes too: left
+    # behind, enabled, every placement would pay a dial timeout on it first.
+    # Nothing references a relay by key (a worker's relay_id is a location it
+    # refreshes), and deploying it again inserts the row anew.
+    unregister_sql: "DELETE FROM {activation}_relay WHERE name = 'local'"
 
 presets:
   admin:
