@@ -381,6 +381,21 @@ type signupTokenMock struct {
 	tokenErr     error  // set to NotFound for a token that matches nothing
 	byAddress    []*pb.PendingInviteRow
 	consumed     bool
+	binds        []*pb.BindOpenOrgInviteReq
+	// uncommitted makes the bind invisible to the reads, as it is inside
+	// SignUp's transaction: the query tier reads the pool, not the tx.
+	uncommitted bool
+}
+
+// BindOpenOrgInvite behaves as its WHERE does: it binds only an open
+// invitation, and the read-back then sees the bound address — unless the bind
+// is still uncommitted.
+func (m *signupTokenMock) BindOpenOrgInvite(_ context.Context, in *pb.BindOpenOrgInviteReq, _ ...grpc.CallOption) (*pb.BindOpenOrgInviteResp, error) {
+	m.binds = append(m.binds, in)
+	if m.tokenErr == nil && m.pendingEmail == "" && !m.uncommitted {
+		m.pendingEmail = in.GetEmail()
+	}
+	return &pb.BindOpenOrgInviteResp{}, nil
 }
 
 func (m *signupTokenMock) GetPendingOrgInviteByToken(_ context.Context, _ *pb.GetPendingOrgInviteByTokenReq, _ ...grpc.CallOption) (*pb.GetPendingOrgInviteByTokenResp, error) {
@@ -520,5 +535,69 @@ func TestInviteToOrg_PropagatesTheConstraintDetail(t *testing.T) {
 		t.Fatalf("the constraint detail did not survive the business handler — "+
 			"a client then has only InvalidArgument and cannot tell a duplicate from a "+
 			"malformed field, which is exactly what was reported. details = %v", st.Details())
+	}
+}
+
+// The first registration through an OPEN link spends it on its address: the
+// invitation is bound to it, and the same link admits nobody else after.
+// Before, the link was only read here and one open link registered any number
+// of accounts until somebody accepted it.
+func TestClaimOpenInvite_TheFirstRegistrationSpendsTheLink(t *testing.T) {
+	m := &signupTokenMock{} // open invitation
+	h := &AuthServiceHandler{Query: m, Mutation: m, InviteOnly: true}
+
+	if err := claimOpenInvite(context.Background(), h, "first@example.com", "the-link"); err != nil {
+		t.Fatalf("the first registration through an open link: %v", err)
+	}
+	if len(m.binds) != 1 || m.binds[0].GetEmail() != "first@example.com" || m.binds[0].GetTokenHash() != sha256Hex("the-link") {
+		t.Fatalf("binds = %+v, want the link bound to first@example.com", m.binds)
+	}
+	// The second — the gate (read-only) still lets it through, the claim does not.
+	if err := requirePendingInvite(context.Background(), h, "second@example.com", "the-link"); err == nil {
+		t.Error("the gate admitted a second address through a link already bound to the first")
+	}
+	if err := claimOpenInvite(context.Background(), h, "second@example.com", "the-link"); err == nil {
+		t.Fatal("a second registration through a spent link was admitted under invite_only")
+	}
+}
+
+// Inside SignUp's transaction the bind is not committed when the claim reads
+// the invitation back — the query tier reads the pool — so the first
+// registration through an open link sees it still OPEN. That is its own bind,
+// and it must not be refused for it.
+func TestClaimOpenInvite_AnUncommittedBindIsTheClaimantsOwn(t *testing.T) {
+	m := &signupTokenMock{uncommitted: true} // open invitation, bind inside a tx
+	h := &AuthServiceHandler{Query: m, Mutation: m, InviteOnly: true}
+	if err := claimOpenInvite(context.Background(), h, "first@example.com", "the-link"); err != nil {
+		t.Fatalf("the first registration through an open link was refused inside its transaction: %v", err)
+	}
+	if len(m.binds) != 1 {
+		t.Fatalf("binds = %+v, want one", m.binds)
+	}
+}
+
+// Two registrations racing on one link both pass the gate; the claim decides.
+// The loser is refused — unless its address holds an invitation of its own.
+func TestClaimOpenInvite_TheLoserOfARaceKeepsItsOwnInvitation(t *testing.T) {
+	m := &signupTokenMock{pendingEmail: "winner@example.com", byAddress: []*pb.PendingInviteRow{{OrgId: "org-2"}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m, InviteOnly: true}
+	if err := claimOpenInvite(context.Background(), h, "loser@example.com", "the-link"); err != nil {
+		t.Fatalf("an address invited in its own right was refused because it lost the race on a link: %v", err)
+	}
+}
+
+// Without invite_only an invitation only decides the org: the link is still
+// spent, but a registration is never refused over it.
+func TestClaimOpenInvite_WithoutInviteOnlyNothingIsRefused(t *testing.T) {
+	m := &signupTokenMock{pendingEmail: "winner@example.com"}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if err := claimOpenInvite(context.Background(), h, "other@example.com", "the-link"); err != nil {
+		t.Fatalf("registration is open, and was refused: %v", err)
+	}
+	if len(m.binds) != 1 {
+		t.Errorf("the link was not offered for binding: %+v", m.binds)
+	}
+	if err := claimOpenInvite(context.Background(), h, "x@example.com", ""); err != nil || len(m.binds) != 1 {
+		t.Errorf("a registration with no link claimed something: %v %+v", err, m.binds)
 	}
 }
