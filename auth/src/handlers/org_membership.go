@@ -45,6 +45,8 @@ var errOrgNotMember = errors.New("active org: caller is not a member of the requ
 // this package (alias-imported under the activation name), so the init runs
 // once during server bring-up.
 func init() {
+	orgMembershipStaged = true // see feature_marks.go
+
 	// WhoAmI answers "who am I and where am I", not just "who".
 	//
 	// Before this, every screen rebuilt the org half from further calls and

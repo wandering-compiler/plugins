@@ -44,3 +44,25 @@ func fillBotTenant(ctx context.Context, req *pb.CreateBotUserReq) error {
 	req.TenantId = tenantID
 	return nil
 }
+
+// Under tenant_scope a machine account belongs to the tenant it was created in
+// (fillBotTenant), and an operator sees and mints only for their own tenant's.
+//
+// Needed since service_account stopped requiring org_membership: a realm
+// without organizations is one organization only when it is not multi-tenant.
+// With tenant_scope on and no organizations, the realm-wide directory was every
+// tenant's machine accounts, and an operator in one tenant could mint a working
+// credential for another's — the 2026-09-21 cross-organization leak, on the
+// tenant axis. With organizations on as well this narrows nothing an org does
+// not already narrow, and costs nothing.
+func init() {
+	botVisible = append(botVisible, botInCallersTenant)
+}
+
+// botInCallersTenant keeps a machine account of the caller's tenant. A caller
+// with no tenant in scope sees none — fail closed, as fillBotTenant refuses to
+// create one.
+func botInCallersTenant(ctx context.Context, bot *pb.User) bool {
+	tenantID, ok := principal.Scope(ctx, "tenant_id")
+	return ok && tenantID != "" && bot.GetTenantId() == tenantID
+}

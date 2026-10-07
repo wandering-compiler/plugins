@@ -853,31 +853,32 @@ func (x *ListUsersResp) GetPaging() *w17.Paging {
 	return nil
 }
 
-type ListBotUsersReq struct {
+type ListOrgMemberAccountsReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The ACTIVE organization. Not optional: User is not an org-scoped model —
-	// a person belongs to several — so without this the list is every machine
-	// account on the console. It was, and one company's operator saw another's
-	// (reported on production 2026-09-21).
+	// a person belongs to several — so without this the list would be every
+	// account on the console. The machine-account directory once was exactly
+	// that, and one company's operator saw another's bots (reported on
+	// production 2026-09-21).
 	OrgId         string `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListBotUsersReq) Reset() {
-	*x = ListBotUsersReq{}
+func (x *ListOrgMemberAccountsReq) Reset() {
+	*x = ListOrgMemberAccountsReq{}
 	mi := &file_queries_auth_query_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListBotUsersReq) String() string {
+func (x *ListOrgMemberAccountsReq) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListBotUsersReq) ProtoMessage() {}
+func (*ListOrgMemberAccountsReq) ProtoMessage() {}
 
-func (x *ListBotUsersReq) ProtoReflect() protoreflect.Message {
+func (x *ListOrgMemberAccountsReq) ProtoReflect() protoreflect.Message {
 	mi := &file_queries_auth_query_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -889,19 +890,99 @@ func (x *ListBotUsersReq) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListBotUsersReq.ProtoReflect.Descriptor instead.
-func (*ListBotUsersReq) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListOrgMemberAccountsReq.ProtoReflect.Descriptor instead.
+func (*ListOrgMemberAccountsReq) Descriptor() ([]byte, []int) {
 	return file_queries_auth_query_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *ListBotUsersReq) GetOrgId() string {
+func (x *ListOrgMemberAccountsReq) GetOrgId() string {
 	if x != nil {
 		return x.OrgId
 	}
 	return ""
 }
 
-type GetBotInOrgReq struct {
+type ListRealmMachineAccountsReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRealmMachineAccountsReq) Reset() {
+	*x = ListRealmMachineAccountsReq{}
+	mi := &file_queries_auth_query_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRealmMachineAccountsReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRealmMachineAccountsReq) ProtoMessage() {}
+
+func (x *ListRealmMachineAccountsReq) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_auth_query_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRealmMachineAccountsReq.ProtoReflect.Descriptor instead.
+func (*ListRealmMachineAccountsReq) Descriptor() ([]byte, []int) {
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{18}
+}
+
+type ListRealmMachineAccountsResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Accounts      []*User                `protobuf:"bytes,1,rep,name=accounts,proto3" json:"accounts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRealmMachineAccountsResp) Reset() {
+	*x = ListRealmMachineAccountsResp{}
+	mi := &file_queries_auth_query_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRealmMachineAccountsResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRealmMachineAccountsResp) ProtoMessage() {}
+
+func (x *ListRealmMachineAccountsResp) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_auth_query_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRealmMachineAccountsResp.ProtoReflect.Descriptor instead.
+func (*ListRealmMachineAccountsResp) Descriptor() ([]byte, []int) {
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ListRealmMachineAccountsResp) GetAccounts() []*User {
+	if x != nil {
+		return x.Accounts
+	}
+	return nil
+}
+
+type GetOrgMemberReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	OrgId         string                 `protobuf:"bytes,2,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
@@ -909,21 +990,21 @@ type GetBotInOrgReq struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetBotInOrgReq) Reset() {
-	*x = GetBotInOrgReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[18]
+func (x *GetOrgMemberReq) Reset() {
+	*x = GetOrgMemberReq{}
+	mi := &file_queries_auth_query_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetBotInOrgReq) String() string {
+func (x *GetOrgMemberReq) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetBotInOrgReq) ProtoMessage() {}
+func (*GetOrgMemberReq) ProtoMessage() {}
 
-func (x *GetBotInOrgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[18]
+func (x *GetOrgMemberReq) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_auth_query_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -934,48 +1015,49 @@ func (x *GetBotInOrgReq) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetBotInOrgReq.ProtoReflect.Descriptor instead.
-func (*GetBotInOrgReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{18}
+// Deprecated: Use GetOrgMemberReq.ProtoReflect.Descriptor instead.
+func (*GetOrgMemberReq) Descriptor() ([]byte, []int) {
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{20}
 }
 
-func (x *GetBotInOrgReq) GetUserId() string {
+func (x *GetOrgMemberReq) GetUserId() string {
 	if x != nil {
 		return x.UserId
 	}
 	return ""
 }
 
-func (x *GetBotInOrgReq) GetOrgId() string {
+func (x *GetOrgMemberReq) GetOrgId() string {
 	if x != nil {
 		return x.OrgId
 	}
 	return ""
 }
 
-type GetBotInOrgResp struct {
+type GetOrgMemberResp struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Empty when the bot is not in this organization — or is not a bot.
+	// Empty when the account is not a member of this organization. A member is
+	// a person or a machine; whether it is a BOT the caller asks of the account.
 	UserId        string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetBotInOrgResp) Reset() {
-	*x = GetBotInOrgResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[19]
+func (x *GetOrgMemberResp) Reset() {
+	*x = GetOrgMemberResp{}
+	mi := &file_queries_auth_query_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetBotInOrgResp) String() string {
+func (x *GetOrgMemberResp) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetBotInOrgResp) ProtoMessage() {}
+func (*GetOrgMemberResp) ProtoMessage() {}
 
-func (x *GetBotInOrgResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[19]
+func (x *GetOrgMemberResp) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_auth_query_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,40 +1068,40 @@ func (x *GetBotInOrgResp) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetBotInOrgResp.ProtoReflect.Descriptor instead.
-func (*GetBotInOrgResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{19}
+// Deprecated: Use GetOrgMemberResp.ProtoReflect.Descriptor instead.
+func (*GetOrgMemberResp) Descriptor() ([]byte, []int) {
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{21}
 }
 
-func (x *GetBotInOrgResp) GetUserId() string {
+func (x *GetOrgMemberResp) GetUserId() string {
 	if x != nil {
 		return x.UserId
 	}
 	return ""
 }
 
-type ListBotUsersResp struct {
+type ListOrgMemberAccountsResp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Bots          []*User                `protobuf:"bytes,1,rep,name=bots,proto3" json:"bots,omitempty"`
+	Accounts      []*User                `protobuf:"bytes,1,rep,name=accounts,proto3" json:"accounts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListBotUsersResp) Reset() {
-	*x = ListBotUsersResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[20]
+func (x *ListOrgMemberAccountsResp) Reset() {
+	*x = ListOrgMemberAccountsResp{}
+	mi := &file_queries_auth_query_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListBotUsersResp) String() string {
+func (x *ListOrgMemberAccountsResp) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListBotUsersResp) ProtoMessage() {}
+func (*ListOrgMemberAccountsResp) ProtoMessage() {}
 
-func (x *ListBotUsersResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[20]
+func (x *ListOrgMemberAccountsResp) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_auth_query_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,14 +1112,14 @@ func (x *ListBotUsersResp) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListBotUsersResp.ProtoReflect.Descriptor instead.
-func (*ListBotUsersResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{20}
+// Deprecated: Use ListOrgMemberAccountsResp.ProtoReflect.Descriptor instead.
+func (*ListOrgMemberAccountsResp) Descriptor() ([]byte, []int) {
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *ListBotUsersResp) GetBots() []*User {
+func (x *ListOrgMemberAccountsResp) GetAccounts() []*User {
 	if x != nil {
-		return x.Bots
+		return x.Accounts
 	}
 	return nil
 }
@@ -1050,7 +1132,7 @@ type ListBotAccountsReq struct {
 
 func (x *ListBotAccountsReq) Reset() {
 	*x = ListBotAccountsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[21]
+	mi := &file_queries_auth_query_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1062,7 +1144,7 @@ func (x *ListBotAccountsReq) String() string {
 func (*ListBotAccountsReq) ProtoMessage() {}
 
 func (x *ListBotAccountsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[21]
+	mi := &file_queries_auth_query_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1075,7 +1157,7 @@ func (x *ListBotAccountsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBotAccountsReq.ProtoReflect.Descriptor instead.
 func (*ListBotAccountsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{21}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{23}
 }
 
 type ListBotAccountsResp struct {
@@ -1089,7 +1171,7 @@ type ListBotAccountsResp struct {
 
 func (x *ListBotAccountsResp) Reset() {
 	*x = ListBotAccountsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[22]
+	mi := &file_queries_auth_query_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1101,7 +1183,7 @@ func (x *ListBotAccountsResp) String() string {
 func (*ListBotAccountsResp) ProtoMessage() {}
 
 func (x *ListBotAccountsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[22]
+	mi := &file_queries_auth_query_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1114,7 +1196,7 @@ func (x *ListBotAccountsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBotAccountsResp.ProtoReflect.Descriptor instead.
 func (*ListBotAccountsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{22}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListBotAccountsResp) GetBots() []*User {
@@ -1139,7 +1221,7 @@ type ListApiRealmRolesReq struct {
 
 func (x *ListApiRealmRolesReq) Reset() {
 	*x = ListApiRealmRolesReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[23]
+	mi := &file_queries_auth_query_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1151,7 +1233,7 @@ func (x *ListApiRealmRolesReq) String() string {
 func (*ListApiRealmRolesReq) ProtoMessage() {}
 
 func (x *ListApiRealmRolesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[23]
+	mi := &file_queries_auth_query_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1164,19 +1246,19 @@ func (x *ListApiRealmRolesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListApiRealmRolesReq.ProtoReflect.Descriptor instead.
 func (*ListApiRealmRolesReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{23}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{25}
 }
 
 type ListApiRealmRolesResp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Roles         []*OrgScopedRole       `protobuf:"bytes,1,rep,name=roles,proto3" json:"roles,omitempty"`
+	Roles         []*ApiRealmRole        `protobuf:"bytes,1,rep,name=roles,proto3" json:"roles,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListApiRealmRolesResp) Reset() {
 	*x = ListApiRealmRolesResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[24]
+	mi := &file_queries_auth_query_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1188,7 +1270,7 @@ func (x *ListApiRealmRolesResp) String() string {
 func (*ListApiRealmRolesResp) ProtoMessage() {}
 
 func (x *ListApiRealmRolesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[24]
+	mi := &file_queries_auth_query_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1201,14 +1283,77 @@ func (x *ListApiRealmRolesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListApiRealmRolesResp.ProtoReflect.Descriptor instead.
 func (*ListApiRealmRolesResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{24}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{26}
 }
 
-func (x *ListApiRealmRolesResp) GetRoles() []*OrgScopedRole {
+func (x *ListApiRealmRolesResp) GetRoles() []*ApiRealmRole {
 	if x != nil {
 		return x.Roles
 	}
 	return nil
+}
+
+// ApiRealmRole — a role a machine account may hold. Its own message, not
+// OrgScopedRole: that one is gated `org_membership`, and the api-realm roles
+// exist in a realm without orgs too.
+type ApiRealmRole struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApiRealmRole) Reset() {
+	*x = ApiRealmRole{}
+	mi := &file_queries_auth_query_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApiRealmRole) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApiRealmRole) ProtoMessage() {}
+
+func (x *ApiRealmRole) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_auth_query_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApiRealmRole.ProtoReflect.Descriptor instead.
+func (*ApiRealmRole) Descriptor() ([]byte, []int) {
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ApiRealmRole) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ApiRealmRole) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ApiRealmRole) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
 }
 
 type GetUserReq struct {
@@ -1220,7 +1365,7 @@ type GetUserReq struct {
 
 func (x *GetUserReq) Reset() {
 	*x = GetUserReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[25]
+	mi := &file_queries_auth_query_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1232,7 +1377,7 @@ func (x *GetUserReq) String() string {
 func (*GetUserReq) ProtoMessage() {}
 
 func (x *GetUserReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[25]
+	mi := &file_queries_auth_query_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1245,7 +1390,7 @@ func (x *GetUserReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserReq.ProtoReflect.Descriptor instead.
 func (*GetUserReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{25}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetUserReq) GetUserId() string {
@@ -1263,7 +1408,7 @@ type GetFirstUserRolesReq struct {
 
 func (x *GetFirstUserRolesReq) Reset() {
 	*x = GetFirstUserRolesReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[26]
+	mi := &file_queries_auth_query_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1275,7 +1420,7 @@ func (x *GetFirstUserRolesReq) String() string {
 func (*GetFirstUserRolesReq) ProtoMessage() {}
 
 func (x *GetFirstUserRolesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[26]
+	mi := &file_queries_auth_query_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1288,7 +1433,7 @@ func (x *GetFirstUserRolesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFirstUserRolesReq.ProtoReflect.Descriptor instead.
 func (*GetFirstUserRolesReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{26}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{29}
 }
 
 type GetFirstUserRolesResp struct {
@@ -1300,7 +1445,7 @@ type GetFirstUserRolesResp struct {
 
 func (x *GetFirstUserRolesResp) Reset() {
 	*x = GetFirstUserRolesResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[27]
+	mi := &file_queries_auth_query_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1312,7 +1457,7 @@ func (x *GetFirstUserRolesResp) String() string {
 func (*GetFirstUserRolesResp) ProtoMessage() {}
 
 func (x *GetFirstUserRolesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[27]
+	mi := &file_queries_auth_query_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1325,7 +1470,7 @@ func (x *GetFirstUserRolesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFirstUserRolesResp.ProtoReflect.Descriptor instead.
 func (*GetFirstUserRolesResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{27}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetFirstUserRolesResp) GetRoleIds() []string {
@@ -1343,7 +1488,7 @@ type GetDefaultRolesReq struct {
 
 func (x *GetDefaultRolesReq) Reset() {
 	*x = GetDefaultRolesReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[28]
+	mi := &file_queries_auth_query_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1355,7 +1500,7 @@ func (x *GetDefaultRolesReq) String() string {
 func (*GetDefaultRolesReq) ProtoMessage() {}
 
 func (x *GetDefaultRolesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[28]
+	mi := &file_queries_auth_query_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1368,7 +1513,7 @@ func (x *GetDefaultRolesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDefaultRolesReq.ProtoReflect.Descriptor instead.
 func (*GetDefaultRolesReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{28}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{31}
 }
 
 type GetDefaultRolesResp struct {
@@ -1380,7 +1525,7 @@ type GetDefaultRolesResp struct {
 
 func (x *GetDefaultRolesResp) Reset() {
 	*x = GetDefaultRolesResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[29]
+	mi := &file_queries_auth_query_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1392,7 +1537,7 @@ func (x *GetDefaultRolesResp) String() string {
 func (*GetDefaultRolesResp) ProtoMessage() {}
 
 func (x *GetDefaultRolesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[29]
+	mi := &file_queries_auth_query_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1405,7 +1550,7 @@ func (x *GetDefaultRolesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDefaultRolesResp.ProtoReflect.Descriptor instead.
 func (*GetDefaultRolesResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{29}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetDefaultRolesResp) GetRoleIds() []string {
@@ -1428,7 +1573,7 @@ type ListRolesReq struct {
 
 func (x *ListRolesReq) Reset() {
 	*x = ListRolesReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[30]
+	mi := &file_queries_auth_query_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1440,7 +1585,7 @@ func (x *ListRolesReq) String() string {
 func (*ListRolesReq) ProtoMessage() {}
 
 func (x *ListRolesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[30]
+	mi := &file_queries_auth_query_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1453,7 +1598,7 @@ func (x *ListRolesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRolesReq.ProtoReflect.Descriptor instead.
 func (*ListRolesReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{30}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{33}
 }
 
 type GetUserOwnsAnyOrgReq struct {
@@ -1465,7 +1610,7 @@ type GetUserOwnsAnyOrgReq struct {
 
 func (x *GetUserOwnsAnyOrgReq) Reset() {
 	*x = GetUserOwnsAnyOrgReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[31]
+	mi := &file_queries_auth_query_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1477,7 +1622,7 @@ func (x *GetUserOwnsAnyOrgReq) String() string {
 func (*GetUserOwnsAnyOrgReq) ProtoMessage() {}
 
 func (x *GetUserOwnsAnyOrgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[31]
+	mi := &file_queries_auth_query_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1490,7 +1635,7 @@ func (x *GetUserOwnsAnyOrgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOwnsAnyOrgReq.ProtoReflect.Descriptor instead.
 func (*GetUserOwnsAnyOrgReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{31}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GetUserOwnsAnyOrgReq) GetUserId() string {
@@ -1509,7 +1654,7 @@ type GetUserOwnsAnyOrgResp struct {
 
 func (x *GetUserOwnsAnyOrgResp) Reset() {
 	*x = GetUserOwnsAnyOrgResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[32]
+	mi := &file_queries_auth_query_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1521,7 +1666,7 @@ func (x *GetUserOwnsAnyOrgResp) String() string {
 func (*GetUserOwnsAnyOrgResp) ProtoMessage() {}
 
 func (x *GetUserOwnsAnyOrgResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[32]
+	mi := &file_queries_auth_query_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1534,7 +1679,7 @@ func (x *GetUserOwnsAnyOrgResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOwnsAnyOrgResp.ProtoReflect.Descriptor instead.
 func (*GetUserOwnsAnyOrgResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{32}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GetUserOwnsAnyOrgResp) GetOwns() bool {
@@ -1554,7 +1699,7 @@ type GetOwnedOrgBySlugReq struct {
 
 func (x *GetOwnedOrgBySlugReq) Reset() {
 	*x = GetOwnedOrgBySlugReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[33]
+	mi := &file_queries_auth_query_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1566,7 +1711,7 @@ func (x *GetOwnedOrgBySlugReq) String() string {
 func (*GetOwnedOrgBySlugReq) ProtoMessage() {}
 
 func (x *GetOwnedOrgBySlugReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[33]
+	mi := &file_queries_auth_query_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1579,7 +1724,7 @@ func (x *GetOwnedOrgBySlugReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOwnedOrgBySlugReq.ProtoReflect.Descriptor instead.
 func (*GetOwnedOrgBySlugReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{33}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *GetOwnedOrgBySlugReq) GetUserId() string {
@@ -1607,7 +1752,7 @@ type GetOwnedOrgBySlugResp struct {
 
 func (x *GetOwnedOrgBySlugResp) Reset() {
 	*x = GetOwnedOrgBySlugResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[34]
+	mi := &file_queries_auth_query_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1619,7 +1764,7 @@ func (x *GetOwnedOrgBySlugResp) String() string {
 func (*GetOwnedOrgBySlugResp) ProtoMessage() {}
 
 func (x *GetOwnedOrgBySlugResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[34]
+	mi := &file_queries_auth_query_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1632,7 +1777,7 @@ func (x *GetOwnedOrgBySlugResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOwnedOrgBySlugResp.ProtoReflect.Descriptor instead.
 func (*GetOwnedOrgBySlugResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{34}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetOwnedOrgBySlugResp) GetOrgId() string {
@@ -1650,7 +1795,7 @@ type ListOrgScopedRolesReq struct {
 
 func (x *ListOrgScopedRolesReq) Reset() {
 	*x = ListOrgScopedRolesReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[35]
+	mi := &file_queries_auth_query_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1662,7 +1807,7 @@ func (x *ListOrgScopedRolesReq) String() string {
 func (*ListOrgScopedRolesReq) ProtoMessage() {}
 
 func (x *ListOrgScopedRolesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[35]
+	mi := &file_queries_auth_query_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1675,7 +1820,7 @@ func (x *ListOrgScopedRolesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgScopedRolesReq.ProtoReflect.Descriptor instead.
 func (*ListOrgScopedRolesReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{35}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{38}
 }
 
 type ListOrgScopedRolesResp struct {
@@ -1687,7 +1832,7 @@ type ListOrgScopedRolesResp struct {
 
 func (x *ListOrgScopedRolesResp) Reset() {
 	*x = ListOrgScopedRolesResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[36]
+	mi := &file_queries_auth_query_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1699,7 +1844,7 @@ func (x *ListOrgScopedRolesResp) String() string {
 func (*ListOrgScopedRolesResp) ProtoMessage() {}
 
 func (x *ListOrgScopedRolesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[36]
+	mi := &file_queries_auth_query_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1712,7 +1857,7 @@ func (x *ListOrgScopedRolesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgScopedRolesResp.ProtoReflect.Descriptor instead.
 func (*ListOrgScopedRolesResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{36}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ListOrgScopedRolesResp) GetRoles() []*OrgScopedRole {
@@ -1736,7 +1881,7 @@ type OrgScopedRole struct {
 
 func (x *OrgScopedRole) Reset() {
 	*x = OrgScopedRole{}
-	mi := &file_queries_auth_query_proto_msgTypes[37]
+	mi := &file_queries_auth_query_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1748,7 +1893,7 @@ func (x *OrgScopedRole) String() string {
 func (*OrgScopedRole) ProtoMessage() {}
 
 func (x *OrgScopedRole) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[37]
+	mi := &file_queries_auth_query_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1761,7 +1906,7 @@ func (x *OrgScopedRole) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgScopedRole.ProtoReflect.Descriptor instead.
 func (*OrgScopedRole) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{37}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *OrgScopedRole) GetId() string {
@@ -1801,7 +1946,7 @@ type ListRolesResp struct {
 
 func (x *ListRolesResp) Reset() {
 	*x = ListRolesResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[38]
+	mi := &file_queries_auth_query_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1813,7 +1958,7 @@ func (x *ListRolesResp) String() string {
 func (*ListRolesResp) ProtoMessage() {}
 
 func (x *ListRolesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[38]
+	mi := &file_queries_auth_query_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1826,7 +1971,7 @@ func (x *ListRolesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRolesResp.ProtoReflect.Descriptor instead.
 func (*ListRolesResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{38}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ListRolesResp) GetRoles() []*Role {
@@ -1852,7 +1997,7 @@ type GetRoleReq struct {
 
 func (x *GetRoleReq) Reset() {
 	*x = GetRoleReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[39]
+	mi := &file_queries_auth_query_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1864,7 +2009,7 @@ func (x *GetRoleReq) String() string {
 func (*GetRoleReq) ProtoMessage() {}
 
 func (x *GetRoleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[39]
+	mi := &file_queries_auth_query_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1877,7 +2022,7 @@ func (x *GetRoleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRoleReq.ProtoReflect.Descriptor instead.
 func (*GetRoleReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{39}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetRoleReq) GetId() string {
@@ -1896,7 +2041,7 @@ type GetTokenWithTypeReq struct {
 
 func (x *GetTokenWithTypeReq) Reset() {
 	*x = GetTokenWithTypeReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[40]
+	mi := &file_queries_auth_query_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1908,7 +2053,7 @@ func (x *GetTokenWithTypeReq) String() string {
 func (*GetTokenWithTypeReq) ProtoMessage() {}
 
 func (x *GetTokenWithTypeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[40]
+	mi := &file_queries_auth_query_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1921,7 +2066,7 @@ func (x *GetTokenWithTypeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTokenWithTypeReq.ProtoReflect.Descriptor instead.
 func (*GetTokenWithTypeReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{40}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *GetTokenWithTypeReq) GetToken() string {
@@ -1942,7 +2087,7 @@ type GetTokenWithTypeResp struct {
 
 func (x *GetTokenWithTypeResp) Reset() {
 	*x = GetTokenWithTypeResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[41]
+	mi := &file_queries_auth_query_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1954,7 +2099,7 @@ func (x *GetTokenWithTypeResp) String() string {
 func (*GetTokenWithTypeResp) ProtoMessage() {}
 
 func (x *GetTokenWithTypeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[41]
+	mi := &file_queries_auth_query_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1967,7 +2112,7 @@ func (x *GetTokenWithTypeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTokenWithTypeResp.ProtoReflect.Descriptor instead.
 func (*GetTokenWithTypeResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{41}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GetTokenWithTypeResp) GetUserId() string {
@@ -2001,7 +2146,7 @@ type GetUserRolePermissionsByRealmReq struct {
 
 func (x *GetUserRolePermissionsByRealmReq) Reset() {
 	*x = GetUserRolePermissionsByRealmReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[42]
+	mi := &file_queries_auth_query_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2013,7 +2158,7 @@ func (x *GetUserRolePermissionsByRealmReq) String() string {
 func (*GetUserRolePermissionsByRealmReq) ProtoMessage() {}
 
 func (x *GetUserRolePermissionsByRealmReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[42]
+	mi := &file_queries_auth_query_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2026,7 +2171,7 @@ func (x *GetUserRolePermissionsByRealmReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserRolePermissionsByRealmReq.ProtoReflect.Descriptor instead.
 func (*GetUserRolePermissionsByRealmReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{42}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetUserRolePermissionsByRealmReq) GetUserId() string {
@@ -2056,7 +2201,7 @@ type GetUserRolePermissionsByRealmResp struct {
 
 func (x *GetUserRolePermissionsByRealmResp) Reset() {
 	*x = GetUserRolePermissionsByRealmResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[43]
+	mi := &file_queries_auth_query_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2068,7 +2213,7 @@ func (x *GetUserRolePermissionsByRealmResp) String() string {
 func (*GetUserRolePermissionsByRealmResp) ProtoMessage() {}
 
 func (x *GetUserRolePermissionsByRealmResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[43]
+	mi := &file_queries_auth_query_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2081,7 +2226,7 @@ func (x *GetUserRolePermissionsByRealmResp) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetUserRolePermissionsByRealmResp.ProtoReflect.Descriptor instead.
 func (*GetUserRolePermissionsByRealmResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{43}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *GetUserRolePermissionsByRealmResp) GetGrants() []*RoleGrant {
@@ -2100,7 +2245,7 @@ type GetTokenPermissionSubsetReq struct {
 
 func (x *GetTokenPermissionSubsetReq) Reset() {
 	*x = GetTokenPermissionSubsetReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[44]
+	mi := &file_queries_auth_query_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2112,7 +2257,7 @@ func (x *GetTokenPermissionSubsetReq) String() string {
 func (*GetTokenPermissionSubsetReq) ProtoMessage() {}
 
 func (x *GetTokenPermissionSubsetReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[44]
+	mi := &file_queries_auth_query_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2125,7 +2270,7 @@ func (x *GetTokenPermissionSubsetReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTokenPermissionSubsetReq.ProtoReflect.Descriptor instead.
 func (*GetTokenPermissionSubsetReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{44}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetTokenPermissionSubsetReq) GetTokenId() string {
@@ -2144,7 +2289,7 @@ type GetTokenPermissionSubsetResp struct {
 
 func (x *GetTokenPermissionSubsetResp) Reset() {
 	*x = GetTokenPermissionSubsetResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[45]
+	mi := &file_queries_auth_query_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2156,7 +2301,7 @@ func (x *GetTokenPermissionSubsetResp) String() string {
 func (*GetTokenPermissionSubsetResp) ProtoMessage() {}
 
 func (x *GetTokenPermissionSubsetResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[45]
+	mi := &file_queries_auth_query_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2169,7 +2314,7 @@ func (x *GetTokenPermissionSubsetResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTokenPermissionSubsetResp.ProtoReflect.Descriptor instead.
 func (*GetTokenPermissionSubsetResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{45}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GetTokenPermissionSubsetResp) GetPermissionIds() []int32 {
@@ -2195,7 +2340,7 @@ type ApiTokenInfo struct {
 
 func (x *ApiTokenInfo) Reset() {
 	*x = ApiTokenInfo{}
-	mi := &file_queries_auth_query_proto_msgTypes[46]
+	mi := &file_queries_auth_query_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2207,7 +2352,7 @@ func (x *ApiTokenInfo) String() string {
 func (*ApiTokenInfo) ProtoMessage() {}
 
 func (x *ApiTokenInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[46]
+	mi := &file_queries_auth_query_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2220,7 +2365,7 @@ func (x *ApiTokenInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApiTokenInfo.ProtoReflect.Descriptor instead.
 func (*ApiTokenInfo) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{46}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ApiTokenInfo) GetId() string {
@@ -2268,7 +2413,7 @@ type ListApiTokensByUserReq struct {
 
 func (x *ListApiTokensByUserReq) Reset() {
 	*x = ListApiTokensByUserReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[47]
+	mi := &file_queries_auth_query_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2280,7 +2425,7 @@ func (x *ListApiTokensByUserReq) String() string {
 func (*ListApiTokensByUserReq) ProtoMessage() {}
 
 func (x *ListApiTokensByUserReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[47]
+	mi := &file_queries_auth_query_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2293,7 +2438,7 @@ func (x *ListApiTokensByUserReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListApiTokensByUserReq.ProtoReflect.Descriptor instead.
 func (*ListApiTokensByUserReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{47}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ListApiTokensByUserReq) GetUserId() string {
@@ -2319,7 +2464,7 @@ type ListApiTokensByUserResp struct {
 
 func (x *ListApiTokensByUserResp) Reset() {
 	*x = ListApiTokensByUserResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[48]
+	mi := &file_queries_auth_query_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2331,7 +2476,7 @@ func (x *ListApiTokensByUserResp) String() string {
 func (*ListApiTokensByUserResp) ProtoMessage() {}
 
 func (x *ListApiTokensByUserResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[48]
+	mi := &file_queries_auth_query_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2344,7 +2489,7 @@ func (x *ListApiTokensByUserResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListApiTokensByUserResp.ProtoReflect.Descriptor instead.
 func (*ListApiTokensByUserResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{48}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *ListApiTokensByUserResp) GetTokens() []*ApiTokenInfo {
@@ -2364,7 +2509,7 @@ type GetRegisteredRedirectReq struct {
 
 func (x *GetRegisteredRedirectReq) Reset() {
 	*x = GetRegisteredRedirectReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[49]
+	mi := &file_queries_auth_query_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2376,7 +2521,7 @@ func (x *GetRegisteredRedirectReq) String() string {
 func (*GetRegisteredRedirectReq) ProtoMessage() {}
 
 func (x *GetRegisteredRedirectReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[49]
+	mi := &file_queries_auth_query_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2389,7 +2534,7 @@ func (x *GetRegisteredRedirectReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegisteredRedirectReq.ProtoReflect.Descriptor instead.
 func (*GetRegisteredRedirectReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{49}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *GetRegisteredRedirectReq) GetClientId() string {
@@ -2415,7 +2560,7 @@ type GetRegisteredRedirectResp struct {
 
 func (x *GetRegisteredRedirectResp) Reset() {
 	*x = GetRegisteredRedirectResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[50]
+	mi := &file_queries_auth_query_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2427,7 +2572,7 @@ func (x *GetRegisteredRedirectResp) String() string {
 func (*GetRegisteredRedirectResp) ProtoMessage() {}
 
 func (x *GetRegisteredRedirectResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[50]
+	mi := &file_queries_auth_query_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2440,7 +2585,7 @@ func (x *GetRegisteredRedirectResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegisteredRedirectResp.ProtoReflect.Descriptor instead.
 func (*GetRegisteredRedirectResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{50}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *GetRegisteredRedirectResp) GetClient() *AuthClient {
@@ -2466,7 +2611,7 @@ type GetAuthClientSecretReq struct {
 
 func (x *GetAuthClientSecretReq) Reset() {
 	*x = GetAuthClientSecretReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[51]
+	mi := &file_queries_auth_query_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2478,7 +2623,7 @@ func (x *GetAuthClientSecretReq) String() string {
 func (*GetAuthClientSecretReq) ProtoMessage() {}
 
 func (x *GetAuthClientSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[51]
+	mi := &file_queries_auth_query_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2491,7 +2636,7 @@ func (x *GetAuthClientSecretReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAuthClientSecretReq.ProtoReflect.Descriptor instead.
 func (*GetAuthClientSecretReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{51}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *GetAuthClientSecretReq) GetClientId() string {
@@ -2518,7 +2663,7 @@ type GetAuthClientSecretResp struct {
 
 func (x *GetAuthClientSecretResp) Reset() {
 	*x = GetAuthClientSecretResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[52]
+	mi := &file_queries_auth_query_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2530,7 +2675,7 @@ func (x *GetAuthClientSecretResp) String() string {
 func (*GetAuthClientSecretResp) ProtoMessage() {}
 
 func (x *GetAuthClientSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[52]
+	mi := &file_queries_auth_query_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2543,7 +2688,7 @@ func (x *GetAuthClientSecretResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAuthClientSecretResp.ProtoReflect.Descriptor instead.
 func (*GetAuthClientSecretResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{52}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *GetAuthClientSecretResp) GetClientSecret() string {
@@ -2568,7 +2713,7 @@ type ListAuthClientsReq struct {
 
 func (x *ListAuthClientsReq) Reset() {
 	*x = ListAuthClientsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[53]
+	mi := &file_queries_auth_query_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2580,7 +2725,7 @@ func (x *ListAuthClientsReq) String() string {
 func (*ListAuthClientsReq) ProtoMessage() {}
 
 func (x *ListAuthClientsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[53]
+	mi := &file_queries_auth_query_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2593,7 +2738,7 @@ func (x *ListAuthClientsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuthClientsReq.ProtoReflect.Descriptor instead.
 func (*ListAuthClientsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{53}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{56}
 }
 
 type ListAuthClientsResp struct {
@@ -2605,7 +2750,7 @@ type ListAuthClientsResp struct {
 
 func (x *ListAuthClientsResp) Reset() {
 	*x = ListAuthClientsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[54]
+	mi := &file_queries_auth_query_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2617,7 +2762,7 @@ func (x *ListAuthClientsResp) String() string {
 func (*ListAuthClientsResp) ProtoMessage() {}
 
 func (x *ListAuthClientsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[54]
+	mi := &file_queries_auth_query_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2630,7 +2775,7 @@ func (x *ListAuthClientsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuthClientsResp.ProtoReflect.Descriptor instead.
 func (*ListAuthClientsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{54}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ListAuthClientsResp) GetClients() []*AuthClient {
@@ -2649,7 +2794,7 @@ type GetProviderByNameReq struct {
 
 func (x *GetProviderByNameReq) Reset() {
 	*x = GetProviderByNameReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[55]
+	mi := &file_queries_auth_query_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2661,7 +2806,7 @@ func (x *GetProviderByNameReq) String() string {
 func (*GetProviderByNameReq) ProtoMessage() {}
 
 func (x *GetProviderByNameReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[55]
+	mi := &file_queries_auth_query_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2674,7 +2819,7 @@ func (x *GetProviderByNameReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderByNameReq.ProtoReflect.Descriptor instead.
 func (*GetProviderByNameReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{55}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *GetProviderByNameReq) GetName() string {
@@ -2693,7 +2838,7 @@ type GetProviderByNameResp struct {
 
 func (x *GetProviderByNameResp) Reset() {
 	*x = GetProviderByNameResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[56]
+	mi := &file_queries_auth_query_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2705,7 +2850,7 @@ func (x *GetProviderByNameResp) String() string {
 func (*GetProviderByNameResp) ProtoMessage() {}
 
 func (x *GetProviderByNameResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[56]
+	mi := &file_queries_auth_query_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2718,7 +2863,7 @@ func (x *GetProviderByNameResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderByNameResp.ProtoReflect.Descriptor instead.
 func (*GetProviderByNameResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{56}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *GetProviderByNameResp) GetProvider() *OAuthProvider {
@@ -2738,7 +2883,7 @@ type GetOAuthIdentityReq struct {
 
 func (x *GetOAuthIdentityReq) Reset() {
 	*x = GetOAuthIdentityReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[57]
+	mi := &file_queries_auth_query_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2750,7 +2895,7 @@ func (x *GetOAuthIdentityReq) String() string {
 func (*GetOAuthIdentityReq) ProtoMessage() {}
 
 func (x *GetOAuthIdentityReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[57]
+	mi := &file_queries_auth_query_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2763,7 +2908,7 @@ func (x *GetOAuthIdentityReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOAuthIdentityReq.ProtoReflect.Descriptor instead.
 func (*GetOAuthIdentityReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{57}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *GetOAuthIdentityReq) GetProviderId() string {
@@ -2789,7 +2934,7 @@ type GetOAuthIdentityResp struct {
 
 func (x *GetOAuthIdentityResp) Reset() {
 	*x = GetOAuthIdentityResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[58]
+	mi := &file_queries_auth_query_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2801,7 +2946,7 @@ func (x *GetOAuthIdentityResp) String() string {
 func (*GetOAuthIdentityResp) ProtoMessage() {}
 
 func (x *GetOAuthIdentityResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[58]
+	mi := &file_queries_auth_query_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2814,7 +2959,7 @@ func (x *GetOAuthIdentityResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOAuthIdentityResp.ProtoReflect.Descriptor instead.
 func (*GetOAuthIdentityResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{58}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *GetOAuthIdentityResp) GetIdentity() *OAuthIdentity {
@@ -2838,7 +2983,7 @@ type GetUserByIdReq struct {
 
 func (x *GetUserByIdReq) Reset() {
 	*x = GetUserByIdReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[59]
+	mi := &file_queries_auth_query_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2850,7 +2995,7 @@ func (x *GetUserByIdReq) String() string {
 func (*GetUserByIdReq) ProtoMessage() {}
 
 func (x *GetUserByIdReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[59]
+	mi := &file_queries_auth_query_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2863,7 +3008,7 @@ func (x *GetUserByIdReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserByIdReq.ProtoReflect.Descriptor instead.
 func (*GetUserByIdReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{59}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *GetUserByIdReq) GetUserId() string {
@@ -2882,7 +3027,7 @@ type GetUserByIdResp struct {
 
 func (x *GetUserByIdResp) Reset() {
 	*x = GetUserByIdResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[60]
+	mi := &file_queries_auth_query_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2894,7 +3039,7 @@ func (x *GetUserByIdResp) String() string {
 func (*GetUserByIdResp) ProtoMessage() {}
 
 func (x *GetUserByIdResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[60]
+	mi := &file_queries_auth_query_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2907,7 +3052,7 @@ func (x *GetUserByIdResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserByIdResp.ProtoReflect.Descriptor instead.
 func (*GetUserByIdResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{60}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *GetUserByIdResp) GetUser() *User {
@@ -2926,7 +3071,7 @@ type GetTotpSecretReq struct {
 
 func (x *GetTotpSecretReq) Reset() {
 	*x = GetTotpSecretReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[61]
+	mi := &file_queries_auth_query_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2938,7 +3083,7 @@ func (x *GetTotpSecretReq) String() string {
 func (*GetTotpSecretReq) ProtoMessage() {}
 
 func (x *GetTotpSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[61]
+	mi := &file_queries_auth_query_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2951,7 +3096,7 @@ func (x *GetTotpSecretReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTotpSecretReq.ProtoReflect.Descriptor instead.
 func (*GetTotpSecretReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{61}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *GetTotpSecretReq) GetUserId() string {
@@ -2970,7 +3115,7 @@ type GetTotpSecretResp struct {
 
 func (x *GetTotpSecretResp) Reset() {
 	*x = GetTotpSecretResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[62]
+	mi := &file_queries_auth_query_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2982,7 +3127,7 @@ func (x *GetTotpSecretResp) String() string {
 func (*GetTotpSecretResp) ProtoMessage() {}
 
 func (x *GetTotpSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[62]
+	mi := &file_queries_auth_query_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2995,7 +3140,7 @@ func (x *GetTotpSecretResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTotpSecretResp.ProtoReflect.Descriptor instead.
 func (*GetTotpSecretResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{62}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *GetTotpSecretResp) GetSecret() *UserTotpSecret {
@@ -3014,7 +3159,7 @@ type GetMfaChallengeReq struct {
 
 func (x *GetMfaChallengeReq) Reset() {
 	*x = GetMfaChallengeReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[63]
+	mi := &file_queries_auth_query_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3026,7 +3171,7 @@ func (x *GetMfaChallengeReq) String() string {
 func (*GetMfaChallengeReq) ProtoMessage() {}
 
 func (x *GetMfaChallengeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[63]
+	mi := &file_queries_auth_query_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3039,7 +3184,7 @@ func (x *GetMfaChallengeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMfaChallengeReq.ProtoReflect.Descriptor instead.
 func (*GetMfaChallengeReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{63}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *GetMfaChallengeReq) GetChallengeId() string {
@@ -3058,7 +3203,7 @@ type GetMfaChallengeResp struct {
 
 func (x *GetMfaChallengeResp) Reset() {
 	*x = GetMfaChallengeResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[64]
+	mi := &file_queries_auth_query_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3070,7 +3215,7 @@ func (x *GetMfaChallengeResp) String() string {
 func (*GetMfaChallengeResp) ProtoMessage() {}
 
 func (x *GetMfaChallengeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[64]
+	mi := &file_queries_auth_query_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3083,7 +3228,7 @@ func (x *GetMfaChallengeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMfaChallengeResp.ProtoReflect.Descriptor instead.
 func (*GetMfaChallengeResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{64}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *GetMfaChallengeResp) GetChallenge() *MfaChallenge {
@@ -3117,7 +3262,7 @@ type LockUserForIssuanceReq struct {
 
 func (x *LockUserForIssuanceReq) Reset() {
 	*x = LockUserForIssuanceReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[65]
+	mi := &file_queries_auth_query_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3129,7 +3274,7 @@ func (x *LockUserForIssuanceReq) String() string {
 func (*LockUserForIssuanceReq) ProtoMessage() {}
 
 func (x *LockUserForIssuanceReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[65]
+	mi := &file_queries_auth_query_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3142,7 +3287,7 @@ func (x *LockUserForIssuanceReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockUserForIssuanceReq.ProtoReflect.Descriptor instead.
 func (*LockUserForIssuanceReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{65}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *LockUserForIssuanceReq) GetUserId() string {
@@ -3161,7 +3306,7 @@ type LockUserForIssuanceResp struct {
 
 func (x *LockUserForIssuanceResp) Reset() {
 	*x = LockUserForIssuanceResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[66]
+	mi := &file_queries_auth_query_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3173,7 +3318,7 @@ func (x *LockUserForIssuanceResp) String() string {
 func (*LockUserForIssuanceResp) ProtoMessage() {}
 
 func (x *LockUserForIssuanceResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[66]
+	mi := &file_queries_auth_query_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3186,7 +3331,7 @@ func (x *LockUserForIssuanceResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockUserForIssuanceResp.ProtoReflect.Descriptor instead.
 func (*LockUserForIssuanceResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{66}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *LockUserForIssuanceResp) GetUserId() string {
@@ -3211,7 +3356,7 @@ type CountRecentMfaChallengesReq struct {
 
 func (x *CountRecentMfaChallengesReq) Reset() {
 	*x = CountRecentMfaChallengesReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[67]
+	mi := &file_queries_auth_query_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3223,7 +3368,7 @@ func (x *CountRecentMfaChallengesReq) String() string {
 func (*CountRecentMfaChallengesReq) ProtoMessage() {}
 
 func (x *CountRecentMfaChallengesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[67]
+	mi := &file_queries_auth_query_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3236,7 +3381,7 @@ func (x *CountRecentMfaChallengesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CountRecentMfaChallengesReq.ProtoReflect.Descriptor instead.
 func (*CountRecentMfaChallengesReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{67}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *CountRecentMfaChallengesReq) GetUserId() string {
@@ -3262,7 +3407,7 @@ type CountRecentMfaChallengesResp struct {
 
 func (x *CountRecentMfaChallengesResp) Reset() {
 	*x = CountRecentMfaChallengesResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[68]
+	mi := &file_queries_auth_query_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3274,7 +3419,7 @@ func (x *CountRecentMfaChallengesResp) String() string {
 func (*CountRecentMfaChallengesResp) ProtoMessage() {}
 
 func (x *CountRecentMfaChallengesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[68]
+	mi := &file_queries_auth_query_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3287,7 +3432,7 @@ func (x *CountRecentMfaChallengesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CountRecentMfaChallengesResp.ProtoReflect.Descriptor instead.
 func (*CountRecentMfaChallengesResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{68}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *CountRecentMfaChallengesResp) GetCount() int64 {
@@ -3307,7 +3452,7 @@ type GetDeviceByIdentifierReq struct {
 
 func (x *GetDeviceByIdentifierReq) Reset() {
 	*x = GetDeviceByIdentifierReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[69]
+	mi := &file_queries_auth_query_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3319,7 +3464,7 @@ func (x *GetDeviceByIdentifierReq) String() string {
 func (*GetDeviceByIdentifierReq) ProtoMessage() {}
 
 func (x *GetDeviceByIdentifierReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[69]
+	mi := &file_queries_auth_query_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3332,7 +3477,7 @@ func (x *GetDeviceByIdentifierReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceByIdentifierReq.ProtoReflect.Descriptor instead.
 func (*GetDeviceByIdentifierReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{69}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *GetDeviceByIdentifierReq) GetUserId() string {
@@ -3358,7 +3503,7 @@ type GetDeviceByIdentifierResp struct {
 
 func (x *GetDeviceByIdentifierResp) Reset() {
 	*x = GetDeviceByIdentifierResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[70]
+	mi := &file_queries_auth_query_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3370,7 +3515,7 @@ func (x *GetDeviceByIdentifierResp) String() string {
 func (*GetDeviceByIdentifierResp) ProtoMessage() {}
 
 func (x *GetDeviceByIdentifierResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[70]
+	mi := &file_queries_auth_query_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3383,7 +3528,7 @@ func (x *GetDeviceByIdentifierResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeviceByIdentifierResp.ProtoReflect.Descriptor instead.
 func (*GetDeviceByIdentifierResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{70}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *GetDeviceByIdentifierResp) GetDevice() *Device {
@@ -3402,7 +3547,7 @@ type ListUserDevicesReq struct {
 
 func (x *ListUserDevicesReq) Reset() {
 	*x = ListUserDevicesReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[71]
+	mi := &file_queries_auth_query_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3414,7 +3559,7 @@ func (x *ListUserDevicesReq) String() string {
 func (*ListUserDevicesReq) ProtoMessage() {}
 
 func (x *ListUserDevicesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[71]
+	mi := &file_queries_auth_query_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3427,7 +3572,7 @@ func (x *ListUserDevicesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserDevicesReq.ProtoReflect.Descriptor instead.
 func (*ListUserDevicesReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{71}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ListUserDevicesReq) GetUserId() string {
@@ -3446,7 +3591,7 @@ type ListUserDevicesResp struct {
 
 func (x *ListUserDevicesResp) Reset() {
 	*x = ListUserDevicesResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[72]
+	mi := &file_queries_auth_query_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3458,7 +3603,7 @@ func (x *ListUserDevicesResp) String() string {
 func (*ListUserDevicesResp) ProtoMessage() {}
 
 func (x *ListUserDevicesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[72]
+	mi := &file_queries_auth_query_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3471,7 +3616,7 @@ func (x *ListUserDevicesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserDevicesResp.ProtoReflect.Descriptor instead.
 func (*ListUserDevicesResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{72}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ListUserDevicesResp) GetDevices() []*Device {
@@ -3496,7 +3641,7 @@ type GetUserTenantReq struct {
 
 func (x *GetUserTenantReq) Reset() {
 	*x = GetUserTenantReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[73]
+	mi := &file_queries_auth_query_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3508,7 +3653,7 @@ func (x *GetUserTenantReq) String() string {
 func (*GetUserTenantReq) ProtoMessage() {}
 
 func (x *GetUserTenantReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[73]
+	mi := &file_queries_auth_query_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3521,7 +3666,7 @@ func (x *GetUserTenantReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserTenantReq.ProtoReflect.Descriptor instead.
 func (*GetUserTenantReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{73}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *GetUserTenantReq) GetUserId() string {
@@ -3540,7 +3685,7 @@ type GetUserTenantResp struct {
 
 func (x *GetUserTenantResp) Reset() {
 	*x = GetUserTenantResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[74]
+	mi := &file_queries_auth_query_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3552,7 +3697,7 @@ func (x *GetUserTenantResp) String() string {
 func (*GetUserTenantResp) ProtoMessage() {}
 
 func (x *GetUserTenantResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[74]
+	mi := &file_queries_auth_query_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3565,7 +3710,7 @@ func (x *GetUserTenantResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserTenantResp.ProtoReflect.Descriptor instead.
 func (*GetUserTenantResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{74}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *GetUserTenantResp) GetTenantId() string {
@@ -3589,7 +3734,7 @@ type GetTenantBySlugReq struct {
 
 func (x *GetTenantBySlugReq) Reset() {
 	*x = GetTenantBySlugReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[75]
+	mi := &file_queries_auth_query_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3601,7 +3746,7 @@ func (x *GetTenantBySlugReq) String() string {
 func (*GetTenantBySlugReq) ProtoMessage() {}
 
 func (x *GetTenantBySlugReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[75]
+	mi := &file_queries_auth_query_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3614,7 +3759,7 @@ func (x *GetTenantBySlugReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantBySlugReq.ProtoReflect.Descriptor instead.
 func (*GetTenantBySlugReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{75}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *GetTenantBySlugReq) GetSlug() string {
@@ -3633,7 +3778,7 @@ type GetTenantBySlugResp struct {
 
 func (x *GetTenantBySlugResp) Reset() {
 	*x = GetTenantBySlugResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[76]
+	mi := &file_queries_auth_query_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3645,7 +3790,7 @@ func (x *GetTenantBySlugResp) String() string {
 func (*GetTenantBySlugResp) ProtoMessage() {}
 
 func (x *GetTenantBySlugResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[76]
+	mi := &file_queries_auth_query_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3658,7 +3803,7 @@ func (x *GetTenantBySlugResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantBySlugResp.ProtoReflect.Descriptor instead.
 func (*GetTenantBySlugResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{76}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *GetTenantBySlugResp) GetTenantId() string {
@@ -3677,7 +3822,7 @@ type GetTenantByDomainReq struct {
 
 func (x *GetTenantByDomainReq) Reset() {
 	*x = GetTenantByDomainReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[77]
+	mi := &file_queries_auth_query_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3689,7 +3834,7 @@ func (x *GetTenantByDomainReq) String() string {
 func (*GetTenantByDomainReq) ProtoMessage() {}
 
 func (x *GetTenantByDomainReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[77]
+	mi := &file_queries_auth_query_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3702,7 +3847,7 @@ func (x *GetTenantByDomainReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantByDomainReq.ProtoReflect.Descriptor instead.
 func (*GetTenantByDomainReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{77}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *GetTenantByDomainReq) GetDomain() string {
@@ -3721,7 +3866,7 @@ type GetTenantByDomainResp struct {
 
 func (x *GetTenantByDomainResp) Reset() {
 	*x = GetTenantByDomainResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[78]
+	mi := &file_queries_auth_query_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3733,7 +3878,7 @@ func (x *GetTenantByDomainResp) String() string {
 func (*GetTenantByDomainResp) ProtoMessage() {}
 
 func (x *GetTenantByDomainResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[78]
+	mi := &file_queries_auth_query_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3746,7 +3891,7 @@ func (x *GetTenantByDomainResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantByDomainResp.ProtoReflect.Descriptor instead.
 func (*GetTenantByDomainResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{78}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *GetTenantByDomainResp) GetTenantId() string {
@@ -3778,7 +3923,7 @@ type UserOrg struct {
 
 func (x *UserOrg) Reset() {
 	*x = UserOrg{}
-	mi := &file_queries_auth_query_proto_msgTypes[79]
+	mi := &file_queries_auth_query_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3790,7 +3935,7 @@ func (x *UserOrg) String() string {
 func (*UserOrg) ProtoMessage() {}
 
 func (x *UserOrg) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[79]
+	mi := &file_queries_auth_query_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3803,7 +3948,7 @@ func (x *UserOrg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserOrg.ProtoReflect.Descriptor instead.
 func (*UserOrg) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{79}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *UserOrg) GetOrgId() string {
@@ -3857,7 +4002,7 @@ type ListUserOrgsReq struct {
 
 func (x *ListUserOrgsReq) Reset() {
 	*x = ListUserOrgsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[80]
+	mi := &file_queries_auth_query_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3869,7 +4014,7 @@ func (x *ListUserOrgsReq) String() string {
 func (*ListUserOrgsReq) ProtoMessage() {}
 
 func (x *ListUserOrgsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[80]
+	mi := &file_queries_auth_query_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3882,7 +4027,7 @@ func (x *ListUserOrgsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserOrgsReq.ProtoReflect.Descriptor instead.
 func (*ListUserOrgsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{80}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ListUserOrgsReq) GetUserId() string {
@@ -3901,7 +4046,7 @@ type ListUserOrgsResp struct {
 
 func (x *ListUserOrgsResp) Reset() {
 	*x = ListUserOrgsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[81]
+	mi := &file_queries_auth_query_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3913,7 +4058,7 @@ func (x *ListUserOrgsResp) String() string {
 func (*ListUserOrgsResp) ProtoMessage() {}
 
 func (x *ListUserOrgsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[81]
+	mi := &file_queries_auth_query_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3926,7 +4071,7 @@ func (x *ListUserOrgsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserOrgsResp.ProtoReflect.Descriptor instead.
 func (*ListUserOrgsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{81}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *ListUserOrgsResp) GetOrgs() []*UserOrg {
@@ -3946,7 +4091,7 @@ type GetUserOrgBySlugReq struct {
 
 func (x *GetUserOrgBySlugReq) Reset() {
 	*x = GetUserOrgBySlugReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[82]
+	mi := &file_queries_auth_query_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3958,7 +4103,7 @@ func (x *GetUserOrgBySlugReq) String() string {
 func (*GetUserOrgBySlugReq) ProtoMessage() {}
 
 func (x *GetUserOrgBySlugReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[82]
+	mi := &file_queries_auth_query_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3971,7 +4116,7 @@ func (x *GetUserOrgBySlugReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOrgBySlugReq.ProtoReflect.Descriptor instead.
 func (*GetUserOrgBySlugReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{82}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *GetUserOrgBySlugReq) GetUserId() string {
@@ -4007,7 +4152,7 @@ type ListUserOrgGrantsReq struct {
 
 func (x *ListUserOrgGrantsReq) Reset() {
 	*x = ListUserOrgGrantsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[83]
+	mi := &file_queries_auth_query_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4019,7 +4164,7 @@ func (x *ListUserOrgGrantsReq) String() string {
 func (*ListUserOrgGrantsReq) ProtoMessage() {}
 
 func (x *ListUserOrgGrantsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[83]
+	mi := &file_queries_auth_query_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4032,7 +4177,7 @@ func (x *ListUserOrgGrantsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserOrgGrantsReq.ProtoReflect.Descriptor instead.
 func (*ListUserOrgGrantsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{83}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *ListUserOrgGrantsReq) GetUserId() string {
@@ -4058,7 +4203,7 @@ type ListUserOrgGrantsResp struct {
 
 func (x *ListUserOrgGrantsResp) Reset() {
 	*x = ListUserOrgGrantsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[84]
+	mi := &file_queries_auth_query_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4070,7 +4215,7 @@ func (x *ListUserOrgGrantsResp) String() string {
 func (*ListUserOrgGrantsResp) ProtoMessage() {}
 
 func (x *ListUserOrgGrantsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[84]
+	mi := &file_queries_auth_query_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4083,7 +4228,7 @@ func (x *ListUserOrgGrantsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserOrgGrantsResp.ProtoReflect.Descriptor instead.
 func (*ListUserOrgGrantsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{84}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *ListUserOrgGrantsResp) GetRoleIds() []string {
@@ -4103,7 +4248,7 @@ type GetUserOrgPermissionsReq struct {
 
 func (x *GetUserOrgPermissionsReq) Reset() {
 	*x = GetUserOrgPermissionsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[85]
+	mi := &file_queries_auth_query_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4115,7 +4260,7 @@ func (x *GetUserOrgPermissionsReq) String() string {
 func (*GetUserOrgPermissionsReq) ProtoMessage() {}
 
 func (x *GetUserOrgPermissionsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[85]
+	mi := &file_queries_auth_query_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4128,7 +4273,7 @@ func (x *GetUserOrgPermissionsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOrgPermissionsReq.ProtoReflect.Descriptor instead.
 func (*GetUserOrgPermissionsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{85}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *GetUserOrgPermissionsReq) GetUserId() string {
@@ -4158,7 +4303,7 @@ type GetUserOrgPermissionsResp struct {
 
 func (x *GetUserOrgPermissionsResp) Reset() {
 	*x = GetUserOrgPermissionsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[86]
+	mi := &file_queries_auth_query_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4170,7 +4315,7 @@ func (x *GetUserOrgPermissionsResp) String() string {
 func (*GetUserOrgPermissionsResp) ProtoMessage() {}
 
 func (x *GetUserOrgPermissionsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[86]
+	mi := &file_queries_auth_query_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4183,7 +4328,7 @@ func (x *GetUserOrgPermissionsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOrgPermissionsResp.ProtoReflect.Descriptor instead.
 func (*GetUserOrgPermissionsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{86}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *GetUserOrgPermissionsResp) GetGrants() []*RoleGrant {
@@ -4211,7 +4356,7 @@ type GetUserOwnsOrgReq struct {
 
 func (x *GetUserOwnsOrgReq) Reset() {
 	*x = GetUserOwnsOrgReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[87]
+	mi := &file_queries_auth_query_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4223,7 +4368,7 @@ func (x *GetUserOwnsOrgReq) String() string {
 func (*GetUserOwnsOrgReq) ProtoMessage() {}
 
 func (x *GetUserOwnsOrgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[87]
+	mi := &file_queries_auth_query_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4236,7 +4381,7 @@ func (x *GetUserOwnsOrgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOwnsOrgReq.ProtoReflect.Descriptor instead.
 func (*GetUserOwnsOrgReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{87}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *GetUserOwnsOrgReq) GetUserId() string {
@@ -4282,7 +4427,7 @@ type GetUserOwnsOrgResp struct {
 
 func (x *GetUserOwnsOrgResp) Reset() {
 	*x = GetUserOwnsOrgResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[88]
+	mi := &file_queries_auth_query_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4294,7 +4439,7 @@ func (x *GetUserOwnsOrgResp) String() string {
 func (*GetUserOwnsOrgResp) ProtoMessage() {}
 
 func (x *GetUserOwnsOrgResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[88]
+	mi := &file_queries_auth_query_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4307,7 +4452,7 @@ func (x *GetUserOwnsOrgResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOwnsOrgResp.ProtoReflect.Descriptor instead.
 func (*GetUserOwnsOrgResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{88}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *GetUserOwnsOrgResp) GetOwner() bool {
@@ -4332,7 +4477,7 @@ type GetUserRealmWidePermissionsReq struct {
 
 func (x *GetUserRealmWidePermissionsReq) Reset() {
 	*x = GetUserRealmWidePermissionsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[89]
+	mi := &file_queries_auth_query_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4344,7 +4489,7 @@ func (x *GetUserRealmWidePermissionsReq) String() string {
 func (*GetUserRealmWidePermissionsReq) ProtoMessage() {}
 
 func (x *GetUserRealmWidePermissionsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[89]
+	mi := &file_queries_auth_query_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4357,7 +4502,7 @@ func (x *GetUserRealmWidePermissionsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserRealmWidePermissionsReq.ProtoReflect.Descriptor instead.
 func (*GetUserRealmWidePermissionsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{89}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *GetUserRealmWidePermissionsReq) GetUserId() string {
@@ -4379,7 +4524,7 @@ type GetUserRealmWidePermissionsResp struct {
 
 func (x *GetUserRealmWidePermissionsResp) Reset() {
 	*x = GetUserRealmWidePermissionsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[90]
+	mi := &file_queries_auth_query_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4391,7 +4536,7 @@ func (x *GetUserRealmWidePermissionsResp) String() string {
 func (*GetUserRealmWidePermissionsResp) ProtoMessage() {}
 
 func (x *GetUserRealmWidePermissionsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[90]
+	mi := &file_queries_auth_query_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4404,7 +4549,7 @@ func (x *GetUserRealmWidePermissionsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserRealmWidePermissionsResp.ProtoReflect.Descriptor instead.
 func (*GetUserRealmWidePermissionsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{90}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *GetUserRealmWidePermissionsResp) GetGrants() []*RoleGrant {
@@ -4426,7 +4571,7 @@ type GetUserOrgBySlugResp struct {
 
 func (x *GetUserOrgBySlugResp) Reset() {
 	*x = GetUserOrgBySlugResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[91]
+	mi := &file_queries_auth_query_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4438,7 +4583,7 @@ func (x *GetUserOrgBySlugResp) String() string {
 func (*GetUserOrgBySlugResp) ProtoMessage() {}
 
 func (x *GetUserOrgBySlugResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[91]
+	mi := &file_queries_auth_query_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4451,7 +4596,7 @@ func (x *GetUserOrgBySlugResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserOrgBySlugResp.ProtoReflect.Descriptor instead.
 func (*GetUserOrgBySlugResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{91}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *GetUserOrgBySlugResp) GetOrgId() string {
@@ -4476,7 +4621,7 @@ type ListOrganizationsReq struct {
 
 func (x *ListOrganizationsReq) Reset() {
 	*x = ListOrganizationsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[92]
+	mi := &file_queries_auth_query_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4488,7 +4633,7 @@ func (x *ListOrganizationsReq) String() string {
 func (*ListOrganizationsReq) ProtoMessage() {}
 
 func (x *ListOrganizationsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[92]
+	mi := &file_queries_auth_query_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4501,7 +4646,7 @@ func (x *ListOrganizationsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrganizationsReq.ProtoReflect.Descriptor instead.
 func (*ListOrganizationsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{92}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{95}
 }
 
 type ListOrganizationsResp struct {
@@ -4521,7 +4666,7 @@ type ListOrganizationsResp struct {
 
 func (x *ListOrganizationsResp) Reset() {
 	*x = ListOrganizationsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[93]
+	mi := &file_queries_auth_query_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4533,7 +4678,7 @@ func (x *ListOrganizationsResp) String() string {
 func (*ListOrganizationsResp) ProtoMessage() {}
 
 func (x *ListOrganizationsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[93]
+	mi := &file_queries_auth_query_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4546,7 +4691,7 @@ func (x *ListOrganizationsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrganizationsResp.ProtoReflect.Descriptor instead.
 func (*ListOrganizationsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{93}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *ListOrganizationsResp) GetOrganizations() []*Organization {
@@ -4572,7 +4717,7 @@ type GetOrganizationReq struct {
 
 func (x *GetOrganizationReq) Reset() {
 	*x = GetOrganizationReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[94]
+	mi := &file_queries_auth_query_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4584,7 +4729,7 @@ func (x *GetOrganizationReq) String() string {
 func (*GetOrganizationReq) ProtoMessage() {}
 
 func (x *GetOrganizationReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[94]
+	mi := &file_queries_auth_query_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4597,7 +4742,7 @@ func (x *GetOrganizationReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrganizationReq.ProtoReflect.Descriptor instead.
 func (*GetOrganizationReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{94}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *GetOrganizationReq) GetId() string {
@@ -4615,7 +4760,7 @@ type ListOrgMembershipsReq struct {
 
 func (x *ListOrgMembershipsReq) Reset() {
 	*x = ListOrgMembershipsReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[95]
+	mi := &file_queries_auth_query_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4627,7 +4772,7 @@ func (x *ListOrgMembershipsReq) String() string {
 func (*ListOrgMembershipsReq) ProtoMessage() {}
 
 func (x *ListOrgMembershipsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[95]
+	mi := &file_queries_auth_query_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4640,7 +4785,7 @@ func (x *ListOrgMembershipsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgMembershipsReq.ProtoReflect.Descriptor instead.
 func (*ListOrgMembershipsReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{95}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{98}
 }
 
 // OrgMembershipAdminRow — the OrgMemberships list projection (ADMIN-FK).
@@ -4676,7 +4821,7 @@ type OrgMembershipAdminRow struct {
 
 func (x *OrgMembershipAdminRow) Reset() {
 	*x = OrgMembershipAdminRow{}
-	mi := &file_queries_auth_query_proto_msgTypes[96]
+	mi := &file_queries_auth_query_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4688,7 +4833,7 @@ func (x *OrgMembershipAdminRow) String() string {
 func (*OrgMembershipAdminRow) ProtoMessage() {}
 
 func (x *OrgMembershipAdminRow) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[96]
+	mi := &file_queries_auth_query_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4701,7 +4846,7 @@ func (x *OrgMembershipAdminRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgMembershipAdminRow.ProtoReflect.Descriptor instead.
 func (*OrgMembershipAdminRow) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{96}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *OrgMembershipAdminRow) GetId() string {
@@ -4763,7 +4908,7 @@ type ListOrgMembershipsResp struct {
 
 func (x *ListOrgMembershipsResp) Reset() {
 	*x = ListOrgMembershipsResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[97]
+	mi := &file_queries_auth_query_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4775,7 +4920,7 @@ func (x *ListOrgMembershipsResp) String() string {
 func (*ListOrgMembershipsResp) ProtoMessage() {}
 
 func (x *ListOrgMembershipsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[97]
+	mi := &file_queries_auth_query_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4788,7 +4933,7 @@ func (x *ListOrgMembershipsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgMembershipsResp.ProtoReflect.Descriptor instead.
 func (*ListOrgMembershipsResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{97}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *ListOrgMembershipsResp) GetMemberships() []*OrgMembershipAdminRow {
@@ -4814,7 +4959,7 @@ type GetOrgMembershipReq struct {
 
 func (x *GetOrgMembershipReq) Reset() {
 	*x = GetOrgMembershipReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[98]
+	mi := &file_queries_auth_query_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4826,7 +4971,7 @@ func (x *GetOrgMembershipReq) String() string {
 func (*GetOrgMembershipReq) ProtoMessage() {}
 
 func (x *GetOrgMembershipReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[98]
+	mi := &file_queries_auth_query_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4839,7 +4984,7 @@ func (x *GetOrgMembershipReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrgMembershipReq.ProtoReflect.Descriptor instead.
 func (*GetOrgMembershipReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{98}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *GetOrgMembershipReq) GetId() string {
@@ -4857,7 +5002,7 @@ type ListUserTokensReq struct {
 
 func (x *ListUserTokensReq) Reset() {
 	*x = ListUserTokensReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[99]
+	mi := &file_queries_auth_query_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4869,7 +5014,7 @@ func (x *ListUserTokensReq) String() string {
 func (*ListUserTokensReq) ProtoMessage() {}
 
 func (x *ListUserTokensReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[99]
+	mi := &file_queries_auth_query_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4882,7 +5027,7 @@ func (x *ListUserTokensReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserTokensReq.ProtoReflect.Descriptor instead.
 func (*ListUserTokensReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{99}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{102}
 }
 
 // UserTokenAdminRow — the Sessions list projection (ADMIN-FK). NOT a
@@ -4921,7 +5066,7 @@ type UserTokenAdminRow struct {
 
 func (x *UserTokenAdminRow) Reset() {
 	*x = UserTokenAdminRow{}
-	mi := &file_queries_auth_query_proto_msgTypes[100]
+	mi := &file_queries_auth_query_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4933,7 +5078,7 @@ func (x *UserTokenAdminRow) String() string {
 func (*UserTokenAdminRow) ProtoMessage() {}
 
 func (x *UserTokenAdminRow) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[100]
+	mi := &file_queries_auth_query_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4946,7 +5091,7 @@ func (x *UserTokenAdminRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserTokenAdminRow.ProtoReflect.Descriptor instead.
 func (*UserTokenAdminRow) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{100}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *UserTokenAdminRow) GetId() string {
@@ -5001,7 +5146,7 @@ type ListUserTokensResp struct {
 
 func (x *ListUserTokensResp) Reset() {
 	*x = ListUserTokensResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[101]
+	mi := &file_queries_auth_query_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5013,7 +5158,7 @@ func (x *ListUserTokensResp) String() string {
 func (*ListUserTokensResp) ProtoMessage() {}
 
 func (x *ListUserTokensResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[101]
+	mi := &file_queries_auth_query_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5026,7 +5171,7 @@ func (x *ListUserTokensResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUserTokensResp.ProtoReflect.Descriptor instead.
 func (*ListUserTokensResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{101}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *ListUserTokensResp) GetTokens() []*UserTokenAdminRow {
@@ -5052,7 +5197,7 @@ type GetUserTokenReq struct {
 
 func (x *GetUserTokenReq) Reset() {
 	*x = GetUserTokenReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[102]
+	mi := &file_queries_auth_query_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5064,7 +5209,7 @@ func (x *GetUserTokenReq) String() string {
 func (*GetUserTokenReq) ProtoMessage() {}
 
 func (x *GetUserTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[102]
+	mi := &file_queries_auth_query_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5077,7 +5222,7 @@ func (x *GetUserTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUserTokenReq.ProtoReflect.Descriptor instead.
 func (*GetUserTokenReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{102}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *GetUserTokenReq) GetId() string {
@@ -5105,7 +5250,7 @@ type OrgMemberRow struct {
 
 func (x *OrgMemberRow) Reset() {
 	*x = OrgMemberRow{}
-	mi := &file_queries_auth_query_proto_msgTypes[103]
+	mi := &file_queries_auth_query_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5117,7 +5262,7 @@ func (x *OrgMemberRow) String() string {
 func (*OrgMemberRow) ProtoMessage() {}
 
 func (x *OrgMemberRow) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[103]
+	mi := &file_queries_auth_query_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5130,7 +5275,7 @@ func (x *OrgMemberRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgMemberRow.ProtoReflect.Descriptor instead.
 func (*OrgMemberRow) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{103}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *OrgMemberRow) GetUserId() string {
@@ -5177,7 +5322,7 @@ type ListOrgMembersByOrgReq struct {
 
 func (x *ListOrgMembersByOrgReq) Reset() {
 	*x = ListOrgMembersByOrgReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[104]
+	mi := &file_queries_auth_query_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5189,7 +5334,7 @@ func (x *ListOrgMembersByOrgReq) String() string {
 func (*ListOrgMembersByOrgReq) ProtoMessage() {}
 
 func (x *ListOrgMembersByOrgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[104]
+	mi := &file_queries_auth_query_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5202,7 +5347,7 @@ func (x *ListOrgMembersByOrgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgMembersByOrgReq.ProtoReflect.Descriptor instead.
 func (*ListOrgMembersByOrgReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{104}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *ListOrgMembersByOrgReq) GetOrgId() string {
@@ -5221,7 +5366,7 @@ type ListOrgMembersByOrgResp struct {
 
 func (x *ListOrgMembersByOrgResp) Reset() {
 	*x = ListOrgMembersByOrgResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[105]
+	mi := &file_queries_auth_query_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5233,7 +5378,7 @@ func (x *ListOrgMembersByOrgResp) String() string {
 func (*ListOrgMembersByOrgResp) ProtoMessage() {}
 
 func (x *ListOrgMembersByOrgResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[105]
+	mi := &file_queries_auth_query_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5246,7 +5391,7 @@ func (x *ListOrgMembersByOrgResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgMembersByOrgResp.ProtoReflect.Descriptor instead.
 func (*ListOrgMembersByOrgResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{105}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *ListOrgMembersByOrgResp) GetMembers() []*OrgMemberRow {
@@ -5265,7 +5410,7 @@ type GetPendingOrgInviteByTokenReq struct {
 
 func (x *GetPendingOrgInviteByTokenReq) Reset() {
 	*x = GetPendingOrgInviteByTokenReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[106]
+	mi := &file_queries_auth_query_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5277,7 +5422,7 @@ func (x *GetPendingOrgInviteByTokenReq) String() string {
 func (*GetPendingOrgInviteByTokenReq) ProtoMessage() {}
 
 func (x *GetPendingOrgInviteByTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[106]
+	mi := &file_queries_auth_query_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5290,7 +5435,7 @@ func (x *GetPendingOrgInviteByTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingOrgInviteByTokenReq.ProtoReflect.Descriptor instead.
 func (*GetPendingOrgInviteByTokenReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{106}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *GetPendingOrgInviteByTokenReq) GetTokenHash() string {
@@ -5316,7 +5461,7 @@ type GetPendingOrgInviteByTokenResp struct {
 
 func (x *GetPendingOrgInviteByTokenResp) Reset() {
 	*x = GetPendingOrgInviteByTokenResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[107]
+	mi := &file_queries_auth_query_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5328,7 +5473,7 @@ func (x *GetPendingOrgInviteByTokenResp) String() string {
 func (*GetPendingOrgInviteByTokenResp) ProtoMessage() {}
 
 func (x *GetPendingOrgInviteByTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[107]
+	mi := &file_queries_auth_query_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5341,7 +5486,7 @@ func (x *GetPendingOrgInviteByTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingOrgInviteByTokenResp.ProtoReflect.Descriptor instead.
 func (*GetPendingOrgInviteByTokenResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{107}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *GetPendingOrgInviteByTokenResp) GetOrgId() string {
@@ -5381,7 +5526,7 @@ type ListOrgInvitesByOrgReq struct {
 
 func (x *ListOrgInvitesByOrgReq) Reset() {
 	*x = ListOrgInvitesByOrgReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[108]
+	mi := &file_queries_auth_query_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5393,7 +5538,7 @@ func (x *ListOrgInvitesByOrgReq) String() string {
 func (*ListOrgInvitesByOrgReq) ProtoMessage() {}
 
 func (x *ListOrgInvitesByOrgReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[108]
+	mi := &file_queries_auth_query_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5406,7 +5551,7 @@ func (x *ListOrgInvitesByOrgReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgInvitesByOrgReq.ProtoReflect.Descriptor instead.
 func (*ListOrgInvitesByOrgReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{108}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *ListOrgInvitesByOrgReq) GetOrgId() string {
@@ -5425,7 +5570,7 @@ type ListOrgInvitesByOrgResp struct {
 
 func (x *ListOrgInvitesByOrgResp) Reset() {
 	*x = ListOrgInvitesByOrgResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[109]
+	mi := &file_queries_auth_query_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5437,7 +5582,7 @@ func (x *ListOrgInvitesByOrgResp) String() string {
 func (*ListOrgInvitesByOrgResp) ProtoMessage() {}
 
 func (x *ListOrgInvitesByOrgResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[109]
+	mi := &file_queries_auth_query_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5450,7 +5595,7 @@ func (x *ListOrgInvitesByOrgResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrgInvitesByOrgResp.ProtoReflect.Descriptor instead.
 func (*ListOrgInvitesByOrgResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{109}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *ListOrgInvitesByOrgResp) GetInvites() []*OrgInvite {
@@ -5469,7 +5614,7 @@ type ListPendingInvitesForEmailReq struct {
 
 func (x *ListPendingInvitesForEmailReq) Reset() {
 	*x = ListPendingInvitesForEmailReq{}
-	mi := &file_queries_auth_query_proto_msgTypes[110]
+	mi := &file_queries_auth_query_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5481,7 +5626,7 @@ func (x *ListPendingInvitesForEmailReq) String() string {
 func (*ListPendingInvitesForEmailReq) ProtoMessage() {}
 
 func (x *ListPendingInvitesForEmailReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[110]
+	mi := &file_queries_auth_query_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5494,7 +5639,7 @@ func (x *ListPendingInvitesForEmailReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingInvitesForEmailReq.ProtoReflect.Descriptor instead.
 func (*ListPendingInvitesForEmailReq) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{110}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ListPendingInvitesForEmailReq) GetEmail() string {
@@ -5521,7 +5666,7 @@ type PendingInviteRow struct {
 
 func (x *PendingInviteRow) Reset() {
 	*x = PendingInviteRow{}
-	mi := &file_queries_auth_query_proto_msgTypes[111]
+	mi := &file_queries_auth_query_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5533,7 +5678,7 @@ func (x *PendingInviteRow) String() string {
 func (*PendingInviteRow) ProtoMessage() {}
 
 func (x *PendingInviteRow) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[111]
+	mi := &file_queries_auth_query_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5546,7 +5691,7 @@ func (x *PendingInviteRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingInviteRow.ProtoReflect.Descriptor instead.
 func (*PendingInviteRow) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{111}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *PendingInviteRow) GetInviteId() string {
@@ -5600,7 +5745,7 @@ type ListPendingInvitesForEmailResp struct {
 
 func (x *ListPendingInvitesForEmailResp) Reset() {
 	*x = ListPendingInvitesForEmailResp{}
-	mi := &file_queries_auth_query_proto_msgTypes[112]
+	mi := &file_queries_auth_query_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5612,7 +5757,7 @@ func (x *ListPendingInvitesForEmailResp) String() string {
 func (*ListPendingInvitesForEmailResp) ProtoMessage() {}
 
 func (x *ListPendingInvitesForEmailResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_auth_query_proto_msgTypes[112]
+	mi := &file_queries_auth_query_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5625,7 +5770,7 @@ func (x *ListPendingInvitesForEmailResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingInvitesForEmailResp.ProtoReflect.Descriptor instead.
 func (*ListPendingInvitesForEmailResp) Descriptor() ([]byte, []int) {
-	return file_queries_auth_query_proto_rawDescGZIP(), []int{112}
+	return file_queries_auth_query_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *ListPendingInvitesForEmailResp) GetInvites() []*PendingInviteRow {
@@ -5676,23 +5821,30 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\rListUsersResp\x12,\n" +
 	"\x05users\x18\x01 \x03(\v2\x16.w17.contrib.auth.UserR\x05users\x12#\n" +
 	"\x06paging\x18\x02 \x01(\v2\v.w17.PagingR\x06paging:\x0e\xfa\xf4\x18\n" +
-	"user_admin\"E\n" +
-	"\x0fListBotUsersReq\x12\x1d\n" +
-	"\x06org_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x05orgId:\x13\xfa\xf4\x18\x0fservice_account\"e\n" +
-	"\x0eGetBotInOrgReq\x12\x1f\n" +
+	"user_admin\"M\n" +
+	"\x18ListOrgMemberAccountsReq\x12\x1d\n" +
+	"\x06org_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x05orgId:\x12\xfa\xf4\x18\x0eorg_membership\"2\n" +
+	"\x1bListRealmMachineAccountsReq:\x13\xfa\xf4\x18\x0fservice_account\"g\n" +
+	"\x1cListRealmMachineAccountsResp\x122\n" +
+	"\baccounts\x18\x01 \x03(\v2\x16.w17.contrib.auth.UserR\baccounts:\x13\xfa\xf4\x18\x0fservice_account\"e\n" +
+	"\x0fGetOrgMemberReq\x12\x1f\n" +
 	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12\x1d\n" +
-	"\x06org_id\x18\x02 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x05orgId:\x13\xfa\xf4\x18\x0fservice_account\"I\n" +
-	"\x0fGetBotInOrgResp\x12!\n" +
-	"\auser_id\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x030\x01R\x06userId:\x13\xfa\xf4\x18\x0fservice_account\"S\n" +
-	"\x10ListBotUsersResp\x12*\n" +
-	"\x04bots\x18\x01 \x03(\v2\x16.w17.contrib.auth.UserR\x04bots:\x13\xfa\xf4\x18\x0fservice_account\")\n" +
+	"\x06org_id\x18\x02 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x05orgId:\x12\xfa\xf4\x18\x0eorg_membership\"I\n" +
+	"\x10GetOrgMemberResp\x12!\n" +
+	"\auser_id\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x030\x01R\x06userId:\x12\xfa\xf4\x18\x0eorg_membership\"c\n" +
+	"\x19ListOrgMemberAccountsResp\x122\n" +
+	"\baccounts\x18\x01 \x03(\v2\x16.w17.contrib.auth.UserR\baccounts:\x12\xfa\xf4\x18\x0eorg_membership\")\n" +
 	"\x12ListBotAccountsReq:\x13\xfa\xf4\x18\x0fservice_account\"{\n" +
 	"\x13ListBotAccountsResp\x12*\n" +
 	"\x04bots\x18\x01 \x03(\v2\x16.w17.contrib.auth.UserR\x04bots\x12#\n" +
 	"\x06paging\x18\x02 \x01(\v2\v.w17.PagingR\x06paging:\x13\xfa\xf4\x18\x0fservice_account\"+\n" +
-	"\x14ListApiRealmRolesReq:\x13\xfa\xf4\x18\x0fservice_account\"c\n" +
-	"\x15ListApiRealmRolesResp\x125\n" +
-	"\x05roles\x18\x01 \x03(\v2\x1f.w17.contrib.auth.OrgScopedRoleR\x05roles:\x13\xfa\xf4\x18\x0fservice_account\"5\n" +
+	"\x14ListApiRealmRolesReq:\x13\xfa\xf4\x18\x0fservice_account\"b\n" +
+	"\x15ListApiRealmRolesResp\x124\n" +
+	"\x05roles\x18\x01 \x03(\v2\x1e.w17.contrib.auth.ApiRealmRoleR\x05roles:\x13\xfa\xf4\x18\x0fservice_account\"i\n" +
+	"\fApiRealmRole\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription:\x13\xfa\xf4\x18\x0fservice_account\"5\n" +
 	"\n" +
 	"GetUserReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId:\x0e\xfa\xf4\x18\n" +
@@ -5949,7 +6101,7 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\"n\n" +
 	"\x1eListPendingInvitesForEmailResp\x12<\n" +
 	"\ainvites\x18\x01 \x03(\v2\".w17.contrib.auth.PendingInviteRowR\ainvites:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xee\x9d\x01\n" +
+	"org_invite2\xbd\xa2\x01\n" +
 	"\tAuthQuery\x12\xec\x03\n" +
 	"\x0eGetUserByEmail\x12#.w17.contrib.auth.GetUserByEmailReq\x1a$.w17.contrib.auth.GetUserByEmailResp\"\x8e\x03\xf2\xf3\x18\x89\x03B\x86\x03\n" +
 	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\xba\x03\n" +
@@ -5968,13 +6120,15 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x04main\x12,SELECT COUNT(*) AS count FROM @module.User u\x8a\xf5\x18\x04rbac\x12\xbd\x02\n" +
 	"\tListUsers\x12\x1e.w17.contrib.auth.ListUsersReq\x1a\x1f.w17.contrib.auth.ListUsersResp\"\xee\x01\xf2\xf3\x18\xdb\x01B\xd8\x01\n" +
 	"\x04main\x12\xcf\x01SELECT u.id AS id, u.email AS email,        ?feature(service_account) u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\n" +
-	"user_admin\x12\x8a\x03\n" +
-	"\fListBotUsers\x12!.w17.contrib.auth.ListBotUsersReq\x1a\".w17.contrib.auth.ListBotUsersResp\"\xb2\x02\xf2\xf3\x18\x9a\x02B\x97\x02\n" +
-	"\x04main\x12\x8e\x02SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\xcb\x02\n" +
+	"user_admin\x12\x81\x04\n" +
+	"\x15ListOrgMemberAccounts\x12*.w17.contrib.auth.ListOrgMemberAccountsReq\x1a+.w17.contrib.auth.ListOrgMemberAccountsResp\"\x8e\x03\xf2\xf3\x18\xf7\x02B\xf4\x02\n" +
+	"\x04main\x12\xeb\x02SELECT u.id AS id, u.email AS email,        ?feature(service_account) u.kind AS kind,        ?feature(user_admin) u.disabled_at AS disabled_at,        ?feature(tenant_scope) u.tenant_id AS tenant_id,        u.created_at AS created_at FROM @module.User u JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0eorg_membership\x12\xcb\x02\n" +
 	"\x0fListBotAccounts\x12$.w17.contrib.auth.ListBotAccountsReq\x1a%.w17.contrib.auth.ListBotAccountsResp\"\xea\x01\xf2\xf3\x18\xd2\x01B\xcf\x01\n" +
-	"\x04main\x12\xc6\x01SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\x90\x02\n" +
-	"\vGetBotInOrg\x12 .w17.contrib.auth.GetBotInOrgReq\x1a!.w17.contrib.auth.GetBotInOrgResp\"\xbb\x01\xf2\xf3\x18\xa3\x01B\xa0\x01\n" +
-	"\x04main\x12\x97\x01SELECT u.id AS user_id FROM @module.User u JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id WHERE u.id = :user_id AND u.kind = 1\x8a\xf5\x18\x0fservice_account\x12\x9a\x02\n" +
+	"\x04main\x12\xc6\x01SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\xa5\x03\n" +
+	"\x18ListRealmMachineAccounts\x12-.w17.contrib.auth.ListRealmMachineAccountsReq\x1a..w17.contrib.auth.ListRealmMachineAccountsResp\"\xa9\x02\xf2\xf3\x18\x91\x02B\x8e\x02\n" +
+	"\x04main\x12\x85\x02SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at,        ?feature(tenant_scope) u.tenant_id AS tenant_id,        u.created_at AS created_at FROM @module.User u WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\x83\x02\n" +
+	"\fGetOrgMember\x12!.w17.contrib.auth.GetOrgMemberReq\x1a\".w17.contrib.auth.GetOrgMemberResp\"\xab\x01\xf2\xf3\x18\x94\x01B\x91\x01\n" +
+	"\x04main\x12\x88\x01SELECT u.id AS user_id FROM @module.User u JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id WHERE u.id = :user_id\x8a\xf5\x18\x0eorg_membership\x12\x9a\x02\n" +
 	"\x11ListApiRealmRoles\x12&.w17.contrib.auth.ListApiRealmRolesReq\x1a'.w17.contrib.auth.ListApiRealmRolesResp\"\xb3\x01\xf2\xf3\x18\x9b\x01B\x98\x01\n" +
 	"\x04main\x12\x8f\x01SELECT r.id AS id, r.name AS name,        r.description AS description FROM @module.Role r WHERE r.token_type = 2 ORDER BY r.name ASC, r.id ASC\x8a\xf5\x18\x0fservice_account\x12\xa0\x02\n" +
 	"\aGetUser\x12\x1c.w17.contrib.auth.GetUserReq\x1a\x16.w17.contrib.auth.User\"\xde\x01\xf2\xf3\x18\xcb\x01B\xc8\x01\n" +
@@ -6017,9 +6171,9 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x11GetProviderByName\x12&.w17.contrib.auth.GetProviderByNameReq\x1a'.w17.contrib.auth.GetProviderByNameResp\"\xf0\x04\xf2\xf3\x18\xe2\x04B\xdf\x04\n" +
 	"\x04main\x12\xd6\x04SELECT p.id AS provider.id,        p.name AS provider.name,        p.display_name AS provider.display_name,        p.client_id AS provider.client_id,        p.client_secret AS provider.client_secret,        p.authorize_url AS provider.authorize_url,        p.token_url AS provider.token_url,        p.userinfo_url AS provider.userinfo_url,        p.scopes AS provider.scopes,        p.subject_path AS provider.subject_path,        p.email_path AS provider.email_path,        p.enabled AS provider.enabled,        p.created_at AS provider.created_at FROM @module.OAuthProvider p WHERE p.name = :name\x8a\xf5\x18\x05oauth\x12\xc9\x03\n" +
 	"\x10GetOAuthIdentity\x12%.w17.contrib.auth.GetOAuthIdentityReq\x1a&.w17.contrib.auth.GetOAuthIdentityResp\"\xe5\x02\xf2\xf3\x18\xd7\x02B\xd4\x02\n" +
-	"\x04main\x12\xcb\x02SELECT i.id AS identity.id,        i.user_id AS identity.user_id,        i.provider_id AS identity.provider_id,        i.external_id AS identity.external_id,        i.email AS identity.email,        i.created_at AS identity.created_at FROM @module.OAuthIdentity i WHERE i.provider_id = :provider_id AND i.external_id = :external_id\x8a\xf5\x18\x05oauth\x12\xe2\x03\n" +
-	"\vGetUserById\x12 .w17.contrib.auth.GetUserByIdReq\x1a!.w17.contrib.auth.GetUserByIdResp\"\x8d\x03\xf2\xf3\x18\x88\x03B\x85\x03\n" +
-	"\x04main\x12\xfc\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        u.created_at AS user.created_at FROM @module.User u WHERE u.id = :user_id\x12\xe9\x02\n" +
+	"\x04main\x12\xcb\x02SELECT i.id AS identity.id,        i.user_id AS identity.user_id,        i.provider_id AS identity.provider_id,        i.external_id AS identity.external_id,        i.email AS identity.email,        i.created_at AS identity.created_at FROM @module.OAuthIdentity i WHERE i.provider_id = :provider_id AND i.external_id = :external_id\x8a\xf5\x18\x05oauth\x12\x9f\x04\n" +
+	"\vGetUserById\x12 .w17.contrib.auth.GetUserByIdReq\x1a!.w17.contrib.auth.GetUserByIdResp\"\xca\x03\xf2\xf3\x18\xc5\x03B\xc2\x03\n" +
+	"\x04main\x12\xb9\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(tenant_scope) u.tenant_id AS user.tenant_id,        u.created_at AS user.created_at FROM @module.User u WHERE u.id = :user_id\x12\xe9\x02\n" +
 	"\rGetTotpSecret\x12\".w17.contrib.auth.GetTotpSecretReq\x1a#.w17.contrib.auth.GetTotpSecretResp\"\x8e\x02\xf2\xf3\x18\xfb\x01B\xf8\x01\n" +
 	"\x04main\x12\xef\x01SELECT s.id AS secret.id,        s.user_id AS secret.user_id,        s.secret AS secret.secret,        s.confirmed_at AS secret.confirmed_at,        s.created_at AS secret.created_at FROM @module.UserTotpSecret s WHERE s.user_id = :user_id\x8a\xf5\x18\n" +
 	"two_factor\x12\xa9\x03\n" +
@@ -6090,7 +6244,7 @@ func file_queries_auth_query_proto_rawDescGZIP() []byte {
 	return file_queries_auth_query_proto_rawDescData
 }
 
-var file_queries_auth_query_proto_msgTypes = make([]protoimpl.MessageInfo, 113)
+var file_queries_auth_query_proto_msgTypes = make([]protoimpl.MessageInfo, 116)
 var file_queries_auth_query_proto_goTypes = []any{
 	(*GetUserByEmailReq)(nil),                 // 0: w17.contrib.auth.GetUserByEmailReq
 	(*GetUserByEmailResp)(nil),                // 1: w17.contrib.auth.GetUserByEmailResp
@@ -6109,283 +6263,289 @@ var file_queries_auth_query_proto_goTypes = []any{
 	(*CountUsersResp)(nil),                    // 14: w17.contrib.auth.CountUsersResp
 	(*ListUsersReq)(nil),                      // 15: w17.contrib.auth.ListUsersReq
 	(*ListUsersResp)(nil),                     // 16: w17.contrib.auth.ListUsersResp
-	(*ListBotUsersReq)(nil),                   // 17: w17.contrib.auth.ListBotUsersReq
-	(*GetBotInOrgReq)(nil),                    // 18: w17.contrib.auth.GetBotInOrgReq
-	(*GetBotInOrgResp)(nil),                   // 19: w17.contrib.auth.GetBotInOrgResp
-	(*ListBotUsersResp)(nil),                  // 20: w17.contrib.auth.ListBotUsersResp
-	(*ListBotAccountsReq)(nil),                // 21: w17.contrib.auth.ListBotAccountsReq
-	(*ListBotAccountsResp)(nil),               // 22: w17.contrib.auth.ListBotAccountsResp
-	(*ListApiRealmRolesReq)(nil),              // 23: w17.contrib.auth.ListApiRealmRolesReq
-	(*ListApiRealmRolesResp)(nil),             // 24: w17.contrib.auth.ListApiRealmRolesResp
-	(*GetUserReq)(nil),                        // 25: w17.contrib.auth.GetUserReq
-	(*GetFirstUserRolesReq)(nil),              // 26: w17.contrib.auth.GetFirstUserRolesReq
-	(*GetFirstUserRolesResp)(nil),             // 27: w17.contrib.auth.GetFirstUserRolesResp
-	(*GetDefaultRolesReq)(nil),                // 28: w17.contrib.auth.GetDefaultRolesReq
-	(*GetDefaultRolesResp)(nil),               // 29: w17.contrib.auth.GetDefaultRolesResp
-	(*ListRolesReq)(nil),                      // 30: w17.contrib.auth.ListRolesReq
-	(*GetUserOwnsAnyOrgReq)(nil),              // 31: w17.contrib.auth.GetUserOwnsAnyOrgReq
-	(*GetUserOwnsAnyOrgResp)(nil),             // 32: w17.contrib.auth.GetUserOwnsAnyOrgResp
-	(*GetOwnedOrgBySlugReq)(nil),              // 33: w17.contrib.auth.GetOwnedOrgBySlugReq
-	(*GetOwnedOrgBySlugResp)(nil),             // 34: w17.contrib.auth.GetOwnedOrgBySlugResp
-	(*ListOrgScopedRolesReq)(nil),             // 35: w17.contrib.auth.ListOrgScopedRolesReq
-	(*ListOrgScopedRolesResp)(nil),            // 36: w17.contrib.auth.ListOrgScopedRolesResp
-	(*OrgScopedRole)(nil),                     // 37: w17.contrib.auth.OrgScopedRole
-	(*ListRolesResp)(nil),                     // 38: w17.contrib.auth.ListRolesResp
-	(*GetRoleReq)(nil),                        // 39: w17.contrib.auth.GetRoleReq
-	(*GetTokenWithTypeReq)(nil),               // 40: w17.contrib.auth.GetTokenWithTypeReq
-	(*GetTokenWithTypeResp)(nil),              // 41: w17.contrib.auth.GetTokenWithTypeResp
-	(*GetUserRolePermissionsByRealmReq)(nil),  // 42: w17.contrib.auth.GetUserRolePermissionsByRealmReq
-	(*GetUserRolePermissionsByRealmResp)(nil), // 43: w17.contrib.auth.GetUserRolePermissionsByRealmResp
-	(*GetTokenPermissionSubsetReq)(nil),       // 44: w17.contrib.auth.GetTokenPermissionSubsetReq
-	(*GetTokenPermissionSubsetResp)(nil),      // 45: w17.contrib.auth.GetTokenPermissionSubsetResp
-	(*ApiTokenInfo)(nil),                      // 46: w17.contrib.auth.ApiTokenInfo
-	(*ListApiTokensByUserReq)(nil),            // 47: w17.contrib.auth.ListApiTokensByUserReq
-	(*ListApiTokensByUserResp)(nil),           // 48: w17.contrib.auth.ListApiTokensByUserResp
-	(*GetRegisteredRedirectReq)(nil),          // 49: w17.contrib.auth.GetRegisteredRedirectReq
-	(*GetRegisteredRedirectResp)(nil),         // 50: w17.contrib.auth.GetRegisteredRedirectResp
-	(*GetAuthClientSecretReq)(nil),            // 51: w17.contrib.auth.GetAuthClientSecretReq
-	(*GetAuthClientSecretResp)(nil),           // 52: w17.contrib.auth.GetAuthClientSecretResp
-	(*ListAuthClientsReq)(nil),                // 53: w17.contrib.auth.ListAuthClientsReq
-	(*ListAuthClientsResp)(nil),               // 54: w17.contrib.auth.ListAuthClientsResp
-	(*GetProviderByNameReq)(nil),              // 55: w17.contrib.auth.GetProviderByNameReq
-	(*GetProviderByNameResp)(nil),             // 56: w17.contrib.auth.GetProviderByNameResp
-	(*GetOAuthIdentityReq)(nil),               // 57: w17.contrib.auth.GetOAuthIdentityReq
-	(*GetOAuthIdentityResp)(nil),              // 58: w17.contrib.auth.GetOAuthIdentityResp
-	(*GetUserByIdReq)(nil),                    // 59: w17.contrib.auth.GetUserByIdReq
-	(*GetUserByIdResp)(nil),                   // 60: w17.contrib.auth.GetUserByIdResp
-	(*GetTotpSecretReq)(nil),                  // 61: w17.contrib.auth.GetTotpSecretReq
-	(*GetTotpSecretResp)(nil),                 // 62: w17.contrib.auth.GetTotpSecretResp
-	(*GetMfaChallengeReq)(nil),                // 63: w17.contrib.auth.GetMfaChallengeReq
-	(*GetMfaChallengeResp)(nil),               // 64: w17.contrib.auth.GetMfaChallengeResp
-	(*LockUserForIssuanceReq)(nil),            // 65: w17.contrib.auth.LockUserForIssuanceReq
-	(*LockUserForIssuanceResp)(nil),           // 66: w17.contrib.auth.LockUserForIssuanceResp
-	(*CountRecentMfaChallengesReq)(nil),       // 67: w17.contrib.auth.CountRecentMfaChallengesReq
-	(*CountRecentMfaChallengesResp)(nil),      // 68: w17.contrib.auth.CountRecentMfaChallengesResp
-	(*GetDeviceByIdentifierReq)(nil),          // 69: w17.contrib.auth.GetDeviceByIdentifierReq
-	(*GetDeviceByIdentifierResp)(nil),         // 70: w17.contrib.auth.GetDeviceByIdentifierResp
-	(*ListUserDevicesReq)(nil),                // 71: w17.contrib.auth.ListUserDevicesReq
-	(*ListUserDevicesResp)(nil),               // 72: w17.contrib.auth.ListUserDevicesResp
-	(*GetUserTenantReq)(nil),                  // 73: w17.contrib.auth.GetUserTenantReq
-	(*GetUserTenantResp)(nil),                 // 74: w17.contrib.auth.GetUserTenantResp
-	(*GetTenantBySlugReq)(nil),                // 75: w17.contrib.auth.GetTenantBySlugReq
-	(*GetTenantBySlugResp)(nil),               // 76: w17.contrib.auth.GetTenantBySlugResp
-	(*GetTenantByDomainReq)(nil),              // 77: w17.contrib.auth.GetTenantByDomainReq
-	(*GetTenantByDomainResp)(nil),             // 78: w17.contrib.auth.GetTenantByDomainResp
-	(*UserOrg)(nil),                           // 79: w17.contrib.auth.UserOrg
-	(*ListUserOrgsReq)(nil),                   // 80: w17.contrib.auth.ListUserOrgsReq
-	(*ListUserOrgsResp)(nil),                  // 81: w17.contrib.auth.ListUserOrgsResp
-	(*GetUserOrgBySlugReq)(nil),               // 82: w17.contrib.auth.GetUserOrgBySlugReq
-	(*ListUserOrgGrantsReq)(nil),              // 83: w17.contrib.auth.ListUserOrgGrantsReq
-	(*ListUserOrgGrantsResp)(nil),             // 84: w17.contrib.auth.ListUserOrgGrantsResp
-	(*GetUserOrgPermissionsReq)(nil),          // 85: w17.contrib.auth.GetUserOrgPermissionsReq
-	(*GetUserOrgPermissionsResp)(nil),         // 86: w17.contrib.auth.GetUserOrgPermissionsResp
-	(*GetUserOwnsOrgReq)(nil),                 // 87: w17.contrib.auth.GetUserOwnsOrgReq
-	(*GetUserOwnsOrgResp)(nil),                // 88: w17.contrib.auth.GetUserOwnsOrgResp
-	(*GetUserRealmWidePermissionsReq)(nil),    // 89: w17.contrib.auth.GetUserRealmWidePermissionsReq
-	(*GetUserRealmWidePermissionsResp)(nil),   // 90: w17.contrib.auth.GetUserRealmWidePermissionsResp
-	(*GetUserOrgBySlugResp)(nil),              // 91: w17.contrib.auth.GetUserOrgBySlugResp
-	(*ListOrganizationsReq)(nil),              // 92: w17.contrib.auth.ListOrganizationsReq
-	(*ListOrganizationsResp)(nil),             // 93: w17.contrib.auth.ListOrganizationsResp
-	(*GetOrganizationReq)(nil),                // 94: w17.contrib.auth.GetOrganizationReq
-	(*ListOrgMembershipsReq)(nil),             // 95: w17.contrib.auth.ListOrgMembershipsReq
-	(*OrgMembershipAdminRow)(nil),             // 96: w17.contrib.auth.OrgMembershipAdminRow
-	(*ListOrgMembershipsResp)(nil),            // 97: w17.contrib.auth.ListOrgMembershipsResp
-	(*GetOrgMembershipReq)(nil),               // 98: w17.contrib.auth.GetOrgMembershipReq
-	(*ListUserTokensReq)(nil),                 // 99: w17.contrib.auth.ListUserTokensReq
-	(*UserTokenAdminRow)(nil),                 // 100: w17.contrib.auth.UserTokenAdminRow
-	(*ListUserTokensResp)(nil),                // 101: w17.contrib.auth.ListUserTokensResp
-	(*GetUserTokenReq)(nil),                   // 102: w17.contrib.auth.GetUserTokenReq
-	(*OrgMemberRow)(nil),                      // 103: w17.contrib.auth.OrgMemberRow
-	(*ListOrgMembersByOrgReq)(nil),            // 104: w17.contrib.auth.ListOrgMembersByOrgReq
-	(*ListOrgMembersByOrgResp)(nil),           // 105: w17.contrib.auth.ListOrgMembersByOrgResp
-	(*GetPendingOrgInviteByTokenReq)(nil),     // 106: w17.contrib.auth.GetPendingOrgInviteByTokenReq
-	(*GetPendingOrgInviteByTokenResp)(nil),    // 107: w17.contrib.auth.GetPendingOrgInviteByTokenResp
-	(*ListOrgInvitesByOrgReq)(nil),            // 108: w17.contrib.auth.ListOrgInvitesByOrgReq
-	(*ListOrgInvitesByOrgResp)(nil),           // 109: w17.contrib.auth.ListOrgInvitesByOrgResp
-	(*ListPendingInvitesForEmailReq)(nil),     // 110: w17.contrib.auth.ListPendingInvitesForEmailReq
-	(*PendingInviteRow)(nil),                  // 111: w17.contrib.auth.PendingInviteRow
-	(*ListPendingInvitesForEmailResp)(nil),    // 112: w17.contrib.auth.ListPendingInvitesForEmailResp
-	(*User)(nil),                              // 113: w17.contrib.auth.User
-	(*w17.Paging)(nil),                        // 114: w17.Paging
-	(*Role)(nil),                              // 115: w17.contrib.auth.Role
-	(TokenType)(0),                            // 116: w17.contrib.auth.TokenType
-	(*timestamppb.Timestamp)(nil),             // 117: google.protobuf.Timestamp
-	(*AuthClient)(nil),                        // 118: w17.contrib.auth.AuthClient
-	(*OAuthProvider)(nil),                     // 119: w17.contrib.auth.OAuthProvider
-	(*OAuthIdentity)(nil),                     // 120: w17.contrib.auth.OAuthIdentity
-	(*UserTotpSecret)(nil),                    // 121: w17.contrib.auth.UserTotpSecret
-	(*MfaChallenge)(nil),                      // 122: w17.contrib.auth.MfaChallenge
-	(*Device)(nil),                            // 123: w17.contrib.auth.Device
-	(*Organization)(nil),                      // 124: w17.contrib.auth.Organization
-	(*OrgInvite)(nil),                         // 125: w17.contrib.auth.OrgInvite
-	(*OrgMembership)(nil),                     // 126: w17.contrib.auth.OrgMembership
-	(*UserToken)(nil),                         // 127: w17.contrib.auth.UserToken
+	(*ListOrgMemberAccountsReq)(nil),          // 17: w17.contrib.auth.ListOrgMemberAccountsReq
+	(*ListRealmMachineAccountsReq)(nil),       // 18: w17.contrib.auth.ListRealmMachineAccountsReq
+	(*ListRealmMachineAccountsResp)(nil),      // 19: w17.contrib.auth.ListRealmMachineAccountsResp
+	(*GetOrgMemberReq)(nil),                   // 20: w17.contrib.auth.GetOrgMemberReq
+	(*GetOrgMemberResp)(nil),                  // 21: w17.contrib.auth.GetOrgMemberResp
+	(*ListOrgMemberAccountsResp)(nil),         // 22: w17.contrib.auth.ListOrgMemberAccountsResp
+	(*ListBotAccountsReq)(nil),                // 23: w17.contrib.auth.ListBotAccountsReq
+	(*ListBotAccountsResp)(nil),               // 24: w17.contrib.auth.ListBotAccountsResp
+	(*ListApiRealmRolesReq)(nil),              // 25: w17.contrib.auth.ListApiRealmRolesReq
+	(*ListApiRealmRolesResp)(nil),             // 26: w17.contrib.auth.ListApiRealmRolesResp
+	(*ApiRealmRole)(nil),                      // 27: w17.contrib.auth.ApiRealmRole
+	(*GetUserReq)(nil),                        // 28: w17.contrib.auth.GetUserReq
+	(*GetFirstUserRolesReq)(nil),              // 29: w17.contrib.auth.GetFirstUserRolesReq
+	(*GetFirstUserRolesResp)(nil),             // 30: w17.contrib.auth.GetFirstUserRolesResp
+	(*GetDefaultRolesReq)(nil),                // 31: w17.contrib.auth.GetDefaultRolesReq
+	(*GetDefaultRolesResp)(nil),               // 32: w17.contrib.auth.GetDefaultRolesResp
+	(*ListRolesReq)(nil),                      // 33: w17.contrib.auth.ListRolesReq
+	(*GetUserOwnsAnyOrgReq)(nil),              // 34: w17.contrib.auth.GetUserOwnsAnyOrgReq
+	(*GetUserOwnsAnyOrgResp)(nil),             // 35: w17.contrib.auth.GetUserOwnsAnyOrgResp
+	(*GetOwnedOrgBySlugReq)(nil),              // 36: w17.contrib.auth.GetOwnedOrgBySlugReq
+	(*GetOwnedOrgBySlugResp)(nil),             // 37: w17.contrib.auth.GetOwnedOrgBySlugResp
+	(*ListOrgScopedRolesReq)(nil),             // 38: w17.contrib.auth.ListOrgScopedRolesReq
+	(*ListOrgScopedRolesResp)(nil),            // 39: w17.contrib.auth.ListOrgScopedRolesResp
+	(*OrgScopedRole)(nil),                     // 40: w17.contrib.auth.OrgScopedRole
+	(*ListRolesResp)(nil),                     // 41: w17.contrib.auth.ListRolesResp
+	(*GetRoleReq)(nil),                        // 42: w17.contrib.auth.GetRoleReq
+	(*GetTokenWithTypeReq)(nil),               // 43: w17.contrib.auth.GetTokenWithTypeReq
+	(*GetTokenWithTypeResp)(nil),              // 44: w17.contrib.auth.GetTokenWithTypeResp
+	(*GetUserRolePermissionsByRealmReq)(nil),  // 45: w17.contrib.auth.GetUserRolePermissionsByRealmReq
+	(*GetUserRolePermissionsByRealmResp)(nil), // 46: w17.contrib.auth.GetUserRolePermissionsByRealmResp
+	(*GetTokenPermissionSubsetReq)(nil),       // 47: w17.contrib.auth.GetTokenPermissionSubsetReq
+	(*GetTokenPermissionSubsetResp)(nil),      // 48: w17.contrib.auth.GetTokenPermissionSubsetResp
+	(*ApiTokenInfo)(nil),                      // 49: w17.contrib.auth.ApiTokenInfo
+	(*ListApiTokensByUserReq)(nil),            // 50: w17.contrib.auth.ListApiTokensByUserReq
+	(*ListApiTokensByUserResp)(nil),           // 51: w17.contrib.auth.ListApiTokensByUserResp
+	(*GetRegisteredRedirectReq)(nil),          // 52: w17.contrib.auth.GetRegisteredRedirectReq
+	(*GetRegisteredRedirectResp)(nil),         // 53: w17.contrib.auth.GetRegisteredRedirectResp
+	(*GetAuthClientSecretReq)(nil),            // 54: w17.contrib.auth.GetAuthClientSecretReq
+	(*GetAuthClientSecretResp)(nil),           // 55: w17.contrib.auth.GetAuthClientSecretResp
+	(*ListAuthClientsReq)(nil),                // 56: w17.contrib.auth.ListAuthClientsReq
+	(*ListAuthClientsResp)(nil),               // 57: w17.contrib.auth.ListAuthClientsResp
+	(*GetProviderByNameReq)(nil),              // 58: w17.contrib.auth.GetProviderByNameReq
+	(*GetProviderByNameResp)(nil),             // 59: w17.contrib.auth.GetProviderByNameResp
+	(*GetOAuthIdentityReq)(nil),               // 60: w17.contrib.auth.GetOAuthIdentityReq
+	(*GetOAuthIdentityResp)(nil),              // 61: w17.contrib.auth.GetOAuthIdentityResp
+	(*GetUserByIdReq)(nil),                    // 62: w17.contrib.auth.GetUserByIdReq
+	(*GetUserByIdResp)(nil),                   // 63: w17.contrib.auth.GetUserByIdResp
+	(*GetTotpSecretReq)(nil),                  // 64: w17.contrib.auth.GetTotpSecretReq
+	(*GetTotpSecretResp)(nil),                 // 65: w17.contrib.auth.GetTotpSecretResp
+	(*GetMfaChallengeReq)(nil),                // 66: w17.contrib.auth.GetMfaChallengeReq
+	(*GetMfaChallengeResp)(nil),               // 67: w17.contrib.auth.GetMfaChallengeResp
+	(*LockUserForIssuanceReq)(nil),            // 68: w17.contrib.auth.LockUserForIssuanceReq
+	(*LockUserForIssuanceResp)(nil),           // 69: w17.contrib.auth.LockUserForIssuanceResp
+	(*CountRecentMfaChallengesReq)(nil),       // 70: w17.contrib.auth.CountRecentMfaChallengesReq
+	(*CountRecentMfaChallengesResp)(nil),      // 71: w17.contrib.auth.CountRecentMfaChallengesResp
+	(*GetDeviceByIdentifierReq)(nil),          // 72: w17.contrib.auth.GetDeviceByIdentifierReq
+	(*GetDeviceByIdentifierResp)(nil),         // 73: w17.contrib.auth.GetDeviceByIdentifierResp
+	(*ListUserDevicesReq)(nil),                // 74: w17.contrib.auth.ListUserDevicesReq
+	(*ListUserDevicesResp)(nil),               // 75: w17.contrib.auth.ListUserDevicesResp
+	(*GetUserTenantReq)(nil),                  // 76: w17.contrib.auth.GetUserTenantReq
+	(*GetUserTenantResp)(nil),                 // 77: w17.contrib.auth.GetUserTenantResp
+	(*GetTenantBySlugReq)(nil),                // 78: w17.contrib.auth.GetTenantBySlugReq
+	(*GetTenantBySlugResp)(nil),               // 79: w17.contrib.auth.GetTenantBySlugResp
+	(*GetTenantByDomainReq)(nil),              // 80: w17.contrib.auth.GetTenantByDomainReq
+	(*GetTenantByDomainResp)(nil),             // 81: w17.contrib.auth.GetTenantByDomainResp
+	(*UserOrg)(nil),                           // 82: w17.contrib.auth.UserOrg
+	(*ListUserOrgsReq)(nil),                   // 83: w17.contrib.auth.ListUserOrgsReq
+	(*ListUserOrgsResp)(nil),                  // 84: w17.contrib.auth.ListUserOrgsResp
+	(*GetUserOrgBySlugReq)(nil),               // 85: w17.contrib.auth.GetUserOrgBySlugReq
+	(*ListUserOrgGrantsReq)(nil),              // 86: w17.contrib.auth.ListUserOrgGrantsReq
+	(*ListUserOrgGrantsResp)(nil),             // 87: w17.contrib.auth.ListUserOrgGrantsResp
+	(*GetUserOrgPermissionsReq)(nil),          // 88: w17.contrib.auth.GetUserOrgPermissionsReq
+	(*GetUserOrgPermissionsResp)(nil),         // 89: w17.contrib.auth.GetUserOrgPermissionsResp
+	(*GetUserOwnsOrgReq)(nil),                 // 90: w17.contrib.auth.GetUserOwnsOrgReq
+	(*GetUserOwnsOrgResp)(nil),                // 91: w17.contrib.auth.GetUserOwnsOrgResp
+	(*GetUserRealmWidePermissionsReq)(nil),    // 92: w17.contrib.auth.GetUserRealmWidePermissionsReq
+	(*GetUserRealmWidePermissionsResp)(nil),   // 93: w17.contrib.auth.GetUserRealmWidePermissionsResp
+	(*GetUserOrgBySlugResp)(nil),              // 94: w17.contrib.auth.GetUserOrgBySlugResp
+	(*ListOrganizationsReq)(nil),              // 95: w17.contrib.auth.ListOrganizationsReq
+	(*ListOrganizationsResp)(nil),             // 96: w17.contrib.auth.ListOrganizationsResp
+	(*GetOrganizationReq)(nil),                // 97: w17.contrib.auth.GetOrganizationReq
+	(*ListOrgMembershipsReq)(nil),             // 98: w17.contrib.auth.ListOrgMembershipsReq
+	(*OrgMembershipAdminRow)(nil),             // 99: w17.contrib.auth.OrgMembershipAdminRow
+	(*ListOrgMembershipsResp)(nil),            // 100: w17.contrib.auth.ListOrgMembershipsResp
+	(*GetOrgMembershipReq)(nil),               // 101: w17.contrib.auth.GetOrgMembershipReq
+	(*ListUserTokensReq)(nil),                 // 102: w17.contrib.auth.ListUserTokensReq
+	(*UserTokenAdminRow)(nil),                 // 103: w17.contrib.auth.UserTokenAdminRow
+	(*ListUserTokensResp)(nil),                // 104: w17.contrib.auth.ListUserTokensResp
+	(*GetUserTokenReq)(nil),                   // 105: w17.contrib.auth.GetUserTokenReq
+	(*OrgMemberRow)(nil),                      // 106: w17.contrib.auth.OrgMemberRow
+	(*ListOrgMembersByOrgReq)(nil),            // 107: w17.contrib.auth.ListOrgMembersByOrgReq
+	(*ListOrgMembersByOrgResp)(nil),           // 108: w17.contrib.auth.ListOrgMembersByOrgResp
+	(*GetPendingOrgInviteByTokenReq)(nil),     // 109: w17.contrib.auth.GetPendingOrgInviteByTokenReq
+	(*GetPendingOrgInviteByTokenResp)(nil),    // 110: w17.contrib.auth.GetPendingOrgInviteByTokenResp
+	(*ListOrgInvitesByOrgReq)(nil),            // 111: w17.contrib.auth.ListOrgInvitesByOrgReq
+	(*ListOrgInvitesByOrgResp)(nil),           // 112: w17.contrib.auth.ListOrgInvitesByOrgResp
+	(*ListPendingInvitesForEmailReq)(nil),     // 113: w17.contrib.auth.ListPendingInvitesForEmailReq
+	(*PendingInviteRow)(nil),                  // 114: w17.contrib.auth.PendingInviteRow
+	(*ListPendingInvitesForEmailResp)(nil),    // 115: w17.contrib.auth.ListPendingInvitesForEmailResp
+	(*User)(nil),                              // 116: w17.contrib.auth.User
+	(*w17.Paging)(nil),                        // 117: w17.Paging
+	(*Role)(nil),                              // 118: w17.contrib.auth.Role
+	(TokenType)(0),                            // 119: w17.contrib.auth.TokenType
+	(*timestamppb.Timestamp)(nil),             // 120: google.protobuf.Timestamp
+	(*AuthClient)(nil),                        // 121: w17.contrib.auth.AuthClient
+	(*OAuthProvider)(nil),                     // 122: w17.contrib.auth.OAuthProvider
+	(*OAuthIdentity)(nil),                     // 123: w17.contrib.auth.OAuthIdentity
+	(*UserTotpSecret)(nil),                    // 124: w17.contrib.auth.UserTotpSecret
+	(*MfaChallenge)(nil),                      // 125: w17.contrib.auth.MfaChallenge
+	(*Device)(nil),                            // 126: w17.contrib.auth.Device
+	(*Organization)(nil),                      // 127: w17.contrib.auth.Organization
+	(*OrgInvite)(nil),                         // 128: w17.contrib.auth.OrgInvite
+	(*OrgMembership)(nil),                     // 129: w17.contrib.auth.OrgMembership
+	(*UserToken)(nil),                         // 130: w17.contrib.auth.UserToken
 }
 var file_queries_auth_query_proto_depIdxs = []int32{
-	113, // 0: w17.contrib.auth.GetUserByEmailResp.user:type_name -> w17.contrib.auth.User
-	113, // 1: w17.contrib.auth.GetUserByTokenResp.user:type_name -> w17.contrib.auth.User
+	116, // 0: w17.contrib.auth.GetUserByEmailResp.user:type_name -> w17.contrib.auth.User
+	116, // 1: w17.contrib.auth.GetUserByTokenResp.user:type_name -> w17.contrib.auth.User
 	11,  // 2: w17.contrib.auth.GetUserRoleGrantsResp.grants:type_name -> w17.contrib.auth.RoleGrant
 	11,  // 3: w17.contrib.auth.ListRoleGrantsResp.grants:type_name -> w17.contrib.auth.RoleGrant
-	113, // 4: w17.contrib.auth.GetUserByTokenWithPermissionsResp.user:type_name -> w17.contrib.auth.User
-	113, // 5: w17.contrib.auth.ListUsersResp.users:type_name -> w17.contrib.auth.User
-	114, // 6: w17.contrib.auth.ListUsersResp.paging:type_name -> w17.Paging
-	113, // 7: w17.contrib.auth.ListBotUsersResp.bots:type_name -> w17.contrib.auth.User
-	113, // 8: w17.contrib.auth.ListBotAccountsResp.bots:type_name -> w17.contrib.auth.User
-	114, // 9: w17.contrib.auth.ListBotAccountsResp.paging:type_name -> w17.Paging
-	37,  // 10: w17.contrib.auth.ListApiRealmRolesResp.roles:type_name -> w17.contrib.auth.OrgScopedRole
-	37,  // 11: w17.contrib.auth.ListOrgScopedRolesResp.roles:type_name -> w17.contrib.auth.OrgScopedRole
-	115, // 12: w17.contrib.auth.ListRolesResp.roles:type_name -> w17.contrib.auth.Role
-	114, // 13: w17.contrib.auth.ListRolesResp.paging:type_name -> w17.Paging
-	116, // 14: w17.contrib.auth.GetTokenWithTypeResp.token_type:type_name -> w17.contrib.auth.TokenType
-	116, // 15: w17.contrib.auth.GetUserRolePermissionsByRealmReq.token_type:type_name -> w17.contrib.auth.TokenType
-	11,  // 16: w17.contrib.auth.GetUserRolePermissionsByRealmResp.grants:type_name -> w17.contrib.auth.RoleGrant
-	117, // 17: w17.contrib.auth.ApiTokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	117, // 18: w17.contrib.auth.ApiTokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	117, // 19: w17.contrib.auth.ApiTokenInfo.created_at:type_name -> google.protobuf.Timestamp
-	116, // 20: w17.contrib.auth.ListApiTokensByUserReq.token_type:type_name -> w17.contrib.auth.TokenType
-	46,  // 21: w17.contrib.auth.ListApiTokensByUserResp.tokens:type_name -> w17.contrib.auth.ApiTokenInfo
-	118, // 22: w17.contrib.auth.GetRegisteredRedirectResp.client:type_name -> w17.contrib.auth.AuthClient
-	118, // 23: w17.contrib.auth.ListAuthClientsResp.clients:type_name -> w17.contrib.auth.AuthClient
-	119, // 24: w17.contrib.auth.GetProviderByNameResp.provider:type_name -> w17.contrib.auth.OAuthProvider
-	120, // 25: w17.contrib.auth.GetOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
-	113, // 26: w17.contrib.auth.GetUserByIdResp.user:type_name -> w17.contrib.auth.User
-	121, // 27: w17.contrib.auth.GetTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
-	122, // 28: w17.contrib.auth.GetMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
-	117, // 29: w17.contrib.auth.CountRecentMfaChallengesReq.since:type_name -> google.protobuf.Timestamp
-	123, // 30: w17.contrib.auth.GetDeviceByIdentifierResp.device:type_name -> w17.contrib.auth.Device
-	123, // 31: w17.contrib.auth.ListUserDevicesResp.devices:type_name -> w17.contrib.auth.Device
-	79,  // 32: w17.contrib.auth.ListUserOrgsResp.orgs:type_name -> w17.contrib.auth.UserOrg
-	11,  // 33: w17.contrib.auth.GetUserOrgPermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
-	11,  // 34: w17.contrib.auth.GetUserRealmWidePermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
-	124, // 35: w17.contrib.auth.ListOrganizationsResp.organizations:type_name -> w17.contrib.auth.Organization
-	114, // 36: w17.contrib.auth.ListOrganizationsResp.paging:type_name -> w17.Paging
-	117, // 37: w17.contrib.auth.OrgMembershipAdminRow.created_at:type_name -> google.protobuf.Timestamp
-	96,  // 38: w17.contrib.auth.ListOrgMembershipsResp.memberships:type_name -> w17.contrib.auth.OrgMembershipAdminRow
-	114, // 39: w17.contrib.auth.ListOrgMembershipsResp.paging:type_name -> w17.Paging
-	117, // 40: w17.contrib.auth.UserTokenAdminRow.created_at:type_name -> google.protobuf.Timestamp
-	117, // 41: w17.contrib.auth.UserTokenAdminRow.expires_at:type_name -> google.protobuf.Timestamp
-	100, // 42: w17.contrib.auth.ListUserTokensResp.tokens:type_name -> w17.contrib.auth.UserTokenAdminRow
-	114, // 43: w17.contrib.auth.ListUserTokensResp.paging:type_name -> w17.Paging
-	117, // 44: w17.contrib.auth.OrgMemberRow.joined_at:type_name -> google.protobuf.Timestamp
-	103, // 45: w17.contrib.auth.ListOrgMembersByOrgResp.members:type_name -> w17.contrib.auth.OrgMemberRow
-	125, // 46: w17.contrib.auth.ListOrgInvitesByOrgResp.invites:type_name -> w17.contrib.auth.OrgInvite
-	117, // 47: w17.contrib.auth.PendingInviteRow.expires_at:type_name -> google.protobuf.Timestamp
-	111, // 48: w17.contrib.auth.ListPendingInvitesForEmailResp.invites:type_name -> w17.contrib.auth.PendingInviteRow
-	0,   // 49: w17.contrib.auth.AuthQuery.GetUserByEmail:input_type -> w17.contrib.auth.GetUserByEmailReq
-	2,   // 50: w17.contrib.auth.AuthQuery.GetUserByToken:input_type -> w17.contrib.auth.GetUserByTokenReq
-	4,   // 51: w17.contrib.auth.AuthQuery.GetUserPermissions:input_type -> w17.contrib.auth.GetUserPermissionsReq
-	6,   // 52: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:input_type -> w17.contrib.auth.GetUserByTokenWithPermissionsReq
-	7,   // 53: w17.contrib.auth.AuthQuery.GetUserRoleGrants:input_type -> w17.contrib.auth.GetUserRoleGrantsReq
-	9,   // 54: w17.contrib.auth.AuthQuery.ListRoleGrants:input_type -> w17.contrib.auth.ListRoleGrantsReq
-	13,  // 55: w17.contrib.auth.AuthQuery.CountUsers:input_type -> w17.contrib.auth.CountUsersReq
-	15,  // 56: w17.contrib.auth.AuthQuery.ListUsers:input_type -> w17.contrib.auth.ListUsersReq
-	17,  // 57: w17.contrib.auth.AuthQuery.ListBotUsers:input_type -> w17.contrib.auth.ListBotUsersReq
-	21,  // 58: w17.contrib.auth.AuthQuery.ListBotAccounts:input_type -> w17.contrib.auth.ListBotAccountsReq
-	18,  // 59: w17.contrib.auth.AuthQuery.GetBotInOrg:input_type -> w17.contrib.auth.GetBotInOrgReq
-	23,  // 60: w17.contrib.auth.AuthQuery.ListApiRealmRoles:input_type -> w17.contrib.auth.ListApiRealmRolesReq
-	25,  // 61: w17.contrib.auth.AuthQuery.GetUser:input_type -> w17.contrib.auth.GetUserReq
-	26,  // 62: w17.contrib.auth.AuthQuery.GetFirstUserRoles:input_type -> w17.contrib.auth.GetFirstUserRolesReq
-	28,  // 63: w17.contrib.auth.AuthQuery.GetDefaultRoles:input_type -> w17.contrib.auth.GetDefaultRolesReq
-	31,  // 64: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:input_type -> w17.contrib.auth.GetUserOwnsAnyOrgReq
-	33,  // 65: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:input_type -> w17.contrib.auth.GetOwnedOrgBySlugReq
-	35,  // 66: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:input_type -> w17.contrib.auth.ListOrgScopedRolesReq
-	30,  // 67: w17.contrib.auth.AuthQuery.ListRoles:input_type -> w17.contrib.auth.ListRolesReq
-	39,  // 68: w17.contrib.auth.AuthQuery.GetRole:input_type -> w17.contrib.auth.GetRoleReq
-	40,  // 69: w17.contrib.auth.AuthQuery.GetTokenWithType:input_type -> w17.contrib.auth.GetTokenWithTypeReq
-	42,  // 70: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:input_type -> w17.contrib.auth.GetUserRolePermissionsByRealmReq
-	44,  // 71: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:input_type -> w17.contrib.auth.GetTokenPermissionSubsetReq
-	47,  // 72: w17.contrib.auth.AuthQuery.ListApiTokensByUser:input_type -> w17.contrib.auth.ListApiTokensByUserReq
-	73,  // 73: w17.contrib.auth.AuthQuery.GetUserTenant:input_type -> w17.contrib.auth.GetUserTenantReq
-	75,  // 74: w17.contrib.auth.AuthQuery.GetTenantBySlug:input_type -> w17.contrib.auth.GetTenantBySlugReq
-	77,  // 75: w17.contrib.auth.AuthQuery.GetTenantByDomain:input_type -> w17.contrib.auth.GetTenantByDomainReq
-	49,  // 76: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:input_type -> w17.contrib.auth.GetRegisteredRedirectReq
-	53,  // 77: w17.contrib.auth.AuthQuery.ListAuthClients:input_type -> w17.contrib.auth.ListAuthClientsReq
-	51,  // 78: w17.contrib.auth.AuthQuery.GetAuthClientSecret:input_type -> w17.contrib.auth.GetAuthClientSecretReq
-	55,  // 79: w17.contrib.auth.AuthQuery.GetProviderByName:input_type -> w17.contrib.auth.GetProviderByNameReq
-	57,  // 80: w17.contrib.auth.AuthQuery.GetOAuthIdentity:input_type -> w17.contrib.auth.GetOAuthIdentityReq
-	59,  // 81: w17.contrib.auth.AuthQuery.GetUserById:input_type -> w17.contrib.auth.GetUserByIdReq
-	61,  // 82: w17.contrib.auth.AuthQuery.GetTotpSecret:input_type -> w17.contrib.auth.GetTotpSecretReq
-	63,  // 83: w17.contrib.auth.AuthQuery.GetMfaChallenge:input_type -> w17.contrib.auth.GetMfaChallengeReq
-	65,  // 84: w17.contrib.auth.AuthQuery.LockUserForIssuance:input_type -> w17.contrib.auth.LockUserForIssuanceReq
-	67,  // 85: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:input_type -> w17.contrib.auth.CountRecentMfaChallengesReq
-	69,  // 86: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:input_type -> w17.contrib.auth.GetDeviceByIdentifierReq
-	71,  // 87: w17.contrib.auth.AuthQuery.ListUserDevices:input_type -> w17.contrib.auth.ListUserDevicesReq
-	80,  // 88: w17.contrib.auth.AuthQuery.ListUserOrgs:input_type -> w17.contrib.auth.ListUserOrgsReq
-	83,  // 89: w17.contrib.auth.AuthQuery.ListUserOrgGrants:input_type -> w17.contrib.auth.ListUserOrgGrantsReq
-	85,  // 90: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:input_type -> w17.contrib.auth.GetUserOrgPermissionsReq
-	87,  // 91: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:input_type -> w17.contrib.auth.GetUserOwnsOrgReq
-	89,  // 92: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:input_type -> w17.contrib.auth.GetUserRealmWidePermissionsReq
-	82,  // 93: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:input_type -> w17.contrib.auth.GetUserOrgBySlugReq
-	92,  // 94: w17.contrib.auth.AuthQuery.ListOrganizations:input_type -> w17.contrib.auth.ListOrganizationsReq
-	94,  // 95: w17.contrib.auth.AuthQuery.GetOrganization:input_type -> w17.contrib.auth.GetOrganizationReq
-	95,  // 96: w17.contrib.auth.AuthQuery.ListOrgMemberships:input_type -> w17.contrib.auth.ListOrgMembershipsReq
-	98,  // 97: w17.contrib.auth.AuthQuery.GetOrgMembership:input_type -> w17.contrib.auth.GetOrgMembershipReq
-	99,  // 98: w17.contrib.auth.AuthQuery.ListUserTokens:input_type -> w17.contrib.auth.ListUserTokensReq
-	102, // 99: w17.contrib.auth.AuthQuery.GetUserToken:input_type -> w17.contrib.auth.GetUserTokenReq
-	104, // 100: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:input_type -> w17.contrib.auth.ListOrgMembersByOrgReq
-	106, // 101: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:input_type -> w17.contrib.auth.GetPendingOrgInviteByTokenReq
-	108, // 102: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:input_type -> w17.contrib.auth.ListOrgInvitesByOrgReq
-	110, // 103: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:input_type -> w17.contrib.auth.ListPendingInvitesForEmailReq
-	1,   // 104: w17.contrib.auth.AuthQuery.GetUserByEmail:output_type -> w17.contrib.auth.GetUserByEmailResp
-	3,   // 105: w17.contrib.auth.AuthQuery.GetUserByToken:output_type -> w17.contrib.auth.GetUserByTokenResp
-	5,   // 106: w17.contrib.auth.AuthQuery.GetUserPermissions:output_type -> w17.contrib.auth.GetUserPermissionsResp
-	12,  // 107: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:output_type -> w17.contrib.auth.GetUserByTokenWithPermissionsResp
-	8,   // 108: w17.contrib.auth.AuthQuery.GetUserRoleGrants:output_type -> w17.contrib.auth.GetUserRoleGrantsResp
-	10,  // 109: w17.contrib.auth.AuthQuery.ListRoleGrants:output_type -> w17.contrib.auth.ListRoleGrantsResp
-	14,  // 110: w17.contrib.auth.AuthQuery.CountUsers:output_type -> w17.contrib.auth.CountUsersResp
-	16,  // 111: w17.contrib.auth.AuthQuery.ListUsers:output_type -> w17.contrib.auth.ListUsersResp
-	20,  // 112: w17.contrib.auth.AuthQuery.ListBotUsers:output_type -> w17.contrib.auth.ListBotUsersResp
-	22,  // 113: w17.contrib.auth.AuthQuery.ListBotAccounts:output_type -> w17.contrib.auth.ListBotAccountsResp
-	19,  // 114: w17.contrib.auth.AuthQuery.GetBotInOrg:output_type -> w17.contrib.auth.GetBotInOrgResp
-	24,  // 115: w17.contrib.auth.AuthQuery.ListApiRealmRoles:output_type -> w17.contrib.auth.ListApiRealmRolesResp
-	113, // 116: w17.contrib.auth.AuthQuery.GetUser:output_type -> w17.contrib.auth.User
-	27,  // 117: w17.contrib.auth.AuthQuery.GetFirstUserRoles:output_type -> w17.contrib.auth.GetFirstUserRolesResp
-	29,  // 118: w17.contrib.auth.AuthQuery.GetDefaultRoles:output_type -> w17.contrib.auth.GetDefaultRolesResp
-	32,  // 119: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:output_type -> w17.contrib.auth.GetUserOwnsAnyOrgResp
-	34,  // 120: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:output_type -> w17.contrib.auth.GetOwnedOrgBySlugResp
-	36,  // 121: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:output_type -> w17.contrib.auth.ListOrgScopedRolesResp
-	38,  // 122: w17.contrib.auth.AuthQuery.ListRoles:output_type -> w17.contrib.auth.ListRolesResp
-	115, // 123: w17.contrib.auth.AuthQuery.GetRole:output_type -> w17.contrib.auth.Role
-	41,  // 124: w17.contrib.auth.AuthQuery.GetTokenWithType:output_type -> w17.contrib.auth.GetTokenWithTypeResp
-	43,  // 125: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:output_type -> w17.contrib.auth.GetUserRolePermissionsByRealmResp
-	45,  // 126: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:output_type -> w17.contrib.auth.GetTokenPermissionSubsetResp
-	48,  // 127: w17.contrib.auth.AuthQuery.ListApiTokensByUser:output_type -> w17.contrib.auth.ListApiTokensByUserResp
-	74,  // 128: w17.contrib.auth.AuthQuery.GetUserTenant:output_type -> w17.contrib.auth.GetUserTenantResp
-	76,  // 129: w17.contrib.auth.AuthQuery.GetTenantBySlug:output_type -> w17.contrib.auth.GetTenantBySlugResp
-	78,  // 130: w17.contrib.auth.AuthQuery.GetTenantByDomain:output_type -> w17.contrib.auth.GetTenantByDomainResp
-	50,  // 131: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:output_type -> w17.contrib.auth.GetRegisteredRedirectResp
-	54,  // 132: w17.contrib.auth.AuthQuery.ListAuthClients:output_type -> w17.contrib.auth.ListAuthClientsResp
-	52,  // 133: w17.contrib.auth.AuthQuery.GetAuthClientSecret:output_type -> w17.contrib.auth.GetAuthClientSecretResp
-	56,  // 134: w17.contrib.auth.AuthQuery.GetProviderByName:output_type -> w17.contrib.auth.GetProviderByNameResp
-	58,  // 135: w17.contrib.auth.AuthQuery.GetOAuthIdentity:output_type -> w17.contrib.auth.GetOAuthIdentityResp
-	60,  // 136: w17.contrib.auth.AuthQuery.GetUserById:output_type -> w17.contrib.auth.GetUserByIdResp
-	62,  // 137: w17.contrib.auth.AuthQuery.GetTotpSecret:output_type -> w17.contrib.auth.GetTotpSecretResp
-	64,  // 138: w17.contrib.auth.AuthQuery.GetMfaChallenge:output_type -> w17.contrib.auth.GetMfaChallengeResp
-	66,  // 139: w17.contrib.auth.AuthQuery.LockUserForIssuance:output_type -> w17.contrib.auth.LockUserForIssuanceResp
-	68,  // 140: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:output_type -> w17.contrib.auth.CountRecentMfaChallengesResp
-	70,  // 141: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:output_type -> w17.contrib.auth.GetDeviceByIdentifierResp
-	72,  // 142: w17.contrib.auth.AuthQuery.ListUserDevices:output_type -> w17.contrib.auth.ListUserDevicesResp
-	81,  // 143: w17.contrib.auth.AuthQuery.ListUserOrgs:output_type -> w17.contrib.auth.ListUserOrgsResp
-	84,  // 144: w17.contrib.auth.AuthQuery.ListUserOrgGrants:output_type -> w17.contrib.auth.ListUserOrgGrantsResp
-	86,  // 145: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:output_type -> w17.contrib.auth.GetUserOrgPermissionsResp
-	88,  // 146: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:output_type -> w17.contrib.auth.GetUserOwnsOrgResp
-	90,  // 147: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:output_type -> w17.contrib.auth.GetUserRealmWidePermissionsResp
-	91,  // 148: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:output_type -> w17.contrib.auth.GetUserOrgBySlugResp
-	93,  // 149: w17.contrib.auth.AuthQuery.ListOrganizations:output_type -> w17.contrib.auth.ListOrganizationsResp
-	124, // 150: w17.contrib.auth.AuthQuery.GetOrganization:output_type -> w17.contrib.auth.Organization
-	97,  // 151: w17.contrib.auth.AuthQuery.ListOrgMemberships:output_type -> w17.contrib.auth.ListOrgMembershipsResp
-	126, // 152: w17.contrib.auth.AuthQuery.GetOrgMembership:output_type -> w17.contrib.auth.OrgMembership
-	101, // 153: w17.contrib.auth.AuthQuery.ListUserTokens:output_type -> w17.contrib.auth.ListUserTokensResp
-	127, // 154: w17.contrib.auth.AuthQuery.GetUserToken:output_type -> w17.contrib.auth.UserToken
-	105, // 155: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:output_type -> w17.contrib.auth.ListOrgMembersByOrgResp
-	107, // 156: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:output_type -> w17.contrib.auth.GetPendingOrgInviteByTokenResp
-	109, // 157: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:output_type -> w17.contrib.auth.ListOrgInvitesByOrgResp
-	112, // 158: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:output_type -> w17.contrib.auth.ListPendingInvitesForEmailResp
-	104, // [104:159] is the sub-list for method output_type
-	49,  // [49:104] is the sub-list for method input_type
-	49,  // [49:49] is the sub-list for extension type_name
-	49,  // [49:49] is the sub-list for extension extendee
-	0,   // [0:49] is the sub-list for field type_name
+	116, // 4: w17.contrib.auth.GetUserByTokenWithPermissionsResp.user:type_name -> w17.contrib.auth.User
+	116, // 5: w17.contrib.auth.ListUsersResp.users:type_name -> w17.contrib.auth.User
+	117, // 6: w17.contrib.auth.ListUsersResp.paging:type_name -> w17.Paging
+	116, // 7: w17.contrib.auth.ListRealmMachineAccountsResp.accounts:type_name -> w17.contrib.auth.User
+	116, // 8: w17.contrib.auth.ListOrgMemberAccountsResp.accounts:type_name -> w17.contrib.auth.User
+	116, // 9: w17.contrib.auth.ListBotAccountsResp.bots:type_name -> w17.contrib.auth.User
+	117, // 10: w17.contrib.auth.ListBotAccountsResp.paging:type_name -> w17.Paging
+	27,  // 11: w17.contrib.auth.ListApiRealmRolesResp.roles:type_name -> w17.contrib.auth.ApiRealmRole
+	40,  // 12: w17.contrib.auth.ListOrgScopedRolesResp.roles:type_name -> w17.contrib.auth.OrgScopedRole
+	118, // 13: w17.contrib.auth.ListRolesResp.roles:type_name -> w17.contrib.auth.Role
+	117, // 14: w17.contrib.auth.ListRolesResp.paging:type_name -> w17.Paging
+	119, // 15: w17.contrib.auth.GetTokenWithTypeResp.token_type:type_name -> w17.contrib.auth.TokenType
+	119, // 16: w17.contrib.auth.GetUserRolePermissionsByRealmReq.token_type:type_name -> w17.contrib.auth.TokenType
+	11,  // 17: w17.contrib.auth.GetUserRolePermissionsByRealmResp.grants:type_name -> w17.contrib.auth.RoleGrant
+	120, // 18: w17.contrib.auth.ApiTokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	120, // 19: w17.contrib.auth.ApiTokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	120, // 20: w17.contrib.auth.ApiTokenInfo.created_at:type_name -> google.protobuf.Timestamp
+	119, // 21: w17.contrib.auth.ListApiTokensByUserReq.token_type:type_name -> w17.contrib.auth.TokenType
+	49,  // 22: w17.contrib.auth.ListApiTokensByUserResp.tokens:type_name -> w17.contrib.auth.ApiTokenInfo
+	121, // 23: w17.contrib.auth.GetRegisteredRedirectResp.client:type_name -> w17.contrib.auth.AuthClient
+	121, // 24: w17.contrib.auth.ListAuthClientsResp.clients:type_name -> w17.contrib.auth.AuthClient
+	122, // 25: w17.contrib.auth.GetProviderByNameResp.provider:type_name -> w17.contrib.auth.OAuthProvider
+	123, // 26: w17.contrib.auth.GetOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
+	116, // 27: w17.contrib.auth.GetUserByIdResp.user:type_name -> w17.contrib.auth.User
+	124, // 28: w17.contrib.auth.GetTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
+	125, // 29: w17.contrib.auth.GetMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
+	120, // 30: w17.contrib.auth.CountRecentMfaChallengesReq.since:type_name -> google.protobuf.Timestamp
+	126, // 31: w17.contrib.auth.GetDeviceByIdentifierResp.device:type_name -> w17.contrib.auth.Device
+	126, // 32: w17.contrib.auth.ListUserDevicesResp.devices:type_name -> w17.contrib.auth.Device
+	82,  // 33: w17.contrib.auth.ListUserOrgsResp.orgs:type_name -> w17.contrib.auth.UserOrg
+	11,  // 34: w17.contrib.auth.GetUserOrgPermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
+	11,  // 35: w17.contrib.auth.GetUserRealmWidePermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
+	127, // 36: w17.contrib.auth.ListOrganizationsResp.organizations:type_name -> w17.contrib.auth.Organization
+	117, // 37: w17.contrib.auth.ListOrganizationsResp.paging:type_name -> w17.Paging
+	120, // 38: w17.contrib.auth.OrgMembershipAdminRow.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 39: w17.contrib.auth.ListOrgMembershipsResp.memberships:type_name -> w17.contrib.auth.OrgMembershipAdminRow
+	117, // 40: w17.contrib.auth.ListOrgMembershipsResp.paging:type_name -> w17.Paging
+	120, // 41: w17.contrib.auth.UserTokenAdminRow.created_at:type_name -> google.protobuf.Timestamp
+	120, // 42: w17.contrib.auth.UserTokenAdminRow.expires_at:type_name -> google.protobuf.Timestamp
+	103, // 43: w17.contrib.auth.ListUserTokensResp.tokens:type_name -> w17.contrib.auth.UserTokenAdminRow
+	117, // 44: w17.contrib.auth.ListUserTokensResp.paging:type_name -> w17.Paging
+	120, // 45: w17.contrib.auth.OrgMemberRow.joined_at:type_name -> google.protobuf.Timestamp
+	106, // 46: w17.contrib.auth.ListOrgMembersByOrgResp.members:type_name -> w17.contrib.auth.OrgMemberRow
+	128, // 47: w17.contrib.auth.ListOrgInvitesByOrgResp.invites:type_name -> w17.contrib.auth.OrgInvite
+	120, // 48: w17.contrib.auth.PendingInviteRow.expires_at:type_name -> google.protobuf.Timestamp
+	114, // 49: w17.contrib.auth.ListPendingInvitesForEmailResp.invites:type_name -> w17.contrib.auth.PendingInviteRow
+	0,   // 50: w17.contrib.auth.AuthQuery.GetUserByEmail:input_type -> w17.contrib.auth.GetUserByEmailReq
+	2,   // 51: w17.contrib.auth.AuthQuery.GetUserByToken:input_type -> w17.contrib.auth.GetUserByTokenReq
+	4,   // 52: w17.contrib.auth.AuthQuery.GetUserPermissions:input_type -> w17.contrib.auth.GetUserPermissionsReq
+	6,   // 53: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:input_type -> w17.contrib.auth.GetUserByTokenWithPermissionsReq
+	7,   // 54: w17.contrib.auth.AuthQuery.GetUserRoleGrants:input_type -> w17.contrib.auth.GetUserRoleGrantsReq
+	9,   // 55: w17.contrib.auth.AuthQuery.ListRoleGrants:input_type -> w17.contrib.auth.ListRoleGrantsReq
+	13,  // 56: w17.contrib.auth.AuthQuery.CountUsers:input_type -> w17.contrib.auth.CountUsersReq
+	15,  // 57: w17.contrib.auth.AuthQuery.ListUsers:input_type -> w17.contrib.auth.ListUsersReq
+	17,  // 58: w17.contrib.auth.AuthQuery.ListOrgMemberAccounts:input_type -> w17.contrib.auth.ListOrgMemberAccountsReq
+	23,  // 59: w17.contrib.auth.AuthQuery.ListBotAccounts:input_type -> w17.contrib.auth.ListBotAccountsReq
+	18,  // 60: w17.contrib.auth.AuthQuery.ListRealmMachineAccounts:input_type -> w17.contrib.auth.ListRealmMachineAccountsReq
+	20,  // 61: w17.contrib.auth.AuthQuery.GetOrgMember:input_type -> w17.contrib.auth.GetOrgMemberReq
+	25,  // 62: w17.contrib.auth.AuthQuery.ListApiRealmRoles:input_type -> w17.contrib.auth.ListApiRealmRolesReq
+	28,  // 63: w17.contrib.auth.AuthQuery.GetUser:input_type -> w17.contrib.auth.GetUserReq
+	29,  // 64: w17.contrib.auth.AuthQuery.GetFirstUserRoles:input_type -> w17.contrib.auth.GetFirstUserRolesReq
+	31,  // 65: w17.contrib.auth.AuthQuery.GetDefaultRoles:input_type -> w17.contrib.auth.GetDefaultRolesReq
+	34,  // 66: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:input_type -> w17.contrib.auth.GetUserOwnsAnyOrgReq
+	36,  // 67: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:input_type -> w17.contrib.auth.GetOwnedOrgBySlugReq
+	38,  // 68: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:input_type -> w17.contrib.auth.ListOrgScopedRolesReq
+	33,  // 69: w17.contrib.auth.AuthQuery.ListRoles:input_type -> w17.contrib.auth.ListRolesReq
+	42,  // 70: w17.contrib.auth.AuthQuery.GetRole:input_type -> w17.contrib.auth.GetRoleReq
+	43,  // 71: w17.contrib.auth.AuthQuery.GetTokenWithType:input_type -> w17.contrib.auth.GetTokenWithTypeReq
+	45,  // 72: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:input_type -> w17.contrib.auth.GetUserRolePermissionsByRealmReq
+	47,  // 73: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:input_type -> w17.contrib.auth.GetTokenPermissionSubsetReq
+	50,  // 74: w17.contrib.auth.AuthQuery.ListApiTokensByUser:input_type -> w17.contrib.auth.ListApiTokensByUserReq
+	76,  // 75: w17.contrib.auth.AuthQuery.GetUserTenant:input_type -> w17.contrib.auth.GetUserTenantReq
+	78,  // 76: w17.contrib.auth.AuthQuery.GetTenantBySlug:input_type -> w17.contrib.auth.GetTenantBySlugReq
+	80,  // 77: w17.contrib.auth.AuthQuery.GetTenantByDomain:input_type -> w17.contrib.auth.GetTenantByDomainReq
+	52,  // 78: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:input_type -> w17.contrib.auth.GetRegisteredRedirectReq
+	56,  // 79: w17.contrib.auth.AuthQuery.ListAuthClients:input_type -> w17.contrib.auth.ListAuthClientsReq
+	54,  // 80: w17.contrib.auth.AuthQuery.GetAuthClientSecret:input_type -> w17.contrib.auth.GetAuthClientSecretReq
+	58,  // 81: w17.contrib.auth.AuthQuery.GetProviderByName:input_type -> w17.contrib.auth.GetProviderByNameReq
+	60,  // 82: w17.contrib.auth.AuthQuery.GetOAuthIdentity:input_type -> w17.contrib.auth.GetOAuthIdentityReq
+	62,  // 83: w17.contrib.auth.AuthQuery.GetUserById:input_type -> w17.contrib.auth.GetUserByIdReq
+	64,  // 84: w17.contrib.auth.AuthQuery.GetTotpSecret:input_type -> w17.contrib.auth.GetTotpSecretReq
+	66,  // 85: w17.contrib.auth.AuthQuery.GetMfaChallenge:input_type -> w17.contrib.auth.GetMfaChallengeReq
+	68,  // 86: w17.contrib.auth.AuthQuery.LockUserForIssuance:input_type -> w17.contrib.auth.LockUserForIssuanceReq
+	70,  // 87: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:input_type -> w17.contrib.auth.CountRecentMfaChallengesReq
+	72,  // 88: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:input_type -> w17.contrib.auth.GetDeviceByIdentifierReq
+	74,  // 89: w17.contrib.auth.AuthQuery.ListUserDevices:input_type -> w17.contrib.auth.ListUserDevicesReq
+	83,  // 90: w17.contrib.auth.AuthQuery.ListUserOrgs:input_type -> w17.contrib.auth.ListUserOrgsReq
+	86,  // 91: w17.contrib.auth.AuthQuery.ListUserOrgGrants:input_type -> w17.contrib.auth.ListUserOrgGrantsReq
+	88,  // 92: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:input_type -> w17.contrib.auth.GetUserOrgPermissionsReq
+	90,  // 93: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:input_type -> w17.contrib.auth.GetUserOwnsOrgReq
+	92,  // 94: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:input_type -> w17.contrib.auth.GetUserRealmWidePermissionsReq
+	85,  // 95: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:input_type -> w17.contrib.auth.GetUserOrgBySlugReq
+	95,  // 96: w17.contrib.auth.AuthQuery.ListOrganizations:input_type -> w17.contrib.auth.ListOrganizationsReq
+	97,  // 97: w17.contrib.auth.AuthQuery.GetOrganization:input_type -> w17.contrib.auth.GetOrganizationReq
+	98,  // 98: w17.contrib.auth.AuthQuery.ListOrgMemberships:input_type -> w17.contrib.auth.ListOrgMembershipsReq
+	101, // 99: w17.contrib.auth.AuthQuery.GetOrgMembership:input_type -> w17.contrib.auth.GetOrgMembershipReq
+	102, // 100: w17.contrib.auth.AuthQuery.ListUserTokens:input_type -> w17.contrib.auth.ListUserTokensReq
+	105, // 101: w17.contrib.auth.AuthQuery.GetUserToken:input_type -> w17.contrib.auth.GetUserTokenReq
+	107, // 102: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:input_type -> w17.contrib.auth.ListOrgMembersByOrgReq
+	109, // 103: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:input_type -> w17.contrib.auth.GetPendingOrgInviteByTokenReq
+	111, // 104: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:input_type -> w17.contrib.auth.ListOrgInvitesByOrgReq
+	113, // 105: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:input_type -> w17.contrib.auth.ListPendingInvitesForEmailReq
+	1,   // 106: w17.contrib.auth.AuthQuery.GetUserByEmail:output_type -> w17.contrib.auth.GetUserByEmailResp
+	3,   // 107: w17.contrib.auth.AuthQuery.GetUserByToken:output_type -> w17.contrib.auth.GetUserByTokenResp
+	5,   // 108: w17.contrib.auth.AuthQuery.GetUserPermissions:output_type -> w17.contrib.auth.GetUserPermissionsResp
+	12,  // 109: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:output_type -> w17.contrib.auth.GetUserByTokenWithPermissionsResp
+	8,   // 110: w17.contrib.auth.AuthQuery.GetUserRoleGrants:output_type -> w17.contrib.auth.GetUserRoleGrantsResp
+	10,  // 111: w17.contrib.auth.AuthQuery.ListRoleGrants:output_type -> w17.contrib.auth.ListRoleGrantsResp
+	14,  // 112: w17.contrib.auth.AuthQuery.CountUsers:output_type -> w17.contrib.auth.CountUsersResp
+	16,  // 113: w17.contrib.auth.AuthQuery.ListUsers:output_type -> w17.contrib.auth.ListUsersResp
+	22,  // 114: w17.contrib.auth.AuthQuery.ListOrgMemberAccounts:output_type -> w17.contrib.auth.ListOrgMemberAccountsResp
+	24,  // 115: w17.contrib.auth.AuthQuery.ListBotAccounts:output_type -> w17.contrib.auth.ListBotAccountsResp
+	19,  // 116: w17.contrib.auth.AuthQuery.ListRealmMachineAccounts:output_type -> w17.contrib.auth.ListRealmMachineAccountsResp
+	21,  // 117: w17.contrib.auth.AuthQuery.GetOrgMember:output_type -> w17.contrib.auth.GetOrgMemberResp
+	26,  // 118: w17.contrib.auth.AuthQuery.ListApiRealmRoles:output_type -> w17.contrib.auth.ListApiRealmRolesResp
+	116, // 119: w17.contrib.auth.AuthQuery.GetUser:output_type -> w17.contrib.auth.User
+	30,  // 120: w17.contrib.auth.AuthQuery.GetFirstUserRoles:output_type -> w17.contrib.auth.GetFirstUserRolesResp
+	32,  // 121: w17.contrib.auth.AuthQuery.GetDefaultRoles:output_type -> w17.contrib.auth.GetDefaultRolesResp
+	35,  // 122: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:output_type -> w17.contrib.auth.GetUserOwnsAnyOrgResp
+	37,  // 123: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:output_type -> w17.contrib.auth.GetOwnedOrgBySlugResp
+	39,  // 124: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:output_type -> w17.contrib.auth.ListOrgScopedRolesResp
+	41,  // 125: w17.contrib.auth.AuthQuery.ListRoles:output_type -> w17.contrib.auth.ListRolesResp
+	118, // 126: w17.contrib.auth.AuthQuery.GetRole:output_type -> w17.contrib.auth.Role
+	44,  // 127: w17.contrib.auth.AuthQuery.GetTokenWithType:output_type -> w17.contrib.auth.GetTokenWithTypeResp
+	46,  // 128: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:output_type -> w17.contrib.auth.GetUserRolePermissionsByRealmResp
+	48,  // 129: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:output_type -> w17.contrib.auth.GetTokenPermissionSubsetResp
+	51,  // 130: w17.contrib.auth.AuthQuery.ListApiTokensByUser:output_type -> w17.contrib.auth.ListApiTokensByUserResp
+	77,  // 131: w17.contrib.auth.AuthQuery.GetUserTenant:output_type -> w17.contrib.auth.GetUserTenantResp
+	79,  // 132: w17.contrib.auth.AuthQuery.GetTenantBySlug:output_type -> w17.contrib.auth.GetTenantBySlugResp
+	81,  // 133: w17.contrib.auth.AuthQuery.GetTenantByDomain:output_type -> w17.contrib.auth.GetTenantByDomainResp
+	53,  // 134: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:output_type -> w17.contrib.auth.GetRegisteredRedirectResp
+	57,  // 135: w17.contrib.auth.AuthQuery.ListAuthClients:output_type -> w17.contrib.auth.ListAuthClientsResp
+	55,  // 136: w17.contrib.auth.AuthQuery.GetAuthClientSecret:output_type -> w17.contrib.auth.GetAuthClientSecretResp
+	59,  // 137: w17.contrib.auth.AuthQuery.GetProviderByName:output_type -> w17.contrib.auth.GetProviderByNameResp
+	61,  // 138: w17.contrib.auth.AuthQuery.GetOAuthIdentity:output_type -> w17.contrib.auth.GetOAuthIdentityResp
+	63,  // 139: w17.contrib.auth.AuthQuery.GetUserById:output_type -> w17.contrib.auth.GetUserByIdResp
+	65,  // 140: w17.contrib.auth.AuthQuery.GetTotpSecret:output_type -> w17.contrib.auth.GetTotpSecretResp
+	67,  // 141: w17.contrib.auth.AuthQuery.GetMfaChallenge:output_type -> w17.contrib.auth.GetMfaChallengeResp
+	69,  // 142: w17.contrib.auth.AuthQuery.LockUserForIssuance:output_type -> w17.contrib.auth.LockUserForIssuanceResp
+	71,  // 143: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:output_type -> w17.contrib.auth.CountRecentMfaChallengesResp
+	73,  // 144: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:output_type -> w17.contrib.auth.GetDeviceByIdentifierResp
+	75,  // 145: w17.contrib.auth.AuthQuery.ListUserDevices:output_type -> w17.contrib.auth.ListUserDevicesResp
+	84,  // 146: w17.contrib.auth.AuthQuery.ListUserOrgs:output_type -> w17.contrib.auth.ListUserOrgsResp
+	87,  // 147: w17.contrib.auth.AuthQuery.ListUserOrgGrants:output_type -> w17.contrib.auth.ListUserOrgGrantsResp
+	89,  // 148: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:output_type -> w17.contrib.auth.GetUserOrgPermissionsResp
+	91,  // 149: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:output_type -> w17.contrib.auth.GetUserOwnsOrgResp
+	93,  // 150: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:output_type -> w17.contrib.auth.GetUserRealmWidePermissionsResp
+	94,  // 151: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:output_type -> w17.contrib.auth.GetUserOrgBySlugResp
+	96,  // 152: w17.contrib.auth.AuthQuery.ListOrganizations:output_type -> w17.contrib.auth.ListOrganizationsResp
+	127, // 153: w17.contrib.auth.AuthQuery.GetOrganization:output_type -> w17.contrib.auth.Organization
+	100, // 154: w17.contrib.auth.AuthQuery.ListOrgMemberships:output_type -> w17.contrib.auth.ListOrgMembershipsResp
+	129, // 155: w17.contrib.auth.AuthQuery.GetOrgMembership:output_type -> w17.contrib.auth.OrgMembership
+	104, // 156: w17.contrib.auth.AuthQuery.ListUserTokens:output_type -> w17.contrib.auth.ListUserTokensResp
+	130, // 157: w17.contrib.auth.AuthQuery.GetUserToken:output_type -> w17.contrib.auth.UserToken
+	108, // 158: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:output_type -> w17.contrib.auth.ListOrgMembersByOrgResp
+	110, // 159: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:output_type -> w17.contrib.auth.GetPendingOrgInviteByTokenResp
+	112, // 160: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:output_type -> w17.contrib.auth.ListOrgInvitesByOrgResp
+	115, // 161: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:output_type -> w17.contrib.auth.ListPendingInvitesForEmailResp
+	106, // [106:162] is the sub-list for method output_type
+	50,  // [50:106] is the sub-list for method input_type
+	50,  // [50:50] is the sub-list for extension type_name
+	50,  // [50:50] is the sub-list for extension extendee
+	0,   // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_queries_auth_query_proto_init() }
@@ -6400,7 +6560,7 @@ func file_queries_auth_query_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_queries_auth_query_proto_rawDesc), len(file_queries_auth_query_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   113,
+			NumMessages:   116,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

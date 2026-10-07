@@ -63,14 +63,24 @@ type botTokenQuery struct {
 }
 
 func (q botTokenQuery) GetUserById(context.Context, *pb.GetUserByIdReq, ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	return &pb.GetUserByIdResp{User: &pb.User{Id: "u1", Kind: q.kind}}, nil
+	return &pb.GetUserByIdResp{User: &pb.User{Id: "u1", Kind: q.kind, TenantId: "tenant-1"}}, nil
+}
+
+// The bot holds no role, so the mint ceiling has nothing to refuse — these
+// cases test the KIND check; the ceiling has its own.
+func (q botTokenQuery) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
+	return &pb.GetUserRoleGrantsResp{}, nil
+}
+
+func (q botTokenQuery) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{}, nil
 }
 
 // The membership probe answers YES here so these cases keep testing what they
 // were written for — the KIND check. Their cross-organization sibling covers
 // the other half.
-func (q botTokenQuery) GetBotInOrg(_ context.Context, in *pb.GetBotInOrgReq, _ ...grpc.CallOption) (*pb.GetBotInOrgResp, error) {
-	return &pb.GetBotInOrgResp{UserId: in.GetUserId()}, nil
+func (q botTokenQuery) GetOrgMember(_ context.Context, in *pb.GetOrgMemberReq, _ ...grpc.CallOption) (*pb.GetOrgMemberResp, error) {
+	return &pb.GetOrgMemberResp{UserId: in.GetUserId()}, nil
 }
 
 // mintRecorder records whether a token was actually issued.
@@ -133,19 +143,33 @@ type botAdminMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
-	apiRoles   []*pb.OrgScopedRole
-	created    bool
-	assigned   string
-	grantOrg   string
-	memberOf   string
-	listedOrg  string
-	probedOrg  string
-	probedUser string
-	botsOrg    string
-	issued     bool
-	assignErr  error
-	botTenant  string
-	rolePerms  map[string][]int32 // ListRoleGrants; a role absent here carries nothing
+	apiRoles    []*pb.ApiRealmRole
+	created     bool
+	assigned    string
+	grantOrg    string
+	memberOf    string
+	listedOrg   string
+	probedOrg   string
+	probedUser  string
+	botsOrg     string
+	issued      bool
+	assignErr   error
+	botTenant   string
+	rolePerms   map[string][]int32 // ListRoleGrants; a role absent here carries nothing
+	members     []*pb.User         // ListOrgMemberAccounts
+	realmBots   []*pb.User         // ListRealmMachineAccounts
+	realmListed bool
+	missing     bool     // GetUserById answers NotFound
+	botTenant2  string   // GetUserById's tenant; "" = tenant-1
+	botRoles    []string // GetUserRoleGrants of the target bot
+}
+
+func (m *botAdminMock) GetUserRoleGrants(ctx context.Context, in *pb.GetUserRoleGrantsReq, _ ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
+	out := &pb.GetUserRoleGrantsResp{}
+	for _, r := range m.botRoles {
+		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: r, PermissionIds: m.rolePerms[r]})
+	}
+	return out, nil
 }
 
 func (m *botAdminMock) ListRoleGrants(ctx context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
@@ -182,7 +206,7 @@ func (m *botAdminMock) AddOrgMembership(ctx context.Context, in *pb.AddOrgMember
 // whose grant silently does nothing. The check is server-side because the
 // role id arrives on the wire, not from the list this server rendered.
 func TestCreateBot_RefusesARoleFromTheSessionRealm(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
 	_, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"), &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-session"})
@@ -197,7 +221,7 @@ func TestCreateBot_RefusesARoleFromTheSessionRealm(t *testing.T) {
 // Control: without it, a handler that refused every role would pass the test
 // above while making the feature unusable.
 func TestCreateBot_AcceptsAnApiRealmRoleAndGrantsIt(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
 	resp, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"), &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"})
@@ -214,7 +238,7 @@ func TestCreateBot_AcceptsAnApiRealmRoleAndGrantsIt(t *testing.T) {
 }
 
 func TestCreateBot_RoleIsRequired(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
 	if _, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"), &pb.CreateBotReq{Email: "ci@example.com"}); status.Code(err) != codes.InvalidArgument {
@@ -256,7 +280,7 @@ func TestBotPasswordSentinel_IsNonEmptyAndCannotVerify(t *testing.T) {
 // the handler tests nor the live token mint caught it — the account looked
 // correct in every listing.
 func TestCreateBot_JoinsTheOrgAndScopesTheGrantToIt(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
 	if _, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"), &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"}); err != nil {
@@ -274,7 +298,7 @@ func TestCreateBot_JoinsTheOrgAndScopesTheGrantToIt(t *testing.T) {
 // must not be created at all — an inert bot is a support ticket, not a safe
 // default.
 func TestCreateBot_RefusesWithNoActiveOrg(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
 	if _, err := h.CreateBot(ctxWithCaller("admin-1"), &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"}); err == nil {
@@ -303,7 +327,7 @@ func ctxWithCallerInOrg(uid, orgID string) context.Context {
 // their authenticated scope. Before this, the pair was declared incompatible: a
 // bot created without a tenant was refused by the database on every call.
 func TestCreateBot_PutsTheBotIntoTheOperatorsTenant(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
 	ctx := withHeldPermissions(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
@@ -320,7 +344,7 @@ func TestCreateBot_PutsTheBotIntoTheOperatorsTenant(t *testing.T) {
 // the refusal must come before the INSERT — the database's answer is a
 // constraint error the operator cannot act on.
 func TestCreateBot_RefusesWithNoTenantInScope(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
 	ctx := withHeldPermissions(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
@@ -336,9 +360,14 @@ func TestCreateBot_RefusesWithNoTenantInScope(t *testing.T) {
 
 // --- cross-tenant: the leak that shipped ------------------------------
 
-func (m *botAdminMock) ListBotUsers(ctx context.Context, in *pb.ListBotUsersReq, _ ...grpc.CallOption) (*pb.ListBotUsersResp, error) {
+func (m *botAdminMock) ListOrgMemberAccounts(ctx context.Context, in *pb.ListOrgMemberAccountsReq, _ ...grpc.CallOption) (*pb.ListOrgMemberAccountsResp, error) {
 	m.listedOrg = in.GetOrgId()
-	return &pb.ListBotUsersResp{}, nil
+	return &pb.ListOrgMemberAccountsResp{Accounts: m.members}, nil
+}
+
+func (m *botAdminMock) ListRealmMachineAccounts(ctx context.Context, _ *pb.ListRealmMachineAccountsReq, _ ...grpc.CallOption) (*pb.ListRealmMachineAccountsResp, error) {
+	m.realmListed = true
+	return &pb.ListRealmMachineAccountsResp{Accounts: m.realmBots}, nil
 }
 
 func (m *botAdminMock) IssueApiToken(ctx context.Context, in *pb.IssueApiTokenReq, _ ...grpc.CallOption) (*pb.IssueApiTokenResp, error) {
@@ -347,15 +376,22 @@ func (m *botAdminMock) IssueApiToken(ctx context.Context, in *pb.IssueApiTokenRe
 }
 
 func (m *botAdminMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Kind: pb.AccountKind_BOT}}, nil
+	if m.missing {
+		return nil, status.Error(codes.NotFound, "no such user")
+	}
+	tenant := m.botTenant2
+	if tenant == "" {
+		tenant = "tenant-1"
+	}
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Kind: pb.AccountKind_BOT, TenantId: tenant}}, nil
 }
 
-func (m *botAdminMock) GetBotInOrg(ctx context.Context, in *pb.GetBotInOrgReq, _ ...grpc.CallOption) (*pb.GetBotInOrgResp, error) {
+func (m *botAdminMock) GetOrgMember(ctx context.Context, in *pb.GetOrgMemberReq, _ ...grpc.CallOption) (*pb.GetOrgMemberResp, error) {
 	m.probedOrg, m.probedUser = in.GetOrgId(), in.GetUserId()
 	if in.GetOrgId() == m.botsOrg {
-		return &pb.GetBotInOrgResp{UserId: in.GetUserId()}, nil
+		return &pb.GetOrgMemberResp{UserId: in.GetUserId()}, nil
 	}
-	return &pb.GetBotInOrgResp{}, nil // not in this organization
+	return &pb.GetOrgMemberResp{}, nil // not in this organization
 }
 
 // `User` is not an org-scoped model — a person belongs to several — so the
@@ -613,7 +649,7 @@ var errTestNarrowFailed = errors.New("test: the narrowing write failed")
 // works. That is what the transaction is for.
 func TestCreateBot_GrantFails_RollsBackTheAccountAndMembership(t *testing.T) {
 	tx := &recordingDistTx{}
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}, assignErr: errTestGrantFailed}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}, assignErr: errTestGrantFailed}
 	h := &AuthServiceHandler{Query: m, Mutation: m, DistTx: tx, Connection: "app-postgres"}
 
 	if _, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"),
@@ -631,7 +667,7 @@ func TestCreateBot_GrantFails_RollsBackTheAccountAndMembership(t *testing.T) {
 // The happy path commits, on the handler's own connection.
 func TestCreateBot_Success_CommitsOnTheHandlersConnection(t *testing.T) {
 	tx := &recordingDistTx{}
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, DistTx: tx, Connection: "app-postgres"}
 
 	if _, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"),
@@ -649,7 +685,7 @@ func TestCreateBot_Success_CommitsOnTheHandlersConnection(t *testing.T) {
 // A refused Begin must write nothing at all.
 func TestCreateBot_BeginRefused_WritesNothing(t *testing.T) {
 	tx := &recordingDistTx{beginErr: errTestBeginRefused}
-	m := &botAdminMock{apiRoles: []*pb.OrgScopedRole{{Id: "role-api"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, DistTx: tx, Connection: "app-postgres"}
 
 	if _, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"),
