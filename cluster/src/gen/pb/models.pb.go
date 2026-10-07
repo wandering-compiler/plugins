@@ -106,10 +106,12 @@ type Relay struct {
 	// world reaches it (see ScheduleTaskResp.address).
 	//
 	// A bare `host:port` — a DNS name (a public one, or a service name on the
-	// same internal network as the control plane, `clusterrelay:13444`), an IPv4
-	// address, or a bracketed IPv6 one. No scheme: it is dialled as a gRPC
-	// target, so `https://…` would only fail at the first call, long after the
-	// operator who typed it has left the form.
+	// same internal network as the control plane: `clusterrelay:13444`, or the
+	// swarm's `<stack>_<service>`), an IPv4 address, or a bracketed IPv6 one
+	// with an optional zone; the port is 1-65535. The request carries the same
+	// pattern, so a bad value is refused by name before it reaches the CHECK.
+	// No scheme: it is dialled as a gRPC target, so `https://…` would only fail
+	// at the first call, long after the operator who typed it has left the form.
 	Url string `protobuf:"bytes,3,opt,name=url,proto3" json:"url,omitempty"`
 	// Lowercase hex SHA-256 of the relay's TLS certificate, no separators, 64
 	// characters.
@@ -395,13 +397,13 @@ var File_types_models_proto protoreflect.FileDescriptor
 
 const file_types_models_proto_rawDesc = "" +
 	"\n" +
-	"\x12types/models.proto\x12\x13w17.contrib.cluster\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"\xe7\x03\n" +
+	"\x12types/models.proto\x12\x13w17.contrib.cluster\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"\x8f\x06\n" +
 	"\x05Relay\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12\x1e\n" +
 	"\x04name\x18\x02 \x01(\tB\n" +
-	"\xca\xf3\x18\x06\b\x068\x01@@R\x04name\x12f\n" +
-	"\x03url\x18\x03 \x01(\tBT\xca\xf3\x18P\b\x01@\xff\x01rI^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+\\]):[0-9]{1,5}$R\x03url\x12C\n" +
-	"\x10cert_fingerprint\x18\x04 \x01(\tB\x18\xca\xf3\x18\x14\b\x01@@r\x0e^[0-9a-f]{64}$R\x0fcertFingerprint\x12!\n" +
+	"\xca\xf3\x18\x06\b\x068\x01@@R\x04name\x12\xb4\x02\n" +
+	"\x03url\x18\x03 \x01(\tB\xa1\x02\xca\xf3\x18\x9c\x02\b\x01@\xff\x01r\xae\x01^([A-Za-z0-9_]([A-Za-z0-9_.-]*[A-Za-z0-9_])?\\.?|\\[[0-9A-Fa-f:.]+(%[A-Za-z0-9_.-]+)?\\]):([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$\xea\x01c\b5\x12_a relay address is host:port with no scheme, e.g. relay.example.com:13444 or clusterrelay:13444R\x03url\x12\x9b\x01\n" +
+	"\x10cert_fingerprint\x18\x04 \x01(\tBp\xca\xf3\x18l\b\x01@@r\x0e^[0-9a-f]{64}$\xea\x01U\b5\x12Qa certificate fingerprint is 64 lowercase hex characters, as relay mint prints itR\x0fcertFingerprint\x12!\n" +
 	"\aenabled\x18\x05 \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1eR\aenabled\x12F\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12I\n" +
