@@ -78,6 +78,15 @@ func init() {
 //
 // A bound or unknown link is not claimed here; the gate already decided what
 // it admits.
+//
+// The read-back goes to the query tier, which reads the POOL, not the
+// registration's transaction (see signup.go). Inside SignUp's unit of work
+// the bind is not committed yet, so a bind that took reads back as still
+// OPEN — an empty address — and that is the bind's own success, not somebody
+// else's: the UPDATE holds the row until the registration ends, so a
+// competing bind either committed before ours ran (and ours matched nothing,
+// reading back its address) or waits behind ours. Outside a transaction the
+// bind is already committed and reads back as this address.
 func claimOpenInvite(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) error {
 	if inviteToken == "" {
 		return nil
@@ -91,7 +100,7 @@ func claimOpenInvite(ctx context.Context, h *AuthServiceHandler, email, inviteTo
 	}
 	pending, err := h.Query.GetPendingOrgInviteByToken(ctx, &pb.GetPendingOrgInviteByTokenReq{TokenHash: tokenHash})
 	switch {
-	case err == nil && pending.GetEmail() == email:
+	case err == nil && (pending.GetEmail() == "" || pending.GetEmail() == email):
 		return nil
 	case err != nil && status.Code(err) != codes.NotFound:
 		return err

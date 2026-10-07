@@ -2752,11 +2752,6 @@ func (x *UpdateUserPasswordIfUnchangedResp) GetUserId() string {
 	return ""
 }
 
-// DeleteUserSessionsForReset — revoke ALL of a user's tokens after a
-// password reset (a reset implies the old credential may be compromised,
-// so every session AND API token is dropped — the conservative default).
-// Gated `password_reset` so it exists independently of the `devices`
-// feature's DeleteAllUserTokens.
 // DeleteOtherSessionTokens ends every SESSION of a user but the one named:
 // a password change signs the person out everywhere else, because whoever
 // held the old password may hold a session too. API tokens are kept — they
@@ -2860,6 +2855,11 @@ func (*DeleteOtherSessionTokensResp) Descriptor() ([]byte, []int) {
 	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{53}
 }
 
+// DeleteUserSessionsForReset — revoke ALL of a user's tokens after a
+// password reset (a reset implies the old credential may be compromised,
+// so every session AND API token is dropped — the conservative default).
+// Gated `password_reset` so it exists independently of the `devices`
+// feature's DeleteAllUserTokens.
 type DeleteUserSessionsForResetReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -4677,11 +4677,9 @@ func (x *DisableUsersReq) GetIds() []string {
 
 // Disable/EnableUsers are fire-and-forget bulk toggles: the admin SPA
 // renders only success/failure for an action (the result body is not
-// displayed in v1), so the response is intentionally empty. That also
-// keeps the DQL a single UPDATE — a `RETURNING id`-into-`repeated`
-// response would need the array bind on a read-back leg (refused as a
-// non-final array bind, T2-6 F-A2) or a `pq.Array` scan of a scalar
-// RETURNING column (wrong shape).
+// displayed in v1), so the response is intentionally empty. A
+// `RETURNING id`-into-`repeated` response would need a `pq.Array` scan of a
+// scalar RETURNING column (wrong shape).
 type DisableUsersResp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields

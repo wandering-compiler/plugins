@@ -36,18 +36,15 @@ var errCurrentPasswordWrong = errors.New("current password does not match")
 // string would not compare — it would fail to bind.
 const nilUUID = "00000000-0000-0000-0000-000000000000"
 
-// ChangePassword verifies the caller's current password and replaces it.
+// ChangePassword verifies the caller's current password and replaces it,
+// and ends every OTHER session of the account in the same unit of work.
 //
-// ⚠️ It does NOT revoke the caller's other sessions, and that is a real
-// limitation rather than an oversight. Bearer tokens do not derive from the
-// password, so they keep working: changing a password after a token has
-// leaked does not evict whoever holds it. Revoking them needs
-// DeleteUserSessionsForReset (owned by `password_reset`) or
-// DeleteAllUserTokens (owned by `devices`), and reaching into either would
-// make this feature depend on one of them — the exact dependency it exists
-// to avoid. Documented here so a deployment can decide knowingly; the fix
-// is a session-revocation primitive this feature can own, not a quiet
-// borrow from a neighbour.
+// Bearer tokens do not derive from the password, so without the sweep they
+// kept working: changing a password after a session leaked did not evict
+// whoever held it. The sweep is DeleteOtherSessionTokens, a primitive this
+// feature owns — not DeleteUserSessionsForReset (`password_reset`) or
+// DeleteAllUserTokens (`devices`), which would make this feature depend on
+// one of them. API tokens are kept; see below.
 func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {

@@ -431,11 +431,6 @@ message UpdateUserPasswordIfUnchangedResp {
   string user_id = 1;
 }
 
-// DeleteUserSessionsForReset — revoke ALL of a user's tokens after a
-// password reset (a reset implies the old credential may be compromised,
-// so every session AND API token is dropped — the conservative default).
-// Gated `password_reset` so it exists independently of the `devices`
-// feature's DeleteAllUserTokens.
 // DeleteOtherSessionTokens ends every SESSION of a user but the one named:
 // a password change signs the person out everywhere else, because whoever
 // held the old password may hold a session too. API tokens are kept — they
@@ -453,6 +448,11 @@ message DeleteOtherSessionTokensResp {
   option (w17.contrib.plugin_feature) = "password_change";
 }
 
+// DeleteUserSessionsForReset — revoke ALL of a user's tokens after a
+// password reset (a reset implies the old credential may be compromised,
+// so every session AND API token is dropped — the conservative default).
+// Gated `password_reset` so it exists independently of the `devices`
+// feature's DeleteAllUserTokens.
 message DeleteUserSessionsForResetReq {
   option (w17.contrib.plugin_feature) = "password_reset";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -689,11 +689,9 @@ message DisableUsersReq {
 }
 // Disable/EnableUsers are fire-and-forget bulk toggles: the admin SPA
 // renders only success/failure for an action (the result body is not
-// displayed in v1), so the response is intentionally empty. That also
-// keeps the DQL a single UPDATE — a `RETURNING id`-into-`repeated`
-// response would need the array bind on a read-back leg (refused as a
-// non-final array bind, T2-6 F-A2) or a `pq.Array` scan of a scalar
-// RETURNING column (wrong shape).
+// displayed in v1), so the response is intentionally empty. A
+// `RETURNING id`-into-`repeated` response would need a `pq.Array` scan of a
+// scalar RETURNING column (wrong shape).
 message DisableUsersResp {
   option (w17.contrib.plugin_feature) = "user_admin";
 }
@@ -2717,19 +2715,6 @@ service AuthMutation {
     };
   }
 
-  // ConsumeOrgInviteByToken — spend the link.
-  //
-  // Keyed on the TOKEN, not on (id, email), which is the whole of the model change:
-  // the identifier in the URL used to be the row id, and a row id reaches logs and
-  // `Referer` and cannot be rotated without changing the identity of the row.
-  //
-  // `accepted_at IS NULL` is the single-use guard — there is deliberately no second
-  // `consumed_at` column, because that is the same fact under another name and the
-  // partial pending index already reads this one.
-  //
-  // RETURNS the email, and that is load-bearing rather than convenience: NULL means
-  // the invitation was OPEN, which is what decides whether accepting it may derive a
-  // verified address. The caller cannot ask afterwards — the row is spent.
   // BindOpenOrgInvite — see the request. No RETURNING: a link already bound
   // (or unknown, or spent) matches nothing, and the caller reads the
   // invitation back to learn whose it is — a zero-row RETURNING inside a
@@ -2746,6 +2731,19 @@ service AuthMutation {
     };
   }
 
+  // ConsumeOrgInviteByToken — spend the link.
+  //
+  // Keyed on the TOKEN, not on (id, email), which is the whole of the model change:
+  // the identifier in the URL used to be the row id, and a row id reaches logs and
+  // `Referer` and cannot be rotated without changing the identity of the row.
+  //
+  // `accepted_at IS NULL` is the single-use guard — there is deliberately no second
+  // `consumed_at` column, because that is the same fact under another name and the
+  // partial pending index already reads this one.
+  //
+  // RETURNS the email, and that is load-bearing rather than convenience: NULL means
+  // the invitation was OPEN, which is what decides whether accepting it may derive a
+  // verified address. The caller cannot ask afterwards — the row is spent.
   rpc ConsumeOrgInviteByToken(ConsumeOrgInviteByTokenReq) returns (ConsumeOrgInviteByTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {

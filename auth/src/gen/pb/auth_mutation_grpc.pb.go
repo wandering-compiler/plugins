@@ -454,6 +454,11 @@ type AuthMutationClient interface {
 	// not block a later one, because being removed from an org and invited
 	// back is a normal thing to happen.
 	CreateOrgInvite(ctx context.Context, in *CreateOrgInviteReq, opts ...grpc.CallOption) (*CreateOrgInviteResp, error)
+	// BindOpenOrgInvite — see the request. No RETURNING: a link already bound
+	// (or unknown, or spent) matches nothing, and the caller reads the
+	// invitation back to learn whose it is — a zero-row RETURNING inside a
+	// transaction would abort the registration it is part of.
+	BindOpenOrgInvite(ctx context.Context, in *BindOpenOrgInviteReq, opts ...grpc.CallOption) (*BindOpenOrgInviteResp, error)
 	// ConsumeOrgInviteByToken — spend the link.
 	//
 	// Keyed on the TOKEN, not on (id, email), which is the whole of the model change:
@@ -467,11 +472,6 @@ type AuthMutationClient interface {
 	// RETURNS the email, and that is load-bearing rather than convenience: NULL means
 	// the invitation was OPEN, which is what decides whether accepting it may derive a
 	// verified address. The caller cannot ask afterwards — the row is spent.
-	// BindOpenOrgInvite — see the request. No RETURNING: a link already bound
-	// (or unknown, or spent) matches nothing, and the caller reads the
-	// invitation back to learn whose it is — a zero-row RETURNING inside a
-	// transaction would abort the registration it is part of.
-	BindOpenOrgInvite(ctx context.Context, in *BindOpenOrgInviteReq, opts ...grpc.CallOption) (*BindOpenOrgInviteResp, error)
 	ConsumeOrgInviteByToken(ctx context.Context, in *ConsumeOrgInviteByTokenReq, opts ...grpc.CallOption) (*ConsumeOrgInviteByTokenResp, error)
 	// ClearExpiredOrgInvite — release the slot an EXPIRED invitation holds.
 	//
@@ -1542,6 +1542,11 @@ type AuthMutationServer interface {
 	// not block a later one, because being removed from an org and invited
 	// back is a normal thing to happen.
 	CreateOrgInvite(context.Context, *CreateOrgInviteReq) (*CreateOrgInviteResp, error)
+	// BindOpenOrgInvite — see the request. No RETURNING: a link already bound
+	// (or unknown, or spent) matches nothing, and the caller reads the
+	// invitation back to learn whose it is — a zero-row RETURNING inside a
+	// transaction would abort the registration it is part of.
+	BindOpenOrgInvite(context.Context, *BindOpenOrgInviteReq) (*BindOpenOrgInviteResp, error)
 	// ConsumeOrgInviteByToken — spend the link.
 	//
 	// Keyed on the TOKEN, not on (id, email), which is the whole of the model change:
@@ -1555,11 +1560,6 @@ type AuthMutationServer interface {
 	// RETURNS the email, and that is load-bearing rather than convenience: NULL means
 	// the invitation was OPEN, which is what decides whether accepting it may derive a
 	// verified address. The caller cannot ask afterwards — the row is spent.
-	// BindOpenOrgInvite — see the request. No RETURNING: a link already bound
-	// (or unknown, or spent) matches nothing, and the caller reads the
-	// invitation back to learn whose it is — a zero-row RETURNING inside a
-	// transaction would abort the registration it is part of.
-	BindOpenOrgInvite(context.Context, *BindOpenOrgInviteReq) (*BindOpenOrgInviteResp, error)
 	ConsumeOrgInviteByToken(context.Context, *ConsumeOrgInviteByTokenReq) (*ConsumeOrgInviteByTokenResp, error)
 	// ClearExpiredOrgInvite — release the slot an EXPIRED invitation holds.
 	//

@@ -382,13 +382,17 @@ type signupTokenMock struct {
 	byAddress    []*pb.PendingInviteRow
 	consumed     bool
 	binds        []*pb.BindOpenOrgInviteReq
+	// uncommitted makes the bind invisible to the reads, as it is inside
+	// SignUp's transaction: the query tier reads the pool, not the tx.
+	uncommitted bool
 }
 
 // BindOpenOrgInvite behaves as its WHERE does: it binds only an open
-// invitation, and the read-back then sees the bound address.
+// invitation, and the read-back then sees the bound address — unless the bind
+// is still uncommitted.
 func (m *signupTokenMock) BindOpenOrgInvite(_ context.Context, in *pb.BindOpenOrgInviteReq, _ ...grpc.CallOption) (*pb.BindOpenOrgInviteResp, error) {
 	m.binds = append(m.binds, in)
-	if m.tokenErr == nil && m.pendingEmail == "" {
+	if m.tokenErr == nil && m.pendingEmail == "" && !m.uncommitted {
 		m.pendingEmail = in.GetEmail()
 	}
 	return &pb.BindOpenOrgInviteResp{}, nil
@@ -554,6 +558,21 @@ func TestClaimOpenInvite_TheFirstRegistrationSpendsTheLink(t *testing.T) {
 	}
 	if err := claimOpenInvite(context.Background(), h, "second@example.com", "the-link"); err == nil {
 		t.Fatal("a second registration through a spent link was admitted under invite_only")
+	}
+}
+
+// Inside SignUp's transaction the bind is not committed when the claim reads
+// the invitation back — the query tier reads the pool — so the first
+// registration through an open link sees it still OPEN. That is its own bind,
+// and it must not be refused for it.
+func TestClaimOpenInvite_AnUncommittedBindIsTheClaimantsOwn(t *testing.T) {
+	m := &signupTokenMock{uncommitted: true} // open invitation, bind inside a tx
+	h := &AuthServiceHandler{Query: m, Mutation: m, InviteOnly: true}
+	if err := claimOpenInvite(context.Background(), h, "first@example.com", "the-link"); err != nil {
+		t.Fatalf("the first registration through an open link was refused inside its transaction: %v", err)
+	}
+	if len(m.binds) != 1 {
+		t.Fatalf("binds = %+v, want one", m.binds)
 	}
 }
 
