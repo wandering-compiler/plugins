@@ -18,7 +18,7 @@ codegen stages the sources into its service bundles.
 A consumer installs a tag:
 
 ```sh
-w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0-rc.17
+w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0-rc.19
 ```
 
 To try an unreleased change, install a commit of `main` (`…#auth@<sha>`). It
