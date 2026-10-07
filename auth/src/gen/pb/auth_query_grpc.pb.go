@@ -38,9 +38,10 @@ const (
 	AuthQuery_ListRoleGrants_FullMethodName                = "/w17.contrib.auth.AuthQuery/ListRoleGrants"
 	AuthQuery_CountUsers_FullMethodName                    = "/w17.contrib.auth.AuthQuery/CountUsers"
 	AuthQuery_ListUsers_FullMethodName                     = "/w17.contrib.auth.AuthQuery/ListUsers"
-	AuthQuery_ListBotUsers_FullMethodName                  = "/w17.contrib.auth.AuthQuery/ListBotUsers"
+	AuthQuery_ListOrgMemberAccounts_FullMethodName         = "/w17.contrib.auth.AuthQuery/ListOrgMemberAccounts"
 	AuthQuery_ListBotAccounts_FullMethodName               = "/w17.contrib.auth.AuthQuery/ListBotAccounts"
-	AuthQuery_GetBotInOrg_FullMethodName                   = "/w17.contrib.auth.AuthQuery/GetBotInOrg"
+	AuthQuery_ListRealmMachineAccounts_FullMethodName      = "/w17.contrib.auth.AuthQuery/ListRealmMachineAccounts"
+	AuthQuery_GetOrgMember_FullMethodName                  = "/w17.contrib.auth.AuthQuery/GetOrgMember"
 	AuthQuery_ListApiRealmRoles_FullMethodName             = "/w17.contrib.auth.AuthQuery/ListApiRealmRoles"
 	AuthQuery_GetUser_FullMethodName                       = "/w17.contrib.auth.AuthQuery/GetUser"
 	AuthQuery_GetFirstUserRoles_FullMethodName             = "/w17.contrib.auth.AuthQuery/GetFirstUserRoles"
@@ -156,34 +157,50 @@ type AuthQueryClient interface {
 	// columns only (NO password_hash) into the repeated User; newest
 	// first. Gated user_admin.
 	ListUsers(ctx context.Context, in *ListUsersReq, opts ...grpc.CallOption) (*ListUsersResp, error)
-	// ListBots — the machine accounts, for their own admin page.
+	// ListOrgMemberAccounts — every account that is a member of THIS
+	// organization, with its kind when `service_account` is on.
 	//
-	// A separate list rather than a column on Users: `User.kind` is gated
-	// service_account, and a preset page's `columns` cannot be gated per entry —
-	// naming a field a build without the feature does not have is a codegen
-	// error. A PAGE can be gated, so the split is what the feature model
-	// supports. Same table either way; this is a view over it.
-	ListBotUsers(ctx context.Context, in *ListBotUsersReq, opts ...grpc.CallOption) (*ListBotUsersResp, error)
+	// The org-scoped half of the machine-account directory (ListBots): the
+	// handler keeps the BOT rows. It is gated `org_membership` and not
+	// `service_account` because the JOIN needs the membership table, and a
+	// query staged with service_account alone broke a realm WITHOUT orgs at
+	// codegen — one organization, no membership table, and machine accounts
+	// that are the realm's (the platform's own backoffice). The kind filter
+	// moved to Go for the same reason: `User.kind` exists only with
+	// service_account, and an rpc carries one gate. `kind` and `disabled_at`
+	// ride feature-gated projections.
+	ListOrgMemberAccounts(ctx context.Context, in *ListOrgMemberAccountsReq, opts ...grpc.CallOption) (*ListOrgMemberAccountsResp, error)
 	// ListBotAccounts — every machine account, for the admin ServiceAccounts page.
 	//
 	// REALM-WIDE, on purpose, and only for the admin surface: that surface is the
 	// operator's, and its Users page already lists every person (ListUsers). The
-	// org-scoped ListBotUsers above serves the in-product bot directory, where a
-	// company's operator must see their own bots only.
+	// org-scoped ListOrgMemberAccounts above serves the in-product bot directory
+	// where the realm has organizations, and a company's operator must see their
+	// own bots only. In a realm WITHOUT organizations this is that directory too:
+	// the realm is one organization, and its machine accounts are all of them.
 	//
 	// The page used to name a query that does not exist, and before that the
 	// org-scoped one — whose required org_id an admin list cannot supply. No
 	// project ever published the page, so nothing ever generated it; plugin dev
 	// now publishes every preset surface, which is what found it.
 	ListBotAccounts(ctx context.Context, in *ListBotAccountsReq, opts ...grpc.CallOption) (*ListBotAccountsResp, error)
-	// GetBotInOrg — is this bot a member of THIS organization?
+	// ListRealmMachineAccounts — every machine account of the realm, for the
+	// in-product directory (ListBots) in a realm WITHOUT organizations.
 	//
-	// Empty user_id = no. An endpoint acting on a bot by id must ask, because
-	// the id arrives on the wire: without it an operator in one company could
-	// name a machine account in another and be served. `kind = 1` is part of
-	// the predicate so the answer cannot be satisfied by a PERSON who happens
-	// to be a member.
-	GetBotInOrg(ctx context.Context, in *GetBotInOrgReq, opts ...grpc.CallOption) (*GetBotInOrgResp, error)
+	// Not ListBotAccounts: that one is the admin page's source and PAGED, so a
+	// handler reading it would see the first page and call it the whole list.
+	// Unpaged like its org-scoped sibling ListOrgMemberAccounts, which a realm
+	// with organizations reads instead.
+	ListRealmMachineAccounts(ctx context.Context, in *ListRealmMachineAccountsReq, opts ...grpc.CallOption) (*ListRealmMachineAccountsResp, error)
+	// GetOrgMember — is this account a member of THIS organization?
+	//
+	// Empty user_id = no. An endpoint acting on a machine account by id must
+	// ask, because the id arrives on the wire: without it an operator in one
+	// company could name a machine account in another and be served. Whether
+	// the member is a BOT is the caller's second question, asked of the
+	// account itself (IssueBotToken reads it before minting) — gated
+	// `org_membership` for the reason ListOrgMemberAccounts is.
+	GetOrgMember(ctx context.Context, in *GetOrgMemberReq, opts ...grpc.CallOption) (*GetOrgMemberResp, error)
 	// ListApiRealmRoles — the roles a BOT may be given.
 	//
 	// The filter is the point and it is SERVER-side. A picker that merely omits
@@ -611,10 +628,10 @@ func (c *authQueryClient) ListUsers(ctx context.Context, in *ListUsersReq, opts 
 	return out, nil
 }
 
-func (c *authQueryClient) ListBotUsers(ctx context.Context, in *ListBotUsersReq, opts ...grpc.CallOption) (*ListBotUsersResp, error) {
+func (c *authQueryClient) ListOrgMemberAccounts(ctx context.Context, in *ListOrgMemberAccountsReq, opts ...grpc.CallOption) (*ListOrgMemberAccountsResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListBotUsersResp)
-	err := c.cc.Invoke(ctx, AuthQuery_ListBotUsers_FullMethodName, in, out, cOpts...)
+	out := new(ListOrgMemberAccountsResp)
+	err := c.cc.Invoke(ctx, AuthQuery_ListOrgMemberAccounts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -631,10 +648,20 @@ func (c *authQueryClient) ListBotAccounts(ctx context.Context, in *ListBotAccoun
 	return out, nil
 }
 
-func (c *authQueryClient) GetBotInOrg(ctx context.Context, in *GetBotInOrgReq, opts ...grpc.CallOption) (*GetBotInOrgResp, error) {
+func (c *authQueryClient) ListRealmMachineAccounts(ctx context.Context, in *ListRealmMachineAccountsReq, opts ...grpc.CallOption) (*ListRealmMachineAccountsResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetBotInOrgResp)
-	err := c.cc.Invoke(ctx, AuthQuery_GetBotInOrg_FullMethodName, in, out, cOpts...)
+	out := new(ListRealmMachineAccountsResp)
+	err := c.cc.Invoke(ctx, AuthQuery_ListRealmMachineAccounts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authQueryClient) GetOrgMember(ctx context.Context, in *GetOrgMemberReq, opts ...grpc.CallOption) (*GetOrgMemberResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetOrgMemberResp)
+	err := c.cc.Invoke(ctx, AuthQuery_GetOrgMember_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1150,34 +1177,50 @@ type AuthQueryServer interface {
 	// columns only (NO password_hash) into the repeated User; newest
 	// first. Gated user_admin.
 	ListUsers(context.Context, *ListUsersReq) (*ListUsersResp, error)
-	// ListBots — the machine accounts, for their own admin page.
+	// ListOrgMemberAccounts — every account that is a member of THIS
+	// organization, with its kind when `service_account` is on.
 	//
-	// A separate list rather than a column on Users: `User.kind` is gated
-	// service_account, and a preset page's `columns` cannot be gated per entry —
-	// naming a field a build without the feature does not have is a codegen
-	// error. A PAGE can be gated, so the split is what the feature model
-	// supports. Same table either way; this is a view over it.
-	ListBotUsers(context.Context, *ListBotUsersReq) (*ListBotUsersResp, error)
+	// The org-scoped half of the machine-account directory (ListBots): the
+	// handler keeps the BOT rows. It is gated `org_membership` and not
+	// `service_account` because the JOIN needs the membership table, and a
+	// query staged with service_account alone broke a realm WITHOUT orgs at
+	// codegen — one organization, no membership table, and machine accounts
+	// that are the realm's (the platform's own backoffice). The kind filter
+	// moved to Go for the same reason: `User.kind` exists only with
+	// service_account, and an rpc carries one gate. `kind` and `disabled_at`
+	// ride feature-gated projections.
+	ListOrgMemberAccounts(context.Context, *ListOrgMemberAccountsReq) (*ListOrgMemberAccountsResp, error)
 	// ListBotAccounts — every machine account, for the admin ServiceAccounts page.
 	//
 	// REALM-WIDE, on purpose, and only for the admin surface: that surface is the
 	// operator's, and its Users page already lists every person (ListUsers). The
-	// org-scoped ListBotUsers above serves the in-product bot directory, where a
-	// company's operator must see their own bots only.
+	// org-scoped ListOrgMemberAccounts above serves the in-product bot directory
+	// where the realm has organizations, and a company's operator must see their
+	// own bots only. In a realm WITHOUT organizations this is that directory too:
+	// the realm is one organization, and its machine accounts are all of them.
 	//
 	// The page used to name a query that does not exist, and before that the
 	// org-scoped one — whose required org_id an admin list cannot supply. No
 	// project ever published the page, so nothing ever generated it; plugin dev
 	// now publishes every preset surface, which is what found it.
 	ListBotAccounts(context.Context, *ListBotAccountsReq) (*ListBotAccountsResp, error)
-	// GetBotInOrg — is this bot a member of THIS organization?
+	// ListRealmMachineAccounts — every machine account of the realm, for the
+	// in-product directory (ListBots) in a realm WITHOUT organizations.
 	//
-	// Empty user_id = no. An endpoint acting on a bot by id must ask, because
-	// the id arrives on the wire: without it an operator in one company could
-	// name a machine account in another and be served. `kind = 1` is part of
-	// the predicate so the answer cannot be satisfied by a PERSON who happens
-	// to be a member.
-	GetBotInOrg(context.Context, *GetBotInOrgReq) (*GetBotInOrgResp, error)
+	// Not ListBotAccounts: that one is the admin page's source and PAGED, so a
+	// handler reading it would see the first page and call it the whole list.
+	// Unpaged like its org-scoped sibling ListOrgMemberAccounts, which a realm
+	// with organizations reads instead.
+	ListRealmMachineAccounts(context.Context, *ListRealmMachineAccountsReq) (*ListRealmMachineAccountsResp, error)
+	// GetOrgMember — is this account a member of THIS organization?
+	//
+	// Empty user_id = no. An endpoint acting on a machine account by id must
+	// ask, because the id arrives on the wire: without it an operator in one
+	// company could name a machine account in another and be served. Whether
+	// the member is a BOT is the caller's second question, asked of the
+	// account itself (IssueBotToken reads it before minting) — gated
+	// `org_membership` for the reason ListOrgMemberAccounts is.
+	GetOrgMember(context.Context, *GetOrgMemberReq) (*GetOrgMemberResp, error)
 	// ListApiRealmRoles — the roles a BOT may be given.
 	//
 	// The filter is the point and it is SERVER-side. A picker that merely omits
@@ -1548,14 +1591,17 @@ func (UnimplementedAuthQueryServer) CountUsers(context.Context, *CountUsersReq) 
 func (UnimplementedAuthQueryServer) ListUsers(context.Context, *ListUsersReq) (*ListUsersResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListUsers not implemented")
 }
-func (UnimplementedAuthQueryServer) ListBotUsers(context.Context, *ListBotUsersReq) (*ListBotUsersResp, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListBotUsers not implemented")
+func (UnimplementedAuthQueryServer) ListOrgMemberAccounts(context.Context, *ListOrgMemberAccountsReq) (*ListOrgMemberAccountsResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListOrgMemberAccounts not implemented")
 }
 func (UnimplementedAuthQueryServer) ListBotAccounts(context.Context, *ListBotAccountsReq) (*ListBotAccountsResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBotAccounts not implemented")
 }
-func (UnimplementedAuthQueryServer) GetBotInOrg(context.Context, *GetBotInOrgReq) (*GetBotInOrgResp, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBotInOrg not implemented")
+func (UnimplementedAuthQueryServer) ListRealmMachineAccounts(context.Context, *ListRealmMachineAccountsReq) (*ListRealmMachineAccountsResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRealmMachineAccounts not implemented")
+}
+func (UnimplementedAuthQueryServer) GetOrgMember(context.Context, *GetOrgMemberReq) (*GetOrgMemberResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetOrgMember not implemented")
 }
 func (UnimplementedAuthQueryServer) ListApiRealmRoles(context.Context, *ListApiRealmRolesReq) (*ListApiRealmRolesResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListApiRealmRoles not implemented")
@@ -1853,20 +1899,20 @@ func _AuthQuery_ListUsers_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthQuery_ListBotUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListBotUsersReq)
+func _AuthQuery_ListOrgMemberAccounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOrgMemberAccountsReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AuthQueryServer).ListBotUsers(ctx, in)
+		return srv.(AuthQueryServer).ListOrgMemberAccounts(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AuthQuery_ListBotUsers_FullMethodName,
+		FullMethod: AuthQuery_ListOrgMemberAccounts_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AuthQueryServer).ListBotUsers(ctx, req.(*ListBotUsersReq))
+		return srv.(AuthQueryServer).ListOrgMemberAccounts(ctx, req.(*ListOrgMemberAccountsReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1889,20 +1935,38 @@ func _AuthQuery_ListBotAccounts_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthQuery_GetBotInOrg_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetBotInOrgReq)
+func _AuthQuery_ListRealmMachineAccounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRealmMachineAccountsReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AuthQueryServer).GetBotInOrg(ctx, in)
+		return srv.(AuthQueryServer).ListRealmMachineAccounts(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AuthQuery_GetBotInOrg_FullMethodName,
+		FullMethod: AuthQuery_ListRealmMachineAccounts_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AuthQueryServer).GetBotInOrg(ctx, req.(*GetBotInOrgReq))
+		return srv.(AuthQueryServer).ListRealmMachineAccounts(ctx, req.(*ListRealmMachineAccountsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthQuery_GetOrgMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOrgMemberReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthQueryServer).GetOrgMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthQuery_GetOrgMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthQueryServer).GetOrgMember(ctx, req.(*GetOrgMemberReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2739,16 +2803,20 @@ var AuthQuery_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AuthQuery_ListUsers_Handler,
 		},
 		{
-			MethodName: "ListBotUsers",
-			Handler:    _AuthQuery_ListBotUsers_Handler,
+			MethodName: "ListOrgMemberAccounts",
+			Handler:    _AuthQuery_ListOrgMemberAccounts_Handler,
 		},
 		{
 			MethodName: "ListBotAccounts",
 			Handler:    _AuthQuery_ListBotAccounts_Handler,
 		},
 		{
-			MethodName: "GetBotInOrg",
-			Handler:    _AuthQuery_GetBotInOrg_Handler,
+			MethodName: "ListRealmMachineAccounts",
+			Handler:    _AuthQuery_ListRealmMachineAccounts_Handler,
+		},
+		{
+			MethodName: "GetOrgMember",
+			Handler:    _AuthQuery_GetOrgMember_Handler,
 		},
 		{
 			MethodName: "ListApiRealmRoles",

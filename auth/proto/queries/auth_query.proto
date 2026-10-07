@@ -166,8 +166,8 @@ message ListUsersResp {
   // page.
   w17.Paging paging = 2;
 }
-message ListBotUsersReq {
-  option (w17.contrib.plugin_feature) = "service_account";
+message ListOrgMemberAccountsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
   // The ACTIVE organization. Not optional: User is not an org-scoped model —
   // a person belongs to several — so without this the list is every machine
   // account on the console. It was, and one company's operator saw another's
@@ -175,19 +175,27 @@ message ListBotUsersReq {
   string org_id = 1 [(w17.field) = { type: UUID }];
 }
 
-message GetBotInOrgReq {
+message ListRealmMachineAccountsReq {
   option (w17.contrib.plugin_feature) = "service_account";
+}
+message ListRealmMachineAccountsResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  repeated User accounts = 1;
+}
+
+message GetOrgMemberReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string org_id  = 2 [(w17.field) = { type: UUID }];
 }
-message GetBotInOrgResp {
-  option (w17.contrib.plugin_feature) = "service_account";
+message GetOrgMemberResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
   // Empty when the bot is not in this organization — or is not a bot.
   string user_id = 1 [(w17.field) = { type: UUID, blank: true }];
 }
-message ListBotUsersResp {
-  option (w17.contrib.plugin_feature) = "service_account";
-  repeated User bots = 1;
+message ListOrgMemberAccountsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  repeated User accounts = 1;
 }
 
 message ListBotAccountsReq {
@@ -206,7 +214,17 @@ message ListApiRealmRolesReq {
 }
 message ListApiRealmRolesResp {
   option (w17.contrib.plugin_feature) = "service_account";
-  repeated OrgScopedRole roles = 1;
+  repeated ApiRealmRole roles = 1;
+}
+
+// ApiRealmRole — a role a machine account may hold. Its own message, not
+// OrgScopedRole: that one is gated `org_membership`, and the api-realm roles
+// exist in a realm without orgs too.
+message ApiRealmRole {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string id          = 1;
+  string name        = 2;
+  string description = 3;
 }
 
 message GetUserReq {
@@ -1135,36 +1153,43 @@ service AuthQuery {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
 
-  // ListBots — the machine accounts, for their own admin page.
+  // ListOrgMemberAccounts — every account that is a member of THIS
+  // organization, with its kind when `service_account` is on.
   //
-  // A separate list rather than a column on Users: `User.kind` is gated
-  // service_account, and a preset page's `columns` cannot be gated per entry —
-  // naming a field a build without the feature does not have is a codegen
-  // error. A PAGE can be gated, so the split is what the feature model
-  // supports. Same table either way; this is a view over it.
-  rpc ListBotUsers(ListBotUsersReq) returns (ListBotUsersResp) {
+  // The org-scoped half of the machine-account directory (ListBots): the
+  // handler keeps the BOT rows. It is gated `org_membership` and not
+  // `service_account` because the JOIN needs the membership table, and a
+  // query staged with service_account alone broke a realm WITHOUT orgs at
+  // codegen — one organization, no membership table, and machine accounts
+  // that are the realm's (the platform's own backoffice). The kind filter
+  // moved to Go for the same reason: `User.kind` exists only with
+  // service_account, and an rpc carries one gate. `kind` and `disabled_at`
+  // ride feature-gated projections.
+  rpc ListOrgMemberAccounts(ListOrgMemberAccountsReq) returns (ListOrgMemberAccountsResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
           "SELECT u.id AS id, u.email AS email, "
-          "       u.kind AS kind, "
-          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "       ?feature(service_account) u.kind AS kind, "
+          "       ?feature(user_admin) u.disabled_at AS disabled_at, "
+          "       u.created_at AS created_at "
           "FROM @module.User u "
           "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
-          "WHERE u.kind = 1 "
           "ORDER BY u.created_at DESC, u.id DESC"
       }
     };
-    option (w17.contrib.plugin_feature_rpc) = "service_account";
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
   }
 
   // ListBotAccounts — every machine account, for the admin ServiceAccounts page.
   //
   // REALM-WIDE, on purpose, and only for the admin surface: that surface is the
   // operator's, and its Users page already lists every person (ListUsers). The
-  // org-scoped ListBotUsers above serves the in-product bot directory, where a
-  // company's operator must see their own bots only.
+  // org-scoped ListOrgMemberAccounts above serves the in-product bot directory
+  // where the realm has organizations, and a company's operator must see their
+  // own bots only. In a realm WITHOUT organizations this is that directory too:
+  // the realm is one organization, and its machine accounts are all of them.
   //
   // The page used to name a query that does not exist, and before that the
   // org-scoped one — whose required org_id an admin list cannot supply. No
@@ -1186,14 +1211,38 @@ service AuthQuery {
     option (w17.contrib.plugin_feature_rpc) = "service_account";
   }
 
-  // GetBotInOrg — is this bot a member of THIS organization?
+  // ListRealmMachineAccounts — every machine account of the realm, for the
+  // in-product directory (ListBots) in a realm WITHOUT organizations.
   //
-  // Empty user_id = no. An endpoint acting on a bot by id must ask, because
-  // the id arrives on the wire: without it an operator in one company could
-  // name a machine account in another and be served. `kind = 1` is part of
-  // the predicate so the answer cannot be satisfied by a PERSON who happens
-  // to be a member.
-  rpc GetBotInOrg(GetBotInOrgReq) returns (GetBotInOrgResp) {
+  // Not ListBotAccounts: that one is the admin page's source and PAGED, so a
+  // handler reading it would see the first page and call it the whole list.
+  // Unpaged like its org-scoped sibling ListOrgMemberAccounts, which a realm
+  // with organizations reads instead.
+  rpc ListRealmMachineAccounts(ListRealmMachineAccountsReq) returns (ListRealmMachineAccountsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS id, u.email AS email, "
+          "       u.kind AS kind, "
+          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "FROM @module.User u "
+          "WHERE u.kind = 1 "
+          "ORDER BY u.created_at DESC, u.id DESC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // GetOrgMember — is this account a member of THIS organization?
+  //
+  // Empty user_id = no. An endpoint acting on a machine account by id must
+  // ask, because the id arrives on the wire: without it an operator in one
+  // company could name a machine account in another and be served. Whether
+  // the member is a BOT is the caller's second question, asked of the
+  // account itself (IssueBotToken reads it before minting) — gated
+  // `org_membership` for the reason ListOrgMemberAccounts is.
+  rpc GetOrgMember(GetOrgMemberReq) returns (GetOrgMemberResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
@@ -1201,10 +1250,10 @@ service AuthQuery {
           "SELECT u.id AS user_id "
           "FROM @module.User u "
           "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
-          "WHERE u.id = :user_id AND u.kind = 1"
+          "WHERE u.id = :user_id"
       }
     };
-    option (w17.contrib.plugin_feature_rpc) = "service_account";
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
   }
 
   // ListApiRealmRoles — the roles a BOT may be given.

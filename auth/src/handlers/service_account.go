@@ -49,6 +49,14 @@ func init() {
 // errNotABotAccount is the refusal for minting a token against a person.
 var errNotABotAccount = errors.New("api tokens may only be minted for machine accounts")
 
+// The refusals when a realm with organizations is called with none selected.
+var (
+	errSelectOrgForToken = status.Error(codes.FailedPrecondition,
+		"select an organization — a token is minted for a machine account inside one")
+	errSelectOrgForBots = status.Error(codes.FailedPrecondition,
+		"select an organization — machine accounts belong to one")
+)
+
 // IssueBotToken mints an API token FOR another account, and only for a machine
 // one.
 //
@@ -71,31 +79,34 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		return nil, status.Error(codes.InvalidArgument, "user_id is required")
 	}
 
-	// The target must be a bot IN THE CALLER'S ORGANIZATION. Both halves are
-	// load-bearing and the second was missing: `user_id` arrives on the wire,
-	// so an operator in one company could name a machine account in another
-	// and mint a working credential for it. The listing that leaked those ids
-	// made that a two-step attack with no barrier between the steps.
-	orgID, orgErr := activeOrgID(ctx)
-	if orgErr != nil {
-		return nil, status.Error(codes.FailedPrecondition,
-			"select an organization — a token is minted for a machine account inside one")
-	}
-	inOrg, err := h.Query.GetBotInOrg(ctx, &pb.GetBotInOrgReq{UserId: target, OrgId: orgID})
-	if err != nil {
-		return nil, err
-	}
-	if inOrg.GetUserId() == "" {
-		// One message for "not a bot", "not here", and "does not exist": the
-		// caller must not learn which, or the refusal becomes a directory of
-		// other companies' accounts.
-		return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+	// The target must be a bot IN THE CALLER'S ORGANIZATION, where the realm
+	// has organizations. Both halves are load-bearing and the second was
+	// missing: `user_id` arrives on the wire, so an operator in one company
+	// could name a machine account in another and mint a working credential
+	// for it. The listing that leaked those ids made that a two-step attack
+	// with no barrier between the steps. A realm without organizations is one
+	// organization, and every machine account in it is the operator's.
+	if botOrgs != nil {
+		inOrg, err := botOrgs.isMember(ctx, h, target)
+		if err != nil {
+			return nil, err
+		}
+		if !inOrg {
+			// One message for "not a bot", "not here", and "does not exist":
+			// the caller must not learn which, or the refusal becomes a
+			// directory of other companies' accounts.
+			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+		}
 	}
 
 	// Read the target and refuse a person. Read FIRST: minting and then
 	// checking would leave a live credential behind on the refusal path.
 	userResp, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: target})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			// Does not exist reads like "not a bot" — see above.
+			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+		}
 		return nil, err
 	}
 	if userResp.GetUser().GetKind() != pb.AccountKind_BOT {
@@ -152,9 +163,35 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 // handlers/service_account_tenant.go is the one today.
 var botUserFillers []func(ctx context.Context, req *pb.CreateBotUserReq) error
 
-// createBotUserTx creates the machine account, its membership and its grant.
-// Kept together so one transaction can hold them — the ordering note below is
-// about which write must come first; this is about all three or none.
+// botOrgs is what a realm WITH organizations adds to machine accounts: each
+// belongs to one, is listed and served only there, and holds its role inside
+// it. Installed by service_account_org.go, which is staged only when both
+// `service_account` and `org_membership` are on (plugin.yaml,
+// `go_files_combined`) — this file cannot name the membership calls itself,
+// they do not exist without org_membership.
+//
+// Nil in a realm WITHOUT organizations — one organization, the owner of the
+// software (Jiri, 2026-10-06: the platform's own backoffice). There a machine
+// account is the realm's: created with a realm-wide grant, listed with every
+// other machine account, and minted for by any operator who may mint at all.
+var botOrgs *botOrgScope
+
+type botOrgScope struct {
+	// active is the organization the caller acts in; an error when none is
+	// selected, which every caller refuses.
+	active func(ctx context.Context) (string, error)
+	// enroll makes the new account a member of orgID and grants it roleID
+	// there, inside the caller's transaction.
+	enroll func(txCtx context.Context, h *AuthServiceHandler, userID, roleID, orgID string) error
+	// accounts lists the members of the caller's organization.
+	accounts func(ctx context.Context, h *AuthServiceHandler) ([]*pb.User, error)
+	// isMember reports whether userID is a member of the caller's organization.
+	isMember func(ctx context.Context, h *AuthServiceHandler, userID string) (bool, error)
+}
+
+// createBotUserTx creates the machine account and its grant — and, where the
+// realm has organizations, its membership. Kept together so one transaction
+// can hold them; this is about all of them or none.
 func (h *AuthServiceHandler) createBotUserTx(txCtx context.Context, email, orgID, roleID string) (string, error) {
 	req := &pb.CreateBotUserReq{Email: email}
 	for _, fill := range botUserFillers {
@@ -167,24 +204,16 @@ func (h *AuthServiceHandler) createBotUserTx(txCtx context.Context, email, orgID
 		return "", err
 	}
 	userID := created.GetUser().GetId()
-
-	// MEMBERSHIP FIRST, and it is not decoration.
-	//
-	// An org-scoped role granted with no organization lands as `org_id NULL`,
-	// which the org axis counts only for roles declared realm-wide — so the
-	// grant applies NOWHERE and the bot authenticates with an empty permission
-	// set. And without a membership there is no organization for the console to
-	// infer, so an unattended caller with no `W17-Org` header has no scope
-	// either. Both were live: a token minted through the UI pushed nothing and
-	// reported "no permissions resolved for this principal" (2026-09-20).
-	if _, err := h.Mutation.AddOrgMembership(txCtx, &pb.AddOrgMembershipReq{
-		UserId: userID, OrgId: orgID, Role: "member",
-	}); err != nil {
-		return "", err
+	if botOrgs != nil {
+		if err := botOrgs.enroll(txCtx, h, userID, roleID, orgID); err != nil {
+			return "", err
+		}
+		return userID, nil
 	}
-	// Granted INSIDE that organization, for the same reason.
+	// A realm without organizations: the grant is realm-wide, which is where
+	// every role of such a realm applies.
 	if _, err := h.Mutation.AssignRoleToUser(txCtx, &pb.AssignRoleToUserReq{
-		UserId: userID, RoleId: roleID, OrgId: orgID,
+		UserId: userID, RoleId: roleID,
 	}); err != nil {
 		return "", err
 	}
@@ -267,17 +296,22 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 		return nil, err
 	}
 
-	// The organization comes from the CALLER's active scope, never from the
-	// request. The client already had to select one to get here, and taking an
-	// id off the wire would let an operator provision a machine account into a
-	// company they are not acting in.
-	orgID, orgErr := activeOrgID(ctx)
-	if orgErr != nil {
-		return nil, status.Error(codes.FailedPrecondition,
-			"select an organization before creating a machine account — its role is granted inside one")
+	// Where the realm has organizations, the one the account joins comes from
+	// the CALLER's active scope, never from the request. The client already
+	// had to select one to get here, and taking an id off the wire would let
+	// an operator provision a machine account into a company they are not
+	// acting in.
+	var orgID string
+	if botOrgs != nil {
+		var orgErr error
+		if orgID, orgErr = botOrgs.active(ctx); orgErr != nil {
+			return nil, status.Error(codes.FailedPrecondition,
+				"select an organization before creating a machine account — its role is granted inside one")
+		}
 	}
 
-	// The account, its membership and its grant are ONE unit.
+	// The account, its membership (where there are organizations) and its
+	// grant are ONE unit.
 	//
 	// Run apart, a failure after the first leaves an orphan bot: no
 	// membership, so no organization to infer and an empty permission set —
@@ -307,7 +341,7 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 	return &pb.CreateBotResp{UserId: userID}, nil
 }
 
-func containsRole(roles []*pb.OrgScopedRole, id string) bool {
+func containsRole(roles []*pb.ApiRealmRole, id string) bool {
 	for _, r := range roles {
 		if r.GetId() == id {
 			return true
@@ -321,22 +355,34 @@ func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	// ⚠️ The organization is REQUIRED, and the reason is a leak that shipped:
-	// `User` is not an org-scoped model — a person belongs to several — so
-	// scope does not narrow this list on its own. Without the filter the
-	// answer was every machine account on the console, and one company's
-	// operator saw another's (reported on production 2026-09-21).
-	orgID, err := activeOrgID(ctx)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition,
-			"select an organization — machine accounts belong to one")
+	// ⚠️ Where the realm has organizations, the caller's is REQUIRED, and the
+	// reason is a leak that shipped: `User` is not an org-scoped model — a
+	// person belongs to several — so scope does not narrow this list on its
+	// own. Without the filter the answer was every machine account on the
+	// console, and one company's operator saw another's (reported on
+	// production 2026-09-21). A realm without organizations is one, and the
+	// list is all of its machine accounts.
+	var accounts []*pb.User
+	if botOrgs != nil {
+		members, err := botOrgs.accounts(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		accounts = members
+	} else {
+		resp, err := h.Query.ListRealmMachineAccounts(ctx, &pb.ListRealmMachineAccountsReq{})
+		if err != nil {
+			return nil, err
+		}
+		accounts = resp.GetAccounts()
 	}
-	resp, err := h.Query.ListBotUsers(ctx, &pb.ListBotUsersReq{OrgId: orgID})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*pb.BotSummary, 0, len(resp.GetBots()))
-	for _, u := range resp.GetBots() {
+	out := make([]*pb.BotSummary, 0, len(accounts))
+	for _, u := range accounts {
+		// The kind is checked HERE for both sources: a membership is held by
+		// people and machines alike.
+		if u.GetKind() != pb.AccountKind_BOT {
+			continue
+		}
 		out = append(out, &pb.BotSummary{
 			Id:       u.GetId(),
 			Email:    u.GetEmail(),

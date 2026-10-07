@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.17
+version: 0.1.0-rc.18
 requires_w17: ">=1.7"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -235,9 +235,9 @@ features:
       # The role ceiling reads the caller's resolved permissions off the
       # AuthResp envelope (authenticate_turnkey's, which org_membership
       # requires) and the role catalogue (rbac's, required through it). Its
-      # callers — org_membership_role.go below, org_invite and service_account
-      # — all have org_membership. Staged with rbac it named AuthResp in an activation
-      # that need not have it.
+      # callers are org_membership_role.go below, org_invite (which requires
+      # org_membership) and service_account, which stages it as well. Staged
+      # with rbac it named AuthResp in an activation that need not have it.
       - handlers/role_ceiling.go
       # A membership's role change is a grant: it resolves the role through
       # the org-scoped catalogue and holds it to the ceiling. The catalogue
@@ -266,21 +266,27 @@ features:
     go_files:
       - handlers/password_change.go
   - name: service_account
-    description: "Machine accounts — a BOT user that cannot sign in with a password and acts only through an API token an admin minted for it. Adds User.kind, the admin mint/revoke endpoints, and the SignIn refusal that makes the distinction enforceable rather than descriptive. Requires api_token (the token machinery) — without it there is no credential for a bot to hold."
+    description: "Machine accounts — a BOT user that cannot sign in with a password and acts only through an API token an admin minted for it. Adds User.kind, the admin mint/revoke endpoints, and the SignIn refusal that makes the distinction enforceable rather than descriptive. Requires api_token (the token machinery) — without it there is no credential for a bot to hold. Works in a realm with or without org_membership: with it, a machine account belongs to the operator's active organization, is listed and minted for only there, and holds its role inside it (handlers/service_account_org.go); without it the realm is one organization (a platform's own backoffice), and its machine accounts hold realm-wide roles and are every operator's."
     default: false
     requires:
       - api_token
       - user_admin
       # CreateBot assigns the bot's role: pb.AssignRoleToUserReq is rbac's.
       - rbac
-      # CreateBot resolves the caller's active organization and writes the
-      # membership before the grant — both are org_membership's. Undeclared,
-      # activating service_account without it fails the BUNDLE build on
-      # `undefined: pb.AddOrgMembershipReq`, in a file the project never wrote
-      # (a consumer).
-      - org_membership
+      # CreateBot holds the role to the caller's ceiling (role_ceiling.go),
+      # which reads the caller's resolved permissions off the AuthResp
+      # envelope — authenticate_turnkey's.
+      - authenticate_turnkey
+      # org_membership is NOT required (it was until 2026-10-07). What
+      # organizations add — the membership written before the grant, the
+      # org-scoped listing and minting — lives in service_account_org.go,
+      # staged only when both are on (go_files_combined below), so a realm
+      # without organizations builds and serves machine accounts of its own.
     go_files:
       - handlers/service_account.go
+      # The role ceiling: org_membership stages it too; a file claimed by any
+      # active feature is staged once.
+      - handlers/role_ceiling.go
   - name: user_admin
     description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / delete of accounts. Adds a nullable User.disabled_at column (SignIn rejects a disabled account before issuing a token; existing tokens survive until expiry/revocation), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated), AuthMutation.DeleteUser (hard-delete + token purge in one tx, emits UserDeleted for downstream cleanup of feature-owned rows), and AuthMutation.DisableUsers / EnableUsers (bulk). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateUser + delete DeleteUser; bulk actions Disable/Enable). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
     default: false
@@ -294,6 +300,11 @@ features:
 go_files_combined:
   - features: [service_account, tenant_scope]
     files: [handlers/service_account_tenant.go]
+  # What organizations add to machine accounts: the membership a new one is
+  # written into, and listing / minting scoped to the operator's organization.
+  # The calls it makes exist only with org_membership.
+  - features: [service_account, org_membership]
+    files: [handlers/service_account_org.go]
   # The pending registration carries the tenant SignUp resolved; the fields
   # that hold it exist only when both features do.
   - features: [sign_up_confirmation, tenant_scope]
