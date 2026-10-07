@@ -40,13 +40,14 @@ message Relay {
   // A bare `host:port` — a DNS name (a public one, or a service name on the
   // same internal network as the control plane: `clusterrelay:13444`, or the
   // swarm's `<stack>_<service>`), an IPv4 address, or a bracketed IPv6 one
-  // with an optional zone; the port is 1-65535. The request carries the same
+  // without a zone (gRPC cannot dial `[fe80::1%eth0]`, and a link-local zone
+  // means nothing to a relay on another machine); the port is 1-65535. The request carries the same
   // pattern, so a bad value is refused by name before it reaches the CHECK.
   // No scheme: it is dialled as a gRPC target, so `https://…` would only fail
   // at the first call, long after the operator who typed it has left the form.
   string url = 3 [(w17.field) = {
     type: CHAR, max_len: 255,
-    pattern: "^([A-Za-z0-9_]([A-Za-z0-9_.-]*[A-Za-z0-9_])?\\.?|\\[[0-9A-Fa-f:.]+(%[A-Za-z0-9_.-]+)?\\]):([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+    pattern: "^([A-Za-z0-9_]([A-Za-z0-9_.-]*[A-Za-z0-9_])?\\.?|\\[[0-9A-Fa-f:.]+\\]):([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
     validation_messages: [{ type: VALIDATION_CHECK_CONSTRAINT, message: "a relay address is host:port with no scheme, e.g. relay.example.com:13444 or clusterrelay:13444" }]
   }];
 
