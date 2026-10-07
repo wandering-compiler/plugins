@@ -36,7 +36,16 @@ message Relay {
   // plane calls. Not the proxy endpoint the caller is handed; that one the
   // relay reports for itself, because only the relay knows how the outside
   // world reaches it (see ScheduleTaskResp.address).
-  string url = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  //
+  // A bare `host:port` — a DNS name (a public one, or a service name on the
+  // same internal network as the control plane, `clusterrelay:13444`), an IPv4
+  // address, or a bracketed IPv6 one. No scheme: it is dialled as a gRPC
+  // target, so `https://…` would only fail at the first call, long after the
+  // operator who typed it has left the form.
+  string url = 3 [(w17.field) = {
+    type: CHAR, max_len: 255,
+    pattern: "^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+\\]):[0-9]{1,5}$"
+  }];
 
   // Lowercase hex SHA-256 of the relay's TLS certificate, no separators, 64
   // characters.
@@ -54,7 +63,14 @@ message Relay {
   // CRYPTED_SECRET field type). A
   // fingerprint is PUBLIC information: leaking this table tells an attacker
   // which certificates to expect and gets them no closer to holding one.
-  string cert_fingerprint = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  //
+  // The format is enforced at the write: a pasted fingerprint with colons,
+  // capitals or a character missing used to be stored and fail only as a pin
+  // mismatch on the first dial.
+  string cert_fingerprint = 4 [(w17.field) = {
+    type: CHAR, max_len: 64,
+    pattern: "^[0-9a-f]{64}$"
+  }];
 
   // Off takes the relay out of scheduling immediately and keeps the row.
   // Default-on is deliberate: a relay is registered by someone who wants it

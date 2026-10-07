@@ -1,5 +1,5 @@
 name: cluster
-version: 0.2.0-rc.7
+version: 0.2.0-rc.8
 requires_w17: ">=1.5"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -124,6 +124,11 @@ presets:
           detail_link_column: name
         detail:
           read: RelayQuery.GetRelay
+          # Registering a relay that runs on ANOTHER machine: the operator
+          # pastes its management address and the fingerprint `relay mint`
+          # printed. A relay deployed beside the control plane is registered
+          # by its deployment instead and never needs this form.
+          create: RelayMutation.CreateRelay
           update: RelayMutation.UpdateRelay
           delete: RelayMutation.DeleteRelay
           # cert_fingerprint IS editable — rotating a relay's certificate is an

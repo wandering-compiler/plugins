@@ -104,6 +104,12 @@ type Relay struct {
 	// plane calls. Not the proxy endpoint the caller is handed; that one the
 	// relay reports for itself, because only the relay knows how the outside
 	// world reaches it (see ScheduleTaskResp.address).
+	//
+	// A bare `host:port` — a DNS name (a public one, or a service name on the
+	// same internal network as the control plane, `clusterrelay:13444`), an IPv4
+	// address, or a bracketed IPv6 one. No scheme: it is dialled as a gRPC
+	// target, so `https://…` would only fail at the first call, long after the
+	// operator who typed it has left the form.
 	Url string `protobuf:"bytes,3,opt,name=url,proto3" json:"url,omitempty"`
 	// Lowercase hex SHA-256 of the relay's TLS certificate, no separators, 64
 	// characters.
@@ -121,6 +127,10 @@ type Relay struct {
 	// CRYPTED_SECRET field type). A
 	// fingerprint is PUBLIC information: leaking this table tells an attacker
 	// which certificates to expect and gets them no closer to holding one.
+	//
+	// The format is enforced at the write: a pasted fingerprint with colons,
+	// capitals or a character missing used to be stored and fail only as a pin
+	// mismatch on the first dial.
 	CertFingerprint string `protobuf:"bytes,4,opt,name=cert_fingerprint,json=certFingerprint,proto3" json:"cert_fingerprint,omitempty"`
 	// Off takes the relay out of scheduling immediately and keeps the row.
 	// Default-on is deliberate: a relay is registered by someone who wants it
@@ -385,13 +395,13 @@ var File_types_models_proto protoreflect.FileDescriptor
 
 const file_types_models_proto_rawDesc = "" +
 	"\n" +
-	"\x12types/models.proto\x12\x13w17.contrib.cluster\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"\x8c\x03\n" +
+	"\x12types/models.proto\x12\x13w17.contrib.cluster\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"\xe7\x03\n" +
 	"\x05Relay\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12\x1e\n" +
 	"\x04name\x18\x02 \x01(\tB\n" +
-	"\xca\xf3\x18\x06\b\x068\x01@@R\x04name\x12\x1b\n" +
-	"\x03url\x18\x03 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x03url\x123\n" +
-	"\x10cert_fingerprint\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\x0fcertFingerprint\x12!\n" +
+	"\xca\xf3\x18\x06\b\x068\x01@@R\x04name\x12f\n" +
+	"\x03url\x18\x03 \x01(\tBT\xca\xf3\x18P\b\x01@\xff\x01rI^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+\\]):[0-9]{1,5}$R\x03url\x12C\n" +
+	"\x10cert_fingerprint\x18\x04 \x01(\tB\x18\xca\xf3\x18\x14\b\x01@@r\x0e^[0-9a-f]{64}$R\x0fcertFingerprint\x12!\n" +
 	"\aenabled\x18\x05 \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1eR\aenabled\x12F\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12I\n" +
