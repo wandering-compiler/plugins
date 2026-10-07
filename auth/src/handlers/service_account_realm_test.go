@@ -20,9 +20,9 @@ import (
 // org_membership stages.
 func withoutOrgs(t *testing.T) {
 	t.Helper()
-	prev := botOrgs
-	botOrgs = nil
-	t.Cleanup(func() { botOrgs = prev })
+	prev, prevMark := botOrgs, orgMembershipStaged
+	botOrgs, orgMembershipStaged = nil, false
+	t.Cleanup(func() { botOrgs, orgMembershipStaged = prev, prevMark })
 }
 
 // realmCaller is an operator of a realm without organizations: signed in, no
@@ -78,8 +78,8 @@ func TestCreateBot_WithoutOrgs_TheRoleCeilingHolds(t *testing.T) {
 func TestListBots_WithoutOrgs_ListsTheRealmsMachines(t *testing.T) {
 	withoutOrgs(t)
 	m := &botAdminMock{realmBots: []*pb.User{
-		{Id: "bot-1", Email: "ci@example.com", Kind: pb.AccountKind_BOT},
-		{Id: "human-1", Email: "person@example.com", Kind: pb.AccountKind_HUMAN},
+		{Id: "bot-1", Email: "ci@example.com", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"},
+		{Id: "human-1", Email: "person@example.com", Kind: pb.AccountKind_HUMAN, TenantId: "tenant-1"},
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	resp, err := h.ListBots(realmCaller("operator-1"), &pb.ListBotsReq{})
@@ -99,8 +99,8 @@ func TestListBots_WithoutOrgs_ListsTheRealmsMachines(t *testing.T) {
 // service_account's) — the handler keeps the machines.
 func TestListBots_InAnOrg_KeepsOnlyTheMachines(t *testing.T) {
 	m := &botAdminMock{members: []*pb.User{
-		{Id: "bot-1", Kind: pb.AccountKind_BOT},
-		{Id: "human-1", Kind: pb.AccountKind_HUMAN},
+		{Id: "bot-1", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"},
+		{Id: "human-1", Kind: pb.AccountKind_HUMAN, TenantId: "tenant-1"},
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	resp, err := h.ListBots(ctxWithCallerInOrg("admin-1", "org-1"), &pb.ListBotsReq{})
@@ -160,5 +160,104 @@ func TestListBotRoles_WithoutOrgs(t *testing.T) {
 	resp, err := h.ListBotRoles(realmCaller("operator-1"), &pb.ListBotRolesReq{})
 	if err != nil || len(resp.GetRoles()) != 1 || resp.GetRoles()[0].GetId() != "role-api" {
 		t.Fatalf("roles = %v, err %v", resp.GetRoles(), err)
+	}
+}
+
+// A build that has organizations but not their machine-account scoping must
+// refuse, not fall back to the realm-wide behaviour — that would list and mint
+// across organizations and compile cleanly doing it.
+func TestMachineAccounts_OrgsWithoutTheirScopingRefuse(t *testing.T) {
+	prev, prevMark := botOrgs, orgMembershipStaged
+	botOrgs, orgMembershipStaged = nil, true
+	t.Cleanup(func() { botOrgs, orgMembershipStaged = prev, prevMark })
+
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}, realmBots: []*pb.User{{Id: "bot-1", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	ctx := ctxWithCallerInOrg("admin-1", "org-1")
+	_, errList := h.ListBots(ctx, &pb.ListBotsReq{})
+	_, errMint := h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1"})
+	_, errCreate := h.CreateBot(ctx, &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"})
+	for name, err := range map[string]error{"list": errList, "mint": errMint, "create": errCreate} {
+		if status.Code(err) != codes.Internal {
+			t.Errorf("%s: code = %v (err %v), want Internal — the build is missing its org scoping", name, status.Code(err), err)
+		}
+	}
+	if m.realmListed || m.issued || m.created {
+		t.Errorf("something ran anyway: listed=%v issued=%v created=%v", m.realmListed, m.issued, m.created)
+	}
+}
+
+// Under tenant_scope an operator sees, and mints for, only their own tenant's
+// machine accounts — without organizations the realm-wide list was every
+// tenant's.
+func TestMachineAccounts_WithoutOrgs_StayInTheOperatorsTenant(t *testing.T) {
+	withoutOrgs(t)
+	m := &botAdminMock{realmBots: []*pb.User{
+		{Id: "bot-mine", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"},
+		{Id: "bot-other", Kind: pb.AccountKind_BOT, TenantId: "tenant-2"},
+	}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	resp, err := h.ListBots(realmCaller("operator-1"), &pb.ListBotsReq{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.GetBots()) != 1 || resp.GetBots()[0].GetId() != "bot-mine" {
+		t.Errorf("bots = %v — another tenant's machine account was listed", resp.GetBots())
+	}
+
+	m2 := &botAdminMock{botTenant2: "tenant-2"}
+	h2 := &AuthServiceHandler{Query: m2, Mutation: m2}
+	_, err = h2.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{UserId: "bot-other"})
+	if status.Code(err) != codes.PermissionDenied || m2.issued {
+		t.Fatalf("minting for another tenant's bot: err=%v issued=%v", err, m2.issued)
+	}
+	if !strings.Contains(err.Error(), errNotABotAccount.Error()) {
+		t.Errorf("another tenant's bot is told apart from a non-bot: %v", err)
+	}
+}
+
+// A caller with no tenant in scope sees no machine account (fail closed).
+func TestMachineAccounts_NoTenantInScopeSeesNone(t *testing.T) {
+	withoutOrgs(t)
+	m := &botAdminMock{realmBots: []*pb.User{{Id: "bot-1", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	resp, err := h.ListBots(withHeldPermissions(ctxWithCaller("operator-1"), "operator-1"), &pb.ListBotsReq{})
+	if err != nil || len(resp.GetBots()) != 0 {
+		t.Fatalf("a caller with no tenant: bots=%v err=%v", resp.GetBots(), err)
+	}
+}
+
+// Minting is held to the operator's ceiling: a bot that holds a role the
+// operator could not grant gets no token from them — with organizations and
+// without.
+func TestIssueBotToken_RefusesABotAboveTheOperator(t *testing.T) {
+	for name, orgs := range map[string]bool{"with orgs": true, "without orgs": false} {
+		t.Run(name, func(t *testing.T) {
+			if !orgs {
+				withoutOrgs(t)
+			}
+			m := &botAdminMock{
+				botsOrg:   "org-1",
+				apiRoles:  []*pb.ApiRealmRole{{Id: "role-admin"}},
+				rolePerms: map[string][]int32{"role-admin": {7, 99}},
+				botRoles:  []string{"role-admin"},
+			}
+			h := &AuthServiceHandler{Query: m, Mutation: m}
+			md := func() context.Context {
+				return metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+					scopeUserIDKey, "op-1", "x-w17-scope-org_id", "org-1", "x-w17-scope-tenant_id", "tenant-1"))
+			}
+			_, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7), &pb.IssueBotTokenReq{UserId: "bot-1"})
+			if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "machine account holds a role") {
+				t.Fatalf("err = %v, want the mint ceiling's PermissionDenied", err)
+			}
+			if m.issued {
+				t.Error("a token was minted for a bot above the operator")
+			}
+			// The control: the same operator holding everything the role carries.
+			if _, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7, 99), &pb.IssueBotTokenReq{UserId: "bot-1"}); err != nil || !m.issued {
+				t.Fatalf("an operator holding the bot's role was refused: %v", err)
+			}
+		})
 	}
 }

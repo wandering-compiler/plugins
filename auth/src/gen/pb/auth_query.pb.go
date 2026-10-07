@@ -856,9 +856,10 @@ func (x *ListUsersResp) GetPaging() *w17.Paging {
 type ListOrgMemberAccountsReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The ACTIVE organization. Not optional: User is not an org-scoped model —
-	// a person belongs to several — so without this the list is every machine
-	// account on the console. It was, and one company's operator saw another's
-	// (reported on production 2026-09-21).
+	// a person belongs to several — so without this the list would be every
+	// account on the console. The machine-account directory once was exactly
+	// that, and one company's operator saw another's bots (reported on
+	// production 2026-09-21).
 	OrgId         string `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1035,7 +1036,8 @@ func (x *GetOrgMemberReq) GetOrgId() string {
 
 type GetOrgMemberResp struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Empty when the bot is not in this organization — or is not a bot.
+	// Empty when the account is not a member of this organization. A member is
+	// a person or a machine; whether it is a BOT the caller asks of the account.
 	UserId        string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6099,7 +6101,7 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\"n\n" +
 	"\x1eListPendingInvitesForEmailResp\x12<\n" +
 	"\ainvites\x18\x01 \x03(\v2\".w17.contrib.auth.PendingInviteRowR\ainvites:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\x89\xa1\x01\n" +
+	"org_invite2\xbd\xa2\x01\n" +
 	"\tAuthQuery\x12\xec\x03\n" +
 	"\x0eGetUserByEmail\x12#.w17.contrib.auth.GetUserByEmailReq\x1a$.w17.contrib.auth.GetUserByEmailResp\"\x8e\x03\xf2\xf3\x18\x89\x03B\x86\x03\n" +
 	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\xba\x03\n" +
@@ -6118,13 +6120,13 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x04main\x12,SELECT COUNT(*) AS count FROM @module.User u\x8a\xf5\x18\x04rbac\x12\xbd\x02\n" +
 	"\tListUsers\x12\x1e.w17.contrib.auth.ListUsersReq\x1a\x1f.w17.contrib.auth.ListUsersResp\"\xee\x01\xf2\xf3\x18\xdb\x01B\xd8\x01\n" +
 	"\x04main\x12\xcf\x01SELECT u.id AS id, u.email AS email,        ?feature(service_account) u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\n" +
-	"user_admin\x12\xc9\x03\n" +
-	"\x15ListOrgMemberAccounts\x12*.w17.contrib.auth.ListOrgMemberAccountsReq\x1a+.w17.contrib.auth.ListOrgMemberAccountsResp\"\xd6\x02\xf2\xf3\x18\xbf\x02B\xbc\x02\n" +
-	"\x04main\x12\xb3\x02SELECT u.id AS id, u.email AS email,        ?feature(service_account) u.kind AS kind,        ?feature(user_admin) u.disabled_at AS disabled_at,        u.created_at AS created_at FROM @module.User u JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0eorg_membership\x12\xcb\x02\n" +
+	"user_admin\x12\x81\x04\n" +
+	"\x15ListOrgMemberAccounts\x12*.w17.contrib.auth.ListOrgMemberAccountsReq\x1a+.w17.contrib.auth.ListOrgMemberAccountsResp\"\x8e\x03\xf2\xf3\x18\xf7\x02B\xf4\x02\n" +
+	"\x04main\x12\xeb\x02SELECT u.id AS id, u.email AS email,        ?feature(service_account) u.kind AS kind,        ?feature(user_admin) u.disabled_at AS disabled_at,        ?feature(tenant_scope) u.tenant_id AS tenant_id,        u.created_at AS created_at FROM @module.User u JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0eorg_membership\x12\xcb\x02\n" +
 	"\x0fListBotAccounts\x12$.w17.contrib.auth.ListBotAccountsReq\x1a%.w17.contrib.auth.ListBotAccountsResp\"\xea\x01\xf2\xf3\x18\xd2\x01B\xcf\x01\n" +
-	"\x04main\x12\xc6\x01SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\xe6\x02\n" +
-	"\x18ListRealmMachineAccounts\x12-.w17.contrib.auth.ListRealmMachineAccountsReq\x1a..w17.contrib.auth.ListRealmMachineAccountsResp\"\xea\x01\xf2\xf3\x18\xd2\x01B\xcf\x01\n" +
-	"\x04main\x12\xc6\x01SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\x83\x02\n" +
+	"\x04main\x12\xc6\x01SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at, u.created_at AS created_at FROM @module.User u WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\xa5\x03\n" +
+	"\x18ListRealmMachineAccounts\x12-.w17.contrib.auth.ListRealmMachineAccountsReq\x1a..w17.contrib.auth.ListRealmMachineAccountsResp\"\xa9\x02\xf2\xf3\x18\x91\x02B\x8e\x02\n" +
+	"\x04main\x12\x85\x02SELECT u.id AS id, u.email AS email,        u.kind AS kind,        u.disabled_at AS disabled_at,        ?feature(tenant_scope) u.tenant_id AS tenant_id,        u.created_at AS created_at FROM @module.User u WHERE u.kind = 1 ORDER BY u.created_at DESC, u.id DESC\x8a\xf5\x18\x0fservice_account\x12\x83\x02\n" +
 	"\fGetOrgMember\x12!.w17.contrib.auth.GetOrgMemberReq\x1a\".w17.contrib.auth.GetOrgMemberResp\"\xab\x01\xf2\xf3\x18\x94\x01B\x91\x01\n" +
 	"\x04main\x12\x88\x01SELECT u.id AS user_id FROM @module.User u JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id WHERE u.id = :user_id\x8a\xf5\x18\x0eorg_membership\x12\x9a\x02\n" +
 	"\x11ListApiRealmRoles\x12&.w17.contrib.auth.ListApiRealmRolesReq\x1a'.w17.contrib.auth.ListApiRealmRolesResp\"\xb3\x01\xf2\xf3\x18\x9b\x01B\x98\x01\n" +
@@ -6169,9 +6171,9 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x11GetProviderByName\x12&.w17.contrib.auth.GetProviderByNameReq\x1a'.w17.contrib.auth.GetProviderByNameResp\"\xf0\x04\xf2\xf3\x18\xe2\x04B\xdf\x04\n" +
 	"\x04main\x12\xd6\x04SELECT p.id AS provider.id,        p.name AS provider.name,        p.display_name AS provider.display_name,        p.client_id AS provider.client_id,        p.client_secret AS provider.client_secret,        p.authorize_url AS provider.authorize_url,        p.token_url AS provider.token_url,        p.userinfo_url AS provider.userinfo_url,        p.scopes AS provider.scopes,        p.subject_path AS provider.subject_path,        p.email_path AS provider.email_path,        p.enabled AS provider.enabled,        p.created_at AS provider.created_at FROM @module.OAuthProvider p WHERE p.name = :name\x8a\xf5\x18\x05oauth\x12\xc9\x03\n" +
 	"\x10GetOAuthIdentity\x12%.w17.contrib.auth.GetOAuthIdentityReq\x1a&.w17.contrib.auth.GetOAuthIdentityResp\"\xe5\x02\xf2\xf3\x18\xd7\x02B\xd4\x02\n" +
-	"\x04main\x12\xcb\x02SELECT i.id AS identity.id,        i.user_id AS identity.user_id,        i.provider_id AS identity.provider_id,        i.external_id AS identity.external_id,        i.email AS identity.email,        i.created_at AS identity.created_at FROM @module.OAuthIdentity i WHERE i.provider_id = :provider_id AND i.external_id = :external_id\x8a\xf5\x18\x05oauth\x12\xe2\x03\n" +
-	"\vGetUserById\x12 .w17.contrib.auth.GetUserByIdReq\x1a!.w17.contrib.auth.GetUserByIdResp\"\x8d\x03\xf2\xf3\x18\x88\x03B\x85\x03\n" +
-	"\x04main\x12\xfc\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        u.created_at AS user.created_at FROM @module.User u WHERE u.id = :user_id\x12\xe9\x02\n" +
+	"\x04main\x12\xcb\x02SELECT i.id AS identity.id,        i.user_id AS identity.user_id,        i.provider_id AS identity.provider_id,        i.external_id AS identity.external_id,        i.email AS identity.email,        i.created_at AS identity.created_at FROM @module.OAuthIdentity i WHERE i.provider_id = :provider_id AND i.external_id = :external_id\x8a\xf5\x18\x05oauth\x12\x9f\x04\n" +
+	"\vGetUserById\x12 .w17.contrib.auth.GetUserByIdReq\x1a!.w17.contrib.auth.GetUserByIdResp\"\xca\x03\xf2\xf3\x18\xc5\x03B\xc2\x03\n" +
+	"\x04main\x12\xb9\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(tenant_scope) u.tenant_id AS user.tenant_id,        u.created_at AS user.created_at FROM @module.User u WHERE u.id = :user_id\x12\xe9\x02\n" +
 	"\rGetTotpSecret\x12\".w17.contrib.auth.GetTotpSecretReq\x1a#.w17.contrib.auth.GetTotpSecretResp\"\x8e\x02\xf2\xf3\x18\xfb\x01B\xf8\x01\n" +
 	"\x04main\x12\xef\x01SELECT s.id AS secret.id,        s.user_id AS secret.user_id,        s.secret AS secret.secret,        s.confirmed_at AS secret.confirmed_at,        s.created_at AS secret.created_at FROM @module.UserTotpSecret s WHERE s.user_id = :user_id\x8a\xf5\x18\n" +
 	"two_factor\x12\xa9\x03\n" +

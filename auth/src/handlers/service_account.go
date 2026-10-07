@@ -20,8 +20,9 @@ var errAuthnBotNoPassword = errors.New("machine account: password sign-in is not
 
 // This file implements the `service_account` feature — MACHINE accounts.
 //
-// A bot is an ordinary user row with `kind = BOT`: same tables, same org
-// membership, same role grant, same token machinery. What differs is that it
+// A bot is an ordinary user row with `kind = BOT`: same tables, same role
+// grant (and org membership, where the realm has organizations), same token
+// machinery. What differs is that it
 // cannot sign in with a password and that an admin may mint a token FOR it —
 // two halves of one property, and the reason both live here.
 //
@@ -86,8 +87,12 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	// for it. The listing that leaked those ids made that a two-step attack
 	// with no barrier between the steps. A realm without organizations is one
 	// organization, and every machine account in it is the operator's.
-	if botOrgs != nil {
-		inOrg, err := botOrgs.isMember(ctx, h, target)
+	orgs, err := botOrgScopeOrNil()
+	if err != nil {
+		return nil, err
+	}
+	if orgs != nil {
+		inOrg, err := orgs.isMember(ctx, h, target)
 		if err != nil {
 			return nil, err
 		}
@@ -109,11 +114,21 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		}
 		return nil, err
 	}
-	if userResp.GetUser().GetKind() != pb.AccountKind_BOT {
+	if userResp.GetUser().GetKind() != pb.AccountKind_BOT || !visibleBot(ctx, userResp.GetUser()) {
 		// The message names the RULE, not the account: a caller must not
 		// learn from the refusal whether the id belongs to a person, a bot it
 		// may not touch, or nothing at all.
 		return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+	}
+
+	// Not above the minting operator. A token acts with the bot's roles, so
+	// minting for a bot whose role the operator could not have GRANTED is
+	// handing out what they themselves may not do — the rule CreateBot holds
+	// at creation, held here too, because the bot may have been created by
+	// someone with more. (The token's subset only narrows the bot; it cannot
+	// lift this.)
+	if err := h.checkMayActAsBot(ctx, target); err != nil {
+		return nil, err
 	}
 
 	// The token and its narrowing are ONE unit, and this is the sharpest
@@ -176,6 +191,35 @@ var botUserFillers []func(ctx context.Context, req *pb.CreateBotUserReq) error
 // other machine account, and minted for by any operator who may mint at all.
 var botOrgs *botOrgScope
 
+// errBotOrgScopeMissing is the refusal when a build has organizations but not
+// the code that scopes machine accounts to them — see orgMembershipStaged.
+var errBotOrgScopeMissing = status.Error(codes.Internal,
+	"machine accounts: this build has organizations but not their scoping (service_account_org.go) — refusing rather than serving every organization's machine accounts")
+
+// botOrgScopeOrNil returns the org scope, nil for a realm without
+// organizations — and refuses a build that has organizations but no scope.
+func botOrgScopeOrNil() (*botOrgScope, error) {
+	if botOrgs == nil && orgMembershipStaged {
+		return nil, errBotOrgScopeMissing
+	}
+	return botOrgs, nil
+}
+
+// botVisible are the checks another feature adds to "may this caller see and
+// mint for this machine account" — tenant_scope's tenant, today
+// (service_account_tenant.go). Appended, never assigned, like botUserFillers.
+// A machine account fails if ANY check says no.
+var botVisible []func(ctx context.Context, bot *pb.User) bool
+
+func visibleBot(ctx context.Context, bot *pb.User) bool {
+	for _, ok := range botVisible {
+		if !ok(ctx, bot) {
+			return false
+		}
+	}
+	return true
+}
+
 type botOrgScope struct {
 	// active is the organization the caller acts in; an error when none is
 	// selected, which every caller refuses.
@@ -204,8 +248,12 @@ func (h *AuthServiceHandler) createBotUserTx(txCtx context.Context, email, orgID
 		return "", err
 	}
 	userID := created.GetUser().GetId()
-	if botOrgs != nil {
-		if err := botOrgs.enroll(txCtx, h, userID, roleID, orgID); err != nil {
+	orgs, err := botOrgScopeOrNil()
+	if err != nil {
+		return "", err
+	}
+	if orgs != nil {
+		if err := orgs.enroll(txCtx, h, userID, roleID, orgID); err != nil {
 			return "", err
 		}
 		return userID, nil
@@ -301,10 +349,14 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 	// had to select one to get here, and taking an id off the wire would let
 	// an operator provision a machine account into a company they are not
 	// acting in.
+	orgs, err := botOrgScopeOrNil()
+	if err != nil {
+		return nil, err
+	}
 	var orgID string
-	if botOrgs != nil {
+	if orgs != nil {
 		var orgErr error
-		if orgID, orgErr = botOrgs.active(ctx); orgErr != nil {
+		if orgID, orgErr = orgs.active(ctx); orgErr != nil {
 			return nil, status.Error(codes.FailedPrecondition,
 				"select an organization before creating a machine account — its role is granted inside one")
 		}
@@ -362,9 +414,13 @@ func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*
 	// console, and one company's operator saw another's (reported on
 	// production 2026-09-21). A realm without organizations is one, and the
 	// list is all of its machine accounts.
+	orgs, err := botOrgScopeOrNil()
+	if err != nil {
+		return nil, err
+	}
 	var accounts []*pb.User
-	if botOrgs != nil {
-		members, err := botOrgs.accounts(ctx, h)
+	if orgs != nil {
+		members, err := orgs.accounts(ctx, h)
 		if err != nil {
 			return nil, err
 		}
@@ -380,7 +436,7 @@ func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*
 	for _, u := range accounts {
 		// The kind is checked HERE for both sources: a membership is held by
 		// people and machines alike.
-		if u.GetKind() != pb.AccountKind_BOT {
+		if u.GetKind() != pb.AccountKind_BOT || !visibleBot(ctx, u) {
 			continue
 		}
 		out = append(out, &pb.BotSummary{
@@ -414,4 +470,29 @@ func (h *AuthServiceHandler) ListBotRoles(ctx context.Context, _ *pb.ListBotRole
 		out = append(out, &pb.BotRole{Id: r.GetId(), Name: r.GetName(), Description: r.GetDescription()})
 	}
 	return &pb.ListBotRolesResp{Roles: out}, nil
+}
+
+// errBotAboveCaller is the refusal for minting for a machine account that holds
+// a role the operator could not grant. Named like the CreateBot refusal: the
+// rule, not the bot's contents.
+var errBotAboveCaller = errors.New("that machine account holds a role carrying permissions you do not hold — a token for it would act beyond your own")
+
+// checkMayActAsBot refuses when the bot holds any role above the caller's
+// ceiling (grantableRoleIDs, the one answer CreateBot also reads).
+func (h *AuthServiceHandler) checkMayActAsBot(ctx context.Context, botID string) error {
+	grants, err := h.Query.GetUserRoleGrants(ctx, &pb.GetUserRoleGrantsReq{UserId: botID})
+	if err != nil {
+		return err
+	}
+	grantable, err := h.grantableRoleIDs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, g := range grants.GetGrants() {
+		if !grantable[g.GetRoleId()] {
+			return refusal(ctx, codes.PermissionDenied, errBotAboveCaller.Error(),
+				CodeRoleAboveCaller, "user_id", MsgBotAboveCaller, nil)
+		}
+	}
+	return nil
 }

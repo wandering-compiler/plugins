@@ -63,7 +63,17 @@ type botTokenQuery struct {
 }
 
 func (q botTokenQuery) GetUserById(context.Context, *pb.GetUserByIdReq, ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	return &pb.GetUserByIdResp{User: &pb.User{Id: "u1", Kind: q.kind}}, nil
+	return &pb.GetUserByIdResp{User: &pb.User{Id: "u1", Kind: q.kind, TenantId: "tenant-1"}}, nil
+}
+
+// The bot holds no role, so the mint ceiling has nothing to refuse — these
+// cases test the KIND check; the ceiling has its own.
+func (q botTokenQuery) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
+	return &pb.GetUserRoleGrantsResp{}, nil
+}
+
+func (q botTokenQuery) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
+	return &pb.ListRoleGrantsResp{}, nil
 }
 
 // The membership probe answers YES here so these cases keep testing what they
@@ -149,7 +159,17 @@ type botAdminMock struct {
 	members     []*pb.User         // ListOrgMemberAccounts
 	realmBots   []*pb.User         // ListRealmMachineAccounts
 	realmListed bool
-	missing     bool // GetUserById answers NotFound
+	missing     bool     // GetUserById answers NotFound
+	botTenant2  string   // GetUserById's tenant; "" = tenant-1
+	botRoles    []string // GetUserRoleGrants of the target bot
+}
+
+func (m *botAdminMock) GetUserRoleGrants(ctx context.Context, in *pb.GetUserRoleGrantsReq, _ ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
+	out := &pb.GetUserRoleGrantsResp{}
+	for _, r := range m.botRoles {
+		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: r, PermissionIds: m.rolePerms[r]})
+	}
+	return out, nil
 }
 
 func (m *botAdminMock) ListRoleGrants(ctx context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
@@ -359,7 +379,11 @@ func (m *botAdminMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _
 	if m.missing {
 		return nil, status.Error(codes.NotFound, "no such user")
 	}
-	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Kind: pb.AccountKind_BOT}}, nil
+	tenant := m.botTenant2
+	if tenant == "" {
+		tenant = "tenant-1"
+	}
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Kind: pb.AccountKind_BOT, TenantId: tenant}}, nil
 }
 
 func (m *botAdminMock) GetOrgMember(ctx context.Context, in *pb.GetOrgMemberReq, _ ...grpc.CallOption) (*pb.GetOrgMemberResp, error) {

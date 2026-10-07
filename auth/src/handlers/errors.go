@@ -186,6 +186,10 @@ const (
 
 	MsgRoleAboveCaller = "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
 
+	// Minting for a machine account whose role the operator could not grant —
+	// the token would act beyond the operator's own permissions.
+	MsgBotAboveCaller = "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
+
 	MsgTenantUnknown = "This address does not belong to any organization here. Check the address you registered on."
 
 	MsgTotpUnavailable = "Authenticator apps are not available here. Your sign-in codes arrive by message instead."

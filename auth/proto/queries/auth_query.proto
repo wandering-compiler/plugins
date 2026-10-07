@@ -169,9 +169,10 @@ message ListUsersResp {
 message ListOrgMemberAccountsReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   // The ACTIVE organization. Not optional: User is not an org-scoped model —
-  // a person belongs to several — so without this the list is every machine
-  // account on the console. It was, and one company's operator saw another's
-  // (reported on production 2026-09-21).
+  // a person belongs to several — so without this the list would be every
+  // account on the console. The machine-account directory once was exactly
+  // that, and one company's operator saw another's bots (reported on
+  // production 2026-09-21).
   string org_id = 1 [(w17.field) = { type: UUID }];
 }
 
@@ -190,7 +191,8 @@ message GetOrgMemberReq {
 }
 message GetOrgMemberResp {
   option (w17.contrib.plugin_feature) = "org_membership";
-  // Empty when the bot is not in this organization — or is not a bot.
+  // Empty when the account is not a member of this organization. A member is
+  // a person or a machine; whether it is a BOT the caller asks of the account.
   string user_id = 1 [(w17.field) = { type: UUID, blank: true }];
 }
 message ListOrgMemberAccountsResp {
@@ -1173,6 +1175,7 @@ service AuthQuery {
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
+          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.created_at AS created_at "
           "FROM @module.User u "
           "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
@@ -1225,7 +1228,9 @@ service AuthQuery {
         dql:
           "SELECT u.id AS id, u.email AS email, "
           "       u.kind AS kind, "
-          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "       u.disabled_at AS disabled_at, "
+          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
+          "       u.created_at AS created_at "
           "FROM @module.User u "
           "WHERE u.kind = 1 "
           "ORDER BY u.created_at DESC, u.id DESC"
@@ -1741,6 +1746,9 @@ service AuthQuery {
           // the OAuth callback and the CLI exchange issued sessions to an
           // account disabled after its password step (examples/auth-proof).
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          // tenant_id (`tenant_scope`): IssueBotToken holds the target to the
+          // operator's tenant (service_account_tenant.go) through this read.
+          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           "       u.created_at AS user.created_at "
           "FROM @module.User u WHERE u.id = :user_id"
       }
