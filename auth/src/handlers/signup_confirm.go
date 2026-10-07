@@ -163,6 +163,14 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 		return nil, err
 	}
 
+	// The link is claimed when the registration STARTS, because only this call
+	// carries it — the confirmation does not. An address that never confirms
+	// keeps the invitation bound to itself, which is what an invitation
+	// addressed to it would have been.
+	if err := signupClaimInvite(ctx, h, email, req.GetInviteToken()); err != nil {
+		return nil, err
+	}
+
 	create := &pb.CreatePendingSignUpReq{
 		Email:        email,
 		PasswordHash: hashed,

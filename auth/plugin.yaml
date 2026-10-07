@@ -1,6 +1,6 @@
 name: auth
-version: 0.1.0-rc.18
-requires_w17: ">=1.7"
+version: 0.1.0-rc.19
+requires_w17: ">=1.9"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -244,7 +244,7 @@ features:
       # lookup lives here, not in org_invite.go, because both features grant.
       - handlers/org_membership_role.go
   - name: org_invite
-    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / MarkOrgInviteAccepted / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
+    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / ConsumeOrgInviteByToken / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
     default: false
     # Built ON org_membership, not merely alongside it: the invite writes an
     # OrgMembership row and an org-scoped UserRole, both of which are types

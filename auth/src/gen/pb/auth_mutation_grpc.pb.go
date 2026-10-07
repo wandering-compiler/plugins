@@ -74,6 +74,7 @@ const (
 	AuthMutation_UpdateUserPassword_FullMethodName            = "/w17.contrib.auth.AuthMutation/UpdateUserPassword"
 	AuthMutation_UpdateUserPasswordIfUnchanged_FullMethodName = "/w17.contrib.auth.AuthMutation/UpdateUserPasswordIfUnchanged"
 	AuthMutation_DeleteUserSessionsForReset_FullMethodName    = "/w17.contrib.auth.AuthMutation/DeleteUserSessionsForReset"
+	AuthMutation_DeleteOtherSessionTokens_FullMethodName      = "/w17.contrib.auth.AuthMutation/DeleteOtherSessionTokens"
 	AuthMutation_CreateEmailVerificationToken_FullMethodName  = "/w17.contrib.auth.AuthMutation/CreateEmailVerificationToken"
 	AuthMutation_ConsumeEmailVerificationToken_FullMethodName = "/w17.contrib.auth.AuthMutation/ConsumeEmailVerificationToken"
 	AuthMutation_MarkEmailVerified_FullMethodName             = "/w17.contrib.auth.AuthMutation/MarkEmailVerified"
@@ -91,9 +92,9 @@ const (
 	AuthMutation_DeleteOrgMembership_FullMethodName           = "/w17.contrib.auth.AuthMutation/DeleteOrgMembership"
 	AuthMutation_RevokeUserToken_FullMethodName               = "/w17.contrib.auth.AuthMutation/RevokeUserToken"
 	AuthMutation_CreateOrgInvite_FullMethodName               = "/w17.contrib.auth.AuthMutation/CreateOrgInvite"
+	AuthMutation_BindOpenOrgInvite_FullMethodName             = "/w17.contrib.auth.AuthMutation/BindOpenOrgInvite"
 	AuthMutation_ConsumeOrgInviteByToken_FullMethodName       = "/w17.contrib.auth.AuthMutation/ConsumeOrgInviteByToken"
 	AuthMutation_ClearExpiredOrgInvite_FullMethodName         = "/w17.contrib.auth.AuthMutation/ClearExpiredOrgInvite"
-	AuthMutation_MarkOrgInviteAccepted_FullMethodName         = "/w17.contrib.auth.AuthMutation/MarkOrgInviteAccepted"
 	AuthMutation_DeleteOrgInvite_FullMethodName               = "/w17.contrib.auth.AuthMutation/DeleteOrgInvite"
 )
 
@@ -298,13 +299,13 @@ type AuthMutationClient interface {
 	UpdateUser(ctx context.Context, in *UpdateUserReq, opts ...grpc.CallOption) (*UpdateUserResp, error)
 	DeleteUser(ctx context.Context, in *DeleteUserReq, opts ...grpc.CallOption) (*DeleteUserResp, error)
 	// DisableUsers — bulk soft-disable (Django is_active=false). Sets
-	// disabled_at on the still-active rows in the id set and returns the
-	// ids it flipped. SignIn rejects a disabled account
-	// (handlers/user_admin.go), but existing tokens survive until expiry
-	// or revocation. Single-op: the `IN (:ids)` array bind must sit on the
-	// FINAL op (the dialect-aware IN-expansion only runs there — a
-	// non-final leg with `IN (:collection)` is refused, T2-6 F-A2). Gated
-	// user_admin.
+	// disabled_at on the still-active rows in the id set, and DELETES every
+	// token of those accounts — sessions and API tokens. Disabling a departing
+	// person has to end their access, not only their next sign-in: tokens used
+	// to survive until they expired (30 days for a session). Re-enabling gives
+	// nothing back; the person signs in again. One unit of work, both legs on
+	// the same id set (an `IN (:ids)` on a non-final leg needs w17 platform
+	// 1.9). Gated user_admin.
 	DisableUsers(ctx context.Context, in *DisableUsersReq, opts ...grpc.CallOption) (*DisableUsersResp, error)
 	// EnableUsers — bulk re-enable (clear disabled_at); returns the ids it
 	// re-enabled. Single-op for the same F-A2 reason as DisableUsers.
@@ -355,6 +356,9 @@ type AuthMutationClient interface {
 	// DeleteUserSessionsForReset — revoke every token for the user after a
 	// reset (sessions + API tokens; the conservative post-reset default).
 	DeleteUserSessionsForReset(ctx context.Context, in *DeleteUserSessionsForResetReq, opts ...grpc.CallOption) (*DeleteUserSessionsForResetResp, error)
+	// DeleteOtherSessionTokens — see the request. No RETURNING: a person with
+	// no other session deletes nothing, and that is no failure.
+	DeleteOtherSessionTokens(ctx context.Context, in *DeleteOtherSessionTokensReq, opts ...grpc.CallOption) (*DeleteOtherSessionTokensResp, error)
 	CreateEmailVerificationToken(ctx context.Context, in *CreateEmailVerificationTokenReq, opts ...grpc.CallOption) (*CreateEmailVerificationTokenResp, error)
 	ConsumeEmailVerificationToken(ctx context.Context, in *ConsumeEmailVerificationTokenReq, opts ...grpc.CallOption) (*ConsumeEmailVerificationTokenResp, error)
 	// MarkEmailVerified — stamp the user's email_verified_at.
@@ -463,6 +467,11 @@ type AuthMutationClient interface {
 	// RETURNS the email, and that is load-bearing rather than convenience: NULL means
 	// the invitation was OPEN, which is what decides whether accepting it may derive a
 	// verified address. The caller cannot ask afterwards — the row is spent.
+	// BindOpenOrgInvite — see the request. No RETURNING: a link already bound
+	// (or unknown, or spent) matches nothing, and the caller reads the
+	// invitation back to learn whose it is — a zero-row RETURNING inside a
+	// transaction would abort the registration it is part of.
+	BindOpenOrgInvite(ctx context.Context, in *BindOpenOrgInviteReq, opts ...grpc.CallOption) (*BindOpenOrgInviteResp, error)
 	ConsumeOrgInviteByToken(ctx context.Context, in *ConsumeOrgInviteByTokenReq, opts ...grpc.CallOption) (*ConsumeOrgInviteByTokenResp, error)
 	// ClearExpiredOrgInvite — release the slot an EXPIRED invitation holds.
 	//
@@ -482,13 +491,6 @@ type AuthMutationClient interface {
 	// NOT_FOUND because of the RETURNING. The caller treats it as "nothing to
 	// clear" rather than as a failure.
 	ClearExpiredOrgInvite(ctx context.Context, in *ClearExpiredOrgInviteReq, opts ...grpc.CallOption) (*ClearExpiredOrgInviteResp, error)
-	// MarkOrgInviteAccepted — claim a live invitation, single-use, in ONE
-	// statement. The not-yet-accepted and not-expired tests sit in the
-	// WHERE beside the write, exactly as ConsumePasswordResetToken does, so
-	// there is no window between checking an invitation and consuming it.
-	// A replayed, expired or already-accepted invite matches zero rows and
-	// comes back with an empty org_id.
-	MarkOrgInviteAccepted(ctx context.Context, in *MarkOrgInviteAcceptedReq, opts ...grpc.CallOption) (*MarkOrgInviteAcceptedResp, error)
 	// DeleteOrgInvite — withdraw a PENDING invitation. Scoped by org_id in
 	// the WHERE and not only by id: the handler already knows the caller's
 	// active org, and an id-only delete would let a member of one
@@ -964,6 +966,16 @@ func (c *authMutationClient) DeleteUserSessionsForReset(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *authMutationClient) DeleteOtherSessionTokens(ctx context.Context, in *DeleteOtherSessionTokensReq, opts ...grpc.CallOption) (*DeleteOtherSessionTokensResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteOtherSessionTokensResp)
+	err := c.cc.Invoke(ctx, AuthMutation_DeleteOtherSessionTokens_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authMutationClient) CreateEmailVerificationToken(ctx context.Context, in *CreateEmailVerificationTokenReq, opts ...grpc.CallOption) (*CreateEmailVerificationTokenResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateEmailVerificationTokenResp)
@@ -1134,6 +1146,16 @@ func (c *authMutationClient) CreateOrgInvite(ctx context.Context, in *CreateOrgI
 	return out, nil
 }
 
+func (c *authMutationClient) BindOpenOrgInvite(ctx context.Context, in *BindOpenOrgInviteReq, opts ...grpc.CallOption) (*BindOpenOrgInviteResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BindOpenOrgInviteResp)
+	err := c.cc.Invoke(ctx, AuthMutation_BindOpenOrgInvite_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authMutationClient) ConsumeOrgInviteByToken(ctx context.Context, in *ConsumeOrgInviteByTokenReq, opts ...grpc.CallOption) (*ConsumeOrgInviteByTokenResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ConsumeOrgInviteByTokenResp)
@@ -1148,16 +1170,6 @@ func (c *authMutationClient) ClearExpiredOrgInvite(ctx context.Context, in *Clea
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ClearExpiredOrgInviteResp)
 	err := c.cc.Invoke(ctx, AuthMutation_ClearExpiredOrgInvite_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *authMutationClient) MarkOrgInviteAccepted(ctx context.Context, in *MarkOrgInviteAcceptedReq, opts ...grpc.CallOption) (*MarkOrgInviteAcceptedResp, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MarkOrgInviteAcceptedResp)
-	err := c.cc.Invoke(ctx, AuthMutation_MarkOrgInviteAccepted_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1375,13 +1387,13 @@ type AuthMutationServer interface {
 	UpdateUser(context.Context, *UpdateUserReq) (*UpdateUserResp, error)
 	DeleteUser(context.Context, *DeleteUserReq) (*DeleteUserResp, error)
 	// DisableUsers — bulk soft-disable (Django is_active=false). Sets
-	// disabled_at on the still-active rows in the id set and returns the
-	// ids it flipped. SignIn rejects a disabled account
-	// (handlers/user_admin.go), but existing tokens survive until expiry
-	// or revocation. Single-op: the `IN (:ids)` array bind must sit on the
-	// FINAL op (the dialect-aware IN-expansion only runs there — a
-	// non-final leg with `IN (:collection)` is refused, T2-6 F-A2). Gated
-	// user_admin.
+	// disabled_at on the still-active rows in the id set, and DELETES every
+	// token of those accounts — sessions and API tokens. Disabling a departing
+	// person has to end their access, not only their next sign-in: tokens used
+	// to survive until they expired (30 days for a session). Re-enabling gives
+	// nothing back; the person signs in again. One unit of work, both legs on
+	// the same id set (an `IN (:ids)` on a non-final leg needs w17 platform
+	// 1.9). Gated user_admin.
 	DisableUsers(context.Context, *DisableUsersReq) (*DisableUsersResp, error)
 	// EnableUsers — bulk re-enable (clear disabled_at); returns the ids it
 	// re-enabled. Single-op for the same F-A2 reason as DisableUsers.
@@ -1432,6 +1444,9 @@ type AuthMutationServer interface {
 	// DeleteUserSessionsForReset — revoke every token for the user after a
 	// reset (sessions + API tokens; the conservative post-reset default).
 	DeleteUserSessionsForReset(context.Context, *DeleteUserSessionsForResetReq) (*DeleteUserSessionsForResetResp, error)
+	// DeleteOtherSessionTokens — see the request. No RETURNING: a person with
+	// no other session deletes nothing, and that is no failure.
+	DeleteOtherSessionTokens(context.Context, *DeleteOtherSessionTokensReq) (*DeleteOtherSessionTokensResp, error)
 	CreateEmailVerificationToken(context.Context, *CreateEmailVerificationTokenReq) (*CreateEmailVerificationTokenResp, error)
 	ConsumeEmailVerificationToken(context.Context, *ConsumeEmailVerificationTokenReq) (*ConsumeEmailVerificationTokenResp, error)
 	// MarkEmailVerified — stamp the user's email_verified_at.
@@ -1540,6 +1555,11 @@ type AuthMutationServer interface {
 	// RETURNS the email, and that is load-bearing rather than convenience: NULL means
 	// the invitation was OPEN, which is what decides whether accepting it may derive a
 	// verified address. The caller cannot ask afterwards — the row is spent.
+	// BindOpenOrgInvite — see the request. No RETURNING: a link already bound
+	// (or unknown, or spent) matches nothing, and the caller reads the
+	// invitation back to learn whose it is — a zero-row RETURNING inside a
+	// transaction would abort the registration it is part of.
+	BindOpenOrgInvite(context.Context, *BindOpenOrgInviteReq) (*BindOpenOrgInviteResp, error)
 	ConsumeOrgInviteByToken(context.Context, *ConsumeOrgInviteByTokenReq) (*ConsumeOrgInviteByTokenResp, error)
 	// ClearExpiredOrgInvite — release the slot an EXPIRED invitation holds.
 	//
@@ -1559,13 +1579,6 @@ type AuthMutationServer interface {
 	// NOT_FOUND because of the RETURNING. The caller treats it as "nothing to
 	// clear" rather than as a failure.
 	ClearExpiredOrgInvite(context.Context, *ClearExpiredOrgInviteReq) (*ClearExpiredOrgInviteResp, error)
-	// MarkOrgInviteAccepted — claim a live invitation, single-use, in ONE
-	// statement. The not-yet-accepted and not-expired tests sit in the
-	// WHERE beside the write, exactly as ConsumePasswordResetToken does, so
-	// there is no window between checking an invitation and consuming it.
-	// A replayed, expired or already-accepted invite matches zero rows and
-	// comes back with an empty org_id.
-	MarkOrgInviteAccepted(context.Context, *MarkOrgInviteAcceptedReq) (*MarkOrgInviteAcceptedResp, error)
 	// DeleteOrgInvite — withdraw a PENDING invitation. Scoped by org_id in
 	// the WHERE and not only by id: the handler already knows the caller's
 	// active org, and an id-only delete would let a member of one
@@ -1718,6 +1731,9 @@ func (UnimplementedAuthMutationServer) UpdateUserPasswordIfUnchanged(context.Con
 func (UnimplementedAuthMutationServer) DeleteUserSessionsForReset(context.Context, *DeleteUserSessionsForResetReq) (*DeleteUserSessionsForResetResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteUserSessionsForReset not implemented")
 }
+func (UnimplementedAuthMutationServer) DeleteOtherSessionTokens(context.Context, *DeleteOtherSessionTokensReq) (*DeleteOtherSessionTokensResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteOtherSessionTokens not implemented")
+}
 func (UnimplementedAuthMutationServer) CreateEmailVerificationToken(context.Context, *CreateEmailVerificationTokenReq) (*CreateEmailVerificationTokenResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateEmailVerificationToken not implemented")
 }
@@ -1769,14 +1785,14 @@ func (UnimplementedAuthMutationServer) RevokeUserToken(context.Context, *RevokeU
 func (UnimplementedAuthMutationServer) CreateOrgInvite(context.Context, *CreateOrgInviteReq) (*CreateOrgInviteResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateOrgInvite not implemented")
 }
+func (UnimplementedAuthMutationServer) BindOpenOrgInvite(context.Context, *BindOpenOrgInviteReq) (*BindOpenOrgInviteResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method BindOpenOrgInvite not implemented")
+}
 func (UnimplementedAuthMutationServer) ConsumeOrgInviteByToken(context.Context, *ConsumeOrgInviteByTokenReq) (*ConsumeOrgInviteByTokenResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConsumeOrgInviteByToken not implemented")
 }
 func (UnimplementedAuthMutationServer) ClearExpiredOrgInvite(context.Context, *ClearExpiredOrgInviteReq) (*ClearExpiredOrgInviteResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClearExpiredOrgInvite not implemented")
-}
-func (UnimplementedAuthMutationServer) MarkOrgInviteAccepted(context.Context, *MarkOrgInviteAcceptedReq) (*MarkOrgInviteAcceptedResp, error) {
-	return nil, status.Error(codes.Unimplemented, "method MarkOrgInviteAccepted not implemented")
 }
 func (UnimplementedAuthMutationServer) DeleteOrgInvite(context.Context, *DeleteOrgInviteReq) (*DeleteOrgInviteResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteOrgInvite not implemented")
@@ -2629,6 +2645,24 @@ func _AuthMutation_DeleteUserSessionsForReset_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthMutation_DeleteOtherSessionTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteOtherSessionTokensReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).DeleteOtherSessionTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_DeleteOtherSessionTokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).DeleteOtherSessionTokens(ctx, req.(*DeleteOtherSessionTokensReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthMutation_CreateEmailVerificationToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateEmailVerificationTokenReq)
 	if err := dec(in); err != nil {
@@ -2935,6 +2969,24 @@ func _AuthMutation_CreateOrgInvite_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthMutation_BindOpenOrgInvite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BindOpenOrgInviteReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).BindOpenOrgInvite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_BindOpenOrgInvite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).BindOpenOrgInvite(ctx, req.(*BindOpenOrgInviteReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthMutation_ConsumeOrgInviteByToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ConsumeOrgInviteByTokenReq)
 	if err := dec(in); err != nil {
@@ -2967,24 +3019,6 @@ func _AuthMutation_ClearExpiredOrgInvite_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthMutationServer).ClearExpiredOrgInvite(ctx, req.(*ClearExpiredOrgInviteReq))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AuthMutation_MarkOrgInviteAccepted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MarkOrgInviteAcceptedReq)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AuthMutationServer).MarkOrgInviteAccepted(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AuthMutation_MarkOrgInviteAccepted_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AuthMutationServer).MarkOrgInviteAccepted(ctx, req.(*MarkOrgInviteAcceptedReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3199,6 +3233,10 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AuthMutation_DeleteUserSessionsForReset_Handler,
 		},
 		{
+			MethodName: "DeleteOtherSessionTokens",
+			Handler:    _AuthMutation_DeleteOtherSessionTokens_Handler,
+		},
+		{
 			MethodName: "CreateEmailVerificationToken",
 			Handler:    _AuthMutation_CreateEmailVerificationToken_Handler,
 		},
@@ -3267,16 +3305,16 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AuthMutation_CreateOrgInvite_Handler,
 		},
 		{
+			MethodName: "BindOpenOrgInvite",
+			Handler:    _AuthMutation_BindOpenOrgInvite_Handler,
+		},
+		{
 			MethodName: "ConsumeOrgInviteByToken",
 			Handler:    _AuthMutation_ConsumeOrgInviteByToken_Handler,
 		},
 		{
 			MethodName: "ClearExpiredOrgInvite",
 			Handler:    _AuthMutation_ClearExpiredOrgInvite_Handler,
-		},
-		{
-			MethodName: "MarkOrgInviteAccepted",
-			Handler:    _AuthMutation_MarkOrgInviteAccepted_Handler,
 		},
 		{
 			MethodName: "DeleteOrgInvite",

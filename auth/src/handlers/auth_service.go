@@ -585,6 +585,15 @@ var signupInviteGate = func(ctx context.Context, h *AuthServiceHandler, email, i
 	return nil
 }
 
+// signupClaimInvite spends an OPEN invitation's link on the registration
+// that came through it (see handlers/org_invite.go). Default (no
+// `org_invite`): nothing to claim. Called inside the registration's unit of
+// work where there is one, so a registration that fails leaves the link
+// open.
+var signupClaimInvite = func(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) error {
+	return nil
+}
+
 // signInMfaGate decides whether a second factor challenges this
 // sign-in. Default (no `two_factor`): never — returns (nil, false,
 // nil) so SignIn proceeds straight to token issuance.

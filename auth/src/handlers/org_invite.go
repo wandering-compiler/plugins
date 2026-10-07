@@ -59,6 +59,51 @@ const defaultOrgInviteTTLHours = 24 * 7 // 7 days
 // permissive default returns nil for everything.
 func init() {
 	signupInviteGate = requirePendingInvite
+	signupClaimInvite = claimOpenInvite
+}
+
+// claimOpenInvite binds an OPEN invitation to the address registering
+// through its link. The link used to be only READ at registration, and
+// acceptance (which spends it) comes later: until somebody accepted, one open
+// link registered any number of accounts — under `invite_only`, a way to
+// create accounts with nothing but a forwarded URL. Bound, the invitation
+// admits that address and no other, and the account it belongs to accepts it
+// as before.
+//
+// Two registrations racing on one link both passed the read-only gate; the
+// bind decides between them. The update matches only while the invitation is
+// still open, so the second matches nothing and reads back somebody else's
+// address — and under `invite_only` it is refused, unless the address holds
+// an invitation of its own (the gate's other path).
+//
+// A bound or unknown link is not claimed here; the gate already decided what
+// it admits.
+func claimOpenInvite(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) error {
+	if inviteToken == "" {
+		return nil
+	}
+	tokenHash := sha256Hex(inviteToken)
+	if _, err := h.Mutation.BindOpenOrgInvite(ctx, &pb.BindOpenOrgInviteReq{TokenHash: tokenHash, Email: email}); err != nil {
+		return err
+	}
+	if !h.InviteOnly {
+		return nil // the invitation decides the org, not whether one may register
+	}
+	pending, err := h.Query.GetPendingOrgInviteByToken(ctx, &pb.GetPendingOrgInviteByTokenReq{TokenHash: tokenHash})
+	switch {
+	case err == nil && pending.GetEmail() == email:
+		return nil
+	case err != nil && status.Code(err) != codes.NotFound:
+		return err
+	}
+	resp, err := h.Query.ListPendingInvitesForEmail(ctx, &pb.ListPendingInvitesForEmailReq{Email: email})
+	if err != nil {
+		return err
+	}
+	if len(resp.GetInvites()) == 0 {
+		return errSignUpNotInvited
+	}
+	return nil
 }
 
 // requirePendingInvite refuses an address that holds no acceptable

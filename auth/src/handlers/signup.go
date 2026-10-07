@@ -156,6 +156,9 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 	if err := signupAssignRoleIDs(txCtx, h, userID, roleIDs); err != nil {
 		return nil, err
 	}
+	if err := signupClaimInvite(txCtx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken()); err != nil {
+		return nil, err
+	}
 	// Stamp the absolute session TTL like SignIn (issueSession): a SignUp-minted
 	// bearer expires too. Without ExpiresAt the storage binds the proto zero
 	// time (0001-01-01), which the validation guard reads as already-expired →

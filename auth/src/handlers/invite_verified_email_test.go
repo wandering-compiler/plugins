@@ -56,11 +56,6 @@ func (m *verifiedMock) ConsumeOrgInviteByToken(_ context.Context, _ *pb.ConsumeO
 	return &pb.ConsumeOrgInviteByTokenResp{OrgId: "org-1", Role: "member", Email: "invited@example.com"}, nil
 }
 
-func (m *verifiedMock) MarkOrgInviteAccepted(_ context.Context, _ *pb.MarkOrgInviteAcceptedReq, _ ...grpc.CallOption) (*pb.MarkOrgInviteAcceptedResp, error) {
-	m.claimTried = true
-	return &pb.MarkOrgInviteAcceptedResp{OrgId: "org-1", Role: "member"}, nil
-}
-
 // An invitation is keyed on an ADDRESS, so accepting one proves ownership of
 // that mailbox only if somebody checked the address belongs to the account.
 // Nothing did, and both the model and the invite_only knob claimed enabling

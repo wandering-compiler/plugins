@@ -436,6 +436,23 @@ message UpdateUserPasswordIfUnchangedResp {
 // so every session AND API token is dropped — the conservative default).
 // Gated `password_reset` so it exists independently of the `devices`
 // feature's DeleteAllUserTokens.
+// DeleteOtherSessionTokens ends every SESSION of a user but the one named:
+// a password change signs the person out everywhere else, because whoever
+// held the old password may hold a session too. API tokens are kept — they
+// are credentials the person minted on purpose, for CI and scripts. Gated
+// `password_change`.
+message DeleteOtherSessionTokensReq {
+  option (w17.contrib.plugin_feature) = "password_change";
+  string    user_id       = 1 [(w17.field) = { type: UUID }];
+  // The caller's own session, kept. The nil UUID keeps none (a caller on an
+  // API token has no session to keep).
+  string    keep_token_id = 2 [(w17.field) = { type: UUID }];
+  TokenType token_type    = 3;
+}
+message DeleteOtherSessionTokensResp {
+  option (w17.contrib.plugin_feature) = "password_change";
+}
+
 message DeleteUserSessionsForResetReq {
   option (w17.contrib.plugin_feature) = "password_reset";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -997,6 +1014,20 @@ message ClearExpiredOrgInviteResp {
   string id = 1;
 }
 
+// BindOpenOrgInviteReq — registration through an OPEN invitation's link binds
+// the invitation to the registering address. The link was read-only at
+// registration, so one open link registered any number of accounts until
+// somebody accepted it — under `invite_only` a way to create accounts. Bound,
+// it lets in that address only; acceptance by that account is unchanged.
+message BindOpenOrgInviteReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string email      = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message BindOpenOrgInviteResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
+}
+
 message ConsumeOrgInviteByTokenReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   // sha256 hex of the token the link carried. The plaintext never reaches the
@@ -1026,32 +1057,6 @@ message ConsumeOrgInviteByTokenResp {
   // What the inviter was checked against — accept refuses a role that has
   // moved past it. See OrgInvite.role_snapshot.
   string role_snapshot = 5;
-}
-
-message MarkOrgInviteAcceptedReq {
-  option (w17.contrib.plugin_feature) = "org_invite";
-  string invite_id = 1 [(w17.field) = { type: UUID }];
-  // The accepting account's address. In the WHERE beside the id, so the
-  // statement itself refuses an invitation addressed to somebody else —
-  // the check cannot be forgotten by a caller, because there is no path
-  // that reaches the write without supplying it.
-  string email     = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
-}
-message MarkOrgInviteAcceptedResp {
-  option (w17.contrib.plugin_feature) = "org_invite";
-  // Populated on a successful claim. Nothing matched — expired, already
-  // accepted, addressed to a different account, or never there — arrives as
-  // NOT_FOUND, because the statement carries RETURNING and the generated
-  // write reports zero rows as an error.
-  //
-  // This used to say an empty org_id meant "nothing matched". It could not:
-  // the caller never receives this message in that case. The handler's opaque
-  // refusal — one answer for all four causes, so an unauthenticated guess
-  // learns nothing — hangs off the NOT_FOUND, and for a while hung off a
-  // branch nothing could reach, which is how a caller came to see the name of
-  // an internal RPC instead.
-  string org_id = 1;
-  string role   = 2;
 }
 
 message DeleteOrgInviteReq {
@@ -1898,21 +1903,27 @@ service AuthMutation {
   }
 
   // DisableUsers — bulk soft-disable (Django is_active=false). Sets
-  // disabled_at on the still-active rows in the id set and returns the
-  // ids it flipped. SignIn rejects a disabled account
-  // (handlers/user_admin.go), but existing tokens survive until expiry
-  // or revocation. Single-op: the `IN (:ids)` array bind must sit on the
-  // FINAL op (the dialect-aware IN-expansion only runs there — a
-  // non-final leg with `IN (:collection)` is refused, T2-6 F-A2). Gated
-  // user_admin.
+  // disabled_at on the still-active rows in the id set, and DELETES every
+  // token of those accounts — sessions and API tokens. Disabling a departing
+  // person has to end their access, not only their next sign-in: tokens used
+  // to survive until they expired (30 days for a session). Re-enabling gives
+  // nothing back; the person signs in again. One unit of work, both legs on
+  // the same id set (an `IN (:ids)` on a non-final leg needs w17 platform
+  // 1.9). Gated user_admin.
   rpc DisableUsers(DisableUsersReq) returns (DisableUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:  "UPDATE @module.User SET disabled_at = NOW() "
-              "WHERE id IN (:ids) AND disabled_at IS NULL"
-      }
+      ops: [
+        {
+          name: "disable"
+          dql:  "UPDATE @module.User SET disabled_at = NOW() "
+                "WHERE id IN (:ids) AND disabled_at IS NULL"
+        },
+        {
+          name: "main"
+          dql:  "DELETE FROM @module.UserToken WHERE user_id IN (:ids)"
+        }
+      ]
     };
   }
 
@@ -2160,6 +2171,20 @@ service AuthMutation {
       }
     };
   }
+  // DeleteOtherSessionTokens — see the request. No RETURNING: a person with
+  // no other session deletes nothing, and that is no failure.
+  rpc DeleteOtherSessionTokens(DeleteOtherSessionTokensReq) returns (DeleteOtherSessionTokensResp) {
+    option (w17.contrib.plugin_feature_rpc) = "password_change";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "DELETE FROM @module.UserToken "
+          "WHERE user_id = :user_id AND token_type = :token_type AND id <> :keep_token_id"
+      }
+    };
+  }
+
 
   // ── email_verification mutations (E1) ───────────────────────
 
@@ -2705,6 +2730,22 @@ service AuthMutation {
   // RETURNS the email, and that is load-bearing rather than convenience: NULL means
   // the invitation was OPEN, which is what decides whether accepting it may derive a
   // verified address. The caller cannot ask afterwards — the row is spent.
+  // BindOpenOrgInvite — see the request. No RETURNING: a link already bound
+  // (or unknown, or spent) matches nothing, and the caller reads the
+  // invitation back to learn whose it is — a zero-row RETURNING inside a
+  // transaction would abort the registration it is part of.
+  rpc BindOpenOrgInvite(BindOpenOrgInviteReq) returns (BindOpenOrgInviteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgInvite SET email = :email "
+          "WHERE token_hash = :token_hash AND email IS NULL AND accepted_at IS NULL AND expires_at > NOW()"
+      }
+    };
+  }
+
   rpc ConsumeOrgInviteByToken(ConsumeOrgInviteByTokenReq) returns (ConsumeOrgInviteByTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {
@@ -2719,7 +2760,7 @@ service AuthMutation {
     };
     // The acceptance's announcement. OrgInviteAccepted was declared and
     // nothing emitted it: acceptance moved to this token-keyed claim and the
-    // emit stayed behind with nobody (MarkOrgInviteAccepted, never called),
+    // emit stayed behind with nobody (an id-keyed claim that nothing called, removed in rc.19),
     // so a subscriber waiting for "joined" never fired (found live by
     // examples/auth-proof). Emitted after commit, so a claim the
     // transaction rolls back — a role that moved since the invitation —
@@ -2764,26 +2805,6 @@ service AuthMutation {
           "WHERE org_id = :org_id AND email = :email "
           "AND accepted_at IS NULL AND expires_at <= NOW() "
           "RETURNING id"
-      }
-    };
-  }
-
-  // MarkOrgInviteAccepted — claim a live invitation, single-use, in ONE
-  // statement. The not-yet-accepted and not-expired tests sit in the
-  // WHERE beside the write, exactly as ConsumePasswordResetToken does, so
-  // there is no window between checking an invitation and consuming it.
-  // A replayed, expired or already-accepted invite matches zero rows and
-  // comes back with an empty org_id.
-  rpc MarkOrgInviteAccepted(MarkOrgInviteAcceptedReq) returns (MarkOrgInviteAcceptedResp) {
-    option (w17.contrib.plugin_feature_rpc) = "org_invite";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "UPDATE @module.OrgInvite SET "
-          "accepted_at = NOW() "
-          "WHERE id = :invite_id AND email = :email AND accepted_at IS NULL AND expires_at > NOW() "
-          "RETURNING org_id, role"
       }
     };
   }

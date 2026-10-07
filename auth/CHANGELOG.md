@@ -1,5 +1,33 @@
 # auth — changelog
 
+## 0.1.0-rc.19
+
+Needs w17 platform 1.9 (`requires_w17: ">=1.9"`): `DisableUsers` acts on one id set in two statements.
+
+### Disabling an account ends its sessions and tokens
+
+`DisableUsers` (`user_admin`) now also deletes every token of the disabled accounts, sessions and API tokens alike. Before this release they kept working until they expired (30 days for a session), so disabling a departing person did not end their access. Re-enabling an account gives no token back.
+
+### A password change signs the person out everywhere else
+
+`ChangePassword` (`password_change`) deletes every other session of the account in the same unit of work as the new password, and keeps the session the change came from. API tokens are kept. If the sign-out fails, the password is not changed.
+
+New storage method: `AuthMutation.DeleteOtherSessionTokens`.
+
+### An open invitation's link is spent at registration
+
+Registering through an open invitation's link binds the invitation to the registering address. One open link used to register any number of accounts until somebody accepted it; under `invite_only` that was a way to create accounts. Now a second registration through the same link is refused under `invite_only`, and without it the second account simply does not get the invitation. Acceptance is unchanged.
+
+New storage method: `AuthMutation.BindOpenOrgInvite`.
+
+### Removed
+
+`AuthMutation.MarkOrgInviteAccepted`. Nothing called it: acceptance is `ConsumeOrgInviteByToken`. Hand-written code that called it should call that instead.
+
+### Documented
+
+The README now has a section on what a consumer has to know: sessions and tokens, invitations (the plugin sends no mail, the link is returned once to the inviter), and where a refusal's sentence for a person is.
+
 ## 0.1.0-rc.18
 
 ### Machine accounts in a realm without organizations

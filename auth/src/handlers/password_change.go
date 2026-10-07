@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/tx/distx"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -27,6 +30,11 @@ import (
 // no password set" would say something about the account's auth method
 // that the caller has not proven they may know.
 var errCurrentPasswordWrong = errors.New("current password does not match")
+
+// nilUUID names no token: DeleteOtherSessionTokens keeps none when the caller
+// holds no session (an API-token bearer). The column is a uuid, so an empty
+// string would not compare — it would fail to bind.
+const nilUUID = "00000000-0000-0000-0000-000000000000"
 
 // ChangePassword verifies the caller's current password and replaces it.
 //
@@ -86,15 +94,55 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 	// password not matching, which by then is precisely true — the proof this
 	// request carried is stale — and keeps the refusal identical to the wrong-
 	// password case, which is what stops the two being told apart.
-	if _, err := h.Mutation.UpdateUserPasswordIfUnchanged(ctx, &pb.UpdateUserPasswordIfUnchangedReq{
+	// The new password and the end of every OTHER session are one unit of
+	// work. A person changes a password because someone else may have it, and
+	// whoever has it may also hold a session: a change that left those alive
+	// would tell the person "done" while the other side stayed signed in.
+	// Together they commit or neither does — a failed sign-out keeps the old
+	// password, and the person is told the change failed.
+	//
+	// The caller's own session is kept (they are in the middle of using it);
+	// a caller on an API token has none, and keeps no session. API tokens
+	// stay: they are credentials minted on purpose, for CI, and a password
+	// change is not a decision about them — revoke one with RevokeApiToken.
+	var tx *distx.TxHandle
+	txCtx := ctx
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	fail := func(err error) (*pb.ChangePasswordResp, error) {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return nil, err
+	}
+	if _, err := h.Mutation.UpdateUserPasswordIfUnchanged(txCtx, &pb.UpdateUserPasswordIfUnchangedReq{
 		UserId:       userID,
 		PasswordHash: hashed,
 		CurrentHash:  currentHash,
 	}); err != nil {
 		if status.Code(err) == codes.NotFound {
-			return nil, Unauthenticated(errCurrentPasswordWrong)
+			return fail(Unauthenticated(errCurrentPasswordWrong))
 		}
-		return nil, err
+		return fail(err)
+	}
+	keep := callerSessionTokenID(ctx)
+	if keep == "" {
+		keep = nilUUID
+	}
+	if _, err := h.Mutation.DeleteOtherSessionTokens(txCtx, &pb.DeleteOtherSessionTokensReq{
+		UserId:      userID,
+		KeepTokenId: keep,
+		TokenType:   pb.TokenType_TOKEN_TYPE_SESSION,
+	}); err != nil {
+		return fail(err)
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return &pb.ChangePasswordResp{}, nil
 }
