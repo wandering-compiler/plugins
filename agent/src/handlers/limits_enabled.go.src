@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"time"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -22,13 +25,33 @@ func init() {
 		if !ok || !ok2 {
 			return allowAllLimiter{}
 		}
-		return &dbLimiter{
-			q:      qc.UsageQuery(),
-			m:      mc.UsageMutation(),
-			spend:  &spendCache{ttl: 30 * time.Second},
-			limits: &spendCache{ttl: 5 * time.Minute},
-		}
+		return newDBLimiter(qc.UsageQuery(), mc.UsageMutation())
 	}
+}
+
+func newDBLimiter(q pb.UsageQueryClient, m pb.UsageMutationClient) *dbLimiter {
+	return &dbLimiter{
+		q:      q,
+		m:      m,
+		spend:  &spendCache[scopeSpend]{ttl: 30 * time.Second},
+		limits: &spendCache[scopeLimit]{ttl: 5 * time.Minute},
+	}
+}
+
+// scopeLimit is one scope's cap as last read. `none` is the cached ABSENCE of a
+// cap — most scopes have none, and asking again on every call to learn that is
+// the round trip the cache exists to save.
+type scopeLimit struct {
+	minor    int64
+	currency string
+	none     bool
+}
+
+// scopeSpend is one scope's month-to-date spend as last read. currency is empty
+// when nothing priced was spent.
+type scopeSpend struct {
+	minor    int64
+	currency string
 }
 
 // dbLimiter enforces a per-scope monthly cap.
@@ -42,14 +65,41 @@ type dbLimiter struct {
 	q pb.UsageQueryClient
 	m pb.UsageMutationClient
 
-	spend  *spendCache
-	limits *spendCache
+	spend  *spendCache[scopeSpend]
+	limits *spendCache[scopeLimit]
+
+	// Scope ids, cached: an id is stable for the life of its row. Without this
+	// every model call ran an UPSERT — a write — in front of the provider,
+	// which is the per-call database round trip this whole design exists to
+	// avoid; the comment on scopeID claimed the id was cached "by that path
+	// too", and the path it meant was the writer's, a different cache this one
+	// never reads.
+	//
+	// BOUNDED (idCache): the key is whatever scope a caller sends, so an
+	// unbounded map grew by one entry per distinct scope for the life of the
+	// process.
+	ids idCache[string]
 }
 
+const (
+	reasonOverLimit = "agent: this scope has reached its spending limit for the current month"
+
+	reasonMixedCurrency = "agent: this scope's spending cannot be totalled — its models are priced in " +
+		"more than one currency, and a limit is a single amount. Price them alike, or lift the limit."
+
+	reasonLimitCurrency = "agent: this scope's limit is set in a different currency from the one its " +
+		"models are priced in, so the two cannot be compared. Set the limit in the pricing currency, or lift it."
+)
+
 func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
-	if scope == "" {
+	if strings.TrimSpace(scope) == "" {
 		// Nothing to charge means nothing to cap. Refusing here would make a
 		// caller that does not use scopes unable to call the model at all.
+		//
+		// BLANK, not only empty: the usage path files a whitespace scope under
+		// ScopeUnattributed, so asking about the literal "  " interned a scope
+		// row nothing is ever recorded against and checked a limit nothing can
+		// ever reach.
 		return LimitDecision{Allowed: true}
 	}
 	now := time.Now().UTC()
@@ -69,17 +119,25 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 			Window:  pb.LimitWindow_LIMIT_WINDOW_MONTH,
 			At:      timestamppb.New(now),
 		})
-		if lErr != nil {
+		switch {
+		case status.Code(lErr) == codes.NotFound:
 			// No row is the common case — most scopes have no cap — and it
-			// arrives as an error. Cache the absence so a scope without a
+			// arrives as NotFound. Cache the absence so a scope without a
 			// limit does not ask on every call.
-			l.limits.put(scope, -1, now)
+			l.limits.put(scope, scopeLimit{none: true}, now)
+			return LimitDecision{Allowed: true}
+		case lErr != nil:
+			// Any OTHER failure is the database, not an answer. Fail open as
+			// everywhere else — but do not CACHE it: this used to store "no
+			// limit" for every error, so one transient blip switched a scope's
+			// cap off for the limit cache's whole TTL (five minutes) with
+			// nothing to say so.
 			return LimitDecision{Allowed: true}
 		}
-		limit = resp.GetLimitMinor()
+		limit = scopeLimit{minor: resp.GetLimitMinor(), currency: resp.GetCurrency()}
 		l.limits.put(scope, limit, now)
 	}
-	if limit < 0 {
+	if limit.none || limit.minor < 0 {
 		return LimitDecision{Allowed: true}
 	}
 
@@ -94,48 +152,56 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 		if sErr != nil {
 			return LimitDecision{Allowed: true}
 		}
-		total, ok := totalSpend(resp.GetLines())
+		total, currency, ok := totalSpend(resp.GetLines())
 		if !ok {
-			// Fail CLOSED, and this is the one place in this file that does.
-			// Everywhere else the limiter fails open on purpose — an
-			// unreachable database must not become a second outage — because
-			// there the uncertainty is infrastructure and it passes. Here the
-			// data arrived and says the cap cannot be evaluated at all: the
-			// spend exists, and letting it through is an unbounded overspend
-			// against a limit somebody set deliberately. An operator fixes it
-			// by pricing a scope's models alike; a caller cannot fix it by
-			// retrying, so the reason says which it is.
-			return LimitDecision{
-				Allowed: false,
-				Reason: "agent: this scope's spending cannot be totalled — its models are priced in " +
-					"more than one currency, and a limit is a single amount. Price them alike, or lift the limit.",
-			}
+			// Fail CLOSED, and this is one of the two places in this file
+			// that does. Everywhere else the limiter fails open on purpose —
+			// an unreachable database must not become a second outage —
+			// because there the uncertainty is infrastructure and it passes.
+			// Here the data arrived and says the cap cannot be evaluated at
+			// all: the spend exists, and letting it through is an unbounded
+			// overspend against a limit somebody set deliberately. An
+			// operator fixes it by pricing a scope's models alike; a caller
+			// cannot fix it by retrying, so the reason says which it is.
+			return LimitDecision{Allowed: false, Reason: reasonMixedCurrency}
 		}
-		spent = total
+		spent = scopeSpend{minor: total, currency: currency}
 		l.spend.put(scope, spent, now)
 	}
 
-	if spent >= limit {
-		return LimitDecision{
-			Allowed: false,
-			Reason:  "agent: this scope has reached its spending limit for the current month",
-		}
+	// The other place, for the same reason. The spend was totalled within ONE
+	// currency and the limit carries its own, and nothing compared the two: a
+	// cap of 100.00 EUR against spend priced in a currency with a hundred
+	// times more minor units per euro let the scope run a hundredfold past
+	// it — and the reverse refused a tenant who had spent almost nothing.
+	// Minor units are only comparable within a currency.
+	if spent.currency != "" && limit.currency != "" && !strings.EqualFold(spent.currency, limit.currency) {
+		return LimitDecision{Allowed: false, Reason: reasonLimitCurrency}
+	}
+
+	if spent.minor >= limit.minor {
+		return LimitDecision{Allowed: false, Reason: reasonOverLimit}
 	}
 	return LimitDecision{Allowed: true}
 }
 
-// scopeID interns the scope so a limit can be looked up by id. The upsert is
-// the same one the writer uses, and the id is cached by that path too.
+// scopeID interns the scope so a limit can be looked up by id, once per scope
+// while the bounded cache holds it. A failure is not cached: the next call asks
+// again.
 func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
+	if id, ok := l.ids.get(scope); ok {
+		return id, nil
+	}
 	resp, err := l.m.InternScope(ctx, &pb.InternScopeReq{ExternalId: scope})
 	if err != nil {
 		return 0, err
 	}
+	l.ids.put(scope, resp.GetId())
 	return resp.GetId(), nil
 }
 
-// totalSpend reduces a scope's spend lines to ONE comparable amount, reporting
-// whether that is possible at all.
+// totalSpend reduces a scope's spend lines to ONE comparable amount and the
+// currency it is in, reporting whether that is possible at all.
 //
 // Minor units are only comparable within a currency, and a cap is one integer
 // with no currency of its own. The loop this replaced added them flat — dollars
@@ -145,8 +211,9 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 // Three kinds of line, and the middle one is what a consumer reported:
 //
 //	cost present            counted, under its own currency
-//	cost absent, priced > 0 UNTOTALLABLE. #74/1 gave absence a second meaning —
-//	                        the currencies inside this line disagreed — and the
+//	cost absent, priced > 0 UNTOTALLABLE. The usage rollup gave absence a
+//	                        second meaning — the currencies inside this line
+//	                        disagreed, so no single amount exists — and the
 //	                        old `if CostMinor != nil` skipped it, so real spend
 //	                        vanished and a scope priced in two currencies never
 //	                        reached its cap.
@@ -156,22 +223,23 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 //
 // A pure function because the decision is the thing worth pinning, and the
 // generated clients around it are not: there was no test on this file at all
-// when #79/3 arrived, which is how two correct changes met and nobody noticed.
-func totalSpend(lines []*pb.ScopeSpendLine) (int64, bool) {
+// when the rollup started leaving mixed-currency lines without a cost, which is
+// how two correct changes met and nobody noticed.
+func totalSpend(lines []*pb.ScopeSpendLine) (int64, string, bool) {
 	byCurrency := map[string]int64{}
 	for _, line := range lines {
 		switch {
 		case line.CostMinor != nil:
-			byCurrency[line.GetCurrency()] += line.GetCostMinor()
+			byCurrency[strings.ToUpper(line.GetCurrency())] += line.GetCostMinor()
 		case line.GetPricedCalls() > 0:
-			return 0, false
+			return 0, "", false
 		}
 	}
 	if len(byCurrency) > 1 {
-		return 0, false
+		return 0, "", false
 	}
-	for _, total := range byCurrency {
-		return total, true
+	for currency, total := range byCurrency {
+		return total, currency, true
 	}
-	return 0, true
+	return 0, "", true
 }

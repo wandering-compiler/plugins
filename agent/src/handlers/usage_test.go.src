@@ -17,9 +17,9 @@ import (
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
 	"github.com/openai/openai-go/v2/responses"
-	gen "github.com/wandering-compiler/platform/plugins/agent/gen"
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+	gen "github.com/wandering-compiler/plugins/agent/gen"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/plugins/agent/lib/llm"
 )
 
 type capturingSink struct{ events []UsageEvent }
@@ -44,7 +44,8 @@ func TestAFailedCallIsStillRecorded(t *testing.T) {
 	// failingCompleter is never called — so this test asserted that "a failed
 	// call is recorded" while exercising a path where no call happened. It
 	// passed because every error was treated as a failed call, which is the
-	// defect a consumer reported (#74/3). The budget makes it reach the fake.
+	// defect a consumer reported: a refusal before the provider recorded as a
+	// failed call. The budget makes it reach the fake.
 	h := &AgentServiceHandler{Client: failingCompleter{}, Usage: sink, DefaultModel: "gpt-x", DefaultMaxTokens: 100}
 
 	_, err := h.Complete(context.Background(), &pb.CompleteReq{

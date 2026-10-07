@@ -101,9 +101,12 @@ message ModelUsage {
   // for (a dated id, a deployment alias).
   string model = 1;
 
-  // False when the provider reported no usage at all. Without this a free call
-  // and an unreported one are the same row of zeros, and a caller summing them
-  // cannot tell which they have.
+  // False when the provider did not report the usage — for a run, when any
+  // turn it SENT went unreported (a turn never sent — refused before the
+  // request, or not attempted because the run had already ended — does not
+  // count, and a run that sent none is measured at zero). Without this a free call and an unreported one are the same row of
+  // zeros, and a caller summing them cannot tell which they have. The token
+  // counts beside a false are what WAS reported: a floor.
   bool measured = 2;
 
   int32 input_tokens  = 3;

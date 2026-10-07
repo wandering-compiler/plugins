@@ -9,8 +9,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/agent/lib/llm"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
+	"github.com/wandering-compiler/plugins/agent/lib/llm"
 )
 
 // CompleteStream runs one model call and sends the text as it arrives.
@@ -33,15 +33,22 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 	m := h.modelFor(req)
 
 	startedAt := time.Now()
+	// The transport's own failure, kept so it can be told apart from the
+	// model's below.
+	var sendErr error
 	out, err := llm.CompleteStream(srv.Context(), h.StreamClient, m,
 		req.GetInstructions(), messagesFrom(req.GetMessages()),
 		func(text string) error {
 			// A send failure is the client going away, and it is returned so
 			// the call ABORTS: continuing would keep paying the provider for
 			// tokens with nowhere to put them.
-			return srv.Send(&pb.CompleteEvent{
+			if sErr := srv.Send(&pb.CompleteEvent{
 				Event: &pb.CompleteEvent_Delta{Delta: &pb.TextDelta{Text: text}},
-			})
+			}); sErr != nil {
+				sendErr = sErr
+				return sErr
+			}
+			return nil
 		})
 	if err != nil {
 		// BEFORE the usage row, not after it. A preflight refusal never reached
@@ -56,9 +63,28 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 		// Recorded before the error is shaped: a stream that died mid-flight
 		// has already paid for whatever the provider produced, and a runaway
 		// guard stopping it does not make those tokens free.
-		h.recordUsage(req, m.ID, out, OutcomeFailed, startedAt)
-		// A send failure travelling back out of onDelta is not ours to
-		// re-wrap: the client is gone and there is nobody to tell.
+		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
+		// The client going away is not ours to re-wrap: there is nobody to
+		// tell. The same rule as RunAgent (callerLeft): a Send that failed
+		// because the client is gone comes back as-is, and so does the
+		// stream's own context ending — the client hanging up, or its own
+		// deadline passing, while the provider was still talking. Both used to
+		// fall through to the Unavailable below, with a log line blaming the
+		// model for something the client did; the deadline case survived the
+		// first fix because only the send path was covered.
+		//
+		// A Send that failed on THIS side (an oversized or unmarshalable
+		// message) is not the client leaving…
+		if left := callerLeft(srv.Context(), err, sendErr, nil); left != nil {
+			return left
+		}
+		// …and goes HERE: the send's own status (ResourceExhausted stays
+		// ResourceExhausted), logged as a send failure. It used to reach the
+		// Unavailable below, logged as the model failing, and a caller
+		// retrying on Unavailable hit the same oversize every time.
+		if f := streamFailure(m.ID, err, sendErr, nil); f != nil {
+			return f
+		}
 		if errors.Is(err, llm.ErrRunawayOutput) {
 			return status.Error(codes.ResourceExhausted, "agent: the model produced more output than the limit allows")
 		}

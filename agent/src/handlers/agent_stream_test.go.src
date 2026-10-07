@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v2/option"
 	"github.com/openai/openai-go/v2/packages/ssestream"
@@ -14,7 +16,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 )
 
 type fakeDecoder struct {
@@ -43,9 +45,16 @@ type recorder struct {
 	attempts int
 	failAt   int
 	sendErr  error
+	// ctx is the stream's context; nil means Background.
+	ctx context.Context
 }
 
-func (r *recorder) Context() context.Context { return context.Background() }
+func (r *recorder) Context() context.Context {
+	if r.ctx != nil {
+		return r.ctx
+	}
+	return context.Background()
+}
 func (r *recorder) Send(e *pb.CompleteEvent) error {
 	r.attempts++
 	if r.failAt > 0 && len(r.sent) >= r.failAt {
@@ -196,5 +205,73 @@ func TestNoStreamClientIsUnimplementedNotAPanic(t *testing.T) {
 func TestStreamRefusesAnEmptyRequest(t *testing.T) {
 	if err := streamHandler(nil).CompleteStream(nil, &recorder{}); err == nil {
 		t.Error("nil request accepted")
+	}
+}
+
+// The client's own deadline passing while the provider is still talking is the
+// client leaving, not the model failing — the same rule RunAgent applies
+// (callerLeft). CompleteStream used to recognise only a failed Send, so this
+// came back Unavailable with a "model stream failed" log line blaming the
+// provider.
+func TestCompleteStream_TheCallersDeadlineIsNotAModelFailure(t *testing.T) {
+	logs := captureLog(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	sink := &syncSink{}
+	h := &AgentServiceHandler{
+		// What the SDK returns when the request's context has expired.
+		StreamClient: errStreamer{err: &url.Error{
+			Op: "Post", URL: "https://acme-ai.example.com/openai/deployments/secret-deploy/responses",
+			Err: context.DeadlineExceeded,
+		}},
+		DefaultModel: "gpt-4o", DefaultMaxTokens: 100, Usage: sink,
+	}
+	err := h.CompleteStream(&pb.CompleteReq{}, &recorder{ctx: ctx})
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("err = %v (%v), want DeadlineExceeded — the caller's deadline passed", err, status.Code(err))
+	}
+	if strings.Contains(logs.String(), "model stream failed") {
+		t.Errorf("the caller's deadline was logged as a model failure: %q", logs.String())
+	}
+	if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed {
+		t.Errorf("recorded %+v, want one FAILED row", evs)
+	}
+}
+
+// A Send that fails on the SERVER's side is not the client leaving, on this
+// path either — and it is not the MODEL failing. It used to come back as
+// Unavailable "the model call failed", logged as "model stream failed": the
+// wrong label, and a caller retrying on Unavailable hit the same oversize
+// every time. Now the Send's own status comes back — ResourceExhausted stays
+// ResourceExhausted, anything else is Internal — logged as a send failure,
+// and the call is billed once.
+func TestCompleteStream_AServerSideSendFailureIsNotTheClientLeaving(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sendErr error
+		code    codes.Code
+	}{
+		{"too large", status.Error(codes.ResourceExhausted, "grpc: trying to send message larger than max"), codes.ResourceExhausted},
+		{"would not marshal", status.Error(codes.Internal, "grpc: error while marshaling: boom"), codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLog(t)
+			sink := &syncSink{}
+			h := streamHandler([]map[string]any{delta("a"), delta("b"), completedEvent(3)})
+			h.Usage = sink
+			err := h.CompleteStream(&pb.CompleteReq{}, &recorder{failAt: 1, sendErr: tc.sendErr})
+			if status.Code(err) != tc.code {
+				t.Fatalf("err = %v (%v), want %v — the send's own failure, not the model's", err, status.Code(err), tc.code)
+			}
+			if strings.Contains(logs.String(), "model stream failed") {
+				t.Errorf("a send failure was logged as a model failure: %q", logs.String())
+			}
+			if !strings.Contains(logs.String(), "sending to the caller failed") {
+				t.Errorf("log = %q, want the send failure logged", logs.String())
+			}
+			if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed {
+				t.Errorf("recorded %+v, want one FAILED row", evs)
+			}
+		})
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	gen "github.com/wandering-compiler/platform/plugins/agent/gen"
-	pb "github.com/wandering-compiler/platform/plugins/agent/gen/pb"
+	gen "github.com/wandering-compiler/plugins/agent/gen"
+	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 	"github.com/wandering-compiler/sdk/go/service/secret"
 )
 
