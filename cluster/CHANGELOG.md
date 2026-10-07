@@ -1,5 +1,13 @@
 # cluster — changelog
 
+## 0.2.0-rc.9
+
+### A relay address with an IPv6 zone is refused
+
+0.2.0-rc.8 accepted an IPv6 address with a zone (`[fe80::1%eth0]:13444`), but gRPC cannot dial one: the target fails to parse, so every placement on that relay failed. The zone is no longer accepted. A link-local address means nothing to a relay on another machine; use a routable address or a DNS name.
+
+A project that vendors this release needs a schema migration (the `url` CHECK changes). If a stored relay has a zone in its address, the migration refuses and names the constraint; that relay could never be reached, so fix or delete the row.
+
 ## 0.2.0-rc.8
 
 ### Register a relay from the admin
@@ -11,7 +19,7 @@ The new endpoint adds a permission, so a project that vendors this release needs
 ### The relay's address and fingerprint are validated when written
 
 - `url` must be a bare `host:port`:
-  - the host can be a DNS name (a public name, an internal service name such as `clusterrelay:13444`, or a swarm `<stack>_<service>` name), an IPv4 address, or a bracketed IPv6 address with an optional zone;
+  - the host can be a DNS name (a public name, an internal service name such as `clusterrelay:13444`, or a swarm `<stack>_<service>` name), an IPv4 address, or a bracketed IPv6 address;
   - the port must be 1–65535;
   - a scheme such as `https://` is refused, because the value is dialled as a gRPC target.
 - `cert_fingerprint` must be 64 lowercase hex characters. Colons, capitals and short values are refused.
