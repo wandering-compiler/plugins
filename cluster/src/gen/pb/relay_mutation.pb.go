@@ -523,18 +523,18 @@ var File_mutations_relay_mutation_proto protoreflect.FileDescriptor
 
 const file_mutations_relay_mutation_proto_rawDesc = "" +
 	"\n" +
-	"\x1emutations/relay_mutation.proto\x12\x13w17.contrib.cluster\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"\x80\x01\n" +
+	"\x1emutations/relay_mutation.proto\x12\x13w17.contrib.cluster\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"\x83\x04\n" +
 	"\x0eCreateRelayReq\x12\x1c\n" +
-	"\x04name\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\x04name\x12\x1b\n" +
-	"\x03url\x18\x02 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x03url\x123\n" +
-	"\x10cert_fingerprint\x18\x03 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\x0fcertFingerprint\")\n" +
+	"\x04name\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\x04name\x12\xb4\x02\n" +
+	"\x03url\x18\x02 \x01(\tB\xa1\x02\xca\xf3\x18\x9c\x02\b\x01@\xff\x01r\xae\x01^([A-Za-z0-9_]([A-Za-z0-9_.-]*[A-Za-z0-9_])?\\.?|\\[[0-9A-Fa-f:.]+(%[A-Za-z0-9_.-]+)?\\]):([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$\xea\x01c\b\x05\x12_a relay address is host:port with no scheme, e.g. relay.example.com:13444 or clusterrelay:13444R\x03url\x12\x9b\x01\n" +
+	"\x10cert_fingerprint\x18\x03 \x01(\tBp\xca\xf3\x18l\b\x01@@r\x0e^[0-9a-f]{64}$\xea\x01U\b\x05\x12Qa certificate fingerprint is 64 lowercase hex characters, as relay mint prints itR\x0fcertFingerprint\")\n" +
 	"\x0fCreateRelayResp\x12\x16\n" +
-	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id\"\xb2\x01\n" +
+	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id\"\xb5\x04\n" +
 	"\x0eUpdateRelayReq\x12\x16\n" +
 	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id\x12\x1c\n" +
-	"\x04name\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\x04name\x12\x1b\n" +
-	"\x03url\x18\x03 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x03url\x123\n" +
-	"\x10cert_fingerprint\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\x0fcertFingerprint\x12\x18\n" +
+	"\x04name\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\x04name\x12\xb4\x02\n" +
+	"\x03url\x18\x03 \x01(\tB\xa1\x02\xca\xf3\x18\x9c\x02\b\x01@\xff\x01r\xae\x01^([A-Za-z0-9_]([A-Za-z0-9_.-]*[A-Za-z0-9_])?\\.?|\\[[0-9A-Fa-f:.]+(%[A-Za-z0-9_.-]+)?\\]):([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$\xea\x01c\b\x05\x12_a relay address is host:port with no scheme, e.g. relay.example.com:13444 or clusterrelay:13444R\x03url\x12\x9b\x01\n" +
+	"\x10cert_fingerprint\x18\x04 \x01(\tBp\xca\xf3\x18l\b\x01@@r\x0e^[0-9a-f]{64}$\xea\x01U\b\x05\x12Qa certificate fingerprint is 64 lowercase hex characters, as relay mint prints itR\x0fcertFingerprint\x12\x18\n" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\"\x11\n" +
 	"\x0fUpdateRelayResp\"(\n" +
 	"\x0eDeleteRelayReq\x12\x16\n" +

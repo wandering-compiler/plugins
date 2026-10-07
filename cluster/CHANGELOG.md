@@ -1,5 +1,27 @@
 # cluster — changelog
 
+## 0.2.0-rc.8
+
+### Register a relay from the admin
+
+The Relays admin page can now create a relay: name, management address and certificate fingerprint, over `RelayMutation.CreateRelay`. Use it for a relay on another machine. A relay deployed beside the control plane is registered by its deployment and does not need the form.
+
+The new endpoint adds a permission, so a project that vendors this release needs a schema migration (`w17ctl migrate generate`).
+
+### The relay's address and fingerprint are validated when written
+
+- `url` must be a bare `host:port`:
+  - the host can be a DNS name (a public name, an internal service name such as `clusterrelay:13444`, or a swarm `<stack>_<service>` name), an IPv4 address, or a bracketed IPv6 address with an optional zone;
+  - the port must be 1–65535;
+  - a scheme such as `https://` is refused, because the value is dialled as a gRPC target.
+- `cert_fingerprint` must be 64 lowercase hex characters. Colons, capitals and short values are refused.
+
+Before this release, both kinds of mistake were stored and failed only on the first dial, as a connection error or a pin mismatch.
+
+The rules are checked twice:
+- The create and update requests check them first, so a bad value is refused on that field with a message that names the expected shape.
+- The table also gets CHECK constraints. If an existing row violates one, the migration refuses to apply and names the constraint; fix the row first.
+
 ## 0.2.0-rc.7
 
 ### Module path
