@@ -1,5 +1,15 @@
 # cluster — changelog
 
+## 0.2.0-rc.10
+
+### The relay and a worker can be deployed beside the project
+
+The manifest declares a `deploy:` block: the relay (built from this plugin's source), a worker whose image the project chooses, the identities a deploy mints for them, and the row that registers the relay as `local`. A project runs them on its own machine by naming the worker's image in its lock, for example `w17ctl infra update --plugin prod:codegen.worker=bundle:<bundle>`. Only the relay's caller port is published; management, attach and tunnels stay on the internal network, and every connection stays TLS with certificates the deploy mints.
+
+The swarm target renders it. The aws-ecs and gcp-cloudrun targets refuse it, because Fargate and Cloud Run have no shared host.
+
+Needs w17 platform 1.8 (`requires_w17: ">=1.8"`). Nothing changes for a project that does not deploy the activation. A relay on another machine is still run by hand and registered in the admin.
+
 ## 0.2.0-rc.9
 
 ### A relay address with an IPv6 zone is refused
