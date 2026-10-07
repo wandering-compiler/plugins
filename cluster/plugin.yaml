@@ -1,5 +1,5 @@
 name: cluster
-version: 0.2.0-rc.10
+version: 0.1.0-rc.11
 requires_w17: ">=1.8"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every

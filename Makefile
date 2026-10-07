@@ -19,7 +19,7 @@ GOLANGCI = $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(sh
 
 .PHONY: check plugins-exist test vet fmt gen-pb check-gen-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release
 
-check: fmt vet lint test check-modules check-stage check-plugin-msgids check-gen-pb check-render check-published-tests check-refs check-names check-tools
+check: fmt vet lint test check-modules check-stage check-plugin-msgids check-gen-pb check-render check-published-tests check-refs check-names check-tools check-versions
 
 # A typo in PLUGIN must not make every check pass over nothing.
 plugins-exist:
@@ -147,6 +147,16 @@ check-tools:
 		out="$$(gofmt -l $$m)"; [ -z "$$out" ] || { echo "!! not gofmt-clean: $$out"; exit 1; }; \
 		(cd $$m && $(GO) vet ./... && $(GOLANGCI) ./... && $(GO) test -count=1 ./...) || exit 1; \
 	done
+
+# Every plugin is on the one version line the platform uses: 0.1.0-rc.N, the rc
+# counter the only thing that moves. A cluster release once went to 0.2.0 — a
+# minor bump for a break, which semver allowed and nobody wanted — and every
+# adopter had to be moved back by hand. tools/release.sh refuses the same.
+check-versions:
+	@bad=0; for m in */plugin.yaml; do \
+		v=$$(sed -n 's/^version:[[:space:]]*//p' $$m | head -1); \
+		echo "$$v" | grep -Eq '^0\.1\.0-rc\.[0-9]+$$' || { echo "!! $$m: version $$v — every plugin is 0.1.0-rc.N"; bad=1; }; \
+	done; exit $$bad
 
 release:
 	@tools/release.sh $(RELEASE)

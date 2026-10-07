@@ -37,6 +37,10 @@ cd "$ROOT"
 
 field() { sed -n "s/^$1:[[:space:]]*//p" "$PLUGIN/plugin.yaml" | head -1 | tr -d '"'"'"' '; }
 case "$VERSION" in v*) ;; *) echo "!! the version starts with v: $VERSION" >&2; exit 1 ;; esac
+# One version line for every plugin and the platform: v0.1.0-rc.N (Makefile's
+# check-versions says why).
+echo "$VERSION" | grep -Eq '^v0\.1\.0-rc\.[0-9]+$' || {
+	echo "!! $VERSION is not on the version line — every release is v0.1.0-rc.N" >&2; exit 1; }
 [ -f "$PLUGIN/plugin.yaml" ] || { echo "!! no plugin $PLUGIN here" >&2; exit 1; }
 [ "$(field name)" = "$PLUGIN" ] || {
 	echo "!! $PLUGIN/plugin.yaml declares name: $(field name) — the directory and the manifest disagree" >&2

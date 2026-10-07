@@ -1,5 +1,11 @@
 # cluster — changelog
 
+## 0.1.0-rc.11
+
+The same plugin as 0.2.0-rc.10, back on the version line every plugin and the platform share: `0.1.0-rc.N`. The 0.2.0 releases were a numbering mistake, not a break with 0.1.0 — nothing about them is a second line.
+
+Move with `w17ctl plugin update cluster --to v0.1.0-rc.11`: the 0.2.0 tags still exist for now, and `update` without `--to` takes the highest release, which is still a 0.2.0 one until they are removed. Nothing in the plugin changes.
+
 ## 0.2.0-rc.10
 
 ### The relay and a worker can be deployed beside the project
