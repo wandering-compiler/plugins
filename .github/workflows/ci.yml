@@ -99,6 +99,8 @@ jobs:
           cache: false
       - name: no references to the platform's private docs
         run: make check-refs
+      - name: every plugin is on the 0.1.0-rc.N version line
+        run: make check-versions
       - name: tools and sandboxes build, lint clean and pass
         run: make check-tools
       # The list of names this public repository must not carry is a secret. A

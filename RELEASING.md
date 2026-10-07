@@ -3,7 +3,9 @@
 A release is cut by hand from `main` as merged:
 
 1. **Bump the version** in `<plugin>/plugin.yaml`, in a pull request, and merge it.
-   Versions are `v0.MINOR.PATCH-rc.N` until a stable line exists.
+   Every plugin is on one version line, `v0.1.0-rc.N`: only the rc counter moves —
+   a break is a new rc, not a new minor. `make check` and `tools/release.sh` refuse
+   anything else.
 2. **Cut the release** from an up-to-date, clean `main`:
 
    ```sh
@@ -12,6 +14,7 @@ A release is cut by hand from `main` as merged:
    ```
 
 `tools/release.sh` refuses unless:
+- the version is `v0.1.0-rc.N`;
 - the manifest says that version;
 - `HEAD` is `origin/main`;
 - the tag does not exist yet.
