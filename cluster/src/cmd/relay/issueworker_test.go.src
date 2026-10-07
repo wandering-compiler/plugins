@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
 )
 
 func TestIssueWorker_FromTheRelaysIdentityDir(t *testing.T) {

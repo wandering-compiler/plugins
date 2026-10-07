@@ -1,6 +1,7 @@
 package relayserver
 
 import (
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -212,7 +213,7 @@ func TestBackends_TakeSkipsAWorkerThatIsNoLongerAdmitted(t *testing.T) {
 	}
 }
 
-// ── the five review findings on PR #9, each as a guard ──────────────────────
+// ── the five review findings on w17 platform PR #9, each as a guard ──────────────────────
 
 // A PENDING worker must not raise the relay's capacity.
 //
@@ -264,11 +265,20 @@ func TestBackends_ADeadTunnelLeavesTheCapacity(t *testing.T) {
 		t.Errorf("capacity = %d after the tunnel died, want 0 — the pool keeps "+
 			"granting tickets nobody can run until an unrelated event refreshes it", got)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if seen[len(seen)-1] != 0 {
-		t.Errorf("the capacity sink ended at %v — a dead tunnel did not publish", seen)
+	// The sink is waited for on its own. The watcher changes the state under
+	// the lock and publishes AFTER releasing it (publishLocked: the pool is
+	// never called under a relay lock), so Capacity() reads 0 a moment before
+	// the publish lands — reading the sink right after the poll above saw
+	// [0 0 3] about one run in four under -race. The guarantee is eventual:
+	// the last publish carries the current total.
+	last := func() []int { mu.Lock(); defer mu.Unlock(); return slices.Clone(seen) }
+	for time.Now().Before(deadline) {
+		if s := last(); s[len(s)-1] == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
+	t.Errorf("the capacity sink ended at %v — a dead tunnel did not publish", last())
 }
 
 // A call still unwinding on a REPLACED tunnel must not give back a slot booked

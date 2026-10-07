@@ -39,6 +39,20 @@ const (
 	// the floor grpc-go clamps every client to, so no grpc-go client can be cut
 	// for pinging too often whatever it configured. Well below KeepaliveTime.
 	KeepaliveMinTime = 10 * time.Second
+
+	// HandshakeTimeout bounds a work server's HTTP/2 handshake: from the
+	// accepted socket to the peer's connection preface.
+	//
+	// Keepalive only starts once that handshake is done, so without a bound
+	// of its own a peer that vanishes MID-handshake — the relay's preface lost
+	// to the same reclaimed VM or forgotten NAT mapping keepalive exists for —
+	// was covered by nothing but gRPC's default of 120 s: a worker's
+	// ServeTunnel sat on a socket that would never speak for two minutes
+	// before it dialled a replacement, three times longer than a tunnel that
+	// died a moment later. Generous next to a real handshake (one round trip
+	// after TLS), and no longer than keepalive takes to notice a dead
+	// established connection.
+	HandshakeTimeout = 20 * time.Second
 )
 
 // ClientKeepalive is the dial option every client in the cluster uses.
@@ -71,10 +85,11 @@ func ServerKeepalive() []grpc.ServerOption {
 }
 
 // WorkServerOptions are what a server CARRYING WORK is built with — the
-// relay's proxy and the worker's server on its tunnel: keepalive, and the
-// message cap in both directions.
+// relay's proxy and the worker's server on its tunnel: keepalive, a bounded
+// HTTP/2 handshake (HandshakeTimeout), and the message cap in both directions.
 func WorkServerOptions() []grpc.ServerOption {
 	return append(ServerKeepalive(),
+		grpc.ConnectionTimeout(HandshakeTimeout),
 		grpc.MaxRecvMsgSize(MaxMessage),
 		grpc.MaxSendMsgSize(MaxMessage),
 	)

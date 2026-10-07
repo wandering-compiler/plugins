@@ -30,10 +30,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -41,15 +43,15 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/regcode"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relayserver"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
-	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/regcode"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/lib/relayserver"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/workerpb"
 )
 
 type config struct {
@@ -71,6 +73,18 @@ type config struct {
 	caKeyPath    string
 	certLifetime time.Duration
 	codeTTL      time.Duration
+
+	// netListen opens every listener; nil is net.Listen. A test seam, never
+	// set from flags: it lets a test make one bind fail deterministically
+	// instead of racing for a port it freed.
+	netListen func(network, address string) (net.Listener, error)
+}
+
+func (c config) bind(address string) (net.Listener, error) {
+	if c.netListen != nil {
+		return c.netListen("tcp", address)
+	}
+	return net.Listen("tcp", address)
 }
 
 func main() {
@@ -88,8 +102,30 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "mint" {
 		return mint(os.Args[2:], os.Stdout)
 	}
+	cfg, err := parseConfig(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	return serve(cfg, stop, nil)
+}
+
+// parseConfig reads the flags, each defaulted from its environment variable.
+// Split from serve so the relay's wiring can be run in-process by a test, on
+// ports it chose, without going through os.Args.
+func parseConfig(args []string, out io.Writer) (config, error) {
 	cfg := config{}
-	fs := flag.NewFlagSet("relay", flag.ExitOnError)
+	env := &envReader{}
+	envOr := env.str
+	// The number and duration readers take the FLAG their variable defaults,
+	// so a malformed variable is only an error when that flag was not given.
+	envInt, envDuration := env.int, env.duration
+	fs := flag.NewFlagSet("relay", flag.ContinueOnError)
+	fs.SetOutput(out)
 	fs.StringVar(&cfg.listen, "listen", envOr("RELAY_LISTEN", ":13444"),
 		"address the MANAGEMENT gRPC listens on — the half the control plane dials")
 	fs.StringVar(&cfg.attachListen, "attach-listen", envOr("RELAY_ATTACH_LISTEN", ":13446"),
@@ -113,26 +149,70 @@ func run() error {
 		"PEM certificate of the CA this relay issues WORKER certificates from (production: a secret)")
 	fs.StringVar(&cfg.caKeyPath, "ca-key", os.Getenv("RELAY_CA_KEY"), "PEM private key for --ca-cert")
 	fs.DurationVar(&cfg.certLifetime, "worker-cert-lifetime",
-		envDuration("RELAY_WORKER_CERT_LIFETIME", relayserver.DefaultWorkerCertLifetime),
+		envDuration("worker-cert-lifetime", "RELAY_WORKER_CERT_LIFETIME", relayserver.DefaultWorkerCertLifetime),
 		"how long an issued worker certificate lasts; workers renew well before, and a forgotten ban runs out with it")
-	fs.DurationVar(&cfg.codeTTL, "registration-code-ttl", envDuration("RELAY_REGISTRATION_CODE_TTL", 15*time.Minute),
+	fs.DurationVar(&cfg.codeTTL, "registration-code-ttl", envDuration("registration-code-ttl", "RELAY_REGISTRATION_CODE_TTL", 15*time.Minute),
 		"how long a one-time registration code stays usable")
 	fs.StringVar(&cfg.controlPin, "control-plane-fingerprint", os.Getenv("RELAY_CONTROL_PLANE_FINGERPRINT"),
 		"lowercase hex SHA-256 of the control plane's client certificate; nothing else may manage this relay")
-	fs.IntVar(&cfg.capacity, "capacity", envInt("RELAY_CAPACITY", 0),
+	fs.IntVar(&cfg.capacity, "capacity", envInt("capacity", "RELAY_CAPACITY", 0),
 		"OPTIONAL ceiling on concurrent tasks; 0 means whatever the attached workers add up to")
-	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("RELAY_TICKET_TTL", 30*time.Second),
+	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("ticket-ttl", "RELAY_TICKET_TTL", 30*time.Second),
 		"how long a granted ticket stays claimable — TIME TO CLAIM, not a cap on how long work may run")
-	fs.DurationVar(&cfg.drainTimeout, "drain-timeout", envDuration("RELAY_DRAIN_TIMEOUT", 15*time.Minute),
+	fs.DurationVar(&cfg.drainTimeout, "drain-timeout", envDuration("drain-timeout", "RELAY_DRAIN_TIMEOUT", 15*time.Minute),
 		"on SIGTERM, how long to wait for running work after draining before stopping anyway — at "+
 			"least the longest task this pool runs; the supervisor's kill timeout must be longer still")
-	fs.DurationVar(&cfg.pollInterval, "poll-interval", envDuration("RELAY_POLL_INTERVAL", relaycore.DefaultPollInterval),
+	fs.DurationVar(&cfg.pollInterval, "poll-interval", envDuration("poll-interval", "RELAY_POLL_INTERVAL", relaycore.DefaultPollInterval),
 		"how often a client holding a polled reservation is told to ask again")
-	fs.DurationVar(&cfg.pollTimeout, "poll-timeout", envDuration("RELAY_POLL_TIMEOUT", relaycore.DefaultPollTimeout),
+	fs.DurationVar(&cfg.pollTimeout, "poll-timeout", envDuration("poll-timeout", "RELAY_POLL_TIMEOUT", relaycore.DefaultPollTimeout),
 		"how long a polled reservation survives without a poll before it is abandoned — a few poll intervals")
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		return err
+	// The command line first: `-h` is usage whatever the environment holds,
+	// and a flag given explicitly replaces its variable — so the variable
+	// being malformed does not matter and is not a reason to refuse.
+	if err := fs.Parse(args); err != nil {
+		return config{}, err
 	}
+	if fs.NArg() > 0 {
+		// A stray word is almost always a flag that lost its dashes or a
+		// subcommand misspelt; starting anyway would run a relay on defaults
+		// the operator believes they changed.
+		return config{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	var errs []error
+	for _, e := range env.errs {
+		if !set[e.flag] {
+			errs = append(errs, e.err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return config{}, err
+	}
+	return cfg, nil
+}
+
+// listening is where a started relay's four listeners actually bound — what a
+// test needs when it asked for port 0.
+type listening struct {
+	management, attach, tunnels, proxy net.Addr
+}
+
+// serve runs the relay until a value arrives on stop, then drains and shuts
+// down (shutdownPlan). started, if set, is told the bound addresses once every
+// listener is up.
+//
+// A start that FAILS part-way stops whatever it had already started before
+// returning, so nothing keeps serving behind an error.
+func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err error) {
+	var undo []func()
+	defer func() {
+		if err != nil {
+			for i := len(undo) - 1; i >= 0; i-- {
+				undo[i]()
+			}
+		}
+	}()
 
 	// Every one of these is refused rather than defaulted. A relay that starts
 	// with no proxy address hands out grants naming nowhere; one with no pin
@@ -182,6 +262,38 @@ func run() error {
 	workers := workeradmit.New()
 
 	controlPin := strings.ToLower(strings.TrimSpace(cfg.controlPin))
+	// A refused control plane is LOGGED, with the fingerprint it presented.
+	// The handshake failure is otherwise invisible on this side, and the
+	// common cause is not an intruder but a console whose identity was
+	// re-minted without updating --control-plane-fingerprint — which an
+	// operator can only diagnose by comparing the two fingerprints.
+	//
+	// In THIS side's words: relaydial's own message is written for the
+	// control plane pinning a relay ("registry pins …, the relay's
+	// certificate was rotated without updating its row"), and on a relay it
+	// sent the operator to a registry row that has nothing to do with it.
+	pinCert := relaydial.PinnedVerifier("control plane", controlPin)
+	pinConn := relaydial.PinnedConnectionVerifier("control plane", controlPin)
+	verifyCert := func(raw [][]byte, chains [][]*x509.Certificate) error {
+		if pinCert(raw, chains) != nil {
+			var leaf []byte
+			if len(raw) > 0 {
+				leaf = raw[0]
+			}
+			return logControlPlaneRefused(leaf, controlPin)
+		}
+		return nil
+	}
+	verifyConn := func(cs tls.ConnectionState) error {
+		if pinConn(cs) != nil {
+			var leaf []byte
+			if len(cs.PeerCertificates) > 0 {
+				leaf = cs.PeerCertificates[0].Raw
+			}
+			return logControlPlaneRefused(leaf, controlPin)
+		}
+		return nil
+	}
 	// Every server here takes tunnel.ServerKeepalive: it pings its peers on
 	// the cluster schedule and accepts their pings (lib/tunnel/keepalive.go).
 	// The management server also applies the ban set every control-plane call
@@ -195,10 +307,10 @@ func run() error {
 		// a CA. Workers are the opposite case (a fleet that comes and goes)
 		// and are verified against this relay's CA on their own listeners.
 		ClientAuth:            tls.RequireAnyClientCert,
-		VerifyPeerCertificate: relaydial.PinnedVerifier("control plane", controlPin),
+		VerifyPeerCertificate: verifyCert,
 		// A resumed session never reaches VerifyPeerCertificate; this hook runs
 		// on both paths, so the pin holds past the first connection (G123).
-		VerifyConnection: relaydial.PinnedConnectionVerifier("control plane", controlPin),
+		VerifyConnection: verifyConn,
 	})))...)
 	backends := relayserver.NewBackends()
 	// Capacity comes from the FLEET, and this is the wire that carries it: a
@@ -240,11 +352,12 @@ func run() error {
 	}
 	attachTLS := tunnelTLS.Clone()
 	attachTLS.ClientAuth = tls.VerifyClientCertIfGiven
-	tunnelRaw, err := net.Listen("tcp", cfg.tunnelListen)
+	tunnelRaw, err := cfg.bind(cfg.tunnelListen)
 	if err != nil {
 		return fmt.Errorf("listening for worker tunnels on %s: %w", cfg.tunnelListen, err)
 	}
 	tunnelLis := tls.NewListener(tunnelRaw, tunnelTLS)
+	undo = append(undo, func() { _ = tunnelLis.Close() })
 	go func() {
 		err := relayserver.ServeTunnels(tunnelLis, workers, backends, func(e error) {
 			// Logged and dropped. A refused tunnel is one machine's problem,
@@ -274,10 +387,15 @@ func run() error {
 		Workers:  workers,
 		Lifetime: cfg.certLifetime,
 	})
-	attachLis, err := net.Listen("tcp", cfg.attachListen)
+	attachLis, err := cfg.bind(cfg.attachListen)
 	if err != nil {
 		return fmt.Errorf("listening for worker attach on %s: %w", cfg.attachListen, err)
 	}
+	// The listener is closed HERE as well as by Stop: Serve runs in a goroutine
+	// that may not have registered it yet, and a server stopped before Serve
+	// closes the listener only when Serve gets round to it — after serve has
+	// already returned, with the port still held.
+	undo = append(undo, func() { attachSrv.Stop(); _ = attachLis.Close() })
 	go func() {
 		if err := attachSrv.Serve(attachLis); err != nil {
 			log.Printf("attach listener stopped: %v", err)
@@ -298,28 +416,31 @@ func run() error {
 			Certificates: []tls.Certificate{crt},
 			MinVersion:   tls.VersionTLS13,
 		})))...)
-	proxyLis, err := net.Listen("tcp", cfg.proxyListen)
+	proxyLis, err := cfg.bind(cfg.proxyListen)
 	if err != nil {
 		return fmt.Errorf("listening for callers on %s: %w", cfg.proxyListen, err)
 	}
+	undo = append(undo, func() { proxy.Stop(); _ = proxyLis.Close() })
 	go func() {
 		if err := proxy.Serve(proxyLis); err != nil {
 			log.Printf("proxy stopped: %v", err)
 		}
 	}()
 
-	lis, err := net.Listen("tcp", cfg.listen)
+	lis, err := cfg.bind(cfg.listen)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", cfg.listen, err)
 	}
+	undo = append(undo, func() { srv.Stop(); _ = lis.Close() })
 	log.Printf("management %s · attach %s · tunnels %s · callers %s · capacity %d · advertised %s",
 		cfg.listen, cfg.attachListen, cfg.tunnelListen, cfg.proxyListen, cfg.capacity, cfg.proxyAddress)
 
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(lis) }()
+	if started != nil {
+		started(listening{management: lis.Addr(), attach: attachLis.Addr(), tunnels: tunnelLis.Addr(), proxy: proxyLis.Addr()})
+	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case err := <-served:
 		// The management listener failed on its own: nothing can manage this
@@ -341,26 +462,59 @@ func run() error {
 	return nil
 }
 
-func envOr(k, def string) string {
+// envReader supplies the flags' defaults from RELAY_* variables.
+//
+// An UNSET (or blank) variable is the default. A SET one that does not parse
+// is an error, collected and refused by parseConfig unless its flag was given
+// on the command line — never quietly read as something else. It used to be:
+// RELAY_CAPACITY=8x was read as 8 (the old scan stopped at the first
+// non-digit and called that success), RELAY_CAPACITY=-2 as no ceiling at all
+// (anything not positive fell back to the default, 0), and
+// RELAY_TICKET_TTL=60 (no unit) as the default 30 s — each a relay running on
+// a value its operator did not write.
+type envReader struct{ errs []envError }
+
+// envError is a malformed variable, and the flag that would have overridden
+// it.
+type envError struct {
+	flag string
+	err  error
+}
+
+func (e *envReader) str(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		return v
 	}
 	return def
 }
 
-func envInt(k string, def int) int {
-	var n int
-	if _, err := fmt.Sscanf(os.Getenv(k), "%d", &n); err == nil && n > 0 {
-		return n
+// int reads a count where 0 is meaningful (RELAY_CAPACITY: no ceiling) and a
+// negative one is not.
+func (e *envReader) int(flagName, k string, def int) int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
 	}
-	return def
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		e.errs = append(e.errs, envError{flagName, fmt.Errorf("%s=%q is not a whole number of zero or more", k, v)})
+		return def
+	}
+	return n
 }
 
-func envDuration(k string, def time.Duration) time.Duration {
-	if d, err := time.ParseDuration(os.Getenv(k)); err == nil && d > 0 {
-		return d
+// duration reads a positive Go duration ("30s", "15m").
+func (e *envReader) duration(flagName, k string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
 	}
-	return def
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		e.errs = append(e.errs, envError{flagName, fmt.Errorf("%s=%q is not a positive duration with a unit, like 30s or 15m", k, v)})
+		return def
+	}
+	return d
 }
 
 // relayIdentity resolves the relay's own key pair from whichever of the two
@@ -429,4 +583,37 @@ func relayCA(cfg config) (*identity.CA, error) {
 	return nil, errors.New(
 		"this relay has no worker CA: pass --ca-cert/--ca-key, or --identity-dir to keep one there — " +
 			"without it no worker can enrol")
+}
+
+// controlPlaneRefused is the relay's account of refusing a control plane by
+// its pin: the fingerprint it presented, the one this relay pins, and where
+// that pin comes from — --control-plane-fingerprint or
+// RELAY_CONTROL_PLANE_FINGERPRINT — so an operator whose console identity was
+// re-minted knows what to change, and one who did not knows this was not their
+// control plane. leaf is the presented leaf certificate, DER, or nil.
+//
+// relaydial's error is deliberately not wrapped in: its advice is about a
+// registry row, which a relay does not have. Everything it said that applies
+// here — no certificate, an unparseable one, which fingerprint — is said
+// below.
+func controlPlaneRefused(leaf []byte, want string) error {
+	presented := "none"
+	if leaf != nil {
+		presented = "an unparseable one"
+		if cert, err := x509.ParseCertificate(leaf); err == nil {
+			presented = relaydial.Fingerprint(cert)
+		}
+	}
+	return fmt.Errorf("refused a management connection: the control plane presented certificate %s, "+
+		"this relay expects %s (--control-plane-fingerprint / RELAY_CONTROL_PLANE_FINGERPRINT) — "+
+		"if the control plane's identity was re-minted, set that to its new fingerprint after checking it; "+
+		"otherwise this is not the control plane this relay serves", presented, want)
+}
+
+// logControlPlaneRefused logs controlPlaneRefused and returns it, for the TLS
+// layer to refuse the handshake with.
+func logControlPlaneRefused(leaf []byte, want string) error {
+	err := controlPlaneRefused(leaf, want)
+	log.Print(err)
+	return err
 }

@@ -5,7 +5,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 )
 
 // relayService is the wire name of ClusterService ON A RELAY: the plugin's own
@@ -71,10 +71,10 @@ func (c relayClient) ScheduleTask(ctx context.Context, in *pb.ScheduleTaskReq) (
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[pb.ScheduleTaskReq, pb.ScheduleTaskEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
+	if err := x.SendMsg(in); err != nil {
 		return nil, err
 	}
-	if err := x.ClientStream.CloseSend(); err != nil {
+	if err := x.CloseSend(); err != nil {
 		return nil, err
 	}
 	return x, nil

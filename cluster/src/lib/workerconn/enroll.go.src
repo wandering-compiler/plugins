@@ -12,11 +12,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
-	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/workerpb"
 )
 
 // ErrNeedsRegistration is a worker with no usable certificate and no
@@ -26,6 +27,18 @@ import (
 var ErrNeedsRegistration = errors.New(
 	"workerconn: this worker has no valid certificate and no registration code — " +
 		"ask an operator to issue one for this relay and start the worker with it")
+
+// ErrInvalidClaim is a worker whose configured Name or DeviceID the control
+// plane's registry could not record — too long, or with a control character
+// (workeradmit.CheckClaims). Checked before an enrolment is attempted, and
+// fatal: a relay would refuse it with refusal.WorkerClaimInvalid, and
+// retrying the same configuration cannot succeed.
+//
+// Only when ENROLLING. A worker that already holds a certificate keeps
+// attaching under whatever it is configured with — its relay records the
+// claims shortened and sanitized — so upgrading this package never takes an
+// enrolled machine out of its fleet over a label.
+var ErrInvalidClaim = errors.New("workerconn: invalid worker name or device id")
 
 // EnsureEnrolled makes sure IdentityDir holds a key and a valid certificate
 // for this relay, enrolling with RegistrationCode when it does not.
@@ -52,6 +65,12 @@ func EnsureEnrolled(ctx context.Context, cfg Config) error {
 	code := strings.TrimSpace(cfg.RegistrationCode)
 	if code == "" {
 		return ErrNeedsRegistration
+	}
+	// Before anything is dialled or any code is offered: a relay would refuse
+	// it, and the operator reading this machine's log is the one who can fix
+	// it.
+	if err := workeradmit.CheckClaims(cfg.Name, cfg.DeviceID); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidClaim, err)
 	}
 	csr, err := identity.CSRFor(keyPEM, cfg.Name)
 	if err != nil {

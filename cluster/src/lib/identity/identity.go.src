@@ -17,6 +17,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -66,6 +67,18 @@ func LoadOrCreateIdentity(dir, name string) (Identity, error) {
 		fp, err := fingerprintOfPEM(certPEM)
 		if err != nil {
 			return Identity{}, fmt.Errorf("identity: %s is unreadable: %w", certPath, err)
+		}
+		// The KEY is checked too, and against this certificate. Both files
+		// existing is not both files being whole: a disk that filled up
+		// mid-write leaves a truncated key beside an intact certificate, and
+		// accepting that printed a fingerprint for an identity nothing could
+		// present — the operator pastes it, and the failure surfaces later, at
+		// a handshake, far from its cause.
+		if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+			return Identity{}, fmt.Errorf(
+				"identity: %s does not hold the key for %s (%v) — a half-written or mismatched "+
+					"identity; restore the pair, or remove both to mint a new one (the new "+
+					"fingerprint then has to be pasted into the relay's row again)", keyPath, certPath, err)
 		}
 		return Identity{CertPEM: certPEM, KeyPEM: keyPEM, Fingerprint: fp}, nil
 	case os.IsNotExist(certErr) && os.IsNotExist(keyErr):

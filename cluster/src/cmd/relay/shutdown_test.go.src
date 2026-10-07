@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
 )
 
 // fakeServer records how it was stopped; GracefulStop blocks until released,

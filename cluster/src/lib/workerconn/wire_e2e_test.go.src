@@ -1,6 +1,7 @@
 package workerconn
 
 import (
+	"crypto/tls"
 	"io"
 	"net"
 	"strings"
@@ -11,8 +12,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
 )
 
 // A message over gRPC's 4 MiB default crosses every hop, both ways.
@@ -127,6 +129,26 @@ func (b *blackhole) pipe(dst, src net.Conn) {
 	}
 }
 
+// carryACall sends one call through the proxy and the tunnel and back.
+//
+// The keepalive tests freeze the wire only AFTER this, because the rig returns
+// as soon as the relay has registered the tunnel — right after TLS, before the
+// HTTP/2 handshake has crossed. Freezing there tested the handshake instead of
+// keepalive (keepalive only starts once the handshake is done), and under -race
+// it reliably did: the relay's preface never reached the worker, whose server
+// then waited out the handshake timeout. That case has a test of its own
+// (TestTunnel_ARelayThatNeverSpeaksHTTP2EndsTheWorkersTunnel).
+func carryACall(t *testing.T, r *rig) {
+	t.Helper()
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callThroughProxy(t, r, grant.Ticket); err != nil {
+		t.Fatalf("setup: a call did not cross the tunnel before the freeze: %v", err)
+	}
+}
+
 // The RELAY stops counting a worker whose tunnel went silent.
 //
 // Without keepalive on the relay's client side of the tunnel, a backend whose
@@ -147,6 +169,7 @@ func TestTunnel_ABlackHoledTunnelStopsBeingABackend(t *testing.T) {
 	if n := r.backends.Count(); n != 1 {
 		t.Fatalf("setup: %d backends, want 1", n)
 	}
+	carryACall(t, r)
 	bh.freeze()
 
 	limit := tunnel.KeepaliveTime + tunnel.KeepaliveTimeout + 15*time.Second
@@ -167,10 +190,11 @@ func TestTunnel_ABlackHoledRelayEndsTheWorkersTunnel(t *testing.T) {
 	t.Parallel()
 	var bh *blackhole
 	done := make(chan error, 1)
-	standUpWith(t, rigOptions{
+	r := standUpWith(t, rigOptions{
 		via:        func(addr string) string { bh = newBlackhole(t, addr); return bh.addr() },
 		tunnelDone: done,
 	})
+	carryACall(t, r)
 	bh.freeze()
 
 	limit := tunnel.KeepaliveTime + tunnel.KeepaliveTimeout + 15*time.Second
@@ -217,5 +241,82 @@ func TestKeepalive_ClientsPingNoFasterThanServersAllow(t *testing.T) {
 	if tunnel.KeepaliveTime < tunnel.KeepaliveMinTime {
 		t.Fatalf("clients ping every %s, servers allow one per %s — every idle connection "+
 			"collects strikes and is cut with too_many_pings", tunnel.KeepaliveTime, tunnel.KeepaliveMinTime)
+	}
+}
+
+// A relay that completes TLS and then never speaks HTTP/2 releases the
+// worker's tunnel within tunnel.HandshakeTimeout.
+//
+// Keepalive cannot cover this: it starts only after the HTTP/2 handshake, so a
+// peer lost between the TLS handshake and its connection preface was bounded
+// by nothing but gRPC's 120 s default — the worker's ServeTunnel sat on a
+// socket that would never speak for two minutes before dialling a replacement.
+// Found by the black-hole test above, which froze the wire mid-handshake under
+// -race and waited out exactly that.
+func TestTunnel_ARelayThatNeverSpeaksHTTP2EndsTheWorkersTunnel(t *testing.T) {
+	t.Parallel()
+	relayID, err := identity.LoadOrCreateIdentity(t.TempDir(), "relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	crt, err := tls.X509KeyPair(relayID.CertPEM, relayID.KeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := newCA(t)
+	dir, _ := enrolledDir(t, ca, time.Hour)
+
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis := tls.NewListener(raw, &tls.Config{
+		Certificates: []tls.Certificate{crt},
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    ca.Pool(),
+	})
+	t.Cleanup(func() { _ = lis.Close() })
+	handshook := make(chan net.Conn, 1)
+	go func() {
+		c, err := lis.Accept()
+		if err != nil {
+			return
+		}
+		// TLS completes — so this is not a dial failure — and then nothing:
+		// no preface, no SETTINGS, no RST. The socket is held open.
+		if err := c.(*tls.Conn).Handshake(); err != nil {
+			_ = c.Close()
+			return
+		}
+		handshook <- c
+	}()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		done <- ServeTunnel(t.Context(), Config{
+			TunnelAddress:    lis.Addr().String(),
+			RelayFingerprint: relayID.Fingerprint,
+			IdentityDir:      dir,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, &fakeWork{}) })
+	}()
+	select {
+	case c := <-handshook:
+		t.Cleanup(func() { _ = c.Close() })
+	case err := <-done:
+		t.Fatalf("ServeTunnel ended before TLS completed, so this is not the case under test: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("setup: the TLS handshake never completed")
+	}
+
+	limit := tunnel.HandshakeTimeout + 10*time.Second
+	select {
+	case <-done:
+		if took := time.Since(start); took < tunnel.HandshakeTimeout/2 {
+			t.Errorf("ServeTunnel gave up after %s — sooner than the handshake bound allows a slow peer", took)
+		}
+	case <-time.After(limit):
+		t.Fatalf("ServeTunnel is still waiting on a relay that never spoke HTTP/2 %s later", limit)
 	}
 }

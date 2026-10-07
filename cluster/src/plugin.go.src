@@ -2,6 +2,7 @@
 package cluster
 
 import (
+	"crypto/tls"
 	"fmt"
 	"os"
 	"strings"
@@ -9,9 +10,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/gen"
-	"github.com/wandering-compiler/platform/plugins/cluster/handlers"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/gen"
+	"github.com/wandering-compiler/plugins/cluster/handlers"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
 )
 
 // RegisterPlugin wires the control plane's half of the cluster.
@@ -70,6 +71,15 @@ func loadIdentity(cfg *gen.EnvConfig) (relaydial.Config, error) {
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
 		return relaydial.Config{}, fmt.Errorf("cluster: reading client_key_path: %w", err)
+	}
+	// PARSED here, not only read. Two readable files are not an identity: a
+	// truncated key, a key from another pair, a certificate pasted where the
+	// key goes — each used to boot cleanly and then fail every placement at
+	// dial time ("relaydial: client identity: …"), which is the
+	// looks-healthy-and-is-not outcome loading at boot exists to prevent.
+	if _, err := tls.X509KeyPair(cert, key); err != nil {
+		return relaydial.Config{}, fmt.Errorf(
+			"cluster: client_cert_path and client_key_path are not a usable key pair: %w", err)
 	}
 	return relaydial.Config{ClientCertPEM: cert, ClientKeyPEM: key}, nil
 }

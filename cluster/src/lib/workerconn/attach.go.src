@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/workerpb"
 )
 
 // State is what the relay last said about this worker.
@@ -175,8 +175,10 @@ func (r Readiness) proto() workerpb.WorkerStatus_Readiness {
 // the caller decides what is worth logging. It must not block.
 //
 // It returns ErrNeedsRegistration when the worker has no usable certificate
-// and no code to get one with: an operator has to act, and a loop retrying
-// the impossible would only hide that.
+// and no code to get one with, ErrInvalidClaim when it would enrol under a
+// name or device id the registry cannot record, and the relay's refusal when
+// the relay refused the enrolment with a reason: an operator has to act, and
+// a loop retrying the impossible would only hide that.
 func Run(ctx context.Context, cfg Config, onState func(State)) error {
 	if err := cfg.validateIdentity(); err != nil {
 		return err
@@ -202,7 +204,8 @@ func Run(ctx context.Context, cfg Config, onState func(State)) error {
 		if err == nil {
 			break
 		}
-		if errors.Is(err, ErrNeedsRegistration) || refusal.ReasonOf(err) != "" || ctx.Err() != nil {
+		if errors.Is(err, ErrNeedsRegistration) || errors.Is(err, ErrInvalidClaim) ||
+			refusal.ReasonOf(err) != "" || ctx.Err() != nil {
 			return err
 		}
 		onState(Disconnected)

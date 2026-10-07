@@ -9,11 +9,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/identity"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/refusal"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/regcode"
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
-	"github.com/wandering-compiler/platform/plugins/cluster/workerpb"
+	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/regcode"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/workerpb"
 )
 
 // DefaultWorkerCertLifetime is how long a worker certificate lasts: weeks, so
@@ -70,6 +70,12 @@ func (e *Enrollment) Enroll(_ context.Context, req *workerpb.EnrollReq) (*worker
 		return nil, refusal.New(codes.PermissionDenied, refusal.WorkerBanned,
 			"relay: the key in this request ("+id+") is banned — enrol with a new key")
 	}
+	// Claims after the ban, still before the code is spent: a banned key is
+	// told it is BANNED whatever it claims. The other order told it to fix its
+	// name, and a worker that obeyed came back only to learn the real answer.
+	if err := checkClaims(req.GetName(), req.GetDeviceId()); err != nil {
+		return nil, err
+	}
 	if err := e.Codes.Redeem(req.GetRegistrationCode()); err != nil {
 		if errors.Is(err, regcode.ErrInvalid) {
 			return nil, refusal.New(codes.PermissionDenied, refusal.RegistrationCodeInvalid,
@@ -123,4 +129,25 @@ func (e *Enrollment) Renew(ctx context.Context, req *workerpb.RenewReq) (*worker
 		return nil, status.Errorf(codes.Internal, "relay: issuing the certificate: %v", err)
 	}
 	return &workerpb.Certificate{CertificatePem: certPEM, CaPem: e.CA.CertPEM}, nil
+}
+
+// checkClaims refuses, at ENROLMENT, a worker's name or device id that the
+// control plane's registry could not record (workeradmit.CheckClaims: too
+// long, a control character such as NUL, or an invisible format character).
+//
+// Refused at the edge, where the worker can be told, rather than met and
+// passed on: a claim the registry cannot hold used to reach the control
+// plane's sweep, where the only thing that could happen to it was a failure
+// nobody on the worker's machine would ever see. A refusal with a REASON,
+// not a bare InvalidArgument: a worker ends on a reasoned refusal and shows
+// the message, where a bare status was retried every few seconds forever
+// behind "disconnected".
+//
+// Attach does NOT use it — a worker that already holds a certificate has its
+// claims sanitized instead (see WorkerServer.Attach).
+func checkClaims(name, deviceID string) error {
+	if err := workeradmit.CheckClaims(name, deviceID); err != nil {
+		return refusal.New(codes.InvalidArgument, refusal.WorkerClaimInvalid, "relay: "+err.Error())
+	}
+	return nil
 }

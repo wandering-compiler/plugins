@@ -81,6 +81,13 @@ const (
 	// CertificateExpired — an attached worker's certificate ran out while its
 	// stream was open. It reconnects with the renewed one.
 	CertificateExpired = "CERTIFICATE_EXPIRED"
+
+	// WorkerClaimInvalid — an enrolment claimed a name or device id the
+	// control plane's registry cannot record (too long, or a control
+	// character). Answered to a WORKER, and fatal for it: retrying the same
+	// configuration cannot succeed, so a worker ends with the message instead
+	// of reconnecting forever. The registration code is not spent.
+	WorkerClaimInvalid = "WORKER_CLAIM_INVALID"
 )
 
 // Reasons emitted by the CONTROL PLANE (the project's handlers).

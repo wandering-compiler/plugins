@@ -5,7 +5,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/workeradmit"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 // BanInterceptors apply the ban set the control plane sends on EVERY call to

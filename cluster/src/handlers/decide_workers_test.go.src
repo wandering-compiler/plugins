@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
 
-	pb "github.com/wandering-compiler/platform/plugins/cluster/gen/pb"
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 )
 
 // signedIn is a context carrying the gateway's verified principal the way the

@@ -10,7 +10,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/wandering-compiler/platform/plugins/cluster/lib/tunnel"
+	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
 )
 
 // ServeTunnel opens the work channel and serves on it until ctx ends or the
