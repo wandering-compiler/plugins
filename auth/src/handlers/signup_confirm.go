@@ -163,6 +163,31 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 		return nil, err
 	}
 
+	// The link is claimed when the registration STARTS, because only this call
+	// carries it — the confirmation does not. An address that never confirms
+	// keeps the invitation bound to itself, which is what an invitation
+	// addressed to it would have been.
+	//
+	// The claim and the pending registration are one unit of work: a pending
+	// row that fails to write must leave the link open (and a lost claim must
+	// leave no pending row to confirm).
+	txCtx := ctx
+	var tx *distx.TxHandle
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	fail := func(err error) (*pb.SignUpResp, error) {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return nil, err
+	}
+	if err := signupClaimInvite(txCtx, h, email, req.GetInviteToken()); err != nil {
+		return fail(err)
+	}
+
 	create := &pb.CreatePendingSignUpReq{
 		Email:        email,
 		PasswordHash: hashed,
@@ -170,12 +195,17 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 		ExpiresAt:    timestamppb.New(time.Now().Add(h.signUpConfirmationTTL())),
 		Code:         code,
 	}
-	if err := pendingSignUpTenant(ctx, h, req, create); err != nil {
-		return nil, err
+	if err := pendingSignUpTenant(txCtx, h, req, create); err != nil {
+		return fail(err)
 	}
-	created, err := h.Mutation.CreatePendingSignUp(ctx, create)
+	created, err := h.Mutation.CreatePendingSignUp(txCtx, create)
 	if err != nil {
-		return nil, err
+		return fail(err)
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return &pb.SignUpResp{
 		ConfirmationRequired: true,

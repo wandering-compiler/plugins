@@ -25,6 +25,17 @@ type passwordChangeMock struct {
 	lastCAS   *pb.UpdateUserPasswordIfUnchangedReq
 	casErr    error
 	plainCall int // UpdateUserPassword — the un-predicated write; must stay unused here
+
+	sweeps   []*pb.DeleteOtherSessionTokensReq
+	sweepErr error
+}
+
+func (m *passwordChangeMock) DeleteOtherSessionTokens(ctx context.Context, in *pb.DeleteOtherSessionTokensReq, _ ...grpc.CallOption) (*pb.DeleteOtherSessionTokensResp, error) {
+	m.sweeps = append(m.sweeps, in)
+	if m.sweepErr != nil {
+		return nil, m.sweepErr
+	}
+	return &pb.DeleteOtherSessionTokensResp{}, nil
 }
 
 func (m *passwordChangeMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
@@ -143,5 +154,51 @@ func TestChangePassword_WrongCurrentPasswordWritesNothing(t *testing.T) {
 	}
 	if m.casCalls != 0 || m.plainCall != 0 {
 		t.Fatalf("nothing may be written when the proof fails (cas=%d plain=%d)", m.casCalls, m.plainCall)
+	}
+}
+
+// A password change signs the person out everywhere ELSE: every other
+// session of theirs is deleted, the one they changed it from is kept, and
+// their API tokens are not touched (only sessions are named).
+func TestChangePassword_EndsEveryOtherSession(t *testing.T) {
+	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
+	if _, err := h.ChangePassword(ctxWithEnvelope(t, "u1", "11111111-1111-4111-8111-111111111111"), &pb.ChangePasswordReq{
+		CurrentPassword: "correct-horse-battery-staple",
+		NewPassword:     "a-different-long-password",
+	}); err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+	if len(m.sweeps) != 1 {
+		t.Fatalf("other sessions swept %d times, want once", len(m.sweeps))
+	}
+	sw := m.sweeps[0]
+	if sw.GetUserId() != "u1" || sw.GetKeepTokenId() != "11111111-1111-4111-8111-111111111111" || sw.GetTokenType() != pb.TokenType_TOKEN_TYPE_SESSION {
+		t.Errorf("sweep = %+v, want u1's sessions but the caller's own", sw)
+	}
+
+	// An API-token caller has no session to keep: every session goes.
+	m.sweeps = nil
+	if _, err := h.ChangePassword(ctxWithEnvelope(t, "u1", ""), &pb.ChangePasswordReq{
+		CurrentPassword: "correct-horse-battery-staple",
+		NewPassword:     "a-third-long-password",
+	}); err != nil {
+		t.Fatalf("ChangePassword (API token): %v", err)
+	}
+	if len(m.sweeps) != 1 || m.sweeps[0].GetKeepTokenId() != nilUUID {
+		t.Errorf("an API-token caller kept a session: %+v", m.sweeps)
+	}
+}
+
+// A sign-out that fails fails the change: the person must not be told the
+// password changed while the other sessions live on.
+func TestChangePassword_AFailedSignOutFailsTheChange(t *testing.T) {
+	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
+	m.sweepErr = status.Error(codes.Unavailable, "db down")
+	_, err := h.ChangePassword(ctxWithEnvelope(t, "u1", "11111111-1111-4111-8111-111111111111"), &pb.ChangePasswordReq{
+		CurrentPassword: "correct-horse-battery-staple",
+		NewPassword:     "a-different-long-password",
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("want the sweep's failure, got %v", err)
 	}
 }
