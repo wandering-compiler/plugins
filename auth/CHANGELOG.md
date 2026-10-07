@@ -26,7 +26,7 @@ New storage method: `AuthMutation.BindOpenOrgInvite`.
 
 ### Documented
 
-The README now has a section on what a consumer has to know: sessions and tokens, invitations (the plugin sends no mail, the link is returned once to the inviter), and where a refusal's sentence for a person is.
+The README now has a section on what a consumer has to know: sessions and tokens, invitations (the plugin sends no mail, the link is returned once to the inviter), the CLI-login client registry (one list for the deployment — grant its four RPCs to an operator role only), and where a refusal's sentence for a person is.
 
 ## 0.1.0-rc.18
 

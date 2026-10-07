@@ -62,6 +62,9 @@ Behaviour that is deliberate, and easy to build against wrongly.
 - **An open invitation's link is spent by the first registration through it.** It is bound to that address, and a second account cannot register with the same link (under `invite_only` it is refused). Acceptance by the bound account works as before.
 - **Invitation `metadata` comes back as the same JSON value, re-serialised.** It is stored as jsonb, so key order and whitespace are the database's. Compare it parsed.
 
+**CLI-login clients**
+- **The client registry (`cli_login`) is one list for the whole deployment.** An `AuthClient` row carries no organization, and `RegisterClient`, `ListClients`, `SetClientEnabled` and `DeleteClient` check only that the caller is signed in. Grant them to an OPERATOR role only. A tenant role that holds them lists, disables and deletes every other tenant's registered clients. Loopback CLI login (a `w17ctl`-style client on `127.0.0.1`) needs no registration.
+
 **Errors**
 - **The sentence for a person is in `details[0].message`.** The envelope's top-level `message` is the generic sentence for the code: for `EMAIL_TAKEN` it reads "Another change reached this first. Please try again." A client must render the detail.
 
