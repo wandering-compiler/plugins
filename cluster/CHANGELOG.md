@@ -8,6 +8,8 @@ The manifest declares a `deploy:` block: the relay (built from this plugin's sou
 
 The swarm target renders it. The aws-ecs and gcp-cloudrun targets refuse it, because Fargate and Cloud Run have no shared host.
 
+When an environment stops deploying it, the next deploy deletes the `local` row.
+
 Needs w17 platform 1.8 (`requires_w17: ">=1.8"`). Nothing changes for a project that does not deploy the activation. A relay on another machine is still run by hand and registered in the admin.
 
 ## 0.2.0-rc.9

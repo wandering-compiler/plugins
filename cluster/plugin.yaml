@@ -182,6 +182,11 @@ deploy:
       INSERT INTO {activation}_relay (name, url, cert_fingerprint, enabled)
       VALUES ('local', '{address:relay.management}', '{fingerprint:relay}', true)
       ON CONFLICT (name) DO UPDATE SET url = EXCLUDED.url, cert_fingerprint = EXCLUDED.cert_fingerprint
+    # When an environment stops deploying the relay, its row goes too: left
+    # behind, enabled, every placement would pay a dial timeout on it first.
+    # Nothing references a relay by key (a worker's relay_id is a location it
+    # refreshes), and deploying it again inserts the row anew.
+    unregister_sql: "DELETE FROM {activation}_relay WHERE name = 'local'"
 
 presets:
   admin:
