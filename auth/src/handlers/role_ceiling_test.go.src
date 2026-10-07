@@ -131,7 +131,7 @@ func TestCheckMayGrantRole_NoEnvelopeFailsClosed(t *testing.T) {
 // an org-admin, who may not push, minting a ci-push bot that can.
 func TestCreateBot_RefusesARoleAboveTheOperator(t *testing.T) {
 	m := &botAdminMock{
-		apiRoles:  []*pb.OrgScopedRole{{Id: "role-ci"}},
+		apiRoles:  []*pb.ApiRealmRole{{Id: "role-ci"}},
 		rolePerms: map[string][]int32{"role-ci": {7, 50}},
 	}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
@@ -148,7 +148,7 @@ func TestCreateBot_RefusesARoleAboveTheOperator(t *testing.T) {
 
 func TestListBotRoles_OffersOnlyRolesWithinTheCeiling(t *testing.T) {
 	m := &botAdminMock{
-		apiRoles:  []*pb.OrgScopedRole{{Id: "role-ci"}, {Id: "role-fetch"}},
+		apiRoles:  []*pb.ApiRealmRole{{Id: "role-ci"}, {Id: "role-fetch"}},
 		rolePerms: map[string][]int32{"role-ci": {7, 50}, "role-fetch": {7}},
 	}
 	h := &AuthServiceHandler{Query: m}

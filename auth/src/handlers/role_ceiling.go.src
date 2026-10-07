@@ -40,10 +40,11 @@ import (
 // that later drops does not revoke what was granted under it — that is
 // membership management, not this.
 //
-// Staged with `org_membership`, which brings both things it reads: the
-// AuthResp envelope (through authenticate_turnkey) and the role catalogue
-// (through rbac). Its callers — a membership's role change
-// (org_membership_role.go), org_invite and service_account — all have it.
+// Staged with `org_membership` and with `service_account`, each of which
+// brings both things it reads: the AuthResp envelope (authenticate_turnkey) and
+// the role catalogue (rbac). Its callers — a membership's role change
+// (org_membership_role.go), org_invite (which requires org_membership) and
+// service_account — have one or the other; it reads no organization.
 
 // errRoleAboveCaller is the refusal. It names the rule, not the missing
 // permissions: the list would describe the role's contents to someone who has
