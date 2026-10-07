@@ -15,11 +15,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/wandering-compiler/platform/plugins/auth/lib/passwordhash"
-	"github.com/wandering-compiler/platform/plugins/auth/lib/secretbox"
-	"github.com/wandering-compiler/platform/plugins/auth/lib/totp"
+	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
+	"github.com/wandering-compiler/plugins/auth/lib/secretbox"
+	"github.com/wandering-compiler/plugins/auth/lib/totp"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 func testPasswordSettings() passwordhash.Settings { return passwordhash.DefaultSettings() }

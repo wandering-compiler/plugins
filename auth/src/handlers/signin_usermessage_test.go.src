@@ -8,8 +8,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/wandering-compiler/platform/plugins/auth/gen/pb"
-	"github.com/wandering-compiler/platform/plugins/auth/lib/passwordhash"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -22,7 +22,7 @@ import (
 // if it were switched back to the generic Unauthenticated, and the existing
 // gate tests only assert "refused" or "code is Unauthenticated", so all of
 // them stay green while the message a person reads silently disappears.
-// Raised in review on PR #8.
+// Raised in review on w17 platform PR #8.
 //
 // This is also the anti-enumeration assertion that counts. The rule is about
 // what a PROBER observes from the outside, and the outside is this seam.

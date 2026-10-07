@@ -1,11 +1,11 @@
 name: auth
-version: 0.1.0-rc.16
+version: 0.1.0-rc.17
 requires_w17: ">=1.7"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
 # per-activation pb path when the plugin is staged into a project.
-go_module: github.com/wandering-compiler/platform/plugins/auth
+go_module: github.com/wandering-compiler/plugins/auth
 
 description: "Email + password authentication primitives + bearer tokens + RBAC. v3 plugin — proto + DQL primitives + authored Go business handlers (Authenticate, SignIn)."
 license: "Apache-2.0"
@@ -762,8 +762,8 @@ sandboxes:
   # when the activation enables that feature. Reachable in-network at
   # `http://fakeidp:8080` — seed an OAuthProvider row whose
   # authorize/token/userinfo URLs point there. The image is built
-  # locally from plugins/auth/sandboxes/fakeidp:
-  #   docker build -t ${W17_WORKSPACE:-w17}-w17-fakeidp:dev plugins/auth/sandboxes/fakeidp
+  # locally from a clone of github.com/wandering-compiler/plugins:
+  #   docker build -t ${W17_WORKSPACE:-w17}-w17-fakeidp:dev auth/sandboxes/fakeidp
   # The tag is WORKSPACE-PREFIXED: an image tag is build output, and a fixed
   # one on a shared docker daemon is a name every checkout overwrites.
   - name: fakeidp
