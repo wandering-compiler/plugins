@@ -18,14 +18,14 @@ codegen stages the sources into its service bundles.
 A consumer installs a tag:
 
 ```sh
-w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0-rc.16
+w17ctl plugin install https://github.com/wandering-compiler/plugins#auth/v0.1.0-rc.17
 ```
 
 To try an unreleased change, install a commit of `main` (`…#auth@<sha>`). It
-lands unsigned. A w17ctl that renders an author tree on install (newer than
-v0.1.0-rc.65) places what a release of that commit would. v0.1.0-rc.65 and older
-place the raw author tree, with its generated pb, sandboxes and a live go.mod
-(tests are dropped). Prefer a tag until that w17ctl is released.
+lands unsigned. w17ctl v0.1.0-rc.66 and newer render the author tree on install,
+so it places what a release of that commit would. v0.1.0-rc.65 and older place
+the raw author tree, with its generated pb, sandboxes and a live go.mod (tests
+are dropped), so upgrade w17ctl before installing a commit.
 
 ## Working on a plugin
 
