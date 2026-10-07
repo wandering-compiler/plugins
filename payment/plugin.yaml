@@ -1,11 +1,11 @@
 name: payment
-version: 0.1.0-rc.2
+version: 0.1.0-rc.3
 requires_w17: ">=1.5"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in
 # src/handlers/ + src/lib/ + plugin.go to the per-activation pb path.
 # Also the package base w17ctl plugin gen-pb regenerates src/gen/pb under.
-go_module: github.com/wandering-compiler/platform/plugins/payment
+go_module: github.com/wandering-compiler/plugins/payment
 
 description: "Provider-agnostic billing — customers, payments, refunds + webhook ingestion. Stripe driver. Slice 1 (core)."
 license: "Apache-2.0"

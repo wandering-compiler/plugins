@@ -14,7 +14,31 @@
 // provider's unit (e.g. integer minor units) at its boundary.
 package backend
 
-import "context"
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+)
+
+// Provider-failure classes. A driver wraps its errors with one of these
+// (errors.Is) when it KNOWS the failure is not transient; anything else
+// is treated as transient (network, 5xx, rate limit) and the caller may
+// retry. The distinction matters because a gRPC client retry policy
+// retries UNAVAILABLE automatically: a request the provider refused as
+// invalid, or a card it declined, fails identically on every retry.
+var (
+	// ErrInvalidRequest — the request itself is wrong (an amount the
+	// currency cannot represent, a refund larger than the charge, an
+	// idempotency key reused with different parameters). Retrying it
+	// unchanged cannot succeed.
+	ErrInvalidRequest = errors.New("payment provider rejected the request as invalid")
+	// ErrDeclined — the provider refused the charge itself (card
+	// declined, insufficient funds). A retry needs a different payment
+	// method, not a second attempt.
+	ErrDeclined = errors.New("payment declined by the provider")
+)
 
 // Money is a currency amount as a decimal string (e.g. "19.99") plus a
 // lowercase ISO-4217 currency code. String carrier = exact, lossless —
@@ -36,6 +60,63 @@ type PaymentSpec struct {
 	Amount             Money
 	IdempotencyKey     string
 	Description        string
+	// Origin marks the provider object as this plugin's (OriginCharge,
+	// OriginTopup), so a webhook for it can tell "ours, local row not
+	// landed yet" from "not ours at all".
+	Origin string
+	// Install names the installation that created the object (InstallID);
+	// written beside Origin. Empty writes no install mark.
+	Install string
+}
+
+// OriginMetadataKey is the provider metadata key carrying the Origin of an
+// object this plugin created. A webhook names objects the plugin never made
+// too — a subscription's invoice payments, a dashboard charge, another app on
+// the same account — and those have no local row and never will: only an
+// object carrying this key AND this installation's InstallMetadataKey is
+// worth failing (and so redelivering) until its row lands.
+const (
+	OriginMetadataKey  = "w17_payment"
+	OriginCharge       = "charge"
+	OriginTopup        = "topup"
+	OriginSubscription = "subscription"
+)
+
+// InstallMetadataKey is the provider metadata key carrying the InstallID of
+// the installation that created the object.
+//
+// The origin mark alone says "some w17 payment plugin made this", and one
+// provider account is routinely shared by several installations (staging
+// and production on the same test-mode account, two apps of one company).
+// Each installation's webhook endpoint receives every event of the account,
+// so each saw the OTHER's marked objects, found no local row, and failed the
+// event — redelivered for days, on every installation but the one that made
+// the object. Only an object carrying THIS installation's id is worth failing
+// until its row lands; one marked by another installation is acknowledged.
+const InstallMetadataKey = "w17_install"
+
+// InstallID derives the installation identity from the webhook signing
+// secret: hex(HMAC-SHA256(secret, "w17-install-id"))[:16].
+//
+// The signing secret is the one value that is per installation by
+// construction — the provider issues one per webhook endpoint, and an
+// installation that receives webhooks has exactly one endpoint — and that
+// every replica of one installation shares. The id is a keyed hash, so it
+// is safe to write into provider metadata: it does not help recover the
+// secret (the secret is a high-entropy random token, and HMAC is a PRF),
+// and it is stable for as long as the secret is.
+//
+// Empty for an empty secret: an installation without webhooks has no events
+// to tell apart, and marks nothing. Rotating the secret changes the id; an
+// object created under the old id whose local row has not landed by then is
+// treated as foreign (acknowledged), so rotate while no charge is in flight.
+func InstallID(webhookSecret string) string {
+	if webhookSecret == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(webhookSecret))
+	mac.Write([]byte("w17-install-id"))
+	return hex.EncodeToString(mac.Sum(nil))[:16]
 }
 
 // PaymentResult is what the provider returns for a created payment.
@@ -70,6 +151,9 @@ type SubscriptionSpec struct {
 	ProviderCustomerID string
 	ProviderPriceID    string
 	IdempotencyKey     string
+	// Install is written as the object's install mark (see
+	// PaymentSpec.Install).
+	Install string
 }
 
 // SubscriptionResult is what the provider returns for a started

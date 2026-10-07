@@ -9,9 +9,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/wandering-compiler/platform/plugins/payment/lib/backend"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // ── fakes ───────────────────────────────────────────────────────────
@@ -59,6 +59,12 @@ func (f *fakeBackend) StartSubscription(_ context.Context, spec backend.Subscrip
 	return f.subRes, nil
 }
 
+// fakeQuery answers each single-row read with the row a test primed, or —
+// like generated storage (QueryRow+Scan, sql.ErrNoRows mapped by grpcerr) —
+// NotFound when none was primed (noRow). It used to answer an empty
+// response with a nil error for every absent row, the unfaithful shape
+// memStore was already fixed away from: a handler that treated "no row" as a
+// failure stayed green against it.
 type fakeQuery struct {
 	pb.PaymentQueryClient
 	customer     *pb.Customer
@@ -67,28 +73,76 @@ type fakeQuery struct {
 	usageMeter   *pb.UsageMeter    // usage
 	plan         *pb.Plan          // subscriptions
 	subscription *pb.Subscription
-	creditTopup  *pb.CreditTopup // prepaid top-up
+	creditTopup  *pb.CreditTopup  // prepaid top-up
+	ledgerEntry  *pb.CreditLedger // GetCreditLedgerByKey answer (prepaid)
+
+	paymentByProvider *pb.Payment // GetPaymentByProviderId answer
 }
 
 func (q *fakeQuery) GetCustomerByUserId(_ context.Context, _ *pb.GetCustomerByUserIdReq, _ ...grpc.CallOption) (*pb.GetCustomerByUserIdResp, error) {
+	if q.customer == nil {
+		return nil, noRow()
+	}
 	return &pb.GetCustomerByUserIdResp{Customer: q.customer}, nil
 }
 func (q *fakeQuery) GetPayment(_ context.Context, _ *pb.GetPaymentReq, _ ...grpc.CallOption) (*pb.GetPaymentResp, error) {
+	if q.payment == nil {
+		return nil, noRow()
+	}
 	return &pb.GetPaymentResp{Payment: q.payment}, nil
 }
 func (q *fakeQuery) GetCreditBalance(_ context.Context, _ *pb.GetCreditBalanceReq, _ ...grpc.CallOption) (*pb.GetCreditBalanceResp, error) {
+	if q.balance == nil {
+		return nil, noRow()
+	}
 	return &pb.GetCreditBalanceResp{Balance: q.balance}, nil
 }
 func (q *fakeQuery) GetUsageMeter(_ context.Context, _ *pb.GetUsageMeterReq, _ ...grpc.CallOption) (*pb.GetUsageMeterResp, error) {
+	if q.usageMeter == nil {
+		return nil, noRow()
+	}
 	return &pb.GetUsageMeterResp{Meter: q.usageMeter}, nil
 }
 func (q *fakeQuery) GetPlanBySlug(_ context.Context, _ *pb.GetPlanBySlugReq, _ ...grpc.CallOption) (*pb.GetPlanBySlugResp, error) {
+	if q.plan == nil {
+		return nil, noRow()
+	}
 	return &pb.GetPlanBySlugResp{Plan: q.plan}, nil
 }
 func (q *fakeQuery) GetSubscription(_ context.Context, _ *pb.GetSubscriptionReq, _ ...grpc.CallOption) (*pb.GetSubscriptionResp, error) {
+	if q.subscription == nil {
+		return nil, noRow()
+	}
 	return &pb.GetSubscriptionResp{Subscription: q.subscription}, nil
 }
+func (q *fakeQuery) GetPaymentByProviderId(_ context.Context, _ *pb.GetPaymentByProviderIdReq, _ ...grpc.CallOption) (*pb.GetPaymentByProviderIdResp, error) {
+	if q.paymentByProvider == nil {
+		return nil, noRow()
+	}
+	return &pb.GetPaymentByProviderIdResp{Payment: q.paymentByProvider}, nil
+}
+func (q *fakeQuery) GetRefundByProviderId(_ context.Context, _ *pb.GetRefundByProviderIdReq, _ ...grpc.CallOption) (*pb.GetRefundByProviderIdResp, error) {
+	return nil, noRow()
+}
+func (q *fakeQuery) GetRefundByIdempotencyKey(_ context.Context, _ *pb.GetRefundByIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.GetRefundByIdempotencyKeyResp, error) {
+	return nil, noRow()
+}
+func (q *fakeQuery) GetSubscriptionByProviderId(_ context.Context, _ *pb.GetSubscriptionByProviderIdReq, _ ...grpc.CallOption) (*pb.GetSubscriptionByProviderIdResp, error) {
+	return nil, noRow()
+}
+func (q *fakeQuery) GetCreditLedgerByKey(_ context.Context, _ *pb.GetCreditLedgerByKeyReq, _ ...grpc.CallOption) (*pb.GetCreditLedgerByKeyResp, error) {
+	if q.ledgerEntry == nil {
+		return nil, noRow()
+	}
+	return &pb.GetCreditLedgerByKeyResp{Entry: q.ledgerEntry}, nil
+}
+func (q *fakeQuery) GetUsageRecordByKey(_ context.Context, _ *pb.GetUsageRecordByKeyReq, _ ...grpc.CallOption) (*pb.GetUsageRecordByKeyResp, error) {
+	return nil, noRow()
+}
 func (q *fakeQuery) GetCreditTopupByProviderId(_ context.Context, _ *pb.GetCreditTopupByProviderIdReq, _ ...grpc.CallOption) (*pb.GetCreditTopupByProviderIdResp, error) {
+	if q.creditTopup == nil {
+		return nil, noRow()
+	}
 	return &pb.GetCreditTopupByProviderIdResp{Topup: q.creditTopup}, nil
 }
 

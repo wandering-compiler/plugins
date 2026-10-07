@@ -18,7 +18,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/service/secret"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // EnvConfig is the typed view of the activation's env-var inputs. One
@@ -30,9 +30,9 @@ type EnvConfig struct {
 	// any other value fails loud at RegisterPlugin.
 	PaymentProvider string
 
-	// ProviderApiKey is the provider API secret (Stripe sk_…). Passed
+	// ProviderAPIKey is the provider API secret (Stripe sk_…). Passed
 	// to the backend constructor via .Reveal().
-	ProviderApiKey secret.String
+	ProviderAPIKey secret.String
 
 	// WebhookSigningSecret verifies the inbound webhook HMAC (Stripe
 	// whsec_…). Required when the stripe_webhooks feature is active.

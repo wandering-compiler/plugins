@@ -24,6 +24,18 @@ message GetCustomerByUserIdResp { Customer customer = 1; }
 message GetPaymentReq  { string id = 1 [(w17.field) = { type: UUID }]; }
 message GetPaymentResp { Payment payment = 1; }
 
+// GetPaymentByProviderId — provider_payment_id is UNIQUE (models.proto),
+// so this is a single-row read.
+message GetPaymentByProviderIdReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message GetPaymentByProviderIdResp { Payment payment = 1; }
+
+// GetRefundByProviderId — provider_refund_id is UNIQUE (models.proto).
+message GetRefundByProviderIdReq  { string provider_refund_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message GetRefundByProviderIdResp { Refund refund = 1; }
+
+message GetRefundByIdempotencyKeyReq  { string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message GetRefundByIdempotencyKeyResp { Refund refund = 1; }
+
 message GetCreditBalanceReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -31,6 +43,15 @@ message GetCreditBalanceReq {
 message GetCreditBalanceResp {
   option (w17.contrib.plugin_feature) = "prepaid";
   CreditBalance balance = 1;
+}
+
+message GetCreditLedgerByKeyReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetCreditLedgerByKeyResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  CreditLedger entry = 1;
 }
 
 message GetCreditTopupByProviderIdReq {
@@ -53,6 +74,15 @@ message GetUsageMeterResp {
   UsageMeter meter = 1;
 }
 
+message GetUsageRecordByKeyReq {
+  option (w17.contrib.plugin_feature) = "usage";
+  string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetUsageRecordByKeyResp {
+  option (w17.contrib.plugin_feature) = "usage";
+  UsageRecord record = 1;
+}
+
 message GetPlanBySlugReq {
   option (w17.contrib.plugin_feature) = "subscriptions";
   string slug = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
@@ -67,6 +97,16 @@ message GetSubscriptionReq {
   string id = 1 [(w17.field) = { type: UUID }];
 }
 message GetSubscriptionResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Subscription subscription = 1;
+}
+
+// GetSubscriptionByProviderId — provider_subscription_id is UNIQUE.
+message GetSubscriptionByProviderIdReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string provider_subscription_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetSubscriptionByProviderIdResp {
   option (w17.contrib.plugin_feature) = "subscriptions";
   Subscription subscription = 1;
 }
@@ -112,6 +152,76 @@ service PaymentQuery {
     };
   }
 
+  // GetPaymentByProviderId — fetch one Payment by the provider's object id.
+  // Two readers, both holding a provider id and no local id:
+  //
+  //   - the create paths (CreatePayment / TopUpCredit): a retry with the
+  //     same idempotency key gets the SAME provider object replayed, and
+  //     the local INSERT hits the unique key — the existing row is the
+  //     answer, not an error;
+  //   - webhook reconciliation, when a transition-guarded UPDATE matched no
+  //     row: a row that exists was already in the target state (redelivery
+  //     or out-of-order event — acknowledge), a row that does not exist is
+  //     not here yet (fail, so the provider redelivers).
+  rpc GetPaymentByProviderId(GetPaymentByProviderIdReq) returns (GetPaymentByProviderIdResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS payment.id, "
+          "       p.customer_id AS payment.customer_id, "
+          "       p.provider_payment_id AS payment.provider_payment_id, "
+          "       p.amount AS payment.amount, "
+          "       p.currency AS payment.currency, "
+          "       p.status AS payment.status, "
+          "       p.idempotency_key AS payment.idempotency_key, "
+          "       p.description AS payment.description, "
+          "       p.created_at AS payment.created_at, "
+          "       p.updated_at AS payment.updated_at "
+          "FROM @module.Payment p WHERE p.provider_payment_id = :provider_payment_id"
+      }
+    };
+  }
+
+  // GetRefundByProviderId — fetch one Refund by the provider's refund id.
+  // RefundPayment reads it when a retried refund (same idempotency key, so
+  // the provider replays the same refund object) hits the unique key on
+  // its local INSERT.
+  rpc GetRefundByProviderId(GetRefundByProviderIdReq) returns (GetRefundByProviderIdResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS refund.id, "
+          "       r.payment_id AS refund.payment_id, "
+          "       r.provider_refund_id AS refund.provider_refund_id, "
+          "       r.amount AS refund.amount, "
+          "       r.currency AS refund.currency, "
+          "       r.created_at AS refund.created_at "
+          "FROM @module.Refund r WHERE r.provider_refund_id = :provider_refund_id"
+      }
+    };
+  }
+
+  // GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
+  // already produced, looked up before the provider is asked again.
+  rpc GetRefundByIdempotencyKey(GetRefundByIdempotencyKeyReq) returns (GetRefundByIdempotencyKeyResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS refund.id, "
+          "       r.payment_id AS refund.payment_id, "
+          "       r.provider_refund_id AS refund.provider_refund_id, "
+          "       r.amount AS refund.amount, "
+          "       r.currency AS refund.currency, "
+          "       r.created_at AS refund.created_at, "
+          "       r.idempotency_key AS refund.idempotency_key "
+          "FROM @module.Refund r WHERE r.idempotency_key = :idempotency_key"
+      }
+    };
+  }
+
   // GetCreditBalance — read the materialized prepaid balance for a
   // principal (empty result = no credits ever applied → treat as zero).
   // Gated prepaid.
@@ -125,6 +235,29 @@ service PaymentQuery {
           "       b.balance AS balance.balance, "
           "       b.updated_at AS balance.updated_at "
           "FROM @module.CreditBalance b WHERE b.user_id = :user_id"
+      }
+    };
+  }
+
+  // GetCreditLedgerByKey — one ledger entry by its stored idempotency key
+  // (UNIQUE). GrantCredit / SpendCredit read it before applying under the
+  // scoped key: rc.2 and earlier stored the caller's RAW key, so an apply
+  // made by one of them and retried after the upgrade is found only under
+  // that raw key. Gated prepaid.
+  rpc GetCreditLedgerByKey(GetCreditLedgerByKeyReq) returns (GetCreditLedgerByKeyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT l.id AS entry.id, "
+          "       l.user_id AS entry.user_id, "
+          "       l.delta AS entry.delta, "
+          "       l.reason AS entry.reason, "
+          "       l.ref AS entry.ref, "
+          "       l.idempotency_key AS entry.idempotency_key, "
+          "       l.created_at AS entry.created_at "
+          "FROM @module.CreditLedger l WHERE l.idempotency_key = :idempotency_key"
       }
     };
   }
@@ -170,6 +303,30 @@ service PaymentQuery {
     };
   }
 
+  // GetUsageRecordByKey — one usage record by its stored idempotency key
+  // (UNIQUE). ReportUsage reads it before recording under the scoped key:
+  // rc.2 and earlier stored the caller's RAW key, so a report made by one of
+  // them and retried after the upgrade is found only under that raw key.
+  // Gated usage.
+  rpc GetUsageRecordByKey(GetUsageRecordByKeyReq) returns (GetUsageRecordByKeyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "usage";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS record.id, "
+          "       r.user_id AS record.user_id, "
+          "       r.meter AS record.meter, "
+          "       r.period AS record.period, "
+          "       r.quantity AS record.quantity, "
+          "       r.item_ref AS record.item_ref, "
+          "       r.idempotency_key AS record.idempotency_key, "
+          "       r.created_at AS record.created_at "
+          "FROM @module.UsageRecord r WHERE r.idempotency_key = :idempotency_key"
+      }
+    };
+  }
+
   // GetPlanBySlug — resolve a plan by its stable local slug (the
   // Subscribe handler reads plan_id + provider_price_id from it).
   // Gated subscriptions.
@@ -209,6 +366,31 @@ service PaymentQuery {
           "       s.created_at AS subscription.created_at, "
           "       s.updated_at AS subscription.updated_at "
           "FROM @module.Subscription s WHERE s.id = :id"
+      }
+    };
+  }
+
+  // GetSubscriptionByProviderId — fetch one subscription by the provider's
+  // subscription id. Read by Subscribe when a retried subscribe (same
+  // idempotency key, so the provider replays the same subscription) hits
+  // the unique key, and by the subscription webhook when its guarded
+  // UPDATE matched no row (exists → already CANCELED, acknowledge; absent
+  // → not here yet, fail so the provider redelivers). Gated subscriptions.
+  rpc GetSubscriptionByProviderId(GetSubscriptionByProviderIdReq) returns (GetSubscriptionByProviderIdResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT s.id AS subscription.id, "
+          "       s.customer_id AS subscription.customer_id, "
+          "       s.plan_id AS subscription.plan_id, "
+          "       s.provider_subscription_id AS subscription.provider_subscription_id, "
+          "       s.status AS subscription.status, "
+          "       s.current_period_end AS subscription.current_period_end, "
+          "       s.created_at AS subscription.created_at, "
+          "       s.updated_at AS subscription.updated_at "
+          "FROM @module.Subscription s WHERE s.provider_subscription_id = :provider_subscription_id"
       }
     };
   }

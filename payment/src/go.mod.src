@@ -1,4 +1,4 @@
-module github.com/wandering-compiler/platform/plugins/payment
+module github.com/wandering-compiler/plugins/payment
 
 go 1.26.1
 

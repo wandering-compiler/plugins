@@ -9,7 +9,7 @@ import (
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
-	pb "github.com/wandering-compiler/platform/plugins/payment/gen/pb"
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // constraintErr builds the InvalidArgument + ErrorDetail{code} shape
@@ -101,3 +101,100 @@ func TestApplyCredit_RequiresIdempotencyKey(t *testing.T) {
 // (PaymentQuery.GetCreditBalance via REST preset) — no business handler
 // to test. The currentBalance helper is still covered via the
 // idempotent-grant path (TestApplyCredit_IdempotentOnDuplicate).
+
+// rc.2 and earlier stored the caller's RAW key in the ledger. A grant or
+// spend made by one of them and retried after the upgrade is not found under
+// the scoped key, and used to land a second time — credit granted twice, a
+// service paid for twice. It is looked up under the raw key too, and is the
+// same apply when principal, direction and amount all match.
+func TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce(t *testing.T) {
+	r := newRig(t)
+	// What rc.2 wrote: raw caller keys.
+	for _, row := range []*pb.ApplyCreditReq{
+		{UserId: "user-a", Delta: "10", Reason: "grant", IdempotencyKey: "order-1"},
+		{UserId: "user-a", Delta: "-2", Reason: "spend", IdempotencyKey: "use-1"},
+		{UserId: "user-a", Delta: "3", Reason: "topup", Ref: "pi_legacy", IdempotencyKey: "topup:pi_legacy"},
+	} {
+		if _, err := r.store.ApplyCredit(bg, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	applies := r.store.callCount("ApplyCredit")
+
+	// The retries: same principal, direction and amount (amount by value).
+	if v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "10.00", IdempotencyKey: "order-1"}); err != nil || v.GetBalance() != "11.0000" {
+		t.Errorf("grant retried across the upgrade = %v / %v, want balance 11.0000 (applied once)", v, err)
+	}
+	if v, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "2", IdempotencyKey: "use-1"}); err != nil || v.GetBalance() != "11.0000" {
+		t.Errorf("spend retried across the upgrade = %v / %v, want balance 11.0000 (applied once)", v, err)
+	}
+	if n := r.store.callCount("ApplyCredit"); n != applies {
+		t.Errorf("a retry of an rc.2 apply reached ApplyCredit (%d → %d)", applies, n)
+	}
+
+	// Not the same apply — the collisions the scoped key exists to fix:
+	// another principal, the other direction, another amount, and a key in
+	// the top-up namespace. Each applies.
+	for _, c := range []struct {
+		what string
+		call func() error
+	}{
+		{"user-b under user-a's key", func() error {
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-b", Amount: "10", IdempotencyKey: "order-1"})
+			return err
+		}},
+		{"a spend under a grant's key", func() error {
+			_, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "order-1"})
+			return err
+		}},
+		{"another amount under the key", func() error {
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "4", IdempotencyKey: "order-1"})
+			return err
+		}},
+		{"a caller grant under a top-up's key", func() error {
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: "topup:pi_legacy"})
+			return err
+		}},
+	} {
+		before := r.store.count("ledger")
+		if err := c.call(); err != nil {
+			t.Fatalf("%s: %v", c.what, err)
+		}
+		if r.store.count("ledger") != before+1 {
+			t.Errorf("%s: not applied — a silent no-op", c.what)
+		}
+	}
+	if b := r.store.balance(t, "user-a"); b != "17.0000" {
+		t.Errorf("user-a balance = %s, want 17.0000 (11 − 1 + 4 + 3)", b)
+	}
+	if b := r.store.balance(t, "user-b"); b != "10.0000" {
+		t.Errorf("user-b balance = %s, want 10.0000", b)
+	}
+
+	// A failing lookup surfaces; nothing is applied blind.
+	r.store.injectBefore("GetCreditLedgerByKey", errTransient)
+	before := r.store.count("ledger")
+	_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "fresh"})
+	wantCode(t, err, codes.Unavailable, "legacy lookup failure")
+	if r.store.count("ledger") != before {
+		t.Error("applied although the legacy lookup failed")
+	}
+}
+
+// A caller key shaped like a scoped key ("v2:" + hex) is not looked up raw:
+// it can equal ANOTHER apply's stored scoped key, and matching that row
+// would answer a new grant as a retry and grant nothing.
+func TestFlow_Credit_CallerKeyShapedLikeAScopedKey_IsNotAMatch(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	stored := ledgerKey(creditGrant, "user-a", "x")
+	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: stored})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.GetBalance() != "6.0000" {
+		t.Errorf("balance = %s, want 6.0000 — a grant under a key equal to another's stored scoped key was taken for a retry", v.GetBalance())
+	}
+}
