@@ -455,6 +455,40 @@ message UserTotpSecret {
   google.protobuf.Timestamp confirmed_at = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at   = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   string seed    = 6 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // base32 seed
+  // last_step — the highest RFC 6238 time step this authenticator has had
+  // accepted. A code is taken only for a LATER step (ClaimTotpStep, one
+  // conditional UPDATE), so a code that was used — or overheard — cannot be
+  // replayed inside its validity window, by a second request or a concurrent
+  // one. 0 = never used.
+  int64  last_step = 7 [(w17.field) = { default_int: 0 }];
+  // stepup_attempts / stepup_locked_until — the guess budget of the step-up
+  // (the code EnrollTotp / DisableTotp / GenerateRecoveryCodes ask for). A
+  // sign-in's guesses are bounded per challenge; these calls take a code from
+  // a SESSION, so without their own budget a stolen one could try six-digit
+  // codes until one landed. RecordStepUpAttempt counts in one statement and
+  // refuses while locked; a success resets the count.
+  int64  stepup_attempts = 8 [(w17.field) = { type: COUNTER, default_int: 0 }];
+  google.protobuf.Timestamp stepup_locked_until = 9 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// UserRecoveryCode — the one-time codes that stand in for the authenticator
+// when the phone is gone, behind `two_factor`. Issued as a set of ten when an
+// authenticator is confirmed (and again on GenerateRecoveryCodes, replacing
+// the set), shown once, stored as a SHA-256 hash: a code is ~50 random bits,
+// so it is looked up by hash rather than verified against a slow hash, and
+// guessing is bounded by the challenge's attempt budget like any MFA code.
+// used_at NULL = still usable; ConsumeRecoveryCode spends one atomically.
+message UserRecoveryCode {
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "user_id" }, { name: "code_hash" }] } ]
+  };
+  option (w17.contrib.plugin_feature) = "two_factor";
+
+  string id        = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id   = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 64 }]; // hex sha256 of the normalised code
+  google.protobuf.Timestamp used_at    = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 }
 
 // MfaChallenge — a pending second-factor verification, behind

@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.20
+version: 0.1.0-rc.21
 requires_w17: ">=1.10"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -190,10 +190,11 @@ features:
       # mfa.go names pb.SignInResp: the two-step sign-in RETURNS one
       # (mfa_required instead of a token). No sign-in, no build.
       - sign_in_turnkey
-    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (secret encrypted at rest) + MfaChallenge tables, the EnrollTotp/ConfirmTotp/DisableTotp/GetMfaStatus enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (new_devices requires `devices`). Off by default."
+    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (seed encrypted at rest, codes single-use) + UserRecoveryCode + MfaChallenge tables, the EnrollTotp (returns the otpauth URI and a QR code as SVG)/ConfirmTotp (returns ten recovery codes)/DisableTotp/GetMfaStatus/GenerateRecoveryCodes enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (new_devices requires `devices`). Off by default."
     default: false
     go_files:
       - handlers/mfa.go
+      - handlers/mfa_recovery.go
   - name: password_reset
     description: "Self-service password reset (E1). Adds the PasswordResetToken table + the RequestPasswordReset / ResetPassword RPCs (both unauthenticated, REST-exposed). RequestPasswordReset always returns success regardless of whether the email exists (anti-enumeration) and emits PasswordResetRequested carrying a single-use, time-bounded plaintext token (only its hash is stored) for a hand-written e-mail delivery channel. ResetPassword consumes the token atomically (single-use + expiry), sets the new password, and revokes every existing token (sessions + API). TTL via env (password_reset_ttl_seconds, default 1h). Off by default."
     default: false
@@ -418,6 +419,7 @@ presets:
           - { ref: AuthService.ConfirmTotp,  method: POST,   path: /totp/confirm,                     feature: two_factor }
           - { ref: AuthService.DisableTotp,  method: DELETE, path: /totp,                             feature: two_factor }
           - { ref: AuthService.GetMfaStatus, method: GET,    path: /status,                           feature: two_factor }
+          - { ref: AuthService.GenerateRecoveryCodes, method: POST, path: /recovery-codes,            feature: two_factor }
       # Device/session management — the caller manages their OWN devices,
       # authenticated by their bearer session. Gated devices: the whole
       # group drops when the feature is off.
@@ -809,14 +811,17 @@ msgids:
   - "Authentication is temporarily unavailable. Please try again shortly."
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Confirm your email address before accepting this invitation."
+  - "Set up an authenticator app first. Recovery codes belong to it."
   - "That expiry date is not a valid date."
   - "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
   - "There is no organization role named {role}."
   - "This address does not belong to any organization here. Check the address you registered on."
+  - "This authenticator app is already set up. To get new recovery codes, generate them."
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
   - "This request names two different organizations. Name one."
+  - "Too many wrong codes. Wait 15 minutes and try again."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
   - "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."

@@ -281,6 +281,77 @@ message MoveTotpSeedResp {
   string user_id = 1;
 }
 
+// ClaimTotpStepReq takes the time step a TOTP code matched, only if it is
+// later than every step this authenticator accepted before.
+message ClaimTotpStepReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id   = 1 [(w17.field) = { type: UUID }];
+  int64  step = 2;
+}
+message ClaimTotpStepResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1; // empty = not claimed: the step was already used (a replay)
+}
+
+// RecordStepUpAttemptReq claims one guess of the step-up budget. Zero
+// attempts back = not claimed: the step-up is locked (or the row is gone).
+message RecordStepUpAttemptReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RecordStepUpAttemptResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  int64 attempts = 1;
+}
+
+message LockStepUpReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp until = 2 [(w17.field) = { type: DATETIME }];
+}
+message LockStepUpResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1;
+}
+
+message ResetStepUpReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message ResetStepUpResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1;
+}
+
+message CreateRecoveryCodeReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id   = 1 [(w17.field) = { type: UUID }];
+  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message CreateRecoveryCodeResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1;
+}
+
+message DeleteRecoveryCodesReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message DeleteRecoveryCodesResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+}
+
+message ConsumeRecoveryCodeReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id   = 1 [(w17.field) = { type: UUID }];
+  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message ConsumeRecoveryCodeResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id      = 1; // empty = no such unused code
+  string user_id = 2;
+}
+
 message DeleteTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -1484,6 +1555,114 @@ service AuthMutation {
           "secret = NULL "
           "WHERE id = :id AND user_id = :user_id "
           "RETURNING user_id"
+      }
+    };
+  }
+
+  // ClaimTotpStep — the replay guard. One conditional UPDATE, so of two
+  // requests presenting the same code only one gets a row back.
+  rpc ClaimTotpStep(ClaimTotpStepReq) returns (ClaimTotpStepResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "last_step = :step "
+          "WHERE id = :id AND last_step < :step "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // RecordStepUpAttempt — count a step-up guess, refusing (no row back)
+  // while the step-up is locked. One statement, so concurrent guesses get
+  // distinct counts and a lock is never raced past.
+  rpc RecordStepUpAttempt(RecordStepUpAttemptReq) returns (RecordStepUpAttemptResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "stepup_attempts = stepup_attempts + 1 "
+          "WHERE id = :id AND (stepup_locked_until IS NULL OR stepup_locked_until < NOW()) "
+          "RETURNING stepup_attempts AS attempts"
+      }
+    };
+  }
+  rpc LockStepUp(LockStepUpReq) returns (LockStepUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "stepup_attempts = 0, "
+          "stepup_locked_until = :until "
+          "WHERE id = :id "
+          "RETURNING id"
+      }
+    };
+  }
+  rpc ResetStepUp(ResetStepUpReq) returns (ResetStepUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "stepup_attempts = 0 "
+          "WHERE id = :id "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // CreateRecoveryCode / DeleteRecoveryCodes — the handler replaces a user's
+  // set (delete, then ten inserts) inside one transaction.
+  rpc CreateRecoveryCode(CreateRecoveryCodeReq) returns (CreateRecoveryCodeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.UserRecoveryCode SET "
+          "user_id = :user_id, "
+          "code_hash = :code_hash "
+          "RETURNING id"
+      }
+    };
+  }
+  rpc DeleteRecoveryCodes(DeleteRecoveryCodesReq) returns (DeleteRecoveryCodesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:  "DELETE FROM @module.UserRecoveryCode WHERE user_id = :user_id"
+      }
+    };
+  }
+
+  // ConsumeRecoveryCode — spend one code, atomically single-use. Emits
+  // RecoveryCodeUsed so a consumer can tell the person (a code they did not
+  // use being spent means someone has their password AND their codes).
+  rpc ConsumeRecoveryCode(ConsumeRecoveryCodeReq) returns (ConsumeRecoveryCodeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserRecoveryCode SET "
+          "used_at = NOW() "
+          "WHERE user_id = :user_id AND code_hash = :code_hash AND used_at IS NULL "
+          "RETURNING id, user_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "RecoveryCodeUsed"
+      payload: {
+        fields: [ { key: "user_id", value: "$response.user_id" } ]
       }
     };
   }

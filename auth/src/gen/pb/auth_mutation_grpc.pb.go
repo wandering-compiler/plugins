@@ -43,6 +43,13 @@ const (
 	AuthMutation_MoveOAuthProviderSecret_FullMethodName        = "/w17.contrib.auth.AuthMutation/MoveOAuthProviderSecret"
 	AuthMutation_ClearOAuthProviderLegacySecret_FullMethodName = "/w17.contrib.auth.AuthMutation/ClearOAuthProviderLegacySecret"
 	AuthMutation_MoveTotpSeed_FullMethodName                   = "/w17.contrib.auth.AuthMutation/MoveTotpSeed"
+	AuthMutation_ClaimTotpStep_FullMethodName                  = "/w17.contrib.auth.AuthMutation/ClaimTotpStep"
+	AuthMutation_RecordStepUpAttempt_FullMethodName            = "/w17.contrib.auth.AuthMutation/RecordStepUpAttempt"
+	AuthMutation_LockStepUp_FullMethodName                     = "/w17.contrib.auth.AuthMutation/LockStepUp"
+	AuthMutation_ResetStepUp_FullMethodName                    = "/w17.contrib.auth.AuthMutation/ResetStepUp"
+	AuthMutation_CreateRecoveryCode_FullMethodName             = "/w17.contrib.auth.AuthMutation/CreateRecoveryCode"
+	AuthMutation_DeleteRecoveryCodes_FullMethodName            = "/w17.contrib.auth.AuthMutation/DeleteRecoveryCodes"
+	AuthMutation_ConsumeRecoveryCode_FullMethodName            = "/w17.contrib.auth.AuthMutation/ConsumeRecoveryCode"
 	AuthMutation_DeleteTotpSecret_FullMethodName               = "/w17.contrib.auth.AuthMutation/DeleteTotpSecret"
 	AuthMutation_CreateMfaChallenge_FullMethodName             = "/w17.contrib.auth.AuthMutation/CreateMfaChallenge"
 	AuthMutation_CreatePendingSignUp_FullMethodName            = "/w17.contrib.auth.AuthMutation/CreatePendingSignUp"
@@ -205,6 +212,23 @@ type AuthMutationClient interface {
 	// old key is needed for this row exactly once. No event: nothing about the
 	// user's authenticator changed.
 	MoveTotpSeed(ctx context.Context, in *MoveTotpSeedReq, opts ...grpc.CallOption) (*MoveTotpSeedResp, error)
+	// ClaimTotpStep — the replay guard. One conditional UPDATE, so of two
+	// requests presenting the same code only one gets a row back.
+	ClaimTotpStep(ctx context.Context, in *ClaimTotpStepReq, opts ...grpc.CallOption) (*ClaimTotpStepResp, error)
+	// RecordStepUpAttempt — count a step-up guess, refusing (no row back)
+	// while the step-up is locked. One statement, so concurrent guesses get
+	// distinct counts and a lock is never raced past.
+	RecordStepUpAttempt(ctx context.Context, in *RecordStepUpAttemptReq, opts ...grpc.CallOption) (*RecordStepUpAttemptResp, error)
+	LockStepUp(ctx context.Context, in *LockStepUpReq, opts ...grpc.CallOption) (*LockStepUpResp, error)
+	ResetStepUp(ctx context.Context, in *ResetStepUpReq, opts ...grpc.CallOption) (*ResetStepUpResp, error)
+	// CreateRecoveryCode / DeleteRecoveryCodes — the handler replaces a user's
+	// set (delete, then ten inserts) inside one transaction.
+	CreateRecoveryCode(ctx context.Context, in *CreateRecoveryCodeReq, opts ...grpc.CallOption) (*CreateRecoveryCodeResp, error)
+	DeleteRecoveryCodes(ctx context.Context, in *DeleteRecoveryCodesReq, opts ...grpc.CallOption) (*DeleteRecoveryCodesResp, error)
+	// ConsumeRecoveryCode — spend one code, atomically single-use. Emits
+	// RecoveryCodeUsed so a consumer can tell the person (a code they did not
+	// use being spent means someone has their password AND their codes).
+	ConsumeRecoveryCode(ctx context.Context, in *ConsumeRecoveryCodeReq, opts ...grpc.CallOption) (*ConsumeRecoveryCodeResp, error)
 	// DeleteTotpSecret — disable the built-in authenticator. Idempotent.
 	// Emits TotpDisabled.
 	DeleteTotpSecret(ctx context.Context, in *DeleteTotpSecretReq, opts ...grpc.CallOption) (*DeleteTotpSecretResp, error)
@@ -663,6 +687,76 @@ func (c *authMutationClient) MoveTotpSeed(ctx context.Context, in *MoveTotpSeedR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MoveTotpSeedResp)
 	err := c.cc.Invoke(ctx, AuthMutation_MoveTotpSeed_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) ClaimTotpStep(ctx context.Context, in *ClaimTotpStepReq, opts ...grpc.CallOption) (*ClaimTotpStepResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimTotpStepResp)
+	err := c.cc.Invoke(ctx, AuthMutation_ClaimTotpStep_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) RecordStepUpAttempt(ctx context.Context, in *RecordStepUpAttemptReq, opts ...grpc.CallOption) (*RecordStepUpAttemptResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordStepUpAttemptResp)
+	err := c.cc.Invoke(ctx, AuthMutation_RecordStepUpAttempt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) LockStepUp(ctx context.Context, in *LockStepUpReq, opts ...grpc.CallOption) (*LockStepUpResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LockStepUpResp)
+	err := c.cc.Invoke(ctx, AuthMutation_LockStepUp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) ResetStepUp(ctx context.Context, in *ResetStepUpReq, opts ...grpc.CallOption) (*ResetStepUpResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResetStepUpResp)
+	err := c.cc.Invoke(ctx, AuthMutation_ResetStepUp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) CreateRecoveryCode(ctx context.Context, in *CreateRecoveryCodeReq, opts ...grpc.CallOption) (*CreateRecoveryCodeResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateRecoveryCodeResp)
+	err := c.cc.Invoke(ctx, AuthMutation_CreateRecoveryCode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) DeleteRecoveryCodes(ctx context.Context, in *DeleteRecoveryCodesReq, opts ...grpc.CallOption) (*DeleteRecoveryCodesResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteRecoveryCodesResp)
+	err := c.cc.Invoke(ctx, AuthMutation_DeleteRecoveryCodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) ConsumeRecoveryCode(ctx context.Context, in *ConsumeRecoveryCodeReq, opts ...grpc.CallOption) (*ConsumeRecoveryCodeResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConsumeRecoveryCodeResp)
+	err := c.cc.Invoke(ctx, AuthMutation_ConsumeRecoveryCode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1333,6 +1427,23 @@ type AuthMutationServer interface {
 	// old key is needed for this row exactly once. No event: nothing about the
 	// user's authenticator changed.
 	MoveTotpSeed(context.Context, *MoveTotpSeedReq) (*MoveTotpSeedResp, error)
+	// ClaimTotpStep — the replay guard. One conditional UPDATE, so of two
+	// requests presenting the same code only one gets a row back.
+	ClaimTotpStep(context.Context, *ClaimTotpStepReq) (*ClaimTotpStepResp, error)
+	// RecordStepUpAttempt — count a step-up guess, refusing (no row back)
+	// while the step-up is locked. One statement, so concurrent guesses get
+	// distinct counts and a lock is never raced past.
+	RecordStepUpAttempt(context.Context, *RecordStepUpAttemptReq) (*RecordStepUpAttemptResp, error)
+	LockStepUp(context.Context, *LockStepUpReq) (*LockStepUpResp, error)
+	ResetStepUp(context.Context, *ResetStepUpReq) (*ResetStepUpResp, error)
+	// CreateRecoveryCode / DeleteRecoveryCodes — the handler replaces a user's
+	// set (delete, then ten inserts) inside one transaction.
+	CreateRecoveryCode(context.Context, *CreateRecoveryCodeReq) (*CreateRecoveryCodeResp, error)
+	DeleteRecoveryCodes(context.Context, *DeleteRecoveryCodesReq) (*DeleteRecoveryCodesResp, error)
+	// ConsumeRecoveryCode — spend one code, atomically single-use. Emits
+	// RecoveryCodeUsed so a consumer can tell the person (a code they did not
+	// use being spent means someone has their password AND their codes).
+	ConsumeRecoveryCode(context.Context, *ConsumeRecoveryCodeReq) (*ConsumeRecoveryCodeResp, error)
 	// DeleteTotpSecret — disable the built-in authenticator. Idempotent.
 	// Emits TotpDisabled.
 	DeleteTotpSecret(context.Context, *DeleteTotpSecretReq) (*DeleteTotpSecretResp, error)
@@ -1690,6 +1801,27 @@ func (UnimplementedAuthMutationServer) ClearOAuthProviderLegacySecret(context.Co
 }
 func (UnimplementedAuthMutationServer) MoveTotpSeed(context.Context, *MoveTotpSeedReq) (*MoveTotpSeedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MoveTotpSeed not implemented")
+}
+func (UnimplementedAuthMutationServer) ClaimTotpStep(context.Context, *ClaimTotpStepReq) (*ClaimTotpStepResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClaimTotpStep not implemented")
+}
+func (UnimplementedAuthMutationServer) RecordStepUpAttempt(context.Context, *RecordStepUpAttemptReq) (*RecordStepUpAttemptResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordStepUpAttempt not implemented")
+}
+func (UnimplementedAuthMutationServer) LockStepUp(context.Context, *LockStepUpReq) (*LockStepUpResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method LockStepUp not implemented")
+}
+func (UnimplementedAuthMutationServer) ResetStepUp(context.Context, *ResetStepUpReq) (*ResetStepUpResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResetStepUp not implemented")
+}
+func (UnimplementedAuthMutationServer) CreateRecoveryCode(context.Context, *CreateRecoveryCodeReq) (*CreateRecoveryCodeResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateRecoveryCode not implemented")
+}
+func (UnimplementedAuthMutationServer) DeleteRecoveryCodes(context.Context, *DeleteRecoveryCodesReq) (*DeleteRecoveryCodesResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteRecoveryCodes not implemented")
+}
+func (UnimplementedAuthMutationServer) ConsumeRecoveryCode(context.Context, *ConsumeRecoveryCodeReq) (*ConsumeRecoveryCodeResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConsumeRecoveryCode not implemented")
 }
 func (UnimplementedAuthMutationServer) DeleteTotpSecret(context.Context, *DeleteTotpSecretReq) (*DeleteTotpSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteTotpSecret not implemented")
@@ -2145,6 +2277,132 @@ func _AuthMutation_MoveTotpSeed_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthMutationServer).MoveTotpSeed(ctx, req.(*MoveTotpSeedReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_ClaimTotpStep_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimTotpStepReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).ClaimTotpStep(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_ClaimTotpStep_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).ClaimTotpStep(ctx, req.(*ClaimTotpStepReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_RecordStepUpAttempt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordStepUpAttemptReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).RecordStepUpAttempt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_RecordStepUpAttempt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).RecordStepUpAttempt(ctx, req.(*RecordStepUpAttemptReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_LockStepUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LockStepUpReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).LockStepUp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_LockStepUp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).LockStepUp(ctx, req.(*LockStepUpReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_ResetStepUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResetStepUpReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).ResetStepUp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_ResetStepUp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).ResetStepUp(ctx, req.(*ResetStepUpReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_CreateRecoveryCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateRecoveryCodeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).CreateRecoveryCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_CreateRecoveryCode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).CreateRecoveryCode(ctx, req.(*CreateRecoveryCodeReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_DeleteRecoveryCodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRecoveryCodesReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).DeleteRecoveryCodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_DeleteRecoveryCodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).DeleteRecoveryCodes(ctx, req.(*DeleteRecoveryCodesReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_ConsumeRecoveryCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConsumeRecoveryCodeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).ConsumeRecoveryCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_ConsumeRecoveryCode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).ConsumeRecoveryCode(ctx, req.(*ConsumeRecoveryCodeReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3223,6 +3481,34 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MoveTotpSeed",
 			Handler:    _AuthMutation_MoveTotpSeed_Handler,
+		},
+		{
+			MethodName: "ClaimTotpStep",
+			Handler:    _AuthMutation_ClaimTotpStep_Handler,
+		},
+		{
+			MethodName: "RecordStepUpAttempt",
+			Handler:    _AuthMutation_RecordStepUpAttempt_Handler,
+		},
+		{
+			MethodName: "LockStepUp",
+			Handler:    _AuthMutation_LockStepUp_Handler,
+		},
+		{
+			MethodName: "ResetStepUp",
+			Handler:    _AuthMutation_ResetStepUp_Handler,
+		},
+		{
+			MethodName: "CreateRecoveryCode",
+			Handler:    _AuthMutation_CreateRecoveryCode_Handler,
+		},
+		{
+			MethodName: "DeleteRecoveryCodes",
+			Handler:    _AuthMutation_DeleteRecoveryCodes_Handler,
+		},
+		{
+			MethodName: "ConsumeRecoveryCode",
+			Handler:    _AuthMutation_ConsumeRecoveryCode_Handler,
 		},
 		{
 			MethodName: "DeleteTotpSecret",

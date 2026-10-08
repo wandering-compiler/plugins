@@ -1066,15 +1066,29 @@ func (x *OAuthIdentity) GetCreatedAt() *timestamppb.Timestamp {
 // once and moved into `seed` (MoveTotpSeed), so the column empties itself as
 // people sign in. It, the knob and lib/secretbox go in a later release.
 type UserTotpSecret struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Secret        string                 `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"` // legacy: secretbox-encrypted seed (two_factor_secret_key)
-	ConfirmedAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	Seed          string                 `protobuf:"bytes,6,opt,name=seed,proto3" json:"seed,omitempty"` // base32 seed
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	UserId      string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Secret      string                 `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"` // legacy: secretbox-encrypted seed (two_factor_secret_key)
+	ConfirmedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Seed        string                 `protobuf:"bytes,6,opt,name=seed,proto3" json:"seed,omitempty"` // base32 seed
+	// last_step — the highest RFC 6238 time step this authenticator has had
+	// accepted. A code is taken only for a LATER step (ClaimTotpStep, one
+	// conditional UPDATE), so a code that was used — or overheard — cannot be
+	// replayed inside its validity window, by a second request or a concurrent
+	// one. 0 = never used.
+	LastStep int64 `protobuf:"varint,7,opt,name=last_step,json=lastStep,proto3" json:"last_step,omitempty"`
+	// stepup_attempts / stepup_locked_until — the guess budget of the step-up
+	// (the code EnrollTotp / DisableTotp / GenerateRecoveryCodes ask for). A
+	// sign-in's guesses are bounded per challenge; these calls take a code from
+	// a SESSION, so without their own budget a stolen one could try six-digit
+	// codes until one landed. RecordStepUpAttempt counts in one statement and
+	// refuses while locked; a success resets the count.
+	StepupAttempts    int64                  `protobuf:"varint,8,opt,name=stepup_attempts,json=stepupAttempts,proto3" json:"stepup_attempts,omitempty"`
+	StepupLockedUntil *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=stepup_locked_until,json=stepupLockedUntil,proto3" json:"stepup_locked_until,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *UserTotpSecret) Reset() {
@@ -1149,6 +1163,110 @@ func (x *UserTotpSecret) GetSeed() string {
 	return ""
 }
 
+func (x *UserTotpSecret) GetLastStep() int64 {
+	if x != nil {
+		return x.LastStep
+	}
+	return 0
+}
+
+func (x *UserTotpSecret) GetStepupAttempts() int64 {
+	if x != nil {
+		return x.StepupAttempts
+	}
+	return 0
+}
+
+func (x *UserTotpSecret) GetStepupLockedUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StepupLockedUntil
+	}
+	return nil
+}
+
+// UserRecoveryCode — the one-time codes that stand in for the authenticator
+// when the phone is gone, behind `two_factor`. Issued as a set of ten when an
+// authenticator is confirmed (and again on GenerateRecoveryCodes, replacing
+// the set), shown once, stored as a SHA-256 hash: a code is ~50 random bits,
+// so it is looked up by hash rather than verified against a slow hash, and
+// guessing is bounded by the challenge's attempt budget like any MFA code.
+// used_at NULL = still usable; ConsumeRecoveryCode spends one atomically.
+type UserRecoveryCode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	CodeHash      string                 `protobuf:"bytes,3,opt,name=code_hash,json=codeHash,proto3" json:"code_hash,omitempty"` // hex sha256 of the normalised code
+	UsedAt        *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=used_at,json=usedAt,proto3" json:"used_at,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserRecoveryCode) Reset() {
+	*x = UserRecoveryCode{}
+	mi := &file_types_models_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserRecoveryCode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserRecoveryCode) ProtoMessage() {}
+
+func (x *UserRecoveryCode) ProtoReflect() protoreflect.Message {
+	mi := &file_types_models_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserRecoveryCode.ProtoReflect.Descriptor instead.
+func (*UserRecoveryCode) Descriptor() ([]byte, []int) {
+	return file_types_models_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *UserRecoveryCode) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *UserRecoveryCode) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserRecoveryCode) GetCodeHash() string {
+	if x != nil {
+		return x.CodeHash
+	}
+	return ""
+}
+
+func (x *UserRecoveryCode) GetUsedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UsedAt
+	}
+	return nil
+}
+
+func (x *UserRecoveryCode) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
 // MfaChallenge — a pending second-factor verification, behind
 // `two_factor`. Created by SignIn when 2FA fires; consumed by VerifyMfa.
 // `code_hash` backs the EVENT / fallback path only (a TOTP-enrolled user
@@ -1177,7 +1295,7 @@ type MfaChallenge struct {
 
 func (x *MfaChallenge) Reset() {
 	*x = MfaChallenge{}
-	mi := &file_types_models_proto_msgTypes[7]
+	mi := &file_types_models_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1189,7 +1307,7 @@ func (x *MfaChallenge) String() string {
 func (*MfaChallenge) ProtoMessage() {}
 
 func (x *MfaChallenge) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[7]
+	mi := &file_types_models_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1202,7 +1320,7 @@ func (x *MfaChallenge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MfaChallenge.ProtoReflect.Descriptor instead.
 func (*MfaChallenge) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{7}
+	return file_types_models_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *MfaChallenge) GetId() string {
@@ -1284,7 +1402,7 @@ type PendingSignUp struct {
 
 func (x *PendingSignUp) Reset() {
 	*x = PendingSignUp{}
-	mi := &file_types_models_proto_msgTypes[8]
+	mi := &file_types_models_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1296,7 +1414,7 @@ func (x *PendingSignUp) String() string {
 func (*PendingSignUp) ProtoMessage() {}
 
 func (x *PendingSignUp) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[8]
+	mi := &file_types_models_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1309,7 +1427,7 @@ func (x *PendingSignUp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingSignUp.ProtoReflect.Descriptor instead.
 func (*PendingSignUp) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{8}
+	return file_types_models_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PendingSignUp) GetId() string {
@@ -1388,7 +1506,7 @@ type PasswordResetToken struct {
 
 func (x *PasswordResetToken) Reset() {
 	*x = PasswordResetToken{}
-	mi := &file_types_models_proto_msgTypes[9]
+	mi := &file_types_models_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1400,7 +1518,7 @@ func (x *PasswordResetToken) String() string {
 func (*PasswordResetToken) ProtoMessage() {}
 
 func (x *PasswordResetToken) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[9]
+	mi := &file_types_models_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1413,7 +1531,7 @@ func (x *PasswordResetToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PasswordResetToken.ProtoReflect.Descriptor instead.
 func (*PasswordResetToken) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{9}
+	return file_types_models_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PasswordResetToken) GetId() string {
@@ -1476,7 +1594,7 @@ type EmailVerificationToken struct {
 
 func (x *EmailVerificationToken) Reset() {
 	*x = EmailVerificationToken{}
-	mi := &file_types_models_proto_msgTypes[10]
+	mi := &file_types_models_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1488,7 +1606,7 @@ func (x *EmailVerificationToken) String() string {
 func (*EmailVerificationToken) ProtoMessage() {}
 
 func (x *EmailVerificationToken) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[10]
+	mi := &file_types_models_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1501,7 +1619,7 @@ func (x *EmailVerificationToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmailVerificationToken.ProtoReflect.Descriptor instead.
 func (*EmailVerificationToken) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{10}
+	return file_types_models_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *EmailVerificationToken) GetId() string {
@@ -1663,7 +1781,7 @@ type Role struct {
 
 func (x *Role) Reset() {
 	*x = Role{}
-	mi := &file_types_models_proto_msgTypes[11]
+	mi := &file_types_models_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1675,7 +1793,7 @@ func (x *Role) String() string {
 func (*Role) ProtoMessage() {}
 
 func (x *Role) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[11]
+	mi := &file_types_models_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1688,7 +1806,7 @@ func (x *Role) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Role.ProtoReflect.Descriptor instead.
 func (*Role) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{11}
+	return file_types_models_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Role) GetId() string {
@@ -1800,7 +1918,7 @@ type RolePermission struct {
 
 func (x *RolePermission) Reset() {
 	*x = RolePermission{}
-	mi := &file_types_models_proto_msgTypes[12]
+	mi := &file_types_models_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1812,7 +1930,7 @@ func (x *RolePermission) String() string {
 func (*RolePermission) ProtoMessage() {}
 
 func (x *RolePermission) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[12]
+	mi := &file_types_models_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1825,7 +1943,7 @@ func (x *RolePermission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RolePermission.ProtoReflect.Descriptor instead.
 func (*RolePermission) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{12}
+	return file_types_models_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RolePermission) GetId() string {
@@ -1923,7 +2041,7 @@ type UserRole struct {
 
 func (x *UserRole) Reset() {
 	*x = UserRole{}
-	mi := &file_types_models_proto_msgTypes[13]
+	mi := &file_types_models_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1935,7 +2053,7 @@ func (x *UserRole) String() string {
 func (*UserRole) ProtoMessage() {}
 
 func (x *UserRole) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[13]
+	mi := &file_types_models_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1948,7 +2066,7 @@ func (x *UserRole) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserRole.ProtoReflect.Descriptor instead.
 func (*UserRole) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{13}
+	return file_types_models_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *UserRole) GetId() string {
@@ -2005,7 +2123,7 @@ type TokenPermission struct {
 
 func (x *TokenPermission) Reset() {
 	*x = TokenPermission{}
-	mi := &file_types_models_proto_msgTypes[14]
+	mi := &file_types_models_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2017,7 +2135,7 @@ func (x *TokenPermission) String() string {
 func (*TokenPermission) ProtoMessage() {}
 
 func (x *TokenPermission) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[14]
+	mi := &file_types_models_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2030,7 +2148,7 @@ func (x *TokenPermission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenPermission.ProtoReflect.Descriptor instead.
 func (*TokenPermission) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{14}
+	return file_types_models_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TokenPermission) GetId() string {
@@ -2115,7 +2233,7 @@ type AuthClient struct {
 
 func (x *AuthClient) Reset() {
 	*x = AuthClient{}
-	mi := &file_types_models_proto_msgTypes[15]
+	mi := &file_types_models_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2127,7 +2245,7 @@ func (x *AuthClient) String() string {
 func (*AuthClient) ProtoMessage() {}
 
 func (x *AuthClient) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[15]
+	mi := &file_types_models_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2140,7 +2258,7 @@ func (x *AuthClient) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthClient.ProtoReflect.Descriptor instead.
 func (*AuthClient) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{15}
+	return file_types_models_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AuthClient) GetId() string {
@@ -2229,7 +2347,7 @@ type CliAuthCode struct {
 
 func (x *CliAuthCode) Reset() {
 	*x = CliAuthCode{}
-	mi := &file_types_models_proto_msgTypes[16]
+	mi := &file_types_models_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2241,7 +2359,7 @@ func (x *CliAuthCode) String() string {
 func (*CliAuthCode) ProtoMessage() {}
 
 func (x *CliAuthCode) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[16]
+	mi := &file_types_models_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2254,7 +2372,7 @@ func (x *CliAuthCode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CliAuthCode.ProtoReflect.Descriptor instead.
 func (*CliAuthCode) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{16}
+	return file_types_models_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CliAuthCode) GetId() string {
@@ -2359,7 +2477,7 @@ type Organization struct {
 
 func (x *Organization) Reset() {
 	*x = Organization{}
-	mi := &file_types_models_proto_msgTypes[17]
+	mi := &file_types_models_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2371,7 +2489,7 @@ func (x *Organization) String() string {
 func (*Organization) ProtoMessage() {}
 
 func (x *Organization) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[17]
+	mi := &file_types_models_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2384,7 +2502,7 @@ func (x *Organization) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Organization.ProtoReflect.Descriptor instead.
 func (*Organization) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{17}
+	return file_types_models_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Organization) GetId() string {
@@ -2450,7 +2568,7 @@ type OrgMembership struct {
 
 func (x *OrgMembership) Reset() {
 	*x = OrgMembership{}
-	mi := &file_types_models_proto_msgTypes[18]
+	mi := &file_types_models_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2462,7 +2580,7 @@ func (x *OrgMembership) String() string {
 func (*OrgMembership) ProtoMessage() {}
 
 func (x *OrgMembership) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[18]
+	mi := &file_types_models_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2475,7 +2593,7 @@ func (x *OrgMembership) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgMembership.ProtoReflect.Descriptor instead.
 func (*OrgMembership) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{18}
+	return file_types_models_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *OrgMembership) GetId() string {
@@ -2637,7 +2755,7 @@ type OrgInvite struct {
 
 func (x *OrgInvite) Reset() {
 	*x = OrgInvite{}
-	mi := &file_types_models_proto_msgTypes[19]
+	mi := &file_types_models_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2649,7 +2767,7 @@ func (x *OrgInvite) String() string {
 func (*OrgInvite) ProtoMessage() {}
 
 func (x *OrgInvite) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[19]
+	mi := &file_types_models_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2662,7 +2780,7 @@ func (x *OrgInvite) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgInvite.ProtoReflect.Descriptor instead.
 func (*OrgInvite) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{19}
+	return file_types_models_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *OrgInvite) GetId() string {
@@ -2836,7 +2954,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\r\n" +
 	"\vprovider_id\n" +
 	"\r\n" +
-	"\vexternal_id\x10\x01\xfa\xf4\x18\x05oauth\"\xcb\x02\n" +
+	"\vexternal_id\x10\x01\xfa\xf4\x18\x05oauth\"\xfb\x03\n" +
 	"\x0eUserTotpSecret\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12#\n" +
@@ -2844,9 +2962,24 @@ const file_types_models_proto_rawDesc = "" +
 	"\fconfirmed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\vconfirmedAt\x12F\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12\x1c\n" +
-	"\x04seed\x18\x06 \x01(\tB\b\xca\xf3\x18\x04\bD(\x01R\x04seed:!\xc2\xf3\x18\x0f\x12\r\n" +
+	"\x04seed\x18\x06 \x01(\tB\b\xca\xf3\x18\x04\bD(\x01R\x04seed\x12$\n" +
+	"\tlast_step\x18\a \x01(\x03B\a\xca\xf3\x18\x03\xa8\x01\x00R\blastStep\x122\n" +
+	"\x0fstepup_attempts\x18\b \x01(\x03B\t\xca\xf3\x18\x05\b\f\xa8\x01\x00R\x0estepupAttempts\x12T\n" +
+	"\x13stepup_locked_until\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x11stepupLockedUntil:!\xc2\xf3\x18\x0f\x12\r\n" +
 	"\t\n" +
 	"\auser_id\x10\x01\xfa\xf4\x18\n" +
+	"two_factor\"\xb4\x02\n" +
+	"\x10UserRecoveryCode\x12\x1b\n" +
+	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
+	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12%\n" +
+	"\tcode_hash\x18\x03 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\bcodeHash\x12=\n" +
+	"\aused_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x06usedAt\x12F\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:.\xc2\xf3\x18\x1c\x12\x1a\n" +
+	"\t\n" +
+	"\auser_id\n" +
+	"\v\n" +
+	"\tcode_hash\x10\x01\xfa\xf4\x18\n" +
 	"two_factor\"\xc6\x02\n" +
 	"\fMfaChallenge\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
@@ -3053,7 +3186,7 @@ func file_types_models_proto_rawDescGZIP() []byte {
 }
 
 var file_types_models_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_types_models_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_types_models_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_types_models_proto_goTypes = []any{
 	(TokenType)(0),                 // 0: w17.contrib.auth.TokenType
 	(EmailProof)(0),                // 1: w17.contrib.auth.EmailProof
@@ -3065,68 +3198,72 @@ var file_types_models_proto_goTypes = []any{
 	(*OAuthProvider)(nil),          // 7: w17.contrib.auth.OAuthProvider
 	(*OAuthIdentity)(nil),          // 8: w17.contrib.auth.OAuthIdentity
 	(*UserTotpSecret)(nil),         // 9: w17.contrib.auth.UserTotpSecret
-	(*MfaChallenge)(nil),           // 10: w17.contrib.auth.MfaChallenge
-	(*PendingSignUp)(nil),          // 11: w17.contrib.auth.PendingSignUp
-	(*PasswordResetToken)(nil),     // 12: w17.contrib.auth.PasswordResetToken
-	(*EmailVerificationToken)(nil), // 13: w17.contrib.auth.EmailVerificationToken
-	(*Role)(nil),                   // 14: w17.contrib.auth.Role
-	(*RolePermission)(nil),         // 15: w17.contrib.auth.RolePermission
-	(*UserRole)(nil),               // 16: w17.contrib.auth.UserRole
-	(*TokenPermission)(nil),        // 17: w17.contrib.auth.TokenPermission
-	(*AuthClient)(nil),             // 18: w17.contrib.auth.AuthClient
-	(*CliAuthCode)(nil),            // 19: w17.contrib.auth.CliAuthCode
-	(*Organization)(nil),           // 20: w17.contrib.auth.Organization
-	(*OrgMembership)(nil),          // 21: w17.contrib.auth.OrgMembership
-	(*OrgInvite)(nil),              // 22: w17.contrib.auth.OrgInvite
-	(*timestamppb.Timestamp)(nil),  // 23: google.protobuf.Timestamp
+	(*UserRecoveryCode)(nil),       // 10: w17.contrib.auth.UserRecoveryCode
+	(*MfaChallenge)(nil),           // 11: w17.contrib.auth.MfaChallenge
+	(*PendingSignUp)(nil),          // 12: w17.contrib.auth.PendingSignUp
+	(*PasswordResetToken)(nil),     // 13: w17.contrib.auth.PasswordResetToken
+	(*EmailVerificationToken)(nil), // 14: w17.contrib.auth.EmailVerificationToken
+	(*Role)(nil),                   // 15: w17.contrib.auth.Role
+	(*RolePermission)(nil),         // 16: w17.contrib.auth.RolePermission
+	(*UserRole)(nil),               // 17: w17.contrib.auth.UserRole
+	(*TokenPermission)(nil),        // 18: w17.contrib.auth.TokenPermission
+	(*AuthClient)(nil),             // 19: w17.contrib.auth.AuthClient
+	(*CliAuthCode)(nil),            // 20: w17.contrib.auth.CliAuthCode
+	(*Organization)(nil),           // 21: w17.contrib.auth.Organization
+	(*OrgMembership)(nil),          // 22: w17.contrib.auth.OrgMembership
+	(*OrgInvite)(nil),              // 23: w17.contrib.auth.OrgInvite
+	(*timestamppb.Timestamp)(nil),  // 24: google.protobuf.Timestamp
 }
 var file_types_models_proto_depIdxs = []int32{
-	23, // 0: w17.contrib.auth.User.created_at:type_name -> google.protobuf.Timestamp
-	23, // 1: w17.contrib.auth.User.email_verified_at:type_name -> google.protobuf.Timestamp
+	24, // 0: w17.contrib.auth.User.created_at:type_name -> google.protobuf.Timestamp
+	24, // 1: w17.contrib.auth.User.email_verified_at:type_name -> google.protobuf.Timestamp
 	1,  // 2: w17.contrib.auth.User.email_proof:type_name -> w17.contrib.auth.EmailProof
-	23, // 3: w17.contrib.auth.User.disabled_at:type_name -> google.protobuf.Timestamp
+	24, // 3: w17.contrib.auth.User.disabled_at:type_name -> google.protobuf.Timestamp
 	2,  // 4: w17.contrib.auth.User.kind:type_name -> w17.contrib.auth.AccountKind
-	23, // 5: w17.contrib.auth.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	23, // 6: w17.contrib.auth.UserToken.created_at:type_name -> google.protobuf.Timestamp
-	23, // 7: w17.contrib.auth.UserToken.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 5: w17.contrib.auth.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	24, // 6: w17.contrib.auth.UserToken.created_at:type_name -> google.protobuf.Timestamp
+	24, // 7: w17.contrib.auth.UserToken.expires_at:type_name -> google.protobuf.Timestamp
 	0,  // 8: w17.contrib.auth.UserToken.token_type:type_name -> w17.contrib.auth.TokenType
-	23, // 9: w17.contrib.auth.UserToken.last_used_at:type_name -> google.protobuf.Timestamp
-	23, // 10: w17.contrib.auth.Device.trusted_at:type_name -> google.protobuf.Timestamp
-	23, // 11: w17.contrib.auth.Device.last_seen_at:type_name -> google.protobuf.Timestamp
-	23, // 12: w17.contrib.auth.Device.created_at:type_name -> google.protobuf.Timestamp
-	23, // 13: w17.contrib.auth.OAuthProvider.created_at:type_name -> google.protobuf.Timestamp
-	23, // 14: w17.contrib.auth.OAuthIdentity.created_at:type_name -> google.protobuf.Timestamp
-	23, // 15: w17.contrib.auth.UserTotpSecret.confirmed_at:type_name -> google.protobuf.Timestamp
-	23, // 16: w17.contrib.auth.UserTotpSecret.created_at:type_name -> google.protobuf.Timestamp
-	23, // 17: w17.contrib.auth.MfaChallenge.consumed_at:type_name -> google.protobuf.Timestamp
-	23, // 18: w17.contrib.auth.MfaChallenge.created_at:type_name -> google.protobuf.Timestamp
-	23, // 19: w17.contrib.auth.PendingSignUp.expires_at:type_name -> google.protobuf.Timestamp
-	23, // 20: w17.contrib.auth.PendingSignUp.created_at:type_name -> google.protobuf.Timestamp
-	23, // 21: w17.contrib.auth.PasswordResetToken.expires_at:type_name -> google.protobuf.Timestamp
-	23, // 22: w17.contrib.auth.PasswordResetToken.consumed_at:type_name -> google.protobuf.Timestamp
-	23, // 23: w17.contrib.auth.PasswordResetToken.created_at:type_name -> google.protobuf.Timestamp
-	23, // 24: w17.contrib.auth.EmailVerificationToken.expires_at:type_name -> google.protobuf.Timestamp
-	23, // 25: w17.contrib.auth.EmailVerificationToken.consumed_at:type_name -> google.protobuf.Timestamp
-	23, // 26: w17.contrib.auth.EmailVerificationToken.created_at:type_name -> google.protobuf.Timestamp
-	23, // 27: w17.contrib.auth.Role.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 28: w17.contrib.auth.Role.token_type:type_name -> w17.contrib.auth.TokenType
-	23, // 29: w17.contrib.auth.RolePermission.created_at:type_name -> google.protobuf.Timestamp
-	23, // 30: w17.contrib.auth.UserRole.created_at:type_name -> google.protobuf.Timestamp
-	23, // 31: w17.contrib.auth.TokenPermission.created_at:type_name -> google.protobuf.Timestamp
-	23, // 32: w17.contrib.auth.AuthClient.created_at:type_name -> google.protobuf.Timestamp
-	23, // 33: w17.contrib.auth.CliAuthCode.expires_at:type_name -> google.protobuf.Timestamp
-	23, // 34: w17.contrib.auth.CliAuthCode.consumed_at:type_name -> google.protobuf.Timestamp
-	23, // 35: w17.contrib.auth.CliAuthCode.created_at:type_name -> google.protobuf.Timestamp
-	23, // 36: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
-	23, // 37: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
-	23, // 38: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
-	23, // 39: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
-	23, // 40: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
-	41, // [41:41] is the sub-list for method output_type
-	41, // [41:41] is the sub-list for method input_type
-	41, // [41:41] is the sub-list for extension type_name
-	41, // [41:41] is the sub-list for extension extendee
-	0,  // [0:41] is the sub-list for field type_name
+	24, // 9: w17.contrib.auth.UserToken.last_used_at:type_name -> google.protobuf.Timestamp
+	24, // 10: w17.contrib.auth.Device.trusted_at:type_name -> google.protobuf.Timestamp
+	24, // 11: w17.contrib.auth.Device.last_seen_at:type_name -> google.protobuf.Timestamp
+	24, // 12: w17.contrib.auth.Device.created_at:type_name -> google.protobuf.Timestamp
+	24, // 13: w17.contrib.auth.OAuthProvider.created_at:type_name -> google.protobuf.Timestamp
+	24, // 14: w17.contrib.auth.OAuthIdentity.created_at:type_name -> google.protobuf.Timestamp
+	24, // 15: w17.contrib.auth.UserTotpSecret.confirmed_at:type_name -> google.protobuf.Timestamp
+	24, // 16: w17.contrib.auth.UserTotpSecret.created_at:type_name -> google.protobuf.Timestamp
+	24, // 17: w17.contrib.auth.UserTotpSecret.stepup_locked_until:type_name -> google.protobuf.Timestamp
+	24, // 18: w17.contrib.auth.UserRecoveryCode.used_at:type_name -> google.protobuf.Timestamp
+	24, // 19: w17.contrib.auth.UserRecoveryCode.created_at:type_name -> google.protobuf.Timestamp
+	24, // 20: w17.contrib.auth.MfaChallenge.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 21: w17.contrib.auth.MfaChallenge.created_at:type_name -> google.protobuf.Timestamp
+	24, // 22: w17.contrib.auth.PendingSignUp.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 23: w17.contrib.auth.PendingSignUp.created_at:type_name -> google.protobuf.Timestamp
+	24, // 24: w17.contrib.auth.PasswordResetToken.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 25: w17.contrib.auth.PasswordResetToken.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 26: w17.contrib.auth.PasswordResetToken.created_at:type_name -> google.protobuf.Timestamp
+	24, // 27: w17.contrib.auth.EmailVerificationToken.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 28: w17.contrib.auth.EmailVerificationToken.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 29: w17.contrib.auth.EmailVerificationToken.created_at:type_name -> google.protobuf.Timestamp
+	24, // 30: w17.contrib.auth.Role.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 31: w17.contrib.auth.Role.token_type:type_name -> w17.contrib.auth.TokenType
+	24, // 32: w17.contrib.auth.RolePermission.created_at:type_name -> google.protobuf.Timestamp
+	24, // 33: w17.contrib.auth.UserRole.created_at:type_name -> google.protobuf.Timestamp
+	24, // 34: w17.contrib.auth.TokenPermission.created_at:type_name -> google.protobuf.Timestamp
+	24, // 35: w17.contrib.auth.AuthClient.created_at:type_name -> google.protobuf.Timestamp
+	24, // 36: w17.contrib.auth.CliAuthCode.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 37: w17.contrib.auth.CliAuthCode.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 38: w17.contrib.auth.CliAuthCode.created_at:type_name -> google.protobuf.Timestamp
+	24, // 39: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
+	24, // 40: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
+	24, // 41: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 42: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
+	24, // 43: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
+	44, // [44:44] is the sub-list for method output_type
+	44, // [44:44] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_types_models_proto_init() }
@@ -3140,7 +3277,7 @@ func file_types_models_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_types_models_proto_rawDesc), len(file_types_models_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   20,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

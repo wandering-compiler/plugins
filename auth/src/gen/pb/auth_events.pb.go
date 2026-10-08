@@ -1092,6 +1092,53 @@ func (x *TotpDisabled) GetUserId() string {
 	return ""
 }
 
+// RecoveryCodeUsed — a recovery code was spent (sign-in, or the step-up of
+// EnrollTotp / DisableTotp / GenerateRecoveryCodes). Worth telling the person:
+// one they did not spend means their codes are in someone else's hands.
+type RecoveryCodeUsed struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecoveryCodeUsed) Reset() {
+	*x = RecoveryCodeUsed{}
+	mi := &file_events_auth_events_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecoveryCodeUsed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecoveryCodeUsed) ProtoMessage() {}
+
+func (x *RecoveryCodeUsed) ProtoReflect() protoreflect.Message {
+	mi := &file_events_auth_events_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecoveryCodeUsed.ProtoReflect.Descriptor instead.
+func (*RecoveryCodeUsed) Descriptor() ([]byte, []int) {
+	return file_events_auth_events_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *RecoveryCodeUsed) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
 // password_reset lifecycle — emitted by CreatePasswordResetToken when a
 // user requests a reset. Carries the PLAINTEXT token (never persisted —
 // only its hash is stored) + email for a hand-written delivery channel
@@ -1110,7 +1157,7 @@ type PasswordResetRequested struct {
 
 func (x *PasswordResetRequested) Reset() {
 	*x = PasswordResetRequested{}
-	mi := &file_events_auth_events_proto_msgTypes[18]
+	mi := &file_events_auth_events_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1122,7 +1169,7 @@ func (x *PasswordResetRequested) String() string {
 func (*PasswordResetRequested) ProtoMessage() {}
 
 func (x *PasswordResetRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[18]
+	mi := &file_events_auth_events_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1135,7 +1182,7 @@ func (x *PasswordResetRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PasswordResetRequested.ProtoReflect.Descriptor instead.
 func (*PasswordResetRequested) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{18}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PasswordResetRequested) GetUserId() string {
@@ -1184,7 +1231,7 @@ type SignUpConfirmationRequested struct {
 
 func (x *SignUpConfirmationRequested) Reset() {
 	*x = SignUpConfirmationRequested{}
-	mi := &file_events_auth_events_proto_msgTypes[19]
+	mi := &file_events_auth_events_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1196,7 +1243,7 @@ func (x *SignUpConfirmationRequested) String() string {
 func (*SignUpConfirmationRequested) ProtoMessage() {}
 
 func (x *SignUpConfirmationRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[19]
+	mi := &file_events_auth_events_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1209,7 +1256,7 @@ func (x *SignUpConfirmationRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignUpConfirmationRequested.ProtoReflect.Descriptor instead.
 func (*SignUpConfirmationRequested) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{19}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SignUpConfirmationRequested) GetPendingId() string {
@@ -1255,7 +1302,7 @@ type EmailVerificationRequested struct {
 
 func (x *EmailVerificationRequested) Reset() {
 	*x = EmailVerificationRequested{}
-	mi := &file_events_auth_events_proto_msgTypes[20]
+	mi := &file_events_auth_events_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1267,7 +1314,7 @@ func (x *EmailVerificationRequested) String() string {
 func (*EmailVerificationRequested) ProtoMessage() {}
 
 func (x *EmailVerificationRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[20]
+	mi := &file_events_auth_events_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1280,7 +1327,7 @@ func (x *EmailVerificationRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmailVerificationRequested.ProtoReflect.Descriptor instead.
 func (*EmailVerificationRequested) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{20}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *EmailVerificationRequested) GetUserId() string {
@@ -1327,7 +1374,7 @@ type OrganizationCreated struct {
 
 func (x *OrganizationCreated) Reset() {
 	*x = OrganizationCreated{}
-	mi := &file_events_auth_events_proto_msgTypes[21]
+	mi := &file_events_auth_events_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1339,7 +1386,7 @@ func (x *OrganizationCreated) String() string {
 func (*OrganizationCreated) ProtoMessage() {}
 
 func (x *OrganizationCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[21]
+	mi := &file_events_auth_events_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1352,7 +1399,7 @@ func (x *OrganizationCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrganizationCreated.ProtoReflect.Descriptor instead.
 func (*OrganizationCreated) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{21}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *OrganizationCreated) GetOrgId() string {
@@ -1407,7 +1454,7 @@ type OrgMembershipAdded struct {
 
 func (x *OrgMembershipAdded) Reset() {
 	*x = OrgMembershipAdded{}
-	mi := &file_events_auth_events_proto_msgTypes[22]
+	mi := &file_events_auth_events_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1419,7 +1466,7 @@ func (x *OrgMembershipAdded) String() string {
 func (*OrgMembershipAdded) ProtoMessage() {}
 
 func (x *OrgMembershipAdded) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[22]
+	mi := &file_events_auth_events_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1432,7 +1479,7 @@ func (x *OrgMembershipAdded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgMembershipAdded.ProtoReflect.Descriptor instead.
 func (*OrgMembershipAdded) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{22}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *OrgMembershipAdded) GetMembershipId() string {
@@ -1483,7 +1530,7 @@ type OrganizationDeleted struct {
 
 func (x *OrganizationDeleted) Reset() {
 	*x = OrganizationDeleted{}
-	mi := &file_events_auth_events_proto_msgTypes[23]
+	mi := &file_events_auth_events_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1495,7 +1542,7 @@ func (x *OrganizationDeleted) String() string {
 func (*OrganizationDeleted) ProtoMessage() {}
 
 func (x *OrganizationDeleted) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[23]
+	mi := &file_events_auth_events_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1508,7 +1555,7 @@ func (x *OrganizationDeleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrganizationDeleted.ProtoReflect.Descriptor instead.
 func (*OrganizationDeleted) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{23}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *OrganizationDeleted) GetOrgId() string {
@@ -1530,7 +1577,7 @@ type OrganizationUpdated struct {
 
 func (x *OrganizationUpdated) Reset() {
 	*x = OrganizationUpdated{}
-	mi := &file_events_auth_events_proto_msgTypes[24]
+	mi := &file_events_auth_events_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1542,7 +1589,7 @@ func (x *OrganizationUpdated) String() string {
 func (*OrganizationUpdated) ProtoMessage() {}
 
 func (x *OrganizationUpdated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[24]
+	mi := &file_events_auth_events_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1555,7 +1602,7 @@ func (x *OrganizationUpdated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrganizationUpdated.ProtoReflect.Descriptor instead.
 func (*OrganizationUpdated) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{24}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *OrganizationUpdated) GetOrgId() string {
@@ -1578,7 +1625,7 @@ type OrgMembershipUpdated struct {
 
 func (x *OrgMembershipUpdated) Reset() {
 	*x = OrgMembershipUpdated{}
-	mi := &file_events_auth_events_proto_msgTypes[25]
+	mi := &file_events_auth_events_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1590,7 +1637,7 @@ func (x *OrgMembershipUpdated) String() string {
 func (*OrgMembershipUpdated) ProtoMessage() {}
 
 func (x *OrgMembershipUpdated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[25]
+	mi := &file_events_auth_events_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1603,7 +1650,7 @@ func (x *OrgMembershipUpdated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgMembershipUpdated.ProtoReflect.Descriptor instead.
 func (*OrgMembershipUpdated) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{25}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *OrgMembershipUpdated) GetMembershipId() string {
@@ -1625,7 +1672,7 @@ type OrgMembershipRemoved struct {
 
 func (x *OrgMembershipRemoved) Reset() {
 	*x = OrgMembershipRemoved{}
-	mi := &file_events_auth_events_proto_msgTypes[26]
+	mi := &file_events_auth_events_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1637,7 +1684,7 @@ func (x *OrgMembershipRemoved) String() string {
 func (*OrgMembershipRemoved) ProtoMessage() {}
 
 func (x *OrgMembershipRemoved) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[26]
+	mi := &file_events_auth_events_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1650,7 +1697,7 @@ func (x *OrgMembershipRemoved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgMembershipRemoved.ProtoReflect.Descriptor instead.
 func (*OrgMembershipRemoved) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{26}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *OrgMembershipRemoved) GetMembershipId() string {
@@ -1674,7 +1721,7 @@ type OrgInviteCreated struct {
 
 func (x *OrgInviteCreated) Reset() {
 	*x = OrgInviteCreated{}
-	mi := &file_events_auth_events_proto_msgTypes[27]
+	mi := &file_events_auth_events_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1686,7 +1733,7 @@ func (x *OrgInviteCreated) String() string {
 func (*OrgInviteCreated) ProtoMessage() {}
 
 func (x *OrgInviteCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[27]
+	mi := &file_events_auth_events_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1699,7 +1746,7 @@ func (x *OrgInviteCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgInviteCreated.ProtoReflect.Descriptor instead.
 func (*OrgInviteCreated) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{27}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *OrgInviteCreated) GetInviteId() string {
@@ -1759,7 +1806,7 @@ type OrgInviteAccepted struct {
 
 func (x *OrgInviteAccepted) Reset() {
 	*x = OrgInviteAccepted{}
-	mi := &file_events_auth_events_proto_msgTypes[28]
+	mi := &file_events_auth_events_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1771,7 +1818,7 @@ func (x *OrgInviteAccepted) String() string {
 func (*OrgInviteAccepted) ProtoMessage() {}
 
 func (x *OrgInviteAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[28]
+	mi := &file_events_auth_events_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1784,7 +1831,7 @@ func (x *OrgInviteAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgInviteAccepted.ProtoReflect.Descriptor instead.
 func (*OrgInviteAccepted) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{28}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *OrgInviteAccepted) GetInviteId() string {
@@ -1825,7 +1872,7 @@ type OrgInviteRevoked struct {
 
 func (x *OrgInviteRevoked) Reset() {
 	*x = OrgInviteRevoked{}
-	mi := &file_events_auth_events_proto_msgTypes[29]
+	mi := &file_events_auth_events_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1837,7 +1884,7 @@ func (x *OrgInviteRevoked) String() string {
 func (*OrgInviteRevoked) ProtoMessage() {}
 
 func (x *OrgInviteRevoked) ProtoReflect() protoreflect.Message {
-	mi := &file_events_auth_events_proto_msgTypes[29]
+	mi := &file_events_auth_events_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1850,7 +1897,7 @@ func (x *OrgInviteRevoked) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgInviteRevoked.ProtoReflect.Descriptor instead.
 func (*OrgInviteRevoked) Descriptor() ([]byte, []int) {
-	return file_events_auth_events_proto_rawDescGZIP(), []int{29}
+	return file_events_auth_events_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *OrgInviteRevoked) GetInviteId() string {
@@ -1964,6 +2011,10 @@ const file_events_auth_events_proto_rawDesc = "" +
 	"\fTotpDisabled\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId:.\x92\xbd\x18\x1c\n" +
 	"\x06events\x12\x12auth.totp.disabled\xfa\xf4\x18\n" +
+	"two_factor\"d\n" +
+	"\x10RecoveryCodeUsed\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId:7\x92\xbd\x18%\n" +
+	"\x06events\x12\x1bauth.mfa.recovery_code_used\xfa\xf4\x18\n" +
 	"two_factor\"\xd7\x01\n" +
 	"\x16PasswordResetRequested\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
@@ -2052,7 +2103,7 @@ func file_events_auth_events_proto_rawDescGZIP() []byte {
 	return file_events_auth_events_proto_rawDescData
 }
 
-var file_events_auth_events_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_events_auth_events_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_events_auth_events_proto_goTypes = []any{
 	(*UserCreated)(nil),                 // 0: w17.contrib.auth.UserCreated
 	(*UserDeleted)(nil),                 // 1: w17.contrib.auth.UserDeleted
@@ -2072,34 +2123,35 @@ var file_events_auth_events_proto_goTypes = []any{
 	(*TotpEnrolled)(nil),                // 15: w17.contrib.auth.TotpEnrolled
 	(*TotpConfirmed)(nil),               // 16: w17.contrib.auth.TotpConfirmed
 	(*TotpDisabled)(nil),                // 17: w17.contrib.auth.TotpDisabled
-	(*PasswordResetRequested)(nil),      // 18: w17.contrib.auth.PasswordResetRequested
-	(*SignUpConfirmationRequested)(nil), // 19: w17.contrib.auth.SignUpConfirmationRequested
-	(*EmailVerificationRequested)(nil),  // 20: w17.contrib.auth.EmailVerificationRequested
-	(*OrganizationCreated)(nil),         // 21: w17.contrib.auth.OrganizationCreated
-	(*OrgMembershipAdded)(nil),          // 22: w17.contrib.auth.OrgMembershipAdded
-	(*OrganizationDeleted)(nil),         // 23: w17.contrib.auth.OrganizationDeleted
-	(*OrganizationUpdated)(nil),         // 24: w17.contrib.auth.OrganizationUpdated
-	(*OrgMembershipUpdated)(nil),        // 25: w17.contrib.auth.OrgMembershipUpdated
-	(*OrgMembershipRemoved)(nil),        // 26: w17.contrib.auth.OrgMembershipRemoved
-	(*OrgInviteCreated)(nil),            // 27: w17.contrib.auth.OrgInviteCreated
-	(*OrgInviteAccepted)(nil),           // 28: w17.contrib.auth.OrgInviteAccepted
-	(*OrgInviteRevoked)(nil),            // 29: w17.contrib.auth.OrgInviteRevoked
-	(*timestamppb.Timestamp)(nil),       // 30: google.protobuf.Timestamp
+	(*RecoveryCodeUsed)(nil),            // 18: w17.contrib.auth.RecoveryCodeUsed
+	(*PasswordResetRequested)(nil),      // 19: w17.contrib.auth.PasswordResetRequested
+	(*SignUpConfirmationRequested)(nil), // 20: w17.contrib.auth.SignUpConfirmationRequested
+	(*EmailVerificationRequested)(nil),  // 21: w17.contrib.auth.EmailVerificationRequested
+	(*OrganizationCreated)(nil),         // 22: w17.contrib.auth.OrganizationCreated
+	(*OrgMembershipAdded)(nil),          // 23: w17.contrib.auth.OrgMembershipAdded
+	(*OrganizationDeleted)(nil),         // 24: w17.contrib.auth.OrganizationDeleted
+	(*OrganizationUpdated)(nil),         // 25: w17.contrib.auth.OrganizationUpdated
+	(*OrgMembershipUpdated)(nil),        // 26: w17.contrib.auth.OrgMembershipUpdated
+	(*OrgMembershipRemoved)(nil),        // 27: w17.contrib.auth.OrgMembershipRemoved
+	(*OrgInviteCreated)(nil),            // 28: w17.contrib.auth.OrgInviteCreated
+	(*OrgInviteAccepted)(nil),           // 29: w17.contrib.auth.OrgInviteAccepted
+	(*OrgInviteRevoked)(nil),            // 30: w17.contrib.auth.OrgInviteRevoked
+	(*timestamppb.Timestamp)(nil),       // 31: google.protobuf.Timestamp
 }
 var file_events_auth_events_proto_depIdxs = []int32{
-	30, // 0: w17.contrib.auth.UserCreated.created_at:type_name -> google.protobuf.Timestamp
-	30, // 1: w17.contrib.auth.TokenIssued.issued_at:type_name -> google.protobuf.Timestamp
-	30, // 2: w17.contrib.auth.RoleCreated.created_at:type_name -> google.protobuf.Timestamp
-	30, // 3: w17.contrib.auth.UserRoleAssigned.assigned_at:type_name -> google.protobuf.Timestamp
-	30, // 4: w17.contrib.auth.RolePermissionAdded.added_at:type_name -> google.protobuf.Timestamp
-	30, // 5: w17.contrib.auth.MfaChallengeRequested.expires_at:type_name -> google.protobuf.Timestamp
-	30, // 6: w17.contrib.auth.TotpEnrolled.enrolled_at:type_name -> google.protobuf.Timestamp
-	30, // 7: w17.contrib.auth.PasswordResetRequested.expires_at:type_name -> google.protobuf.Timestamp
-	30, // 8: w17.contrib.auth.SignUpConfirmationRequested.expires_at:type_name -> google.protobuf.Timestamp
-	30, // 9: w17.contrib.auth.EmailVerificationRequested.expires_at:type_name -> google.protobuf.Timestamp
-	30, // 10: w17.contrib.auth.OrganizationCreated.created_at:type_name -> google.protobuf.Timestamp
-	30, // 11: w17.contrib.auth.OrgMembershipAdded.created_at:type_name -> google.protobuf.Timestamp
-	30, // 12: w17.contrib.auth.OrgInviteCreated.expires_at:type_name -> google.protobuf.Timestamp
+	31, // 0: w17.contrib.auth.UserCreated.created_at:type_name -> google.protobuf.Timestamp
+	31, // 1: w17.contrib.auth.TokenIssued.issued_at:type_name -> google.protobuf.Timestamp
+	31, // 2: w17.contrib.auth.RoleCreated.created_at:type_name -> google.protobuf.Timestamp
+	31, // 3: w17.contrib.auth.UserRoleAssigned.assigned_at:type_name -> google.protobuf.Timestamp
+	31, // 4: w17.contrib.auth.RolePermissionAdded.added_at:type_name -> google.protobuf.Timestamp
+	31, // 5: w17.contrib.auth.MfaChallengeRequested.expires_at:type_name -> google.protobuf.Timestamp
+	31, // 6: w17.contrib.auth.TotpEnrolled.enrolled_at:type_name -> google.protobuf.Timestamp
+	31, // 7: w17.contrib.auth.PasswordResetRequested.expires_at:type_name -> google.protobuf.Timestamp
+	31, // 8: w17.contrib.auth.SignUpConfirmationRequested.expires_at:type_name -> google.protobuf.Timestamp
+	31, // 9: w17.contrib.auth.EmailVerificationRequested.expires_at:type_name -> google.protobuf.Timestamp
+	31, // 10: w17.contrib.auth.OrganizationCreated.created_at:type_name -> google.protobuf.Timestamp
+	31, // 11: w17.contrib.auth.OrgMembershipAdded.created_at:type_name -> google.protobuf.Timestamp
+	31, // 12: w17.contrib.auth.OrgInviteCreated.expires_at:type_name -> google.protobuf.Timestamp
 	13, // [13:13] is the sub-list for method output_type
 	13, // [13:13] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
@@ -2118,7 +2170,7 @@ func file_events_auth_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_auth_events_proto_rawDesc), len(file_events_auth_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

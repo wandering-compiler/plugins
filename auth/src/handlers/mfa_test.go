@@ -33,10 +33,15 @@ type mfaMock struct {
 	pb.AuthMutationClient
 
 	// totp secret state
-	totpSecretEnc string // legacy `secret` (secretbox blob, rc.19 and earlier); "" = none
-	totpSeed      string // `seed` as the storage layer hands it back: plaintext
-	movedSeed     string // what MoveTotpSeed was given
-	movedRow      string // …and the enrolment row it was keyed by
+	totpSecretEnc string          // legacy `secret` (secretbox blob, rc.19 and earlier); "" = none
+	totpSeed      string          // `seed` as the storage layer hands it back: plaintext
+	movedSeed     string          // what MoveTotpSeed was given
+	movedRow      string          // …and the enrolment row it was keyed by
+	lastStep      int64           // UserTotpSecret.last_step (the replay guard)
+	recovery      map[string]bool // code_hash → used
+	claimErr      error           // ClaimTotpStep fails (store unreachable)
+	stepUps       int64           // UserTotpSecret.stepup_attempts
+	stepUpLocked  time.Time       // UserTotpSecret.stepup_locked_until
 	totpConfirmed bool
 	totpReadErr   error // enrolment store refuses to answer (a consumer, #58/3)
 
@@ -91,7 +96,7 @@ func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ 
 	if m.totpSecretEnc == "" && m.totpSeed == "" {
 		return &pb.GetTotpSecretResp{}, nil
 	}
-	s := &pb.UserTotpSecret{Id: "row-1", UserId: in.GetUserId(), Secret: m.totpSecretEnc}
+	s := &pb.UserTotpSecret{Id: "row-1", UserId: in.GetUserId(), Secret: m.totpSecretEnc, LastStep: m.lastStep}
 	if m.totpConfirmed {
 		s.ConfirmedAt = timestamppb.Now()
 	}
@@ -122,6 +127,65 @@ func (m *mfaMock) CreateTotpSecret(ctx context.Context, in *pb.CreateTotpSecretR
 	m.totpSeed, m.totpSecretEnc = in.GetSeed(), ""
 	m.totpConfirmed = false
 	return &pb.CreateTotpSecretResp{Secret: &pb.UserTotpSecret{UserId: in.GetUserId()}}, nil
+}
+func (m *mfaMock) ClaimTotpStep(ctx context.Context, in *pb.ClaimTotpStepReq, _ ...grpc.CallOption) (*pb.ClaimTotpStepResp, error) {
+	if m.claimErr != nil {
+		return nil, m.claimErr
+	}
+	if in.GetStep() <= m.lastStep {
+		return &pb.ClaimTotpStepResp{}, nil // the conditional UPDATE matched nothing
+	}
+	m.lastStep = in.GetStep()
+	return &pb.ClaimTotpStepResp{Id: in.GetId()}, nil
+}
+func (m *mfaMock) RecordStepUpAttempt(ctx context.Context, in *pb.RecordStepUpAttemptReq, _ ...grpc.CallOption) (*pb.RecordStepUpAttemptResp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if time.Now().Before(m.stepUpLocked) {
+		return &pb.RecordStepUpAttemptResp{}, nil // the WHERE excludes a locked row
+	}
+	m.stepUps++
+	return &pb.RecordStepUpAttemptResp{Attempts: m.stepUps}, nil
+}
+func (m *mfaMock) LockStepUp(ctx context.Context, in *pb.LockStepUpReq, _ ...grpc.CallOption) (*pb.LockStepUpResp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stepUps, m.stepUpLocked = 0, in.GetUntil().AsTime()
+	return &pb.LockStepUpResp{Id: in.GetId()}, nil
+}
+func (m *mfaMock) ResetStepUp(ctx context.Context, in *pb.ResetStepUpReq, _ ...grpc.CallOption) (*pb.ResetStepUpResp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stepUps = 0
+	return &pb.ResetStepUpResp{Id: in.GetId()}, nil
+}
+func (m *mfaMock) CreateRecoveryCode(ctx context.Context, in *pb.CreateRecoveryCodeReq, _ ...grpc.CallOption) (*pb.CreateRecoveryCodeResp, error) {
+	if m.recovery == nil {
+		m.recovery = map[string]bool{}
+	}
+	m.recovery[in.GetCodeHash()] = false
+	return &pb.CreateRecoveryCodeResp{Id: "rc"}, nil
+}
+func (m *mfaMock) DeleteRecoveryCodes(ctx context.Context, in *pb.DeleteRecoveryCodesReq, _ ...grpc.CallOption) (*pb.DeleteRecoveryCodesResp, error) {
+	m.recovery = nil
+	return &pb.DeleteRecoveryCodesResp{}, nil
+}
+func (m *mfaMock) ConsumeRecoveryCode(ctx context.Context, in *pb.ConsumeRecoveryCodeReq, _ ...grpc.CallOption) (*pb.ConsumeRecoveryCodeResp, error) {
+	used, ok := m.recovery[in.GetCodeHash()]
+	if !ok || used {
+		return &pb.ConsumeRecoveryCodeResp{}, nil
+	}
+	m.recovery[in.GetCodeHash()] = true
+	return &pb.ConsumeRecoveryCodeResp{Id: "rc", UserId: in.GetUserId()}, nil
+}
+func (m *mfaMock) CountRecoveryCodes(ctx context.Context, in *pb.CountRecoveryCodesReq, _ ...grpc.CallOption) (*pb.CountRecoveryCodesResp, error) {
+	var n int64
+	for _, used := range m.recovery {
+		if !used {
+			n++
+		}
+	}
+	return &pb.CountRecoveryCodesResp{Count: n}, nil
 }
 func (m *mfaMock) MoveTotpSeed(ctx context.Context, in *pb.MoveTotpSeedReq, _ ...grpc.CallOption) (*pb.MoveTotpSeedResp, error) {
 	m.movedSeed, m.movedRow = in.GetSeed(), in.GetId()
@@ -291,7 +355,7 @@ func TestEnrollConfirmVerify_TotpRoundTrip(t *testing.T) {
 	if !challenged {
 		t.Fatal("expected challenge")
 	}
-	verifyCode, _ := totp.Code(enroll.GetSecret(), time.Now())
+	verifyCode := nextCode(t, enroll.GetSecret()) // the confirm spent this window's code
 	vresp, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: verifyCode})
 	if err != nil {
 		t.Fatalf("verify (TOTP path): %v", err)
@@ -420,9 +484,10 @@ func TestLegacySeed_VerifiesAndMoves(t *testing.T) {
 	if m.movedSeed != seed || m.totpSecretEnc != "" {
 		t.Errorf("moved=%q legacy=%q, want the seed moved and the legacy column cleared", m.movedSeed, m.totpSecretEnc)
 	}
-	// Moved: the old key is no longer needed.
+	// Moved: the old key is no longer needed. (The next window's code: this
+	// one was spent.)
 	h.TwoFactorSecretKey = ""
-	if !h.verifyMfaCode(ctxWithCaller("u1"), "u1", "", code) {
+	if !h.verifyMfaCode(ctxWithCaller("u1"), "u1", "", nextCode(t, seed)) {
 		t.Error("a moved authenticator still needs the legacy key")
 	}
 }
@@ -484,8 +549,7 @@ func TestDisableTotp_ValidCode_Deletes(t *testing.T) {
 	ctx := ctxWithCaller("u1")
 	secret := enrollAndConfirm(t, h, m, ctx)
 
-	code, _ := totp.Code(secret, time.Now())
-	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: code}); err != nil {
+	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: nextCode(t, secret)}); err != nil {
 		t.Fatalf("disable with valid code: %v", err)
 	}
 	if !m.deletedTotp {
@@ -723,12 +787,14 @@ func (f *failingCreateTotp) CreateTotpSecret(context.Context, *pb.CreateTotpSecr
 }
 
 func TestEnrollTotp_AFailedCreateDoesNotLeaveTheUserWithoutAFactor(t *testing.T) {
-	m := &mfaMock{userEmail: "a@b.c", totpSeed: "existing", totpConfirmed: true}
+	seed, _ := totp.GenerateSecret()
+	m := &mfaMock{userEmail: "a@b.c", totpSeed: seed, totpConfirmed: true}
 	f := &failingCreateTotp{mfaMock: m}
 	h := newMfaHandler(m)
 	h.Mutation = f
 
-	if _, err := h.EnrollTotp(ctxWithCaller("u1"), &pb.EnrollTotpReq{}); err == nil {
+	code, _ := totp.Code(seed, time.Now()) // replacing a confirmed authenticator takes its code
+	if _, err := h.EnrollTotp(ctxWithCaller("u1"), &pb.EnrollTotpReq{Code: code}); err == nil {
 		t.Fatal("a failed create was reported as a successful enrolment")
 	}
 
@@ -768,8 +834,12 @@ func TestEnrollTotp_BothWritesGoThroughOneSeam(t *testing.T) {
 	if !strings.Contains(fn, "replaceTotpSecret(") {
 		t.Error("EnrollTotp no longer goes through replaceTotpSecret — nothing holds the pair together")
 	}
-	if !strings.Contains(fn, "distx.Begin(") {
+	if !strings.Contains(fn, "h.inMfaTx(") {
 		t.Error("EnrollTotp opens no transaction — the seam exists but nothing wraps it")
+	}
+	j := strings.Index(body, "func (h *AuthServiceHandler) inMfaTx(")
+	if j < 0 || !strings.Contains(body[j:j+strings.Index(body[j:], "\n}\n")], "distx.Begin(") {
+		t.Error("inMfaTx begins no distributed transaction")
 	}
 }
 
@@ -810,4 +880,15 @@ func TestEnrollTotp_RefusedWhenTheAuthenticatorIsOff(t *testing.T) {
 			t.Errorf("want FailedPrecondition/%s, got %v", CodeTotpUnavailable, err)
 		}
 	}
+}
+
+// nextCode is the authenticator's code for the NEXT time step — still inside
+// the ±1 skew, and not the step a code earlier in the test already spent.
+func nextCode(t *testing.T, secret string) string {
+	t.Helper()
+	c, err := totp.Code(secret, time.Now().Add(30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

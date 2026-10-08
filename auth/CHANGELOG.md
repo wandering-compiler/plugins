@@ -1,5 +1,45 @@
 # auth — changelog
 
+## 0.1.0-rc.21
+
+### Recovery codes
+
+Confirming an authenticator (`ConfirmTotp`) now returns ten one-time recovery codes, shown once. The codes are stored as SHA-256 hashes in the new `UserRecoveryCode` table.
+
+- A recovery code works wherever the authenticator's code does: `VerifyMfa`, and the step-up of `EnrollTotp`, `DisableTotp` and `GenerateRecoveryCodes`. Each code works once. It may be typed in any case, with or without the dash.
+- `GenerateRecoveryCodes` (`POST /auth/mfa/recovery-codes`) replaces the set. It needs a confirmed authenticator, plus a current code or a recovery code. Without an authenticator it is refused with `TOTP_NOT_ENROLLED`.
+- `GetMfaStatus` reports `recovery_codes_remaining`.
+- `DisableTotp` deletes the codes together with the authenticator.
+- Spending a code emits `RecoveryCodeUsed` (`auth.mfa.recovery_code_used`), so a consumer can tell the person.
+
+### A TOTP code is accepted once
+
+`UserTotpSecret.last_step` records the highest time step accepted. A code is taken only for a later step, through one conditional `UPDATE` (`ClaimTotpStep`). Before this, a code worked for its whole window of about 90 seconds, so a code read over someone's shoulder or captured by a phishing page could sign in a second time (RFC 6238 §5.2). The code that confirms an authenticator counts too. A client that verified twice with the same code now needs the next one.
+
+### Re-enrolling over a confirmed authenticator needs a code
+
+`EnrollTotpReq.code` is now required when the caller already has a confirmed authenticator. It takes a current code or a recovery code. Re-enrolling replaces the authenticator, which turns the second factor off until the new one is confirmed. Before this, a hijacked session could do through `EnrollTotp` what `DisableTotp`'s code requirement prevents. A lost phone is now: sign in with a recovery code, then enrol with another one.
+
+### The step-up has a guess budget
+
+The step-up is the code that `EnrollTotp`, `DisableTotp` and `GenerateRecoveryCodes` ask for. Five wrong codes lock it for 15 minutes, refused with `STEP_UP_LOCKED` (ResourceExhausted) even for the right code, and a success resets the count. The counter is `UserTotpSecret.stepup_attempts` and `stepup_locked_until`, updated in one statement (`RecordStepUpAttempt`), so concurrent guesses cannot race past the lock.
+
+The step-up comes from a session, outside any sign-in challenge's budget. Without this limit a stolen session could keep trying six-digit codes until one of the three valid ones came up. `DisableTotp` had no limit before this release.
+
+A recovery-shaped code is checked as a recovery code without reading the seed. This way a legacy authenticator whose `two_factor_secret_key` is gone can still be replaced with a recovery code.
+
+### `ConfirmTotp` refuses an authenticator that is already confirmed
+
+It answers `TOTP_ALREADY_CONFIRMED`. Re-confirming used to be a harmless no-op. With recovery codes it would hand a fresh set to whoever holds the session, with no step-up budget. Use `GenerateRecoveryCodes` for a new set.
+
+### The QR code comes with the enrolment
+
+`EnrollTotpResp.qr_svg` is `otpauth_uri` as a QR code: a self-contained SVG with black modules on white and the quiet zone included. Render it as it is. Encoding is done by `rsc.io/qr`, the SVG rendering by `lib/qrsvg`. The client no longer needs a QR library, and the seed is never handed to one.
+
+New storage methods:
+- `AuthMutation`: `ClaimTotpStep`, `RecordStepUpAttempt`, `LockStepUp`, `ResetStepUp`, `CreateRecoveryCode`, `DeleteRecoveryCodes`, `ConsumeRecoveryCode`;
+- `AuthQuery`: `CountRecoveryCodes`.
+
 ## 0.1.0-rc.20
 
 Needs w17 platform 1.10 (`requires_w17: ">=1.10"`): a project with a `CRYPTED_SECRET` column may now use `RETURNING` on mutations, as long as no encrypted column is returned.
