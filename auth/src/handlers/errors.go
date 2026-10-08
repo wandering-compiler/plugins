@@ -152,6 +152,14 @@ const (
 	// CodeTotpNotEnrolled: an operation that belongs to an authenticator
 	// (recovery codes) asked for by an account that has none confirmed.
 	CodeTotpNotEnrolled = "TOTP_NOT_ENROLLED"
+
+	// CodeTotpAlreadyConfirmed: ConfirmTotp for an authenticator that is
+	// already confirmed (new recovery codes are GenerateRecoveryCodes).
+	CodeTotpAlreadyConfirmed = "TOTP_ALREADY_CONFIRMED"
+
+	// CodeStepUpLocked: too many wrong codes for a change to the
+	// authenticator; it is refused for a while, whatever the code.
+	CodeStepUpLocked = "STEP_UP_LOCKED"
 )
 
 // The sentences a person reads, and the ONE place each is written.
@@ -199,6 +207,10 @@ const (
 	MsgTotpUnavailable = "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
 
 	MsgTotpNotEnrolled = "Set up an authenticator app first. Recovery codes belong to it."
+
+	MsgTotpAlreadyConfirmed = "This authenticator app is already set up. To get new recovery codes, generate them."
+
+	MsgStepUpLocked = "Too many wrong codes. Wait 15 minutes and try again."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

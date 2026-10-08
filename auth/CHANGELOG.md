@@ -20,12 +20,24 @@ Confirming an authenticator (`ConfirmTotp`) now returns ten one-time recovery co
 
 `EnrollTotpReq.code` is now required when the caller already has a confirmed authenticator. It takes a current code or a recovery code. Re-enrolling replaces the authenticator, which turns the second factor off until the new one is confirmed. Before this, a hijacked session could do through `EnrollTotp` what `DisableTotp`'s code requirement prevents. A lost phone is now: sign in with a recovery code, then enrol with another one.
 
+### The step-up has a guess budget
+
+The step-up is the code that `EnrollTotp`, `DisableTotp` and `GenerateRecoveryCodes` ask for. Five wrong codes lock it for 15 minutes, refused with `STEP_UP_LOCKED` (ResourceExhausted) even for the right code, and a success resets the count. The counter is `UserTotpSecret.stepup_attempts` and `stepup_locked_until`, updated in one statement (`RecordStepUpAttempt`), so concurrent guesses cannot race past the lock.
+
+The step-up comes from a session, outside any sign-in challenge's budget. Without this limit a stolen session could keep trying six-digit codes until one of the three valid ones came up. `DisableTotp` had no limit before this release.
+
+A recovery-shaped code is checked as a recovery code without reading the seed. This way a legacy authenticator whose `two_factor_secret_key` is gone can still be replaced with a recovery code.
+
+### `ConfirmTotp` refuses an authenticator that is already confirmed
+
+It answers `TOTP_ALREADY_CONFIRMED`. Re-confirming used to be a harmless no-op. With recovery codes it would hand a fresh set to whoever holds the session, with no step-up budget. Use `GenerateRecoveryCodes` for a new set.
+
 ### The QR code comes with the enrolment
 
 `EnrollTotpResp.qr_svg` is `otpauth_uri` as a QR code: a self-contained SVG with black modules on white and the quiet zone included. Render it as it is. Encoding is done by `rsc.io/qr`, the SVG rendering by `lib/qrsvg`. The client no longer needs a QR library, and the seed is never handed to one.
 
 New storage methods:
-- `AuthMutation`: `ClaimTotpStep`, `CreateRecoveryCode`, `DeleteRecoveryCodes`, `ConsumeRecoveryCode`;
+- `AuthMutation`: `ClaimTotpStep`, `RecordStepUpAttempt`, `LockStepUp`, `ResetStepUp`, `CreateRecoveryCode`, `DeleteRecoveryCodes`, `ConsumeRecoveryCode`;
 - `AuthQuery`: `CountRecoveryCodes`.
 
 ## 0.1.0-rc.20

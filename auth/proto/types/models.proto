@@ -461,6 +461,14 @@ message UserTotpSecret {
   // replayed inside its validity window, by a second request or a concurrent
   // one. 0 = never used.
   int64  last_step = 7 [(w17.field) = { default_int: 0 }];
+  // stepup_attempts / stepup_locked_until — the guess budget of the step-up
+  // (the code EnrollTotp / DisableTotp / GenerateRecoveryCodes ask for). A
+  // sign-in's guesses are bounded per challenge; these calls take a code from
+  // a SESSION, so without their own budget a stolen one could try six-digit
+  // codes until one landed. RecordStepUpAttempt counts in one statement and
+  // refuses while locked; a success resets the count.
+  int64  stepup_attempts = 8 [(w17.field) = { type: COUNTER, default_int: 0 }];
+  google.protobuf.Timestamp stepup_locked_until = 9 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // UserRecoveryCode — the one-time codes that stand in for the authenticator

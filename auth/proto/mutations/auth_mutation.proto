@@ -293,6 +293,36 @@ message ClaimTotpStepResp {
   string id = 1; // empty = not claimed: the step was already used (a replay)
 }
 
+// RecordStepUpAttemptReq claims one guess of the step-up budget. Zero
+// attempts back = not claimed: the step-up is locked (or the row is gone).
+message RecordStepUpAttemptReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RecordStepUpAttemptResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  int64 attempts = 1;
+}
+
+message LockStepUpReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp until = 2 [(w17.field) = { type: DATETIME }];
+}
+message LockStepUpResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1;
+}
+
+message ResetStepUpReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message ResetStepUpResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id = 1;
+}
+
 message CreateRecoveryCodeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id   = 1 [(w17.field) = { type: UUID }];
@@ -1540,6 +1570,50 @@ service AuthMutation {
           "UPDATE @module.UserTotpSecret SET "
           "last_step = :step "
           "WHERE id = :id AND last_step < :step "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // RecordStepUpAttempt — count a step-up guess, refusing (no row back)
+  // while the step-up is locked. One statement, so concurrent guesses get
+  // distinct counts and a lock is never raced past.
+  rpc RecordStepUpAttempt(RecordStepUpAttemptReq) returns (RecordStepUpAttemptResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "stepup_attempts = stepup_attempts + 1 "
+          "WHERE id = :id AND (stepup_locked_until IS NULL OR stepup_locked_until < NOW()) "
+          "RETURNING stepup_attempts AS attempts"
+      }
+    };
+  }
+  rpc LockStepUp(LockStepUpReq) returns (LockStepUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "stepup_attempts = 0, "
+          "stepup_locked_until = :until "
+          "WHERE id = :id "
+          "RETURNING id"
+      }
+    };
+  }
+  rpc ResetStepUp(ResetStepUpReq) returns (ResetStepUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "stepup_attempts = 0 "
+          "WHERE id = :id "
           "RETURNING id"
       }
     };

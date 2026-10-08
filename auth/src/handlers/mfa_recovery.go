@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/auth/lib/totp"
 
@@ -30,7 +31,18 @@ const (
 	recoveryCodeLen = 10
 	// No 0/o, 1/l/i: a code is read off paper and typed on a phone.
 	recoveryAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
+	// maxStepUpAttempts wrong step-up codes in a row lock it for stepUpLockout.
+	maxStepUpAttempts = 5
+	stepUpLockout     = 15 * time.Minute
 )
+
+// stepUpLocked refuses a step-up whose guess budget is spent. Deliberate and
+// non-opaque, like errMfaChallengeBudget — only a signed-in session reaches it.
+func stepUpLocked(ctx context.Context) error {
+	return refusal(ctx, codes.ResourceExhausted, "two_factor: step-up locked after too many wrong codes",
+		CodeStepUpLocked, "", MsgStepUpLocked, nil)
+}
 
 // acceptTotp reports whether code is the authenticator's current code AND
 // claims its time step, so the same code — replayed, overheard, or sent twice
@@ -67,18 +79,43 @@ func (h *AuthServiceHandler) acceptRecoveryCode(ctx context.Context, userID, cod
 // current code from it, or a recovery code. A session alone is not enough —
 // a stolen one would otherwise be able to remove or replace the factor that
 // limits what it can do.
+//
+// Budgeted: maxStepUpAttempts wrong codes lock it for stepUpLockout. A
+// sign-in's guesses are bounded by its challenge; these calls come from a
+// session, and without a budget of their own a stolen one could try codes
+// until one of the three a ±1 skew accepts came up.
+//
+// A recovery-shaped code is checked as one without touching the seed, so a
+// legacy authenticator whose old key is gone can still be replaced with a
+// recovery code — the case they exist for.
 func (h *AuthServiceHandler) stepUp(ctx context.Context, userID string, row *pb.UserTotpSecret, code string) error {
-	seed, err := h.seedOf(ctx, row)
-	if err != nil {
-		return err
+	att, err := h.Mutation.RecordStepUpAttempt(ctx, &pb.RecordStepUpAttemptReq{Id: row.GetId()})
+	if err != nil && notFoundOK(err) != nil {
+		return Unauthenticated(errMfaChallengeInvalid) // an unaccounted guess is not granted
 	}
-	ok, err := h.acceptTotp(ctx, row, seed, code)
-	if err != nil {
-		return err
+	if att.GetAttempts() == 0 {
+		return stepUpLocked(ctx)
 	}
-	if !ok && !h.acceptRecoveryCode(ctx, userID, code) {
+	if att.GetAttempts() > maxStepUpAttempts {
+		_, _ = h.Mutation.LockStepUp(ctx, &pb.LockStepUpReq{Id: row.GetId(), Until: timestamppb.New(time.Now().Add(stepUpLockout))})
+		return stepUpLocked(ctx)
+	}
+	var ok bool
+	if len(normaliseRecoveryCode(code)) == recoveryCodeLen {
+		ok = h.acceptRecoveryCode(ctx, userID, code)
+	} else {
+		seed, err := h.seedOf(ctx, row)
+		if err != nil {
+			return err
+		}
+		if ok, err = h.acceptTotp(ctx, row, seed, code); err != nil {
+			return err
+		}
+	}
+	if !ok {
 		return Unauthenticated(errMfaChallengeInvalid)
 	}
+	_, _ = h.Mutation.ResetStepUp(ctx, &pb.ResetStepUpReq{Id: row.GetId()})
 	return nil
 }
 

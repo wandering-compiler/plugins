@@ -40,6 +40,8 @@ type mfaMock struct {
 	lastStep      int64           // UserTotpSecret.last_step (the replay guard)
 	recovery      map[string]bool // code_hash → used
 	claimErr      error           // ClaimTotpStep fails (store unreachable)
+	stepUps       int64           // UserTotpSecret.stepup_attempts
+	stepUpLocked  time.Time       // UserTotpSecret.stepup_locked_until
 	totpConfirmed bool
 	totpReadErr   error // enrolment store refuses to answer (a consumer, #58/3)
 
@@ -135,6 +137,27 @@ func (m *mfaMock) ClaimTotpStep(ctx context.Context, in *pb.ClaimTotpStepReq, _ 
 	}
 	m.lastStep = in.GetStep()
 	return &pb.ClaimTotpStepResp{Id: in.GetId()}, nil
+}
+func (m *mfaMock) RecordStepUpAttempt(ctx context.Context, in *pb.RecordStepUpAttemptReq, _ ...grpc.CallOption) (*pb.RecordStepUpAttemptResp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if time.Now().Before(m.stepUpLocked) {
+		return &pb.RecordStepUpAttemptResp{}, nil // the WHERE excludes a locked row
+	}
+	m.stepUps++
+	return &pb.RecordStepUpAttemptResp{Attempts: m.stepUps}, nil
+}
+func (m *mfaMock) LockStepUp(ctx context.Context, in *pb.LockStepUpReq, _ ...grpc.CallOption) (*pb.LockStepUpResp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stepUps, m.stepUpLocked = 0, in.GetUntil().AsTime()
+	return &pb.LockStepUpResp{Id: in.GetId()}, nil
+}
+func (m *mfaMock) ResetStepUp(ctx context.Context, in *pb.ResetStepUpReq, _ ...grpc.CallOption) (*pb.ResetStepUpResp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stepUps = 0
+	return &pb.ResetStepUpResp{Id: in.GetId()}, nil
 }
 func (m *mfaMock) CreateRecoveryCode(ctx context.Context, in *pb.CreateRecoveryCodeReq, _ ...grpc.CallOption) (*pb.CreateRecoveryCodeResp, error) {
 	if m.recovery == nil {

@@ -1078,9 +1078,17 @@ type UserTotpSecret struct {
 	// conditional UPDATE), so a code that was used — or overheard — cannot be
 	// replayed inside its validity window, by a second request or a concurrent
 	// one. 0 = never used.
-	LastStep      int64 `protobuf:"varint,7,opt,name=last_step,json=lastStep,proto3" json:"last_step,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	LastStep int64 `protobuf:"varint,7,opt,name=last_step,json=lastStep,proto3" json:"last_step,omitempty"`
+	// stepup_attempts / stepup_locked_until — the guess budget of the step-up
+	// (the code EnrollTotp / DisableTotp / GenerateRecoveryCodes ask for). A
+	// sign-in's guesses are bounded per challenge; these calls take a code from
+	// a SESSION, so without their own budget a stolen one could try six-digit
+	// codes until one landed. RecordStepUpAttempt counts in one statement and
+	// refuses while locked; a success resets the count.
+	StepupAttempts    int64                  `protobuf:"varint,8,opt,name=stepup_attempts,json=stepupAttempts,proto3" json:"stepup_attempts,omitempty"`
+	StepupLockedUntil *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=stepup_locked_until,json=stepupLockedUntil,proto3" json:"stepup_locked_until,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *UserTotpSecret) Reset() {
@@ -1160,6 +1168,20 @@ func (x *UserTotpSecret) GetLastStep() int64 {
 		return x.LastStep
 	}
 	return 0
+}
+
+func (x *UserTotpSecret) GetStepupAttempts() int64 {
+	if x != nil {
+		return x.StepupAttempts
+	}
+	return 0
+}
+
+func (x *UserTotpSecret) GetStepupLockedUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StepupLockedUntil
+	}
+	return nil
 }
 
 // UserRecoveryCode — the one-time codes that stand in for the authenticator
@@ -2932,7 +2954,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\r\n" +
 	"\vprovider_id\n" +
 	"\r\n" +
-	"\vexternal_id\x10\x01\xfa\xf4\x18\x05oauth\"\xf1\x02\n" +
+	"\vexternal_id\x10\x01\xfa\xf4\x18\x05oauth\"\xfb\x03\n" +
 	"\x0eUserTotpSecret\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12#\n" +
@@ -2941,7 +2963,9 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12\x1c\n" +
 	"\x04seed\x18\x06 \x01(\tB\b\xca\xf3\x18\x04\bD(\x01R\x04seed\x12$\n" +
-	"\tlast_step\x18\a \x01(\x03B\a\xca\xf3\x18\x03\xa8\x01\x00R\blastStep:!\xc2\xf3\x18\x0f\x12\r\n" +
+	"\tlast_step\x18\a \x01(\x03B\a\xca\xf3\x18\x03\xa8\x01\x00R\blastStep\x122\n" +
+	"\x0fstepup_attempts\x18\b \x01(\x03B\t\xca\xf3\x18\x05\b\f\xa8\x01\x00R\x0estepupAttempts\x12T\n" +
+	"\x13stepup_locked_until\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x11stepupLockedUntil:!\xc2\xf3\x18\x0f\x12\r\n" +
 	"\t\n" +
 	"\auser_id\x10\x01\xfa\xf4\x18\n" +
 	"two_factor\"\xb4\x02\n" +
@@ -3208,37 +3232,38 @@ var file_types_models_proto_depIdxs = []int32{
 	24, // 14: w17.contrib.auth.OAuthIdentity.created_at:type_name -> google.protobuf.Timestamp
 	24, // 15: w17.contrib.auth.UserTotpSecret.confirmed_at:type_name -> google.protobuf.Timestamp
 	24, // 16: w17.contrib.auth.UserTotpSecret.created_at:type_name -> google.protobuf.Timestamp
-	24, // 17: w17.contrib.auth.UserRecoveryCode.used_at:type_name -> google.protobuf.Timestamp
-	24, // 18: w17.contrib.auth.UserRecoveryCode.created_at:type_name -> google.protobuf.Timestamp
-	24, // 19: w17.contrib.auth.MfaChallenge.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 20: w17.contrib.auth.MfaChallenge.created_at:type_name -> google.protobuf.Timestamp
-	24, // 21: w17.contrib.auth.PendingSignUp.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 22: w17.contrib.auth.PendingSignUp.created_at:type_name -> google.protobuf.Timestamp
-	24, // 23: w17.contrib.auth.PasswordResetToken.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 24: w17.contrib.auth.PasswordResetToken.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 25: w17.contrib.auth.PasswordResetToken.created_at:type_name -> google.protobuf.Timestamp
-	24, // 26: w17.contrib.auth.EmailVerificationToken.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 27: w17.contrib.auth.EmailVerificationToken.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 28: w17.contrib.auth.EmailVerificationToken.created_at:type_name -> google.protobuf.Timestamp
-	24, // 29: w17.contrib.auth.Role.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 30: w17.contrib.auth.Role.token_type:type_name -> w17.contrib.auth.TokenType
-	24, // 31: w17.contrib.auth.RolePermission.created_at:type_name -> google.protobuf.Timestamp
-	24, // 32: w17.contrib.auth.UserRole.created_at:type_name -> google.protobuf.Timestamp
-	24, // 33: w17.contrib.auth.TokenPermission.created_at:type_name -> google.protobuf.Timestamp
-	24, // 34: w17.contrib.auth.AuthClient.created_at:type_name -> google.protobuf.Timestamp
-	24, // 35: w17.contrib.auth.CliAuthCode.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 36: w17.contrib.auth.CliAuthCode.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 37: w17.contrib.auth.CliAuthCode.created_at:type_name -> google.protobuf.Timestamp
-	24, // 38: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
-	24, // 39: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
-	24, // 40: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 41: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
-	24, // 42: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
-	43, // [43:43] is the sub-list for method output_type
-	43, // [43:43] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	24, // 17: w17.contrib.auth.UserTotpSecret.stepup_locked_until:type_name -> google.protobuf.Timestamp
+	24, // 18: w17.contrib.auth.UserRecoveryCode.used_at:type_name -> google.protobuf.Timestamp
+	24, // 19: w17.contrib.auth.UserRecoveryCode.created_at:type_name -> google.protobuf.Timestamp
+	24, // 20: w17.contrib.auth.MfaChallenge.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 21: w17.contrib.auth.MfaChallenge.created_at:type_name -> google.protobuf.Timestamp
+	24, // 22: w17.contrib.auth.PendingSignUp.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 23: w17.contrib.auth.PendingSignUp.created_at:type_name -> google.protobuf.Timestamp
+	24, // 24: w17.contrib.auth.PasswordResetToken.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 25: w17.contrib.auth.PasswordResetToken.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 26: w17.contrib.auth.PasswordResetToken.created_at:type_name -> google.protobuf.Timestamp
+	24, // 27: w17.contrib.auth.EmailVerificationToken.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 28: w17.contrib.auth.EmailVerificationToken.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 29: w17.contrib.auth.EmailVerificationToken.created_at:type_name -> google.protobuf.Timestamp
+	24, // 30: w17.contrib.auth.Role.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 31: w17.contrib.auth.Role.token_type:type_name -> w17.contrib.auth.TokenType
+	24, // 32: w17.contrib.auth.RolePermission.created_at:type_name -> google.protobuf.Timestamp
+	24, // 33: w17.contrib.auth.UserRole.created_at:type_name -> google.protobuf.Timestamp
+	24, // 34: w17.contrib.auth.TokenPermission.created_at:type_name -> google.protobuf.Timestamp
+	24, // 35: w17.contrib.auth.AuthClient.created_at:type_name -> google.protobuf.Timestamp
+	24, // 36: w17.contrib.auth.CliAuthCode.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 37: w17.contrib.auth.CliAuthCode.consumed_at:type_name -> google.protobuf.Timestamp
+	24, // 38: w17.contrib.auth.CliAuthCode.created_at:type_name -> google.protobuf.Timestamp
+	24, // 39: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
+	24, // 40: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
+	24, // 41: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
+	24, // 42: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
+	24, // 43: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
+	44, // [44:44] is the sub-list for method output_type
+	44, // [44:44] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_types_models_proto_init() }

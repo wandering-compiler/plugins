@@ -426,6 +426,14 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	if err != nil || resp.GetSecret() == nil {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
+	// Confirming is for a PENDING authenticator. Re-confirming a confirmed one
+	// used to be a harmless no-op; now it would mint a new set of recovery
+	// codes for whoever holds the session, on any code that verifies, with no
+	// step-up budget — GenerateRecoveryCodes is that operation, behind one.
+	if resp.GetSecret().GetConfirmedAt() != nil {
+		return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: the authenticator is already confirmed",
+			CodeTotpAlreadyConfirmed, "", MsgTotpAlreadyConfirmed, nil)
+	}
 	resp.GetSecret().Seed = resp.GetSeed()
 	plain, err := h.seedOf(ctx, resp.GetSecret())
 	if err != nil {

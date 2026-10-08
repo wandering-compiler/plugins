@@ -217,3 +217,86 @@ func TestEnrollTotp_ReturnsTheQrCodeAsSvg(t *testing.T) {
 		t.Errorf("qr_svg = %.80q…", e.GetQrSvg())
 	}
 }
+
+// The step-up takes codes from a SESSION, outside any challenge's budget, so
+// it has its own: five wrong codes lock it, and while locked even the right
+// code is refused — otherwise a stolen session could guess six digits until
+// one of the three valid ones came up.
+func TestStepUp_FiveWrongCodesLockIt(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	ctx := ctxWithCaller("u1")
+	seed, _ := enrolled(t, h, ctx)
+	m.deletedTotp = false
+	for i := 0; i < maxStepUpAttempts; i++ {
+		if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: "000000"}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("wrong code %d: %v, want Unauthenticated", i+1, err)
+		}
+	}
+	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: nextCode(t, seed)}); status.Code(err) != codes.ResourceExhausted || detailOf(t, err).GetCode() != CodeStepUpLocked {
+		t.Errorf("the right code after five wrong ones: %v, want ResourceExhausted/%s (locked)", err, CodeStepUpLocked)
+	}
+	if _, err := h.GenerateRecoveryCodes(ctx, &pb.GenerateRecoveryCodesReq{Code: nextCode(t, seed)}); status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("the lock is the step-up's, not one endpoint's: %v", err)
+	}
+	if m.deletedTotp {
+		t.Error("the authenticator was removed while the step-up was locked")
+	}
+	m.stepUpLocked = time.Now().Add(-time.Second) // the lockout ran out
+	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: nextCode(t, seed)}); err != nil {
+		t.Errorf("after the lockout: %v", err)
+	}
+}
+
+// A success resets the count: a person who mistypes now and then is never
+// locked out by the accumulation.
+func TestStepUp_ASuccessResetsTheCount(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	ctx := ctxWithCaller("u1")
+	seed, rc := enrolled(t, h, ctx)
+	for i := 0; i < maxStepUpAttempts-1; i++ {
+		_, _ = h.GenerateRecoveryCodes(ctx, &pb.GenerateRecoveryCodesReq{Code: "000000"})
+	}
+	if _, err := h.GenerateRecoveryCodes(ctx, &pb.GenerateRecoveryCodesReq{Code: rc[0]}); err != nil {
+		t.Fatalf("the right code within the budget: %v", err)
+	}
+	for i := 0; i < maxStepUpAttempts-1; i++ {
+		_, _ = h.GenerateRecoveryCodes(ctx, &pb.GenerateRecoveryCodesReq{Code: "000000"})
+	}
+	if _, err := h.GenerateRecoveryCodes(ctx, &pb.GenerateRecoveryCodesReq{Code: nextCode(t, seed)}); err != nil {
+		t.Errorf("locked by failures spread across a success: %v", err)
+	}
+}
+
+// Re-confirming would hand a fresh set of recovery codes to whoever holds the
+// session, with no step-up budget; GenerateRecoveryCodes is that operation.
+func TestConfirmTotp_RefusesAConfirmedAuthenticator(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	ctx := ctxWithCaller("u1")
+	seed, _ := enrolled(t, h, ctx)
+	before := len(m.recovery)
+	_, err := h.ConfirmTotp(ctx, &pb.ConfirmTotpReq{Code: nextCode(t, seed)})
+	if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeTotpAlreadyConfirmed {
+		t.Errorf("re-confirm: %v, want FailedPrecondition/%s", err, CodeTotpAlreadyConfirmed)
+	}
+	if len(m.recovery) != before {
+		t.Error("re-confirming minted recovery codes")
+	}
+}
+
+// The lost-key case recovery codes exist for: a legacy authenticator whose
+// two_factor_secret_key is gone cannot be checked, but a recovery code still
+// replaces it.
+func TestStepUp_ARecoveryCodeNeedsNoSeed(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	ctx := ctxWithCaller("u1")
+	_, rc := enrolled(t, h, ctx)
+	m.totpSeed, m.totpSecretEnc = "", "legacy-blob-whose-key-is-gone"
+	h.TwoFactorSecretKey = ""
+	if _, err := h.EnrollTotp(ctx, &pb.EnrollTotpReq{Code: rc[0]}); err != nil {
+		t.Errorf("a recovery code could not replace an authenticator whose seed is unreadable: %v", err)
+	}
+}
