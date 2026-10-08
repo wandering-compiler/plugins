@@ -83,7 +83,7 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 	if !isSafeRelativeRedirect(req.GetRedirectAfter()) {
 		return nil, Unauthenticated(errOAuthUnsafeRedirect)
 	}
-	state, err := signOAuthState(p.GetClientSecret(), p.GetName(), req.GetRedirectAfter())
+	state, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -113,7 +113,7 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	redirectAfter, err := verifyOAuthState(p.GetClientSecret(), p.GetName(), req.GetState())
+	redirectAfter, err := verifyOAuthState(p.GetSecret(), p.GetName(), req.GetState())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -167,10 +167,25 @@ func (h *AuthServiceHandler) loadEnabledProvider(ctx context.Context, name strin
 	if p == nil || !p.GetEnabled() {
 		return nil, errOAuthProviderDisabled
 	}
-	// Q36-auth-2 — refuse a provider with no client_secret: it would sign
+	p.Secret = resp.GetSecret() // decrypted beside the row, not inside it
+	// The legacy plaintext column (rc.19 and earlier, or a fixture) is read
+	// only while the encrypted `secret` is empty, and moved there; once
+	// `secret` is set it wins — it is where the admin writes — and a
+	// plaintext copy left beside it is dropped. Letting the legacy value win
+	// instead would undo an operator's rotation made before the first sign-in.
+	// A failed move or clear costs nothing but a retry on the next read.
+	if legacy := p.GetClientSecret(); legacy != "" {
+		if p.GetSecret() == "" {
+			p.Secret = legacy
+			_, _ = h.Mutation.MoveOAuthProviderSecret(ctx, &pb.MoveOAuthProviderSecretReq{Id: p.GetId(), Secret: legacy, Legacy: legacy})
+		} else {
+			_, _ = h.Mutation.ClearOAuthProviderLegacySecret(ctx, &pb.ClearOAuthProviderLegacySecretReq{Id: p.GetId()})
+		}
+	}
+	// Q36-auth-2 — refuse a provider with no client secret: it would sign
 	// the state CSRF token with an empty HMAC key (forgeable), and the
 	// token exchange (which also needs the secret) would fail anyway.
-	if p.GetClientSecret() == "" {
+	if p.GetSecret() == "" {
 		return nil, errOAuthProviderMisconfigured
 	}
 	return p, nil
@@ -211,7 +226,7 @@ func (h *AuthServiceHandler) exchangeCode(ctx context.Context, p *pb.OAuthProvid
 	form.Set("code", code)
 	form.Set("redirect_uri", h.oauthRedirectURI(ctx, p.GetName()))
 	form.Set("client_id", p.GetClientId())
-	form.Set("client_secret", p.GetClientSecret())
+	form.Set("client_secret", p.GetSecret())
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.GetTokenUrl(), strings.NewReader(form.Encode()))
 	if err != nil {

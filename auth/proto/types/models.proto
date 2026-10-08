@@ -359,10 +359,17 @@ message Device {
 // OAuthProvider — an admin-configured OAuth2/OIDC server, behind `oauth`.
 // Generic by design: provider differences (GitHub isn't OIDC) are captured
 // by userinfo_url + the *_path mapping columns, never per-provider code.
-// client_secret is SECRET-typed: an opaque secret stored exactly as issued,
-// masked in the admin, never hashed. oauth.go signs the OAuth state with it as
-// an HMAC key and posts it to the token endpoint verbatim, so the stored bytes
-// have to BE the secret.
+// `secret` is the client secret, CRYPTED_SECRET: encrypted at rest with the
+// project's field keyring (W17_FIELD_KEYS), decrypted on read, masked in the
+// admin. oauth.go signs the OAuth state with it as an HMAC key and posts it to
+// the token endpoint verbatim, so it is read back, never hashed.
+//
+// `client_secret` is where rc.19 and earlier stored it, in the clear (SECRET).
+// It is read only while `secret` is empty, and the first sign-in through the
+// provider moves it there (MoveOAuthProviderSecret); once `secret` is set, a
+// value in the legacy column is ignored and cleared. Edit `secret`. A fixture
+// cannot seed `secret` (the console holds no key), so seeding the legacy
+// column is how a dev sandbox gets one until it is removed in a later release.
 //
 // It was PASSWORD until 2026-09-09 — the annotation for a hash you VERIFY
 // against, whose rules all follow from that. The one that bit: fixtures refuse
@@ -379,7 +386,7 @@ message OAuthProvider {
   string name          = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }]; // url key: /auth/oauth/{name}/...
   string display_name  = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   string client_id     = 4 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string client_secret = 5 [(w17.field) = { type: SECRET }];
+  string client_secret = 5 [(w17.field) = { type: SECRET, null: true }]; // legacy, plaintext — moved into `secret` on use
   string authorize_url = 6 [(w17.field) = { type: URL }];
   string token_url     = 7 [(w17.field) = { type: URL }];
   string userinfo_url  = 8 [(w17.field) = { type: URL, blank: true }]; // empty → OIDC id_token claims
@@ -400,6 +407,7 @@ message OAuthProvider {
     (w17.db.column) = { index: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  string secret = 15 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // the client secret
 }
 
 // OAuthIdentity — links a local User to an external IdP subject, behind
@@ -422,13 +430,19 @@ message OAuthIdentity {
 }
 
 // UserTotpSecret — one per user (the built-in authenticator), behind
-// `two_factor`. `secret` is the base32 TOTP seed stored ENCRYPTED at rest
-// (lib/secretbox AES-256-GCM, keyed by two_factor_secret_key); RFC 6238
-// needs the raw seed to verify, so unlike a password it can't be one-way
-// hashed. confirmed_at NULL = enrolled-but-unconfirmed (the first code
-// hasn't been verified yet); a user "has an authenticator" iff
-// confirmed_at IS NOT NULL. Unique on user_id (one authenticator per
-// user). Same no-DB-FK caveat as the rest of the plugin.
+// `two_factor`. `seed` is the base32 TOTP seed, CRYPTED_SECRET: encrypted at
+// rest with the project's field keyring (W17_FIELD_KEYS) and decrypted on
+// read; RFC 6238 needs the raw seed to verify, so unlike a password it can't
+// be one-way hashed. confirmed_at NULL = enrolled-but-unconfirmed (the first
+// code hasn't been verified yet); a user "has an authenticator" iff
+// confirmed_at IS NOT NULL. Unique on user_id (one authenticator per user).
+// Same no-DB-FK caveat as the rest of the plugin.
+//
+// `secret` is the seed as rc.19 and earlier stored it — encrypted by the
+// plugin's own lib/secretbox under the two_factor_secret_key knob. Nothing
+// writes it any more: a row that still has it is read through the old key
+// once and moved into `seed` (MoveTotpSeed), so the column empties itself as
+// people sign in. It, the knob and lib/secretbox go in a later release.
 message UserTotpSecret {
   option (w17.db.table) = {
     indexes: [ { unique: true, fields: [{ name: "user_id" }] } ]
@@ -437,9 +451,10 @@ message UserTotpSecret {
 
   string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  string secret  = 3 [(w17.field) = { type: CHAR, max_len: 512 }]; // base32 seed, secretbox-encrypted
+  string secret  = 3 [(w17.field) = { type: CHAR, max_len: 512, null: true }]; // legacy: secretbox-encrypted seed (two_factor_secret_key)
   google.protobuf.Timestamp confirmed_at = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at   = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  string seed    = 6 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // base32 seed
 }
 
 // MfaChallenge — a pending second-factor verification, behind

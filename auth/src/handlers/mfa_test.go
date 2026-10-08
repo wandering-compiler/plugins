@@ -33,7 +33,10 @@ type mfaMock struct {
 	pb.AuthMutationClient
 
 	// totp secret state
-	totpSecretEnc string // stored (encrypted) secret blob; "" = none
+	totpSecretEnc string // legacy `secret` (secretbox blob, rc.19 and earlier); "" = none
+	totpSeed      string // `seed` as the storage layer hands it back: plaintext
+	movedSeed     string // what MoveTotpSeed was given
+	movedRow      string // …and the enrolment row it was keyed by
 	totpConfirmed bool
 	totpReadErr   error // enrolment store refuses to answer (a consumer, #58/3)
 
@@ -85,14 +88,14 @@ func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ 
 	if m.totpReadErr != nil {
 		return nil, m.totpReadErr
 	}
-	if m.totpSecretEnc == "" {
+	if m.totpSecretEnc == "" && m.totpSeed == "" {
 		return &pb.GetTotpSecretResp{}, nil
 	}
-	s := &pb.UserTotpSecret{UserId: in.GetUserId(), Secret: m.totpSecretEnc}
+	s := &pb.UserTotpSecret{Id: "row-1", UserId: in.GetUserId(), Secret: m.totpSecretEnc}
 	if m.totpConfirmed {
 		s.ConfirmedAt = timestamppb.Now()
 	}
-	return &pb.GetTotpSecretResp{Secret: s}, nil
+	return &pb.GetTotpSecretResp{Secret: s, Seed: m.totpSeed}, nil
 }
 func (m *mfaMock) GetMfaChallenge(ctx context.Context, in *pb.GetMfaChallengeReq, _ ...grpc.CallOption) (*pb.GetMfaChallengeResp, error) {
 	m.mu.Lock()
@@ -116,9 +119,14 @@ func (m *mfaMock) GetDeviceByIdentifier(ctx context.Context, in *pb.GetDeviceByI
 
 // --- mutations ---
 func (m *mfaMock) CreateTotpSecret(ctx context.Context, in *pb.CreateTotpSecretReq, _ ...grpc.CallOption) (*pb.CreateTotpSecretResp, error) {
-	m.totpSecretEnc = in.GetSecret()
+	m.totpSeed, m.totpSecretEnc = in.GetSeed(), ""
 	m.totpConfirmed = false
-	return &pb.CreateTotpSecretResp{Secret: &pb.UserTotpSecret{UserId: in.GetUserId(), Secret: in.GetSecret()}}, nil
+	return &pb.CreateTotpSecretResp{Secret: &pb.UserTotpSecret{UserId: in.GetUserId()}}, nil
+}
+func (m *mfaMock) MoveTotpSeed(ctx context.Context, in *pb.MoveTotpSeedReq, _ ...grpc.CallOption) (*pb.MoveTotpSeedResp, error) {
+	m.movedSeed, m.movedRow = in.GetSeed(), in.GetId()
+	m.totpSeed, m.totpSecretEnc = in.GetSeed(), ""
+	return &pb.MoveTotpSeedResp{UserId: in.GetUserId()}, nil
 }
 func (m *mfaMock) ConfirmTotpSecret(ctx context.Context, in *pb.ConfirmTotpSecretReq, _ ...grpc.CallOption) (*pb.ConfirmTotpSecretResp, error) {
 	m.totpConfirmed = true
@@ -126,7 +134,7 @@ func (m *mfaMock) ConfirmTotpSecret(ctx context.Context, in *pb.ConfirmTotpSecre
 	return &pb.ConfirmTotpSecretResp{UserId: in.GetUserId()}, nil
 }
 func (m *mfaMock) DeleteTotpSecret(ctx context.Context, in *pb.DeleteTotpSecretReq, _ ...grpc.CallOption) (*pb.DeleteTotpSecretResp, error) {
-	m.totpSecretEnc = ""
+	m.totpSecretEnc, m.totpSeed = "", ""
 	m.totpConfirmed = false
 	m.deletedTotp = true
 	return &pb.DeleteTotpSecretResp{UserId: in.GetUserId()}, nil
@@ -244,7 +252,7 @@ func TestMfaGate_NewDevices_ChallengesUntrusted(t *testing.T) {
 }
 
 func TestMfaGate_TotpEnrolled_NoCode(t *testing.T) {
-	m := &mfaMock{totpSecretEnc: "x", totpConfirmed: true} // confirmed authenticator
+	m := &mfaMock{totpSeed: "x", totpConfirmed: true} // confirmed authenticator
 	h := newMfaHandler(m)
 	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "", false)
 	if err != nil || !challenged {
@@ -378,17 +386,66 @@ func TestVerifyMfa_Consumed_Unauthenticated(t *testing.T) {
 	}
 }
 
-func TestEnrollTotp_NoKey_Errors(t *testing.T) {
+// The seed is a CRYPTED_SECRET: enrolment hands the storage layer the
+// plaintext and needs no plugin key — the field keyring is the bundle's, and a
+// bundle without one does not boot.
+func TestEnrollTotp_NeedsNoPluginKey(t *testing.T) {
 	m := &mfaMock{}
 	h := newMfaHandler(m)
-	h.TwoFactorSecretKey = "" // no at-rest key configured
-	if _, err := h.EnrollTotp(ctxWithCaller("u1"), &pb.EnrollTotpReq{}); err == nil {
-		t.Error("EnrollTotp must error (not ship plaintext) when no secret key is configured")
+	h.TwoFactorSecretKey = ""
+	enroll, err := h.EnrollTotp(ctxWithCaller("u1"), &pb.EnrollTotpReq{})
+	if err != nil {
+		t.Fatalf("enroll without two_factor_secret_key: %v", err)
+	}
+	if m.totpSeed != enroll.GetSecret() || m.totpSecretEnc != "" {
+		t.Errorf("stored seed=%q legacy=%q, want the seed in `seed` and nothing in the legacy column", m.totpSeed, m.totpSecretEnc)
+	}
+}
+
+// An authenticator enrolled by rc.19 (secretbox under two_factor_secret_key)
+// keeps working, and its first use moves the seed into the encrypted column.
+func TestLegacySeed_VerifiesAndMoves(t *testing.T) {
+	seed, _ := totp.GenerateSecret()
+	cipher, _ := secretbox.NewFromBase64(mfaTestKey())
+	blob, _ := cipher.Seal(seed)
+	m := &mfaMock{userEmail: "a@b.c", totpSecretEnc: blob, totpConfirmed: true}
+	h := newMfaHandler(m)
+	code, _ := totp.Code(seed, time.Now())
+	if !h.verifyMfaCode(ctxWithCaller("u1"), "u1", "", code) {
+		t.Fatal("a legacy authenticator no longer verifies")
+	}
+	if m.movedRow != "row-1" {
+		t.Errorf("the move is keyed by %q, not by the enrolment row it read — a re-enrolment in between would get the old seed", m.movedRow)
+	}
+	if m.movedSeed != seed || m.totpSecretEnc != "" {
+		t.Errorf("moved=%q legacy=%q, want the seed moved and the legacy column cleared", m.movedSeed, m.totpSecretEnc)
+	}
+	// Moved: the old key is no longer needed.
+	h.TwoFactorSecretKey = ""
+	if !h.verifyMfaCode(ctxWithCaller("u1"), "u1", "", code) {
+		t.Error("a moved authenticator still needs the legacy key")
+	}
+}
+
+// A legacy authenticator whose key is gone cannot be checked: a refusal the
+// caller can read, not a 500 and not a pass.
+func TestLegacySeed_KeyGone_Refuses(t *testing.T) {
+	cipher, _ := secretbox.NewFromBase64(mfaTestKey())
+	blob, _ := cipher.Seal("JBSWY3DPEHPK3PXP")
+	m := &mfaMock{totpSecretEnc: blob, totpConfirmed: true}
+	h := newMfaHandler(m)
+	h.TwoFactorSecretKey = ""
+	_, err := h.DisableTotp(ctxWithCaller("u1"), &pb.DisableTotpReq{Code: "123456"})
+	if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeTotpUnavailable {
+		t.Errorf("want FailedPrecondition/%s, got %v", CodeTotpUnavailable, err)
+	}
+	if m.deletedTotp {
+		t.Error("an authenticator that could not be checked was dropped")
 	}
 }
 
 func TestGetMfaStatus_ReflectsEnrollment(t *testing.T) {
-	m := &mfaMock{totpSecretEnc: "x", totpConfirmed: true}
+	m := &mfaMock{totpSeed: "x", totpConfirmed: true}
 	h := newMfaHandler(m)
 	resp, err := h.GetMfaStatus(ctxWithCaller("u1"), &pb.GetMfaStatusReq{})
 	if err != nil {
@@ -534,7 +591,7 @@ func TestDisableTotp_ReadFailure_DoesNotDisableWithoutACode(t *testing.T) {
 
 // The sign-in gate: no challenge means the password alone let the caller in.
 func TestMfaGate_ReadFailure_RefusesRatherThanSkipTheChallenge(t *testing.T) {
-	m := &mfaMock{userEmail: "a@b.c", totpSecretEnc: "enc", totpConfirmed: true}
+	m := &mfaMock{userEmail: "a@b.c", totpSeed: "enc", totpConfirmed: true}
 	h := newMfaHandler(m)
 	m.totpReadErr = status.Error(codes.Unavailable, "enrolment store down")
 
@@ -550,7 +607,7 @@ func TestMfaGate_ReadFailure_RefusesRatherThanSkipTheChallenge(t *testing.T) {
 // GetMfaStatus: "you have no authenticator" is a claim a failed read cannot
 // support — a user who believes it re-enrols and loses the one they have.
 func TestGetMfaStatus_ReadFailure_Errors(t *testing.T) {
-	m := &mfaMock{userEmail: "a@b.c", totpSecretEnc: "enc", totpConfirmed: true}
+	m := &mfaMock{userEmail: "a@b.c", totpSeed: "enc", totpConfirmed: true}
 	h := newMfaHandler(m)
 	m.totpReadErr = status.Error(codes.Unavailable, "enrolment store down")
 
@@ -666,7 +723,7 @@ func (f *failingCreateTotp) CreateTotpSecret(context.Context, *pb.CreateTotpSecr
 }
 
 func TestEnrollTotp_AFailedCreateDoesNotLeaveTheUserWithoutAFactor(t *testing.T) {
-	m := &mfaMock{userEmail: "a@b.c", totpSecretEnc: "existing", totpConfirmed: true}
+	m := &mfaMock{userEmail: "a@b.c", totpSeed: "existing", totpConfirmed: true}
 	f := &failingCreateTotp{mfaMock: m}
 	h := newMfaHandler(m)
 	h.Mutation = f
@@ -752,10 +809,5 @@ func TestEnrollTotp_RefusedWhenTheAuthenticatorIsOff(t *testing.T) {
 		if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeTotpUnavailable {
 			t.Errorf("want FailedPrecondition/%s, got %v", CodeTotpUnavailable, err)
 		}
-	}
-	h.TwoFactorTOTP = true
-	h.TwoFactorSecretKey = ""
-	if _, err := h.EnrollTotp(ctxWithCaller("u1"), &pb.EnrollTotpReq{}); status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("no seed key: want FailedPrecondition, got %v", err)
 	}
 }

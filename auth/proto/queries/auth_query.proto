@@ -425,6 +425,9 @@ message GetProviderByNameReq {
 message GetProviderByNameResp {
   option (w17.contrib.plugin_feature) = "oauth";
   OAuthProvider provider = 1;
+  // The decrypted client secret (OAuthProvider.secret) — top-level because an
+  // encrypted column decrypts only into a single-segment target.
+  string secret = 2;
 }
 
 message GetOAuthIdentityReq {
@@ -462,6 +465,9 @@ message GetTotpSecretReq {
 message GetTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   UserTotpSecret secret = 1;
+  // The decrypted seed — top-level because an encrypted column decrypts only
+  // into a single-segment target (`secret.seed` would carry ciphertext).
+  string seed = 2;
 }
 
 message GetMfaChallengeReq {
@@ -1686,6 +1692,7 @@ service AuthQuery {
           "       p.display_name AS provider.display_name, "
           "       p.client_id AS provider.client_id, "
           "       p.client_secret AS provider.client_secret, "
+          "       p.secret AS secret, "
           "       p.authorize_url AS provider.authorize_url, "
           "       p.token_url AS provider.token_url, "
           "       p.userinfo_url AS provider.userinfo_url, "
@@ -1755,9 +1762,10 @@ service AuthQuery {
     };
   }
 
-  // GetTotpSecret — the user's TOTP row (encrypted secret + confirmed_at).
+  // GetTotpSecret — the user's TOTP row (seed — or the legacy secretbox
+  // `secret` seedOf moves — + confirmed_at).
   // NotFound = not enrolled. The gate reads confirmed_at for totp_enrolled;
-  // VerifyMfa / ConfirmTotp decrypt + verify against `secret`. Gated
+  // VerifyMfa / ConfirmTotp verify against the seed. Gated
   // two_factor.
   rpc GetTotpSecret(GetTotpSecretReq) returns (GetTotpSecretResp) {
     option (w17.db.method) = {
@@ -1767,6 +1775,7 @@ service AuthQuery {
           "SELECT s.id AS secret.id, "
           "       s.user_id AS secret.user_id, "
           "       s.secret AS secret.secret, "
+          "       s.seed AS seed, "
           "       s.confirmed_at AS secret.confirmed_at, "
           "       s.created_at AS secret.created_at "
           "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id"

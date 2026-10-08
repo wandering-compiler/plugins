@@ -29,6 +29,18 @@ type oauthMock struct {
 	// What an OAuth sign-up must give the account it creates, like SignUp.
 	assigned []*pb.AssignRoleToUserReq
 	verified []string
+	moved    *pb.MoveOAuthProviderSecretReq
+	cleared  string
+}
+
+func (m *oauthMock) ClearOAuthProviderLegacySecret(_ context.Context, in *pb.ClearOAuthProviderLegacySecretReq, _ ...grpc.CallOption) (*pb.ClearOAuthProviderLegacySecretResp, error) {
+	m.cleared = in.GetId()
+	return &pb.ClearOAuthProviderLegacySecretResp{Id: in.GetId()}, nil
+}
+
+func (m *oauthMock) MoveOAuthProviderSecret(_ context.Context, in *pb.MoveOAuthProviderSecretReq, _ ...grpc.CallOption) (*pb.MoveOAuthProviderSecretResp, error) {
+	m.moved = in
+	return &pb.MoveOAuthProviderSecretResp{Id: in.GetId()}, nil
 }
 
 func (m *oauthMock) CountUsers(context.Context, *pb.CountUsersReq, ...grpc.CallOption) (*pb.CountUsersResp, error) {
@@ -50,7 +62,8 @@ func (m *oauthMock) MarkEmailVerified(_ context.Context, in *pb.MarkEmailVerifie
 }
 
 func (m *oauthMock) GetProviderByName(ctx context.Context, in *pb.GetProviderByNameReq, _ ...grpc.CallOption) (*pb.GetProviderByNameResp, error) {
-	return &pb.GetProviderByNameResp{Provider: m.provider}, nil
+	// The storage layer decrypts `secret` into the top-level field.
+	return &pb.GetProviderByNameResp{Provider: m.provider, Secret: m.provider.GetSecret()}, nil
 }
 func (m *oauthMock) GetOAuthIdentity(ctx context.Context, in *pb.GetOAuthIdentityReq, _ ...grpc.CallOption) (*pb.GetOAuthIdentityResp, error) {
 	return &pb.GetOAuthIdentityResp{Identity: m.identity}, nil
@@ -107,7 +120,7 @@ func TestOAuthState_SignVerifyRoundTrip(t *testing.T) {
 
 func TestOAuthAuthorizeURL_BuildsRedirect(t *testing.T) {
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Name: "google", ClientId: "cid", ClientSecret: "csec",
+		Name: "google", ClientId: "cid", Secret: "csec",
 		AuthorizeUrl: "https://idp.example/authorize", Scopes: "openid email", Enabled: true,
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, OAuthRedirectBase: "https://app.example"}
@@ -126,6 +139,41 @@ func TestOAuthAuthorizeURL_BuildsRedirect(t *testing.T) {
 	} {
 		if !strings.Contains(u, want) {
 			t.Errorf("authorize url missing %q:\n%s", want, u)
+		}
+	}
+}
+
+// The client secret lives in the encrypted `secret`, where the admin writes.
+// The legacy plaintext column is read only while `secret` is empty, and moved
+// (conditioned on still holding what was read); beside a set `secret` it is
+// ignored and cleared — letting it win would undo a rotation an operator made
+// in the admin before the provider's first sign-in.
+func TestOAuthProvider_SecretFromEncryptedColumnOrMovedFromLegacy(t *testing.T) {
+	for _, c := range []struct {
+		name           string
+		secret, legacy string
+		want           string
+		moves, clears  bool
+	}{
+		{"encrypted only", "enc", "", "enc", false, false},
+		{"legacy only", "", "plain", "plain", true, false},
+		{"encrypted wins, plaintext copy cleared", "rotated", "stale", "rotated", false, true},
+	} {
+		m := &oauthMock{provider: &pb.OAuthProvider{Id: "p1", Name: "google", Secret: c.secret, ClientSecret: c.legacy, Enabled: true}}
+		h := &AuthServiceHandler{Query: m, Mutation: m}
+		p, err := h.loadEnabledProvider(context.Background(), "google")
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if p.GetSecret() != c.want {
+			t.Errorf("%s: secret = %q, want %q", c.name, p.GetSecret(), c.want)
+		}
+		if moved := m.moved != nil; moved != c.moves ||
+			(moved && (m.moved.GetId() != "p1" || m.moved.GetSecret() != c.want || m.moved.GetLegacy() != c.legacy)) {
+			t.Errorf("%s: move = %+v, want moves=%v", c.name, m.moved, c.moves)
+		}
+		if cleared := m.cleared == "p1"; cleared != c.clears {
+			t.Errorf("%s: cleared = %v, want %v", c.name, cleared, c.clears)
 		}
 	}
 }
@@ -160,7 +208,7 @@ func TestOAuthAuthorizeURL_EmptyClientSecret_Rejected(t *testing.T) {
 func TestOAuthAuthorizeURL_RejectsUnsafeRedirect(t *testing.T) {
 	for _, bad := range []string{"https://evil.com", "//evil.com", "http://x", "javascript:alert(1)", "/\\evil.com", "\\\\evil"} {
 		m := &oauthMock{provider: &pb.OAuthProvider{
-			Name: "google", ClientId: "cid", ClientSecret: "csec",
+			Name: "google", ClientId: "cid", Secret: "csec",
 			AuthorizeUrl: "https://idp.example/authorize", Enabled: true,
 		}}
 		h := &AuthServiceHandler{Query: m, Mutation: m, OAuthRedirectBase: "https://app.example"}
@@ -170,7 +218,7 @@ func TestOAuthAuthorizeURL_RejectsUnsafeRedirect(t *testing.T) {
 	}
 	// A site-relative path is still accepted.
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Name: "google", ClientId: "cid", ClientSecret: "csec",
+		Name: "google", ClientId: "cid", Secret: "csec",
 		AuthorizeUrl: "https://idp.example/authorize", Enabled: true,
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, OAuthRedirectBase: "https://app.example"}
@@ -185,7 +233,7 @@ func TestOAuthAuthorizeURL_RejectsUnsafeRedirect(t *testing.T) {
 func TestOAuthCallback_DropsUnsafeRedirect(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"sub": "ext-9", "email": "eve@idp.com"}, "")
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Id: "p9", Name: "google", ClientId: "cid", ClientSecret: "csec",
+		Id: "p9", Name: "google", ClientId: "cid", Secret: "csec",
 		TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
@@ -240,7 +288,7 @@ func fakeIdP(t *testing.T, userinfo map[string]any, idToken string) *httptest.Se
 func TestOAuthCallback_UserinfoPath_CreatesUser(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"sub": "ext-1", "email": "alice@idp.com"}, "")
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Id: "p1", Name: "google", ClientId: "cid", ClientSecret: "csec",
+		Id: "p1", Name: "google", ClientId: "cid", Secret: "csec",
 		TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
@@ -279,7 +327,7 @@ func TestOAuthCallback_UserinfoPath_CreatesUser(t *testing.T) {
 func TestOAuthCallback_AProviderVerifiedAddressIsRecorded(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"sub": "ext-2", "email": "bob@idp.com", "email_verified": true}, "")
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Id: "p1", Name: "google", ClientId: "cid", ClientSecret: "csec",
+		Id: "p1", Name: "google", ClientId: "cid", Secret: "csec",
 		TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
@@ -298,7 +346,7 @@ func TestOAuthCallback_IDTokenPath(t *testing.T) {
 	idToken := "h." + base64.RawURLEncoding.EncodeToString(claims) + ".sig"
 	srv := fakeIdP(t, nil, idToken)
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Id: "p1", Name: "okta", ClientId: "cid", ClientSecret: "csec",
+		Id: "p1", Name: "okta", ClientId: "cid", Secret: "csec",
 		TokenUrl: srv.URL + "/token", UserinfoUrl: "", Enabled: true, // no userinfo → decode id_token
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
@@ -319,7 +367,7 @@ func TestOAuthCallback_IDTokenPath(t *testing.T) {
 func TestOAuthCallback_GitHubNumericId(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"id": float64(987654), "email": "dev@gh.com"}, "")
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Id: "p1", Name: "github", ClientId: "cid", ClientSecret: "csec",
+		Id: "p1", Name: "github", ClientId: "cid", Secret: "csec",
 		TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo",
 		SubjectPath: "id", EmailPath: "email", Enabled: true,
 	}}
@@ -337,7 +385,7 @@ func TestOAuthCallback_ExistingIdentity_ReusesUser(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"sub": "ext-1", "email": "alice@idp.com"}, "")
 	m := &oauthMock{
 		provider: &pb.OAuthProvider{
-			Id: "p1", Name: "google", ClientSecret: "csec",
+			Id: "p1", Name: "google", Secret: "csec",
 			TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 		},
 		identity: &pb.OAuthIdentity{Id: "id-existing", UserId: "u-existing"},
@@ -359,7 +407,7 @@ func TestOAuthCallback_ExistingIdentity_ReusesUser(t *testing.T) {
 func TestOAuthCallback_BadState_Unauthenticated(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"sub": "x", "email": "y@z.c"}, "")
 	m := &oauthMock{provider: &pb.OAuthProvider{
-		Name: "google", ClientSecret: "csec", TokenUrl: srv.URL + "/token",
+		Name: "google", Secret: "csec", TokenUrl: srv.URL + "/token",
 		UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
@@ -378,7 +426,7 @@ func TestOAuthCallback_UnverifiedEmail_RefusesLinkToExisting(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"sub": "attacker-ext", "email": "victim@corp.com"}, "")
 	m := &oauthMock{
 		provider: &pb.OAuthProvider{
-			Id: "p1", Name: "google", ClientId: "cid", ClientSecret: "csec",
+			Id: "p1", Name: "google", ClientId: "cid", Secret: "csec",
 			TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 		},
 		userByEmail: &pb.User{Id: "victim-123", Email: "victim@corp.com"}, // pre-existing account
@@ -401,7 +449,7 @@ func TestOAuthCallback_VerifiedEmail_LinksToExisting(t *testing.T) {
 	srv := fakeIdP(t, map[string]any{"sub": "ext-9", "email": "user@corp.com", "email_verified": true}, "")
 	m := &oauthMock{
 		provider: &pb.OAuthProvider{
-			Id: "p1", Name: "google", ClientId: "cid", ClientSecret: "csec",
+			Id: "p1", Name: "google", ClientId: "cid", Secret: "csec",
 			TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 		},
 		// EmailVerifiedAt set: since T3-7 pass #14 (B14-2) the auto-link
