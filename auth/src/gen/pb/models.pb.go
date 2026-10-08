@@ -783,10 +783,17 @@ func (x *Device) GetTrustTokenHash() string {
 // OAuthProvider — an admin-configured OAuth2/OIDC server, behind `oauth`.
 // Generic by design: provider differences (GitHub isn't OIDC) are captured
 // by userinfo_url + the *_path mapping columns, never per-provider code.
-// client_secret is SECRET-typed: an opaque secret stored exactly as issued,
-// masked in the admin, never hashed. oauth.go signs the OAuth state with it as
-// an HMAC key and posts it to the token endpoint verbatim, so the stored bytes
-// have to BE the secret.
+// `secret` is the client secret, CRYPTED_SECRET: encrypted at rest with the
+// project's field keyring (W17_FIELD_KEYS), decrypted on read, masked in the
+// admin. oauth.go signs the OAuth state with it as an HMAC key and posts it to
+// the token endpoint verbatim, so it is read back, never hashed.
+//
+// `client_secret` is where rc.19 and earlier stored it, in the clear (SECRET).
+// A value there still WINS — it is what an operator or a fixture just wrote —
+// and the first sign-in through the provider moves it into `secret`
+// (MoveOAuthProviderSecret). A fixture cannot seed `secret` (the console holds
+// no key), so seeding the legacy column is how a dev sandbox gets one until it
+// is removed in a later release.
 //
 // It was PASSWORD until 2026-09-09 — the annotation for a hash you VERIFY
 // against, whose rules all follow from that. The one that bit: fixtures refuse
@@ -801,7 +808,7 @@ type OAuthProvider struct {
 	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // url key: /auth/oauth/{name}/...
 	DisplayName  string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	ClientId     string                 `protobuf:"bytes,4,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	ClientSecret string                 `protobuf:"bytes,5,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	ClientSecret string                 `protobuf:"bytes,5,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"` // legacy, plaintext — moved into `secret` on use
 	AuthorizeUrl string                 `protobuf:"bytes,6,opt,name=authorize_url,json=authorizeUrl,proto3" json:"authorize_url,omitempty"`
 	TokenUrl     string                 `protobuf:"bytes,7,opt,name=token_url,json=tokenUrl,proto3" json:"token_url,omitempty"`
 	UserinfoUrl  string                 `protobuf:"bytes,8,opt,name=userinfo_url,json=userinfoUrl,proto3" json:"userinfo_url,omitempty"` // empty → OIDC id_token claims
@@ -817,6 +824,7 @@ type OAuthProvider struct {
 	// can scope providers per tenant. Field-gated `tenant_scope` (drops with
 	// the feature). No DB-level FK (app-enforced, like the rest).
 	TenantId      string `protobuf:"bytes,14,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Secret        string `protobuf:"bytes,15,opt,name=secret,proto3" json:"secret,omitempty"` // the client secret
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -949,6 +957,13 @@ func (x *OAuthProvider) GetTenantId() string {
 	return ""
 }
 
+func (x *OAuthProvider) GetSecret() string {
+	if x != nil {
+		return x.Secret
+	}
+	return ""
+}
+
 // OAuthIdentity — links a local User to an external IdP subject, behind
 // `oauth`. (provider_id, external_id) is unique; a user may link several
 // providers. Same no-DB-FK caveat as the rest of the plugin.
@@ -1037,20 +1052,27 @@ func (x *OAuthIdentity) GetCreatedAt() *timestamppb.Timestamp {
 }
 
 // UserTotpSecret — one per user (the built-in authenticator), behind
-// `two_factor`. `secret` is the base32 TOTP seed stored ENCRYPTED at rest
-// (lib/secretbox AES-256-GCM, keyed by two_factor_secret_key); RFC 6238
-// needs the raw seed to verify, so unlike a password it can't be one-way
-// hashed. confirmed_at NULL = enrolled-but-unconfirmed (the first code
-// hasn't been verified yet); a user "has an authenticator" iff
-// confirmed_at IS NOT NULL. Unique on user_id (one authenticator per
-// user). Same no-DB-FK caveat as the rest of the plugin.
+// `two_factor`. `seed` is the base32 TOTP seed, CRYPTED_SECRET: encrypted at
+// rest with the project's field keyring (W17_FIELD_KEYS) and decrypted on
+// read; RFC 6238 needs the raw seed to verify, so unlike a password it can't
+// be one-way hashed. confirmed_at NULL = enrolled-but-unconfirmed (the first
+// code hasn't been verified yet); a user "has an authenticator" iff
+// confirmed_at IS NOT NULL. Unique on user_id (one authenticator per user).
+// Same no-DB-FK caveat as the rest of the plugin.
+//
+// `secret` is the seed as rc.19 and earlier stored it — encrypted by the
+// plugin's own lib/secretbox under the two_factor_secret_key knob. Nothing
+// writes it any more: a row that still has it is read through the old key
+// once and moved into `seed` (MoveTotpSeed), so the column empties itself as
+// people sign in. It, the knob and lib/secretbox go in a later release.
 type UserTotpSecret struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Secret        string                 `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"` // base32 seed, secretbox-encrypted
+	Secret        string                 `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"` // legacy: secretbox-encrypted seed (two_factor_secret_key)
 	ConfirmedAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Seed          string                 `protobuf:"bytes,6,opt,name=seed,proto3" json:"seed,omitempty"` // base32 seed
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1118,6 +1140,13 @@ func (x *UserTotpSecret) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *UserTotpSecret) GetSeed() string {
+	if x != nil {
+		return x.Seed
+	}
+	return ""
 }
 
 // MfaChallenge — a pending second-factor verification, behind
@@ -2773,14 +2802,14 @@ const file_types_models_proto_rawDesc = "" +
 	"\auser_id\n" +
 	"\f\n" +
 	"\n" +
-	"identifier\x10\x01\xfa\xf4\x18\adevices\"\x86\x05\n" +
+	"identifier\x10\x01\xfa\xf4\x18\adevices\"\xaa\x05\n" +
 	"\rOAuthProvider\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12\x1e\n" +
 	"\x04name\x18\x02 \x01(\tB\n" +
 	"\xca\xf3\x18\x06\b\x068\x01@@R\x04name\x12.\n" +
 	"\fdisplay_name\x18\x03 \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\x80\x01R\vdisplayName\x12&\n" +
-	"\tclient_id\x18\x04 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\bclientId\x12+\n" +
-	"\rclient_secret\x18\x05 \x01(\tB\x06\xca\xf3\x18\x02\bCR\fclientSecret\x12+\n" +
+	"\tclient_id\x18\x04 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\bclientId\x12-\n" +
+	"\rclient_secret\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\bC(\x01R\fclientSecret\x12+\n" +
 	"\rauthorize_url\x18\x06 \x01(\tB\x06\xca\xf3\x18\x02\b\x05R\fauthorizeUrl\x12#\n" +
 	"\ttoken_url\x18\a \x01(\tB\x06\xca\xf3\x18\x02\b\x05R\btokenUrl\x12+\n" +
 	"\fuserinfo_url\x18\b \x01(\tB\b\xca\xf3\x18\x04\b\x050\x01R\vuserinfoUrl\x12#\n" +
@@ -2792,7 +2821,8 @@ const file_types_models_proto_rawDesc = "" +
 	"\aenabled\x18\f \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1eR\aenabled\x12F\n" +
 	"\n" +
 	"created_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x129\n" +
-	"\ttenant_id\x18\x0e \x01(\tB\x1c\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01\x92\xf5\x18\ftenant_scopeR\btenantId:\r\xc2\xf3\x18\x00\xfa\xf4\x18\x05oauth\"\xca\x02\n" +
+	"\ttenant_id\x18\x0e \x01(\tB\x1c\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01\x92\xf5\x18\ftenant_scopeR\btenantId\x12 \n" +
+	"\x06secret\x18\x0f \x01(\tB\b\xca\xf3\x18\x04\bD(\x01R\x06secret:\r\xc2\xf3\x18\x00\xfa\xf4\x18\x05oauth\"\xca\x02\n" +
 	"\rOAuthIdentity\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12-\n" +
@@ -2806,14 +2836,15 @@ const file_types_models_proto_rawDesc = "" +
 	"\r\n" +
 	"\vprovider_id\n" +
 	"\r\n" +
-	"\vexternal_id\x10\x01\xfa\xf4\x18\x05oauth\"\xab\x02\n" +
+	"\vexternal_id\x10\x01\xfa\xf4\x18\x05oauth\"\xcb\x02\n" +
 	"\x0eUserTotpSecret\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
-	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12!\n" +
-	"\x06secret\x18\x03 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\x80\x04R\x06secret\x12G\n" +
+	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12#\n" +
+	"\x06secret\x18\x03 \x01(\tB\v\xca\xf3\x18\a\b\x01(\x01@\x80\x04R\x06secret\x12G\n" +
 	"\fconfirmed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\vconfirmedAt\x12F\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:!\xc2\xf3\x18\x0f\x12\r\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12\x1c\n" +
+	"\x04seed\x18\x06 \x01(\tB\b\xca\xf3\x18\x04\bD(\x01R\x04seed:!\xc2\xf3\x18\x0f\x12\r\n" +
 	"\t\n" +
 	"\auser_id\x10\x01\xfa\xf4\x18\n" +
 	"two_factor\"\xc6\x02\n" +

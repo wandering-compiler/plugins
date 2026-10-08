@@ -2830,8 +2830,11 @@ func (x *GetProviderByNameReq) GetName() string {
 }
 
 type GetProviderByNameResp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      *OAuthProvider         `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Provider *OAuthProvider         `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	// The decrypted client secret (OAuthProvider.secret) — top-level because an
+	// encrypted column decrypts only into a single-segment target.
+	Secret        string `protobuf:"bytes,2,opt,name=secret,proto3" json:"secret,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2871,6 +2874,13 @@ func (x *GetProviderByNameResp) GetProvider() *OAuthProvider {
 		return x.Provider
 	}
 	return nil
+}
+
+func (x *GetProviderByNameResp) GetSecret() string {
+	if x != nil {
+		return x.Secret
+	}
+	return ""
 }
 
 type GetOAuthIdentityReq struct {
@@ -3107,8 +3117,11 @@ func (x *GetTotpSecretReq) GetUserId() string {
 }
 
 type GetTotpSecretResp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Secret        *UserTotpSecret        `protobuf:"bytes,1,opt,name=secret,proto3" json:"secret,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Secret *UserTotpSecret        `protobuf:"bytes,1,opt,name=secret,proto3" json:"secret,omitempty"`
+	// The decrypted seed — top-level because an encrypted column decrypts only
+	// into a single-segment target (`secret.seed` would carry ciphertext).
+	Seed          string `protobuf:"bytes,2,opt,name=seed,proto3" json:"seed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3148,6 +3161,13 @@ func (x *GetTotpSecretResp) GetSecret() *UserTotpSecret {
 		return x.Secret
 	}
 	return nil
+}
+
+func (x *GetTotpSecretResp) GetSeed() string {
+	if x != nil {
+		return x.Seed
+	}
+	return ""
 }
 
 type GetMfaChallengeReq struct {
@@ -5925,9 +5945,10 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x13ListAuthClientsResp\x126\n" +
 	"\aclients\x18\x01 \x03(\v2\x1c.w17.contrib.auth.AuthClientR\aclients:\r\xfa\xf4\x18\tcli_login\"5\n" +
 	"\x14GetProviderByNameReq\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name:\t\xfa\xf4\x18\x05oauth\"_\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name:\t\xfa\xf4\x18\x05oauth\"w\n" +
 	"\x15GetProviderByNameResp\x12;\n" +
-	"\bprovider\x18\x01 \x01(\v2\x1f.w17.contrib.auth.OAuthProviderR\bprovider:\t\xfa\xf4\x18\x05oauth\"b\n" +
+	"\bprovider\x18\x01 \x01(\v2\x1f.w17.contrib.auth.OAuthProviderR\bprovider\x12\x16\n" +
+	"\x06secret\x18\x02 \x01(\tR\x06secret:\t\xfa\xf4\x18\x05oauth\"b\n" +
 	"\x13GetOAuthIdentityReq\x12\x1f\n" +
 	"\vprovider_id\x18\x01 \x01(\tR\n" +
 	"providerId\x12\x1f\n" +
@@ -5941,9 +5962,10 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\";\n" +
 	"\x10GetTotpSecretReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId:\x0e\xfa\xf4\x18\n" +
-	"two_factor\"]\n" +
+	"two_factor\"q\n" +
 	"\x11GetTotpSecretResp\x128\n" +
-	"\x06secret\x18\x01 \x01(\v2 .w17.contrib.auth.UserTotpSecretR\x06secret:\x0e\xfa\xf4\x18\n" +
+	"\x06secret\x18\x01 \x01(\v2 .w17.contrib.auth.UserTotpSecretR\x06secret\x12\x12\n" +
+	"\x04seed\x18\x02 \x01(\tR\x04seed:\x0e\xfa\xf4\x18\n" +
 	"two_factor\"G\n" +
 	"\x12GetMfaChallengeReq\x12!\n" +
 	"\fchallenge_id\x18\x01 \x01(\tR\vchallengeId:\x0e\xfa\xf4\x18\n" +
@@ -6101,7 +6123,7 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\"n\n" +
 	"\x1eListPendingInvitesForEmailResp\x12<\n" +
 	"\ainvites\x18\x01 \x03(\v2\".w17.contrib.auth.PendingInviteRowR\ainvites:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xbd\xa2\x01\n" +
+	"org_invite2\xef\xa2\x01\n" +
 	"\tAuthQuery\x12\xec\x03\n" +
 	"\x0eGetUserByEmail\x12#.w17.contrib.auth.GetUserByEmailReq\x1a$.w17.contrib.auth.GetUserByEmailResp\"\x8e\x03\xf2\xf3\x18\x89\x03B\x86\x03\n" +
 	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\xba\x03\n" +
@@ -6167,15 +6189,15 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x0fListAuthClients\x12$.w17.contrib.auth.ListAuthClientsReq\x1a%.w17.contrib.auth.ListAuthClientsResp\"\x8d\x02\xf2\xf3\x18\xfb\x01B\xf8\x01\n" +
 	"\x04main\x12\xef\x01SELECT c.id AS id,        c.client_id AS client_id,        c.name AS name,        c.redirect_uri AS redirect_uri,        c.enabled AS enabled,        c.created_at AS created_at FROM @module.AuthClient c ORDER BY c.client_id, c.redirect_uri\x8a\xf5\x18\tcli_login\x12\xab\x02\n" +
 	"\x13GetAuthClientSecret\x12(.w17.contrib.auth.GetAuthClientSecretReq\x1a).w17.contrib.auth.GetAuthClientSecretResp\"\xbe\x01\xf2\xf3\x18\xac\x01B\xa9\x01\n" +
-	"\x04main\x12\xa0\x01SELECT c.client_secret AS client_secret,        c.enabled AS enabled FROM @module.AuthClient c WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri\x8a\xf5\x18\tcli_login\x12\xd7\x05\n" +
-	"\x11GetProviderByName\x12&.w17.contrib.auth.GetProviderByNameReq\x1a'.w17.contrib.auth.GetProviderByNameResp\"\xf0\x04\xf2\xf3\x18\xe2\x04B\xdf\x04\n" +
-	"\x04main\x12\xd6\x04SELECT p.id AS provider.id,        p.name AS provider.name,        p.display_name AS provider.display_name,        p.client_id AS provider.client_id,        p.client_secret AS provider.client_secret,        p.authorize_url AS provider.authorize_url,        p.token_url AS provider.token_url,        p.userinfo_url AS provider.userinfo_url,        p.scopes AS provider.scopes,        p.subject_path AS provider.subject_path,        p.email_path AS provider.email_path,        p.enabled AS provider.enabled,        p.created_at AS provider.created_at FROM @module.OAuthProvider p WHERE p.name = :name\x8a\xf5\x18\x05oauth\x12\xc9\x03\n" +
+	"\x04main\x12\xa0\x01SELECT c.client_secret AS client_secret,        c.enabled AS enabled FROM @module.AuthClient c WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri\x8a\xf5\x18\tcli_login\x12\xf2\x05\n" +
+	"\x11GetProviderByName\x12&.w17.contrib.auth.GetProviderByNameReq\x1a'.w17.contrib.auth.GetProviderByNameResp\"\x8b\x05\xf2\xf3\x18\xfd\x04B\xfa\x04\n" +
+	"\x04main\x12\xf1\x04SELECT p.id AS provider.id,        p.name AS provider.name,        p.display_name AS provider.display_name,        p.client_id AS provider.client_id,        p.client_secret AS provider.client_secret,        p.secret AS secret,        p.authorize_url AS provider.authorize_url,        p.token_url AS provider.token_url,        p.userinfo_url AS provider.userinfo_url,        p.scopes AS provider.scopes,        p.subject_path AS provider.subject_path,        p.email_path AS provider.email_path,        p.enabled AS provider.enabled,        p.created_at AS provider.created_at FROM @module.OAuthProvider p WHERE p.name = :name\x8a\xf5\x18\x05oauth\x12\xc9\x03\n" +
 	"\x10GetOAuthIdentity\x12%.w17.contrib.auth.GetOAuthIdentityReq\x1a&.w17.contrib.auth.GetOAuthIdentityResp\"\xe5\x02\xf2\xf3\x18\xd7\x02B\xd4\x02\n" +
 	"\x04main\x12\xcb\x02SELECT i.id AS identity.id,        i.user_id AS identity.user_id,        i.provider_id AS identity.provider_id,        i.external_id AS identity.external_id,        i.email AS identity.email,        i.created_at AS identity.created_at FROM @module.OAuthIdentity i WHERE i.provider_id = :provider_id AND i.external_id = :external_id\x8a\xf5\x18\x05oauth\x12\x9f\x04\n" +
 	"\vGetUserById\x12 .w17.contrib.auth.GetUserByIdReq\x1a!.w17.contrib.auth.GetUserByIdResp\"\xca\x03\xf2\xf3\x18\xc5\x03B\xc2\x03\n" +
-	"\x04main\x12\xb9\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(tenant_scope) u.tenant_id AS user.tenant_id,        u.created_at AS user.created_at FROM @module.User u WHERE u.id = :user_id\x12\xe9\x02\n" +
-	"\rGetTotpSecret\x12\".w17.contrib.auth.GetTotpSecretReq\x1a#.w17.contrib.auth.GetTotpSecretResp\"\x8e\x02\xf2\xf3\x18\xfb\x01B\xf8\x01\n" +
-	"\x04main\x12\xef\x01SELECT s.id AS secret.id,        s.user_id AS secret.user_id,        s.secret AS secret.secret,        s.confirmed_at AS secret.confirmed_at,        s.created_at AS secret.created_at FROM @module.UserTotpSecret s WHERE s.user_id = :user_id\x8a\xf5\x18\n" +
+	"\x04main\x12\xb9\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(tenant_scope) u.tenant_id AS user.tenant_id,        u.created_at AS user.created_at FROM @module.User u WHERE u.id = :user_id\x12\x80\x03\n" +
+	"\rGetTotpSecret\x12\".w17.contrib.auth.GetTotpSecretReq\x1a#.w17.contrib.auth.GetTotpSecretResp\"\xa5\x02\xf2\xf3\x18\x92\x02B\x8f\x02\n" +
+	"\x04main\x12\x86\x02SELECT s.id AS secret.id,        s.user_id AS secret.user_id,        s.secret AS secret.secret,        s.seed AS seed,        s.confirmed_at AS secret.confirmed_at,        s.created_at AS secret.created_at FROM @module.UserTotpSecret s WHERE s.user_id = :user_id\x8a\xf5\x18\n" +
 	"two_factor\x12\xa9\x03\n" +
 	"\x0fGetMfaChallenge\x12$.w17.contrib.auth.GetMfaChallengeReq\x1a%.w17.contrib.auth.GetMfaChallengeResp\"\xc8\x02\xf2\xf3\x18\xb5\x02B\xb2\x02\n" +
 	"\x04main\x12\xa9\x02SELECT c.id AS challenge.id,        c.user_id AS challenge.user_id,        c.code_hash AS challenge.code_hash,        c.consumed_at AS challenge.consumed_at,        c.created_at AS challenge.created_at,        c.attempts AS challenge.attempts FROM @module.MfaChallenge c WHERE c.id = :challenge_id\x8a\xf5\x18\n" +

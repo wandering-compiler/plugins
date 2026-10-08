@@ -83,7 +83,7 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 	if !isSafeRelativeRedirect(req.GetRedirectAfter()) {
 		return nil, Unauthenticated(errOAuthUnsafeRedirect)
 	}
-	state, err := signOAuthState(p.GetClientSecret(), p.GetName(), req.GetRedirectAfter())
+	state, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -113,7 +113,7 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	redirectAfter, err := verifyOAuthState(p.GetClientSecret(), p.GetName(), req.GetState())
+	redirectAfter, err := verifyOAuthState(p.GetSecret(), p.GetName(), req.GetState())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -167,10 +167,18 @@ func (h *AuthServiceHandler) loadEnabledProvider(ctx context.Context, name strin
 	if p == nil || !p.GetEnabled() {
 		return nil, errOAuthProviderDisabled
 	}
-	// Q36-auth-2 — refuse a provider with no client_secret: it would sign
+	p.Secret = resp.GetSecret() // decrypted beside the row, not inside it
+	// A client secret still in the legacy plaintext column wins: it is what
+	// an operator or a fixture wrote last. It moves into the encrypted
+	// `secret` here; a failed move costs nothing but a retry next time.
+	if legacy := p.GetClientSecret(); legacy != "" {
+		p.Secret = legacy
+		_, _ = h.Mutation.MoveOAuthProviderSecret(ctx, &pb.MoveOAuthProviderSecretReq{Id: p.GetId(), Secret: legacy})
+	}
+	// Q36-auth-2 — refuse a provider with no client secret: it would sign
 	// the state CSRF token with an empty HMAC key (forgeable), and the
 	// token exchange (which also needs the secret) would fail anyway.
-	if p.GetClientSecret() == "" {
+	if p.GetSecret() == "" {
 		return nil, errOAuthProviderMisconfigured
 	}
 	return p, nil
@@ -211,7 +219,7 @@ func (h *AuthServiceHandler) exchangeCode(ctx context.Context, p *pb.OAuthProvid
 	form.Set("code", code)
 	form.Set("redirect_uri", h.oauthRedirectURI(ctx, p.GetName()))
 	form.Set("client_id", p.GetClientId())
-	form.Set("client_secret", p.GetClientSecret())
+	form.Set("client_secret", p.GetSecret())
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.GetTokenUrl(), strings.NewReader(form.Encode()))
 	if err != nil {

@@ -1,6 +1,6 @@
 name: auth
-version: 0.1.0-rc.19
-requires_w17: ">=1.9"
+version: 0.1.0-rc.20
+requires_w17: ">=1.10"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -61,7 +61,7 @@ env:
   - name: two_factor_secret_key
     type: string
     default: ""
-    description: "base64-encoded 32-byte key encrypting TOTP seeds at rest (AES-256-GCM). REQUIRED to use the built-in TOTP authenticator — EnrollTotp/ConfirmTotp/VerifyMfa error clearly when unset, so a deployment never ships plaintext seeds. The event/fallback path (two_factor_totp=false) needs no key."
+    description: "LEGACY — only for authenticators enrolled by rc.19 or earlier. TOTP seeds are now a CRYPTED_SECRET column, encrypted with the project's field keyring (W17_FIELD_KEYS — the one key for every encrypted column, `w17ctl secrets field-key`); new deployments leave this empty. An existing deployment keeps its old value until every old seed has moved: each moves into the new column the first time it is used. Will be removed with the old column in a later release."
   - name: oauth_redirect_base
     type: string
     default: ""

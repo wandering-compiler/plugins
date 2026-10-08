@@ -364,9 +364,10 @@ type AuthQueryClient interface {
 	// authenticated principal, and must not look that principal up by an
 	// address the request supplied). Ungated — see the messages above.
 	GetUserById(ctx context.Context, in *GetUserByIdReq, opts ...grpc.CallOption) (*GetUserByIdResp, error)
-	// GetTotpSecret — the user's TOTP row (encrypted secret + confirmed_at).
+	// GetTotpSecret — the user's TOTP row (seed — or the legacy secretbox
+	// `secret` seedOf moves — + confirmed_at).
 	// NotFound = not enrolled. The gate reads confirmed_at for totp_enrolled;
-	// VerifyMfa / ConfirmTotp decrypt + verify against `secret`. Gated
+	// VerifyMfa / ConfirmTotp verify against the seed. Gated
 	// two_factor.
 	GetTotpSecret(ctx context.Context, in *GetTotpSecretReq, opts ...grpc.CallOption) (*GetTotpSecretResp, error)
 	// GetMfaChallenge — load a pending challenge by id for VerifyMfa
@@ -1384,9 +1385,10 @@ type AuthQueryServer interface {
 	// authenticated principal, and must not look that principal up by an
 	// address the request supplied). Ungated — see the messages above.
 	GetUserById(context.Context, *GetUserByIdReq) (*GetUserByIdResp, error)
-	// GetTotpSecret — the user's TOTP row (encrypted secret + confirmed_at).
+	// GetTotpSecret — the user's TOTP row (seed — or the legacy secretbox
+	// `secret` seedOf moves — + confirmed_at).
 	// NotFound = not enrolled. The gate reads confirmed_at for totp_enrolled;
-	// VerifyMfa / ConfirmTotp decrypt + verify against `secret`. Gated
+	// VerifyMfa / ConfirmTotp verify against the seed. Gated
 	// two_factor.
 	GetTotpSecret(context.Context, *GetTotpSecretReq) (*GetTotpSecretResp, error)
 	// GetMfaChallenge — load a pending challenge by id for VerifyMfa

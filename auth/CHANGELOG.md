@@ -1,5 +1,31 @@
 # auth — changelog
 
+## 0.1.0-rc.20
+
+Needs w17 platform 1.10 (`requires_w17: ">=1.10"`): a project with a `CRYPTED_SECRET` column may now use `RETURNING` on mutations, as long as no encrypted column is returned.
+
+### TOTP seeds and OAuth client secrets are encrypted with the project's field key
+
+Two stored secrets are read back as plain values and are now `CRYPTED_SECRET` columns, encrypted with the project's field keyring (`W17_FIELD_KEYS`):
+
+- `UserTotpSecret.seed` holds the TOTP seed.
+- `OAuthProvider.secret` holds the OAuth client secret.
+
+`W17_FIELD_KEYS` is the one key for every encrypted column of a project: the local stack gets a development key from `.env.defaults`, and a deployment gets its own key from `w17ctl secrets field-key`. Before this release, the TOTP seed was encrypted by the plugin's own cipher under the `two_factor_secret_key` knob, and the client secret was stored in the clear.
+
+Nothing has to be migrated by hand. Existing values move the first time they are used:
+
+- A seed enrolled by rc.19 or earlier is still in `UserTotpSecret.secret`. On its next verification it is decrypted with `two_factor_secret_key` and moved into `seed`. Keep the knob set until every authenticator has moved.
+- A client secret in `OAuthProvider.client_secret` moves into `secret` at the provider's next sign-in. A value written there still wins, because it is what an operator or a fixture wrote last. A fixture cannot seed an encrypted column, so a dev sandbox keeps seeding `client_secret`.
+
+New deployments leave `two_factor_secret_key` empty, and enrolling no longer needs it. A later release removes the knob and both legacy columns.
+
+New storage methods: `AuthMutation.MoveTotpSeed` and `AuthMutation.MoveOAuthProviderSecret`.
+
+`GetTotpSecretResp.seed` and `GetProviderByNameResp.secret` carry the decrypted values. A decrypted value is returned as a top-level field, not inside the row message.
+
+`CreateTotpSecretReq.secret` (field 2) is replaced by `seed`. Hand-written code that called `CreateTotpSecret` now passes the plaintext seed.
+
 ## 0.1.0-rc.19
 
 Needs w17 platform 1.9 (`requires_w17: ">=1.9"`): `DisableUsers` acts on one id set in two statements.

@@ -217,13 +217,14 @@ message CreateOAuthIdentityResp {
 // ── two_factor mutation request/response messages ───────────
 //
 // TOTP enrollment lifecycle + MFA challenge create/consume. All
-// gated `two_factor`. The TOTP `secret` is already secretbox-
-// encrypted by the handler before CreateTotpSecret persists it.
+// gated `two_factor`. The TOTP `seed` is CRYPTED_SECRET: the generated
+// storage layer encrypts it on the way in, the handler hands it plaintext.
 
 message CreateTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string secret  = 2 [(w17.field) = { type: CHAR, max_len: 512 }]; // encrypted seed
+  reserved 2; // `secret`, the secretbox blob — see UserTotpSecret
+  string seed    = 3 [(w17.field) = { type: CRYPTED_SECRET }];
 }
 message CreateTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -235,6 +236,30 @@ message ConfirmTotpSecretReq {
   string user_id = 1 [(w17.field) = { type: UUID }];
 }
 message ConfirmTotpSecretResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
+}
+
+// MoveOAuthProviderSecretReq moves a provider's legacy plaintext
+// client_secret into the encrypted `secret`.
+message MoveOAuthProviderSecretReq {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string id     = 1 [(w17.field) = { type: UUID }];
+  string secret = 2 [(w17.field) = { type: CRYPTED_SECRET }];
+}
+message MoveOAuthProviderSecretResp {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string id = 1;
+}
+
+// MoveTotpSeedReq moves a legacy seed (UserTotpSecret.secret, decrypted by
+// the handler with two_factor_secret_key) into the encrypted `seed`.
+message MoveTotpSeedReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string seed    = 2 [(w17.field) = { type: CRYPTED_SECRET }];
+}
+message MoveTotpSeedResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
 }
@@ -1355,10 +1380,9 @@ service AuthMutation {
         dql:
           "INSERT INTO @module.UserTotpSecret SET "
           "user_id = :user_id, "
-          "secret = :secret "
+          "seed = :seed "
           "RETURNING id AS secret.id, "
           "          user_id AS secret.user_id, "
-          "          secret AS secret.secret, "
           "          confirmed_at AS secret.confirmed_at, "
           "          created_at AS secret.created_at"
       }
@@ -1392,6 +1416,41 @@ service AuthMutation {
       event: "TotpConfirmed"
       payload: {
         fields: [ { key: "user_id", value: "$response.user_id" } ]
+      }
+    };
+  }
+
+  // MoveOAuthProviderSecret — store a legacy plaintext client_secret in
+  // `secret` and clear it. No event: the provider's configuration is the same.
+  rpc MoveOAuthProviderSecret(MoveOAuthProviderSecretReq) returns (MoveOAuthProviderSecretResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OAuthProvider SET "
+          "secret = :secret, "
+          "client_secret = NULL "
+          "WHERE id = :id "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // MoveTotpSeed — store a legacy seed in `seed` and clear `secret`, so the
+  // old key is needed for this row exactly once. No event: nothing about the
+  // user's authenticator changed.
+  rpc MoveTotpSeed(MoveTotpSeedReq) returns (MoveTotpSeedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserTotpSecret SET "
+          "seed = :seed, "
+          "secret = NULL "
+          "WHERE user_id = :user_id "
+          "RETURNING user_id"
       }
     };
   }

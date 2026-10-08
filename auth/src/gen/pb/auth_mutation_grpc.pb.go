@@ -40,6 +40,8 @@ const (
 	AuthMutation_CreateOAuthIdentity_FullMethodName           = "/w17.contrib.auth.AuthMutation/CreateOAuthIdentity"
 	AuthMutation_CreateTotpSecret_FullMethodName              = "/w17.contrib.auth.AuthMutation/CreateTotpSecret"
 	AuthMutation_ConfirmTotpSecret_FullMethodName             = "/w17.contrib.auth.AuthMutation/ConfirmTotpSecret"
+	AuthMutation_MoveOAuthProviderSecret_FullMethodName       = "/w17.contrib.auth.AuthMutation/MoveOAuthProviderSecret"
+	AuthMutation_MoveTotpSeed_FullMethodName                  = "/w17.contrib.auth.AuthMutation/MoveTotpSeed"
 	AuthMutation_DeleteTotpSecret_FullMethodName              = "/w17.contrib.auth.AuthMutation/DeleteTotpSecret"
 	AuthMutation_CreateMfaChallenge_FullMethodName            = "/w17.contrib.auth.AuthMutation/CreateMfaChallenge"
 	AuthMutation_CreatePendingSignUp_FullMethodName           = "/w17.contrib.auth.AuthMutation/CreatePendingSignUp"
@@ -192,6 +194,13 @@ type AuthMutationClient interface {
 	// ConfirmTotpSecret — mark the user's TOTP confirmed (the first code
 	// verified). Now the user "has an authenticator". Emits TotpConfirmed.
 	ConfirmTotpSecret(ctx context.Context, in *ConfirmTotpSecretReq, opts ...grpc.CallOption) (*ConfirmTotpSecretResp, error)
+	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
+	// `secret` and clear it. No event: the provider's configuration is the same.
+	MoveOAuthProviderSecret(ctx context.Context, in *MoveOAuthProviderSecretReq, opts ...grpc.CallOption) (*MoveOAuthProviderSecretResp, error)
+	// MoveTotpSeed — store a legacy seed in `seed` and clear `secret`, so the
+	// old key is needed for this row exactly once. No event: nothing about the
+	// user's authenticator changed.
+	MoveTotpSeed(ctx context.Context, in *MoveTotpSeedReq, opts ...grpc.CallOption) (*MoveTotpSeedResp, error)
 	// DeleteTotpSecret — disable the built-in authenticator. Idempotent.
 	// Emits TotpDisabled.
 	DeleteTotpSecret(ctx context.Context, in *DeleteTotpSecretReq, opts ...grpc.CallOption) (*DeleteTotpSecretResp, error)
@@ -620,6 +629,26 @@ func (c *authMutationClient) ConfirmTotpSecret(ctx context.Context, in *ConfirmT
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ConfirmTotpSecretResp)
 	err := c.cc.Invoke(ctx, AuthMutation_ConfirmTotpSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) MoveOAuthProviderSecret(ctx context.Context, in *MoveOAuthProviderSecretReq, opts ...grpc.CallOption) (*MoveOAuthProviderSecretResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MoveOAuthProviderSecretResp)
+	err := c.cc.Invoke(ctx, AuthMutation_MoveOAuthProviderSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) MoveTotpSeed(ctx context.Context, in *MoveTotpSeedReq, opts ...grpc.CallOption) (*MoveTotpSeedResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MoveTotpSeedResp)
+	err := c.cc.Invoke(ctx, AuthMutation_MoveTotpSeed_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1280,6 +1309,13 @@ type AuthMutationServer interface {
 	// ConfirmTotpSecret — mark the user's TOTP confirmed (the first code
 	// verified). Now the user "has an authenticator". Emits TotpConfirmed.
 	ConfirmTotpSecret(context.Context, *ConfirmTotpSecretReq) (*ConfirmTotpSecretResp, error)
+	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
+	// `secret` and clear it. No event: the provider's configuration is the same.
+	MoveOAuthProviderSecret(context.Context, *MoveOAuthProviderSecretReq) (*MoveOAuthProviderSecretResp, error)
+	// MoveTotpSeed — store a legacy seed in `seed` and clear `secret`, so the
+	// old key is needed for this row exactly once. No event: nothing about the
+	// user's authenticator changed.
+	MoveTotpSeed(context.Context, *MoveTotpSeedReq) (*MoveTotpSeedResp, error)
 	// DeleteTotpSecret — disable the built-in authenticator. Idempotent.
 	// Emits TotpDisabled.
 	DeleteTotpSecret(context.Context, *DeleteTotpSecretReq) (*DeleteTotpSecretResp, error)
@@ -1628,6 +1664,12 @@ func (UnimplementedAuthMutationServer) CreateTotpSecret(context.Context, *Create
 }
 func (UnimplementedAuthMutationServer) ConfirmTotpSecret(context.Context, *ConfirmTotpSecretReq) (*ConfirmTotpSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfirmTotpSecret not implemented")
+}
+func (UnimplementedAuthMutationServer) MoveOAuthProviderSecret(context.Context, *MoveOAuthProviderSecretReq) (*MoveOAuthProviderSecretResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method MoveOAuthProviderSecret not implemented")
+}
+func (UnimplementedAuthMutationServer) MoveTotpSeed(context.Context, *MoveTotpSeedReq) (*MoveTotpSeedResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method MoveTotpSeed not implemented")
 }
 func (UnimplementedAuthMutationServer) DeleteTotpSecret(context.Context, *DeleteTotpSecretReq) (*DeleteTotpSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteTotpSecret not implemented")
@@ -2029,6 +2071,42 @@ func _AuthMutation_ConfirmTotpSecret_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthMutationServer).ConfirmTotpSecret(ctx, req.(*ConfirmTotpSecretReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_MoveOAuthProviderSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MoveOAuthProviderSecretReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).MoveOAuthProviderSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_MoveOAuthProviderSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).MoveOAuthProviderSecret(ctx, req.(*MoveOAuthProviderSecretReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_MoveTotpSeed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MoveTotpSeedReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).MoveTotpSeed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_MoveTotpSeed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).MoveTotpSeed(ctx, req.(*MoveTotpSeedReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3095,6 +3173,14 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ConfirmTotpSecret",
 			Handler:    _AuthMutation_ConfirmTotpSecret_Handler,
+		},
+		{
+			MethodName: "MoveOAuthProviderSecret",
+			Handler:    _AuthMutation_MoveOAuthProviderSecret_Handler,
+		},
+		{
+			MethodName: "MoveTotpSeed",
+			Handler:    _AuthMutation_MoveTotpSeed_Handler,
 		},
 		{
 			MethodName: "DeleteTotpSecret",

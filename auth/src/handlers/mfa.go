@@ -77,34 +77,53 @@ func init() {
 	signInMfaGate = mfaSignInGate
 }
 
-// totpCipher builds the at-rest secret cipher from the configured key.
-// Returns secretbox.ErrNoKey (clear "not configured") when unset — TOTP
-// enroll/verify surface this so a deployment never silently ships
-// plaintext seeds.
-func (h *AuthServiceHandler) totpCipher() (*secretbox.Cipher, error) {
-	return secretbox.NewFromBase64(h.TwoFactorSecretKey)
-}
-
-// enrolmentCipher is the cipher an authenticator is enrolled under, or the
-// refusal when this deployment does not offer one.
+// enrolmentAllowed refuses an enrolment this deployment does not offer.
 //
 // two_factor_totp=false means the built-in authenticator is OFF: VerifyMfa
 // ignores a stored secret and mails a code instead. Enrolling anyway stored
 // an authenticator nothing would ever ask for, so a person believed it
-// protected them; without a key, enrolling answered 500 "Something went
-// wrong on our side" (found live by examples/auth-proof). Both are a
-// configuration the caller can be told about.
-func (h *AuthServiceHandler) enrolmentCipher(ctx context.Context) (*secretbox.Cipher, error) {
+// protected them. A configuration the caller can be told about.
+//
+// No key check any more: the seed is a CRYPTED_SECRET column, and a bundle
+// with one refuses to BOOT without its keyring (W17_FIELD_KEYS), so a
+// running handler always has it.
+func (h *AuthServiceHandler) enrolmentAllowed(ctx context.Context) error {
 	if !h.TwoFactorTOTP {
-		return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: the built-in authenticator is off (two_factor_totp=false)",
+		return refusal(ctx, codes.FailedPrecondition, "two_factor: the built-in authenticator is off (two_factor_totp=false)",
 			CodeTotpUnavailable, "", MsgTotpUnavailable, nil)
 	}
-	cipher, err := h.totpCipher()
+	return nil
+}
+
+// seedOf is the plaintext TOTP seed of an enrolment row.
+//
+// `seed` is a CRYPTED_SECRET and arrives decrypted. A row enrolled by rc.19 or
+// earlier has only `secret`, the blob lib/secretbox sealed under
+// two_factor_secret_key: it is opened with that key and MOVED into `seed`, so
+// each such row needs the old key exactly once. A failed move is not a failed
+// verification — the seed is right either way, and the next read moves it.
+func (h *AuthServiceHandler) seedOf(ctx context.Context, row *pb.UserTotpSecret) (string, error) {
+	if row.GetSeed() != "" {
+		return row.GetSeed(), nil
+	}
+	if row.GetSecret() == "" {
+		return "", fmt.Errorf("two_factor: enrolment of user %s holds no seed", row.GetUserId())
+	}
+	cipher, err := secretbox.NewFromBase64(h.TwoFactorSecretKey)
 	if err != nil {
-		return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: TOTP secret encryption not configured: "+err.Error(),
+		// Not a 500: the authenticator predates the field keyring and the key
+		// it was sealed with is gone; the caller can be told it cannot be
+		// checked here.
+		return "", refusal(ctx, codes.FailedPrecondition,
+			"two_factor: this authenticator was enrolled under two_factor_secret_key, which is not usable: "+err.Error(),
 			CodeTotpUnavailable, "", MsgTotpUnavailable, nil)
 	}
-	return cipher, nil
+	plain, err := cipher.Open(row.GetSecret())
+	if err != nil {
+		return "", err
+	}
+	_, _ = h.Mutation.MoveTotpSeed(ctx, &pb.MoveTotpSeedReq{UserId: row.GetUserId(), Seed: plain})
+	return plain, nil
 }
 
 func (h *AuthServiceHandler) mfaTTL() time.Duration {
@@ -115,8 +134,8 @@ func (h *AuthServiceHandler) mfaTTL() time.Duration {
 }
 
 // totpEnrolled reports whether the user has a CONFIRMED authenticator and
-// returns the stored (encrypted) secret. A missing row / unconfirmed row
-// → (false, ""). Any query error → (false, "") so the gate treats it as
+// returns the enrolment row (seedOf reads its seed). A missing row →
+// (false, nil); an unconfirmed one → (false, row). Any query error → (false, "") so the gate treats it as
 // "no authenticator" (the event/fallback path still fires).
 // The error is RETURNED rather than folded into `false`. "No enrolment row"
 // and "the enrolment store did not answer" are opposite facts about a second
@@ -126,19 +145,20 @@ func (h *AuthServiceHandler) mfaTTL() time.Duration {
 // call sites now refuse instead, which is the direction a factor may fail in.
 //
 // NotFound stays a value, not an error: it is the genuine "not enrolled".
-func (h *AuthServiceHandler) totpEnrolled(ctx context.Context, userID string) (bool, string, error) {
+func (h *AuthServiceHandler) totpEnrolled(ctx context.Context, userID string) (bool, *pb.UserTotpSecret, error) {
 	resp, err := h.Query.GetTotpSecret(ctx, &pb.GetTotpSecretReq{UserId: userID})
 	if err != nil {
 		if notFoundOK(err) == nil {
-			return false, "", nil
+			return false, nil, nil
 		}
-		return false, "", err
+		return false, nil, err
 	}
 	if resp.GetSecret() == nil {
-		return false, "", nil
+		return false, nil, nil
 	}
 	s := resp.GetSecret()
-	return s.GetConfirmedAt() != nil, s.GetSecret(), nil
+	s.Seed = resp.GetSeed() // decrypted beside the row, not inside it
+	return s.GetConfirmedAt() != nil, s, nil
 }
 
 // mfaChallengeWindow / maxMfaChallengesPerWindow read the ISSUANCE cap
@@ -317,7 +337,7 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, de
 }
 
 // EnrollTotp generates a fresh authenticator secret for the caller,
-// stores it encrypted (unconfirmed), and returns the secret + otpauth URI
+// stores it (unconfirmed; CRYPTED_SECRET, so encrypted at rest), and returns the secret + otpauth URI
 // for the client to render as a QR code. Re-enrolling replaces any prior
 // secret (delete-then-create) so a user can move authenticators.
 func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpReq) (*pb.EnrollTotpResp, error) {
@@ -325,15 +345,10 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	cipher, err := h.enrolmentCipher(ctx)
-	if err != nil {
+	if err := h.enrolmentAllowed(ctx); err != nil {
 		return nil, err
 	}
 	secret, err := totp.GenerateSecret()
-	if err != nil {
-		return nil, err
-	}
-	enc, err := cipher.Seal(secret)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +369,7 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 			return nil, err
 		}
 	}
-	if err := h.replaceTotpSecret(txCtx, userID, enc); err != nil {
+	if err := h.replaceTotpSecret(txCtx, userID, secret); err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
 		}
@@ -384,15 +399,15 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	cipher, err := h.enrolmentCipher(ctx)
-	if err != nil {
+	if err := h.enrolmentAllowed(ctx); err != nil {
 		return nil, err
 	}
 	resp, err := h.Query.GetTotpSecret(ctx, &pb.GetTotpSecretReq{UserId: userID})
 	if err != nil || resp.GetSecret() == nil {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
-	plain, err := cipher.Open(resp.GetSecret().GetSecret())
+	resp.GetSecret().Seed = resp.GetSeed()
+	plain, err := h.seedOf(ctx, resp.GetSecret())
 	if err != nil {
 		return nil, err
 	}
@@ -423,19 +438,12 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	// session could drop a confirmed second factor without presenting a code,
 	// for as long as the read was failing (reported by a consumer). Going through
 	// totpEnrolled keeps that impossible — the error is now a refusal.
-	enrolled, encSecret, err := h.totpEnrolled(ctx, userID)
+	enrolled, row, err := h.totpEnrolled(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 	if enrolled {
-		cipher, err := h.totpCipher()
-		if err != nil {
-			// Not a 500: the deployment lost its seed key, and the caller can be
-			// told an authenticator cannot be checked here.
-			return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: TOTP secret encryption not configured: "+err.Error(),
-				CodeTotpUnavailable, "", MsgTotpUnavailable, nil)
-		}
-		plain, err := cipher.Open(encSecret)
+		plain, err := h.seedOf(ctx, row)
 		if err != nil {
 			return nil, err
 		}
@@ -452,11 +460,11 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 // replaceTotpSecret is the delete-then-create pair, kept together so a caller
 // can run it inside one transaction. Extracted rather than inlined because the
 // pairing IS the fix: separated again, the rollback has nothing to roll back.
-func (h *AuthServiceHandler) replaceTotpSecret(txCtx context.Context, userID, enc string) error {
+func (h *AuthServiceHandler) replaceTotpSecret(txCtx context.Context, userID, seed string) error {
 	if _, err := h.Mutation.DeleteTotpSecret(txCtx, &pb.DeleteTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
 		return err
 	}
-	if _, err := h.Mutation.CreateTotpSecret(txCtx, &pb.CreateTotpSecretReq{UserId: userID, Secret: enc}); err != nil {
+	if _, err := h.Mutation.CreateTotpSecret(txCtx, &pb.CreateTotpSecretReq{UserId: userID, Seed: seed}); err != nil {
 		return err
 	}
 	return nil
@@ -567,7 +575,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 // built-in verifier on) is checked against their secret; everyone else is
 // checked against the challenge's code hash (the event/fallback path).
 func (h *AuthServiceHandler) verifyMfaCode(ctx context.Context, userID, codeHash, code string) bool {
-	enrolled, encSecret, err := h.totpEnrolled(ctx, userID)
+	enrolled, row, err := h.totpEnrolled(ctx, userID)
 	if err != nil {
 		// Not "fall through to the code hash": an unreadable enrolment
 		// cannot tell us the user is NOT on the TOTP path, and taking the
@@ -576,11 +584,7 @@ func (h *AuthServiceHandler) verifyMfaCode(ctx context.Context, userID, codeHash
 		return false
 	}
 	if enrolled && h.TwoFactorTOTP {
-		cipher, err := h.totpCipher()
-		if err != nil {
-			return false
-		}
-		plain, err := cipher.Open(encSecret)
+		plain, err := h.seedOf(ctx, row)
 		if err != nil {
 			return false
 		}
