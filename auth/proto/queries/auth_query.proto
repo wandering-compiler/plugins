@@ -470,6 +470,15 @@ message GetTotpSecretResp {
   string seed = 2;
 }
 
+message CountRecoveryCodesReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message CountRecoveryCodesResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  int64 count = 1;
+}
+
 message GetMfaChallengeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string challenge_id = 1;
@@ -1776,9 +1785,24 @@ service AuthQuery {
           "       s.user_id AS secret.user_id, "
           "       s.secret AS secret.secret, "
           "       s.seed AS seed, "
+          "       s.last_step AS secret.last_step, "
           "       s.confirmed_at AS secret.confirmed_at, "
           "       s.created_at AS secret.created_at "
           "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+  }
+
+  // CountRecoveryCodes — the user's still-usable recovery codes, for
+  // GetMfaStatus. Gated two_factor.
+  rpc CountRecoveryCodes(CountRecoveryCodesReq) returns (CountRecoveryCodesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT COUNT(*) AS count FROM @module.UserRecoveryCode r "
+          "WHERE r.user_id = :user_id AND r.used_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "two_factor";

@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/plugins/auth/lib/qrsvg"
 	"github.com/wandering-compiler/plugins/auth/lib/secretbox"
 	"github.com/wandering-compiler/plugins/auth/lib/totp"
 
@@ -336,9 +337,12 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, de
 }
 
 // EnrollTotp generates a fresh authenticator secret for the caller,
-// stores it (unconfirmed; CRYPTED_SECRET, so encrypted at rest), and returns the secret + otpauth URI
-// for the client to render as a QR code. Re-enrolling replaces any prior
-// secret (delete-then-create) so a user can move authenticators.
+// stores it (unconfirmed; CRYPTED_SECRET, so encrypted at rest), and returns
+// the secret, the otpauth URI and that URI as a QR code (SVG). Re-enrolling
+// replaces any prior secret (delete-then-create) so a user can move
+// authenticators — and when the prior one is CONFIRMED, only with a current
+// code from it or a recovery code (stepUp), because replacing it is switching
+// the second factor off until the new one is confirmed.
 func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpReq) (*pb.EnrollTotpResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
@@ -346,6 +350,17 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	}
 	if err := h.enrolmentAllowed(ctx); err != nil {
 		return nil, err
+	}
+	// Same reasoning as DisableTotp's B1: without this, the code DisableTotp
+	// demands was one EnrollTotp call away from irrelevant.
+	enrolled, row, err := h.totpEnrolled(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if enrolled {
+		if err := h.stepUp(ctx, userID, row, req.GetCode()); err != nil {
+			return nil, err
+		}
 	}
 	secret, err := totp.GenerateSecret()
 	if err != nil {
@@ -361,33 +376,39 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	// deleted, and they are locked out of the thing that was protecting them
 	// — by an operation whose entire purpose was to move it to a new phone
 	// (a consumer). Same distx shape AcceptOrgInvite uses.
-	var tx *distx.TxHandle
-	txCtx := ctx
-	if h.DistTx != nil {
-		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
-			return nil, err
-		}
-	}
-	if err := h.replaceTotpSecret(txCtx, userID, secret); err != nil {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
+	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+		return h.replaceTotpSecret(txCtx, userID, secret)
+	}); err != nil {
 		return nil, err
-	}
-	if tx != nil {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, err
-		}
 	}
 
 	account := userID
 	if u, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID}); err == nil && u.GetUser().GetEmail() != "" {
 		account = u.GetUser().GetEmail()
 	}
-	return &pb.EnrollTotpResp{
-		Secret:     secret,
-		OtpauthUri: totp.ProvisioningURI(secret, h.TotpIssuer, account),
-	}, nil
+	uri := totp.ProvisioningURI(secret, h.TotpIssuer, account)
+	svg, err := qrsvg.SVG(uri)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.EnrollTotpResp{Secret: secret, OtpauthUri: uri, QrSvg: svg}, nil
+}
+
+// inMfaTx runs fn in one distributed transaction when the bundle has a
+// coordinator (always, in a generated bundle), plainly otherwise.
+func (h *AuthServiceHandler) inMfaTx(ctx context.Context, fn func(txCtx context.Context) error) error {
+	if h.DistTx == nil {
+		return fn(ctx)
+	}
+	tx, txCtx, err := distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection})
+	if err != nil {
+		return err
+	}
+	if err := fn(txCtx); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // ConfirmTotp verifies the first code against the pending secret and, on
@@ -410,18 +431,33 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	if err != nil {
 		return nil, err
 	}
-	if !totp.Verify(plain, req.GetCode(), time.Now(), totpSkewSteps) {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
-	}
-	if _, err := h.Mutation.ConfirmTotpSecret(ctx, &pb.ConfirmTotpSecretReq{UserId: userID}); err != nil {
+	ok, err := h.acceptTotp(ctx, resp.GetSecret(), plain, req.GetCode())
+	if err != nil {
 		return nil, err
 	}
-	return &pb.ConfirmTotpResp{}, nil
+	if !ok {
+		return nil, Unauthenticated(errMfaChallengeInvalid)
+	}
+	// Confirmed and given its recovery codes together: an authenticator that
+	// protects the account with no way back from a lost phone is one support
+	// ticket away from an account takeover by social engineering.
+	var codes []string
+	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+		if _, err := h.Mutation.ConfirmTotpSecret(txCtx, &pb.ConfirmTotpSecretReq{UserId: userID}); err != nil {
+			return err
+		}
+		var err error
+		codes, err = h.replaceRecoveryCodes(txCtx, userID)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return &pb.ConfirmTotpResp{RecoveryCodes: codes}, nil
 }
 
-// DisableTotp removes the caller's authenticator. B1: a CONFIRMED
-// authenticator is re-verified against a live TOTP code first (same
-// decrypt+verify as ConfirmTotp / VerifyMfa) so a hijacked session
+// DisableTotp removes the caller's authenticator and its recovery codes. B1:
+// a CONFIRMED authenticator is re-verified against a live TOTP code — or a
+// recovery code — first (stepUp) so a hijacked session
 // can't permanently disable the victim's 2FA — a transient compromise
 // then can't weaken the account. A missing or still-pending
 // (unconfirmed) enrollment provides no active protection, so it's
@@ -442,15 +478,20 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 		return nil, err
 	}
 	if enrolled {
-		plain, err := h.seedOf(ctx, row)
-		if err != nil {
+		if err := h.stepUp(ctx, userID, row, req.GetCode()); err != nil {
 			return nil, err
 		}
-		if !totp.Verify(plain, req.GetCode(), time.Now(), totpSkewSteps) {
-			return nil, Unauthenticated(errMfaChallengeInvalid)
-		}
 	}
-	if _, err := h.Mutation.DeleteTotpSecret(ctx, &pb.DeleteTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
+	// The recovery codes go with the authenticator they stand in for: kept,
+	// they would be a second factor nothing asks for — until the next
+	// enrolment, when they would quietly work again.
+	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+		if _, err := h.Mutation.DeleteTotpSecret(txCtx, &pb.DeleteTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
+			return err
+		}
+		_, err := h.Mutation.DeleteRecoveryCodes(txCtx, &pb.DeleteRecoveryCodesReq{UserId: userID})
+		return notFoundOK(err)
+	}); err != nil {
 		return nil, err
 	}
 	return &pb.DisableTotpResp{}, nil
@@ -481,7 +522,15 @@ func (h *AuthServiceHandler) GetMfaStatus(ctx context.Context, req *pb.GetMfaSta
 		// not support it — a user who acts on it disables what they have.
 		return nil, err
 	}
-	return &pb.GetMfaStatusResp{TotpEnrolled: enrolled}, nil
+	out := &pb.GetMfaStatusResp{TotpEnrolled: enrolled}
+	if enrolled {
+		n, err := h.Query.CountRecoveryCodes(ctx, &pb.CountRecoveryCodesReq{UserId: userID})
+		if err != nil {
+			return nil, err
+		}
+		out.RecoveryCodesRemaining = n.GetCount()
+	}
+	return out, nil
 }
 
 // VerifyMfa completes a two-step sign-in: load the pending challenge,
@@ -587,7 +636,11 @@ func (h *AuthServiceHandler) verifyMfaCode(ctx context.Context, userID, codeHash
 		if err != nil {
 			return false
 		}
-		return totp.Verify(plain, code, time.Now(), totpSkewSteps)
+		if ok, err := h.acceptTotp(ctx, row, plain, code); err != nil || ok {
+			return ok && err == nil
+		}
+		// Not the authenticator's code: one of its recovery codes, or nothing.
+		return h.acceptRecoveryCode(ctx, userID, code)
 	}
 	if codeHash == "" {
 		return false

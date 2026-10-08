@@ -97,6 +97,7 @@ const (
 	AuthService_ConfirmTotp_FullMethodName              = "/w17.contrib.auth.AuthService/ConfirmTotp"
 	AuthService_DisableTotp_FullMethodName              = "/w17.contrib.auth.AuthService/DisableTotp"
 	AuthService_GetMfaStatus_FullMethodName             = "/w17.contrib.auth.AuthService/GetMfaStatus"
+	AuthService_GenerateRecoveryCodes_FullMethodName    = "/w17.contrib.auth.AuthService/GenerateRecoveryCodes"
 	AuthService_VerifyMfa_FullMethodName                = "/w17.contrib.auth.AuthService/VerifyMfa"
 	AuthService_ListDevices_FullMethodName              = "/w17.contrib.auth.AuthService/ListDevices"
 	AuthService_RevokeDevice_FullMethodName             = "/w17.contrib.auth.AuthService/RevokeDevice"
@@ -195,6 +196,7 @@ type AuthServiceClient interface {
 	ConfirmTotp(ctx context.Context, in *ConfirmTotpReq, opts ...grpc.CallOption) (*ConfirmTotpResp, error)
 	DisableTotp(ctx context.Context, in *DisableTotpReq, opts ...grpc.CallOption) (*DisableTotpResp, error)
 	GetMfaStatus(ctx context.Context, in *GetMfaStatusReq, opts ...grpc.CallOption) (*GetMfaStatusResp, error)
+	GenerateRecoveryCodes(ctx context.Context, in *GenerateRecoveryCodesReq, opts ...grpc.CallOption) (*GenerateRecoveryCodesResp, error)
 	VerifyMfa(ctx context.Context, in *VerifyMfaReq, opts ...grpc.CallOption) (*VerifyMfaResp, error)
 	// ── devices management — list + log out one/others/all ──────
 	// ListDevices — the caller's devices (mgmt view, derived trusted /
@@ -525,6 +527,16 @@ func (c *authServiceClient) GetMfaStatus(ctx context.Context, in *GetMfaStatusRe
 	return out, nil
 }
 
+func (c *authServiceClient) GenerateRecoveryCodes(ctx context.Context, in *GenerateRecoveryCodesReq, opts ...grpc.CallOption) (*GenerateRecoveryCodesResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GenerateRecoveryCodesResp)
+	err := c.cc.Invoke(ctx, AuthService_GenerateRecoveryCodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authServiceClient) VerifyMfa(ctx context.Context, in *VerifyMfaReq, opts ...grpc.CallOption) (*VerifyMfaResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VerifyMfaResp)
@@ -819,6 +831,7 @@ type AuthServiceServer interface {
 	ConfirmTotp(context.Context, *ConfirmTotpReq) (*ConfirmTotpResp, error)
 	DisableTotp(context.Context, *DisableTotpReq) (*DisableTotpResp, error)
 	GetMfaStatus(context.Context, *GetMfaStatusReq) (*GetMfaStatusResp, error)
+	GenerateRecoveryCodes(context.Context, *GenerateRecoveryCodesReq) (*GenerateRecoveryCodesResp, error)
 	VerifyMfa(context.Context, *VerifyMfaReq) (*VerifyMfaResp, error)
 	// ── devices management — list + log out one/others/all ──────
 	// ListDevices — the caller's devices (mgmt view, derived trusted /
@@ -986,6 +999,9 @@ func (UnimplementedAuthServiceServer) DisableTotp(context.Context, *DisableTotpR
 }
 func (UnimplementedAuthServiceServer) GetMfaStatus(context.Context, *GetMfaStatusReq) (*GetMfaStatusResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMfaStatus not implemented")
+}
+func (UnimplementedAuthServiceServer) GenerateRecoveryCodes(context.Context, *GenerateRecoveryCodesReq) (*GenerateRecoveryCodesResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GenerateRecoveryCodes not implemented")
 }
 func (UnimplementedAuthServiceServer) VerifyMfa(context.Context, *VerifyMfaReq) (*VerifyMfaResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyMfa not implemented")
@@ -1487,6 +1503,24 @@ func _AuthService_GetMfaStatus_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_GenerateRecoveryCodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GenerateRecoveryCodesReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).GenerateRecoveryCodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_GenerateRecoveryCodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).GenerateRecoveryCodes(ctx, req.(*GenerateRecoveryCodesReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthService_VerifyMfa_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(VerifyMfaReq)
 	if err := dec(in); err != nil {
@@ -1981,6 +2015,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMfaStatus",
 			Handler:    _AuthService_GetMfaStatus_Handler,
+		},
+		{
+			MethodName: "GenerateRecoveryCodes",
+			Handler:    _AuthService_GenerateRecoveryCodes_Handler,
 		},
 		{
 			MethodName: "VerifyMfa",

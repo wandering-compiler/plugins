@@ -148,6 +148,10 @@ const (
 	// CodeTotpUnavailable: this deployment offers no authenticator app
 	// (two_factor_totp=false, or no seed key configured).
 	CodeTotpUnavailable = "TOTP_UNAVAILABLE"
+
+	// CodeTotpNotEnrolled: an operation that belongs to an authenticator
+	// (recovery codes) asked for by an account that has none confirmed.
+	CodeTotpNotEnrolled = "TOTP_NOT_ENROLLED"
 )
 
 // The sentences a person reads, and the ONE place each is written.
@@ -193,6 +197,8 @@ const (
 	MsgTenantUnknown = "This address does not belong to any organization here. Check the address you registered on."
 
 	MsgTotpUnavailable = "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
+
+	MsgTotpNotEnrolled = "Set up an authenticator app first. Recovery codes belong to it."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

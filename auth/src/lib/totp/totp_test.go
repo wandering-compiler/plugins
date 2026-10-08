@@ -69,3 +69,32 @@ func TestProvisioningURI(t *testing.T) {
 		}
 	}
 }
+
+// Match names the step that matched — the one the caller records so a code
+// is accepted once. Whatever step it names must be one whose code this is
+// (codes of neighbouring windows collide one time in 10^6), inside the skew.
+func TestMatch_ReportsTheMatchedStep(t *testing.T) {
+	secret, _ := GenerateSecret()
+	now := time.Now()
+	base := now.Unix() / period
+	for d := int64(-1); d <= 1; d++ {
+		code := mustCode(t, secret, base+d)
+		step, ok := Match(secret, code, now, 1)
+		if !ok || step < base-1 || step > base+1 || mustCode(t, secret, step) != code {
+			t.Errorf("offset %d: step=%d ok=%v", d, step, ok)
+		}
+	}
+	far := mustCode(t, secret, base+5)
+	if step, ok := Match(secret, far, now, 1); ok && mustCode(t, secret, step) != far {
+		t.Errorf("a code five windows away matched step %d", step)
+	}
+}
+
+func mustCode(t *testing.T, secret string, step int64) string {
+	t.Helper()
+	c, err := Code(secret, time.Unix(step*period, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}

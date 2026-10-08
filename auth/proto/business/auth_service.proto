@@ -464,13 +464,26 @@ message OAuthCallbackResp {
 
 message EnrollTotpReq {
   option (w17.contrib.plugin_feature) = "two_factor";
+  // Required when the caller ALREADY has a confirmed authenticator: a
+  // current code from it, or one of their recovery codes. Re-enrolling
+  // replaces that authenticator, so without this a hijacked session could
+  // switch the victim's 2FA off — the thing DisableTotp's code requirement
+  // exists to prevent. A lost phone is: sign in with a recovery code, then
+  // enrol with another one.
+  string code = 1;
 }
 message EnrollTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
-  // The base32 secret (shown once) + the otpauth:// URI the client
-  // renders as a QR code. The secret is also stored encrypted server-side.
+  // The base32 secret (shown once, for typing in by hand) + the otpauth://
+  // URI an authenticator app scans. The secret is also stored encrypted
+  // server-side.
   string secret      = 1;
   string otpauth_uri = 2;
+  // qr_svg — otpauth_uri as a QR code, a self-contained SVG document
+  // (black modules on white, quiet zone included, scales without loss).
+  // Render it as-is (an <img> data URI or inline). Generating it here keeps
+  // the seed out of third-party QR libraries and online QR services.
+  string qr_svg      = 3;
 }
 
 message ConfirmTotpReq {
@@ -479,6 +492,9 @@ message ConfirmTotpReq {
 }
 message ConfirmTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
+  // Ten one-time recovery codes for when the authenticator is lost, shown
+  // ONCE (only their hashes are stored). Confirming replaces any earlier set.
+  repeated string recovery_codes = 1;
 }
 
 message DisableTotpReq {
@@ -487,7 +503,8 @@ message DisableTotpReq {
   // authenticator is removed so a hijacked session can't permanently
   // disable the victim's 2FA (a transient compromise then can't
   // weaken the account). Ignored when no confirmed authenticator
-  // exists (nothing to protect). Same decrypt+verify as ConfirmTotp.
+  // exists (nothing to protect). A recovery code is accepted too (lost
+  // phone). Disabling deletes the recovery codes with the authenticator.
   string code = 1;
 }
 message DisableTotpResp {
@@ -499,12 +516,29 @@ message GetMfaStatusReq {
 }
 message GetMfaStatusResp {
   option (w17.contrib.plugin_feature) = "two_factor";
-  bool totp_enrolled = 1;
+  bool  totp_enrolled            = 1;
+  // Unused recovery codes left. 0 with an authenticator enrolled: time to
+  // GenerateRecoveryCodes.
+  int64 recovery_codes_remaining = 2;
+}
+
+// GenerateRecoveryCodes — replace the caller's recovery codes with a fresh
+// set of ten. Needs a confirmed authenticator and a current code from it (or
+// a recovery code), like DisableTotp.
+message GenerateRecoveryCodesReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string code = 1;
+}
+message GenerateRecoveryCodesResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  repeated string recovery_codes = 1;
 }
 
 message VerifyMfaReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string challenge_id = 1 [(w17.field) = { type: UUID }];
+  // The authenticator's current code — each accepted at most once — or,
+  // for an account with an authenticator, one of its recovery codes.
   string code         = 2;
 }
 message VerifyMfaResp {
@@ -928,6 +962,9 @@ service AuthService {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
   }
   rpc GetMfaStatus(GetMfaStatusReq) returns (GetMfaStatusResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+  }
+  rpc GenerateRecoveryCodes(GenerateRecoveryCodesReq) returns (GenerateRecoveryCodesResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
   }
   rpc VerifyMfa(VerifyMfaReq) returns (VerifyMfaResp) {

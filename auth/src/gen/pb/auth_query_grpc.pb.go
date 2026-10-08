@@ -65,6 +65,7 @@ const (
 	AuthQuery_GetOAuthIdentity_FullMethodName              = "/w17.contrib.auth.AuthQuery/GetOAuthIdentity"
 	AuthQuery_GetUserById_FullMethodName                   = "/w17.contrib.auth.AuthQuery/GetUserById"
 	AuthQuery_GetTotpSecret_FullMethodName                 = "/w17.contrib.auth.AuthQuery/GetTotpSecret"
+	AuthQuery_CountRecoveryCodes_FullMethodName            = "/w17.contrib.auth.AuthQuery/CountRecoveryCodes"
 	AuthQuery_GetMfaChallenge_FullMethodName               = "/w17.contrib.auth.AuthQuery/GetMfaChallenge"
 	AuthQuery_LockUserForIssuance_FullMethodName           = "/w17.contrib.auth.AuthQuery/LockUserForIssuance"
 	AuthQuery_CountRecentMfaChallenges_FullMethodName      = "/w17.contrib.auth.AuthQuery/CountRecentMfaChallenges"
@@ -370,6 +371,9 @@ type AuthQueryClient interface {
 	// VerifyMfa / ConfirmTotp verify against the seed. Gated
 	// two_factor.
 	GetTotpSecret(ctx context.Context, in *GetTotpSecretReq, opts ...grpc.CallOption) (*GetTotpSecretResp, error)
+	// CountRecoveryCodes — the user's still-usable recovery codes, for
+	// GetMfaStatus. Gated two_factor.
+	CountRecoveryCodes(ctx context.Context, in *CountRecoveryCodesReq, opts ...grpc.CallOption) (*CountRecoveryCodesResp, error)
 	// GetMfaChallenge — load a pending challenge by id for VerifyMfa
 	// (user_id to scope the verify, code_hash for the event/fallback path,
 	// consumed_at + created_at for the single-use + TTL checks). Gated
@@ -899,6 +903,16 @@ func (c *authQueryClient) GetTotpSecret(ctx context.Context, in *GetTotpSecretRe
 	return out, nil
 }
 
+func (c *authQueryClient) CountRecoveryCodes(ctx context.Context, in *CountRecoveryCodesReq, opts ...grpc.CallOption) (*CountRecoveryCodesResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CountRecoveryCodesResp)
+	err := c.cc.Invoke(ctx, AuthQuery_CountRecoveryCodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authQueryClient) GetMfaChallenge(ctx context.Context, in *GetMfaChallengeReq, opts ...grpc.CallOption) (*GetMfaChallengeResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetMfaChallengeResp)
@@ -1391,6 +1405,9 @@ type AuthQueryServer interface {
 	// VerifyMfa / ConfirmTotp verify against the seed. Gated
 	// two_factor.
 	GetTotpSecret(context.Context, *GetTotpSecretReq) (*GetTotpSecretResp, error)
+	// CountRecoveryCodes — the user's still-usable recovery codes, for
+	// GetMfaStatus. Gated two_factor.
+	CountRecoveryCodes(context.Context, *CountRecoveryCodesReq) (*CountRecoveryCodesResp, error)
 	// GetMfaChallenge — load a pending challenge by id for VerifyMfa
 	// (user_id to scope the verify, code_hash for the event/fallback path,
 	// consumed_at + created_at for the single-use + TTL checks). Gated
@@ -1673,6 +1690,9 @@ func (UnimplementedAuthQueryServer) GetUserById(context.Context, *GetUserByIdReq
 }
 func (UnimplementedAuthQueryServer) GetTotpSecret(context.Context, *GetTotpSecretReq) (*GetTotpSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTotpSecret not implemented")
+}
+func (UnimplementedAuthQueryServer) CountRecoveryCodes(context.Context, *CountRecoveryCodesReq) (*CountRecoveryCodesResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method CountRecoveryCodes not implemented")
 }
 func (UnimplementedAuthQueryServer) GetMfaChallenge(context.Context, *GetMfaChallengeReq) (*GetMfaChallengeResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMfaChallenge not implemented")
@@ -2387,6 +2407,24 @@ func _AuthQuery_GetTotpSecret_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthQuery_CountRecoveryCodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CountRecoveryCodesReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthQueryServer).CountRecoveryCodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthQuery_CountRecoveryCodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthQueryServer).CountRecoveryCodes(ctx, req.(*CountRecoveryCodesReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthQuery_GetMfaChallenge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetMfaChallengeReq)
 	if err := dec(in); err != nil {
@@ -2911,6 +2949,10 @@ var AuthQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTotpSecret",
 			Handler:    _AuthQuery_GetTotpSecret_Handler,
+		},
+		{
+			MethodName: "CountRecoveryCodes",
+			Handler:    _AuthQuery_CountRecoveryCodes_Handler,
 		},
 		{
 			MethodName: "GetMfaChallenge",
