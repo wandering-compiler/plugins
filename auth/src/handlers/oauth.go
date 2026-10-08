@@ -168,12 +168,19 @@ func (h *AuthServiceHandler) loadEnabledProvider(ctx context.Context, name strin
 		return nil, errOAuthProviderDisabled
 	}
 	p.Secret = resp.GetSecret() // decrypted beside the row, not inside it
-	// A client secret still in the legacy plaintext column wins: it is what
-	// an operator or a fixture wrote last. It moves into the encrypted
-	// `secret` here; a failed move costs nothing but a retry next time.
+	// The legacy plaintext column (rc.19 and earlier, or a fixture) is read
+	// only while the encrypted `secret` is empty, and moved there; once
+	// `secret` is set it wins — it is where the admin writes — and a
+	// plaintext copy left beside it is dropped. Letting the legacy value win
+	// instead would undo an operator's rotation made before the first sign-in.
+	// A failed move or clear costs nothing but a retry on the next read.
 	if legacy := p.GetClientSecret(); legacy != "" {
-		p.Secret = legacy
-		_, _ = h.Mutation.MoveOAuthProviderSecret(ctx, &pb.MoveOAuthProviderSecretReq{Id: p.GetId(), Secret: legacy})
+		if p.GetSecret() == "" {
+			p.Secret = legacy
+			_, _ = h.Mutation.MoveOAuthProviderSecret(ctx, &pb.MoveOAuthProviderSecretReq{Id: p.GetId(), Secret: legacy, Legacy: legacy})
+		} else {
+			_, _ = h.Mutation.ClearOAuthProviderLegacySecret(ctx, &pb.ClearOAuthProviderLegacySecretReq{Id: p.GetId()})
+		}
 	}
 	// Q36-auth-2 — refuse a provider with no client secret: it would sign
 	// the state CSRF token with an empty HMAC key (forgeable), and the

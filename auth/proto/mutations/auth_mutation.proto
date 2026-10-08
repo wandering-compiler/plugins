@@ -241,23 +241,40 @@ message ConfirmTotpSecretResp {
 }
 
 // MoveOAuthProviderSecretReq moves a provider's legacy plaintext
-// client_secret into the encrypted `secret`.
+// client_secret into the encrypted `secret` — only while the legacy column
+// still holds `legacy`, so a value an operator wrote in between is not lost.
 message MoveOAuthProviderSecretReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string id     = 1 [(w17.field) = { type: UUID }];
   string secret = 2 [(w17.field) = { type: CRYPTED_SECRET }];
+  string legacy = 3 [(w17.field) = { type: SECRET }];
 }
 message MoveOAuthProviderSecretResp {
   option (w17.contrib.plugin_feature) = "oauth";
   string id = 1;
 }
 
+// ClearOAuthProviderLegacySecretReq empties the legacy plaintext column of a
+// provider whose encrypted `secret` is already set.
+message ClearOAuthProviderLegacySecretReq {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message ClearOAuthProviderLegacySecretResp {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string id = 1;
+}
+
 // MoveTotpSeedReq moves a legacy seed (UserTotpSecret.secret, decrypted by
 // the handler with two_factor_secret_key) into the encrypted `seed`.
+//
+// Keyed by the enrolment row's id, not by user_id: a re-enrolment between
+// the read and the move creates a NEW row, and the old seed must not land in it.
 message MoveTotpSeedReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string seed    = 2 [(w17.field) = { type: CRYPTED_SECRET }];
+  string id      = 3 [(w17.field) = { type: UUID }];
 }
 message MoveTotpSeedResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -1431,6 +1448,22 @@ service AuthMutation {
           "UPDATE @module.OAuthProvider SET "
           "secret = :secret, "
           "client_secret = NULL "
+          "WHERE id = :id AND client_secret = :legacy "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // ClearOAuthProviderLegacySecret — drop the plaintext copy of a provider
+  // whose encrypted `secret` is set (a fixture re-seeds the legacy column).
+  rpc ClearOAuthProviderLegacySecret(ClearOAuthProviderLegacySecretReq) returns (ClearOAuthProviderLegacySecretResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OAuthProvider SET "
+          "client_secret = NULL "
           "WHERE id = :id "
           "RETURNING id"
       }
@@ -1449,7 +1482,7 @@ service AuthMutation {
           "UPDATE @module.UserTotpSecret SET "
           "seed = :seed, "
           "secret = NULL "
-          "WHERE user_id = :user_id "
+          "WHERE id = :id AND user_id = :user_id "
           "RETURNING user_id"
       }
     };

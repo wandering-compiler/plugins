@@ -28,76 +28,77 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AuthMutation_CreateBotUser_FullMethodName                 = "/w17.contrib.auth.AuthMutation/CreateBotUser"
-	AuthMutation_CreateUser_FullMethodName                    = "/w17.contrib.auth.AuthMutation/CreateUser"
-	AuthMutation_IssueToken_FullMethodName                    = "/w17.contrib.auth.AuthMutation/IssueToken"
-	AuthMutation_DeleteToken_FullMethodName                   = "/w17.contrib.auth.AuthMutation/DeleteToken"
-	AuthMutation_DeleteSessionToken_FullMethodName            = "/w17.contrib.auth.AuthMutation/DeleteSessionToken"
-	AuthMutation_IssueApiToken_FullMethodName                 = "/w17.contrib.auth.AuthMutation/IssueApiToken"
-	AuthMutation_AddTokenPermission_FullMethodName            = "/w17.contrib.auth.AuthMutation/AddTokenPermission"
-	AuthMutation_DeleteApiToken_FullMethodName                = "/w17.contrib.auth.AuthMutation/DeleteApiToken"
-	AuthMutation_DeleteTokenPermissions_FullMethodName        = "/w17.contrib.auth.AuthMutation/DeleteTokenPermissions"
-	AuthMutation_CreateOAuthIdentity_FullMethodName           = "/w17.contrib.auth.AuthMutation/CreateOAuthIdentity"
-	AuthMutation_CreateTotpSecret_FullMethodName              = "/w17.contrib.auth.AuthMutation/CreateTotpSecret"
-	AuthMutation_ConfirmTotpSecret_FullMethodName             = "/w17.contrib.auth.AuthMutation/ConfirmTotpSecret"
-	AuthMutation_MoveOAuthProviderSecret_FullMethodName       = "/w17.contrib.auth.AuthMutation/MoveOAuthProviderSecret"
-	AuthMutation_MoveTotpSeed_FullMethodName                  = "/w17.contrib.auth.AuthMutation/MoveTotpSeed"
-	AuthMutation_DeleteTotpSecret_FullMethodName              = "/w17.contrib.auth.AuthMutation/DeleteTotpSecret"
-	AuthMutation_CreateMfaChallenge_FullMethodName            = "/w17.contrib.auth.AuthMutation/CreateMfaChallenge"
-	AuthMutation_CreatePendingSignUp_FullMethodName           = "/w17.contrib.auth.AuthMutation/CreatePendingSignUp"
-	AuthMutation_RecordPendingSignUpAttempt_FullMethodName    = "/w17.contrib.auth.AuthMutation/RecordPendingSignUpAttempt"
-	AuthMutation_ClaimPendingSignUp_FullMethodName            = "/w17.contrib.auth.AuthMutation/ClaimPendingSignUp"
-	AuthMutation_DeletePendingSignUpsForEmail_FullMethodName  = "/w17.contrib.auth.AuthMutation/DeletePendingSignUpsForEmail"
-	AuthMutation_PurgeExpiredPendingSignUps_FullMethodName    = "/w17.contrib.auth.AuthMutation/PurgeExpiredPendingSignUps"
-	AuthMutation_ConsumeMfaChallenge_FullMethodName           = "/w17.contrib.auth.AuthMutation/ConsumeMfaChallenge"
-	AuthMutation_RecordMfaAttempt_FullMethodName              = "/w17.contrib.auth.AuthMutation/RecordMfaAttempt"
-	AuthMutation_SupersedePendingMfaChallenges_FullMethodName = "/w17.contrib.auth.AuthMutation/SupersedePendingMfaChallenges"
-	AuthMutation_CreateDevice_FullMethodName                  = "/w17.contrib.auth.AuthMutation/CreateDevice"
-	AuthMutation_TrustDevice_FullMethodName                   = "/w17.contrib.auth.AuthMutation/TrustDevice"
-	AuthMutation_TouchDevice_FullMethodName                   = "/w17.contrib.auth.AuthMutation/TouchDevice"
-	AuthMutation_DeleteUndevicedSessions_FullMethodName       = "/w17.contrib.auth.AuthMutation/DeleteUndevicedSessions"
-	AuthMutation_DeleteDeviceTokens_FullMethodName            = "/w17.contrib.auth.AuthMutation/DeleteDeviceTokens"
-	AuthMutation_DeleteDevice_FullMethodName                  = "/w17.contrib.auth.AuthMutation/DeleteDevice"
-	AuthMutation_DeleteAllUserTokens_FullMethodName           = "/w17.contrib.auth.AuthMutation/DeleteAllUserTokens"
-	AuthMutation_DeleteAllUserDevices_FullMethodName          = "/w17.contrib.auth.AuthMutation/DeleteAllUserDevices"
-	AuthMutation_CreateRole_FullMethodName                    = "/w17.contrib.auth.AuthMutation/CreateRole"
-	AuthMutation_UpdateRole_FullMethodName                    = "/w17.contrib.auth.AuthMutation/UpdateRole"
-	AuthMutation_DeleteRole_FullMethodName                    = "/w17.contrib.auth.AuthMutation/DeleteRole"
-	AuthMutation_UpdateUser_FullMethodName                    = "/w17.contrib.auth.AuthMutation/UpdateUser"
-	AuthMutation_DeleteUser_FullMethodName                    = "/w17.contrib.auth.AuthMutation/DeleteUser"
-	AuthMutation_DisableUsers_FullMethodName                  = "/w17.contrib.auth.AuthMutation/DisableUsers"
-	AuthMutation_EnableUsers_FullMethodName                   = "/w17.contrib.auth.AuthMutation/EnableUsers"
-	AuthMutation_AssignRoleToUser_FullMethodName              = "/w17.contrib.auth.AuthMutation/AssignRoleToUser"
-	AuthMutation_RevokeRoleFromUser_FullMethodName            = "/w17.contrib.auth.AuthMutation/RevokeRoleFromUser"
-	AuthMutation_AddPermissionToRole_FullMethodName           = "/w17.contrib.auth.AuthMutation/AddPermissionToRole"
-	AuthMutation_RemovePermissionFromRole_FullMethodName      = "/w17.contrib.auth.AuthMutation/RemovePermissionFromRole"
-	AuthMutation_CreatePasswordResetToken_FullMethodName      = "/w17.contrib.auth.AuthMutation/CreatePasswordResetToken"
-	AuthMutation_ConsumePasswordResetToken_FullMethodName     = "/w17.contrib.auth.AuthMutation/ConsumePasswordResetToken"
-	AuthMutation_UpdateUserPassword_FullMethodName            = "/w17.contrib.auth.AuthMutation/UpdateUserPassword"
-	AuthMutation_UpdateUserPasswordIfUnchanged_FullMethodName = "/w17.contrib.auth.AuthMutation/UpdateUserPasswordIfUnchanged"
-	AuthMutation_DeleteUserSessionsForReset_FullMethodName    = "/w17.contrib.auth.AuthMutation/DeleteUserSessionsForReset"
-	AuthMutation_DeleteOtherSessionTokens_FullMethodName      = "/w17.contrib.auth.AuthMutation/DeleteOtherSessionTokens"
-	AuthMutation_CreateEmailVerificationToken_FullMethodName  = "/w17.contrib.auth.AuthMutation/CreateEmailVerificationToken"
-	AuthMutation_ConsumeEmailVerificationToken_FullMethodName = "/w17.contrib.auth.AuthMutation/ConsumeEmailVerificationToken"
-	AuthMutation_MarkEmailVerified_FullMethodName             = "/w17.contrib.auth.AuthMutation/MarkEmailVerified"
-	AuthMutation_MarkEmailDerivedFromInvite_FullMethodName    = "/w17.contrib.auth.AuthMutation/MarkEmailDerivedFromInvite"
-	AuthMutation_RegisterAuthClient_FullMethodName            = "/w17.contrib.auth.AuthMutation/RegisterAuthClient"
-	AuthMutation_SetAuthClientEnabled_FullMethodName          = "/w17.contrib.auth.AuthMutation/SetAuthClientEnabled"
-	AuthMutation_DeleteAuthClient_FullMethodName              = "/w17.contrib.auth.AuthMutation/DeleteAuthClient"
-	AuthMutation_CreateCliAuthCode_FullMethodName             = "/w17.contrib.auth.AuthMutation/CreateCliAuthCode"
-	AuthMutation_ConsumeCliAuthCode_FullMethodName            = "/w17.contrib.auth.AuthMutation/ConsumeCliAuthCode"
-	AuthMutation_CreateOrganization_FullMethodName            = "/w17.contrib.auth.AuthMutation/CreateOrganization"
-	AuthMutation_AddOrgMembership_FullMethodName              = "/w17.contrib.auth.AuthMutation/AddOrgMembership"
-	AuthMutation_UpdateOrganization_FullMethodName            = "/w17.contrib.auth.AuthMutation/UpdateOrganization"
-	AuthMutation_DeleteOrganization_FullMethodName            = "/w17.contrib.auth.AuthMutation/DeleteOrganization"
-	AuthMutation_UpdateOrgMembership_FullMethodName           = "/w17.contrib.auth.AuthMutation/UpdateOrgMembership"
-	AuthMutation_DeleteOrgMembership_FullMethodName           = "/w17.contrib.auth.AuthMutation/DeleteOrgMembership"
-	AuthMutation_RevokeUserToken_FullMethodName               = "/w17.contrib.auth.AuthMutation/RevokeUserToken"
-	AuthMutation_CreateOrgInvite_FullMethodName               = "/w17.contrib.auth.AuthMutation/CreateOrgInvite"
-	AuthMutation_BindOpenOrgInvite_FullMethodName             = "/w17.contrib.auth.AuthMutation/BindOpenOrgInvite"
-	AuthMutation_ConsumeOrgInviteByToken_FullMethodName       = "/w17.contrib.auth.AuthMutation/ConsumeOrgInviteByToken"
-	AuthMutation_ClearExpiredOrgInvite_FullMethodName         = "/w17.contrib.auth.AuthMutation/ClearExpiredOrgInvite"
-	AuthMutation_DeleteOrgInvite_FullMethodName               = "/w17.contrib.auth.AuthMutation/DeleteOrgInvite"
+	AuthMutation_CreateBotUser_FullMethodName                  = "/w17.contrib.auth.AuthMutation/CreateBotUser"
+	AuthMutation_CreateUser_FullMethodName                     = "/w17.contrib.auth.AuthMutation/CreateUser"
+	AuthMutation_IssueToken_FullMethodName                     = "/w17.contrib.auth.AuthMutation/IssueToken"
+	AuthMutation_DeleteToken_FullMethodName                    = "/w17.contrib.auth.AuthMutation/DeleteToken"
+	AuthMutation_DeleteSessionToken_FullMethodName             = "/w17.contrib.auth.AuthMutation/DeleteSessionToken"
+	AuthMutation_IssueApiToken_FullMethodName                  = "/w17.contrib.auth.AuthMutation/IssueApiToken"
+	AuthMutation_AddTokenPermission_FullMethodName             = "/w17.contrib.auth.AuthMutation/AddTokenPermission"
+	AuthMutation_DeleteApiToken_FullMethodName                 = "/w17.contrib.auth.AuthMutation/DeleteApiToken"
+	AuthMutation_DeleteTokenPermissions_FullMethodName         = "/w17.contrib.auth.AuthMutation/DeleteTokenPermissions"
+	AuthMutation_CreateOAuthIdentity_FullMethodName            = "/w17.contrib.auth.AuthMutation/CreateOAuthIdentity"
+	AuthMutation_CreateTotpSecret_FullMethodName               = "/w17.contrib.auth.AuthMutation/CreateTotpSecret"
+	AuthMutation_ConfirmTotpSecret_FullMethodName              = "/w17.contrib.auth.AuthMutation/ConfirmTotpSecret"
+	AuthMutation_MoveOAuthProviderSecret_FullMethodName        = "/w17.contrib.auth.AuthMutation/MoveOAuthProviderSecret"
+	AuthMutation_ClearOAuthProviderLegacySecret_FullMethodName = "/w17.contrib.auth.AuthMutation/ClearOAuthProviderLegacySecret"
+	AuthMutation_MoveTotpSeed_FullMethodName                   = "/w17.contrib.auth.AuthMutation/MoveTotpSeed"
+	AuthMutation_DeleteTotpSecret_FullMethodName               = "/w17.contrib.auth.AuthMutation/DeleteTotpSecret"
+	AuthMutation_CreateMfaChallenge_FullMethodName             = "/w17.contrib.auth.AuthMutation/CreateMfaChallenge"
+	AuthMutation_CreatePendingSignUp_FullMethodName            = "/w17.contrib.auth.AuthMutation/CreatePendingSignUp"
+	AuthMutation_RecordPendingSignUpAttempt_FullMethodName     = "/w17.contrib.auth.AuthMutation/RecordPendingSignUpAttempt"
+	AuthMutation_ClaimPendingSignUp_FullMethodName             = "/w17.contrib.auth.AuthMutation/ClaimPendingSignUp"
+	AuthMutation_DeletePendingSignUpsForEmail_FullMethodName   = "/w17.contrib.auth.AuthMutation/DeletePendingSignUpsForEmail"
+	AuthMutation_PurgeExpiredPendingSignUps_FullMethodName     = "/w17.contrib.auth.AuthMutation/PurgeExpiredPendingSignUps"
+	AuthMutation_ConsumeMfaChallenge_FullMethodName            = "/w17.contrib.auth.AuthMutation/ConsumeMfaChallenge"
+	AuthMutation_RecordMfaAttempt_FullMethodName               = "/w17.contrib.auth.AuthMutation/RecordMfaAttempt"
+	AuthMutation_SupersedePendingMfaChallenges_FullMethodName  = "/w17.contrib.auth.AuthMutation/SupersedePendingMfaChallenges"
+	AuthMutation_CreateDevice_FullMethodName                   = "/w17.contrib.auth.AuthMutation/CreateDevice"
+	AuthMutation_TrustDevice_FullMethodName                    = "/w17.contrib.auth.AuthMutation/TrustDevice"
+	AuthMutation_TouchDevice_FullMethodName                    = "/w17.contrib.auth.AuthMutation/TouchDevice"
+	AuthMutation_DeleteUndevicedSessions_FullMethodName        = "/w17.contrib.auth.AuthMutation/DeleteUndevicedSessions"
+	AuthMutation_DeleteDeviceTokens_FullMethodName             = "/w17.contrib.auth.AuthMutation/DeleteDeviceTokens"
+	AuthMutation_DeleteDevice_FullMethodName                   = "/w17.contrib.auth.AuthMutation/DeleteDevice"
+	AuthMutation_DeleteAllUserTokens_FullMethodName            = "/w17.contrib.auth.AuthMutation/DeleteAllUserTokens"
+	AuthMutation_DeleteAllUserDevices_FullMethodName           = "/w17.contrib.auth.AuthMutation/DeleteAllUserDevices"
+	AuthMutation_CreateRole_FullMethodName                     = "/w17.contrib.auth.AuthMutation/CreateRole"
+	AuthMutation_UpdateRole_FullMethodName                     = "/w17.contrib.auth.AuthMutation/UpdateRole"
+	AuthMutation_DeleteRole_FullMethodName                     = "/w17.contrib.auth.AuthMutation/DeleteRole"
+	AuthMutation_UpdateUser_FullMethodName                     = "/w17.contrib.auth.AuthMutation/UpdateUser"
+	AuthMutation_DeleteUser_FullMethodName                     = "/w17.contrib.auth.AuthMutation/DeleteUser"
+	AuthMutation_DisableUsers_FullMethodName                   = "/w17.contrib.auth.AuthMutation/DisableUsers"
+	AuthMutation_EnableUsers_FullMethodName                    = "/w17.contrib.auth.AuthMutation/EnableUsers"
+	AuthMutation_AssignRoleToUser_FullMethodName               = "/w17.contrib.auth.AuthMutation/AssignRoleToUser"
+	AuthMutation_RevokeRoleFromUser_FullMethodName             = "/w17.contrib.auth.AuthMutation/RevokeRoleFromUser"
+	AuthMutation_AddPermissionToRole_FullMethodName            = "/w17.contrib.auth.AuthMutation/AddPermissionToRole"
+	AuthMutation_RemovePermissionFromRole_FullMethodName       = "/w17.contrib.auth.AuthMutation/RemovePermissionFromRole"
+	AuthMutation_CreatePasswordResetToken_FullMethodName       = "/w17.contrib.auth.AuthMutation/CreatePasswordResetToken"
+	AuthMutation_ConsumePasswordResetToken_FullMethodName      = "/w17.contrib.auth.AuthMutation/ConsumePasswordResetToken"
+	AuthMutation_UpdateUserPassword_FullMethodName             = "/w17.contrib.auth.AuthMutation/UpdateUserPassword"
+	AuthMutation_UpdateUserPasswordIfUnchanged_FullMethodName  = "/w17.contrib.auth.AuthMutation/UpdateUserPasswordIfUnchanged"
+	AuthMutation_DeleteUserSessionsForReset_FullMethodName     = "/w17.contrib.auth.AuthMutation/DeleteUserSessionsForReset"
+	AuthMutation_DeleteOtherSessionTokens_FullMethodName       = "/w17.contrib.auth.AuthMutation/DeleteOtherSessionTokens"
+	AuthMutation_CreateEmailVerificationToken_FullMethodName   = "/w17.contrib.auth.AuthMutation/CreateEmailVerificationToken"
+	AuthMutation_ConsumeEmailVerificationToken_FullMethodName  = "/w17.contrib.auth.AuthMutation/ConsumeEmailVerificationToken"
+	AuthMutation_MarkEmailVerified_FullMethodName              = "/w17.contrib.auth.AuthMutation/MarkEmailVerified"
+	AuthMutation_MarkEmailDerivedFromInvite_FullMethodName     = "/w17.contrib.auth.AuthMutation/MarkEmailDerivedFromInvite"
+	AuthMutation_RegisterAuthClient_FullMethodName             = "/w17.contrib.auth.AuthMutation/RegisterAuthClient"
+	AuthMutation_SetAuthClientEnabled_FullMethodName           = "/w17.contrib.auth.AuthMutation/SetAuthClientEnabled"
+	AuthMutation_DeleteAuthClient_FullMethodName               = "/w17.contrib.auth.AuthMutation/DeleteAuthClient"
+	AuthMutation_CreateCliAuthCode_FullMethodName              = "/w17.contrib.auth.AuthMutation/CreateCliAuthCode"
+	AuthMutation_ConsumeCliAuthCode_FullMethodName             = "/w17.contrib.auth.AuthMutation/ConsumeCliAuthCode"
+	AuthMutation_CreateOrganization_FullMethodName             = "/w17.contrib.auth.AuthMutation/CreateOrganization"
+	AuthMutation_AddOrgMembership_FullMethodName               = "/w17.contrib.auth.AuthMutation/AddOrgMembership"
+	AuthMutation_UpdateOrganization_FullMethodName             = "/w17.contrib.auth.AuthMutation/UpdateOrganization"
+	AuthMutation_DeleteOrganization_FullMethodName             = "/w17.contrib.auth.AuthMutation/DeleteOrganization"
+	AuthMutation_UpdateOrgMembership_FullMethodName            = "/w17.contrib.auth.AuthMutation/UpdateOrgMembership"
+	AuthMutation_DeleteOrgMembership_FullMethodName            = "/w17.contrib.auth.AuthMutation/DeleteOrgMembership"
+	AuthMutation_RevokeUserToken_FullMethodName                = "/w17.contrib.auth.AuthMutation/RevokeUserToken"
+	AuthMutation_CreateOrgInvite_FullMethodName                = "/w17.contrib.auth.AuthMutation/CreateOrgInvite"
+	AuthMutation_BindOpenOrgInvite_FullMethodName              = "/w17.contrib.auth.AuthMutation/BindOpenOrgInvite"
+	AuthMutation_ConsumeOrgInviteByToken_FullMethodName        = "/w17.contrib.auth.AuthMutation/ConsumeOrgInviteByToken"
+	AuthMutation_ClearExpiredOrgInvite_FullMethodName          = "/w17.contrib.auth.AuthMutation/ClearExpiredOrgInvite"
+	AuthMutation_DeleteOrgInvite_FullMethodName                = "/w17.contrib.auth.AuthMutation/DeleteOrgInvite"
 )
 
 // AuthMutationClient is the client API for AuthMutation service.
@@ -197,6 +198,9 @@ type AuthMutationClient interface {
 	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
 	// `secret` and clear it. No event: the provider's configuration is the same.
 	MoveOAuthProviderSecret(ctx context.Context, in *MoveOAuthProviderSecretReq, opts ...grpc.CallOption) (*MoveOAuthProviderSecretResp, error)
+	// ClearOAuthProviderLegacySecret — drop the plaintext copy of a provider
+	// whose encrypted `secret` is set (a fixture re-seeds the legacy column).
+	ClearOAuthProviderLegacySecret(ctx context.Context, in *ClearOAuthProviderLegacySecretReq, opts ...grpc.CallOption) (*ClearOAuthProviderLegacySecretResp, error)
 	// MoveTotpSeed — store a legacy seed in `seed` and clear `secret`, so the
 	// old key is needed for this row exactly once. No event: nothing about the
 	// user's authenticator changed.
@@ -639,6 +643,16 @@ func (c *authMutationClient) MoveOAuthProviderSecret(ctx context.Context, in *Mo
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MoveOAuthProviderSecretResp)
 	err := c.cc.Invoke(ctx, AuthMutation_MoveOAuthProviderSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) ClearOAuthProviderLegacySecret(ctx context.Context, in *ClearOAuthProviderLegacySecretReq, opts ...grpc.CallOption) (*ClearOAuthProviderLegacySecretResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearOAuthProviderLegacySecretResp)
+	err := c.cc.Invoke(ctx, AuthMutation_ClearOAuthProviderLegacySecret_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1312,6 +1326,9 @@ type AuthMutationServer interface {
 	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
 	// `secret` and clear it. No event: the provider's configuration is the same.
 	MoveOAuthProviderSecret(context.Context, *MoveOAuthProviderSecretReq) (*MoveOAuthProviderSecretResp, error)
+	// ClearOAuthProviderLegacySecret — drop the plaintext copy of a provider
+	// whose encrypted `secret` is set (a fixture re-seeds the legacy column).
+	ClearOAuthProviderLegacySecret(context.Context, *ClearOAuthProviderLegacySecretReq) (*ClearOAuthProviderLegacySecretResp, error)
 	// MoveTotpSeed — store a legacy seed in `seed` and clear `secret`, so the
 	// old key is needed for this row exactly once. No event: nothing about the
 	// user's authenticator changed.
@@ -1667,6 +1684,9 @@ func (UnimplementedAuthMutationServer) ConfirmTotpSecret(context.Context, *Confi
 }
 func (UnimplementedAuthMutationServer) MoveOAuthProviderSecret(context.Context, *MoveOAuthProviderSecretReq) (*MoveOAuthProviderSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MoveOAuthProviderSecret not implemented")
+}
+func (UnimplementedAuthMutationServer) ClearOAuthProviderLegacySecret(context.Context, *ClearOAuthProviderLegacySecretReq) (*ClearOAuthProviderLegacySecretResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearOAuthProviderLegacySecret not implemented")
 }
 func (UnimplementedAuthMutationServer) MoveTotpSeed(context.Context, *MoveTotpSeedReq) (*MoveTotpSeedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MoveTotpSeed not implemented")
@@ -2089,6 +2109,24 @@ func _AuthMutation_MoveOAuthProviderSecret_Handler(srv interface{}, ctx context.
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthMutationServer).MoveOAuthProviderSecret(ctx, req.(*MoveOAuthProviderSecretReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_ClearOAuthProviderLegacySecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearOAuthProviderLegacySecretReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).ClearOAuthProviderLegacySecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_ClearOAuthProviderLegacySecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).ClearOAuthProviderLegacySecret(ctx, req.(*ClearOAuthProviderLegacySecretReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3177,6 +3215,10 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MoveOAuthProviderSecret",
 			Handler:    _AuthMutation_MoveOAuthProviderSecret_Handler,
+		},
+		{
+			MethodName: "ClearOAuthProviderLegacySecret",
+			Handler:    _AuthMutation_ClearOAuthProviderLegacySecret_Handler,
 		},
 		{
 			MethodName: "MoveTotpSeed",

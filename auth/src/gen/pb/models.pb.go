@@ -789,11 +789,11 @@ func (x *Device) GetTrustTokenHash() string {
 // the token endpoint verbatim, so it is read back, never hashed.
 //
 // `client_secret` is where rc.19 and earlier stored it, in the clear (SECRET).
-// A value there still WINS — it is what an operator or a fixture just wrote —
-// and the first sign-in through the provider moves it into `secret`
-// (MoveOAuthProviderSecret). A fixture cannot seed `secret` (the console holds
-// no key), so seeding the legacy column is how a dev sandbox gets one until it
-// is removed in a later release.
+// It is read only while `secret` is empty, and the first sign-in through the
+// provider moves it there (MoveOAuthProviderSecret); once `secret` is set, a
+// value in the legacy column is ignored and cleared. Edit `secret`. A fixture
+// cannot seed `secret` (the console holds no key), so seeding the legacy
+// column is how a dev sandbox gets one until it is removed in a later release.
 //
 // It was PASSWORD until 2026-09-09 — the annotation for a hash you VERIFY
 // against, whose rules all follow from that. The one that bit: fixtures refuse

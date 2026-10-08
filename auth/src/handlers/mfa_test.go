@@ -36,6 +36,7 @@ type mfaMock struct {
 	totpSecretEnc string // legacy `secret` (secretbox blob, rc.19 and earlier); "" = none
 	totpSeed      string // `seed` as the storage layer hands it back: plaintext
 	movedSeed     string // what MoveTotpSeed was given
+	movedRow      string // …and the enrolment row it was keyed by
 	totpConfirmed bool
 	totpReadErr   error // enrolment store refuses to answer (a consumer, #58/3)
 
@@ -90,7 +91,7 @@ func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ 
 	if m.totpSecretEnc == "" && m.totpSeed == "" {
 		return &pb.GetTotpSecretResp{}, nil
 	}
-	s := &pb.UserTotpSecret{UserId: in.GetUserId(), Secret: m.totpSecretEnc}
+	s := &pb.UserTotpSecret{Id: "row-1", UserId: in.GetUserId(), Secret: m.totpSecretEnc}
 	if m.totpConfirmed {
 		s.ConfirmedAt = timestamppb.Now()
 	}
@@ -123,7 +124,7 @@ func (m *mfaMock) CreateTotpSecret(ctx context.Context, in *pb.CreateTotpSecretR
 	return &pb.CreateTotpSecretResp{Secret: &pb.UserTotpSecret{UserId: in.GetUserId()}}, nil
 }
 func (m *mfaMock) MoveTotpSeed(ctx context.Context, in *pb.MoveTotpSeedReq, _ ...grpc.CallOption) (*pb.MoveTotpSeedResp, error) {
-	m.movedSeed = in.GetSeed()
+	m.movedSeed, m.movedRow = in.GetSeed(), in.GetId()
 	m.totpSeed, m.totpSecretEnc = in.GetSeed(), ""
 	return &pb.MoveTotpSeedResp{UserId: in.GetUserId()}, nil
 }
@@ -412,6 +413,9 @@ func TestLegacySeed_VerifiesAndMoves(t *testing.T) {
 	code, _ := totp.Code(seed, time.Now())
 	if !h.verifyMfaCode(ctxWithCaller("u1"), "u1", "", code) {
 		t.Fatal("a legacy authenticator no longer verifies")
+	}
+	if m.movedRow != "row-1" {
+		t.Errorf("the move is keyed by %q, not by the enrolment row it read — a re-enrolment in between would get the old seed", m.movedRow)
 	}
 	if m.movedSeed != seed || m.totpSecretEnc != "" {
 		t.Errorf("moved=%q legacy=%q, want the seed moved and the legacy column cleared", m.movedSeed, m.totpSecretEnc)

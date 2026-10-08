@@ -16,11 +16,11 @@ Two stored secrets are read back as plain values and are now `CRYPTED_SECRET` co
 Nothing has to be migrated by hand. Existing values move the first time they are used:
 
 - A seed enrolled by rc.19 or earlier is still in `UserTotpSecret.secret`. On its next verification it is decrypted with `two_factor_secret_key` and moved into `seed`. Keep the knob set until every authenticator has moved.
-- A client secret in `OAuthProvider.client_secret` moves into `secret` at the provider's next sign-in. A value written there still wins, because it is what an operator or a fixture wrote last. A fixture cannot seed an encrypted column, so a dev sandbox keeps seeding `client_secret`.
+- A client secret in `OAuthProvider.client_secret` moves into `secret` at the provider's next sign-in. That happens only while `secret` is empty. Once `secret` is set, it wins and the plaintext copy is cleared, so a rotation made in the admin before the first sign-in is kept. Rotate the secret in `secret`. A fixture cannot seed an encrypted column, so a dev sandbox keeps seeding `client_secret`.
 
 New deployments leave `two_factor_secret_key` empty, and enrolling no longer needs it. A later release removes the knob and both legacy columns.
 
-New storage methods: `AuthMutation.MoveTotpSeed` and `AuthMutation.MoveOAuthProviderSecret`.
+New storage methods: `AuthMutation.MoveTotpSeed`, `AuthMutation.MoveOAuthProviderSecret` and `AuthMutation.ClearOAuthProviderLegacySecret`. A move is keyed by the row it read: a TOTP seed by the enrolment row's id, so a re-enrolment in between keeps its new seed, and a client secret by the legacy value still being there.
 
 `GetTotpSecretResp.seed` and `GetProviderByNameResp.secret` carry the decrypted values. A decrypted value is returned as a top-level field, not inside the row message.
 

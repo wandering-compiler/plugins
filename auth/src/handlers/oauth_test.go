@@ -30,6 +30,12 @@ type oauthMock struct {
 	assigned []*pb.AssignRoleToUserReq
 	verified []string
 	moved    *pb.MoveOAuthProviderSecretReq
+	cleared  string
+}
+
+func (m *oauthMock) ClearOAuthProviderLegacySecret(_ context.Context, in *pb.ClearOAuthProviderLegacySecretReq, _ ...grpc.CallOption) (*pb.ClearOAuthProviderLegacySecretResp, error) {
+	m.cleared = in.GetId()
+	return &pb.ClearOAuthProviderLegacySecretResp{Id: in.GetId()}, nil
 }
 
 func (m *oauthMock) MoveOAuthProviderSecret(_ context.Context, in *pb.MoveOAuthProviderSecretReq, _ ...grpc.CallOption) (*pb.MoveOAuthProviderSecretResp, error) {
@@ -137,18 +143,21 @@ func TestOAuthAuthorizeURL_BuildsRedirect(t *testing.T) {
 	}
 }
 
-// The client secret lives in the encrypted `secret`; one still in the legacy
-// plaintext column wins (an operator or a fixture just wrote it) and moves.
+// The client secret lives in the encrypted `secret`, where the admin writes.
+// The legacy plaintext column is read only while `secret` is empty, and moved
+// (conditioned on still holding what was read); beside a set `secret` it is
+// ignored and cleared — letting it win would undo a rotation an operator made
+// in the admin before the provider's first sign-in.
 func TestOAuthProvider_SecretFromEncryptedColumnOrMovedFromLegacy(t *testing.T) {
 	for _, c := range []struct {
 		name           string
 		secret, legacy string
 		want           string
-		moves          bool
+		moves, clears  bool
 	}{
-		{"encrypted only", "enc", "", "enc", false},
-		{"legacy only", "", "plain", "plain", true},
-		{"legacy wins", "old", "new", "new", true},
+		{"encrypted only", "enc", "", "enc", false, false},
+		{"legacy only", "", "plain", "plain", true, false},
+		{"encrypted wins, plaintext copy cleared", "rotated", "stale", "rotated", false, true},
 	} {
 		m := &oauthMock{provider: &pb.OAuthProvider{Id: "p1", Name: "google", Secret: c.secret, ClientSecret: c.legacy, Enabled: true}}
 		h := &AuthServiceHandler{Query: m, Mutation: m}
@@ -159,8 +168,12 @@ func TestOAuthProvider_SecretFromEncryptedColumnOrMovedFromLegacy(t *testing.T) 
 		if p.GetSecret() != c.want {
 			t.Errorf("%s: secret = %q, want %q", c.name, p.GetSecret(), c.want)
 		}
-		if moved := m.moved != nil; moved != c.moves || (moved && (m.moved.GetId() != "p1" || m.moved.GetSecret() != c.want)) {
+		if moved := m.moved != nil; moved != c.moves ||
+			(moved && (m.moved.GetId() != "p1" || m.moved.GetSecret() != c.want || m.moved.GetLegacy() != c.legacy)) {
 			t.Errorf("%s: move = %+v, want moves=%v", c.name, m.moved, c.moves)
+		}
+		if cleared := m.cleared == "p1"; cleared != c.clears {
+			t.Errorf("%s: cleared = %v, want %v", c.name, cleared, c.clears)
 		}
 	}
 }

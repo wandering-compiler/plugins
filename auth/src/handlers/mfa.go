@@ -122,7 +122,7 @@ func (h *AuthServiceHandler) seedOf(ctx context.Context, row *pb.UserTotpSecret)
 	if err != nil {
 		return "", err
 	}
-	_, _ = h.Mutation.MoveTotpSeed(ctx, &pb.MoveTotpSeedReq{UserId: row.GetUserId(), Seed: plain})
+	_, _ = h.Mutation.MoveTotpSeed(ctx, &pb.MoveTotpSeedReq{Id: row.GetId(), UserId: row.GetUserId(), Seed: plain})
 	return plain, nil
 }
 
@@ -135,9 +135,8 @@ func (h *AuthServiceHandler) mfaTTL() time.Duration {
 
 // totpEnrolled reports whether the user has a CONFIRMED authenticator and
 // returns the enrolment row (seedOf reads its seed). A missing row →
-// (false, nil); an unconfirmed one → (false, row). Any query error → (false, "") so the gate treats it as
-// "no authenticator" (the event/fallback path still fires).
-// The error is RETURNED rather than folded into `false`. "No enrolment row"
+// (false, nil); an unconfirmed one → (false, row).
+// A query error is RETURNED rather than folded into `false`. "No enrolment row"
 // and "the enrolment store did not answer" are opposite facts about a second
 // factor, and collapsing them let a read failure downgrade every caller: the
 // sign-in gate skipped the challenge, VerifyMfa fell to the weaker code path,
