@@ -9,7 +9,9 @@
 package payment
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/wandering-compiler/plugins/payment/gen"
@@ -61,7 +63,32 @@ func resolveBackend(cfg *gen.EnvConfig) (backend.Backend, error) {
 		if key == "" {
 			return nil, fmt.Errorf("payment plugin: provider_api_key is required for the stripe backend")
 		}
-		return stripe.New(key), nil
+		var opts []stripe.Option
+		if base := strings.TrimSpace(cfg.ProviderAPIBase); base != "" {
+			u, err := url.Parse(base)
+			if err != nil {
+				// *url.Error repeats the whole value, credentials included;
+				// say only what is wrong with it.
+				var ue *url.Error
+				if errors.As(err, &ue) {
+					err = ue.Err
+				}
+				return nil, fmt.Errorf("payment plugin: provider_api_base is not an http(s) URL: %w", err)
+			}
+			// The driver appends the endpoint path to this root verbatim, so a
+			// query or fragment would swallow it, and credentials in the URL
+			// would travel to the mock in every request.
+			if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+				return nil, fmt.Errorf("payment plugin: provider_api_base %q is not an http(s) URL root (no credentials, query or fragment)", u.Redacted())
+			}
+			// A mock or test server never needs a live key; sending one there
+			// (often over plain http) would hand it to whatever listens.
+			if strings.HasPrefix(key, "sk_live_") || strings.HasPrefix(key, "rk_live_") {
+				return nil, fmt.Errorf("payment plugin: provider_api_base is set together with a live provider_api_key; it is for test keys only")
+			}
+			opts = append(opts, stripe.WithBaseURL(base))
+		}
+		return stripe.New(key, opts...), nil
 	default:
 		return nil, fmt.Errorf("payment plugin: unknown payment_provider %q (v1 supports: stripe)", provider)
 	}

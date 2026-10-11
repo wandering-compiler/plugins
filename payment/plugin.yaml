@@ -1,5 +1,5 @@
 name: payment
-version: 0.1.0-rc.4
+version: 0.1.0-rc.5
 requires_w17: ">=1.5"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in
@@ -28,6 +28,9 @@ env:
     type: string
     secret: true
     description: "Webhook signing secret (Stripe whsec_…) used to verify the Stripe-Signature HMAC on inbound webhooks. secret.String. Required when stripe_webhooks is active."
+  - name: provider_api_base
+    type: string
+    description: "Root URL of a Stripe-compatible API to call instead of https://api.stripe.com — for a local stack or a test suite run against the stripemock sandbox (http://stripemock:12111). Empty = the real Stripe API. Never set in production."
   - name: default_currency
     type: string
     default: usd
@@ -104,3 +107,13 @@ presets:
         description: "Inbound payment-provider webhooks (signature-verified, unauthenticated)."
         endpoints:
           - { ref: PaymentService.IngestStripe, method: POST, path: /stripe, exclude_auth: true, raw_body_field: raw_payload, feature: stripe_webhooks }
+
+sandboxes:
+  # Stripe's own API mock, for running a project against the payment plugin
+  # without a Stripe account: it answers every Stripe endpoint with the shape
+  # the real API returns (canned values, no state). Point the plugin at it
+  # with provider_api_base = http://stripemock:12111 and any sk_test_… key.
+  # Webhooks are not part of it — they are tested with a signed payload.
+  - name: stripemock
+    description: "Stripe API mock (dev-only)"
+    image: stripe/stripe-mock:v0.205.0
