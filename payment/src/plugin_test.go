@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/wandering-compiler/sdk/go/service/secret"
@@ -121,5 +122,17 @@ func TestResolveBackend_ProviderAPIBaseRefusesLiveKey(t *testing.T) {
 		if _, err := resolveBackend(&gen.EnvConfig{ProviderAPIKey: secret.New(key), ProviderAPIBase: "http://stripemock:12111"}); err == nil {
 			t.Errorf("live key %q accepted with provider_api_base", key)
 		}
+	}
+}
+
+// A provider_api_base that does not parse is refused without echoing it: it
+// may carry credentials.
+func TestResolveBackend_AnUnparsableBaseIsNotEchoed(t *testing.T) {
+	_, err := resolveBackend(&gen.EnvConfig{ProviderAPIKey: secret.New("sk_test_x"), ProviderAPIBase: "http://u:hunter2@mock:%zz"})
+	if err == nil {
+		t.Fatal("an unparsable provider_api_base was accepted")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the error repeats the credentials: %v", err)
 	}
 }

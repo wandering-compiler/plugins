@@ -9,6 +9,7 @@
 package payment
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -66,7 +67,13 @@ func resolveBackend(cfg *gen.EnvConfig) (backend.Backend, error) {
 		if base := strings.TrimSpace(cfg.ProviderAPIBase); base != "" {
 			u, err := url.Parse(base)
 			if err != nil {
-				return nil, fmt.Errorf("payment plugin: provider_api_base is not an http(s) URL: %v", err)
+				// *url.Error repeats the whole value, credentials included;
+				// say only what is wrong with it.
+				var ue *url.Error
+				if errors.As(err, &ue) {
+					err = ue.Err
+				}
+				return nil, fmt.Errorf("payment plugin: provider_api_base is not an http(s) URL: %w", err)
 			}
 			// The driver appends the endpoint path to this root verbatim, so a
 			// query or fragment would swallow it, and credentials in the URL
