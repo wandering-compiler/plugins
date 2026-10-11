@@ -238,20 +238,16 @@ message UserToken {
   option (w17.db.table) = {};
 
   string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  // Phase N3 — storage codegen mutation-handler preamble fills
-  // this column app-side via `randstr.Token(64)` at INSERT time
-  // (the `(w17.field).default_auto = CRYPTO_RANDOM` annotation
-  // triggers the synthesized SetPair + bind). Caller's
-  // IssueTokenReq carries NO `token` field — the codegen owns
-  // the value end-to-end.
-  // SECRET, not CHAR: this IS the bearer credential, so the admin masks it
-  // and leaves it out of list views. max_len + unique stay — the stored value
-  // is the token itself, so it has a real width and a real identity.
+  // LEGACY: the bearer token in the clear, as rows minted before 0.1.0-rc.24
+  // still hold it. Nothing writes it any more — a token is stored only as
+  // token_hash — and the lookup that finds a row by it moves the row to the
+  // hash and clears this column (UpgradeTokenHash). A later release drops it,
+  // which ends every legacy token that was never used in between.
   string token = 2 [(w17.field) = {
     type: SECRET
     max_len: 64
     unique: true
-    default_auto: CRYPTO_RANDOM
+    null: true
   }];
   string user_id = 3 [
     (w17.field) = { type: UUID },
@@ -314,6 +310,19 @@ message UserToken {
     (w17.db.column) = { index: true },
     (w17.contrib.plugin_feature_field) = "devices"
   ];
+
+  // token_hash — sha256 (hex) of the bearer token, the only form a token is
+  // stored in. The handler that mints a token generates it, stores this
+  // hash and hands the token to the caller once; a lookup hashes the
+  // presented bearer and compares. Whoever reads the table or a backup gets
+  // nothing they can present. SECRET keeps it out of admin list views even
+  // so. NULL only on a legacy row (see `token`).
+  string token_hash = 10 [(w17.field) = {
+    type: SECRET
+    max_len: 64
+    unique: true
+    null: true
+  }];
 }
 
 // Device — a tracked device/session anchor for a user. Created or

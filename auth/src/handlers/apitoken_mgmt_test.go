@@ -64,8 +64,13 @@ func TestCreateApiToken_StampsAPIRealm_AndSubset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if resp.GetToken() != "secret-xyz" || resp.GetTokenId() != "tok-1" {
-		t.Errorf("resp = %+v, want token secret-xyz / id tok-1", resp)
+	// The handler mints the token and the store gets only its hash: the
+	// token the caller is handed is never read back from the row.
+	if len(resp.GetToken()) != bearerTokenLen || resp.GetTokenId() != "tok-1" {
+		t.Errorf("resp = %+v, want a %d-char token / id tok-1", resp, bearerTokenLen)
+	}
+	if got := m.issueReq.GetTokenHash(); got != sha256Hex(resp.GetToken()) {
+		t.Errorf("stored token_hash = %q, want sha256 of the token handed out", got)
 	}
 	if m.issueReq.GetUserId() != "u1" {
 		t.Errorf("issue user_id = %q, want u1 (caller)", m.issueReq.GetUserId())

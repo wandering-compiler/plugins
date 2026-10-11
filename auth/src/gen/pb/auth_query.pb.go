@@ -123,9 +123,15 @@ func (x *GetUserByEmailResp) GetUser() *User {
 	return nil
 }
 
+// token_hash is sha256(token) in hex, the form a token is stored in.
+// legacy_token is the token itself, which only finds a legacy row that
+// predates the hash (see UserToken); the caller then runs UpgradeTokenHash.
+// Named so a caller that sets only the token does not compile against a
+// lookup that would miss every hashed row.
 type GetUserByTokenReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	LegacyToken   string                 `protobuf:"bytes,1,opt,name=legacy_token,json=legacyToken,proto3" json:"legacy_token,omitempty"`
+	TokenHash     string                 `protobuf:"bytes,2,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -160,18 +166,27 @@ func (*GetUserByTokenReq) Descriptor() ([]byte, []int) {
 	return file_queries_auth_query_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *GetUserByTokenReq) GetToken() string {
+func (x *GetUserByTokenReq) GetLegacyToken() string {
 	if x != nil {
-		return x.Token
+		return x.LegacyToken
+	}
+	return ""
+}
+
+func (x *GetUserByTokenReq) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
 	}
 	return ""
 }
 
 type GetUserByTokenResp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	User          *User                  `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	User  *User                  `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
+	// The row's token_hash, empty on a legacy row (the caller moves it).
+	StoredTokenHash string `protobuf:"bytes,2,opt,name=stored_token_hash,json=storedTokenHash,proto3" json:"stored_token_hash,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetUserByTokenResp) Reset() {
@@ -209,6 +224,13 @@ func (x *GetUserByTokenResp) GetUser() *User {
 		return x.User
 	}
 	return nil
+}
+
+func (x *GetUserByTokenResp) GetStoredTokenHash() string {
+	if x != nil {
+		return x.StoredTokenHash
+	}
+	return ""
 }
 
 type GetUserPermissionsReq struct {
@@ -304,8 +326,10 @@ func (x *GetUserPermissionsResp) GetPermissionIds() []int32 {
 }
 
 type GetUserByTokenWithPermissionsReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// See GetUserByTokenReq.
+	LegacyToken   string `protobuf:"bytes,1,opt,name=legacy_token,json=legacyToken,proto3" json:"legacy_token,omitempty"`
+	TokenHash     string `protobuf:"bytes,2,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -340,9 +364,16 @@ func (*GetUserByTokenWithPermissionsReq) Descriptor() ([]byte, []int) {
 	return file_queries_auth_query_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *GetUserByTokenWithPermissionsReq) GetToken() string {
+func (x *GetUserByTokenWithPermissionsReq) GetLegacyToken() string {
 	if x != nil {
-		return x.Token
+		return x.LegacyToken
+	}
+	return ""
+}
+
+func (x *GetUserByTokenWithPermissionsReq) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
 	}
 	return ""
 }
@@ -617,9 +648,12 @@ type GetUserByTokenWithPermissionsResp struct {
 	// token_id is the id of the UserToken the bearer resolved to — threaded
 	// by Authenticate into AuthResp.session_token_id so base-tier Logout can
 	// revoke exactly this session without ever seeing the raw token.
-	TokenId       string `protobuf:"bytes,3,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TokenId string `protobuf:"bytes,3,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	// The row's token_hash, empty on a legacy row: the caller then moves the
+	// row to the hash (UpgradeTokenHash).
+	StoredTokenHash string `protobuf:"bytes,6,opt,name=stored_token_hash,json=storedTokenHash,proto3" json:"stored_token_hash,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetUserByTokenWithPermissionsResp) Reset() {
@@ -662,6 +696,13 @@ func (x *GetUserByTokenWithPermissionsResp) GetUser() *User {
 func (x *GetUserByTokenWithPermissionsResp) GetTokenId() string {
 	if x != nil {
 		return x.TokenId
+	}
+	return ""
+}
+
+func (x *GetUserByTokenWithPermissionsResp) GetStoredTokenHash() string {
+	if x != nil {
+		return x.StoredTokenHash
 	}
 	return ""
 }
@@ -2033,8 +2074,10 @@ func (x *GetRoleReq) GetId() string {
 }
 
 type GetTokenWithTypeReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// See GetUserByTokenReq.
+	LegacyToken   string `protobuf:"bytes,1,opt,name=legacy_token,json=legacyToken,proto3" json:"legacy_token,omitempty"`
+	TokenHash     string `protobuf:"bytes,2,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2069,20 +2112,30 @@ func (*GetTokenWithTypeReq) Descriptor() ([]byte, []int) {
 	return file_queries_auth_query_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *GetTokenWithTypeReq) GetToken() string {
+func (x *GetTokenWithTypeReq) GetLegacyToken() string {
 	if x != nil {
-		return x.Token
+		return x.LegacyToken
+	}
+	return ""
+}
+
+func (x *GetTokenWithTypeReq) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
 	}
 	return ""
 }
 
 type GetTokenWithTypeResp struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	TokenId       string                 `protobuf:"bytes,2,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
-	TokenType     TokenType              `protobuf:"varint,3,opt,name=token_type,json=tokenType,proto3,enum=w17.contrib.auth.TokenType" json:"token_type,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	UserId    string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	TokenId   string                 `protobuf:"bytes,2,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	TokenType TokenType              `protobuf:"varint,3,opt,name=token_type,json=tokenType,proto3,enum=w17.contrib.auth.TokenType" json:"token_type,omitempty"`
+	// The row's token_hash, empty on a legacy row (see
+	// GetUserByTokenWithPermissionsResp).
+	StoredTokenHash string `protobuf:"bytes,6,opt,name=stored_token_hash,json=storedTokenHash,proto3" json:"stored_token_hash,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetTokenWithTypeResp) Reset() {
@@ -2134,6 +2187,13 @@ func (x *GetTokenWithTypeResp) GetTokenType() TokenType {
 		return x.TokenType
 	}
 	return TokenType_TOKEN_TYPE_UNSPECIFIED
+}
+
+func (x *GetTokenWithTypeResp) GetStoredTokenHash() string {
+	if x != nil {
+		return x.StoredTokenHash
+	}
+	return ""
 }
 
 type GetUserRolePermissionsByRealmReq struct {
@@ -5896,17 +5956,22 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x11GetUserByEmailReq\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\"@\n" +
 	"\x12GetUserByEmailResp\x12*\n" +
-	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\")\n" +
-	"\x11GetUserByTokenReq\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"@\n" +
+	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\"U\n" +
+	"\x11GetUserByTokenReq\x12!\n" +
+	"\flegacy_token\x18\x01 \x01(\tR\vlegacyToken\x12\x1d\n" +
+	"\n" +
+	"token_hash\x18\x02 \x01(\tR\ttokenHash\"l\n" +
 	"\x12GetUserByTokenResp\x12*\n" +
-	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\":\n" +
+	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\x12*\n" +
+	"\x11stored_token_hash\x18\x02 \x01(\tR\x0fstoredTokenHash\":\n" +
 	"\x15GetUserPermissionsReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId:\b\xfa\xf4\x18\x04rbac\"I\n" +
 	"\x16GetUserPermissionsResp\x12%\n" +
-	"\x0epermission_ids\x18\x01 \x03(\x05R\rpermissionIds:\b\xfa\xf4\x18\x04rbac\"B\n" +
-	" GetUserByTokenWithPermissionsReq\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token:\b\xfa\xf4\x18\x04rbac\"A\n" +
+	"\x0epermission_ids\x18\x01 \x03(\x05R\rpermissionIds:\b\xfa\xf4\x18\x04rbac\"n\n" +
+	" GetUserByTokenWithPermissionsReq\x12!\n" +
+	"\flegacy_token\x18\x01 \x01(\tR\vlegacyToken\x12\x1d\n" +
+	"\n" +
+	"token_hash\x18\x02 \x01(\tR\ttokenHash:\b\xfa\xf4\x18\x04rbac\"A\n" +
 	"\x14GetUserRoleGrantsReq\x12\x1f\n" +
 	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId:\b\xfa\xf4\x18\x04rbac\"V\n" +
 	"\x15GetUserRoleGrantsResp\x123\n" +
@@ -5917,10 +5982,11 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\tRoleGrant\x12\x1f\n" +
 	"\arole_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06roleId\x12%\n" +
 	"\x0epermission_ids\x18\x02 \x03(\x05R\rpermissionIds\x12'\n" +
-	"\x0fall_permissions\x18\x03 \x01(\bR\x0eallPermissions\"\x8e\x01\n" +
+	"\x0fall_permissions\x18\x03 \x01(\bR\x0eallPermissions\"\xba\x01\n" +
 	"!GetUserByTokenWithPermissionsResp\x12*\n" +
 	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\x12!\n" +
-	"\btoken_id\x18\x03 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\atokenId:\b\xfa\xf4\x18\x04rbacJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06\"\x19\n" +
+	"\btoken_id\x18\x03 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\atokenId\x12*\n" +
+	"\x11stored_token_hash\x18\x06 \x01(\tR\x0fstoredTokenHash:\b\xfa\xf4\x18\x04rbacJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06\"\x19\n" +
 	"\rCountUsersReq:\b\xfa\xf4\x18\x04rbac\"0\n" +
 	"\x0eCountUsersResp\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x03R\x05count:\b\xfa\xf4\x18\x04rbac\"\x1e\n" +
@@ -5985,14 +6051,17 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x06paging\x18\x02 \x01(\v2\v.w17.PagingR\x06paging:\b\xfa\xf4\x18\x04rbac\"&\n" +
 	"\n" +
 	"GetRoleReq\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id:\b\xfa\xf4\x18\x04rbac\":\n" +
-	"\x13GetTokenWithTypeReq\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token:\r\xfa\xf4\x18\tapi_token\"\x95\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id:\b\xfa\xf4\x18\x04rbac\"f\n" +
+	"\x13GetTokenWithTypeReq\x12!\n" +
+	"\flegacy_token\x18\x01 \x01(\tR\vlegacyToken\x12\x1d\n" +
+	"\n" +
+	"token_hash\x18\x02 \x01(\tR\ttokenHash:\r\xfa\xf4\x18\tapi_token\"\xc1\x01\n" +
 	"\x14GetTokenWithTypeResp\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x19\n" +
 	"\btoken_id\x18\x02 \x01(\tR\atokenId\x12:\n" +
 	"\n" +
-	"token_type\x18\x03 \x01(\x0e2\x1b.w17.contrib.auth.TokenTypeR\ttokenType:\r\xfa\xf4\x18\tapi_token\"\x86\x01\n" +
+	"token_type\x18\x03 \x01(\x0e2\x1b.w17.contrib.auth.TokenTypeR\ttokenType\x12*\n" +
+	"\x11stored_token_hash\x18\x06 \x01(\tR\x0fstoredTokenHash:\r\xfa\xf4\x18\tapi_token\"\x86\x01\n" +
 	" GetUserRolePermissionsByRealmReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12:\n" +
 	"\n" +
@@ -6217,16 +6286,16 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\"n\n" +
 	"\x1eListPendingInvitesForEmailResp\x12<\n" +
 	"\ainvites\x18\x01 \x03(\v2\".w17.contrib.auth.PendingInviteRowR\ainvites:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\x89\xa5\x01\n" +
+	"org_invite2\xa6\xa7\x01\n" +
 	"\tAuthQuery\x12\xec\x03\n" +
 	"\x0eGetUserByEmail\x12#.w17.contrib.auth.GetUserByEmailReq\x1a$.w17.contrib.auth.GetUserByEmailResp\"\x8e\x03\xf2\xf3\x18\x89\x03B\x86\x03\n" +
-	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\xba\x03\n" +
-	"\x0eGetUserByToken\x12#.w17.contrib.auth.GetUserByTokenReq\x1a$.w17.contrib.auth.GetUserByTokenResp\"\xdc\x02\xf2\xf3\x18\xd7\x02B\xd4\x02\n" +
-	"\x04main\x12\xcb\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        u.created_at AS user.created_at FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())\x12\xaa\x02\n" +
+	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\x99\x04\n" +
+	"\x0eGetUserByToken\x12#.w17.contrib.auth.GetUserByTokenReq\x1a$.w17.contrib.auth.GetUserByTokenResp\"\xbb\x03\xf2\xf3\x18\xb6\x03B\xb3\x03\n" +
+	"\x04main\x12\xaa\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        u.created_at AS user.created_at,        COALESCE(t.token_hash, '') AS stored_token_hash FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x12\xaa\x02\n" +
 	"\x12GetUserPermissions\x12'.w17.contrib.auth.GetUserPermissionsReq\x1a(.w17.contrib.auth.GetUserPermissionsResp\"\xc0\x01\xf2\xf3\x18\xb3\x01B\xb0\x01\n" +
-	"\x04main\x12\xa7\x01SELECT ROWS_TO_ARRAY(rp.permission_id) AS permission_ids FROM @module.RolePermission rp JOIN @module.UserRole ur ON ur.role_id = rp.role_id WHERE ur.user_id = :user_id\x8a\xf5\x18\x04rbac\x12\x88\x04\n" +
-	"\x1dGetUserByTokenWithPermissions\x122.w17.contrib.auth.GetUserByTokenWithPermissionsReq\x1a3.w17.contrib.auth.GetUserByTokenWithPermissionsResp\"\xfd\x02\xf2\xf3\x18\xf0\x02B\xed\x02\n" +
-	"\x04main\x12\xe4\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        u.created_at AS user.created_at,        t.id AS token_id FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\x04rbac\x12\xc7\x03\n" +
+	"\x04main\x12\xa7\x01SELECT ROWS_TO_ARRAY(rp.permission_id) AS permission_ids FROM @module.RolePermission rp JOIN @module.UserRole ur ON ur.role_id = rp.role_id WHERE ur.user_id = :user_id\x8a\xf5\x18\x04rbac\x12\xe7\x04\n" +
+	"\x1dGetUserByTokenWithPermissions\x122.w17.contrib.auth.GetUserByTokenWithPermissionsReq\x1a3.w17.contrib.auth.GetUserByTokenWithPermissionsResp\"\xdc\x03\xf2\xf3\x18\xcf\x03B\xcc\x03\n" +
+	"\x04main\x12\xc3\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        u.created_at AS user.created_at,        t.id AS token_id,        COALESCE(t.token_hash, '') AS stored_token_hash FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\x04rbac\x12\xc7\x03\n" +
 	"\x11GetUserRoleGrants\x12&.w17.contrib.auth.GetUserRoleGrantsReq\x1a'.w17.contrib.auth.GetUserRoleGrantsResp\"\xe0\x02\xf2\xf3\x18\xd3\x02B\xd0\x02\n" +
 	"\x04main\x12\xc7\x02SELECT r.id AS role_id,        ROWS_TO_ARRAY(rp.permission_id) AS permission_ids,        r.all_permissions AS all_permissions FROM @module.UserRole ur JOIN @module.Role r ON r.id = ur.role_id LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id WHERE ur.user_id = :user_id GROUP BY r.id, r.all_permissions ORDER BY r.id ASC\x8a\xf5\x18\x04rbac\x12\xf4\x02\n" +
 	"\x0eListRoleGrants\x12#.w17.contrib.auth.ListRoleGrantsReq\x1a$.w17.contrib.auth.ListRoleGrantsResp\"\x96\x02\xf2\xf3\x18\x89\x02B\x86\x02\n" +
@@ -6263,9 +6332,9 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\tListRoles\x12\x1e.w17.contrib.auth.ListRolesReq\x1a\x1f.w17.contrib.auth.ListRolesResp\"\x80\x03\xf2\xf3\x18\xf3\x02B\xf0\x02\n" +
 	"\x04main\x12\xe7\x02SELECT r.id AS id, r.name AS name, r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r ORDER BY r.name ASC, r.id ASC\x8a\xf5\x18\x04rbac\x12\xbc\x03\n" +
 	"\aGetRole\x12\x1c.w17.contrib.auth.GetRoleReq\x1a\x16.w17.contrib.auth.Role\"\xfa\x02\xf2\xf3\x18\xed\x02B\xea\x02\n" +
-	"\x04main\x12\xe1\x02SELECT r.id AS id, r.name AS name,        r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r WHERE r.id = :id\x8a\xf5\x18\x04rbac\x12\xbc\x02\n" +
-	"\x10GetTokenWithType\x12%.w17.contrib.auth.GetTokenWithTypeReq\x1a&.w17.contrib.auth.GetTokenWithTypeResp\"\xd8\x01\xf2\xf3\x18\xc6\x01B\xc3\x01\n" +
-	"\x04main\x12\xba\x01SELECT t.user_id AS user_id,        t.id AS token_id,        t.token_type AS token_type FROM @module.UserToken t WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\tapi_token\x12\x8f\x04\n" +
+	"\x04main\x12\xe1\x02SELECT r.id AS id, r.name AS name,        r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r WHERE r.id = :id\x8a\xf5\x18\x04rbac\x12\x9b\x03\n" +
+	"\x10GetTokenWithType\x12%.w17.contrib.auth.GetTokenWithTypeReq\x1a&.w17.contrib.auth.GetTokenWithTypeResp\"\xb7\x02\xf2\xf3\x18\xa5\x02B\xa2\x02\n" +
+	"\x04main\x12\x99\x02SELECT t.user_id AS user_id,        t.id AS token_id,        t.token_type AS token_type,        COALESCE(t.token_hash, '') AS stored_token_hash FROM @module.UserToken t WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\tapi_token\x12\x8f\x04\n" +
 	"\x1dGetUserRolePermissionsByRealm\x122.w17.contrib.auth.GetUserRolePermissionsByRealmReq\x1a3.w17.contrib.auth.GetUserRolePermissionsByRealmResp\"\x84\x03\xf2\xf3\x18\xf2\x02B\xef\x02\n" +
 	"\x04main\x12\xe6\x02SELECT r.id AS role_id,        ROWS_TO_ARRAY(rp.permission_id) AS permission_ids,        r.all_permissions AS all_permissions FROM @module.UserRole ur JOIN @module.Role r ON r.id = ur.role_id LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id WHERE ur.user_id = :user_id AND r.token_type = :token_type GROUP BY r.id, r.all_permissions ORDER BY r.id ASC\x8a\xf5\x18\tapi_token\x12\x8e\x02\n" +
 	"\x18GetTokenPermissionSubset\x12-.w17.contrib.auth.GetTokenPermissionSubsetReq\x1a..w17.contrib.auth.GetTokenPermissionSubsetResp\"\x92\x01\xf2\xf3\x18\x80\x01B~\n" +

@@ -54,7 +54,7 @@ func (m *deviceMock) CreateDevice(ctx context.Context, in *pb.CreateDeviceReq, _
 }
 func (m *deviceMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
 	m.issuedWith = append(m.issuedWith, in)
-	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", Token: "secret-dev", UserId: in.GetUserId(), DeviceId: in.GetDeviceId()}}, nil
+	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", UserId: in.GetUserId(), DeviceId: in.GetDeviceId()}}, nil
 }
 func (m *deviceMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...grpc.CallOption) (*pb.TrustDeviceResp, error) {
 	m.trusted = append(m.trusted, in)
@@ -213,8 +213,8 @@ func TestIssueSessionWithDevice_IssuesMintsAndTrusts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	if tok != "secret-dev" {
-		t.Errorf("token = %q, want secret-dev", tok)
+	if tok == "" || len(m.issuedWith) != 1 || m.issuedWith[0].GetTokenHash() != sha256Hex(tok) {
+		t.Errorf("token = %q: the store must get sha256 of the token handed out", tok)
 	}
 	if trustToken == "" {
 		t.Fatal("issueSessionWithDevice must return a non-empty device-trust token")

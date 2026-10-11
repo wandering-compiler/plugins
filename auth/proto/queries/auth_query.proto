@@ -28,8 +28,17 @@ option go_package = "@project;@pkg";
 message GetUserByEmailReq  { string email = 1; }
 message GetUserByEmailResp { User user = 1; }
 
-message GetUserByTokenReq  { string token = 1; }
-message GetUserByTokenResp { User user = 1; }
+// token_hash is sha256(token) in hex, the form a token is stored in.
+// legacy_token is the token itself, which only finds a legacy row that
+// predates the hash (see UserToken); the caller then runs UpgradeTokenHash.
+// Named so a caller that sets only the token does not compile against a
+// lookup that would miss every hashed row.
+message GetUserByTokenReq  { string legacy_token = 1; string token_hash = 2; }
+message GetUserByTokenResp {
+  User user = 1;
+  // The row's token_hash, empty on a legacy row (the caller moves it).
+  string stored_token_hash = 2;
+}
 
 message GetUserPermissionsReq {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -46,7 +55,9 @@ message GetUserPermissionsResp {
 
 message GetUserByTokenWithPermissionsReq {
   option (w17.contrib.plugin_feature) = "rbac";
-  string token = 1;
+  // See GetUserByTokenReq.
+  string legacy_token = 1;
+  string token_hash   = 2;
 }
 // UserWithPermissions packs identity + the deduped permission
 // IDs the user holds across every assigned role. One SQL
@@ -116,6 +127,9 @@ message GetUserByTokenWithPermissionsResp {
   // by Authenticate into AuthResp.session_token_id so base-tier Logout can
   // revoke exactly this session without ever seeing the raw token.
   string token_id = 3 [(w17.field) = { type: UUID }];
+  // The row's token_hash, empty on a legacy row: the caller then moves the
+  // row to the hash (UpgradeTokenHash).
+  string stored_token_hash = 6;
 
   // The role grants are NOT here: they come from GetUserRoleGrants.
   //
@@ -322,13 +336,18 @@ message GetRoleReq {
 
 message GetTokenWithTypeReq {
   option (w17.contrib.plugin_feature) = "api_token";
-  string token = 1;
+  // See GetUserByTokenReq.
+  string legacy_token = 1;
+  string token_hash   = 2;
 }
 message GetTokenWithTypeResp {
   option (w17.contrib.plugin_feature) = "api_token";
   string    user_id    = 1;
   string    token_id   = 2;
   TokenType token_type = 3;
+  // The row's token_hash, empty on a legacy row (see
+  // GetUserByTokenWithPermissionsResp).
+  string stored_token_hash = 6;
 }
 
 message GetUserRolePermissionsByRealmReq {
@@ -1014,8 +1033,9 @@ service AuthQuery {
           "       u.email AS user.email, "
           "       u.password_hash AS user.password_hash, "
           "       ?feature(service_account) u.kind AS user.kind, "
-          "       u.created_at AS user.created_at "
-          "FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "       u.created_at AS user.created_at, "
+          "       COALESCE(t.token_hash, '') AS stored_token_hash "
+          "FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
       }
     };
   }
@@ -1088,10 +1108,11 @@ service AuthQuery {
           "       u.password_hash AS user.password_hash, "
           "       ?feature(service_account) u.kind AS user.kind, "
           "       u.created_at AS user.created_at, "
-          "       t.id AS token_id "
+          "       t.id AS token_id, "
+          "       COALESCE(t.token_hash, '') AS stored_token_hash "
           "FROM @module.User u "
           "JOIN @module.UserToken t ON t.user_id = u.id "
-          "WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1503,8 +1524,9 @@ service AuthQuery {
         dql:
           "SELECT t.user_id AS user_id, "
           "       t.id AS token_id, "
-          "       t.token_type AS token_type "
-          "FROM @module.UserToken t WHERE t.token = :token AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "       t.token_type AS token_type, "
+          "       COALESCE(t.token_hash, '') AS stored_token_hash "
+          "FROM @module.UserToken t WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "api_token";

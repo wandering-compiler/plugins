@@ -1,5 +1,20 @@
 # auth — changelog
 
+## 0.1.0-rc.24
+
+### Bearer tokens are stored as a hash
+
+Session and API tokens (`UserToken`) used to be stored as they are handed out, so whoever could read the table or a backup of it held every live token. A token is now stored only as `token_hash`, the sha256 of the token. The handler that mints a token generates it, stores the hash, and returns the token to the caller once. A lookup hashes the bearer it is presented and compares.
+
+What changes:
+
+- **New column `UserToken.token_hash`.** Generate a migration as usual (`w17ctl migrate generate`). `UserToken.token` becomes nullable and nothing writes it any more.
+- **Existing tokens keep working.** A token minted before this release is still found by its value. The first request that `Authenticate` resolves with it moves the row to `token_hash` and clears `token` (`AuthMutation.UpgradeTokenHash`). Nobody is signed out by the upgrade. Hand-written code that resolves a token through `GetUserByToken` does not move the row; it runs `UpgradeTokenHash` itself if it should.
+- **A token that is never used stays in the clear** until a later release drops the `token` column, which ends every such token. To close it sooner, revoke the tokens that are still unhashed (`token_hash IS NULL`): their owners sign in again or reissue an API token.
+- **Storage callers:** `IssueToken` and `IssueApiToken` take the hash (`token_hash`) and no longer return the token. `GetUserByToken`, `GetUserByTokenWithPermissions`, `GetTokenWithType` and `DeleteToken` take `token_hash`, plus `legacy_token`, the token itself, which finds only a row minted before this release. The old `token` field is gone, so code that set only the token does not compile: a lookup by the token alone would miss every hashed row. Hash the token with sha256, hex-encode it, and pass both.
+- **No rollback past this release.** A token minted by this release exists only as its hash, so going back to rc.23, which looks tokens up by `token` alone, signs out every session and invalidates every API token issued since the upgrade.
+- **Fixtures** that seed a `UserToken` with a known `token` keep working through the legacy path. A fixture may instead seed `token_hash` with the sha256 of the token.
+
 ## 0.1.0-rc.23
 
 ### A successful OAuth sign-in no longer spends the per-address limit twice

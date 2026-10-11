@@ -503,15 +503,11 @@ func (x *Tenant) GetCreatedAt() *timestamppb.Timestamp {
 type UserToken struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// Phase N3 — storage codegen mutation-handler preamble fills
-	// this column app-side via `randstr.Token(64)` at INSERT time
-	// (the `(w17.field).default_auto = CRYPTO_RANDOM` annotation
-	// triggers the synthesized SetPair + bind). Caller's
-	// IssueTokenReq carries NO `token` field — the codegen owns
-	// the value end-to-end.
-	// SECRET, not CHAR: this IS the bearer credential, so the admin masks it
-	// and leaves it out of list views. max_len + unique stay — the stored value
-	// is the token itself, so it has a real width and a real identity.
+	// LEGACY: the bearer token in the clear, as rows minted before 0.1.0-rc.24
+	// still hold it. Nothing writes it any more — a token is stored only as
+	// token_hash — and the lookup that finds a row by it moves the row to the
+	// hash and clears this column (UpgradeTokenHash). A later release drops it,
+	// which ends every legacy token that was never used in between.
 	Token     string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
 	UserId    string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -553,7 +549,14 @@ type UserToken struct {
 	// the field unset, so device_id stays NULL there; only the sign-in
 	// paths under `devices` (SignIn / VerifyMfa) pass one. A NOT NULL
 	// column would break SignUp the moment `devices` is enabled.
-	DeviceId      string `protobuf:"bytes,9,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	DeviceId string `protobuf:"bytes,9,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// token_hash — sha256 (hex) of the bearer token, the only form a token is
+	// stored in. The handler that mints a token generates it, stores this
+	// hash and hands the token to the caller once; a lookup hashes the
+	// presented bearer and compares. Whoever reads the table or a backup gets
+	// nothing they can present. SECRET keeps it out of admin list views even
+	// so. NULL only on a legacy row (see `token`).
+	TokenHash     string `protobuf:"bytes,10,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -647,6 +650,13 @@ func (x *UserToken) GetLastUsedAt() *timestamppb.Timestamp {
 func (x *UserToken) GetDeviceId() string {
 	if x != nil {
 		return x.DeviceId
+	}
+	return ""
+}
+
+func (x *UserToken) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
 	}
 	return ""
 }
@@ -2885,10 +2895,10 @@ const file_types_models_proto_rawDesc = "" +
 	"\xca\xf3\x18\x06\b\x068\x01@dR\x04name\x12+\n" +
 	"\x06domain\x18\x04 \x01(\tB\x13\xca\xf3\x18\t\b\x01(\x018\x01@\xfd\x01\xd2\xf3\x18\x02\b\x01R\x06domain\x12F\n" +
 	"\n" +
-	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x14\xc2\xf3\x18\x00\xfa\xf4\x18\ftenant_scope\"\x96\x04\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x14\xc2\xf3\x18\x00\xfa\xf4\x18\ftenant_scope\"\xc2\x04\n" +
 	"\tUserToken\x12\x1b\n" +
-	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12#\n" +
-	"\x05token\x18\x02 \x01(\tB\r\xca\xf3\x18\t\bC8\x01@@\xb8\x012R\x05token\x12%\n" +
+	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12\"\n" +
+	"\x05token\x18\x02 \x01(\tB\f\xca\xf3\x18\b\bC(\x018\x01@@R\x05token\x12%\n" +
 	"\auser_id\x18\x03 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12F\n" +
 	"\n" +
 	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12C\n" +
@@ -2899,7 +2909,10 @@ const file_types_models_proto_rawDesc = "" +
 	"\x04name\x18\x06 \x01(\tB\x18\xca\xf3\x18\a\b\x010\x01@\x80\x01\x92\xf5\x18\tapi_tokenR\x04name\x12S\n" +
 	"\flast_used_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x15\xca\xf3\x18\x04\b\x16(\x01\x92\xf5\x18\tapi_tokenR\n" +
 	"lastUsedAt\x126\n" +
-	"\tdevice_id\x18\t \x01(\tB\x19\xca\xf3\x18\x04\b\x03(\x01\xd2\xf3\x18\x02\b\x01\x92\xf5\x18\adevicesR\bdeviceId:\x04\xc2\xf3\x18\x00\"\xf1\x03\n" +
+	"\tdevice_id\x18\t \x01(\tB\x19\xca\xf3\x18\x04\b\x03(\x01\xd2\xf3\x18\x02\b\x01\x92\xf5\x18\adevicesR\bdeviceId\x12+\n" +
+	"\n" +
+	"token_hash\x18\n" +
+	" \x01(\tB\f\xca\xf3\x18\b\bC(\x018\x01@@R\ttokenHash:\x04\xc2\xf3\x18\x00\"\xf1\x03\n" +
 	"\x06Device\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12)\n" +

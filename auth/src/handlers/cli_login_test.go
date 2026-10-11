@@ -35,8 +35,9 @@ type cliMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
-	codes     map[string]*cliCode // code_hash -> stored code
-	issuedFor string              // user_id IssueToken was last called with
+	codes      map[string]*cliCode // code_hash -> stored code
+	issuedHash string
+	issuedFor  string // user_id IssueToken was last called with
 
 	// registered mirrors the AuthClient rows. Keyed on the exact pair the
 	// query's WHERE matches, so the mock cannot be looser than the statement
@@ -106,7 +107,8 @@ func (m *cliMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grp
 		return nil, m.issueErr
 	}
 	m.issuedFor = in.GetUserId()
-	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", Token: "bearer-for-" + in.GetUserId(), UserId: in.GetUserId()}}, nil
+	m.issuedHash = in.GetTokenHash()
+	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", UserId: in.GetUserId()}}, nil
 }
 
 // pkceChallengeOf is the challenge a verifier must hash to — the same
@@ -171,8 +173,8 @@ func TestCliLogin_EndToEnd(t *testing.T) {
 	if tok.GetUserId() != "user-1" {
 		t.Errorf("user_id = %q, want user-1", tok.GetUserId())
 	}
-	if tok.GetToken() != "bearer-for-user-1" {
-		t.Errorf("token = %q", tok.GetToken())
+	if tok.GetToken() == "" || m.issuedHash != sha256Hex(tok.GetToken()) {
+		t.Errorf("token = %q, stored hash %q: the store must get sha256 of the token handed out", tok.GetToken(), m.issuedHash)
 	}
 	if m.issuedFor != "user-1" {
 		t.Errorf("IssueToken called for %q, want user-1", m.issuedFor)

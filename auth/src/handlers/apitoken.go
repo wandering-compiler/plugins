@@ -47,10 +47,12 @@ func init() {
 // Any query error propagates and fails Authenticate closed (the same
 // opaque Unauthenticated path).
 func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, token string) (*authPrincipal, error) {
-	tok, err := h.Query.GetTokenWithType(ctx, &pb.GetTokenWithTypeReq{Token: token})
+	hash := sha256Hex(token)
+	tok, err := h.Query.GetTokenWithType(ctx, &pb.GetTokenWithTypeReq{LegacyToken: token, TokenHash: hash})
 	if err != nil {
 		return nil, err
 	}
+	h.upgradeLegacyToken(ctx, token, hash, tok.GetStoredTokenHash())
 	userID := tok.GetUserId()
 
 	realm, err := h.Query.GetUserRolePermissionsByRealm(ctx, &pb.GetUserRolePermissionsByRealmReq{
@@ -171,11 +173,16 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 // were two copies of this function, which is how one of them would have been
 // left minting never-expiring tokens.
 func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, userID, name string, subset []int32, expiresAt *timestamppb.Timestamp) (token, tokenID string, err error) {
+	token, hash, err := newBearerToken()
+	if err != nil {
+		return "", "", err
+	}
 	issued, err := h.Mutation.IssueApiToken(txCtx, &pb.IssueApiTokenReq{
 		UserId:    userID,
 		Name:      name,
 		TokenType: pb.TokenType_TOKEN_TYPE_API,
 		ExpiresAt: expiresAt,
+		TokenHash: hash,
 	})
 	if err != nil {
 		return "", "", err
@@ -189,7 +196,7 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, userID, name
 			return "", "", err
 		}
 	}
-	return issued.GetToken().GetToken(), id, nil
+	return token, id, nil
 }
 
 // ListApiTokens returns the calling user's API tokens (management view —

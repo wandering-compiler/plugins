@@ -163,12 +163,15 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 	// bearer expires too. Without ExpiresAt the storage binds the proto zero
 	// time (0001-01-01), which the validation guard reads as already-expired →
 	// the fresh token 401s.
-	tokResp, err := h.Mutation.IssueToken(txCtx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry()})
+	token, hash, err := newBearerToken()
 	if err != nil {
+		return nil, err
+	}
+	if _, err := h.Mutation.IssueToken(txCtx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry(), TokenHash: hash}); err != nil {
 		return nil, err
 	}
 	return &pb.SignUpResp{
 		UserId: userID,
-		Token:  tokResp.GetToken().GetToken(),
+		Token:  token,
 	}, nil
 }

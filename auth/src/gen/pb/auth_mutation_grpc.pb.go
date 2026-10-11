@@ -32,6 +32,7 @@ const (
 	AuthMutation_CreateUser_FullMethodName                     = "/w17.contrib.auth.AuthMutation/CreateUser"
 	AuthMutation_IssueToken_FullMethodName                     = "/w17.contrib.auth.AuthMutation/IssueToken"
 	AuthMutation_DeleteToken_FullMethodName                    = "/w17.contrib.auth.AuthMutation/DeleteToken"
+	AuthMutation_UpgradeTokenHash_FullMethodName               = "/w17.contrib.auth.AuthMutation/UpgradeTokenHash"
 	AuthMutation_DeleteSessionToken_FullMethodName             = "/w17.contrib.auth.AuthMutation/DeleteSessionToken"
 	AuthMutation_IssueApiToken_FullMethodName                  = "/w17.contrib.auth.AuthMutation/IssueApiToken"
 	AuthMutation_AddTokenPermission_FullMethodName             = "/w17.contrib.auth.AuthMutation/AddTokenPermission"
@@ -158,6 +159,13 @@ type AuthMutationClient interface {
 	// signal for what is really a rotation. The RETURNING ids stay for the
 	// caller's response.
 	DeleteToken(ctx context.Context, in *DeleteTokenReq, opts ...grpc.CallOption) (*DeleteTokenResp, error)
+	// UpgradeTokenHash — moves a legacy UserToken row (token in the clear,
+	// minted before the hash) to token_hash and clears the clear copy. The
+	// lookups find a legacy row by its token and report an empty
+	// stored_token_hash; the caller then runs this. Guarded on token_hash IS
+	// NULL, so a second run, or a race with another request presenting the
+	// same token, changes nothing.
+	UpgradeTokenHash(ctx context.Context, in *UpgradeTokenHashReq, opts ...grpc.CallOption) (*UpgradeTokenHashResp, error)
 	// DeleteSessionToken — base-tier logout primitive (gated
 	// authenticate_turnkey). Delete-by-id, OWNERSHIP guarded (id AND
 	// user_id) so a caller revokes only their own token. This is the SOLE
@@ -577,6 +585,16 @@ func (c *authMutationClient) DeleteToken(ctx context.Context, in *DeleteTokenReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteTokenResp)
 	err := c.cc.Invoke(ctx, AuthMutation_DeleteToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) UpgradeTokenHash(ctx context.Context, in *UpgradeTokenHashReq, opts ...grpc.CallOption) (*UpgradeTokenHashResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpgradeTokenHashResp)
+	err := c.cc.Invoke(ctx, AuthMutation_UpgradeTokenHash_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1373,6 +1391,13 @@ type AuthMutationServer interface {
 	// signal for what is really a rotation. The RETURNING ids stay for the
 	// caller's response.
 	DeleteToken(context.Context, *DeleteTokenReq) (*DeleteTokenResp, error)
+	// UpgradeTokenHash — moves a legacy UserToken row (token in the clear,
+	// minted before the hash) to token_hash and clears the clear copy. The
+	// lookups find a legacy row by its token and report an empty
+	// stored_token_hash; the caller then runs this. Guarded on token_hash IS
+	// NULL, so a second run, or a race with another request presenting the
+	// same token, changes nothing.
+	UpgradeTokenHash(context.Context, *UpgradeTokenHashReq) (*UpgradeTokenHashResp, error)
 	// DeleteSessionToken — base-tier logout primitive (gated
 	// authenticate_turnkey). Delete-by-id, OWNERSHIP guarded (id AND
 	// user_id) so a caller revokes only their own token. This is the SOLE
@@ -1769,6 +1794,9 @@ func (UnimplementedAuthMutationServer) IssueToken(context.Context, *IssueTokenRe
 func (UnimplementedAuthMutationServer) DeleteToken(context.Context, *DeleteTokenReq) (*DeleteTokenResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteToken not implemented")
 }
+func (UnimplementedAuthMutationServer) UpgradeTokenHash(context.Context, *UpgradeTokenHashReq) (*UpgradeTokenHashResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpgradeTokenHash not implemented")
+}
 func (UnimplementedAuthMutationServer) DeleteSessionToken(context.Context, *DeleteSessionTokenReq) (*DeleteSessionTokenResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSessionToken not implemented")
 }
@@ -2079,6 +2107,24 @@ func _AuthMutation_DeleteToken_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthMutationServer).DeleteToken(ctx, req.(*DeleteTokenReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_UpgradeTokenHash_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpgradeTokenHashReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).UpgradeTokenHash(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_UpgradeTokenHash_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).UpgradeTokenHash(ctx, req.(*UpgradeTokenHashReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3437,6 +3483,10 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteToken",
 			Handler:    _AuthMutation_DeleteToken_Handler,
+		},
+		{
+			MethodName: "UpgradeTokenHash",
+			Handler:    _AuthMutation_UpgradeTokenHash_Handler,
 		},
 		{
 			MethodName: "DeleteSessionToken",

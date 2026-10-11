@@ -298,12 +298,15 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 	if _, err := h.Mutation.DeletePendingSignUpsForEmail(txCtx, &pb.DeletePendingSignUpsForEmailReq{Email: claimed.GetEmail()}); err != nil {
 		return nil, err
 	}
-	tokResp, err := h.Mutation.IssueToken(txCtx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry()})
+	token, hash, err := newBearerToken()
 	if err != nil {
+		return nil, err
+	}
+	if _, err := h.Mutation.IssueToken(txCtx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry(), TokenHash: hash}); err != nil {
 		return nil, err
 	}
 	return &pb.ConfirmSignUpResp{
 		UserId: userID,
-		Token:  tokResp.GetToken().GetToken(),
+		Token:  token,
 	}, nil
 }
