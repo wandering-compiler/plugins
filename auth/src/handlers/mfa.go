@@ -624,7 +624,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, err
 	}
-	token, trustToken, err := issueSession(ctx, h, userID, deviceID)
+	token, trustToken, err := issueSession(ctx, h, userID, deviceID, true)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}

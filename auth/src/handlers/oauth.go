@@ -216,7 +216,10 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	token, trustToken, err := issueSession(ctx, h, userID, deviceID)
+	// Bound to the device, never trusting it: this sign-in skipped the
+	// plugin's second factor, and a trusted device skips it later for a
+	// password sign-in too.
+	token, trustToken, err := issueSession(ctx, h, userID, deviceID, false)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
