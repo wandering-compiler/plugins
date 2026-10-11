@@ -120,15 +120,16 @@ message IssueTokenReq {
 }
 message IssueTokenResp { UserToken token = 1; }
 
-// token_hash finds the row; token only a legacy one (see UserToken).
-message DeleteTokenReq  { string token = 1; string token_hash = 2; }
+// token_hash finds the row; legacy_token only a legacy one (see
+// GetUserByTokenReq).
+message DeleteTokenReq  { string legacy_token = 1; string token_hash = 2; }
 
 // UpgradeTokenHash moves a legacy row — found by its token in the clear —
 // to the hash, and clears the clear copy. Run by the lookup that found it;
 // a no-op on a row already moved.
 message UpgradeTokenHashReq {
-  string token      = 1;
-  string token_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string legacy_token = 1;
+  string token_hash   = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
 }
 message UpgradeTokenHashResp {}
 // DeleteToken returns the deleted row's identifiers for the
@@ -1316,7 +1317,7 @@ service AuthMutation {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :token RETURNING id AS token_id, user_id"
+        dql:  "DELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :legacy_token RETURNING id AS token_id, user_id"
       }
     };
   }
@@ -1331,7 +1332,7 @@ service AuthMutation {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "UPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :token AND token_hash IS NULL"
+        dql:  "UPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :legacy_token AND token_hash IS NULL"
       }
     };
   }

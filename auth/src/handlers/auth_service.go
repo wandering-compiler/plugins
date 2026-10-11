@@ -317,12 +317,17 @@ func (p *authPrincipal) effectivePermissions(lock *acllock.Lock) []int32 {
 // realm's roles, and intersect an API token with its permission subset.
 // Declared here (always-present) so Authenticate compiles with no
 // feature file staged; the override only ships when api_token is on.
-var resolvePrincipal = func(ctx context.Context, h *AuthServiceHandler, token string) (*authPrincipal, error) {
-	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{Token: token, TokenHash: sha256Hex(token)})
+var resolvePrincipal = resolvePrincipalSession
+
+// resolvePrincipalSession is the default resolvePrincipal, named so a test
+// reaches it even in a build where api_token's init() replaced the variable.
+func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token string) (*authPrincipal, error) {
+	hash := sha256Hex(token)
+	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{LegacyToken: token, TokenHash: hash})
 	if err != nil {
 		return nil, err
 	}
-	h.upgradeLegacyToken(ctx, token, resp.GetStoredTokenHash())
+	h.upgradeLegacyToken(ctx, token, hash, resp.GetStoredTokenHash())
 	// SESSION: with api_token off there is only one credential class, and
 	// this is it. Stamping it rather than leaving the zero value keeps the
 	// ownership rule (session-only) reading the same in both builds.

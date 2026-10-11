@@ -44,11 +44,11 @@ func TestNewBearerToken(t *testing.T) {
 func TestUpgradeLegacyToken(t *testing.T) {
 	rec := &upgradeRecorder{}
 	h := &AuthServiceHandler{Mutation: rec}
-	h.upgradeLegacyToken(context.Background(), "legacy-plaintext", "")
-	if len(rec.calls) != 1 || rec.calls[0].GetToken() != "legacy-plaintext" || rec.calls[0].GetTokenHash() != sha256Hex("legacy-plaintext") {
+	h.upgradeLegacyToken(context.Background(), "legacy-plaintext", sha256Hex("legacy-plaintext"), "")
+	if len(rec.calls) != 1 || rec.calls[0].GetLegacyToken() != "legacy-plaintext" || rec.calls[0].GetTokenHash() != sha256Hex("legacy-plaintext") {
 		t.Fatalf("legacy row: calls = %v, want one upgrade to sha256 of the token", rec.calls)
 	}
-	h.upgradeLegacyToken(context.Background(), "new-token", sha256Hex("new-token"))
+	h.upgradeLegacyToken(context.Background(), "new-token", sha256Hex("new-token"), sha256Hex("new-token"))
 	if len(rec.calls) != 1 {
 		t.Errorf("a hashed row was upgraded again: %v", rec.calls)
 	}
@@ -63,7 +63,7 @@ func TestResolvePrincipalRealmAware_LegacyRowIsMovedToTheHash(t *testing.T) {
 	if _, err := resolvePrincipalRealmAware(context.Background(), h, "plain-legacy"); err != nil {
 		t.Fatal(err)
 	}
-	if q.req.GetTokenHash() != sha256Hex("plain-legacy") || q.req.GetToken() != "plain-legacy" {
+	if q.req.GetTokenHash() != sha256Hex("plain-legacy") || q.req.GetLegacyToken() != "plain-legacy" {
 		t.Errorf("lookup req = %v, want the hash and the token (legacy fallback)", q.req)
 	}
 	if len(rec.calls) != 1 {
@@ -84,4 +84,50 @@ func (q *legacyLookupQuery) GetTokenWithType(_ context.Context, in *pb.GetTokenW
 
 func (q *legacyLookupQuery) GetUserRolePermissionsByRealm(context.Context, *pb.GetUserRolePermissionsByRealmReq, ...grpc.CallOption) (*pb.GetUserRolePermissionsByRealmResp, error) {
 	return &pb.GetUserRolePermissionsByRealmResp{}, nil
+}
+
+// The default (api_token off) resolver looks the bearer up by hash too and
+// moves a legacy row it resolved to; a hashed row is left alone.
+func TestResolvePrincipalSession_LegacyRowIsMovedToTheHash(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stored string
+		want   int
+	}{
+		{"legacy", "", 1},
+		{"hashed", sha256Hex("plain"), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &sessionLookupQuery{stored: tc.stored}
+			rec := &upgradeRecorder{}
+			h := &AuthServiceHandler{Query: q, Mutation: rec}
+			if _, err := resolvePrincipalSession(context.Background(), h, "plain"); err != nil {
+				t.Fatal(err)
+			}
+			if q.req.GetTokenHash() != sha256Hex("plain") || q.req.GetLegacyToken() != "plain" {
+				t.Errorf("lookup req = %v, want the hash and the token (legacy fallback)", q.req)
+			}
+			if len(rec.calls) != tc.want {
+				t.Fatalf("upgrades = %v, want %d", rec.calls, tc.want)
+			}
+			if tc.want == 1 && rec.calls[0].GetTokenHash() != sha256Hex("plain") {
+				t.Errorf("upgrade hash = %q, want sha256 of the token", rec.calls[0].GetTokenHash())
+			}
+		})
+	}
+}
+
+type sessionLookupQuery struct {
+	pb.AuthQueryClient
+	stored string
+	req    *pb.GetUserByTokenWithPermissionsReq
+}
+
+func (q *sessionLookupQuery) GetUserByTokenWithPermissions(_ context.Context, in *pb.GetUserByTokenWithPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserByTokenWithPermissionsResp, error) {
+	q.req = in
+	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: q.stored}, nil
+}
+
+func (q *sessionLookupQuery) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
+	return &pb.GetUserRoleGrantsResp{}, nil
 }

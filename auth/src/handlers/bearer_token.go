@@ -27,10 +27,11 @@ func newBearerToken() (token, hash string, err error) {
 // is a legacy row — minted before tokens were hashed, so found by its token
 // in the clear and reported with an empty storedHash. Best effort: a failed
 // move leaves the row as it was, still valid, and the next request using the
-// token tries again; it does not fail the request it rides on.
-func (h *AuthServiceHandler) upgradeLegacyToken(ctx context.Context, token, storedHash string) {
+// token tries again; it does not fail the request it rides on. hash is
+// sha256Hex(token), already computed for the lookup.
+func (h *AuthServiceHandler) upgradeLegacyToken(ctx context.Context, token, hash, storedHash string) {
 	if storedHash != "" || token == "" {
 		return
 	}
-	_, _ = h.Mutation.UpgradeTokenHash(ctx, &pb.UpgradeTokenHashReq{Token: token, TokenHash: sha256Hex(token)})
+	_, _ = h.Mutation.UpgradeTokenHash(ctx, &pb.UpgradeTokenHashReq{LegacyToken: token, TokenHash: hash})
 }

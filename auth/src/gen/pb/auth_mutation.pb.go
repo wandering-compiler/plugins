@@ -410,10 +410,11 @@ func (x *IssueTokenResp) GetToken() *UserToken {
 	return nil
 }
 
-// token_hash finds the row; token only a legacy one (see UserToken).
+// token_hash finds the row; legacy_token only a legacy one (see
+// GetUserByTokenReq).
 type DeleteTokenReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	LegacyToken   string                 `protobuf:"bytes,1,opt,name=legacy_token,json=legacyToken,proto3" json:"legacy_token,omitempty"`
 	TokenHash     string                 `protobuf:"bytes,2,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -449,9 +450,9 @@ func (*DeleteTokenReq) Descriptor() ([]byte, []int) {
 	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *DeleteTokenReq) GetToken() string {
+func (x *DeleteTokenReq) GetLegacyToken() string {
 	if x != nil {
-		return x.Token
+		return x.LegacyToken
 	}
 	return ""
 }
@@ -468,7 +469,7 @@ func (x *DeleteTokenReq) GetTokenHash() string {
 // a no-op on a row already moved.
 type UpgradeTokenHashReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	LegacyToken   string                 `protobuf:"bytes,1,opt,name=legacy_token,json=legacyToken,proto3" json:"legacy_token,omitempty"`
 	TokenHash     string                 `protobuf:"bytes,2,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -504,9 +505,9 @@ func (*UpgradeTokenHashReq) Descriptor() ([]byte, []int) {
 	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *UpgradeTokenHashReq) GetToken() string {
+func (x *UpgradeTokenHashReq) GetLegacyToken() string {
 	if x != nil {
-		return x.Token
+		return x.LegacyToken
 	}
 	return ""
 }
@@ -8206,13 +8207,13 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\n" +
 	"token_hash\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\ttokenHash\"C\n" +
 	"\x0eIssueTokenResp\x121\n" +
-	"\x05token\x18\x01 \x01(\v2\x1b.w17.contrib.auth.UserTokenR\x05token\"E\n" +
-	"\x0eDeleteTokenReq\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1d\n" +
+	"\x05token\x18\x01 \x01(\v2\x1b.w17.contrib.auth.UserTokenR\x05token\"R\n" +
+	"\x0eDeleteTokenReq\x12!\n" +
+	"\flegacy_token\x18\x01 \x01(\tR\vlegacyToken\x12\x1d\n" +
 	"\n" +
-	"token_hash\x18\x02 \x01(\tR\ttokenHash\"T\n" +
-	"\x13UpgradeTokenHashReq\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\x12'\n" +
+	"token_hash\x18\x02 \x01(\tR\ttokenHash\"a\n" +
+	"\x13UpgradeTokenHashReq\x12!\n" +
+	"\flegacy_token\x18\x01 \x01(\tR\vlegacyToken\x12'\n" +
 	"\n" +
 	"token_hash\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\ttokenHash\"\x16\n" +
 	"\x14UpgradeTokenHashResp\"E\n" +
@@ -8701,7 +8702,7 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"org_invite\"B\n" +
 	"\x13DeleteOrgInviteResp\x12\x1b\n" +
 	"\tinvite_id\x18\x01 \x01(\tR\binviteId:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xf2\xe0\x01\n" +
+	"org_invite2\x84\xe1\x01\n" +
 	"\fAuthMutation\x12\xd8\x02\n" +
 	"\rCreateBotUser\x12\".w17.contrib.auth.CreateBotUserReq\x1a#.w17.contrib.auth.CreateBotUserResp\"\xfd\x01\xf2\xf3\x18\xe5\x01B\xe2\x01\n" +
 	"\x04main\x12\xd9\x01INSERT INTO @module.User SET email = :email, password_hash = '!', kind = 1, ?feature(tenant_scope) tenant_id = :tenant_id RETURNING id AS user.id,           email AS user.email,           created_at AS user.created_at\x8a\xf5\x18\x0fservice_account\x12\xe5\x03\n" +
@@ -8725,11 +8726,11 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\auser_id\x12\x17$response.token.user_id\n" +
 	"'\n" +
 	"\tissued_at\x12\x1a$response.token.created_at\xf2\xf3\x18\xbf\x02B\xbc\x02\n" +
-	"\x04main\x12\xb3\x02INSERT INTO @module.UserToken SET user_id = :user_id, token_hash = :token_hash, expires_at = :expires_at, ?feature(devices) device_id = :device_id RETURNING id AS token.id,           user_id AS token.user_id,           ?feature(devices) device_id AS token.device_id,           created_at AS token.created_at\x12\xd2\x01\n" +
-	"\vDeleteToken\x12 .w17.contrib.auth.DeleteTokenReq\x1a!.w17.contrib.auth.DeleteTokenResp\"~\xf2\xf3\x18zBx\n" +
-	"\x04main\x12pDELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :token RETURNING id AS token_id, user_id\x12\xe0\x01\n" +
-	"\x10UpgradeTokenHash\x12%.w17.contrib.auth.UpgradeTokenHashReq\x1a&.w17.contrib.auth.UpgradeTokenHashResp\"}\xf2\xf3\x18yBw\n" +
-	"\x04main\x12oUPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :token AND token_hash IS NULL\x12\xcd\x02\n" +
+	"\x04main\x12\xb3\x02INSERT INTO @module.UserToken SET user_id = :user_id, token_hash = :token_hash, expires_at = :expires_at, ?feature(devices) device_id = :device_id RETURNING id AS token.id,           user_id AS token.user_id,           ?feature(devices) device_id AS token.device_id,           created_at AS token.created_at\x12\xdb\x01\n" +
+	"\vDeleteToken\x12 .w17.contrib.auth.DeleteTokenReq\x1a!.w17.contrib.auth.DeleteTokenResp\"\x86\x01\xf2\xf3\x18\x81\x01B\x7f\n" +
+	"\x04main\x12wDELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :legacy_token RETURNING id AS token_id, user_id\x12\xe9\x01\n" +
+	"\x10UpgradeTokenHash\x12%.w17.contrib.auth.UpgradeTokenHashReq\x1a&.w17.contrib.auth.UpgradeTokenHashResp\"\x85\x01\xf2\xf3\x18\x80\x01B~\n" +
+	"\x04main\x12vUPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :legacy_token AND token_hash IS NULL\x12\xcd\x02\n" +
 	"\x12DeleteSessionToken\x12'.w17.contrib.auth.DeleteSessionTokenReq\x1a(.w17.contrib.auth.DeleteSessionTokenResp\"\xe3\x01\x9a\xbd\x18N\n" +
 	"\fTokenRevoked\x12>\n" +
 	"\x1e\n" +
