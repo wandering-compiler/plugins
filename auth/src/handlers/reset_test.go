@@ -32,6 +32,7 @@ type e1Mock struct {
 	updatePasswordErr error
 	revokedFor        string
 	spentLinksFor     string
+	spendErr          error
 
 	createdVerify      *pb.CreateEmailVerificationTokenReq
 	consumedVerifyHash string
@@ -65,6 +66,9 @@ func (m *e1Mock) UpdateUserPassword(ctx context.Context, in *pb.UpdateUserPasswo
 }
 func (m *e1Mock) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
 	m.spentLinksFor = in.GetUserId()
+	if m.spendErr != nil {
+		return nil, m.spendErr
+	}
 	return &pb.SpendPasswordResetTokensResp{}, nil
 }
 func (m *e1Mock) DeleteUserSessionsForReset(ctx context.Context, in *pb.DeleteUserSessionsForResetReq, _ ...grpc.CallOption) (*pb.DeleteUserSessionsForResetResp, error) {
@@ -359,6 +363,7 @@ func TestResetPassword_BeginRefused_SpendsNothing(t *testing.T) {
 var (
 	errTestUpdateFailed = errors.New("test: the password write failed")
 	errTestBeginRefused = errors.New("test: the coordinator refused to begin")
+	errTestSpendFailed  = errors.New("test: spending the other reset links failed")
 )
 
 // Every other live reset link of the account is spent with the one used: a
@@ -371,5 +376,23 @@ func TestResetPassword_SpendsEveryOtherResetLink(t *testing.T) {
 	}
 	if m.spentLinksFor != "u1" {
 		t.Errorf("the account's other reset links were not spent (spent for %q)", m.spentLinksFor)
+	}
+}
+
+// Spending the other links is part of the reset's unit of work: when it
+// fails, the reset fails and nothing commits, so the person is not told the
+// password changed while older links still work.
+func TestResetPassword_AFailedSpendRollsBackTheReset(t *testing.T) {
+	tx := &recordingDistTx{}
+	m := &e1Mock{consumeResetUser: "u1", spendErr: errTestSpendFailed}
+	h := newE1HandlerTx(m, tx)
+	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); !errors.Is(err, errTestSpendFailed) {
+		t.Fatalf("want the spend's failure, got %v", err)
+	}
+	if got := tx.settled(); got != "rolled back" {
+		t.Fatalf("a failed spend left its transaction %s, want rolled back", got)
+	}
+	if len(tx.committed) != 0 {
+		t.Errorf("nothing may be committed on the failure path; got %v", tx.committed)
 	}
 }
