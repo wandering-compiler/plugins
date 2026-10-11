@@ -509,7 +509,7 @@ No handler opens a transaction. Each local write is one generated mutation:
 | `payment/no-provider-call-in-transaction` | No provider call is made while a database transaction or row lock is held. Holds by construction today: every provider call precedes a single-statement (or single-mutation) write. | none (structural) |
 | `payment/lookups-indexed` | Every lookup on a request or webhook path is served by a unique key or an index: `Customer.user_id`, `Customer.provider_customer_id`, `Payment.provider_payment_id`, `Payment.idempotency_key`, `Refund.provider_refund_id`, `Refund.idempotency_key`, `ProcessedWebhookEvent.provider_event_id`, `CreditBalance.user_id`, `CreditLedger.idempotency_key`, `CreditTopup.provider_payment_id`, `UsageRecord.idempotency_key`, `UsageMeter(user_id, meter, period)`, `Plan.slug`, `Subscription.provider_subscription_id`. `Payment.customer_id` and `Refund.payment_id` are unindexed; no query uses them today, and any per-customer listing or refund total added later needs them. | none (schema only) |
 | `payment/reads-are-pure` | The four preset reads are single-row storage queries with no write. | none |
-| `payment/unbounded-tables` | **Gap:** `ProcessedWebhookEvent` grows by one row per delivered event type and nothing prunes it; the ledgers are append-only by design. | none |
+| `payment/unbounded-tables` | **Gap:** `ProcessedWebhookEvent` grows by one row per delivered event and nothing prunes it; the ledgers are append-only by design. | none |
 
 ---
 
