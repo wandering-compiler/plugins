@@ -1,6 +1,6 @@
 name: auth
-version: 0.1.0-rc.21
-requires_w17: ">=1.10"
+version: 0.1.0-rc.22
+requires_w17: ">=1.11"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -354,9 +354,9 @@ presets:
       - prefix: /auth
         description: "Identity surface served turnkey by the auth plugin — sign-in / sign-up + session bootstrap."
         endpoints:
-          - { ref: AuthService.SignIn, method: POST, path: /login,    exclude_auth: true, feature: sign_in_turnkey }
+          - { ref: AuthService.SignIn, method: POST, path: /login,    exclude_auth: true, public_limit: failed_only, feature: sign_in_turnkey }
           - { ref: AuthService.SignUp, method: POST, path: /register, exclude_auth: true, feature: sign_up_turnkey }
-          - { ref: AuthService.ConfirmSignUp, method: POST, path: /register/confirm, exclude_auth: true, feature: sign_up_confirmation }
+          - { ref: AuthService.ConfirmSignUp, method: POST, path: /register/confirm, exclude_auth: true, public_limit: failed_only, feature: sign_up_confirmation }
           - { ref: AuthService.WhoAmI, method: GET,  path: /whoami,                        feature: authenticate_turnkey }
           # Logout revokes the caller's CURRENT session token (bearer-
           # authenticated). Base-tier — no `devices` feature needed;
@@ -414,7 +414,7 @@ presets:
       - prefix: /auth/mfa
         description: "Two-factor: TOTP enrollment + challenge verification."
         endpoints:
-          - { ref: AuthService.VerifyMfa,    method: POST,   path: /verify,       exclude_auth: true, feature: two_factor }
+          - { ref: AuthService.VerifyMfa,    method: POST,   path: /verify,       exclude_auth: true, public_limit: failed_only, feature: two_factor }
           - { ref: AuthService.EnrollTotp,   method: POST,   path: /totp,                             feature: two_factor }
           - { ref: AuthService.ConfirmTotp,  method: POST,   path: /totp/confirm,                     feature: two_factor }
           - { ref: AuthService.DisableTotp,  method: DELETE, path: /totp,                             feature: two_factor }
@@ -436,7 +436,7 @@ presets:
         description: "Self-service password reset — request a token (e-mailed) + apply a new password."
         endpoints:
           - { ref: AuthService.RequestPasswordReset, method: POST, path: /reset-request, exclude_auth: true, feature: password_reset }
-          - { ref: AuthService.ResetPassword,        method: POST, path: /reset,         exclude_auth: true, feature: password_reset }
+          - { ref: AuthService.ResetPassword,        method: POST, path: /reset,         exclude_auth: true, public_limit: failed_only, feature: password_reset }
           # Same prefix, different half of the same subject: the two above
           # are the FORGOTTEN-password flow and need a mail channel to
           # deliver a token, this one is the authenticated rotation whose
@@ -451,7 +451,7 @@ presets:
         description: "E-mail ownership verification — request a verification link + confirm it."
         endpoints:
           - { ref: AuthService.RequestEmailVerification, method: POST, path: /verify-request,                     feature: email_verification }
-          - { ref: AuthService.VerifyEmail,              method: POST, path: /verify,        exclude_auth: true, feature: email_verification }
+          - { ref: AuthService.VerifyEmail,              method: POST, path: /verify,        exclude_auth: true, public_limit: failed_only, feature: email_verification }
       # First-party CLI login (loopback + PKCE). CliAuthorize is bearer-
       # authenticated (the user is signed into the web; the browser carries
       # the session bearer); CliToken is unauthenticated (the CLI has no
@@ -461,7 +461,7 @@ presets:
         description: "First-party CLI login (loopback + PKCE) — the console issues CLI bearers (e.g. for w17ctl)."
         endpoints:
           - { ref: AuthService.CliAuthorize, method: POST, path: /authorize,                     feature: cli_login }
-          - { ref: AuthService.CliToken,     method: POST, path: /token,     exclude_auth: true, feature: cli_login }
+          - { ref: AuthService.CliToken,     method: POST, path: /token,     exclude_auth: true, public_limit: failed_only, feature: cli_login }
       # The registry of redirect targets the same flow may send a code to.
       #
       # ⚠ THE PLUGIN AUTHENTICATES THESE, IT DOES NOT AUTHORIZE THEM. The
