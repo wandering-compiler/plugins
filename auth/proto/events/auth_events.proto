@@ -267,6 +267,15 @@ message TotpDisabled {
   string user_id = 1;
 }
 
+// RecoveryCodeUsed — a recovery code was spent (sign-in, or the step-up of
+// EnrollTotp / DisableTotp / GenerateRecoveryCodes). Worth telling the person:
+// one they did not spend means their codes are in someone else's hands.
+message RecoveryCodeUsed {
+  option (w17.event) = { channel: "events", topic: "auth.mfa.recovery_code_used" };
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1;
+}
+
 // password_reset lifecycle — emitted by CreatePasswordResetToken when a
 // user requests a reset. Carries the PLAINTEXT token (never persisted —
 // only its hash is stored) + email for a hand-written delivery channel

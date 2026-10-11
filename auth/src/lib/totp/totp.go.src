@@ -59,22 +59,34 @@ func Code(secret string, t time.Time) (string, error) {
 // Comparison is constant-time. A malformed secret or non-matching code
 // returns false (never an error — the caller treats every verify failure
 // identically, anti-enumeration).
+//
+// It does not stop a replay: the same code verifies for its whole window.
+// A caller that accepts a code as a factor uses Match and records the step.
 func Verify(secret, code string, t time.Time, skew int) bool {
+	_, ok := Match(secret, code, t, skew)
+	return ok
+}
+
+// Match is Verify that also reports WHICH time step matched, so the caller
+// can accept each step at most once (RFC 6238 §5.2: a verifier must not
+// accept the second attempt of the same OTP). Every window in the skew range
+// is checked, matched or not, so timing does not say which one it was.
+func Match(secret, code string, t time.Time, skew int) (step int64, ok bool) {
 	code = strings.TrimSpace(code)
 	if code == "" {
-		return false
+		return 0, false
 	}
 	base := t.Unix() / period
 	for i := -skew; i <= skew; i++ {
 		want, err := hotp(secret, uint64(base+int64(i)))
 		if err != nil {
-			return false
+			return 0, false
 		}
-		if hmac.Equal([]byte(want), []byte(code)) {
-			return true
+		if hmac.Equal([]byte(want), []byte(code)) && !ok {
+			step, ok = base+int64(i), true
 		}
 	}
-	return false
+	return step, ok
 }
 
 // hotp is RFC 4226 HOTP(secret, counter) truncated to `digits`.
