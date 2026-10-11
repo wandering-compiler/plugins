@@ -66,6 +66,10 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	// The exchange mints a session, so the caller has to be one already.
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
 	if req.GetCodeChallenge() == "" {
 		return nil, Unauthenticated(errCliChallengeMissing)
 	}

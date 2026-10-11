@@ -115,6 +115,9 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
 	// The token and its narrowing are ONE unit — the same reason IssueBotToken
 	// gives, and this is the endpoint a PERSON calls.
 	//

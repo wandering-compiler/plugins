@@ -1,5 +1,18 @@
 # auth — changelog
 
+## 0.1.0-rc.25
+
+### An API token can no longer mint credentials
+
+`CreateApiToken` and `CliAuthorize` now answer `PERMISSION_DENIED` unless the caller authenticated with a session token.
+
+Both mint a new credential from the holder's roles, not from the caller's narrowed permissions. So an API token limited to one permission, given access to `POST /auth/tokens`, could mint a token carrying every API-realm permission of its holder, and through the CLI exchange (`CliAuthorize` → `CliToken`) it could become a full session.
+
+What changes:
+
+- **Minting an API token or authorizing a CLI login needs a signed-in session.** A user, or the admin acting for them, does it from the app; automation that minted tokens with a token has to use a session or, for a machine account, `IssueBotToken`.
+- **The caller is told apart by `AuthResp.session_token_id`,** which `Authenticate` sets for every session-realm token (sign-in, device, CLI) and leaves empty for an API token. A deployment that authenticates through something other than this plugin's `Authenticate` gets no `session_token_id` and is refused, as `Logout` already is.
+
 ## 0.1.0-rc.24
 
 ### Bearer tokens are stored as a hash

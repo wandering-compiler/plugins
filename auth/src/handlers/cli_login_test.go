@@ -13,7 +13,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -126,7 +125,7 @@ func newCliHandler(m *cliMock) *AuthServiceHandler {
 // cliCtx threads the gateway-authenticated principal the way the gateway
 // does (the x-w17-scope-user_id metadata callerUserID reads).
 func cliCtx(uid string) context.Context {
-	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(scopeUserIDKey, uid))
+	return sessionCallerCtx(uid, "session-"+uid)
 }
 
 func pkceChallenge(verifier string) string {

@@ -1093,6 +1093,29 @@ func callerSessionTokenID(ctx context.Context) string {
 	return ar.GetSessionTokenId()
 }
 
+// errCallerNotASession refuses an API token where only a signed-in session may
+// act: minting another credential. Exported for logs and tests only.
+var errCallerNotASession = errors.New("this operation needs a signed-in session; an API token cannot mint credentials")
+
+// requireSessionCaller refuses a caller that did not authenticate with a
+// session token.
+//
+// An operation that mints a credential (an API token, a CLI session) must not
+// be reachable from an API token: the new credential is minted from the
+// holder's roles, not from the caller's narrowed permissions, so a token
+// limited to one permission would come out of it with all of them, and a CLI
+// exchange would turn it into a session. Authenticate leaves session_token_id
+// empty for an API token and sets it for every session-realm token, which is
+// what tells the two apart here. An envelope without it (an authenticator
+// other than this plugin's) is refused too: it cannot show that the caller is
+// a session.
+func requireSessionCaller(ctx context.Context) error {
+	if callerSessionTokenID(ctx) == "" {
+		return status.Error(codes.PermissionDenied, errCallerNotASession.Error())
+	}
+	return nil
+}
+
 // intersectInt32 returns the elements of `a` that also appear in `b`,
 // preserving `a`'s order and de-duplicating.
 //
