@@ -2,6 +2,14 @@
 
 ## 0.1.0-rc.25
 
+### One bootstrap administrator, even under concurrent first sign-ups
+
+The `first_user` roles (typically every permission) were decided by reading "no users yet" before the sign-up transaction. Two sign-ups racing on an empty deployment both read zero, and both became administrators.
+
+- **New table `BootstrapClaim` (rbac)** with one row on a constant key. Generate a migration as usual.
+- **The sign-up that receives the `first_user` roles writes the claim** in its own transaction (`AuthMutation.ClaimBootstrapAdmin`, `UPSERT … ON CONFLICT DO NOTHING`). A concurrent sign-up waits on the key, conflicts, and gets the default roles. A rolled-back sign-up leaves the claim free.
+- **The claim is never reopened.** Once an administrator was handed out, an empty user table does not hand out another. A deployment that already has users never writes the claim, and behaves as before.
+
 ### OAuth: the callback hands out a single-use code, not a session (breaking)
 
 The OAuth callback used to redirect the browser with the session token in the URL fragment, and its `state` was valid forever, reusable, and tied to no browser. Anyone could start a sign-in with their own provider account and send the callback link to someone else. Whoever opened it was signed in to the sender's account and kept working there (login CSRF).

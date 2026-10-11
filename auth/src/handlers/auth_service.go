@@ -378,11 +378,21 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 // the `rbac` feature file (handlers/signup_roles.go) overrides them via init().
 // Declared here (always-compiled) so SignUp compiles whether or not rbac is
 // staged; the overrides only ship when rbac is on.
-var signupResolveRoleIDs = func(ctx context.Context, h *AuthServiceHandler) ([]string, error) {
-	return nil, nil
+var signupResolveRoleIDs = func(ctx context.Context, h *AuthServiceHandler) (signupRoles, error) {
+	return signupRoles{}, nil
 }
-var signupAssignRoleIDs = func(ctx context.Context, h *AuthServiceHandler, userID string, roleIDs []string) error {
+var signupAssignRoleIDs = func(ctx context.Context, h *AuthServiceHandler, userID string, roles signupRoles) error {
 	return nil
+}
+
+// signupRoles is what the resolve half hands the assign half. `bootstrap`
+// marks the first_user set: the assign half must then win the bootstrap
+// claim inside the transaction, and assigns `fallback` (the default roles)
+// if another sign-up holds it.
+type signupRoles struct {
+	ids       []string
+	bootstrap bool
+	fallback  []string
 }
 
 // SignIn seams — always-present default behaviours opt-in feature

@@ -57,6 +57,10 @@ Behaviour that is deliberate, and easy to build against wrongly.
 - **A reset keeps device trust.** Under `two_factor_scope=new_devices`, a device trusted before the reset is still trusted after it. The reset link arrived in the mailbox, and that mailbox is the second factor the reset already proved.
 - **`two_factor_scope=all_logins` applies to password sign-ins.** An OAuth sign-in issues a session without a second factor; the provider is the factor.
 
+**The first account**
+- **The first account to register gets the `first_user` roles**, typically every permission. On a deployment with open sign-up that is whoever registers first, so create the first account (seed it, or register it yourself) before the sign-up endpoint is reachable.
+- **Exactly one account is ever the bootstrap administrator.** The account that receives the `first_user` roles writes a `BootstrapClaim` row in its sign-up transaction. Concurrent first sign-ups get the default roles, and deleting every account later does not hand out the `first_user` roles again.
+
 **OAuth sign-in**
 - **The callback never carries a session.** A browser sign-in runs in three steps:
   1. The page makes a PKCE verifier (43–128 random URL-safe characters), keeps it in `sessionStorage`, and calls `GET /auth/oauth/{provider}/authorize?code_challenge=<BASE64URL(SHA256(verifier))>&redirect_after=/where`.

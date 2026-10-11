@@ -934,6 +934,26 @@ message AuthClient {
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 }
 
+// BootstrapClaim — the one row that says the bootstrap administrator has
+// been handed out (rbac).
+//
+// The first account gets the `first_user` roles (typically every
+// permission). Deciding that from "no users yet" alone is a read, and two
+// sign-ups reading it at the same time both see zero. The decision is
+// therefore also a write: the sign-up that gets the first_user roles inserts
+// this row, keyed on a constant, in its own transaction, and a concurrent
+// one that conflicts on the key gets the default roles instead. Once
+// written, the row stays: deleting every account later does not reopen the
+// bootstrap.
+message BootstrapClaim {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "rbac";
+
+  string slot    = 1 [(w17.field) = { type: SLUG, max_len: 32, pk: true }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp created_at = 3 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
 // OAuthLoginCode — the single-use code an OAuth callback hands the browser
 // instead of a session (oauth).
 //

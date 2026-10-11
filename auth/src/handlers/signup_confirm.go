@@ -243,7 +243,7 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 	}
 
 	// Committed state, before the tx — the same reason SignUp reads it there.
-	roleIDs, err := signupResolveRoleIDs(ctx, h)
+	roles, err := signupResolveRoleIDs(ctx, h)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 			return nil, err
 		}
 	}
-	resp, err := h.confirmSignUpTx(txCtx, req.GetPendingId(), roleIDs)
+	resp, err := h.confirmSignUpTx(txCtx, req.GetPendingId(), roles)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -270,7 +270,7 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 	return resp, nil
 }
 
-func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID string, roleIDs []string) (*pb.ConfirmSignUpResp, error) {
+func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID string, roles signupRoles) (*pb.ConfirmSignUpResp, error) {
 	claimed, err := h.Mutation.ClaimPendingSignUp(txCtx, &pb.ClaimPendingSignUpReq{PendingId: pendingID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -289,7 +289,7 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 		}
 		return nil, err
 	}
-	if err := signupAssignRoleIDs(txCtx, h, userID, roleIDs); err != nil {
+	if err := signupAssignRoleIDs(txCtx, h, userID, roles); err != nil {
 		return nil, err
 	}
 	if err := markEmailConfirmed(txCtx, h, userID); err != nil {
