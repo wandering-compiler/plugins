@@ -120,12 +120,6 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		// may not touch, or nothing at all.
 		return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
 	}
-	// A disabled machine account gets no token: Authenticate would refuse it
-	// anyway, and the admin should hear why instead of receiving a dead one.
-	if err := signInDisabledGate(userResp.GetUser()); err != nil {
-		return nil, status.Error(codes.FailedPrecondition, "machine account is disabled; enable it first")
-	}
-
 	// Not above the minting operator. A token acts with the bot's roles, so
 	// minting for a bot whose role the operator could not have GRANTED is
 	// handing out what they themselves may not do — the rule CreateBot holds
@@ -134,6 +128,14 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	// lift this.)
 	if err := h.checkMayActAsBot(ctx, target); err != nil {
 		return nil, err
+	}
+
+	// A disabled machine account gets no token: Authenticate would refuse it
+	// anyway, and the admin should hear why instead of receiving a dead one.
+	// After the ceiling, so an operator who may not act as the bot does not
+	// learn its state either.
+	if err := signInDisabledGate(userResp.GetUser()); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "machine account is disabled; enable it first")
 	}
 
 	// The token and its narrowing are ONE unit, and this is the sharpest
