@@ -104,7 +104,7 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 	if !isPKCEChallenge(req.GetCodeChallenge()) {
 		return nil, Unauthenticated(errOAuthChallengeMissing)
 	}
-	state, nonce, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter(), req.GetCodeChallenge(), time.Now())
+	state, nonce, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter(), challengeDigest(req.GetCodeChallenge()), time.Now())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -180,7 +180,7 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 	if _, err := h.Mutation.CreateOAuthLoginCode(ctx, &pb.CreateOAuthLoginCodeReq{
 		UserId:        userID,
 		CodeHash:      sha256Hex(code),
-		CodeChallenge: st.Challenge,
+		CodeChallenge: st.Challenge, // the digest, never the challenge itself
 		ExpiresAt:     timestamppb.New(time.Now().Add(oauthLoginCodeTTL)),
 	}); err != nil {
 		return nil, Unauthenticated(err)
@@ -204,7 +204,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if userID == "" {
 		return nil, Unauthenticated(errOAuthCodeInvalid)
 	}
-	if !verifyPKCES256(req.GetCodeVerifier(), consumed.GetCodeChallenge()) {
+	if !hmac.Equal([]byte(challengeDigest(s256Challenge(req.GetCodeVerifier()))), []byte(consumed.GetCodeChallenge())) {
 		return nil, Unauthenticated(errOAuthVerifierInvalid)
 	}
 	// The account may have changed since the callback; and the device is the
@@ -683,7 +683,7 @@ type oauthStatePayload struct {
 	Nonce         string `json:"n"`
 	Provider      string `json:"p"`
 	RedirectAfter string `json:"r"`
-	Challenge     string `json:"c"`
+	Challenge     string `json:"c"` // challengeDigest of the browser's code_challenge
 	Expires       int64  `json:"e"`
 }
 
@@ -724,7 +724,7 @@ func verifyOAuthState(secret, provider, state string, now time.Time) (*oauthStat
 	}
 	// A state signed before code_challenge was required has none, and could
 	// only ever produce a code nobody can redeem — refuse it up front.
-	if !isPKCEChallenge(p.Challenge) {
+	if len(p.Challenge) != sha256.Size*2 {
 		return nil, errOAuthState
 	}
 	if now.Unix() >= p.Expires {
@@ -743,6 +743,20 @@ func providerVerifier(secret, nonce string) string {
 // oidcNonce is the OIDC nonce for one sign-in, derived like the verifier.
 func oidcNonce(secret, nonce string) string {
 	return oauthStateSig(secret, "nonce:"+nonce)
+}
+
+// challengeDigest is what the state and the login code carry in place of the
+// browser's PKCE challenge: its sha256, hex.
+//
+// The state is readable — it is base64 JSON in the provider URL and in the
+// callback URL — so a raw challenge in it could be lifted. Someone holding a
+// victim's challenge could start a sign-in of their own with it and hand the
+// victim the callback link; a victim page still holding that challenge's
+// verifier (from an abandoned attempt) would then redeem the code into the
+// other person's account. A sha256 of a 256-bit challenge gives nothing to
+// start a sign-in with, and the exchange recomputes it from the verifier.
+func challengeDigest(challenge string) string {
+	return sha256Hex(challenge)
 }
 
 // isPKCEChallenge accepts exactly an S256 challenge: 43 base64url characters.

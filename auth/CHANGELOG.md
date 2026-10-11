@@ -8,7 +8,7 @@ The OAuth callback used to redirect the browser with the session token in the UR
 
 The browser that starts a sign-in now proves it is the one finishing it:
 
-- **`OAuthAuthorizeURL` requires `code_challenge`**, the PKCE S256 challenge (RFC 7636) of a verifier the page keeps. The challenge travels in the signed `state`, which now expires after ten minutes.
+- **`OAuthAuthorizeURL` requires `code_challenge`**, the PKCE S256 challenge (RFC 7636) of a verifier the page keeps. The signed `state` carries a sha256 of it, never the challenge itself, and now expires after ten minutes.
 - **`OAuthCallback` returns `code`, not `token`.** It is a single-use login code, stored as its hash, valid for two minutes and bound to that challenge. The REST callback redirects to `redirect_after#code=…`. `OAuthCallbackResp` drops `user_id`, `token` and `device_trust_token`.
 - **New `OAuthExchange` (`POST /auth/oauth/exchange`, public, failed_only)** redeems the code with `code_verifier` and returns `user_id`, `token` and, under `devices`, `device_trust_token`. A wrong verifier spends the code. The device is resolved from this request, which comes from the page itself.
 - **New table `OAuthLoginCode`.** Generate a migration as usual.
@@ -18,7 +18,7 @@ The browser that starts a sign-in now proves it is the one finishing it:
 **Migrating a frontend:**
 
 1. Before redirecting to `/auth/oauth/{provider}/authorize`, generate a fresh verifier for this sign-in (never reuse one), store it in `sessionStorage`, and add `code_challenge` to the request.
-2. On the landing page, read `code` from the fragment (not `token`), take the verifier out of `sessionStorage` (read, then delete), and `POST` both to `/auth/oauth/exchange`. Delete the verifier before the call, so a failed exchange leaves none behind: the challenge is visible in the `state`, and a leftover verifier would redeem a code someone else started with it.
+2. On the landing page, read `code` from the fragment (not `token`), take the verifier out of `sessionStorage` (read, then delete), and `POST` both to `/auth/oauth/exchange`. Delete the verifier before the call, so a failed exchange leaves none behind: a leftover verifier would redeem a code someone else started with its challenge.
 3. Store the returned token as before.
 
 A state signed by an older release has no challenge and is refused, so a sign-in in flight during the upgrade has to start again.

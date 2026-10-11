@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -49,7 +50,7 @@ func TestOAuthCallback_HandsOutACodeNotASession(t *testing.T) {
 	if resp.GetCode() == "" || row == nil {
 		t.Fatalf("no login code stored for the returned code %q", resp.GetCode())
 	}
-	if row.GetCodeChallenge() != pkceChallengeOf(validVerifier()) {
+	if row.GetCodeChallenge() != challengeDigest(pkceChallengeOf(validVerifier())) {
 		t.Errorf("code bound to challenge %q, want the authorize step's", row.GetCodeChallenge())
 	}
 	if _, plain := m.loginCodes[resp.GetCode()]; plain {
@@ -141,5 +142,24 @@ func TestOAuthCallback_SendsPKCEToTheProvider(t *testing.T) {
 	}
 	if q.Get("code_challenge") == pkceChallengeOf(validVerifier()) {
 		t.Error("the browser's challenge was forwarded to the provider; the provider leg needs its own")
+	}
+}
+
+// The state travels in the provider URL and the callback URL, so it must not
+// reveal the browser's challenge: with it, someone could start a sign-in of
+// their own bound to that challenge and hand the victim the callback link.
+func TestOAuthAuthorizeURL_TheStateDoesNotRevealTheBrowsersChallenge(t *testing.T) {
+	h, _, _ := exchangeHandler(t)
+	ch := pkceChallengeOf(validVerifier())
+	az, err := h.OAuthAuthorizeURL(context.Background(), &pb.OAuthAuthorizeURLReq{Provider: "google", CodeChallenge: ch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(az.GetAuthorizeUrl())
+	state := u.Query().Get("state")
+	payload, _, _ := strings.Cut(state, ".")
+	raw, _ := base64.RawURLEncoding.DecodeString(payload)
+	if strings.Contains(state, ch) || strings.Contains(string(raw), ch) {
+		t.Errorf("the state carries the browser's code_challenge: %s", raw)
 	}
 }

@@ -62,7 +62,7 @@ func (m *oauthMock) ConsumeOAuthLoginCode(_ context.Context, in *pb.ConsumeOAuth
 // challenge of validVerifier() — the browser's verifier in these tests.
 func testState(t *testing.T, secret, provider, redirectAfter string) string {
 	t.Helper()
-	state, _, err := signOAuthState(secret, provider, redirectAfter, pkceChallengeOf(validVerifier()), time.Now())
+	state, _, err := signOAuthState(secret, provider, redirectAfter, challengeDigest(pkceChallengeOf(validVerifier())), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func (m *oauthMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...g
 }
 
 func TestOAuthState_SignVerifyRoundTrip(t *testing.T) {
-	ch := pkceChallengeOf(validVerifier())
+	ch := challengeDigest(pkceChallengeOf(validVerifier()))
 	now := time.Now()
 	state, nonce, err := signOAuthState("topsecret", "google", "/dashboard", ch, now)
 	if err != nil {
@@ -188,7 +188,7 @@ func TestOAuthState_SignVerifyRoundTrip(t *testing.T) {
 // replayed after oauthStateTTL is refused.
 func TestOAuthState_Expires(t *testing.T) {
 	now := time.Now()
-	state, _, err := signOAuthState("s", "google", "", pkceChallengeOf(validVerifier()), now)
+	state, _, err := signOAuthState("s", "google", "", challengeDigest(pkceChallengeOf(validVerifier())), now)
 	if err != nil {
 		t.Fatal(err)
 	}
