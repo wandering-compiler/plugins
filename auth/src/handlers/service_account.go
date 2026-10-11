@@ -120,6 +120,11 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		// may not touch, or nothing at all.
 		return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
 	}
+	// A disabled machine account gets no token: Authenticate would refuse it
+	// anyway, and the admin should hear why instead of receiving a dead one.
+	if err := signInDisabledGate(userResp.GetUser()); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "machine account is disabled; enable it first")
+	}
 
 	// Not above the minting operator. A token acts with the bot's roles, so
 	// minting for a bot whose role the operator could not have GRANTED is

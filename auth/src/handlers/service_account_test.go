@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
@@ -59,11 +60,16 @@ func TestSignInBotGate_ReasonStaysInternal(t *testing.T) {
 // botTokenQuery answers GetUserById with one account of a chosen kind.
 type botTokenQuery struct {
 	pb.AuthQueryClient
-	kind pb.AccountKind
+	kind     pb.AccountKind
+	disabled bool
 }
 
 func (q botTokenQuery) GetUserById(context.Context, *pb.GetUserByIdReq, ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	return &pb.GetUserByIdResp{User: &pb.User{Id: "u1", Kind: q.kind, TenantId: "tenant-1"}}, nil
+	u := &pb.User{Id: "u1", Kind: q.kind, TenantId: "tenant-1"}
+	if q.disabled {
+		u.DisabledAt = timestamppb.Now()
+	}
+	return &pb.GetUserByIdResp{User: u}, nil
 }
 
 // The bot holds no role, so the mint ceiling has nothing to refuse — these
@@ -134,6 +140,22 @@ func TestIssueBotToken_MintsForABot(t *testing.T) {
 	}
 	if !rec.issued {
 		t.Error("no token was actually issued")
+	}
+}
+
+// A disabled bot gets no token: Authenticate would refuse it, so minting one
+// hands the admin a credential that silently does nothing — and before
+// Authenticate checked the flag, one that worked.
+func TestIssueBotToken_RefusesADisabledBot(t *testing.T) {
+	rec := &mintRecorder{}
+	h := &AuthServiceHandler{Query: botTokenQuery{kind: pb.AccountKind_BOT, disabled: true}, Mutation: rec}
+
+	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{UserId: "u1"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("err = %v, want FailedPrecondition for a disabled bot", err)
+	}
+	if rec.issued {
+		t.Error("a token was issued for a disabled bot")
 	}
 }
 

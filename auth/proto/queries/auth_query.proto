@@ -348,6 +348,9 @@ message GetTokenWithTypeResp {
   // The row's token_hash, empty on a legacy row (see
   // GetUserByTokenWithPermissionsResp).
   string stored_token_hash = 6;
+  // The token's owner, carrying only what Authenticate checks on every
+  // request: under `user_admin`, whether the account is disabled.
+  User user = 7;
 }
 
 message GetUserRolePermissionsByRealmReq {
@@ -1107,6 +1110,7 @@ service AuthQuery {
           "       u.email AS user.email, "
           "       u.password_hash AS user.password_hash, "
           "       ?feature(service_account) u.kind AS user.kind, "
+          "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           "       u.created_at AS user.created_at, "
           "       t.id AS token_id, "
           "       COALESCE(t.token_hash, '') AS stored_token_hash "
@@ -1525,8 +1529,11 @@ service AuthQuery {
           "SELECT t.user_id AS user_id, "
           "       t.id AS token_id, "
           "       t.token_type AS token_type, "
-          "       COALESCE(t.token_hash, '') AS stored_token_hash "
-          "FROM @module.UserToken t WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "       COALESCE(t.token_hash, '') AS stored_token_hash, "
+          "       u.id AS user.id, "
+          "       ?feature(user_admin) u.disabled_at AS user.disabled_at "
+          "FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id "
+          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "api_token";

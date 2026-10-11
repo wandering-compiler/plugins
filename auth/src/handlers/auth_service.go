@@ -328,6 +328,11 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 		return nil, err
 	}
 	h.upgradeLegacyToken(ctx, token, hash, resp.GetStoredTokenHash())
+	// A disabled account's tokens are deleted when it is disabled, but one
+	// minted after that (a sign-in racing the disable) must not work either.
+	if err := signInDisabledGate(resp.GetUser()); err != nil {
+		return nil, err
+	}
 	// SESSION: with api_token off there is only one credential class, and
 	// this is it. Stamping it rather than leaving the zero value keeps the
 	// ownership rule (session-only) reading the same in both builds.
