@@ -160,6 +160,11 @@ const (
 	// CodeStepUpLocked: too many wrong codes for a change to the
 	// authenticator; it is refused for a while, whatever the code.
 	CodeStepUpLocked = "STEP_UP_LOCKED"
+
+	// CodeSessionRequired: an operation that creates a credential (an API
+	// token, a CLI session, an authenticator, recovery codes, a trusted
+	// callback) called with an API token. It needs a signed-in session.
+	CodeSessionRequired = "SESSION_REQUIRED"
 )
 
 // The sentences a person reads, and the ONE place each is written.
@@ -211,6 +216,10 @@ const (
 	MsgTotpAlreadyConfirmed = "This authenticator app is already set up. To get new recovery codes, generate them."
 
 	MsgStepUpLocked = "Too many wrong codes. Wait 15 minutes and try again."
+
+	// Names what to do instead: the caller holds a working credential, just
+	// not one this operation accepts.
+	MsgSessionRequired = "Sign in to do this. An API token cannot create credentials."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

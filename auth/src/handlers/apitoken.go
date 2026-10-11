@@ -77,13 +77,16 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		if subset := sub.GetPermissionIds(); len(subset) > 0 {
 			applyTokenSubset(prin, subset, h.Lock)
 		}
-		// B21-auth-1: an API token is NOT a session token — it must not be
-		// stamped as the caller's session_token_id. Logout deletes whatever
-		// session_token_id the envelope carries, and DeleteSessionToken's DQL
-		// drops the token_type filter (Q64-auth-1), so a non-empty value here
-		// would let Logout silently revoke the API token (it should only be
-		// removed via RevokeApiToken). Empty id → Logout no-ops, matching its
-		// documented "API-token bearer still gets a clean success" contract.
+	}
+	// B21-auth-1: only a SESSION token is stamped as the caller's
+	// session_token_id. Two things read it. Logout deletes whatever id the
+	// envelope carries, and DeleteSessionToken's DQL drops the token_type
+	// filter (Q64-auth-1), so an API token's id there would let Logout revoke
+	// it (it is removed only via RevokeApiToken). requireSessionCaller reads
+	// "non-empty" as "this caller is a session" and lets it mint credentials,
+	// so the test is "is SESSION", not "is not API": a row of any other type
+	// fails closed instead of passing as a session.
+	if tok.GetTokenType() != pb.TokenType_TOKEN_TYPE_SESSION {
 		prin.tokenID = ""
 	}
 	return prin, nil

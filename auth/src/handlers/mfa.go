@@ -348,6 +348,12 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	// The secret IS the account's second factor. An API token that could
+	// enroll one would hand it to whoever holds the token, and lock the person
+	// out of their own sign-in.
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
 	if err := h.enrolmentAllowed(ctx); err != nil {
 		return nil, err
 	}
