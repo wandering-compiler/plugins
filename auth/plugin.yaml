@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.22
+version: 0.1.0-rc.23
 requires_w17: ">=1.11"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -406,7 +406,7 @@ presets:
           # signed into `state` so the callback can trust it — and until
           # now NOTHING read it back. The browser landed on
           # {"token":"ey…"} and the flow ended there.
-          - { ref: AuthService.OAuthCallback,     method: GET, path: "/{provider}/callback",  exclude_auth: true, feature: oauth,
+          - { ref: AuthService.OAuthCallback,     method: GET, path: "/{provider}/callback",  exclude_auth: true, public_limit: failed_only, feature: oauth,
               browser_redirect: { target_field: "redirect_after", token_field: "token", token_param: "token", fallback: "/" } }
       # Two-factor: enrollment (bearer) + challenge verification
       # (VerifyMfa is unauthenticated — challenge_id, not a token yet).
