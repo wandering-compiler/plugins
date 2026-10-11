@@ -58,5 +58,7 @@ no test and no example covers is visible as such.
 
 The specifications are public. They state technical reasons only: no names of
 people or organizations, no private hosts, no ticket or review references, no
-paths into other repositories, no dated anecdotes. `scripts/check-leaks.sh`
-checks it.
+paths into other repositories, no dated anecdotes. The leak check,
+`scripts/check-leaks.sh` in
+[wandering-compiler/sdk](https://github.com/wandering-compiler/sdk), enforces
+it; run it against this repository before publishing a specification.
