@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.24
+version: 0.1.0-rc.25
 requires_w17: ">=1.11"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
@@ -812,6 +812,7 @@ msgids:
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Confirm your email address before accepting this invitation."
   - "Set up an authenticator app first. Recovery codes belong to it."
+  - "Sign in to do this. An API token cannot create credentials."
   - "That expiry date is not a valid date."
   - "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
   - "There is no organization role named {role}."

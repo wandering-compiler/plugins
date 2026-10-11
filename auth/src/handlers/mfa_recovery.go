@@ -126,6 +126,10 @@ func (h *AuthServiceHandler) GenerateRecoveryCodes(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	// Recovery codes stand in for the second factor — see EnrollTotp.
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
 	enrolled, row, err := h.totpEnrolled(ctx, userID)
 	if err != nil {
 		return nil, err

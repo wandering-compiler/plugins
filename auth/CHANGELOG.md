@@ -1,5 +1,18 @@
 # auth — changelog
 
+## 0.1.0-rc.25
+
+### An API token can no longer mint credentials
+
+`CreateApiToken`, `CliAuthorize`, `RegisterClient`, `SetClientEnabled`, `EnrollTotp` and `GenerateRecoveryCodes` now answer `PERMISSION_DENIED` (detail `SESSION_REQUIRED`) unless the caller authenticated with a session token.
+
+`CreateApiToken` and `CliAuthorize` mint a new credential from the holder's roles, not from the caller's narrowed permissions. So an API token limited to one permission, given access to `POST /auth/tokens`, could mint a token carrying every API-realm permission of its holder, and through the CLI exchange (`CliAuthorize` → `CliToken`) it could become a full session. The others create credentials of their own: `RegisterClient` a client secret and a callback that `CliAuthorize` sends a session's code to (`SetClientEnabled` restores a retired one), and `EnrollTotp` / `GenerateRecoveryCodes` the account's second factor, which a token could otherwise take over and lock the person out with.
+
+What changes:
+
+- **Creating a credential needs a signed-in session.** A user does it from the app. Automation that minted API tokens with a token has to use a session or, for a machine account, `IssueBotToken`, which stays open to tokens because it is held to the caller's own resolved permissions.
+- **The caller is told apart by `AuthResp.session_token_id`,** which `Authenticate` now sets only for a session-realm token (sign-in, device, CLI) and leaves empty for any other, an API or bot token included. A deployment that authenticates through something other than this plugin's `Authenticate` gets no `session_token_id` and is refused, as `Logout` already is.
+
 ## 0.1.0-rc.24
 
 ### Bearer tokens are stored as a hash

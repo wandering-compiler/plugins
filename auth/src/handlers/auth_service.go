@@ -1093,6 +1093,33 @@ func callerSessionTokenID(ctx context.Context) string {
 	return ar.GetSessionTokenId()
 }
 
+// errCallerNotASession refuses an API token where only a signed-in session may
+// act: creating another credential. The operator's copy; the person reads
+// MsgSessionRequired.
+var errCallerNotASession = errors.New("this operation needs a signed-in session; an API token cannot create credentials")
+
+// requireSessionCaller refuses a caller that did not authenticate with a
+// session token.
+//
+// An operation that creates a credential (an API token, a CLI session, an
+// authenticator or its recovery codes, a trusted CLI callback) must not be
+// reachable from an API token: the new credential is minted from the holder's
+// account, not from the caller's narrowed permissions, so a token limited to
+// one permission would come out of it with all of them, a CLI exchange would
+// turn it into a session, and an enrolled authenticator would hand the
+// account's second factor to whoever holds the token. Authenticate sets
+// session_token_id only for a session-realm token and leaves it empty for any
+// other, which is what tells the two apart here. An envelope without it (an
+// authenticator other than this plugin's) is refused too: it cannot show that
+// the caller is a session.
+func requireSessionCaller(ctx context.Context) error {
+	if callerSessionTokenID(ctx) == "" {
+		return refusal(ctx, codes.PermissionDenied, errCallerNotASession.Error(),
+			CodeSessionRequired, "", MsgSessionRequired, nil)
+	}
+	return nil
+}
+
 // intersectInt32 returns the elements of `a` that also appear in `b`,
 // preserving `a`'s order and de-duplicating.
 //

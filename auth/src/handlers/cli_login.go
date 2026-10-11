@@ -66,6 +66,10 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	// The exchange mints a session, so the caller has to be one already.
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
 	if req.GetCodeChallenge() == "" {
 		return nil, Unauthenticated(errCliChallengeMissing)
 	}
@@ -352,6 +356,11 @@ func (h *AuthServiceHandler) RegisterClient(ctx context.Context, req *pb.Registe
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
+	// A person with a session, as above — and the registration mints a client
+	// secret and a callback CliAuthorize will send a session's code to.
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
 	// Refused HERE rather than left to the authorize path, where a bad
 	// registration is silently a redirect that never matches. `http` is
 	// allowed only for loopback, which needs no registration at all — so a
@@ -401,6 +410,11 @@ func (h *AuthServiceHandler) ListClients(ctx context.Context, _ *pb.ListClientsR
 func (h *AuthServiceHandler) SetClientEnabled(ctx context.Context, req *pb.SetClientEnabledReq) (*pb.SetClientEnabledResp, error) {
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
+	}
+	// Restoring a retired callback makes it trustworthy again, the same act as
+	// registering it.
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
 	}
 	if _, err := h.Mutation.SetAuthClientEnabled(ctx, &pb.SetAuthClientEnabledReq{
 		Id: req.GetId(), Enabled: req.GetEnabled(),

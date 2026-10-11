@@ -6,7 +6,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -54,7 +53,7 @@ func (m *apiTokenMgmtMock) ListApiTokensByUser(ctx context.Context, in *pb.ListA
 }
 
 func ctxWithCaller(uid string) context.Context {
-	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(scopeUserIDKey, uid))
+	return sessionCallerCtx(uid, "session-"+uid)
 }
 
 func TestCreateApiToken_StampsAPIRealm_AndSubset(t *testing.T) {
