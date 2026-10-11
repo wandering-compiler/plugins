@@ -8,7 +8,7 @@ The `first_user` roles (typically every permission) were decided by reading "no 
 
 - **New table `BootstrapClaim` (rbac)** with one row on a constant key. Generate a migration as usual.
 - **The sign-up that receives the `first_user` roles writes the claim** in its own transaction (`AuthMutation.ClaimBootstrapAdmin`, `UPSERT … ON CONFLICT DO NOTHING`). A concurrent sign-up waits on the key, conflicts, and gets the default roles. A rolled-back sign-up leaves the claim free.
-- **The claim is never reopened.** Once an administrator was handed out, an empty user table does not hand out another. A deployment that already has users never writes the claim, and behaves as before.
+- **The claim is never reopened.** Once an administrator was handed out, an empty user table does not hand out another. A deployment that already has users never writes the claim, and behaves as before: deleting every account there still reopens the bootstrap. The same holds for a seeded first account.
 
 ### OAuth: the callback hands out a single-use code, not a session (breaking)
 

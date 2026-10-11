@@ -97,7 +97,7 @@ env:
 
 features:
   - name: rbac
-    description: "Role / Permission / UserRole / RolePermission tables + their CRUD mutations (incl. UpdateRole, which edits a role's name/description only — the privilege flags stay declarative) + their lifecycle events. Required when the project's gateway has ACL annotations + uses role-based assignment. Also stages the turnkey declarative signup role assignment (first_user / default -> UserRole)."
+    description: "Role / Permission / UserRole / RolePermission tables + their CRUD mutations (incl. UpdateRole, which edits a role's name/description only — the privilege flags stay declarative) + their lifecycle events. Required when the project's gateway has ACL annotations + uses role-based assignment. Also stages the turnkey declarative signup role assignment (first_user / default -> UserRole), with the BootstrapClaim table (one row) that hands the first_user roles to exactly one sign-up."
     default: true
     go_files:
       - handlers/signup_roles.go

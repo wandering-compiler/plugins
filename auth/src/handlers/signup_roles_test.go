@@ -33,8 +33,10 @@ func (m *signupRolesQueryMock) GetDefaultRoles(ctx context.Context, in *pb.GetDe
 // signupRolesMutationMock records AssignRoleToUser calls.
 type signupRolesMutationMock struct {
 	pb.AuthMutationClient
-	assigned []string // role_ids assigned, in order
-	claimed  string   // user holding the bootstrap claim ("" = free)
+	assigned  []string // role_ids assigned, in order
+	claimed   string   // user holding the bootstrap claim ("" = free)
+	claimResp *pb.ClaimBootstrapAdminResp
+	claimErr  error
 }
 
 // ClaimBootstrapAdmin mirrors the UPSERT … DO NOTHING on the constant key:
@@ -42,6 +44,9 @@ type signupRolesMutationMock struct {
 func (m *signupRolesMutationMock) ClaimBootstrapAdmin(_ context.Context, in *pb.ClaimBootstrapAdminReq, _ ...grpc.CallOption) (*pb.ClaimBootstrapAdminResp, error) {
 	if in.GetSlot() != bootstrapSlot {
 		return nil, errors.New("unexpected slot " + in.GetSlot())
+	}
+	if m.claimErr != nil || m.claimResp != nil {
+		return m.claimResp, m.claimErr
 	}
 	if m.claimed != "" {
 		return &pb.ClaimBootstrapAdminResp{Written: proto.Int32(0)}, nil
@@ -128,5 +133,35 @@ func TestAssignSignupRoles_ATakenClaimIsNotReopened(t *testing.T) {
 	assignFor(t, h, "u3")
 	if len(mut.assigned) != 1 || mut.assigned[0] != "role-member" {
 		t.Errorf("assigned = %v, want [role-member]", mut.assigned)
+	}
+}
+
+// A claim answer without `written` must not read as a win: the first_user
+// roles are the privileged branch, so an absent count falls back to defaults.
+func TestAssignSignupRoles_AnAbsentWrittenCountFailsClosed(t *testing.T) {
+	q := &signupRolesQueryMock{count: 0, firstRoles: []string{"role-admin"}, defRoles: []string{"role-member"}}
+	mut := &signupRolesMutationMock{claimResp: &pb.ClaimBootstrapAdminResp{}}
+	h := &AuthServiceHandler{Query: q, Mutation: mut}
+	assignFor(t, h, "u1")
+	if len(mut.assigned) != 1 || mut.assigned[0] != "role-member" {
+		t.Errorf("assigned = %v, want [role-member]", mut.assigned)
+	}
+}
+
+// A failed claim fails the sign-up: no role is linked, and the caller rolls
+// the transaction back, which leaves the claim free.
+func TestAssignSignupRoles_AFailedClaimAssignsNothing(t *testing.T) {
+	q := &signupRolesQueryMock{count: 0, firstRoles: []string{"role-admin"}, defRoles: []string{"role-member"}}
+	mut := &signupRolesMutationMock{claimErr: errors.New("db down")}
+	h := &AuthServiceHandler{Query: q, Mutation: mut}
+	roles, err := resolveSignupRoleIDs(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := assignSignupRoleIDs(context.Background(), h, "u1", roles); err == nil {
+		t.Fatal("assign succeeded with a failed claim")
+	}
+	if len(mut.assigned) != 0 {
+		t.Errorf("assigned = %v, want none", mut.assigned)
 	}
 }

@@ -65,6 +65,11 @@ const bootstrapSlot = "first_user"
 // A `bootstrap` set is assigned only to the sign-up that writes the claim. A
 // concurrent one blocks on the claim's key until the first commits, then
 // conflicts, writes nothing, and gets the default roles.
+// That holds under READ COMMITTED (the transaction opens at the driver default,
+// PostgreSQL's) and on MySQL; a stricter PostgreSQL default answers the
+// blocked sign-up with a serialization failure instead. Without DistTx the
+// claim commits on its own, ahead of the role links. A `written` that is not
+// 1, absent included, counts as a lost claim: fail closed, default roles.
 func assignSignupRoleIDs(ctx context.Context, h *AuthServiceHandler, userID string, roles signupRoles) error {
 	ids := roles.ids
 	if roles.bootstrap {

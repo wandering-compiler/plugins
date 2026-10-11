@@ -2331,7 +2331,8 @@ func (x *AuthClient) GetCreatedAt() *timestamppb.Timestamp {
 // this row, keyed on a constant, in its own transaction, and a concurrent
 // one that conflicts on the key gets the default roles instead. Once
 // written, the row stays: deleting every account later does not reopen the
-// bootstrap.
+// bootstrap. Only a sign-up writes it, so a seeded first account (or a
+// deployment with users before this table existed) leaves it empty.
 type BootstrapClaim struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Slot          string                 `protobuf:"bytes,1,opt,name=slot,proto3" json:"slot,omitempty"`
