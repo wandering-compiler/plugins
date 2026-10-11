@@ -57,6 +57,16 @@ Behaviour that is deliberate, and easy to build against wrongly.
 - **A reset keeps device trust.** Under `two_factor_scope=new_devices`, a device trusted before the reset is still trusted after it. The reset link arrived in the mailbox, and that mailbox is the second factor the reset already proved.
 - **`two_factor_scope=all_logins` applies to password sign-ins.** An OAuth sign-in issues a session without a second factor; the provider is the factor.
 
+**OAuth sign-in**
+- **The callback never carries a session.** A browser sign-in runs in three steps:
+  1. The page makes a PKCE verifier (43–128 random URL-safe characters), keeps it in `sessionStorage`, and calls `GET /auth/oauth/{provider}/authorize?code_challenge=<BASE64URL(SHA256(verifier))>&redirect_after=/where`.
+  2. The provider returns the browser to the callback, which answers with a redirect to `redirect_after#code=<login code>`.
+  3. The page calls `POST /auth/oauth/exchange` with `{"code": …, "code_verifier": …}` and receives `{"user_id", "token"}`.
+- **A login code is single-use and expires after two minutes.** Only the verifier of the challenge sent in step 1 redeems it, so a callback link opened in any other browser signs nobody in. A wrong verifier spends the code.
+- **Make a fresh verifier for every sign-in, and remove it before the exchange.** The `state` carries only a sha256 of the challenge, but the challenge itself still passes through the authorize request. Someone who learned it could start their own sign-in with it and send the resulting callback link to the page that made it. That page would sign in to their account if it still held the matching verifier, for example from a sign-in it abandoned at the provider. So the landing page takes the verifier out of `sessionStorage` (read, then delete) before it calls the exchange, whether the exchange succeeds or not, and step 1 never reuses an old one.
+- **`code_challenge` is required.** An authorize request without one, or with anything other than a 43-character S256 challenge, is refused. A sign-in left at the provider for more than ten minutes has to start again.
+- **Towards the provider** the plugin sends its own PKCE challenge and an OIDC `nonce`. Without a `userinfo_url`, it accepts an `id_token` only if its `aud` names the client id, its `azp` (if present) is the client id, its `exp` is in the future, and its `nonce` matches.
+
 **Invitations**
 - **The plugin sends no mail.** `InviteToOrgResp.token` is the link's only copy, returned once to the inviter: the inviter is the delivery channel. `OrgInviteCreated` carries the address, not the link, so a mailer subscribed to it cannot send the invitation; it has to send the link the inviter hands it.
 - **An open invitation's link is spent by the first registration through it.** It is bound to that address, and a second account cannot register with the same link (under `invite_only` it is refused). Acceptance by the bound account works as before.

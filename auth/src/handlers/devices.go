@@ -57,7 +57,7 @@ func init() {
 	stampSignInDeviceTrust = func(resp *pb.SignInResp, trustToken string) {
 		resp.DeviceTrustToken = trustToken
 	}
-	// The message-gated responses (OAuthCallbackResp / VerifyMfaResp) carry the
+	// The message-gated responses (OAuthExchangeResp / VerifyMfaResp) carry the
 	// same `device_trust_token`, but their Go type isn't compiled unless their
 	// own feature is active — so set it by proto NAME via reflection instead of
 	// naming the field. No-op for a message that lacks the field.

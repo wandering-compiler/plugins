@@ -934,6 +934,28 @@ message AuthClient {
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 }
 
+// OAuthLoginCode — the single-use code an OAuth callback hands the browser
+// instead of a session (oauth).
+//
+// The callback is a browser redirect, so whatever it carries lands in a URL
+// any page can be made to open. A session there would sign the opener in,
+// and a callback link minted by one person would sign in whoever followed
+// it. The code is worth nothing on its own: OAuthExchange redeems it once,
+// within minutes, and only with the PKCE verifier whose challenge the
+// browser that STARTED the flow sent to OAuthAuthorizeURL.
+message OAuthLoginCode {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "oauth";
+
+  string id             = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id        = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string code_hash      = 3 [(w17.field) = { type: CHAR, max_len: 64, unique: true }]; // sha256 hex of the code
+  string code_challenge = 4 [(w17.field) = { type: CHAR, max_len: 64 }];                // challengeDigest (sha256 hex) of the authorize step's PKCE challenge
+  google.protobuf.Timestamp expires_at  = 5 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp consumed_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at  = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
 // CliAuthCode is a single-use PKCE authorization code minted by
 // CliAuthorize and redeemed by CliToken (the `cli_login` feature — the
 // console as a first-party OAuth authorization server for CLIs). Only the

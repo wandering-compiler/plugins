@@ -160,7 +160,7 @@ features:
     go_files:
       - handlers/devices.go
   - name: oauth
-    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client_secret PASSWORD-typed) + OAuthIdentity (User↔external-subject link) tables and the authorize/callback handlers. Providers are configured at runtime via the generated admin CRUD; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default."
+    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client secret encrypted) + OAuthIdentity (User↔external-subject link) + OAuthLoginCode tables and the authorize/callback/exchange handlers. The browser that starts a sign-in sends a PKCE challenge; the callback hands it a single-use code, never a session, and only that browser's verifier redeems it (OAuthExchange). Towards the provider the plugin uses PKCE and an OIDC nonce, and checks an id_token's audience, expiry and nonce. Providers are configured at runtime via the generated admin CRUD; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default."
     default: false
     go_files:
       - handlers/oauth.go
@@ -399,7 +399,10 @@ presets:
           # The callback is walked by a BROWSER: the identity provider
           # sends it here with ?code=. `browser_redirect` makes it answer
           # 302 instead of a JSON document, sending the user back where
-          # they started with the session in the fragment.
+          # they started with a single-use LOGIN CODE in the fragment —
+          # never the session: a URL can be handed to anyone, and a session
+          # in it would sign in whoever opened it. The page redeems the code
+          # at /exchange with its PKCE verifier.
           #
           # `redirect_after` has been on OAuthCallbackResp since the
           # feature shipped — caller-supplied, validated site-relative,
@@ -407,7 +410,11 @@ presets:
           # now NOTHING read it back. The browser landed on
           # {"token":"ey…"} and the flow ended there.
           - { ref: AuthService.OAuthCallback,     method: GET, path: "/{provider}/callback",  exclude_auth: true, public_limit: failed_only, feature: oauth,
-              browser_redirect: { target_field: "redirect_after", token_field: "token", token_param: "token", fallback: "/" } }
+              browser_redirect: { target_field: "redirect_after", token_field: "code", token_param: "code", fallback: "/" } }
+          # Redeems the callback's code with the verifier whose challenge
+          # the same browser sent to /authorize, and issues the session.
+          # failed_only: a wrong or replayed code is what the limit is for.
+          - { ref: AuthService.OAuthExchange,     method: POST, path: /exchange, exclude_auth: true, public_limit: failed_only, feature: oauth }
       # Two-factor: enrollment (bearer) + challenge verification
       # (VerifyMfa is unauthenticated — challenge_id, not a token yet).
       # Gated two_factor: the whole group drops when the feature is off.

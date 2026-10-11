@@ -18,6 +18,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -51,6 +52,24 @@ func randomURLToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// pkceMinVerifierLen is RFC 7636 §4.1's minimum code_verifier length (the
+// floor of the 43–128 unreserved-charset range). A too-short verifier
+// weakens the challenge; we enforce the floor (not the exact charset — the
+// hash comparison already rejects a tampered verifier).
+const pkceMinVerifierLen = 43
+
+// s256Challenge is BASE64URL(SHA256(verifier)), the PKCE S256 challenge.
+func s256Challenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// verifyPKCES256 reports whether s256Challenge(verifier) equals the stored
+// challenge, compared in constant time.
+func verifyPKCES256(verifier, challenge string) bool {
+	return hmac.Equal([]byte(s256Challenge(verifier)), []byte(challenge))
 }
 
 // sha256Hex is the one-way function applied to an E1 token for storage +
@@ -834,7 +853,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 var stampSignInDeviceTrust = func(resp *pb.SignInResp, trustToken string) {}
 
 // stampDeviceTrust is the device-trust seam for the responses whose MESSAGE is
-// itself feature-gated — OAuthCallbackResp (`oauth`) and VerifyMfaResp
+// itself feature-gated — OAuthExchangeResp (`oauth`) and VerifyMfaResp
 // (`two_factor`). Unlike SignInResp (always present), the base handler can't
 // name those Go types' `device_trust_token` field, so this seam sets it by
 // proto field NAME via reflection: the always-compiled base stays free of the

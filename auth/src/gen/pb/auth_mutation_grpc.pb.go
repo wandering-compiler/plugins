@@ -93,6 +93,8 @@ const (
 	AuthMutation_RegisterAuthClient_FullMethodName             = "/w17.contrib.auth.AuthMutation/RegisterAuthClient"
 	AuthMutation_SetAuthClientEnabled_FullMethodName           = "/w17.contrib.auth.AuthMutation/SetAuthClientEnabled"
 	AuthMutation_DeleteAuthClient_FullMethodName               = "/w17.contrib.auth.AuthMutation/DeleteAuthClient"
+	AuthMutation_CreateOAuthLoginCode_FullMethodName           = "/w17.contrib.auth.AuthMutation/CreateOAuthLoginCode"
+	AuthMutation_ConsumeOAuthLoginCode_FullMethodName          = "/w17.contrib.auth.AuthMutation/ConsumeOAuthLoginCode"
 	AuthMutation_CreateCliAuthCode_FullMethodName              = "/w17.contrib.auth.AuthMutation/CreateCliAuthCode"
 	AuthMutation_ConsumeCliAuthCode_FullMethodName             = "/w17.contrib.auth.AuthMutation/ConsumeCliAuthCode"
 	AuthMutation_CreateOrganization_FullMethodName             = "/w17.contrib.auth.AuthMutation/CreateOrganization"
@@ -432,6 +434,14 @@ type AuthMutationClient interface {
 	SetAuthClientEnabled(ctx context.Context, in *SetAuthClientEnabledReq, opts ...grpc.CallOption) (*SetAuthClientEnabledResp, error)
 	// DeleteAuthClient — remove a registration outright.
 	DeleteAuthClient(ctx context.Context, in *DeleteAuthClientReq, opts ...grpc.CallOption) (*DeleteAuthClientResp, error)
+	// CreateOAuthLoginCode stores the single-use code an OAuth callback hands
+	// the browser, bound to a sha256 digest of the authorize step's PKCE challenge.
+	CreateOAuthLoginCode(ctx context.Context, in *CreateOAuthLoginCodeReq, opts ...grpc.CallOption) (*CreateOAuthLoginCodeResp, error)
+	// ConsumeOAuthLoginCode redeems a code once: the conditional UPDATE is the
+	// single-use guarantee, so of two concurrent exchanges exactly one gets a
+	// row back. The verifier is checked against the returned digest after
+	// the consume, so a wrong verifier burns the code too.
+	ConsumeOAuthLoginCode(ctx context.Context, in *ConsumeOAuthLoginCodeReq, opts ...grpc.CallOption) (*ConsumeOAuthLoginCodeResp, error)
 	CreateCliAuthCode(ctx context.Context, in *CreateCliAuthCodeReq, opts ...grpc.CallOption) (*CreateCliAuthCodeResp, error)
 	// ConsumeCliAuthCode — atomically claim a live code: flip consumed_at
 	// single-use AND require not-consumed + not-expired in the WHERE, so a
@@ -1201,6 +1211,26 @@ func (c *authMutationClient) DeleteAuthClient(ctx context.Context, in *DeleteAut
 	return out, nil
 }
 
+func (c *authMutationClient) CreateOAuthLoginCode(ctx context.Context, in *CreateOAuthLoginCodeReq, opts ...grpc.CallOption) (*CreateOAuthLoginCodeResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateOAuthLoginCodeResp)
+	err := c.cc.Invoke(ctx, AuthMutation_CreateOAuthLoginCode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) ConsumeOAuthLoginCode(ctx context.Context, in *ConsumeOAuthLoginCodeReq, opts ...grpc.CallOption) (*ConsumeOAuthLoginCodeResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConsumeOAuthLoginCodeResp)
+	err := c.cc.Invoke(ctx, AuthMutation_ConsumeOAuthLoginCode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authMutationClient) CreateCliAuthCode(ctx context.Context, in *CreateCliAuthCodeReq, opts ...grpc.CallOption) (*CreateCliAuthCodeResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateCliAuthCodeResp)
@@ -1664,6 +1694,14 @@ type AuthMutationServer interface {
 	SetAuthClientEnabled(context.Context, *SetAuthClientEnabledReq) (*SetAuthClientEnabledResp, error)
 	// DeleteAuthClient — remove a registration outright.
 	DeleteAuthClient(context.Context, *DeleteAuthClientReq) (*DeleteAuthClientResp, error)
+	// CreateOAuthLoginCode stores the single-use code an OAuth callback hands
+	// the browser, bound to a sha256 digest of the authorize step's PKCE challenge.
+	CreateOAuthLoginCode(context.Context, *CreateOAuthLoginCodeReq) (*CreateOAuthLoginCodeResp, error)
+	// ConsumeOAuthLoginCode redeems a code once: the conditional UPDATE is the
+	// single-use guarantee, so of two concurrent exchanges exactly one gets a
+	// row back. The verifier is checked against the returned digest after
+	// the consume, so a wrong verifier burns the code too.
+	ConsumeOAuthLoginCode(context.Context, *ConsumeOAuthLoginCodeReq) (*ConsumeOAuthLoginCodeResp, error)
 	CreateCliAuthCode(context.Context, *CreateCliAuthCodeReq) (*CreateCliAuthCodeResp, error)
 	// ConsumeCliAuthCode — atomically claim a live code: flip consumed_at
 	// single-use AND require not-consumed + not-expired in the WHERE, so a
@@ -1976,6 +2014,12 @@ func (UnimplementedAuthMutationServer) SetAuthClientEnabled(context.Context, *Se
 }
 func (UnimplementedAuthMutationServer) DeleteAuthClient(context.Context, *DeleteAuthClientReq) (*DeleteAuthClientResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteAuthClient not implemented")
+}
+func (UnimplementedAuthMutationServer) CreateOAuthLoginCode(context.Context, *CreateOAuthLoginCodeReq) (*CreateOAuthLoginCodeResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateOAuthLoginCode not implemented")
+}
+func (UnimplementedAuthMutationServer) ConsumeOAuthLoginCode(context.Context, *ConsumeOAuthLoginCodeReq) (*ConsumeOAuthLoginCodeResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConsumeOAuthLoginCode not implemented")
 }
 func (UnimplementedAuthMutationServer) CreateCliAuthCode(context.Context, *CreateCliAuthCodeReq) (*CreateCliAuthCodeResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateCliAuthCode not implemented")
@@ -3209,6 +3253,42 @@ func _AuthMutation_DeleteAuthClient_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthMutation_CreateOAuthLoginCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateOAuthLoginCodeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).CreateOAuthLoginCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_CreateOAuthLoginCode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).CreateOAuthLoginCode(ctx, req.(*CreateOAuthLoginCodeReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_ConsumeOAuthLoginCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConsumeOAuthLoginCodeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).ConsumeOAuthLoginCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_ConsumeOAuthLoginCode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).ConsumeOAuthLoginCode(ctx, req.(*ConsumeOAuthLoginCodeReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthMutation_CreateCliAuthCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateCliAuthCodeReq)
 	if err := dec(in); err != nil {
@@ -3727,6 +3807,14 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteAuthClient",
 			Handler:    _AuthMutation_DeleteAuthClient_Handler,
+		},
+		{
+			MethodName: "CreateOAuthLoginCode",
+			Handler:    _AuthMutation_CreateOAuthLoginCode_Handler,
+		},
+		{
+			MethodName: "ConsumeOAuthLoginCode",
+			Handler:    _AuthMutation_ConsumeOAuthLoginCode_Handler,
 		},
 		{
 			MethodName: "CreateCliAuthCode",

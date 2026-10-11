@@ -2321,6 +2321,107 @@ func (x *AuthClient) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// OAuthLoginCode — the single-use code an OAuth callback hands the browser
+// instead of a session (oauth).
+//
+// The callback is a browser redirect, so whatever it carries lands in a URL
+// any page can be made to open. A session there would sign the opener in,
+// and a callback link minted by one person would sign in whoever followed
+// it. The code is worth nothing on its own: OAuthExchange redeems it once,
+// within minutes, and only with the PKCE verifier whose challenge the
+// browser that STARTED the flow sent to OAuthAuthorizeURL.
+type OAuthLoginCode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	CodeHash      string                 `protobuf:"bytes,3,opt,name=code_hash,json=codeHash,proto3" json:"code_hash,omitempty"`                // sha256 hex of the code
+	CodeChallenge string                 `protobuf:"bytes,4,opt,name=code_challenge,json=codeChallenge,proto3" json:"code_challenge,omitempty"` // challengeDigest (sha256 hex) of the authorize step's PKCE challenge
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ConsumedAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=consumed_at,json=consumedAt,proto3" json:"consumed_at,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OAuthLoginCode) Reset() {
+	*x = OAuthLoginCode{}
+	mi := &file_types_models_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OAuthLoginCode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OAuthLoginCode) ProtoMessage() {}
+
+func (x *OAuthLoginCode) ProtoReflect() protoreflect.Message {
+	mi := &file_types_models_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OAuthLoginCode.ProtoReflect.Descriptor instead.
+func (*OAuthLoginCode) Descriptor() ([]byte, []int) {
+	return file_types_models_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *OAuthLoginCode) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *OAuthLoginCode) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *OAuthLoginCode) GetCodeHash() string {
+	if x != nil {
+		return x.CodeHash
+	}
+	return ""
+}
+
+func (x *OAuthLoginCode) GetCodeChallenge() string {
+	if x != nil {
+		return x.CodeChallenge
+	}
+	return ""
+}
+
+func (x *OAuthLoginCode) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *OAuthLoginCode) GetConsumedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ConsumedAt
+	}
+	return nil
+}
+
+func (x *OAuthLoginCode) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
 // CliAuthCode is a single-use PKCE authorization code minted by
 // CliAuthorize and redeemed by CliToken (the `cli_login` feature — the
 // console as a first-party OAuth authorization server for CLIs). Only the
@@ -2358,7 +2459,7 @@ type CliAuthCode struct {
 
 func (x *CliAuthCode) Reset() {
 	*x = CliAuthCode{}
-	mi := &file_types_models_proto_msgTypes[17]
+	mi := &file_types_models_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2370,7 +2471,7 @@ func (x *CliAuthCode) String() string {
 func (*CliAuthCode) ProtoMessage() {}
 
 func (x *CliAuthCode) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[17]
+	mi := &file_types_models_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2383,7 +2484,7 @@ func (x *CliAuthCode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CliAuthCode.ProtoReflect.Descriptor instead.
 func (*CliAuthCode) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{17}
+	return file_types_models_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CliAuthCode) GetId() string {
@@ -2488,7 +2589,7 @@ type Organization struct {
 
 func (x *Organization) Reset() {
 	*x = Organization{}
-	mi := &file_types_models_proto_msgTypes[18]
+	mi := &file_types_models_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2500,7 +2601,7 @@ func (x *Organization) String() string {
 func (*Organization) ProtoMessage() {}
 
 func (x *Organization) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[18]
+	mi := &file_types_models_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2513,7 +2614,7 @@ func (x *Organization) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Organization.ProtoReflect.Descriptor instead.
 func (*Organization) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{18}
+	return file_types_models_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Organization) GetId() string {
@@ -2579,7 +2680,7 @@ type OrgMembership struct {
 
 func (x *OrgMembership) Reset() {
 	*x = OrgMembership{}
-	mi := &file_types_models_proto_msgTypes[19]
+	mi := &file_types_models_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2591,7 +2692,7 @@ func (x *OrgMembership) String() string {
 func (*OrgMembership) ProtoMessage() {}
 
 func (x *OrgMembership) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[19]
+	mi := &file_types_models_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2604,7 +2705,7 @@ func (x *OrgMembership) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgMembership.ProtoReflect.Descriptor instead.
 func (*OrgMembership) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{19}
+	return file_types_models_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *OrgMembership) GetId() string {
@@ -2766,7 +2867,7 @@ type OrgInvite struct {
 
 func (x *OrgInvite) Reset() {
 	*x = OrgInvite{}
-	mi := &file_types_models_proto_msgTypes[20]
+	mi := &file_types_models_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2778,7 +2879,7 @@ func (x *OrgInvite) String() string {
 func (*OrgInvite) ProtoMessage() {}
 
 func (x *OrgInvite) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[20]
+	mi := &file_types_models_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2791,7 +2892,7 @@ func (x *OrgInvite) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrgInvite.ProtoReflect.Descriptor instead.
 func (*OrgInvite) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{20}
+	return file_types_models_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *OrgInvite) GetId() string {
@@ -3114,7 +3215,19 @@ const file_types_models_proto_rawDesc = "" +
 	"\v\n" +
 	"\tclient_id\n" +
 	"\x0e\n" +
-	"\fredirect_uri\x10\x01\xfa\xf4\x18\tcli_login\"\xeb\x03\n" +
+	"\fredirect_uri\x10\x01\xfa\xf4\x18\tcli_login\"\x8f\x03\n" +
+	"\x0eOAuthLoginCode\x12\x1b\n" +
+	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
+	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12'\n" +
+	"\tcode_hash\x18\x03 \x01(\tB\n" +
+	"\xca\xf3\x18\x06\b\x018\x01@@R\bcodeHash\x12/\n" +
+	"\x0ecode_challenge\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\rcodeChallenge\x12A\n" +
+	"\n" +
+	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\texpiresAt\x12E\n" +
+	"\vconsumed_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\n" +
+	"consumedAt\x12F\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\r\xc2\xf3\x18\x00\xfa\xf4\x18\x05oauth\"\xeb\x03\n" +
 	"\vCliAuthCode\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12(\n" +
@@ -3200,7 +3313,7 @@ func file_types_models_proto_rawDescGZIP() []byte {
 }
 
 var file_types_models_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_types_models_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_types_models_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_types_models_proto_goTypes = []any{
 	(TokenType)(0),                 // 0: w17.contrib.auth.TokenType
 	(EmailProof)(0),                // 1: w17.contrib.auth.EmailProof
@@ -3222,62 +3335,66 @@ var file_types_models_proto_goTypes = []any{
 	(*UserRole)(nil),               // 17: w17.contrib.auth.UserRole
 	(*TokenPermission)(nil),        // 18: w17.contrib.auth.TokenPermission
 	(*AuthClient)(nil),             // 19: w17.contrib.auth.AuthClient
-	(*CliAuthCode)(nil),            // 20: w17.contrib.auth.CliAuthCode
-	(*Organization)(nil),           // 21: w17.contrib.auth.Organization
-	(*OrgMembership)(nil),          // 22: w17.contrib.auth.OrgMembership
-	(*OrgInvite)(nil),              // 23: w17.contrib.auth.OrgInvite
-	(*timestamppb.Timestamp)(nil),  // 24: google.protobuf.Timestamp
+	(*OAuthLoginCode)(nil),         // 20: w17.contrib.auth.OAuthLoginCode
+	(*CliAuthCode)(nil),            // 21: w17.contrib.auth.CliAuthCode
+	(*Organization)(nil),           // 22: w17.contrib.auth.Organization
+	(*OrgMembership)(nil),          // 23: w17.contrib.auth.OrgMembership
+	(*OrgInvite)(nil),              // 24: w17.contrib.auth.OrgInvite
+	(*timestamppb.Timestamp)(nil),  // 25: google.protobuf.Timestamp
 }
 var file_types_models_proto_depIdxs = []int32{
-	24, // 0: w17.contrib.auth.User.created_at:type_name -> google.protobuf.Timestamp
-	24, // 1: w17.contrib.auth.User.email_verified_at:type_name -> google.protobuf.Timestamp
+	25, // 0: w17.contrib.auth.User.created_at:type_name -> google.protobuf.Timestamp
+	25, // 1: w17.contrib.auth.User.email_verified_at:type_name -> google.protobuf.Timestamp
 	1,  // 2: w17.contrib.auth.User.email_proof:type_name -> w17.contrib.auth.EmailProof
-	24, // 3: w17.contrib.auth.User.disabled_at:type_name -> google.protobuf.Timestamp
+	25, // 3: w17.contrib.auth.User.disabled_at:type_name -> google.protobuf.Timestamp
 	2,  // 4: w17.contrib.auth.User.kind:type_name -> w17.contrib.auth.AccountKind
-	24, // 5: w17.contrib.auth.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	24, // 6: w17.contrib.auth.UserToken.created_at:type_name -> google.protobuf.Timestamp
-	24, // 7: w17.contrib.auth.UserToken.expires_at:type_name -> google.protobuf.Timestamp
+	25, // 5: w17.contrib.auth.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	25, // 6: w17.contrib.auth.UserToken.created_at:type_name -> google.protobuf.Timestamp
+	25, // 7: w17.contrib.auth.UserToken.expires_at:type_name -> google.protobuf.Timestamp
 	0,  // 8: w17.contrib.auth.UserToken.token_type:type_name -> w17.contrib.auth.TokenType
-	24, // 9: w17.contrib.auth.UserToken.last_used_at:type_name -> google.protobuf.Timestamp
-	24, // 10: w17.contrib.auth.Device.trusted_at:type_name -> google.protobuf.Timestamp
-	24, // 11: w17.contrib.auth.Device.last_seen_at:type_name -> google.protobuf.Timestamp
-	24, // 12: w17.contrib.auth.Device.created_at:type_name -> google.protobuf.Timestamp
-	24, // 13: w17.contrib.auth.OAuthProvider.created_at:type_name -> google.protobuf.Timestamp
-	24, // 14: w17.contrib.auth.OAuthIdentity.created_at:type_name -> google.protobuf.Timestamp
-	24, // 15: w17.contrib.auth.UserTotpSecret.confirmed_at:type_name -> google.protobuf.Timestamp
-	24, // 16: w17.contrib.auth.UserTotpSecret.created_at:type_name -> google.protobuf.Timestamp
-	24, // 17: w17.contrib.auth.UserTotpSecret.stepup_locked_until:type_name -> google.protobuf.Timestamp
-	24, // 18: w17.contrib.auth.UserRecoveryCode.used_at:type_name -> google.protobuf.Timestamp
-	24, // 19: w17.contrib.auth.UserRecoveryCode.created_at:type_name -> google.protobuf.Timestamp
-	24, // 20: w17.contrib.auth.MfaChallenge.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 21: w17.contrib.auth.MfaChallenge.created_at:type_name -> google.protobuf.Timestamp
-	24, // 22: w17.contrib.auth.PendingSignUp.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 23: w17.contrib.auth.PendingSignUp.created_at:type_name -> google.protobuf.Timestamp
-	24, // 24: w17.contrib.auth.PasswordResetToken.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 25: w17.contrib.auth.PasswordResetToken.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 26: w17.contrib.auth.PasswordResetToken.created_at:type_name -> google.protobuf.Timestamp
-	24, // 27: w17.contrib.auth.EmailVerificationToken.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 28: w17.contrib.auth.EmailVerificationToken.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 29: w17.contrib.auth.EmailVerificationToken.created_at:type_name -> google.protobuf.Timestamp
-	24, // 30: w17.contrib.auth.Role.created_at:type_name -> google.protobuf.Timestamp
+	25, // 9: w17.contrib.auth.UserToken.last_used_at:type_name -> google.protobuf.Timestamp
+	25, // 10: w17.contrib.auth.Device.trusted_at:type_name -> google.protobuf.Timestamp
+	25, // 11: w17.contrib.auth.Device.last_seen_at:type_name -> google.protobuf.Timestamp
+	25, // 12: w17.contrib.auth.Device.created_at:type_name -> google.protobuf.Timestamp
+	25, // 13: w17.contrib.auth.OAuthProvider.created_at:type_name -> google.protobuf.Timestamp
+	25, // 14: w17.contrib.auth.OAuthIdentity.created_at:type_name -> google.protobuf.Timestamp
+	25, // 15: w17.contrib.auth.UserTotpSecret.confirmed_at:type_name -> google.protobuf.Timestamp
+	25, // 16: w17.contrib.auth.UserTotpSecret.created_at:type_name -> google.protobuf.Timestamp
+	25, // 17: w17.contrib.auth.UserTotpSecret.stepup_locked_until:type_name -> google.protobuf.Timestamp
+	25, // 18: w17.contrib.auth.UserRecoveryCode.used_at:type_name -> google.protobuf.Timestamp
+	25, // 19: w17.contrib.auth.UserRecoveryCode.created_at:type_name -> google.protobuf.Timestamp
+	25, // 20: w17.contrib.auth.MfaChallenge.consumed_at:type_name -> google.protobuf.Timestamp
+	25, // 21: w17.contrib.auth.MfaChallenge.created_at:type_name -> google.protobuf.Timestamp
+	25, // 22: w17.contrib.auth.PendingSignUp.expires_at:type_name -> google.protobuf.Timestamp
+	25, // 23: w17.contrib.auth.PendingSignUp.created_at:type_name -> google.protobuf.Timestamp
+	25, // 24: w17.contrib.auth.PasswordResetToken.expires_at:type_name -> google.protobuf.Timestamp
+	25, // 25: w17.contrib.auth.PasswordResetToken.consumed_at:type_name -> google.protobuf.Timestamp
+	25, // 26: w17.contrib.auth.PasswordResetToken.created_at:type_name -> google.protobuf.Timestamp
+	25, // 27: w17.contrib.auth.EmailVerificationToken.expires_at:type_name -> google.protobuf.Timestamp
+	25, // 28: w17.contrib.auth.EmailVerificationToken.consumed_at:type_name -> google.protobuf.Timestamp
+	25, // 29: w17.contrib.auth.EmailVerificationToken.created_at:type_name -> google.protobuf.Timestamp
+	25, // 30: w17.contrib.auth.Role.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 31: w17.contrib.auth.Role.token_type:type_name -> w17.contrib.auth.TokenType
-	24, // 32: w17.contrib.auth.RolePermission.created_at:type_name -> google.protobuf.Timestamp
-	24, // 33: w17.contrib.auth.UserRole.created_at:type_name -> google.protobuf.Timestamp
-	24, // 34: w17.contrib.auth.TokenPermission.created_at:type_name -> google.protobuf.Timestamp
-	24, // 35: w17.contrib.auth.AuthClient.created_at:type_name -> google.protobuf.Timestamp
-	24, // 36: w17.contrib.auth.CliAuthCode.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 37: w17.contrib.auth.CliAuthCode.consumed_at:type_name -> google.protobuf.Timestamp
-	24, // 38: w17.contrib.auth.CliAuthCode.created_at:type_name -> google.protobuf.Timestamp
-	24, // 39: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
-	24, // 40: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
-	24, // 41: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
-	24, // 42: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
-	24, // 43: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
-	44, // [44:44] is the sub-list for method output_type
-	44, // [44:44] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	25, // 32: w17.contrib.auth.RolePermission.created_at:type_name -> google.protobuf.Timestamp
+	25, // 33: w17.contrib.auth.UserRole.created_at:type_name -> google.protobuf.Timestamp
+	25, // 34: w17.contrib.auth.TokenPermission.created_at:type_name -> google.protobuf.Timestamp
+	25, // 35: w17.contrib.auth.AuthClient.created_at:type_name -> google.protobuf.Timestamp
+	25, // 36: w17.contrib.auth.OAuthLoginCode.expires_at:type_name -> google.protobuf.Timestamp
+	25, // 37: w17.contrib.auth.OAuthLoginCode.consumed_at:type_name -> google.protobuf.Timestamp
+	25, // 38: w17.contrib.auth.OAuthLoginCode.created_at:type_name -> google.protobuf.Timestamp
+	25, // 39: w17.contrib.auth.CliAuthCode.expires_at:type_name -> google.protobuf.Timestamp
+	25, // 40: w17.contrib.auth.CliAuthCode.consumed_at:type_name -> google.protobuf.Timestamp
+	25, // 41: w17.contrib.auth.CliAuthCode.created_at:type_name -> google.protobuf.Timestamp
+	25, // 42: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
+	25, // 43: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
+	25, // 44: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
+	25, // 45: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
+	25, // 46: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
+	47, // [47:47] is the sub-list for method output_type
+	47, // [47:47] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_types_models_proto_init() }
@@ -3291,7 +3408,7 @@ func file_types_models_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_types_models_proto_rawDesc), len(file_types_models_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   21,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

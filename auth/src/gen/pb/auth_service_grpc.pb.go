@@ -93,6 +93,7 @@ const (
 	AuthService_RevokeApiToken_FullMethodName           = "/w17.contrib.auth.AuthService/RevokeApiToken"
 	AuthService_OAuthAuthorizeURL_FullMethodName        = "/w17.contrib.auth.AuthService/OAuthAuthorizeURL"
 	AuthService_OAuthCallback_FullMethodName            = "/w17.contrib.auth.AuthService/OAuthCallback"
+	AuthService_OAuthExchange_FullMethodName            = "/w17.contrib.auth.AuthService/OAuthExchange"
 	AuthService_EnrollTotp_FullMethodName               = "/w17.contrib.auth.AuthService/EnrollTotp"
 	AuthService_ConfirmTotp_FullMethodName              = "/w17.contrib.auth.AuthService/ConfirmTotp"
 	AuthService_DisableTotp_FullMethodName              = "/w17.contrib.auth.AuthService/DisableTotp"
@@ -183,10 +184,14 @@ type AuthServiceClient interface {
 	RevokeApiToken(ctx context.Context, in *RevokeApiTokenReq, opts ...grpc.CallOption) (*RevokeApiTokenResp, error)
 	// ── oauth — authorize-redirect + callback ───────────────────
 	// OAuthAuthorizeURL builds the IdP authorize URL (client redirects);
-	// OAuthCallback exchanges the code, find-or-creates the user, and issues
-	// a session. Both unauthenticated. Gated oauth.
+	// OAuthCallback exchanges the provider's code, find-or-creates the user,
+	// and hands the browser a single-use login code. Both unauthenticated.
+	// Gated oauth.
 	OAuthAuthorizeURL(ctx context.Context, in *OAuthAuthorizeURLReq, opts ...grpc.CallOption) (*OAuthAuthorizeURLResp, error)
 	OAuthCallback(ctx context.Context, in *OAuthCallbackReq, opts ...grpc.CallOption) (*OAuthCallbackResp, error)
+	// OAuthExchange redeems the callback's code with the PKCE verifier and
+	// issues the session. Unauthenticated. Gated oauth.
+	OAuthExchange(ctx context.Context, in *OAuthExchangeReq, opts ...grpc.CallOption) (*OAuthExchangeResp, error)
 	// ── two_factor — enrollment + challenge verification ────────
 	// EnrollTotp / ConfirmTotp / DisableTotp / GetMfaStatus ride the bearer
 	// middleware (manage your own factor). VerifyMfa is unauthenticated
@@ -481,6 +486,16 @@ func (c *authServiceClient) OAuthCallback(ctx context.Context, in *OAuthCallback
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OAuthCallbackResp)
 	err := c.cc.Invoke(ctx, AuthService_OAuthCallback_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) OAuthExchange(ctx context.Context, in *OAuthExchangeReq, opts ...grpc.CallOption) (*OAuthExchangeResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OAuthExchangeResp)
+	err := c.cc.Invoke(ctx, AuthService_OAuthExchange_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -818,10 +833,14 @@ type AuthServiceServer interface {
 	RevokeApiToken(context.Context, *RevokeApiTokenReq) (*RevokeApiTokenResp, error)
 	// ── oauth — authorize-redirect + callback ───────────────────
 	// OAuthAuthorizeURL builds the IdP authorize URL (client redirects);
-	// OAuthCallback exchanges the code, find-or-creates the user, and issues
-	// a session. Both unauthenticated. Gated oauth.
+	// OAuthCallback exchanges the provider's code, find-or-creates the user,
+	// and hands the browser a single-use login code. Both unauthenticated.
+	// Gated oauth.
 	OAuthAuthorizeURL(context.Context, *OAuthAuthorizeURLReq) (*OAuthAuthorizeURLResp, error)
 	OAuthCallback(context.Context, *OAuthCallbackReq) (*OAuthCallbackResp, error)
+	// OAuthExchange redeems the callback's code with the PKCE verifier and
+	// issues the session. Unauthenticated. Gated oauth.
+	OAuthExchange(context.Context, *OAuthExchangeReq) (*OAuthExchangeResp, error)
 	// ── two_factor — enrollment + challenge verification ────────
 	// EnrollTotp / ConfirmTotp / DisableTotp / GetMfaStatus ride the bearer
 	// middleware (manage your own factor). VerifyMfa is unauthenticated
@@ -987,6 +1006,9 @@ func (UnimplementedAuthServiceServer) OAuthAuthorizeURL(context.Context, *OAuthA
 }
 func (UnimplementedAuthServiceServer) OAuthCallback(context.Context, *OAuthCallbackReq) (*OAuthCallbackResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method OAuthCallback not implemented")
+}
+func (UnimplementedAuthServiceServer) OAuthExchange(context.Context, *OAuthExchangeReq) (*OAuthExchangeResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method OAuthExchange not implemented")
 }
 func (UnimplementedAuthServiceServer) EnrollTotp(context.Context, *EnrollTotpReq) (*EnrollTotpResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnrollTotp not implemented")
@@ -1427,6 +1449,24 @@ func _AuthService_OAuthCallback_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthServiceServer).OAuthCallback(ctx, req.(*OAuthCallbackReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_OAuthExchange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OAuthExchangeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).OAuthExchange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_OAuthExchange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).OAuthExchange(ctx, req.(*OAuthExchangeReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1999,6 +2039,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "OAuthCallback",
 			Handler:    _AuthService_OAuthCallback_Handler,
+		},
+		{
+			MethodName: "OAuthExchange",
+			Handler:    _AuthService_OAuthExchange_Handler,
 		},
 		{
 			MethodName: "EnrollTotp",

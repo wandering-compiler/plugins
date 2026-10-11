@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
@@ -69,6 +70,23 @@ var (
 	// redirect_after=https://evil and phishes a victim, who lands on evil
 	// post-login. Restrict it to a site-relative path.
 	errOAuthUnsafeRedirect = errors.New("oauth redirect_after must be a site-relative path (no scheme/host)")
+	// The browser that starts a sign-in must send a PKCE challenge: it is the
+	// only thing that ties the login code the callback hands out to that
+	// browser rather than to whoever opens the callback URL.
+	errOAuthChallengeMissing = errors.New("oauth code_challenge is required (PKCE S256)")
+	errOAuthStateExpired     = errors.New("oauth state expired; start the sign-in again")
+	errOAuthCodeInvalid      = errors.New("oauth login code invalid, expired or already used")
+	errOAuthVerifierInvalid  = errors.New("oauth code_verifier does not match the sign-in's code_challenge")
+	errOAuthIDTokenClaims    = errors.New("oauth id_token audience, expiry or nonce does not match")
+)
+
+const (
+	// oauthStateTTL bounds how long a started sign-in may take at the
+	// provider. A state is not stored, so this is what retires an old one.
+	oauthStateTTL = 10 * time.Minute
+	// oauthLoginCodeTTL is how long the callback's code may wait for the
+	// page to redeem it — a redirect and one request.
+	oauthLoginCodeTTL = 2 * time.Minute
 )
 
 // OAuthAuthorizeURL builds the IdP authorize URL the client redirects to.
@@ -83,7 +101,10 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 	if !isSafeRelativeRedirect(req.GetRedirectAfter()) {
 		return nil, Unauthenticated(errOAuthUnsafeRedirect)
 	}
-	state, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter())
+	if !isPKCEChallenge(req.GetCodeChallenge()) {
+		return nil, Unauthenticated(errOAuthChallengeMissing)
+	}
+	state, nonce, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter(), challengeDigest(req.GetCodeChallenge()), time.Now())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -95,6 +116,14 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 		q.Set("scope", s)
 	}
 	q.Set("state", state)
+	// Towards the provider: PKCE, so an intercepted provider code is useless
+	// without our verifier, and an OIDC nonce, so an id_token minted for
+	// another sign-in is refused. Both derive from the state's nonce under the
+	// client secret, which is how the callback recovers them with nothing
+	// stored. A provider that supports neither ignores them (RFC 6749 §3.1).
+	q.Set("code_challenge", s256Challenge(providerVerifier(p.GetSecret(), nonce)))
+	q.Set("code_challenge_method", "S256")
+	q.Set("nonce", oidcNonce(p.GetSecret(), nonce))
 
 	sep := "?"
 	if strings.Contains(p.GetAuthorizeUrl(), "?") {
@@ -103,33 +132,35 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 	return &pb.OAuthAuthorizeURLResp{AuthorizeUrl: p.GetAuthorizeUrl() + sep + q.Encode()}, nil
 }
 
-// OAuthCallback completes the authorization-code flow: validate state,
-// exchange the code for tokens, read the subject + email, find-or-create
-// the user, link the identity, and issue a session. OAuth bypasses plugin
-// 2FA by default (the IdP is the second factor) — it calls issueSession
-// directly, never the SignIn 2FA gate.
+// OAuthCallback completes the provider side of the flow: validate state,
+// exchange the provider's code, read the subject + email, find-or-create the
+// user, link the identity — and hand the browser a single-use login code,
+// not a session. The callback is a URL; whatever it carries can be put in
+// front of anyone. The session is issued by OAuthExchange, to the browser
+// holding the verifier of the challenge it sent to OAuthAuthorizeURL.
+//
+// OAuth bypasses plugin 2FA by default (the IdP is the second factor).
 func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCallbackReq) (*pb.OAuthCallbackResp, error) {
 	p, err := h.loadEnabledProvider(ctx, req.GetProvider())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	redirectAfter, err := verifyOAuthState(p.GetSecret(), p.GetName(), req.GetState())
+	st, err := verifyOAuthState(p.GetSecret(), p.GetName(), req.GetState(), time.Now())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	// Q45-auth-1 defense-in-depth: even though the authorize side rejects an
-	// unsafe redirect_after before signing, a state signed by an older build
-	// (or a future code path) must not be trusted — drop an unsafe value so
-	// it never reaches the client as an open-redirect target.
+	// Defense in depth: the authorize side rejects an unsafe redirect_after
+	// before signing, but a state from an older build must not be trusted.
+	redirectAfter := st.RedirectAfter
 	if !isSafeRelativeRedirect(redirectAfter) {
 		redirectAfter = ""
 	}
 
-	tok, err := h.exchangeCode(ctx, p, req.GetCode())
+	tok, err := h.exchangeCode(ctx, p, req.GetCode(), providerVerifier(p.GetSecret(), st.Nonce))
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	subject, email, emailVerified, err := h.fetchIdentity(ctx, p, tok)
+	subject, email, emailVerified, err := h.fetchIdentity(ctx, p, tok, oidcNonce(p.GetSecret(), st.Nonce))
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -138,21 +169,58 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+		return nil, err
+	}
 
-	// Issue the session through the shared seam (binds + trusts the device
-	// under `devices`; no 2FA gate — OAuth bypasses it).
-	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
+	code, err := randomURLToken()
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	if _, err := h.Mutation.CreateOAuthLoginCode(ctx, &pb.CreateOAuthLoginCodeReq{
+		UserId:        userID,
+		CodeHash:      sha256Hex(code),
+		CodeChallenge: st.Challenge, // the digest, never the challenge itself
+		ExpiresAt:     timestamppb.New(time.Now().Add(oauthLoginCodeTTL)),
+	}); err != nil {
+		return nil, Unauthenticated(err)
+	}
+	return &pb.OAuthCallbackResp{Code: code, RedirectAfter: redirectAfter}, nil
+}
+
+// OAuthExchange redeems the callback's login code with the PKCE verifier and
+// issues the session. The consume is a conditional UPDATE, so a code works
+// once; it is spent before the verifier is compared, so a wrong verifier
+// burns it rather than leaving it open to guesses.
+func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExchangeReq) (*pb.OAuthExchangeResp, error) {
+	if len(req.GetCodeVerifier()) < pkceMinVerifierLen || req.GetCode() == "" {
+		return nil, Unauthenticated(errOAuthVerifierInvalid)
+	}
+	consumed, err := h.Mutation.ConsumeOAuthLoginCode(ctx, &pb.ConsumeOAuthLoginCodeReq{CodeHash: sha256Hex(req.GetCode())})
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	userID := consumed.GetUserId()
+	if userID == "" {
+		return nil, Unauthenticated(errOAuthCodeInvalid)
+	}
+	if !verifyChallengeDigest(req.GetCodeVerifier(), consumed.GetCodeChallenge()) {
+		return nil, Unauthenticated(errOAuthVerifierInvalid)
+	}
+	// The account may have changed since the callback; and the device is the
+	// one making THIS request — the page, not the provider's redirect.
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, err
+	}
+	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
+	if err != nil {
+		return nil, Unauthenticated(err)
 	}
 	token, trustToken, err := issueSession(ctx, h, userID, deviceID)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	resp := &pb.OAuthCallbackResp{UserId: userID, Token: token, RedirectAfter: redirectAfter}
+	resp := &pb.OAuthExchangeResp{UserId: userID, Token: token}
 	stampDeviceTrust(resp, trustToken) // devices-gated field; seam is a no-op without `devices`
 	return resp, nil
 }
@@ -220,10 +288,11 @@ func hostFromMeta(ctx context.Context) string {
 
 // exchangeCode POSTs the authorization code to the provider's token
 // endpoint and returns the decoded token response.
-func (h *AuthServiceHandler) exchangeCode(ctx context.Context, p *pb.OAuthProvider, code string) (*oauthTokenResp, error) {
+func (h *AuthServiceHandler) exchangeCode(ctx context.Context, p *pb.OAuthProvider, code, verifier string) (*oauthTokenResp, error) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
+	form.Set("code_verifier", verifier)
 	form.Set("redirect_uri", h.oauthRedirectURI(ctx, p.GetName()))
 	form.Set("client_id", p.GetClientId())
 	form.Set("client_secret", p.GetSecret())
@@ -267,12 +336,15 @@ type oauthTokenResp struct {
 // it GETs that endpoint (Bearer access_token); without one (pure OIDC) it
 // decodes the id_token claims. Field names come from the provider's
 // subject_path / email_path (defaulting to OIDC sub / email).
-func (h *AuthServiceHandler) fetchIdentity(ctx context.Context, p *pb.OAuthProvider, tok *oauthTokenResp) (subject, email string, emailVerified bool, err error) {
+func (h *AuthServiceHandler) fetchIdentity(ctx context.Context, p *pb.OAuthProvider, tok *oauthTokenResp, nonce string) (subject, email string, emailVerified bool, err error) {
 	var claims map[string]any
 	if p.GetUserinfoUrl() != "" {
 		claims, err = h.fetchUserinfo(ctx, p.GetUserinfoUrl(), tok.AccessToken)
 	} else {
 		claims, err = decodeIDTokenClaims(tok.IDToken)
+		if err == nil {
+			err = checkIDTokenClaims(claims, p.GetClientId(), nonce, time.Now())
+		}
 	}
 	if err != nil {
 		return "", "", false, err
@@ -337,6 +409,41 @@ func decodeIDTokenClaims(idToken string) (map[string]any, error) {
 		return nil, err
 	}
 	return claims, nil
+}
+
+// checkIDTokenClaims refuses an id_token that was not minted for this
+// client and this sign-in: `aud` must name the client (a string or an array
+// containing it), an `azp` if present must be the client, `exp` must be in
+// the future, and `nonce` must be the one
+// the authorize step sent. The token arrives straight from the provider's
+// token endpoint over TLS, so its signature is not what these checks are
+// for; they stop a token issued to another client, or for another sign-in,
+// from being accepted.
+func checkIDTokenClaims(claims map[string]any, clientID, nonce string, now time.Time) error {
+	audOK := false
+	switch aud := claims["aud"].(type) {
+	case string:
+		audOK = aud == clientID
+	case []any:
+		for _, a := range aud {
+			if s, _ := a.(string); s == clientID {
+				audOK = true
+			}
+		}
+	}
+	// OIDC Core 3.1.3.7: an authorized party, when named, must be this client.
+	if azp, present := claims["azp"]; present {
+		if s, _ := azp.(string); s != clientID {
+			audOK = false
+		}
+	}
+	// Compared as a float: converting an out-of-range float to int64 is
+	// implementation-defined in Go, and saturates on some platforms.
+	exp, _ := claims["exp"].(float64)
+	if !audOK || exp <= float64(now.Unix()) || claimString(claims, "nonce") != nonce {
+		return errOAuthIDTokenClaims
+	}
+	return nil
 }
 
 // claimString reads a top-level string claim (numbers coerced to string,
@@ -565,49 +672,126 @@ func isSafeRelativeRedirect(s string) bool {
 
 // --- OAuth state: HMAC-signed, keyed by the provider's client_secret ---
 // state = base64url(payload) "." base64url(HMAC-SHA256(payload)). Payload
-// is base64url(JSON{nonce, provider, redirect_after}). Self-contained
-// (no server session store) + provider-scoped (no extra key config).
+// is JSON{nonce, provider, redirect_after, code_challenge, expiry}.
+// Self-contained (no server session store) + provider-scoped (no extra key
+// config). It does not by itself bind the flow to a browser — anyone may
+// start a sign-in and get a valid state — which is why the browser's PKCE
+// challenge travels in it and the callback hands out only a code that
+// challenge's verifier redeems.
 
 type oauthStatePayload struct {
 	Nonce         string `json:"n"`
 	Provider      string `json:"p"`
 	RedirectAfter string `json:"r"`
+	Challenge     string `json:"c"` // challengeDigest of the browser's code_challenge
+	Expires       int64  `json:"e"`
 }
 
-func signOAuthState(secret, provider, redirectAfter string) (string, error) {
-	nonce, err := randomToken(16)
+func signOAuthState(secret, provider, redirectAfter, challenge string, now time.Time) (state, nonce string, err error) {
+	nonce, err = randomToken(16)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	raw, err := json.Marshal(oauthStatePayload{Nonce: nonce, Provider: provider, RedirectAfter: redirectAfter})
+	raw, err := json.Marshal(oauthStatePayload{
+		Nonce: nonce, Provider: provider, RedirectAfter: redirectAfter,
+		Challenge: challenge, Expires: now.Add(oauthStateTTL).Unix(),
+	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	payload := base64.RawURLEncoding.EncodeToString(raw)
-	sig := oauthStateSig(secret, payload)
-	return payload + "." + sig, nil
+	return payload + "." + oauthStateSig(secret, payload), nonce, nil
 }
 
-func verifyOAuthState(secret, provider, state string) (redirectAfter string, err error) {
+func verifyOAuthState(secret, provider, state string, now time.Time) (*oauthStatePayload, error) {
 	payload, sig, ok := strings.Cut(state, ".")
 	if !ok {
-		return "", errOAuthState
+		return nil, errOAuthState
 	}
 	if !hmac.Equal([]byte(sig), []byte(oauthStateSig(secret, payload))) {
-		return "", errOAuthState
+		return nil, errOAuthState
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
-		return "", errOAuthState
+		return nil, errOAuthState
 	}
 	var p oauthStatePayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return "", errOAuthState
+		return nil, errOAuthState
 	}
-	if p.Provider != provider {
-		return "", errOAuthState
+	if p.Provider != provider || p.Nonce == "" {
+		return nil, errOAuthState
 	}
-	return p.RedirectAfter, nil
+	// A state signed before code_challenge was required has none, and one
+	// carrying a raw challenge comes from a build that did not digest it;
+	// either could only produce a code nobody can redeem — refuse it up front.
+	if !isChallengeDigest(p.Challenge) {
+		return nil, errOAuthState
+	}
+	if now.Unix() >= p.Expires {
+		return nil, errOAuthStateExpired
+	}
+	return &p, nil
+}
+
+// providerVerifier is the PKCE verifier sent to the provider's token
+// endpoint, derived from the state's nonce under the client secret so the
+// callback can recompute it. 43 base64url characters (RFC 7636 §4.1).
+func providerVerifier(secret, nonce string) string {
+	return oauthStateSig(secret, "pkce:"+nonce)
+}
+
+// oidcNonce is the OIDC nonce for one sign-in, derived like the verifier.
+func oidcNonce(secret, nonce string) string {
+	return oauthStateSig(secret, "nonce:"+nonce)
+}
+
+// challengeDigest is what the state and the login code carry in place of the
+// browser's PKCE challenge: its sha256, hex.
+//
+// The state is readable — it is base64 JSON in the provider URL and in the
+// callback URL — so a raw challenge in it could be lifted. Someone holding a
+// victim's challenge could start a sign-in of their own with it and hand the
+// victim the callback link; a victim page still holding that challenge's
+// verifier (from an abandoned attempt) would then redeem the code into the
+// other person's account. A sha256 of a 256-bit challenge gives nothing to
+// start a sign-in with, and the exchange recomputes it from the verifier.
+func challengeDigest(challenge string) string {
+	return sha256Hex(challenge)
+}
+
+// verifyChallengeDigest reports whether the verifier's S256 challenge digests
+// to the stored digest, compared in constant time. Nothing compares a
+// verifier against a raw challenge on this flow.
+func verifyChallengeDigest(verifier, digest string) bool {
+	return hmac.Equal([]byte(challengeDigest(s256Challenge(verifier))), []byte(digest))
+}
+
+// isChallengeDigest accepts exactly what challengeDigest returns: 64 lowercase
+// hex characters.
+func isChallengeDigest(d string) bool {
+	if len(d) != sha256.Size*2 {
+		return false
+	}
+	for i := 0; i < len(d); i++ {
+		if c := d[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// isPKCEChallenge accepts exactly an S256 challenge: 43 base64url characters.
+func isPKCEChallenge(c string) bool {
+	if len(c) != 43 {
+		return false
+	}
+	for _, r := range c {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func oauthStateSig(secret, payload string) string {

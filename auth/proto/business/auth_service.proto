@@ -433,6 +433,10 @@ message OAuthAuthorizeURLReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string provider       = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
   string redirect_after = 2; // where the SPA wants to land post-login
+  // code_challenge is BASE64URL(SHA256(verifier)) (PKCE S256, RFC 7636) of a
+  // verifier the browser keeps until OAuthExchange. Required: it is what
+  // binds the login to the browser that started it.
+  string code_challenge = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
 }
 message OAuthAuthorizeURLResp {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -447,13 +451,28 @@ message OAuthCallbackReq {
 }
 message OAuthCallbackResp {
   option (w17.contrib.plugin_feature) = "oauth";
-  string user_id        = 1 [(w17.field) = { type: UUID }];
-  string token          = 2;
+  // code is single-use, short-lived, and redeemable only at OAuthExchange
+  // with the verifier of the authorize step's code_challenge. The callback
+  // never carries a session: it is a URL, and a URL can be handed to anyone.
+  string code           = 5;
   string redirect_after = 3;
-  // C2 — server-minted device-trust token (see SignInResp). OAuth bypasses
-  // 2FA, but it still mints + rotates the device-trust token so a later
-  // password sign-in on the same device is recognised as trusted.
-  string device_trust_token = 4 [(w17.contrib.plugin_feature_field) = "devices"];
+
+  // user_id, token and device_trust_token moved to OAuthExchangeResp.
+  reserved 1, 2, 4;
+  reserved "user_id", "token", "device_trust_token";
+}
+
+message OAuthExchangeReq {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string code          = 1;
+  string code_verifier = 2;
+}
+message OAuthExchangeResp {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string token   = 2;
+  // Server-minted device-trust token (see SignInResp).
+  string device_trust_token = 3 [(w17.contrib.plugin_feature_field) = "devices"];
 }
 
 // ── two_factor: enrollment + challenge verification surface ──
@@ -938,12 +957,18 @@ service AuthService {
 
   // ── oauth — authorize-redirect + callback ───────────────────
   // OAuthAuthorizeURL builds the IdP authorize URL (client redirects);
-  // OAuthCallback exchanges the code, find-or-creates the user, and issues
-  // a session. Both unauthenticated. Gated oauth.
+  // OAuthCallback exchanges the provider's code, find-or-creates the user,
+  // and hands the browser a single-use login code. Both unauthenticated.
+  // Gated oauth.
   rpc OAuthAuthorizeURL(OAuthAuthorizeURLReq) returns (OAuthAuthorizeURLResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
   }
   rpc OAuthCallback(OAuthCallbackReq) returns (OAuthCallbackResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+  }
+  // OAuthExchange redeems the callback's code with the PKCE verifier and
+  // issues the session. Unauthenticated. Gated oauth.
+  rpc OAuthExchange(OAuthExchangeReq) returns (OAuthExchangeResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
   }
 
