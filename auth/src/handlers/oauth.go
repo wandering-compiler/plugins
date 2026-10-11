@@ -204,7 +204,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if userID == "" {
 		return nil, Unauthenticated(errOAuthCodeInvalid)
 	}
-	if !hmac.Equal([]byte(challengeDigest(s256Challenge(req.GetCodeVerifier()))), []byte(consumed.GetCodeChallenge())) {
+	if !verifyChallengeDigest(req.GetCodeVerifier(), consumed.GetCodeChallenge()) {
 		return nil, Unauthenticated(errOAuthVerifierInvalid)
 	}
 	// The account may have changed since the callback; and the device is the
@@ -722,9 +722,10 @@ func verifyOAuthState(secret, provider, state string, now time.Time) (*oauthStat
 	if p.Provider != provider || p.Nonce == "" {
 		return nil, errOAuthState
 	}
-	// A state signed before code_challenge was required has none, and could
-	// only ever produce a code nobody can redeem — refuse it up front.
-	if len(p.Challenge) != sha256.Size*2 {
+	// A state signed before code_challenge was required has none, and one
+	// carrying a raw challenge comes from a build that did not digest it;
+	// either could only produce a code nobody can redeem — refuse it up front.
+	if !isChallengeDigest(p.Challenge) {
 		return nil, errOAuthState
 	}
 	if now.Unix() >= p.Expires {
@@ -757,6 +758,27 @@ func oidcNonce(secret, nonce string) string {
 // start a sign-in with, and the exchange recomputes it from the verifier.
 func challengeDigest(challenge string) string {
 	return sha256Hex(challenge)
+}
+
+// verifyChallengeDigest reports whether the verifier's S256 challenge digests
+// to the stored digest, compared in constant time. Nothing compares a
+// verifier against a raw challenge on this flow.
+func verifyChallengeDigest(verifier, digest string) bool {
+	return hmac.Equal([]byte(challengeDigest(s256Challenge(verifier))), []byte(digest))
+}
+
+// isChallengeDigest accepts exactly what challengeDigest returns: 64 lowercase
+// hex characters.
+func isChallengeDigest(d string) bool {
+	if len(d) != sha256.Size*2 {
+		return false
+	}
+	for i := 0; i < len(d); i++ {
+		if c := d[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // isPKCEChallenge accepts exactly an S256 challenge: 43 base64url characters.

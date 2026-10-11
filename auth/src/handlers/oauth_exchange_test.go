@@ -8,8 +8,10 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func exchangeHandler(t *testing.T) (*AuthServiceHandler, *oauthMock, string) {
@@ -157,9 +159,48 @@ func TestOAuthAuthorizeURL_TheStateDoesNotRevealTheBrowsersChallenge(t *testing.
 	}
 	u, _ := url.Parse(az.GetAuthorizeUrl())
 	state := u.Query().Get("state")
-	payload, _, _ := strings.Cut(state, ".")
-	raw, _ := base64.RawURLEncoding.DecodeString(payload)
+	payload, _, ok := strings.Cut(state, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if !ok || err != nil {
+		t.Fatalf("state %q is not payload.signature: %v", state, err)
+	}
 	if strings.Contains(state, ch) || strings.Contains(string(raw), ch) {
 		t.Errorf("the state carries the browser's code_challenge: %s", raw)
 	}
+	if !strings.Contains(string(raw), challengeDigest(ch)) {
+		t.Errorf("the state does not carry the challenge's digest: %s", raw)
+	}
+}
+
+// No path on this flow accepts the raw challenge in place of its digest: a
+// state signed over the raw challenge (an earlier build) is refused, and a
+// login code stored with the raw challenge does not redeem with its verifier.
+func TestOAuth_TheRawChallengeIsAcceptedNowhere(t *testing.T) {
+	ch := pkceChallengeOf(validVerifier())
+	if _, err := verifyOAuthState("csec", "google", mustSignState(t, ch), time.Now()); err == nil {
+		t.Error("a state carrying the raw challenge was accepted")
+	}
+	if _, err := verifyOAuthState("csec", "google", mustSignState(t, strings.Repeat("Z", 64)), time.Now()); err == nil {
+		t.Error("a state carrying 64 non-hex characters was accepted")
+	}
+
+	h, m, _ := exchangeHandler(t)
+	if _, err := m.CreateOAuthLoginCode(context.Background(), &pb.CreateOAuthLoginCodeReq{
+		UserId: "u-1", CodeHash: sha256Hex("raw-code"), CodeChallenge: ch,
+		ExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: "raw-code", CodeVerifier: validVerifier()}); err == nil {
+		t.Error("a login code stored with the raw challenge redeemed")
+	}
+}
+
+func mustSignState(t *testing.T, challenge string) string {
+	t.Helper()
+	state, _, err := signOAuthState("csec", "google", "", challenge, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
 }

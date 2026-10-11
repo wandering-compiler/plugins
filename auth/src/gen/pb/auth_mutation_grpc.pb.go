@@ -435,11 +435,11 @@ type AuthMutationClient interface {
 	// DeleteAuthClient — remove a registration outright.
 	DeleteAuthClient(ctx context.Context, in *DeleteAuthClientReq, opts ...grpc.CallOption) (*DeleteAuthClientResp, error)
 	// CreateOAuthLoginCode stores the single-use code an OAuth callback hands
-	// the browser, bound to the PKCE challenge of the flow's authorize step.
+	// the browser, bound to a sha256 digest of the authorize step's PKCE challenge.
 	CreateOAuthLoginCode(ctx context.Context, in *CreateOAuthLoginCodeReq, opts ...grpc.CallOption) (*CreateOAuthLoginCodeResp, error)
 	// ConsumeOAuthLoginCode redeems a code once: the conditional UPDATE is the
 	// single-use guarantee, so of two concurrent exchanges exactly one gets a
-	// row back. The verifier is checked against the returned challenge after
+	// row back. The verifier is checked against the returned digest after
 	// the consume, so a wrong verifier burns the code too.
 	ConsumeOAuthLoginCode(ctx context.Context, in *ConsumeOAuthLoginCodeReq, opts ...grpc.CallOption) (*ConsumeOAuthLoginCodeResp, error)
 	CreateCliAuthCode(ctx context.Context, in *CreateCliAuthCodeReq, opts ...grpc.CallOption) (*CreateCliAuthCodeResp, error)
@@ -1695,11 +1695,11 @@ type AuthMutationServer interface {
 	// DeleteAuthClient — remove a registration outright.
 	DeleteAuthClient(context.Context, *DeleteAuthClientReq) (*DeleteAuthClientResp, error)
 	// CreateOAuthLoginCode stores the single-use code an OAuth callback hands
-	// the browser, bound to the PKCE challenge of the flow's authorize step.
+	// the browser, bound to a sha256 digest of the authorize step's PKCE challenge.
 	CreateOAuthLoginCode(context.Context, *CreateOAuthLoginCodeReq) (*CreateOAuthLoginCodeResp, error)
 	// ConsumeOAuthLoginCode redeems a code once: the conditional UPDATE is the
 	// single-use guarantee, so of two concurrent exchanges exactly one gets a
-	// row back. The verifier is checked against the returned challenge after
+	// row back. The verifier is checked against the returned digest after
 	// the consume, so a wrong verifier burns the code too.
 	ConsumeOAuthLoginCode(context.Context, *ConsumeOAuthLoginCodeReq) (*ConsumeOAuthLoginCodeResp, error)
 	CreateCliAuthCode(context.Context, *CreateCliAuthCodeReq) (*CreateCliAuthCodeResp, error)

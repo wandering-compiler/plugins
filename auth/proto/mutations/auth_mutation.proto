@@ -2662,7 +2662,7 @@ service AuthMutation {
     };
   }
   // CreateOAuthLoginCode stores the single-use code an OAuth callback hands
-  // the browser, bound to the PKCE challenge of the flow's authorize step.
+  // the browser, bound to a sha256 digest of the authorize step's PKCE challenge.
   rpc CreateOAuthLoginCode(CreateOAuthLoginCodeReq) returns (CreateOAuthLoginCodeResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
     option (w17.db.method) = {
@@ -2680,7 +2680,7 @@ service AuthMutation {
   }
   // ConsumeOAuthLoginCode redeems a code once: the conditional UPDATE is the
   // single-use guarantee, so of two concurrent exchanges exactly one gets a
-  // row back. The verifier is checked against the returned challenge after
+  // row back. The verifier is checked against the returned digest after
   // the consume, so a wrong verifier burns the code too.
   rpc ConsumeOAuthLoginCode(ConsumeOAuthLoginCodeReq) returns (ConsumeOAuthLoginCodeResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
