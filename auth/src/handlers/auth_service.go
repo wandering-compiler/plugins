@@ -18,6 +18,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -51,6 +52,20 @@ func randomURLToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// pkceMinVerifierLen is RFC 7636 §4.1's minimum code_verifier length (the
+// floor of the 43–128 unreserved-charset range). A too-short verifier
+// weakens the challenge; we enforce the floor (not the exact charset — the
+// hash comparison already rejects a tampered verifier).
+const pkceMinVerifierLen = 43
+
+// verifyPKCES256 reports whether BASE64URL(SHA256(verifier)) equals the
+// stored S256 challenge, compared in constant time.
+func verifyPKCES256(verifier, challenge string) bool {
+	sum := sha256.Sum256([]byte(verifier))
+	want := base64.RawURLEncoding.EncodeToString(sum[:])
+	return hmac.Equal([]byte(want), []byte(challenge))
 }
 
 // sha256Hex is the one-way function applied to an E1 token for storage +

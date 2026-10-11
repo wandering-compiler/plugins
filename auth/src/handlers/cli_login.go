@@ -3,8 +3,6 @@ package handlers
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"net/url"
 	"strings"
@@ -36,12 +34,6 @@ import (
 // short TTL + single-use are defense-in-depth (RFC 6749 §10.5 — codes
 // SHOULD be short-lived and single-use).
 const defaultCliAuthCodeTTL = 60 * time.Second
-
-// pkceMinVerifierLen is RFC 7636 §4.1's minimum code_verifier length (the
-// floor of the 43–128 unreserved-charset range). A too-short verifier
-// weakens the challenge; we enforce the floor (not the exact charset — the
-// hash comparison already rejects a tampered verifier).
-const pkceMinVerifierLen = 43
 
 var (
 	errCliChallengeMissing = errors.New("cli auth: code_challenge required")
@@ -252,14 +244,6 @@ func (h *AuthServiceHandler) authenticateClient(ctx context.Context, clientID, r
 		return Unauthenticated(errCliClientAuthFailed)
 	}
 	return nil
-}
-
-// verifyPKCES256 reports whether BASE64URL(SHA256(verifier)) equals the
-// stored S256 challenge, compared in constant time.
-func verifyPKCES256(verifier, challenge string) bool {
-	sum := sha256.Sum256([]byte(verifier))
-	want := base64.RawURLEncoding.EncodeToString(sum[:])
-	return hmac.Equal([]byte(want), []byte(challenge))
 }
 
 // checkRedirectAllowed decides whether a redirect target may receive a code.

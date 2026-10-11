@@ -25,6 +25,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"log"
@@ -145,33 +146,71 @@ func (c config) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := u.Query()
-	q.Set("code", "fake-auth-code")
+	// The code carries what a real provider would remember about this
+	// authorization — the PKCE challenge and the OIDC nonce — so /token can
+	// check the one and echo the other with nothing stored.
+	q.Set("code", encodeCode(r.URL.Query().Get("code_challenge"), r.URL.Query().Get("nonce")))
 	q.Set("state", state)
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
-// token — the token endpoint. Accepts any grant (code is not checked —
-// this is a fake) and returns both an access_token (for the userinfo
-// path) and an id_token (for the OIDC id_token path), so either
-// OAuthProvider config shape works.
-func (c config) token(w http.ResponseWriter, _ *http.Request) {
+// token — the token endpoint. A code minted by /authorize carries its PKCE
+// challenge and nonce: the code_verifier must match the challenge (as a real
+// provider checks), and the nonce goes into the id_token. Any other code
+// (the e2e flow calls the callback directly with an arbitrary one) is
+// accepted without either, which the userinfo path does not need. The
+// id_token's `aud` is the requesting client_id. Returns both an
+// access_token (userinfo path) and an id_token (OIDC id_token path).
+func (c config) token(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	challenge, nonce := decodeCode(r.PostForm.Get("code"))
+	if challenge != "" {
+		sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
+		if base64.RawURLEncoding.EncodeToString(sum[:]) != challenge {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+			return
+		}
+	}
 	writeJSON(w, map[string]any{
 		"access_token": "fake-access-token",
 		"token_type":   "bearer",
 		"expires_in":   3600,
-		"id_token":     c.idToken(),
+		"id_token":     c.idToken(r.PostForm.Get("client_id"), nonce),
 	})
+}
+
+// encodeCode / decodeCode carry the authorize request's challenge and nonce
+// inside the code ("fake." + base64url JSON).
+func encodeCode(challenge, nonce string) string {
+	return "fake." + b64(map[string]string{"c": challenge, "n": nonce})
+}
+
+func decodeCode(code string) (challenge, nonce string) {
+	payload, ok := strings.CutPrefix(code, "fake.")
+	if !ok {
+		return "", ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return "", ""
+	}
+	var v map[string]string
+	if json.Unmarshal(raw, &v) != nil {
+		return "", ""
+	}
+	return v["c"], v["n"]
 }
 
 // userinfo — returns the canned identity claims. The auth plugin maps
 // subject_path/email_path (default sub/email) out of this.
 func (c config) userinfo(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
-		"sub":            c.Subject,
-		"email":          c.Email,
-		"email_verified": true,
-		"name":           "Fake OAuth User",
+		"sub":   c.Subject,
+		"email": c.Email,
+		"name":  "Fake OAuth User",
 	})
 }
 
@@ -179,15 +218,16 @@ func (c config) userinfo(w http.ResponseWriter, _ *http.Request) {
 // The auth plugin decodes the middle segment's claims without verifying
 // the signature (the token arrived over a trusted channel), so the
 // fixed "sig" segment is fine for a dev fake.
-func (c config) idToken() string {
+func (c config) idToken(clientID, nonce string) string {
 	header := b64(map[string]any{"alg": "none", "typ": "JWT"})
 	payload := b64(map[string]any{
 		"iss":   c.Issuer,
 		"sub":   c.Subject,
 		"email": c.Email,
-		"aud":   "fakeidp",
-		"iat":   0,
-		"exp":   9999999999,
+		"aud":   clientID,
+		"nonce": nonce,
+		"iat":   time.Now().Unix(),
+		"exp":   time.Now().Add(time.Hour).Unix(),
 	})
 	return header + "." + payload + ".sig"
 }
