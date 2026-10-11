@@ -31,6 +31,7 @@ type e1Mock struct {
 	// so a rollback here is what keeps the spent link recoverable.
 	updatePasswordErr error
 	revokedFor        string
+	spentLinksFor     string
 
 	createdVerify      *pb.CreateEmailVerificationTokenReq
 	consumedVerifyHash string
@@ -61,6 +62,10 @@ func (m *e1Mock) UpdateUserPassword(ctx context.Context, in *pb.UpdateUserPasswo
 	}
 	m.updatedPassword = in
 	return &pb.UpdateUserPasswordResp{UserId: in.GetUserId()}, nil
+}
+func (m *e1Mock) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
+	m.spentLinksFor = in.GetUserId()
+	return &pb.SpendPasswordResetTokensResp{}, nil
 }
 func (m *e1Mock) DeleteUserSessionsForReset(ctx context.Context, in *pb.DeleteUserSessionsForResetReq, _ ...grpc.CallOption) (*pb.DeleteUserSessionsForResetResp, error) {
 	m.revokedFor = in.GetUserId()
@@ -355,3 +360,16 @@ var (
 	errTestUpdateFailed = errors.New("test: the password write failed")
 	errTestBeginRefused = errors.New("test: the coordinator refused to begin")
 )
+
+// Every other live reset link of the account is spent with the one used: a
+// second link would set the password again.
+func TestResetPassword_SpendsEveryOtherResetLink(t *testing.T) {
+	m := &e1Mock{consumeResetUser: "u1"}
+	h := newE1Handler(m)
+	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if m.spentLinksFor != "u1" {
+		t.Errorf("the account's other reset links were not spent (spent for %q)", m.spentLinksFor)
+	}
+}

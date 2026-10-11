@@ -151,5 +151,20 @@ func (h *AuthServiceHandler) consumeAndSetPassword(txCtx context.Context, tokenH
 	}); err != nil {
 		return "", err
 	}
+	// Every other link the person asked for dies with this one: each would
+	// set the password again, and a link sitting in a mailbox someone else
+	// reads is exactly what a reset is meant to end.
+	if err := spendResetLinks(txCtx, h, userID); err != nil {
+		return "", err
+	}
 	return userID, nil
+}
+
+// init lets the always-compiled password paths spend reset links when this
+// feature is staged (see spendResetLinks in auth_service.go).
+func init() {
+	spendResetLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error {
+		_, err := h.Mutation.SpendPasswordResetTokens(ctx, &pb.SpendPasswordResetTokensReq{UserId: userID})
+		return err
+	}
 }

@@ -28,6 +28,13 @@ type passwordChangeMock struct {
 
 	sweeps   []*pb.DeleteOtherSessionTokensReq
 	sweepErr error
+
+	spentLinksFor string // user whose reset links SpendPasswordResetTokens spent
+}
+
+func (m *passwordChangeMock) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
+	m.spentLinksFor = in.GetUserId()
+	return &pb.SpendPasswordResetTokensResp{}, nil
 }
 
 func (m *passwordChangeMock) DeleteOtherSessionTokens(ctx context.Context, in *pb.DeleteOtherSessionTokensReq, _ ...grpc.CallOption) (*pb.DeleteOtherSessionTokensResp, error) {
@@ -200,5 +207,20 @@ func TestChangePassword_AFailedSignOutFailsTheChange(t *testing.T) {
 	})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("want the sweep's failure, got %v", err)
+	}
+}
+
+// A reset link asked for before a password change would undo the change; it
+// is spent in the same unit of work.
+func TestChangePassword_SpendsTheAccountsResetLinks(t *testing.T) {
+	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
+	if _, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+		CurrentPassword: "correct-horse-battery-staple",
+		NewPassword:     "a-different-long-password",
+	}); err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+	if m.spentLinksFor != "u1" {
+		t.Errorf("reset links not spent on a password change (spent for %q)", m.spentLinksFor)
 	}
 }
