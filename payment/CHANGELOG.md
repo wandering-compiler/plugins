@@ -1,5 +1,14 @@
 # payment — changelog
 
+## 0.1.0-rc.5
+
+### Run a project against Stripe's API mock
+
+- **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL is refused at startup.
+- **Sandbox `stripemock`:** Stripe's own API mock (`stripe/stripe-mock:v0.205.0`). With `provider_api_base = http://stripemock:12111` and any `sk_test_…` key, customers, payments and refunds answer with the shape the real API returns (canned values, no state), so a local stack or a test suite needs no Stripe account. Webhooks are not part of the mock; test them with a signed payload.
+
+Nothing changes for a project that does not set the variable.
+
 ## 0.1.0-rc.4
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/crypto`, `x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update payment`.

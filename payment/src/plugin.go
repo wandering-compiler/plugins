@@ -10,6 +10,7 @@ package payment
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/wandering-compiler/plugins/payment/gen"
@@ -61,7 +62,15 @@ func resolveBackend(cfg *gen.EnvConfig) (backend.Backend, error) {
 		if key == "" {
 			return nil, fmt.Errorf("payment plugin: provider_api_key is required for the stripe backend")
 		}
-		return stripe.New(key), nil
+		var opts []stripe.Option
+		if base := strings.TrimSpace(cfg.ProviderAPIBase); base != "" {
+			u, err := url.Parse(base)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return nil, fmt.Errorf("payment plugin: provider_api_base %q is not an http(s) URL", base)
+			}
+			opts = append(opts, stripe.WithBaseURL(base))
+		}
+		return stripe.New(key, opts...), nil
 	default:
 		return nil, fmt.Errorf("payment plugin: unknown payment_provider %q (v1 supports: stripe)", provider)
 	}

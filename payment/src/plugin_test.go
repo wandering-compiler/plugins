@@ -2,12 +2,15 @@ package payment
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/wandering-compiler/sdk/go/service/secret"
 
 	"github.com/wandering-compiler/plugins/payment/gen"
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 // fake DI surface — non-nil typed clients so ValidateConfig passes.
@@ -77,5 +80,37 @@ func TestDefaultCurrency(t *testing.T) {
 	}
 	if got := defaultCurrency(&gen.EnvConfig{DefaultCurrency: "GBP"}); got != "gbp" {
 		t.Errorf("got %q, want gbp (lowercased)", got)
+	}
+}
+
+// provider_api_base sends the driver's calls to another Stripe-compatible
+// root (the stripe-mock sandbox, a test server) instead of the real API.
+func TestResolveBackend_ProviderAPIBase(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		_, _ = w.Write([]byte(`{"id":"cus_mock"}`))
+	}))
+	defer srv.Close()
+	be, err := resolveBackend(&gen.EnvConfig{ProviderAPIKey: secret.New("sk_test_x"), ProviderAPIBase: srv.URL})
+	if err != nil {
+		t.Fatalf("resolveBackend: %v", err)
+	}
+	id, err := be.EnsureCustomer(context.Background(), backend.CustomerSpec{Email: "a@example.com"})
+	if err != nil || id != "cus_mock" {
+		t.Fatalf("EnsureCustomer = %q, %v; want the mock's cus_mock", id, err)
+	}
+	if path != "/v1/customers" {
+		t.Errorf("the mock got %q, want /v1/customers", path)
+	}
+}
+
+// A provider_api_base that is not an http(s) URL is refused at startup, not
+// discovered at the first charge.
+func TestResolveBackend_ProviderAPIBaseMustBeAURL(t *testing.T) {
+	for _, base := range []string{"stripe-mock:12111", "ftp://x", "http://"} {
+		if _, err := resolveBackend(&gen.EnvConfig{ProviderAPIKey: secret.New("sk_test_x"), ProviderAPIBase: base}); err == nil {
+			t.Errorf("provider_api_base %q accepted", base)
+		}
 	}
 }

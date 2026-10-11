@@ -38,6 +38,10 @@ type EnvConfig struct {
 	// whsec_…). Required when the stripe_webhooks feature is active.
 	WebhookSigningSecret secret.String
 
+	// ProviderAPIBase points the backend at another Stripe-compatible API
+	// root (the stripemock sandbox, a test server). Empty = the real API.
+	ProviderAPIBase string
+
 	// DefaultCurrency (ISO-4217, lowercase) applies to a CreatePayment
 	// that omits a currency.
 	DefaultCurrency string
