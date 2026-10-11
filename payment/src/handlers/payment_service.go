@@ -110,7 +110,7 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	if amount == "" {
 		return nil, invalidArg("amount is required")
 	}
-	// Q45-pay-1: reject a non-positive amount before the provider call — a
+	// Reject a non-positive amount before the provider call — a
 	// negative amount reaches Stripe as a credit/reversal (customer credited
 	// instead of charged), a zero is a meaningless charge.
 	if !isPositiveDecimal(amount) {
@@ -210,7 +210,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	if req.GetPaymentId() == "" {
 		return nil, invalidArg("payment_id is required")
 	}
-	// Q43-pay-2: the idempotency key IS the provider Idempotency-Key for
+	// The idempotency key IS the provider Idempotency-Key for
 	// the refund, so it must be unique per distinct refund and stable
 	// across retries. Deriving it from (payment_id, amount) — as this
 	// handler used to — collided two legitimate same-amount partial

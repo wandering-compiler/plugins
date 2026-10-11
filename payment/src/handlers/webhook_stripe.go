@@ -24,7 +24,7 @@ const stripeSignatureMetadataKey = "stripe-signature"
 // status to the reconciliation mutations (which emit PaymentSucceeded /
 // PaymentFailed), then records the dedup row.
 //
-// Ordering matters (Q43-pay-1): the idempotent side effects run FIRST and
+// Ordering matters: the idempotent side effects run FIRST and
 // the dedup INSERT runs LAST. Recording dedup first stranded the event on
 // any transient side-effect failure (the dedup row outlived the failed
 // handler, so the provider's redelivery short-circuited handled=false and
@@ -80,7 +80,7 @@ func (h *PaymentServiceHandler) IngestStripe(ctx context.Context, req *pb.Ingest
 		return nil, err
 	}
 
-	// Dedup ledger, written LAST (Q43-pay-1): a unique-PK violation ⇒ this
+	// Dedup ledger, written LAST: a unique-PK violation ⇒ this
 	// event was already fully processed. Storage surfaces it as
 	// InvalidArgument + ErrorDetail code=UNIQUE_VIOLATION, not
 	// AlreadyExists.

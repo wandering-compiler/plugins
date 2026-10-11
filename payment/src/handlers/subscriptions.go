@@ -74,7 +74,7 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 	if amount == "" || currency == "" {
 		return nil, invalidArg("amount and currency are required")
 	}
-	// Q45-pay-3: reject a non-positive amount before the provider call — a
+	// Reject a non-positive amount before the provider call — a
 	// negative unit price reaches the provider and every future subscription
 	// on the plan credits the customer instead of charging them.
 	if !isPositiveDecimal(amount) {
@@ -142,7 +142,7 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 	if slug == "" {
 		return nil, invalidArg("plan_slug is required")
 	}
-	// Q45-pay-2: the idempotency key IS the provider Idempotency-Key for
+	// The idempotency key IS the provider Idempotency-Key for
 	// StartSubscription, so it must be unique per distinct subscribe and
 	// stable across retries. Deriving it from (user_id, plan_slug) — as this
 	// handler used to — collided a re-subscribe-after-cancel onto the first

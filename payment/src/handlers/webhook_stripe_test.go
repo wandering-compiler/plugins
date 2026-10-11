@@ -79,9 +79,9 @@ func noRowsErr() error {
 	return status.Error(codes.NotFound, "PaymentMutation.MarkPaymentSucceeded: sql: no rows in result set")
 }
 
-// TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing — D-F5.
+// TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing.
 //
-// Q43-pay-1 deliberately runs the idempotent side effects BEFORE the
+// The webhook handler deliberately runs the idempotent side effects BEFORE the
 // dedup ledger, and accepts that a redelivered event reaches the
 // reconciliation mutation a second time. What that trade missed is the
 // EVENT. The generated emit wrapper fires after every SUCCESSFUL inner
@@ -136,7 +136,7 @@ func TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing(t *testing.T) {
 }
 
 // TestIngestStripe_UnknownProviderPayment_MustNotAcknowledge — the other
-// half of the NotFound discrimination (D-F5 / D-F6).
+// half of the NotFound discrimination.
 //
 // A guarded UPDATE that matches nothing is ambiguous: either the row is
 // already in the target state (a redelivery — above), or the local
@@ -163,7 +163,7 @@ func TestIngestStripe_UnknownProviderPayment_MustNotAcknowledge(t *testing.T) {
 	}
 }
 
-// TestIngestStripe_SideEffectFailure_DoesNotStrand — Q43-pay-1. A transient
+// TestIngestStripe_SideEffectFailure_DoesNotStrand. A transient
 // side-effect failure must surface as an error WITHOUT recording the dedup
 // row, so the provider's redelivery re-runs the side effect. Recording
 // dedup first (the old order) stranded the event: the dedup row outlived

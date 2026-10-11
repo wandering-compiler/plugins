@@ -42,7 +42,7 @@ const C = "unmarked, and must stay out"
 // Skipping it is what the first version did, and it is the failure this whole
 // program exists to prevent: `const Msg = "Wrong " + "password."` is valid Go,
 // its value never reaches the manifest, and an empty msgids: then passed the
-// gate while the plugin emitted the sentence (caught in review on PR #10).
+// gate while the plugin emitted the sentence.
 func TestMarkedIn_ANonLiteralIsRefusedNotSkipped(t *testing.T) {
 	for _, src := range []string{
 		`package p

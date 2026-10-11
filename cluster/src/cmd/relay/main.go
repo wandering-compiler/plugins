@@ -320,7 +320,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	// Without it the relay is back to granting against a number that has no
 	// relationship to the machines present — which meant an empty relay handed
 	// out its full complement of tickets and every caller found out at the
-	// proxy (a consumer, 2026-09-25).
+	// proxy.
 	backends.OnCapacityChange(pool.SetCapacity)
 	// MANAGEMENT ONLY. This server's TLS pins the control plane, so nothing a
 	// worker holds can complete its handshake — registering the worker-facing

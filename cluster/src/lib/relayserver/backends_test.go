@@ -64,8 +64,7 @@ func attach(t *testing.T, b *Backends, fp string, slots uint32, ready bool) uint
 //
 // It used to carry a static RELAY_CAPACITY with no relationship to the
 // machines present, so a relay with nobody attached granted its full
-// complement of tickets and every caller discovered the truth at the proxy
-// (a consumer, 2026-09-25).
+// complement of tickets and every caller discovered the truth at the proxy.
 func TestBackends_CapacityIsTheSumOfTheFleet(t *testing.T) {
 	b := NewBackends()
 	if got := b.Capacity(); got != 0 {
@@ -213,7 +212,7 @@ func TestBackends_TakeSkipsAWorkerThatIsNoLongerAdmitted(t *testing.T) {
 	}
 }
 
-// ── the five review findings on w17 platform PR #9, each as a guard ──────────────────────
+// ── five review findings, each as a guard ──────────────────────
 
 // A PENDING worker must not raise the relay's capacity.
 //

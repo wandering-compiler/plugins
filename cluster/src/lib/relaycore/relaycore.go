@@ -111,8 +111,7 @@ type Pool struct {
 	// callers was told TaskGranted — success, by the contract — and only found
 	// out at the proxy, with "the ticket was valid but no admitted worker is
 	// attached right now". A grant is supposed to BE a slot; for a pool whose
-	// machines come and go, that was not an edge case but the normal morning
-	// (a consumer, 2026-09-25).
+	// machines come and go, that was not an edge case but the normal morning.
 	capacity int
 	// inUse counts every slot spoken for: granted (redeemed or not).
 	inUse int
