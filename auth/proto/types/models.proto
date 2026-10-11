@@ -950,7 +950,7 @@ message OAuthLoginCode {
   string id             = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id        = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
   string code_hash      = 3 [(w17.field) = { type: CHAR, max_len: 64, unique: true }]; // sha256 hex of the code
-  string code_challenge = 4 [(w17.field) = { type: CHAR, max_len: 128 }];                // challengeDigest (sha256 hex) of the authorize step's PKCE challenge
+  string code_challenge = 4 [(w17.field) = { type: CHAR, max_len: 64 }];                // challengeDigest (sha256 hex) of the authorize step's PKCE challenge
   google.protobuf.Timestamp expires_at  = 5 [(w17.field) = { type: DATETIME }];
   google.protobuf.Timestamp consumed_at = 6 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at  = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
