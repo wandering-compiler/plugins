@@ -1,5 +1,29 @@
 # auth — changelog
 
+## 0.1.0-rc.22
+
+Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on a REST preset endpoint.
+
+### Registration and reset requests count against the per-address limit
+
+The gateway limits the endpoints that take no credential per client address (`*_RATELIMIT_PER_MINUTE`, default 30 a minute with a burst of 10). Until now every such endpoint spent a token only when it failed. That is right for a sign-in, where an attacker's guesses fail and a legitimate user's sign-in succeeds. It is wrong for an endpoint that does its work when it succeeds:
+
+- `SignUp` creates an account and sends a mail. A registration from a fresh address never fails, so one address could register without limit.
+- `RequestPasswordReset` sends a mail and answers success whether or not the address exists, so it never spent a token and could mail any address without limit.
+
+From platform 1.11 an endpoint spends a token on every request unless it says otherwise. This release marks the endpoints that check a guessable secret `public_limit: failed_only`, so a correct answer stays free:
+
+- `SignIn`
+- `ConfirmSignUp`
+- `VerifyMfa`
+- `ResetPassword`
+- `VerifyEmail`
+- `CliToken`
+
+`SignUp`, `RequestPasswordReset` and the two OAuth hops now spend a token on every request.
+
+If a test suite registers many accounts from one address, turn the limit off in the test stack. `w17ctl test` does this itself from v0.1.0-rc.70, through the generated `compose.test.yaml`. For your own runs, use `docker compose -f compose.yaml -f compose.test.yaml` or set `<DOMAIN>_GATEWAY_RATELIMIT_PER_MINUTE=0`.
+
 ## 0.1.0-rc.21
 
 ### Recovery codes
