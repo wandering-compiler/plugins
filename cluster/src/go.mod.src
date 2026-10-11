@@ -1,6 +1,6 @@
 module github.com/wandering-compiler/plugins/cluster
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/wandering-compiler/sdk/go v0.0.0-20260923221209-69e99b91ba68
@@ -10,7 +10,7 @@ require (
 )
 
 require (
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )
