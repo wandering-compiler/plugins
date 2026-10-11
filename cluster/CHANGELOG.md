@@ -1,5 +1,9 @@
 # cluster — changelog
 
+## 0.1.0-rc.12
+
+Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update cluster`.
+
 ## 0.1.0-rc.11
 
 The same plugin as 0.2.0-rc.10, back on the version line every plugin and the platform share: `0.1.0-rc.N`. The 0.2.0 releases were a numbering mistake, not a break with 0.1.0 — nothing about them is a second line.

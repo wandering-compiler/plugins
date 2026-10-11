@@ -1,5 +1,9 @@
 # agent — changelog
 
+## 0.1.0-rc.5
+
+Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sync`, `x/crypto`, `x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update agent`.
+
 ## 0.1.0-rc.4
 
 ### Module path
