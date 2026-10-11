@@ -1,5 +1,13 @@
 # auth — changelog
 
+## 0.1.0-rc.23
+
+### A successful OAuth sign-in no longer spends the per-address limit twice
+
+`OAuthCallback` is `public_limit: failed_only`. A callback with a forged or replayed code or state fails and spends a token. A real one comes back from the provider and redirects the browser, and that is free. Before this, an OAuth sign-in spent two tokens: the authorize hop and the callback. With the defaults (burst 10) an office behind one address could get only about five people through in a burst before a 429.
+
+`OAuthAuthorizeURL` still spends a token on every request. It builds a signed redirect and checks no secret.
+
 ## 0.1.0-rc.22
 
 Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on a REST preset endpoint.
