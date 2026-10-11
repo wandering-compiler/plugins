@@ -93,8 +93,8 @@ type ClusterServiceHandler struct {
 	//
 	// The tiebreak used to be the relay NAME, which is stable and therefore
 	// always picks the same relay — so below capacity, where every load is
-	// zero, the alphabetically first relay took every task and the rest idled
-	// (a consumer, 2026-09-25). For a pool whose POINT is spreading work over
+	// zero, the alphabetically first relay took every task and the rest idled.
+	// For a pool whose POINT is spreading work over
 	// several machines and addresses, that turned the feature off during
 	// exactly the conditions it is normally in.
 	rotate atomic.Uint64

@@ -65,7 +65,7 @@ func TestCreatePlan_ValidatesInterval(t *testing.T) {
 	}
 }
 
-// Q45-pay-3: a non-positive plan amount must be rejected BEFORE the backend
+// A non-positive plan amount must be rejected BEFORE the backend
 // is called — a negative unit price reaches the provider and every future
 // subscription on the plan credits the customer instead of charging them.
 func TestCreatePlan_RejectsNonPositiveAmount(t *testing.T) {
@@ -128,7 +128,7 @@ func TestSubscribe_PlanWithoutProviderPrice(t *testing.T) {
 	}
 }
 
-// Q45-pay-2: Subscribe must carry a caller-supplied idempotency key — the
+// Subscribe must carry a caller-supplied idempotency key — the
 // handler can no longer derive one from (user_id, plan_slug). That derived
 // key collided a re-subscribe-after-cancel onto the original (now canceled)
 // subscription via the provider's idempotency replay, silently leaving the
@@ -144,7 +144,7 @@ func TestSubscribe_RequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
-// Q45-pay-2: two subscribe calls for the same (user, plan) with DISTINCT
+// Two subscribe calls for the same (user, plan) with DISTINCT
 // caller keys must reach the provider as DISTINCT Idempotency-Keys — the old
 // derived "sub:<user>:<slug>" key collapsed a re-subscribe onto the first
 // (canceled) subscription. The handler must forward the caller key verbatim.

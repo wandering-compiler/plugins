@@ -177,8 +177,7 @@ func fromGo(root string) ([]string, error) {
 // something to skip past. `const Msg = "Wrong " + "password."` is a perfectly
 // good Go constant and its value never reaches a manifest, so skipping it let
 // an empty `msgids:` pass the gate while the plugin emitted the sentence —
-// silence exactly where this program is supposed to speak (caught in review
-// on PR #10).
+// silence exactly where this program is supposed to speak.
 //
 // Refused rather than evaluated. Every gettext extractor in existence wants a
 // literal for the same reason: a msgid assembled at compile time is one nobody
@@ -259,7 +258,7 @@ func hasMarker(g *ast.CommentGroup) bool {
 // string — because the gate's job is to compare what the file MEANS. The first
 // version matched only the quoted block form this tool emits, so a manifest
 // written any other way parsed as empty and a stale entry sailed through the
-// two-way check that is the whole point (caught in review on PR #10).
+// two-way check that is the whole point.
 //
 // Writing stays textual, and that is not laziness: plugin.yaml is hand-written
 // and full of comments carrying the reasoning for every field, so a round trip

@@ -69,7 +69,7 @@ type PaymentMutationClient interface {
 	// the method still returned successfully, and the generated emit
 	// wrapper fires after every successful return. A provider redelivery
 	// (Stripe is at-least-once, and the dedup ledger is written LAST by
-	// design — Q43-pay-1) therefore emitted PaymentSucceeded a second time
+	// design) therefore emitted PaymentSucceeded a second time
 	// for one charge, and every non-idempotent subscriber acted twice.
 	//
 	// With the guard a redelivery matches zero rows → sql.ErrNoRows →
@@ -118,7 +118,7 @@ type PaymentMutationClient interface {
 	SetRefundIdempotencyKey(ctx context.Context, in *SetRefundIdempotencyKeyReq, opts ...grpc.CallOption) (*SetRefundIdempotencyKeyResp, error)
 	// MarkWebhookProcessed — INSERT the provider event id into the
 	// idempotency ledger AFTER the side effects have been applied
-	// (Q43-pay-1 inverted the original order; recording it first stranded
+	// (the original order was the reverse; recording it first stranded
 	// the event whenever a side effect failed transiently). A unique-PK
 	// violation is the dedup signal: the handler treats it as "already
 	// handled" and returns 200 so the provider stops retrying. Gated
@@ -363,7 +363,7 @@ type PaymentMutationServer interface {
 	// the method still returned successfully, and the generated emit
 	// wrapper fires after every successful return. A provider redelivery
 	// (Stripe is at-least-once, and the dedup ledger is written LAST by
-	// design — Q43-pay-1) therefore emitted PaymentSucceeded a second time
+	// design) therefore emitted PaymentSucceeded a second time
 	// for one charge, and every non-idempotent subscriber acted twice.
 	//
 	// With the guard a redelivery matches zero rows → sql.ErrNoRows →
@@ -412,7 +412,7 @@ type PaymentMutationServer interface {
 	SetRefundIdempotencyKey(context.Context, *SetRefundIdempotencyKeyReq) (*SetRefundIdempotencyKeyResp, error)
 	// MarkWebhookProcessed — INSERT the provider event id into the
 	// idempotency ledger AFTER the side effects have been applied
-	// (Q43-pay-1 inverted the original order; recording it first stranded
+	// (the original order was the reverse; recording it first stranded
 	// the event whenever a side effect failed transiently). A unique-PK
 	// violation is the dedup signal: the handler treats it as "already
 	// handled" and returns 200 so the provider stops retrying. Gated

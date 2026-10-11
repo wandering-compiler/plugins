@@ -278,7 +278,7 @@ func TestScheduleTask_EmptyPoolSaysWhatToDo(t *testing.T) {
 // This test replaces one that asserted a NAME tiebreak — it pinned the defect
 // as the contract, which is why the behaviour survived review. On an idle pool
 // the name rule sent every task to the alphabetically first relay and left the
-// rest cold (a consumer, 2026-09-25), turning off the spread that is the whole
+// rest cold, turning off the spread that is the whole
 // reason for running more than one machine.
 func TestScheduleTask_IdlePoolSpreadsAcrossRelays(t *testing.T) {
 	rs := newRelays(t, map[string]*fakeRelay{

@@ -14,7 +14,7 @@
 //
 // It has already shipped twice. The agent plugin went out unusable because its
 // author-side RegisterPlugin took two arguments while the bundle-side wiring
-// called three, and on PR #11 an invitation gate declared in `org_invite.go`
+// called three, and an invitation gate declared in `org_invite.go`
 // was assigned from `emailverify.go` — breaking every project that wanted to
 // confirm addresses without using invitations, a combination that has nothing
 // to do with either feature's purpose.
@@ -121,7 +121,7 @@ func check(dir string) error {
 	}
 	// The gate is the feature SET itself, never a name built from it:
 	// feature names are free text, and a joined encoding let ["a+b", c] and
-	// [a, "b+c"] collide (review of #139).
+	// [a, "b+c"] collide.
 	for _, c := range m.GoFilesCombined {
 		for _, g := range c.Files {
 			at(g).allOf = append([]string(nil), c.Features...)

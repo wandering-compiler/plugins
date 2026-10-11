@@ -33,7 +33,7 @@ type fakeBackend struct {
 	refundRes      backend.RefundResult
 	lastRefund     backend.Money
 	lastRefundFor  string
-	lastRefundIdem string // provider Idempotency-Key the handler passed (Q43-pay-2)
+	lastRefundIdem string // provider Idempotency-Key the handler passed
 }
 
 func (f *fakeBackend) Name() string { return "fake" }
@@ -156,7 +156,7 @@ type fakeMutation struct {
 	succeededErr     error  // transient failure on MarkPaymentSucceeded
 	succeededFor     string // captured provider_payment_id
 	failedFor        string
-	markedProcessed  bool // MarkWebhookProcessed was invoked (Q43-pay-1)
+	markedProcessed  bool // MarkWebhookProcessed was invoked
 
 	// prepaid test knobs
 	applyErr  error // constraint error to simulate
@@ -355,7 +355,7 @@ func TestCreatePayment_UsesExistingCustomerAndDefaultCurrency(t *testing.T) {
 	}
 }
 
-// Q45-pay-1: a non-positive amount must be rejected BEFORE the backend is
+// A non-positive amount must be rejected BEFORE the backend is
 // called — a negative amount reaches Stripe as a credit/reversal (customer
 // credited instead of charged = merchant loss); zero is a meaningless charge.
 func TestCreatePayment_RejectsNonPositiveAmount(t *testing.T) {
@@ -432,7 +432,7 @@ func TestRefundPayment_RequiresID(t *testing.T) {
 	}
 }
 
-// Q43-pay-2: a refund must carry a caller-supplied idempotency key —
+// A refund must carry a caller-supplied idempotency key —
 // the handler can no longer derive one from (payment_id, amount) (that
 // collided two legitimate same-amount partial refunds into one provider
 // replay, silently shorting the customer).
@@ -444,7 +444,7 @@ func TestRefundPayment_RequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
-// Q43-pay-2: two legitimate same-amount partial refunds with DISTINCT
+// Two legitimate same-amount partial refunds with DISTINCT
 // caller keys must reach the provider as DISTINCT Idempotency-Keys — the
 // old derived "refund:<id>:<amount>" key collapsed them, so the second
 // hit Stripe's idempotency replay and was silently swallowed. The handler

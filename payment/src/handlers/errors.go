@@ -16,8 +16,8 @@ import (
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
-// Storage constraint-violation detail codes (srcgo/lib/validation
-// defaults). Every DB constraint violation surfaces as a
+// Storage constraint-violation detail codes (the generated storage
+// tier's validation defaults). Every DB constraint violation surfaces as a
 // codes.InvalidArgument gRPC status carrying a w17.ErrorDetail; the
 // specific kind lives in ErrorDetail.code, NOT the top-level code.
 const (

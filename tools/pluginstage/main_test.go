@@ -187,7 +187,7 @@ func TestCheck_NoFileMayUseACombinedFilesSymbol(t *testing.T) {
 
 // A combination staged in every build another is — [alpha, beta] wherever
 // [alpha, beta, gamma] is — is in reach of it; and [beta, alpha] is the same
-// condition as [alpha, beta] (review of #139).
+// condition as [alpha, beta].
 func TestCheck_ACombinationMayUseASubsetCombination(t *testing.T) {
 	dir := plugin(t, `
 features:
@@ -226,8 +226,7 @@ go_files_combined:
 
 // A combination's gate is the SET of its features, not a name joined from
 // them: ["a+b", c] and [a, "b+c"] once both became "+a+b+c" and could use
-// each other's symbols although they stage under different activations
-// (Copilot on #139).
+// each other's symbols although they stage under different activations.
 func TestCheck_TwoCombinationsWhoseNamesJoinAlikeAreDistinct(t *testing.T) {
 	dir := plugin(t, `
 features:
@@ -249,7 +248,7 @@ go_files_combined:
 }
 
 // The requires closure holds under a combination too: gamma requires alpha,
-// so [gamma, beta] is staged only where [alpha, beta] is (Copilot on #139).
+// so [gamma, beta] is staged only where [alpha, beta] is.
 func TestCheck_ACombinationReachesThroughRequires(t *testing.T) {
 	dir := plugin(t, `
 features:
