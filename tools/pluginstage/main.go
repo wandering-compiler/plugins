@@ -167,6 +167,8 @@ func check(dir string) error {
 		return true
 	}
 
+	dqlErr := checkDQLColumns(dir, requires)
+
 	declIn, refs, err := scan(filepath.Join(dir, "src"))
 	if err != nil {
 		return err
@@ -190,9 +192,12 @@ func check(dir string) error {
 		}
 	}
 	if len(problems) == 0 {
-		return nil
+		return dqlErr
 	}
 	sort.Strings(problems)
+	if dqlErr != nil {
+		fmt.Fprintln(os.Stderr, dqlErr)
+	}
 	return fmt.Errorf("a reference crosses a feature boundary and will not exist in every build:\n%s\n\n"+
 		"  An activation that enables the first feature without the second stages the\n"+
 		"  file on the left without the one on the right, and its bundle build fails on\n"+

@@ -132,7 +132,6 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 	if _, err := h.Mutation.DeleteOtherSessionTokens(txCtx, &pb.DeleteOtherSessionTokensReq{
 		UserId:      userID,
 		KeepTokenId: keep,
-		TokenType:   pb.TokenType_TOKEN_TYPE_SESSION,
 	}); err != nil {
 		return fail(err)
 	}

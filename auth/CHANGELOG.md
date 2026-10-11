@@ -17,6 +17,13 @@ Each reset request inserts a new link, and a successful reset consumed only the 
 - **`ResetPassword` and `ChangePassword` spend every live link of the account** in the same transaction as the new password. They use the new `AuthMutation.SpendPasswordResetTokens` (password_reset).
 - **`password_change` without `password_reset`** builds and behaves as before: there are no links to spend.
 
+### `password_change` builds without `api_token`
+
+`DeleteOtherSessionTokens` filtered on `UserToken.token_type`, a column only `api_token` adds. An activation with `password_change` and without `api_token` failed code generation.
+
+- **The filter is now `?feature(api_token) token_type = 1`.** Without `api_token`, every token is a session, and the sweep deletes the other ones.
+- **`DeleteOtherSessionTokensReq` drops `token_type`** (field 3, now reserved). The statement names the session realm itself.
+
 ### OAuth: the callback hands out a single-use code, not a session (breaking)
 
 The OAuth callback used to redirect the browser with the session token in the URL fragment, and its `state` was valid forever, reusable, and tied to no browser. Anyone could start a sign-in with their own provider account and send the callback link to someone else. Whoever opened it was signed in to the sender's account and kept working there (login CSRF).
