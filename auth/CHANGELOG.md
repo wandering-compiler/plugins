@@ -32,7 +32,7 @@ Each reset request inserts a new link, and a successful reset consumed only the 
 
 An OAuth sign-in skips the plugin's second factor, and with `devices` it still marked the device trusted. Under `two_factor_scope=new_devices` a trusted device skips the second factor, so after one OAuth sign-in, password sign-ins from that device skipped it too.
 
-- **`OAuthExchange` binds the session to the device and does not trust it.** It returns no `device_trust_token`.
+- **`OAuthExchange` binds the session to the device and does not trust it.** It returns an empty `device_trust_token` and no longer rotates the device's token, so a device that was already trusted stays trusted with the token it holds. A client must not clear its stored token on an empty one.
 - **Password sign-ins and verified second-factor sign-ins** trust the device as before.
 
 ### OAuth: the callback hands out a single-use code, not a session (breaking)

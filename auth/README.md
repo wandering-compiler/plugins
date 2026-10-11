@@ -57,7 +57,7 @@ Behaviour that is deliberate, and easy to build against wrongly.
 - **A reset or a password change spends every other reset link of the account.** A link asked for earlier, still in a mailbox, cannot set the password again.
 - **A reset keeps device trust.** Under `two_factor_scope=new_devices`, a device trusted before the reset is still trusted after it. The reset link arrived in the mailbox, and that mailbox is the second factor the reset already proved.
 - **`two_factor_scope=all_logins` applies to password sign-ins.** An OAuth sign-in issues a session without a second factor; the provider is the factor.
-- **An OAuth sign-in does not make the device trusted.** Its session is bound to the device, but under `two_factor_scope=new_devices` the next password sign-in from that device still asks for the second factor.
+- **An OAuth sign-in does not make the device trusted.** Its session is bound to the device, but it returns no `device_trust_token`, so under `two_factor_scope=new_devices` the next password sign-in from a device that was not trusted before still asks for the second factor. A device that was already trusted stays trusted: keep the token you hold, and overwrite it only with a non-empty one.
 
 **The first account**
 - **The first account to register gets the `first_user` roles**, typically every permission. On a deployment with open sign-up that is whoever registers first, so create the first account (seed it, or register it yourself) before the sign-up endpoint is reachable.
