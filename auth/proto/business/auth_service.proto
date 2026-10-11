@@ -471,9 +471,7 @@ message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string token   = 2;
-  // Always empty: an OAuth sign-in skips the second factor, so it does not
-  // trust the device or rotate its token. Kept for wire compatibility; a
-  // client keeps the token it already holds (see SignInResp).
+  // Server-minted device-trust token (see SignInResp).
   string device_trust_token = 3 [(w17.contrib.plugin_feature_field) = "devices"];
 }
 

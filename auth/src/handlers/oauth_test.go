@@ -35,11 +35,10 @@ type oauthMock struct {
 	moved    *pb.MoveOAuthProviderSecretReq
 	cleared  string
 
-	// trustedDevice records that TrustDevice was called.
-	trustedDevice bool
-
 	// loginCodes mirrors OAuthLoginCode: code_hash -> row. Consume is the
 	// conditional UPDATE's semantics: one unconsumed match, then none.
+	trustedDevice bool
+
 	loginCodes map[string]*pb.CreateOAuthLoginCodeReq
 	consumed   map[string]bool
 }

@@ -1966,9 +1966,7 @@ type OAuthExchangeResp struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	UserId string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Token  string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-	// Always empty: an OAuth sign-in skips the second factor, so it does not
-	// trust the device or rotate its token. Kept for wire compatibility; a
-	// client keeps the token it already holds (see SignInResp).
+	// Server-minted device-trust token (see SignInResp).
 	DeviceTrustToken string `protobuf:"bytes,3,opt,name=device_trust_token,json=deviceTrustToken,proto3" json:"device_trust_token,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

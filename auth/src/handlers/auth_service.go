@@ -854,7 +854,13 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 		return resp, nil
 	}
 
-	token, trustToken, err := issueSession(ctx, h, user.GetId(), deviceID, true)
+	// Trust is renewed for a device that already has it, never granted here:
+	// reaching this line means no second factor was asked for — either the
+	// device is trusted, or `two_factor` is off and there is no factor to
+	// pass. Granting trust on the password alone would let every device that
+	// ever signed in skip the factor once `two_factor_scope=new_devices` is
+	// switched on. A device earns trust by passing VerifyMfa.
+	token, trustToken, err := issueSession(ctx, h, user.GetId(), deviceID, trusted)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}

@@ -435,3 +435,54 @@ func TestIssueSessionWithDevice_BindsWithoutTrustingWhenNotAllowed(t *testing.T)
 		t.Errorf("an untrusting sign-in trusted the device (trust token %q, TrustDevice %+v)", trustToken, m.trusted)
 	}
 }
+
+// signInDeviceMock adds the account lookup SignIn needs to deviceMock.
+type signInDeviceMock struct {
+	*deviceMock
+	user *pb.User
+}
+
+func (m signInDeviceMock) GetUserByEmail(context.Context, *pb.GetUserByEmailReq, ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
+	return &pb.GetUserByEmailResp{User: m.user}, nil
+}
+
+// A password sign-in that met no second factor renews the trust of a device
+// that already has it, and grants none to a device that does not. Granted on
+// the password alone, every device that ever signed in would skip the factor
+// once two_factor_scope=new_devices is switched on.
+func TestSignIn_RenewsDeviceTrustButNeverGrantsIt(t *testing.T) {
+	saved := signInMfaGate
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+		return nil, false, nil // two_factor off: no factor asked for
+	}
+	t.Cleanup(func() { signInMfaGate = saved })
+
+	hashed, err := testPasswordSettings().Hash("pw-long-enough")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustPlain, trustHash, err := newDeviceTrustToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name    string
+		device  *pb.Device
+		ctx     context.Context
+		trusted bool
+	}{
+		{"untrusted device", &pb.Device{Id: "dev-1", Identifier: "d1"}, ctxWithDeviceTrust("", "d1", ""), false},
+		{"trusted device", &pb.Device{Id: "dev-1", Identifier: "d1", TrustedAt: timestamppb.Now(), TrustTokenHash: trustHash}, ctxWithDeviceTrust("", "d1", trustPlain), true},
+	} {
+		dm := &deviceMock{getByIdent: map[string]*pb.Device{devKey("u1", "d1"): c.device}}
+		m := signInDeviceMock{deviceMock: dm, user: &pb.User{Id: "u1", Email: "a@b.c", PasswordHash: hashed}}
+		h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
+		resp, err := h.SignIn(c.ctx, &pb.SignInReq{Email: "a@b.c", Password: "pw-long-enough"})
+		if err != nil {
+			t.Fatalf("%s: sign-in: %v", c.name, err)
+		}
+		if got := len(dm.trusted) == 1 && resp.GetDeviceTrustToken() != ""; got != c.trusted {
+			t.Errorf("%s: trusted = %v (TrustDevice %+v), want %v", c.name, got, dm.trusted, c.trusted)
+		}
+	}
+}
