@@ -53,6 +53,11 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		return nil, err
 	}
 	h.upgradeLegacyToken(ctx, token, hash, tok.GetStoredTokenHash())
+	// Same rule as the session path: a disabled account authenticates with no
+	// token, including one minted after the disable deleted the rest.
+	if err := signInDisabledGate(tok.GetUser()); err != nil {
+		return nil, err
+	}
 	userID := tok.GetUserId()
 
 	realm, err := h.Query.GetUserRolePermissionsByRealm(ctx, &pb.GetUserRolePermissionsByRealmReq{

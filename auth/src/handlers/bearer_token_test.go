@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -73,13 +75,18 @@ func TestResolvePrincipalRealmAware_LegacyRowIsMovedToTheHash(t *testing.T) {
 
 type legacyLookupQuery struct {
 	pb.AuthQueryClient
-	req *pb.GetTokenWithTypeReq
+	req      *pb.GetTokenWithTypeReq
+	disabled bool
 }
 
 func (q *legacyLookupQuery) GetTokenWithType(_ context.Context, in *pb.GetTokenWithTypeReq, _ ...grpc.CallOption) (*pb.GetTokenWithTypeResp, error) {
 	q.req = in
 	// No stored hash: the row predates hashing.
-	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION}, nil
+	resp := &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION, User: &pb.User{Id: "u1"}}
+	if q.disabled {
+		resp.User.DisabledAt = timestamppb.Now()
+	}
+	return resp, nil
 }
 
 func (q *legacyLookupQuery) GetUserRolePermissionsByRealm(context.Context, *pb.GetUserRolePermissionsByRealmReq, ...grpc.CallOption) (*pb.GetUserRolePermissionsByRealmResp, error) {
@@ -119,15 +126,34 @@ func TestResolvePrincipalSession_LegacyRowIsMovedToTheHash(t *testing.T) {
 
 type sessionLookupQuery struct {
 	pb.AuthQueryClient
-	stored string
-	req    *pb.GetUserByTokenWithPermissionsReq
+	stored   string
+	req      *pb.GetUserByTokenWithPermissionsReq
+	disabled bool
 }
 
 func (q *sessionLookupQuery) GetUserByTokenWithPermissions(_ context.Context, in *pb.GetUserByTokenWithPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserByTokenWithPermissionsResp, error) {
 	q.req = in
-	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: q.stored}, nil
+	u := &pb.User{Id: "u1"}
+	if q.disabled {
+		u.DisabledAt = timestamppb.Now()
+	}
+	return &pb.GetUserByTokenWithPermissionsResp{User: u, TokenId: "t1", StoredTokenHash: q.stored}, nil
 }
 
 func (q *sessionLookupQuery) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
 	return &pb.GetUserRoleGrantsResp{}, nil
+}
+
+// A disabled account authenticates with no token, on either resolver.
+// DisableUsers deletes the tokens; this covers one minted after it, such as a
+// sign-in that raced the disable.
+func TestResolvePrincipal_ADisabledAccountIsRefused(t *testing.T) {
+	h := &AuthServiceHandler{Query: &sessionLookupQuery{stored: "x", disabled: true}, Mutation: &upgradeRecorder{}}
+	if _, err := resolvePrincipalSession(context.Background(), h, "plain"); !errors.Is(err, errAuthnUserDisabled) {
+		t.Errorf("session resolver: err = %v, want the disabled-account refusal", err)
+	}
+	h = &AuthServiceHandler{Query: &legacyLookupQuery{disabled: true}, Mutation: &upgradeRecorder{}}
+	if _, err := resolvePrincipalRealmAware(context.Background(), h, "plain"); !errors.Is(err, errAuthnUserDisabled) {
+		t.Errorf("realm-aware resolver: err = %v, want the disabled-account refusal", err)
+	}
 }

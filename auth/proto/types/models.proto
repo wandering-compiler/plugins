@@ -128,11 +128,12 @@ message User {
 
   // disabled_at — when an admin soft-disabled this account (the
   // Django `is_active` analogue, inverted: NULL = active, non-NULL =
-  // disabled). SignIn rejects a disabled account BEFORE issuing a
-  // token (handlers/user_admin.go overrides the signInDisabledGate
-  // seam); existing session/API tokens keep working until they
-  // expire or are revoked — disable is a login gate, not a session
-  // kill (delete the account, or revoke its tokens, for that). Set /
+  // disabled). A disabled account holds no working credential:
+  // SignIn and every other path that issues a token refuse it, and
+  // Authenticate refuses every token it already has, session or API,
+  // for as long as it stays disabled (handlers/user_admin.go overrides
+  // the signInDisabledGate seam). DisableUsers also deletes the tokens;
+  // the check on every request covers one minted after it. Set /
   // cleared by AuthMutation.DisableUsers / EnableUsers from the admin
   // Users page. Field-gated `user_admin`: absent entirely when the
   // feature is off, so the always-compiled SignIn handler must reach

@@ -2134,8 +2134,12 @@ type GetTokenWithTypeResp struct {
 	// The row's token_hash, empty on a legacy row (see
 	// GetUserByTokenWithPermissionsResp).
 	StoredTokenHash string `protobuf:"bytes,6,opt,name=stored_token_hash,json=storedTokenHash,proto3" json:"stored_token_hash,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The token's owner, carrying what Authenticate checks on every request
+	// (under `user_admin`, whether the account is disabled) plus `kind`, which
+	// every User-filling query projects so no gate reads an unset one as HUMAN.
+	User          *User `protobuf:"bytes,7,opt,name=user,proto3" json:"user,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetTokenWithTypeResp) Reset() {
@@ -2194,6 +2198,13 @@ func (x *GetTokenWithTypeResp) GetStoredTokenHash() string {
 		return x.StoredTokenHash
 	}
 	return ""
+}
+
+func (x *GetTokenWithTypeResp) GetUser() *User {
+	if x != nil {
+		return x.User
+	}
+	return nil
 }
 
 type GetUserRolePermissionsByRealmReq struct {
@@ -6055,13 +6066,14 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x13GetTokenWithTypeReq\x12!\n" +
 	"\flegacy_token\x18\x01 \x01(\tR\vlegacyToken\x12\x1d\n" +
 	"\n" +
-	"token_hash\x18\x02 \x01(\tR\ttokenHash:\r\xfa\xf4\x18\tapi_token\"\xc1\x01\n" +
+	"token_hash\x18\x02 \x01(\tR\ttokenHash:\r\xfa\xf4\x18\tapi_token\"\xed\x01\n" +
 	"\x14GetTokenWithTypeResp\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x19\n" +
 	"\btoken_id\x18\x02 \x01(\tR\atokenId\x12:\n" +
 	"\n" +
 	"token_type\x18\x03 \x01(\x0e2\x1b.w17.contrib.auth.TokenTypeR\ttokenType\x12*\n" +
-	"\x11stored_token_hash\x18\x06 \x01(\tR\x0fstoredTokenHash:\r\xfa\xf4\x18\tapi_token\"\x86\x01\n" +
+	"\x11stored_token_hash\x18\x06 \x01(\tR\x0fstoredTokenHash\x12*\n" +
+	"\x04user\x18\a \x01(\v2\x16.w17.contrib.auth.UserR\x04user:\r\xfa\xf4\x18\tapi_token\"\x86\x01\n" +
 	" GetUserRolePermissionsByRealmReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12:\n" +
 	"\n" +
@@ -6286,16 +6298,16 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\"n\n" +
 	"\x1eListPendingInvitesForEmailResp\x12<\n" +
 	"\ainvites\x18\x01 \x03(\v2\".w17.contrib.auth.PendingInviteRowR\ainvites:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xa6\xa7\x01\n" +
+	"org_invite2\x9a\xa9\x01\n" +
 	"\tAuthQuery\x12\xec\x03\n" +
 	"\x0eGetUserByEmail\x12#.w17.contrib.auth.GetUserByEmailReq\x1a$.w17.contrib.auth.GetUserByEmailResp\"\x8e\x03\xf2\xf3\x18\x89\x03B\x86\x03\n" +
 	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\x99\x04\n" +
 	"\x0eGetUserByToken\x12#.w17.contrib.auth.GetUserByTokenReq\x1a$.w17.contrib.auth.GetUserByTokenResp\"\xbb\x03\xf2\xf3\x18\xb6\x03B\xb3\x03\n" +
 	"\x04main\x12\xaa\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        u.created_at AS user.created_at,        COALESCE(t.token_hash, '') AS stored_token_hash FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x12\xaa\x02\n" +
 	"\x12GetUserPermissions\x12'.w17.contrib.auth.GetUserPermissionsReq\x1a(.w17.contrib.auth.GetUserPermissionsResp\"\xc0\x01\xf2\xf3\x18\xb3\x01B\xb0\x01\n" +
-	"\x04main\x12\xa7\x01SELECT ROWS_TO_ARRAY(rp.permission_id) AS permission_ids FROM @module.RolePermission rp JOIN @module.UserRole ur ON ur.role_id = rp.role_id WHERE ur.user_id = :user_id\x8a\xf5\x18\x04rbac\x12\xe7\x04\n" +
-	"\x1dGetUserByTokenWithPermissions\x122.w17.contrib.auth.GetUserByTokenWithPermissionsReq\x1a3.w17.contrib.auth.GetUserByTokenWithPermissionsResp\"\xdc\x03\xf2\xf3\x18\xcf\x03B\xcc\x03\n" +
-	"\x04main\x12\xc3\x03SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        u.created_at AS user.created_at,        t.id AS token_id,        COALESCE(t.token_hash, '') AS stored_token_hash FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\x04rbac\x12\xc7\x03\n" +
+	"\x04main\x12\xa7\x01SELECT ROWS_TO_ARRAY(rp.permission_id) AS permission_ids FROM @module.RolePermission rp JOIN @module.UserRole ur ON ur.role_id = rp.role_id WHERE ur.user_id = :user_id\x8a\xf5\x18\x04rbac\x12\xa6\x05\n" +
+	"\x1dGetUserByTokenWithPermissions\x122.w17.contrib.auth.GetUserByTokenWithPermissionsReq\x1a3.w17.contrib.auth.GetUserByTokenWithPermissionsResp\"\x9b\x04\xf2\xf3\x18\x8e\x04B\x8b\x04\n" +
+	"\x04main\x12\x82\x04SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        u.created_at AS user.created_at,        t.id AS token_id,        COALESCE(t.token_hash, '') AS stored_token_hash FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\x04rbac\x12\xc7\x03\n" +
 	"\x11GetUserRoleGrants\x12&.w17.contrib.auth.GetUserRoleGrantsReq\x1a'.w17.contrib.auth.GetUserRoleGrantsResp\"\xe0\x02\xf2\xf3\x18\xd3\x02B\xd0\x02\n" +
 	"\x04main\x12\xc7\x02SELECT r.id AS role_id,        ROWS_TO_ARRAY(rp.permission_id) AS permission_ids,        r.all_permissions AS all_permissions FROM @module.UserRole ur JOIN @module.Role r ON r.id = ur.role_id LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id WHERE ur.user_id = :user_id GROUP BY r.id, r.all_permissions ORDER BY r.id ASC\x8a\xf5\x18\x04rbac\x12\xf4\x02\n" +
 	"\x0eListRoleGrants\x12#.w17.contrib.auth.ListRoleGrantsReq\x1a$.w17.contrib.auth.ListRoleGrantsResp\"\x96\x02\xf2\xf3\x18\x89\x02B\x86\x02\n" +
@@ -6332,9 +6344,9 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\tListRoles\x12\x1e.w17.contrib.auth.ListRolesReq\x1a\x1f.w17.contrib.auth.ListRolesResp\"\x80\x03\xf2\xf3\x18\xf3\x02B\xf0\x02\n" +
 	"\x04main\x12\xe7\x02SELECT r.id AS id, r.name AS name, r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r ORDER BY r.name ASC, r.id ASC\x8a\xf5\x18\x04rbac\x12\xbc\x03\n" +
 	"\aGetRole\x12\x1c.w17.contrib.auth.GetRoleReq\x1a\x16.w17.contrib.auth.Role\"\xfa\x02\xf2\xf3\x18\xed\x02B\xea\x02\n" +
-	"\x04main\x12\xe1\x02SELECT r.id AS id, r.name AS name,        r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r WHERE r.id = :id\x8a\xf5\x18\x04rbac\x12\x9b\x03\n" +
-	"\x10GetTokenWithType\x12%.w17.contrib.auth.GetTokenWithTypeReq\x1a&.w17.contrib.auth.GetTokenWithTypeResp\"\xb7\x02\xf2\xf3\x18\xa5\x02B\xa2\x02\n" +
-	"\x04main\x12\x99\x02SELECT t.user_id AS user_id,        t.id AS token_id,        t.token_type AS token_type,        COALESCE(t.token_hash, '') AS stored_token_hash FROM @module.UserToken t WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\tapi_token\x12\x8f\x04\n" +
+	"\x04main\x12\xe1\x02SELECT r.id AS id, r.name AS name,        r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r WHERE r.id = :id\x8a\xf5\x18\x04rbac\x12\xd0\x04\n" +
+	"\x10GetTokenWithType\x12%.w17.contrib.auth.GetTokenWithTypeReq\x1a&.w17.contrib.auth.GetTokenWithTypeResp\"\xec\x03\xf2\xf3\x18\xda\x03B\xd7\x03\n" +
+	"\x04main\x12\xce\x03SELECT t.user_id AS user_id,        t.id AS token_id,        t.token_type AS token_type,        COALESCE(t.token_hash, '') AS stored_token_hash,        u.id AS user.id,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\tapi_token\x12\x8f\x04\n" +
 	"\x1dGetUserRolePermissionsByRealm\x122.w17.contrib.auth.GetUserRolePermissionsByRealmReq\x1a3.w17.contrib.auth.GetUserRolePermissionsByRealmResp\"\x84\x03\xf2\xf3\x18\xf2\x02B\xef\x02\n" +
 	"\x04main\x12\xe6\x02SELECT r.id AS role_id,        ROWS_TO_ARRAY(rp.permission_id) AS permission_ids,        r.all_permissions AS all_permissions FROM @module.UserRole ur JOIN @module.Role r ON r.id = ur.role_id LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id WHERE ur.user_id = :user_id AND r.token_type = :token_type GROUP BY r.id, r.all_permissions ORDER BY r.id ASC\x8a\xf5\x18\tapi_token\x12\x8e\x02\n" +
 	"\x18GetTokenPermissionSubset\x12-.w17.contrib.auth.GetTokenPermissionSubsetReq\x1a..w17.contrib.auth.GetTokenPermissionSubsetResp\"\x92\x01\xf2\xf3\x18\x80\x01B~\n" +
@@ -6585,159 +6597,160 @@ var file_queries_auth_query_proto_depIdxs = []int32{
 	120, // 13: w17.contrib.auth.ListRolesResp.roles:type_name -> w17.contrib.auth.Role
 	119, // 14: w17.contrib.auth.ListRolesResp.paging:type_name -> w17.Paging
 	121, // 15: w17.contrib.auth.GetTokenWithTypeResp.token_type:type_name -> w17.contrib.auth.TokenType
-	121, // 16: w17.contrib.auth.GetUserRolePermissionsByRealmReq.token_type:type_name -> w17.contrib.auth.TokenType
-	11,  // 17: w17.contrib.auth.GetUserRolePermissionsByRealmResp.grants:type_name -> w17.contrib.auth.RoleGrant
-	122, // 18: w17.contrib.auth.ApiTokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	122, // 19: w17.contrib.auth.ApiTokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	122, // 20: w17.contrib.auth.ApiTokenInfo.created_at:type_name -> google.protobuf.Timestamp
-	121, // 21: w17.contrib.auth.ListApiTokensByUserReq.token_type:type_name -> w17.contrib.auth.TokenType
-	49,  // 22: w17.contrib.auth.ListApiTokensByUserResp.tokens:type_name -> w17.contrib.auth.ApiTokenInfo
-	123, // 23: w17.contrib.auth.GetRegisteredRedirectResp.client:type_name -> w17.contrib.auth.AuthClient
-	123, // 24: w17.contrib.auth.ListAuthClientsResp.clients:type_name -> w17.contrib.auth.AuthClient
-	124, // 25: w17.contrib.auth.GetProviderByNameResp.provider:type_name -> w17.contrib.auth.OAuthProvider
-	125, // 26: w17.contrib.auth.GetOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
-	118, // 27: w17.contrib.auth.GetUserByIdResp.user:type_name -> w17.contrib.auth.User
-	126, // 28: w17.contrib.auth.GetTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
-	127, // 29: w17.contrib.auth.GetMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
-	122, // 30: w17.contrib.auth.CountRecentMfaChallengesReq.since:type_name -> google.protobuf.Timestamp
-	128, // 31: w17.contrib.auth.GetDeviceByIdentifierResp.device:type_name -> w17.contrib.auth.Device
-	128, // 32: w17.contrib.auth.ListUserDevicesResp.devices:type_name -> w17.contrib.auth.Device
-	84,  // 33: w17.contrib.auth.ListUserOrgsResp.orgs:type_name -> w17.contrib.auth.UserOrg
-	11,  // 34: w17.contrib.auth.GetUserOrgPermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
-	11,  // 35: w17.contrib.auth.GetUserRealmWidePermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
-	129, // 36: w17.contrib.auth.ListOrganizationsResp.organizations:type_name -> w17.contrib.auth.Organization
-	119, // 37: w17.contrib.auth.ListOrganizationsResp.paging:type_name -> w17.Paging
-	122, // 38: w17.contrib.auth.OrgMembershipAdminRow.created_at:type_name -> google.protobuf.Timestamp
-	101, // 39: w17.contrib.auth.ListOrgMembershipsResp.memberships:type_name -> w17.contrib.auth.OrgMembershipAdminRow
-	119, // 40: w17.contrib.auth.ListOrgMembershipsResp.paging:type_name -> w17.Paging
-	122, // 41: w17.contrib.auth.UserTokenAdminRow.created_at:type_name -> google.protobuf.Timestamp
-	122, // 42: w17.contrib.auth.UserTokenAdminRow.expires_at:type_name -> google.protobuf.Timestamp
-	105, // 43: w17.contrib.auth.ListUserTokensResp.tokens:type_name -> w17.contrib.auth.UserTokenAdminRow
-	119, // 44: w17.contrib.auth.ListUserTokensResp.paging:type_name -> w17.Paging
-	122, // 45: w17.contrib.auth.OrgMemberRow.joined_at:type_name -> google.protobuf.Timestamp
-	108, // 46: w17.contrib.auth.ListOrgMembersByOrgResp.members:type_name -> w17.contrib.auth.OrgMemberRow
-	130, // 47: w17.contrib.auth.ListOrgInvitesByOrgResp.invites:type_name -> w17.contrib.auth.OrgInvite
-	122, // 48: w17.contrib.auth.PendingInviteRow.expires_at:type_name -> google.protobuf.Timestamp
-	116, // 49: w17.contrib.auth.ListPendingInvitesForEmailResp.invites:type_name -> w17.contrib.auth.PendingInviteRow
-	0,   // 50: w17.contrib.auth.AuthQuery.GetUserByEmail:input_type -> w17.contrib.auth.GetUserByEmailReq
-	2,   // 51: w17.contrib.auth.AuthQuery.GetUserByToken:input_type -> w17.contrib.auth.GetUserByTokenReq
-	4,   // 52: w17.contrib.auth.AuthQuery.GetUserPermissions:input_type -> w17.contrib.auth.GetUserPermissionsReq
-	6,   // 53: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:input_type -> w17.contrib.auth.GetUserByTokenWithPermissionsReq
-	7,   // 54: w17.contrib.auth.AuthQuery.GetUserRoleGrants:input_type -> w17.contrib.auth.GetUserRoleGrantsReq
-	9,   // 55: w17.contrib.auth.AuthQuery.ListRoleGrants:input_type -> w17.contrib.auth.ListRoleGrantsReq
-	13,  // 56: w17.contrib.auth.AuthQuery.CountUsers:input_type -> w17.contrib.auth.CountUsersReq
-	15,  // 57: w17.contrib.auth.AuthQuery.ListUsers:input_type -> w17.contrib.auth.ListUsersReq
-	17,  // 58: w17.contrib.auth.AuthQuery.ListOrgMemberAccounts:input_type -> w17.contrib.auth.ListOrgMemberAccountsReq
-	23,  // 59: w17.contrib.auth.AuthQuery.ListBotAccounts:input_type -> w17.contrib.auth.ListBotAccountsReq
-	18,  // 60: w17.contrib.auth.AuthQuery.ListRealmMachineAccounts:input_type -> w17.contrib.auth.ListRealmMachineAccountsReq
-	20,  // 61: w17.contrib.auth.AuthQuery.GetOrgMember:input_type -> w17.contrib.auth.GetOrgMemberReq
-	25,  // 62: w17.contrib.auth.AuthQuery.ListApiRealmRoles:input_type -> w17.contrib.auth.ListApiRealmRolesReq
-	28,  // 63: w17.contrib.auth.AuthQuery.GetUser:input_type -> w17.contrib.auth.GetUserReq
-	29,  // 64: w17.contrib.auth.AuthQuery.GetFirstUserRoles:input_type -> w17.contrib.auth.GetFirstUserRolesReq
-	31,  // 65: w17.contrib.auth.AuthQuery.GetDefaultRoles:input_type -> w17.contrib.auth.GetDefaultRolesReq
-	34,  // 66: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:input_type -> w17.contrib.auth.GetUserOwnsAnyOrgReq
-	36,  // 67: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:input_type -> w17.contrib.auth.GetOwnedOrgBySlugReq
-	38,  // 68: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:input_type -> w17.contrib.auth.ListOrgScopedRolesReq
-	33,  // 69: w17.contrib.auth.AuthQuery.ListRoles:input_type -> w17.contrib.auth.ListRolesReq
-	42,  // 70: w17.contrib.auth.AuthQuery.GetRole:input_type -> w17.contrib.auth.GetRoleReq
-	43,  // 71: w17.contrib.auth.AuthQuery.GetTokenWithType:input_type -> w17.contrib.auth.GetTokenWithTypeReq
-	45,  // 72: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:input_type -> w17.contrib.auth.GetUserRolePermissionsByRealmReq
-	47,  // 73: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:input_type -> w17.contrib.auth.GetTokenPermissionSubsetReq
-	50,  // 74: w17.contrib.auth.AuthQuery.ListApiTokensByUser:input_type -> w17.contrib.auth.ListApiTokensByUserReq
-	78,  // 75: w17.contrib.auth.AuthQuery.GetUserTenant:input_type -> w17.contrib.auth.GetUserTenantReq
-	80,  // 76: w17.contrib.auth.AuthQuery.GetTenantBySlug:input_type -> w17.contrib.auth.GetTenantBySlugReq
-	82,  // 77: w17.contrib.auth.AuthQuery.GetTenantByDomain:input_type -> w17.contrib.auth.GetTenantByDomainReq
-	52,  // 78: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:input_type -> w17.contrib.auth.GetRegisteredRedirectReq
-	56,  // 79: w17.contrib.auth.AuthQuery.ListAuthClients:input_type -> w17.contrib.auth.ListAuthClientsReq
-	54,  // 80: w17.contrib.auth.AuthQuery.GetAuthClientSecret:input_type -> w17.contrib.auth.GetAuthClientSecretReq
-	58,  // 81: w17.contrib.auth.AuthQuery.GetProviderByName:input_type -> w17.contrib.auth.GetProviderByNameReq
-	60,  // 82: w17.contrib.auth.AuthQuery.GetOAuthIdentity:input_type -> w17.contrib.auth.GetOAuthIdentityReq
-	62,  // 83: w17.contrib.auth.AuthQuery.GetUserById:input_type -> w17.contrib.auth.GetUserByIdReq
-	64,  // 84: w17.contrib.auth.AuthQuery.GetTotpSecret:input_type -> w17.contrib.auth.GetTotpSecretReq
-	66,  // 85: w17.contrib.auth.AuthQuery.CountRecoveryCodes:input_type -> w17.contrib.auth.CountRecoveryCodesReq
-	68,  // 86: w17.contrib.auth.AuthQuery.GetMfaChallenge:input_type -> w17.contrib.auth.GetMfaChallengeReq
-	70,  // 87: w17.contrib.auth.AuthQuery.LockUserForIssuance:input_type -> w17.contrib.auth.LockUserForIssuanceReq
-	72,  // 88: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:input_type -> w17.contrib.auth.CountRecentMfaChallengesReq
-	74,  // 89: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:input_type -> w17.contrib.auth.GetDeviceByIdentifierReq
-	76,  // 90: w17.contrib.auth.AuthQuery.ListUserDevices:input_type -> w17.contrib.auth.ListUserDevicesReq
-	85,  // 91: w17.contrib.auth.AuthQuery.ListUserOrgs:input_type -> w17.contrib.auth.ListUserOrgsReq
-	88,  // 92: w17.contrib.auth.AuthQuery.ListUserOrgGrants:input_type -> w17.contrib.auth.ListUserOrgGrantsReq
-	90,  // 93: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:input_type -> w17.contrib.auth.GetUserOrgPermissionsReq
-	92,  // 94: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:input_type -> w17.contrib.auth.GetUserOwnsOrgReq
-	94,  // 95: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:input_type -> w17.contrib.auth.GetUserRealmWidePermissionsReq
-	87,  // 96: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:input_type -> w17.contrib.auth.GetUserOrgBySlugReq
-	97,  // 97: w17.contrib.auth.AuthQuery.ListOrganizations:input_type -> w17.contrib.auth.ListOrganizationsReq
-	99,  // 98: w17.contrib.auth.AuthQuery.GetOrganization:input_type -> w17.contrib.auth.GetOrganizationReq
-	100, // 99: w17.contrib.auth.AuthQuery.ListOrgMemberships:input_type -> w17.contrib.auth.ListOrgMembershipsReq
-	103, // 100: w17.contrib.auth.AuthQuery.GetOrgMembership:input_type -> w17.contrib.auth.GetOrgMembershipReq
-	104, // 101: w17.contrib.auth.AuthQuery.ListUserTokens:input_type -> w17.contrib.auth.ListUserTokensReq
-	107, // 102: w17.contrib.auth.AuthQuery.GetUserToken:input_type -> w17.contrib.auth.GetUserTokenReq
-	109, // 103: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:input_type -> w17.contrib.auth.ListOrgMembersByOrgReq
-	111, // 104: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:input_type -> w17.contrib.auth.GetPendingOrgInviteByTokenReq
-	113, // 105: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:input_type -> w17.contrib.auth.ListOrgInvitesByOrgReq
-	115, // 106: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:input_type -> w17.contrib.auth.ListPendingInvitesForEmailReq
-	1,   // 107: w17.contrib.auth.AuthQuery.GetUserByEmail:output_type -> w17.contrib.auth.GetUserByEmailResp
-	3,   // 108: w17.contrib.auth.AuthQuery.GetUserByToken:output_type -> w17.contrib.auth.GetUserByTokenResp
-	5,   // 109: w17.contrib.auth.AuthQuery.GetUserPermissions:output_type -> w17.contrib.auth.GetUserPermissionsResp
-	12,  // 110: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:output_type -> w17.contrib.auth.GetUserByTokenWithPermissionsResp
-	8,   // 111: w17.contrib.auth.AuthQuery.GetUserRoleGrants:output_type -> w17.contrib.auth.GetUserRoleGrantsResp
-	10,  // 112: w17.contrib.auth.AuthQuery.ListRoleGrants:output_type -> w17.contrib.auth.ListRoleGrantsResp
-	14,  // 113: w17.contrib.auth.AuthQuery.CountUsers:output_type -> w17.contrib.auth.CountUsersResp
-	16,  // 114: w17.contrib.auth.AuthQuery.ListUsers:output_type -> w17.contrib.auth.ListUsersResp
-	22,  // 115: w17.contrib.auth.AuthQuery.ListOrgMemberAccounts:output_type -> w17.contrib.auth.ListOrgMemberAccountsResp
-	24,  // 116: w17.contrib.auth.AuthQuery.ListBotAccounts:output_type -> w17.contrib.auth.ListBotAccountsResp
-	19,  // 117: w17.contrib.auth.AuthQuery.ListRealmMachineAccounts:output_type -> w17.contrib.auth.ListRealmMachineAccountsResp
-	21,  // 118: w17.contrib.auth.AuthQuery.GetOrgMember:output_type -> w17.contrib.auth.GetOrgMemberResp
-	26,  // 119: w17.contrib.auth.AuthQuery.ListApiRealmRoles:output_type -> w17.contrib.auth.ListApiRealmRolesResp
-	118, // 120: w17.contrib.auth.AuthQuery.GetUser:output_type -> w17.contrib.auth.User
-	30,  // 121: w17.contrib.auth.AuthQuery.GetFirstUserRoles:output_type -> w17.contrib.auth.GetFirstUserRolesResp
-	32,  // 122: w17.contrib.auth.AuthQuery.GetDefaultRoles:output_type -> w17.contrib.auth.GetDefaultRolesResp
-	35,  // 123: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:output_type -> w17.contrib.auth.GetUserOwnsAnyOrgResp
-	37,  // 124: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:output_type -> w17.contrib.auth.GetOwnedOrgBySlugResp
-	39,  // 125: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:output_type -> w17.contrib.auth.ListOrgScopedRolesResp
-	41,  // 126: w17.contrib.auth.AuthQuery.ListRoles:output_type -> w17.contrib.auth.ListRolesResp
-	120, // 127: w17.contrib.auth.AuthQuery.GetRole:output_type -> w17.contrib.auth.Role
-	44,  // 128: w17.contrib.auth.AuthQuery.GetTokenWithType:output_type -> w17.contrib.auth.GetTokenWithTypeResp
-	46,  // 129: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:output_type -> w17.contrib.auth.GetUserRolePermissionsByRealmResp
-	48,  // 130: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:output_type -> w17.contrib.auth.GetTokenPermissionSubsetResp
-	51,  // 131: w17.contrib.auth.AuthQuery.ListApiTokensByUser:output_type -> w17.contrib.auth.ListApiTokensByUserResp
-	79,  // 132: w17.contrib.auth.AuthQuery.GetUserTenant:output_type -> w17.contrib.auth.GetUserTenantResp
-	81,  // 133: w17.contrib.auth.AuthQuery.GetTenantBySlug:output_type -> w17.contrib.auth.GetTenantBySlugResp
-	83,  // 134: w17.contrib.auth.AuthQuery.GetTenantByDomain:output_type -> w17.contrib.auth.GetTenantByDomainResp
-	53,  // 135: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:output_type -> w17.contrib.auth.GetRegisteredRedirectResp
-	57,  // 136: w17.contrib.auth.AuthQuery.ListAuthClients:output_type -> w17.contrib.auth.ListAuthClientsResp
-	55,  // 137: w17.contrib.auth.AuthQuery.GetAuthClientSecret:output_type -> w17.contrib.auth.GetAuthClientSecretResp
-	59,  // 138: w17.contrib.auth.AuthQuery.GetProviderByName:output_type -> w17.contrib.auth.GetProviderByNameResp
-	61,  // 139: w17.contrib.auth.AuthQuery.GetOAuthIdentity:output_type -> w17.contrib.auth.GetOAuthIdentityResp
-	63,  // 140: w17.contrib.auth.AuthQuery.GetUserById:output_type -> w17.contrib.auth.GetUserByIdResp
-	65,  // 141: w17.contrib.auth.AuthQuery.GetTotpSecret:output_type -> w17.contrib.auth.GetTotpSecretResp
-	67,  // 142: w17.contrib.auth.AuthQuery.CountRecoveryCodes:output_type -> w17.contrib.auth.CountRecoveryCodesResp
-	69,  // 143: w17.contrib.auth.AuthQuery.GetMfaChallenge:output_type -> w17.contrib.auth.GetMfaChallengeResp
-	71,  // 144: w17.contrib.auth.AuthQuery.LockUserForIssuance:output_type -> w17.contrib.auth.LockUserForIssuanceResp
-	73,  // 145: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:output_type -> w17.contrib.auth.CountRecentMfaChallengesResp
-	75,  // 146: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:output_type -> w17.contrib.auth.GetDeviceByIdentifierResp
-	77,  // 147: w17.contrib.auth.AuthQuery.ListUserDevices:output_type -> w17.contrib.auth.ListUserDevicesResp
-	86,  // 148: w17.contrib.auth.AuthQuery.ListUserOrgs:output_type -> w17.contrib.auth.ListUserOrgsResp
-	89,  // 149: w17.contrib.auth.AuthQuery.ListUserOrgGrants:output_type -> w17.contrib.auth.ListUserOrgGrantsResp
-	91,  // 150: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:output_type -> w17.contrib.auth.GetUserOrgPermissionsResp
-	93,  // 151: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:output_type -> w17.contrib.auth.GetUserOwnsOrgResp
-	95,  // 152: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:output_type -> w17.contrib.auth.GetUserRealmWidePermissionsResp
-	96,  // 153: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:output_type -> w17.contrib.auth.GetUserOrgBySlugResp
-	98,  // 154: w17.contrib.auth.AuthQuery.ListOrganizations:output_type -> w17.contrib.auth.ListOrganizationsResp
-	129, // 155: w17.contrib.auth.AuthQuery.GetOrganization:output_type -> w17.contrib.auth.Organization
-	102, // 156: w17.contrib.auth.AuthQuery.ListOrgMemberships:output_type -> w17.contrib.auth.ListOrgMembershipsResp
-	131, // 157: w17.contrib.auth.AuthQuery.GetOrgMembership:output_type -> w17.contrib.auth.OrgMembership
-	106, // 158: w17.contrib.auth.AuthQuery.ListUserTokens:output_type -> w17.contrib.auth.ListUserTokensResp
-	132, // 159: w17.contrib.auth.AuthQuery.GetUserToken:output_type -> w17.contrib.auth.UserToken
-	110, // 160: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:output_type -> w17.contrib.auth.ListOrgMembersByOrgResp
-	112, // 161: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:output_type -> w17.contrib.auth.GetPendingOrgInviteByTokenResp
-	114, // 162: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:output_type -> w17.contrib.auth.ListOrgInvitesByOrgResp
-	117, // 163: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:output_type -> w17.contrib.auth.ListPendingInvitesForEmailResp
-	107, // [107:164] is the sub-list for method output_type
-	50,  // [50:107] is the sub-list for method input_type
-	50,  // [50:50] is the sub-list for extension type_name
-	50,  // [50:50] is the sub-list for extension extendee
-	0,   // [0:50] is the sub-list for field type_name
+	118, // 16: w17.contrib.auth.GetTokenWithTypeResp.user:type_name -> w17.contrib.auth.User
+	121, // 17: w17.contrib.auth.GetUserRolePermissionsByRealmReq.token_type:type_name -> w17.contrib.auth.TokenType
+	11,  // 18: w17.contrib.auth.GetUserRolePermissionsByRealmResp.grants:type_name -> w17.contrib.auth.RoleGrant
+	122, // 19: w17.contrib.auth.ApiTokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	122, // 20: w17.contrib.auth.ApiTokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	122, // 21: w17.contrib.auth.ApiTokenInfo.created_at:type_name -> google.protobuf.Timestamp
+	121, // 22: w17.contrib.auth.ListApiTokensByUserReq.token_type:type_name -> w17.contrib.auth.TokenType
+	49,  // 23: w17.contrib.auth.ListApiTokensByUserResp.tokens:type_name -> w17.contrib.auth.ApiTokenInfo
+	123, // 24: w17.contrib.auth.GetRegisteredRedirectResp.client:type_name -> w17.contrib.auth.AuthClient
+	123, // 25: w17.contrib.auth.ListAuthClientsResp.clients:type_name -> w17.contrib.auth.AuthClient
+	124, // 26: w17.contrib.auth.GetProviderByNameResp.provider:type_name -> w17.contrib.auth.OAuthProvider
+	125, // 27: w17.contrib.auth.GetOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
+	118, // 28: w17.contrib.auth.GetUserByIdResp.user:type_name -> w17.contrib.auth.User
+	126, // 29: w17.contrib.auth.GetTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
+	127, // 30: w17.contrib.auth.GetMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
+	122, // 31: w17.contrib.auth.CountRecentMfaChallengesReq.since:type_name -> google.protobuf.Timestamp
+	128, // 32: w17.contrib.auth.GetDeviceByIdentifierResp.device:type_name -> w17.contrib.auth.Device
+	128, // 33: w17.contrib.auth.ListUserDevicesResp.devices:type_name -> w17.contrib.auth.Device
+	84,  // 34: w17.contrib.auth.ListUserOrgsResp.orgs:type_name -> w17.contrib.auth.UserOrg
+	11,  // 35: w17.contrib.auth.GetUserOrgPermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
+	11,  // 36: w17.contrib.auth.GetUserRealmWidePermissionsResp.grants:type_name -> w17.contrib.auth.RoleGrant
+	129, // 37: w17.contrib.auth.ListOrganizationsResp.organizations:type_name -> w17.contrib.auth.Organization
+	119, // 38: w17.contrib.auth.ListOrganizationsResp.paging:type_name -> w17.Paging
+	122, // 39: w17.contrib.auth.OrgMembershipAdminRow.created_at:type_name -> google.protobuf.Timestamp
+	101, // 40: w17.contrib.auth.ListOrgMembershipsResp.memberships:type_name -> w17.contrib.auth.OrgMembershipAdminRow
+	119, // 41: w17.contrib.auth.ListOrgMembershipsResp.paging:type_name -> w17.Paging
+	122, // 42: w17.contrib.auth.UserTokenAdminRow.created_at:type_name -> google.protobuf.Timestamp
+	122, // 43: w17.contrib.auth.UserTokenAdminRow.expires_at:type_name -> google.protobuf.Timestamp
+	105, // 44: w17.contrib.auth.ListUserTokensResp.tokens:type_name -> w17.contrib.auth.UserTokenAdminRow
+	119, // 45: w17.contrib.auth.ListUserTokensResp.paging:type_name -> w17.Paging
+	122, // 46: w17.contrib.auth.OrgMemberRow.joined_at:type_name -> google.protobuf.Timestamp
+	108, // 47: w17.contrib.auth.ListOrgMembersByOrgResp.members:type_name -> w17.contrib.auth.OrgMemberRow
+	130, // 48: w17.contrib.auth.ListOrgInvitesByOrgResp.invites:type_name -> w17.contrib.auth.OrgInvite
+	122, // 49: w17.contrib.auth.PendingInviteRow.expires_at:type_name -> google.protobuf.Timestamp
+	116, // 50: w17.contrib.auth.ListPendingInvitesForEmailResp.invites:type_name -> w17.contrib.auth.PendingInviteRow
+	0,   // 51: w17.contrib.auth.AuthQuery.GetUserByEmail:input_type -> w17.contrib.auth.GetUserByEmailReq
+	2,   // 52: w17.contrib.auth.AuthQuery.GetUserByToken:input_type -> w17.contrib.auth.GetUserByTokenReq
+	4,   // 53: w17.contrib.auth.AuthQuery.GetUserPermissions:input_type -> w17.contrib.auth.GetUserPermissionsReq
+	6,   // 54: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:input_type -> w17.contrib.auth.GetUserByTokenWithPermissionsReq
+	7,   // 55: w17.contrib.auth.AuthQuery.GetUserRoleGrants:input_type -> w17.contrib.auth.GetUserRoleGrantsReq
+	9,   // 56: w17.contrib.auth.AuthQuery.ListRoleGrants:input_type -> w17.contrib.auth.ListRoleGrantsReq
+	13,  // 57: w17.contrib.auth.AuthQuery.CountUsers:input_type -> w17.contrib.auth.CountUsersReq
+	15,  // 58: w17.contrib.auth.AuthQuery.ListUsers:input_type -> w17.contrib.auth.ListUsersReq
+	17,  // 59: w17.contrib.auth.AuthQuery.ListOrgMemberAccounts:input_type -> w17.contrib.auth.ListOrgMemberAccountsReq
+	23,  // 60: w17.contrib.auth.AuthQuery.ListBotAccounts:input_type -> w17.contrib.auth.ListBotAccountsReq
+	18,  // 61: w17.contrib.auth.AuthQuery.ListRealmMachineAccounts:input_type -> w17.contrib.auth.ListRealmMachineAccountsReq
+	20,  // 62: w17.contrib.auth.AuthQuery.GetOrgMember:input_type -> w17.contrib.auth.GetOrgMemberReq
+	25,  // 63: w17.contrib.auth.AuthQuery.ListApiRealmRoles:input_type -> w17.contrib.auth.ListApiRealmRolesReq
+	28,  // 64: w17.contrib.auth.AuthQuery.GetUser:input_type -> w17.contrib.auth.GetUserReq
+	29,  // 65: w17.contrib.auth.AuthQuery.GetFirstUserRoles:input_type -> w17.contrib.auth.GetFirstUserRolesReq
+	31,  // 66: w17.contrib.auth.AuthQuery.GetDefaultRoles:input_type -> w17.contrib.auth.GetDefaultRolesReq
+	34,  // 67: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:input_type -> w17.contrib.auth.GetUserOwnsAnyOrgReq
+	36,  // 68: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:input_type -> w17.contrib.auth.GetOwnedOrgBySlugReq
+	38,  // 69: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:input_type -> w17.contrib.auth.ListOrgScopedRolesReq
+	33,  // 70: w17.contrib.auth.AuthQuery.ListRoles:input_type -> w17.contrib.auth.ListRolesReq
+	42,  // 71: w17.contrib.auth.AuthQuery.GetRole:input_type -> w17.contrib.auth.GetRoleReq
+	43,  // 72: w17.contrib.auth.AuthQuery.GetTokenWithType:input_type -> w17.contrib.auth.GetTokenWithTypeReq
+	45,  // 73: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:input_type -> w17.contrib.auth.GetUserRolePermissionsByRealmReq
+	47,  // 74: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:input_type -> w17.contrib.auth.GetTokenPermissionSubsetReq
+	50,  // 75: w17.contrib.auth.AuthQuery.ListApiTokensByUser:input_type -> w17.contrib.auth.ListApiTokensByUserReq
+	78,  // 76: w17.contrib.auth.AuthQuery.GetUserTenant:input_type -> w17.contrib.auth.GetUserTenantReq
+	80,  // 77: w17.contrib.auth.AuthQuery.GetTenantBySlug:input_type -> w17.contrib.auth.GetTenantBySlugReq
+	82,  // 78: w17.contrib.auth.AuthQuery.GetTenantByDomain:input_type -> w17.contrib.auth.GetTenantByDomainReq
+	52,  // 79: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:input_type -> w17.contrib.auth.GetRegisteredRedirectReq
+	56,  // 80: w17.contrib.auth.AuthQuery.ListAuthClients:input_type -> w17.contrib.auth.ListAuthClientsReq
+	54,  // 81: w17.contrib.auth.AuthQuery.GetAuthClientSecret:input_type -> w17.contrib.auth.GetAuthClientSecretReq
+	58,  // 82: w17.contrib.auth.AuthQuery.GetProviderByName:input_type -> w17.contrib.auth.GetProviderByNameReq
+	60,  // 83: w17.contrib.auth.AuthQuery.GetOAuthIdentity:input_type -> w17.contrib.auth.GetOAuthIdentityReq
+	62,  // 84: w17.contrib.auth.AuthQuery.GetUserById:input_type -> w17.contrib.auth.GetUserByIdReq
+	64,  // 85: w17.contrib.auth.AuthQuery.GetTotpSecret:input_type -> w17.contrib.auth.GetTotpSecretReq
+	66,  // 86: w17.contrib.auth.AuthQuery.CountRecoveryCodes:input_type -> w17.contrib.auth.CountRecoveryCodesReq
+	68,  // 87: w17.contrib.auth.AuthQuery.GetMfaChallenge:input_type -> w17.contrib.auth.GetMfaChallengeReq
+	70,  // 88: w17.contrib.auth.AuthQuery.LockUserForIssuance:input_type -> w17.contrib.auth.LockUserForIssuanceReq
+	72,  // 89: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:input_type -> w17.contrib.auth.CountRecentMfaChallengesReq
+	74,  // 90: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:input_type -> w17.contrib.auth.GetDeviceByIdentifierReq
+	76,  // 91: w17.contrib.auth.AuthQuery.ListUserDevices:input_type -> w17.contrib.auth.ListUserDevicesReq
+	85,  // 92: w17.contrib.auth.AuthQuery.ListUserOrgs:input_type -> w17.contrib.auth.ListUserOrgsReq
+	88,  // 93: w17.contrib.auth.AuthQuery.ListUserOrgGrants:input_type -> w17.contrib.auth.ListUserOrgGrantsReq
+	90,  // 94: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:input_type -> w17.contrib.auth.GetUserOrgPermissionsReq
+	92,  // 95: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:input_type -> w17.contrib.auth.GetUserOwnsOrgReq
+	94,  // 96: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:input_type -> w17.contrib.auth.GetUserRealmWidePermissionsReq
+	87,  // 97: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:input_type -> w17.contrib.auth.GetUserOrgBySlugReq
+	97,  // 98: w17.contrib.auth.AuthQuery.ListOrganizations:input_type -> w17.contrib.auth.ListOrganizationsReq
+	99,  // 99: w17.contrib.auth.AuthQuery.GetOrganization:input_type -> w17.contrib.auth.GetOrganizationReq
+	100, // 100: w17.contrib.auth.AuthQuery.ListOrgMemberships:input_type -> w17.contrib.auth.ListOrgMembershipsReq
+	103, // 101: w17.contrib.auth.AuthQuery.GetOrgMembership:input_type -> w17.contrib.auth.GetOrgMembershipReq
+	104, // 102: w17.contrib.auth.AuthQuery.ListUserTokens:input_type -> w17.contrib.auth.ListUserTokensReq
+	107, // 103: w17.contrib.auth.AuthQuery.GetUserToken:input_type -> w17.contrib.auth.GetUserTokenReq
+	109, // 104: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:input_type -> w17.contrib.auth.ListOrgMembersByOrgReq
+	111, // 105: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:input_type -> w17.contrib.auth.GetPendingOrgInviteByTokenReq
+	113, // 106: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:input_type -> w17.contrib.auth.ListOrgInvitesByOrgReq
+	115, // 107: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:input_type -> w17.contrib.auth.ListPendingInvitesForEmailReq
+	1,   // 108: w17.contrib.auth.AuthQuery.GetUserByEmail:output_type -> w17.contrib.auth.GetUserByEmailResp
+	3,   // 109: w17.contrib.auth.AuthQuery.GetUserByToken:output_type -> w17.contrib.auth.GetUserByTokenResp
+	5,   // 110: w17.contrib.auth.AuthQuery.GetUserPermissions:output_type -> w17.contrib.auth.GetUserPermissionsResp
+	12,  // 111: w17.contrib.auth.AuthQuery.GetUserByTokenWithPermissions:output_type -> w17.contrib.auth.GetUserByTokenWithPermissionsResp
+	8,   // 112: w17.contrib.auth.AuthQuery.GetUserRoleGrants:output_type -> w17.contrib.auth.GetUserRoleGrantsResp
+	10,  // 113: w17.contrib.auth.AuthQuery.ListRoleGrants:output_type -> w17.contrib.auth.ListRoleGrantsResp
+	14,  // 114: w17.contrib.auth.AuthQuery.CountUsers:output_type -> w17.contrib.auth.CountUsersResp
+	16,  // 115: w17.contrib.auth.AuthQuery.ListUsers:output_type -> w17.contrib.auth.ListUsersResp
+	22,  // 116: w17.contrib.auth.AuthQuery.ListOrgMemberAccounts:output_type -> w17.contrib.auth.ListOrgMemberAccountsResp
+	24,  // 117: w17.contrib.auth.AuthQuery.ListBotAccounts:output_type -> w17.contrib.auth.ListBotAccountsResp
+	19,  // 118: w17.contrib.auth.AuthQuery.ListRealmMachineAccounts:output_type -> w17.contrib.auth.ListRealmMachineAccountsResp
+	21,  // 119: w17.contrib.auth.AuthQuery.GetOrgMember:output_type -> w17.contrib.auth.GetOrgMemberResp
+	26,  // 120: w17.contrib.auth.AuthQuery.ListApiRealmRoles:output_type -> w17.contrib.auth.ListApiRealmRolesResp
+	118, // 121: w17.contrib.auth.AuthQuery.GetUser:output_type -> w17.contrib.auth.User
+	30,  // 122: w17.contrib.auth.AuthQuery.GetFirstUserRoles:output_type -> w17.contrib.auth.GetFirstUserRolesResp
+	32,  // 123: w17.contrib.auth.AuthQuery.GetDefaultRoles:output_type -> w17.contrib.auth.GetDefaultRolesResp
+	35,  // 124: w17.contrib.auth.AuthQuery.GetUserOwnsAnyOrg:output_type -> w17.contrib.auth.GetUserOwnsAnyOrgResp
+	37,  // 125: w17.contrib.auth.AuthQuery.GetOwnedOrgBySlug:output_type -> w17.contrib.auth.GetOwnedOrgBySlugResp
+	39,  // 126: w17.contrib.auth.AuthQuery.ListOrgScopedRoles:output_type -> w17.contrib.auth.ListOrgScopedRolesResp
+	41,  // 127: w17.contrib.auth.AuthQuery.ListRoles:output_type -> w17.contrib.auth.ListRolesResp
+	120, // 128: w17.contrib.auth.AuthQuery.GetRole:output_type -> w17.contrib.auth.Role
+	44,  // 129: w17.contrib.auth.AuthQuery.GetTokenWithType:output_type -> w17.contrib.auth.GetTokenWithTypeResp
+	46,  // 130: w17.contrib.auth.AuthQuery.GetUserRolePermissionsByRealm:output_type -> w17.contrib.auth.GetUserRolePermissionsByRealmResp
+	48,  // 131: w17.contrib.auth.AuthQuery.GetTokenPermissionSubset:output_type -> w17.contrib.auth.GetTokenPermissionSubsetResp
+	51,  // 132: w17.contrib.auth.AuthQuery.ListApiTokensByUser:output_type -> w17.contrib.auth.ListApiTokensByUserResp
+	79,  // 133: w17.contrib.auth.AuthQuery.GetUserTenant:output_type -> w17.contrib.auth.GetUserTenantResp
+	81,  // 134: w17.contrib.auth.AuthQuery.GetTenantBySlug:output_type -> w17.contrib.auth.GetTenantBySlugResp
+	83,  // 135: w17.contrib.auth.AuthQuery.GetTenantByDomain:output_type -> w17.contrib.auth.GetTenantByDomainResp
+	53,  // 136: w17.contrib.auth.AuthQuery.GetRegisteredRedirect:output_type -> w17.contrib.auth.GetRegisteredRedirectResp
+	57,  // 137: w17.contrib.auth.AuthQuery.ListAuthClients:output_type -> w17.contrib.auth.ListAuthClientsResp
+	55,  // 138: w17.contrib.auth.AuthQuery.GetAuthClientSecret:output_type -> w17.contrib.auth.GetAuthClientSecretResp
+	59,  // 139: w17.contrib.auth.AuthQuery.GetProviderByName:output_type -> w17.contrib.auth.GetProviderByNameResp
+	61,  // 140: w17.contrib.auth.AuthQuery.GetOAuthIdentity:output_type -> w17.contrib.auth.GetOAuthIdentityResp
+	63,  // 141: w17.contrib.auth.AuthQuery.GetUserById:output_type -> w17.contrib.auth.GetUserByIdResp
+	65,  // 142: w17.contrib.auth.AuthQuery.GetTotpSecret:output_type -> w17.contrib.auth.GetTotpSecretResp
+	67,  // 143: w17.contrib.auth.AuthQuery.CountRecoveryCodes:output_type -> w17.contrib.auth.CountRecoveryCodesResp
+	69,  // 144: w17.contrib.auth.AuthQuery.GetMfaChallenge:output_type -> w17.contrib.auth.GetMfaChallengeResp
+	71,  // 145: w17.contrib.auth.AuthQuery.LockUserForIssuance:output_type -> w17.contrib.auth.LockUserForIssuanceResp
+	73,  // 146: w17.contrib.auth.AuthQuery.CountRecentMfaChallenges:output_type -> w17.contrib.auth.CountRecentMfaChallengesResp
+	75,  // 147: w17.contrib.auth.AuthQuery.GetDeviceByIdentifier:output_type -> w17.contrib.auth.GetDeviceByIdentifierResp
+	77,  // 148: w17.contrib.auth.AuthQuery.ListUserDevices:output_type -> w17.contrib.auth.ListUserDevicesResp
+	86,  // 149: w17.contrib.auth.AuthQuery.ListUserOrgs:output_type -> w17.contrib.auth.ListUserOrgsResp
+	89,  // 150: w17.contrib.auth.AuthQuery.ListUserOrgGrants:output_type -> w17.contrib.auth.ListUserOrgGrantsResp
+	91,  // 151: w17.contrib.auth.AuthQuery.GetUserOrgPermissions:output_type -> w17.contrib.auth.GetUserOrgPermissionsResp
+	93,  // 152: w17.contrib.auth.AuthQuery.GetUserOwnsOrg:output_type -> w17.contrib.auth.GetUserOwnsOrgResp
+	95,  // 153: w17.contrib.auth.AuthQuery.GetUserRealmWidePermissions:output_type -> w17.contrib.auth.GetUserRealmWidePermissionsResp
+	96,  // 154: w17.contrib.auth.AuthQuery.GetUserOrgBySlug:output_type -> w17.contrib.auth.GetUserOrgBySlugResp
+	98,  // 155: w17.contrib.auth.AuthQuery.ListOrganizations:output_type -> w17.contrib.auth.ListOrganizationsResp
+	129, // 156: w17.contrib.auth.AuthQuery.GetOrganization:output_type -> w17.contrib.auth.Organization
+	102, // 157: w17.contrib.auth.AuthQuery.ListOrgMemberships:output_type -> w17.contrib.auth.ListOrgMembershipsResp
+	131, // 158: w17.contrib.auth.AuthQuery.GetOrgMembership:output_type -> w17.contrib.auth.OrgMembership
+	106, // 159: w17.contrib.auth.AuthQuery.ListUserTokens:output_type -> w17.contrib.auth.ListUserTokensResp
+	132, // 160: w17.contrib.auth.AuthQuery.GetUserToken:output_type -> w17.contrib.auth.UserToken
+	110, // 161: w17.contrib.auth.AuthQuery.ListOrgMembersByOrg:output_type -> w17.contrib.auth.ListOrgMembersByOrgResp
+	112, // 162: w17.contrib.auth.AuthQuery.GetPendingOrgInviteByToken:output_type -> w17.contrib.auth.GetPendingOrgInviteByTokenResp
+	114, // 163: w17.contrib.auth.AuthQuery.ListOrgInvitesByOrg:output_type -> w17.contrib.auth.ListOrgInvitesByOrgResp
+	117, // 164: w17.contrib.auth.AuthQuery.ListPendingInvitesForEmail:output_type -> w17.contrib.auth.ListPendingInvitesForEmailResp
+	108, // [108:165] is the sub-list for method output_type
+	51,  // [51:108] is the sub-list for method input_type
+	51,  // [51:51] is the sub-list for extension type_name
+	51,  // [51:51] is the sub-list for extension extendee
+	0,   // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_queries_auth_query_proto_init() }

@@ -2,6 +2,17 @@
 
 ## 0.1.0-rc.25
 
+### A disabled account holds no working credential
+
+`Authenticate` now refuses every token of a disabled account, session or API, and `IssueBotToken` refuses a disabled machine account with `FAILED_PRECONDITION`.
+
+`DisableUsers` deletes the account's tokens, but nothing checked the flag afterwards. A token minted after the disable worked: one issued by `IssueBotToken` for a disabled bot, or a session from a sign-in racing the disable.
+
+What changes:
+
+- **`GetUserByTokenWithPermissions` projects `user.disabled_at`** (under `user_admin`), and **`GetTokenWithType` joins the owner** and returns it as `user` (`GetTokenWithTypeResp.user`, field 7). Both are the lookups `Authenticate` already runs, so this adds no round trip.
+- **Re-enabling an account gives nothing back,** as before: its tokens were deleted when it was disabled.
+
 ### An API token can no longer mint credentials
 
 `CreateApiToken`, `CliAuthorize`, `RegisterClient`, `SetClientEnabled`, `EnrollTotp` and `GenerateRecoveryCodes` now answer `PERMISSION_DENIED` (detail `SESSION_REQUIRED`) unless the caller authenticated with a session token.
