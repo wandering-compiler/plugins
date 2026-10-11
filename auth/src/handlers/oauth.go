@@ -413,7 +413,8 @@ func decodeIDTokenClaims(idToken string) (map[string]any, error) {
 
 // checkIDTokenClaims refuses an id_token that was not minted for this
 // client and this sign-in: `aud` must name the client (a string or an array
-// containing it), `exp` must be in the future, and `nonce` must be the one
+// containing it), an `azp` if present must be the client, `exp` must be in
+// the future, and `nonce` must be the one
 // the authorize step sent. The token arrives straight from the provider's
 // token endpoint over TLS, so its signature is not what these checks are
 // for; they stop a token issued to another client, or for another sign-in,
@@ -430,8 +431,16 @@ func checkIDTokenClaims(claims map[string]any, clientID, nonce string, now time.
 			}
 		}
 	}
+	// OIDC Core 3.1.3.7: an authorized party, when named, must be this client.
+	if azp, present := claims["azp"]; present {
+		if s, _ := azp.(string); s != clientID {
+			audOK = false
+		}
+	}
+	// Compared as a float: converting an out-of-range float to int64 is
+	// implementation-defined in Go, and saturates on some platforms.
 	exp, _ := claims["exp"].(float64)
-	if !audOK || int64(exp) <= now.Unix() || claimString(claims, "nonce") != nonce {
+	if !audOK || exp <= float64(now.Unix()) || claimString(claims, "nonce") != nonce {
 		return errOAuthIDTokenClaims
 	}
 	return nil
@@ -734,12 +743,6 @@ func providerVerifier(secret, nonce string) string {
 // oidcNonce is the OIDC nonce for one sign-in, derived like the verifier.
 func oidcNonce(secret, nonce string) string {
 	return oauthStateSig(secret, "nonce:"+nonce)
-}
-
-// s256Challenge is BASE64URL(SHA256(verifier)).
-func s256Challenge(verifier string) string {
-	sum := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // isPKCEChallenge accepts exactly an S256 challenge: 43 base64url characters.

@@ -12,14 +12,14 @@ The browser that starts a sign-in now proves it is the one finishing it:
 - **`OAuthCallback` returns `code`, not `token`.** It is a single-use login code, stored as its hash, valid for two minutes and bound to that challenge. The REST callback redirects to `redirect_after#code=…`. `OAuthCallbackResp` drops `user_id`, `token` and `device_trust_token`.
 - **New `OAuthExchange` (`POST /auth/oauth/exchange`, public, failed_only)** redeems the code with `code_verifier` and returns `user_id`, `token` and, under `devices`, `device_trust_token`. A wrong verifier spends the code. The device is resolved from this request, which comes from the page itself.
 - **New table `OAuthLoginCode`.** Generate a migration as usual.
-- **Towards the provider:** the authorize URL carries the plugin's own PKCE challenge (`code_challenge`, `code_challenge_method=S256`) and an OIDC `nonce`, and the token request carries the matching `code_verifier`. Both derive from the state under the client secret, so nothing is stored. A provider that supports neither ignores them. On the `id_token` path (no `userinfo_url`), a token whose `aud` does not name the client id, whose `exp` has passed, or whose `nonce` is not this sign-in's is refused.
+- **Towards the provider:** the authorize URL carries the plugin's own PKCE challenge (`code_challenge`, `code_challenge_method=S256`) and an OIDC `nonce`, and the token request carries the matching `code_verifier`. Both derive from the state under the client secret, so nothing is stored. A provider that supports neither ignores them. On the `id_token` path (no `userinfo_url`), a token whose `aud` does not name the client id, whose `azp` names another client, whose `exp` has passed, or whose `nonce` is not this sign-in's is refused.
 - **The `fakeidp` sandbox** checks PKCE and echoes the nonce for codes it issued from `/authorize`, and sets the `id_token`'s `aud` to the requesting client id. Rebuild its image.
 
 **Migrating a frontend:**
 
-1. Before redirecting to `/auth/oauth/{provider}/authorize`, generate a verifier, store it in `sessionStorage`, and add `code_challenge` to the request.
-2. On the landing page, read `code` from the fragment (not `token`) and `POST` it to `/auth/oauth/exchange` with the stored verifier.
-3. Store the returned token as before, and clear the verifier.
+1. Before redirecting to `/auth/oauth/{provider}/authorize`, generate a fresh verifier for this sign-in (never reuse one), store it in `sessionStorage`, and add `code_challenge` to the request.
+2. On the landing page, read `code` from the fragment (not `token`), take the verifier out of `sessionStorage` (read, then delete), and `POST` both to `/auth/oauth/exchange`. Delete the verifier before the call, so a failed exchange leaves none behind: the challenge is visible in the `state`, and a leftover verifier would redeem a code someone else started with it.
+3. Store the returned token as before.
 
 A state signed by an older release has no challenge and is refused, so a sign-in in flight during the upgrade has to start again.
 

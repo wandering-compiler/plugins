@@ -208,9 +208,10 @@ func decodeCode(code string) (challenge, nonce string) {
 // subject_path/email_path (default sub/email) out of this.
 func (c config) userinfo(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
-		"sub":   c.Subject,
-		"email": c.Email,
-		"name":  "Fake OAuth User",
+		"sub":            c.Subject,
+		"email":          c.Email,
+		"email_verified": true,
+		"name":           "Fake OAuth User",
 	})
 }
 

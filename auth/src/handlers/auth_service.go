@@ -60,12 +60,16 @@ func randomURLToken() (string, error) {
 // hash comparison already rejects a tampered verifier).
 const pkceMinVerifierLen = 43
 
-// verifyPKCES256 reports whether BASE64URL(SHA256(verifier)) equals the
-// stored S256 challenge, compared in constant time.
-func verifyPKCES256(verifier, challenge string) bool {
+// s256Challenge is BASE64URL(SHA256(verifier)), the PKCE S256 challenge.
+func s256Challenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
-	want := base64.RawURLEncoding.EncodeToString(sum[:])
-	return hmac.Equal([]byte(want), []byte(challenge))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// verifyPKCES256 reports whether s256Challenge(verifier) equals the stored
+// challenge, compared in constant time.
+func verifyPKCES256(verifier, challenge string) bool {
+	return hmac.Equal([]byte(s256Challenge(verifier)), []byte(challenge))
 }
 
 // sha256Hex is the one-way function applied to an E1 token for storage +
@@ -849,7 +853,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 var stampSignInDeviceTrust = func(resp *pb.SignInResp, trustToken string) {}
 
 // stampDeviceTrust is the device-trust seam for the responses whose MESSAGE is
-// itself feature-gated — OAuthCallbackResp (`oauth`) and VerifyMfaResp
+// itself feature-gated — OAuthExchangeResp (`oauth`) and VerifyMfaResp
 // (`two_factor`). Unlike SignInResp (always present), the base handler can't
 // name those Go types' `device_trust_token` field, so this seam sets it by
 // proto field NAME via reflection: the always-compiled base stays free of the

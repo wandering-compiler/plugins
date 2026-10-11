@@ -485,6 +485,8 @@ func TestCheckIDTokenClaims(t *testing.T) {
 		{"no expiry", map[string]any{"aud": "cid", "nonce": "n1"}, false},
 		{"another sign-in's nonce", map[string]any{"aud": "cid", "exp": future, "nonce": "n2"}, false},
 		{"no nonce", map[string]any{"aud": "cid", "exp": future}, false},
+		{"another authorized party", map[string]any{"aud": []any{"other", "cid"}, "azp": "other", "exp": future, "nonce": "n1"}, false},
+		{"this authorized party", map[string]any{"aud": []any{"other", "cid"}, "azp": "cid", "exp": future, "nonce": "n1"}, true},
 	} {
 		if err := checkIDTokenClaims(c.claims, "cid", "n1", now); (err == nil) != c.ok {
 			t.Errorf("%s: err = %v, want ok=%v", c.name, err, c.ok)
