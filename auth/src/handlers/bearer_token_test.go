@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -148,11 +149,11 @@ func (q *sessionLookupQuery) GetUserRoleGrants(context.Context, *pb.GetUserRoleG
 // sign-in that raced the disable.
 func TestResolvePrincipal_ADisabledAccountIsRefused(t *testing.T) {
 	h := &AuthServiceHandler{Query: &sessionLookupQuery{stored: "x", disabled: true}, Mutation: &upgradeRecorder{}}
-	if _, err := resolvePrincipalSession(context.Background(), h, "plain"); err == nil {
-		t.Error("session resolver: a disabled account's token authenticated")
+	if _, err := resolvePrincipalSession(context.Background(), h, "plain"); !errors.Is(err, errAuthnUserDisabled) {
+		t.Errorf("session resolver: err = %v, want the disabled-account refusal", err)
 	}
 	h = &AuthServiceHandler{Query: &legacyLookupQuery{disabled: true}, Mutation: &upgradeRecorder{}}
-	if _, err := resolvePrincipalRealmAware(context.Background(), h, "plain"); err == nil {
-		t.Error("realm-aware resolver: a disabled account's token authenticated")
+	if _, err := resolvePrincipalRealmAware(context.Background(), h, "plain"); !errors.Is(err, errAuthnUserDisabled) {
+		t.Errorf("realm-aware resolver: err = %v, want the disabled-account refusal", err)
 	}
 }

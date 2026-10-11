@@ -2134,8 +2134,9 @@ type GetTokenWithTypeResp struct {
 	// The row's token_hash, empty on a legacy row (see
 	// GetUserByTokenWithPermissionsResp).
 	StoredTokenHash string `protobuf:"bytes,6,opt,name=stored_token_hash,json=storedTokenHash,proto3" json:"stored_token_hash,omitempty"`
-	// The token's owner, carrying only what Authenticate checks on every
-	// request: under `user_admin`, whether the account is disabled.
+	// The token's owner, carrying what Authenticate checks on every request
+	// (under `user_admin`, whether the account is disabled) plus `kind`, which
+	// every User-filling query projects so no gate reads an unset one as HUMAN.
 	User          *User `protobuf:"bytes,7,opt,name=user,proto3" json:"user,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6297,7 +6298,7 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\"n\n" +
 	"\x1eListPendingInvitesForEmailResp\x12<\n" +
 	"\ainvites\x18\x01 \x03(\v2\".w17.contrib.auth.PendingInviteRowR\ainvites:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xe4\xa8\x01\n" +
+	"org_invite2\x9a\xa9\x01\n" +
 	"\tAuthQuery\x12\xec\x03\n" +
 	"\x0eGetUserByEmail\x12#.w17.contrib.auth.GetUserByEmailReq\x1a$.w17.contrib.auth.GetUserByEmailResp\"\x8e\x03\xf2\xf3\x18\x89\x03B\x86\x03\n" +
 	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\x99\x04\n" +
@@ -6343,9 +6344,9 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\tListRoles\x12\x1e.w17.contrib.auth.ListRolesReq\x1a\x1f.w17.contrib.auth.ListRolesResp\"\x80\x03\xf2\xf3\x18\xf3\x02B\xf0\x02\n" +
 	"\x04main\x12\xe7\x02SELECT r.id AS id, r.name AS name, r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r ORDER BY r.name ASC, r.id ASC\x8a\xf5\x18\x04rbac\x12\xbc\x03\n" +
 	"\aGetRole\x12\x1c.w17.contrib.auth.GetRoleReq\x1a\x16.w17.contrib.auth.Role\"\xfa\x02\xf2\xf3\x18\xed\x02B\xea\x02\n" +
-	"\x04main\x12\xe1\x02SELECT r.id AS id, r.name AS name,        r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r WHERE r.id = :id\x8a\xf5\x18\x04rbac\x12\x9a\x04\n" +
-	"\x10GetTokenWithType\x12%.w17.contrib.auth.GetTokenWithTypeReq\x1a&.w17.contrib.auth.GetTokenWithTypeResp\"\xb6\x03\xf2\xf3\x18\xa4\x03B\xa1\x03\n" +
-	"\x04main\x12\x98\x03SELECT t.user_id AS user_id,        t.id AS token_id,        t.token_type AS token_type,        COALESCE(t.token_hash, '') AS stored_token_hash,        u.id AS user.id,        ?feature(user_admin) u.disabled_at AS user.disabled_at FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\tapi_token\x12\x8f\x04\n" +
+	"\x04main\x12\xe1\x02SELECT r.id AS id, r.name AS name,        r.description AS description,        r.display_name AS display_name,        r.all_permissions AS all_permissions,        r.assign_first_user AS assign_first_user,        r.assign_default AS assign_default,        r.preset_key AS preset_key,        r.created_at AS created_at FROM @module.Role r WHERE r.id = :id\x8a\xf5\x18\x04rbac\x12\xd0\x04\n" +
+	"\x10GetTokenWithType\x12%.w17.contrib.auth.GetTokenWithTypeReq\x1a&.w17.contrib.auth.GetTokenWithTypeResp\"\xec\x03\xf2\xf3\x18\xda\x03B\xd7\x03\n" +
+	"\x04main\x12\xce\x03SELECT t.user_id AS user_id,        t.id AS token_id,        t.token_type AS token_type,        COALESCE(t.token_hash, '') AS stored_token_hash,        u.id AS user.id,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\tapi_token\x12\x8f\x04\n" +
 	"\x1dGetUserRolePermissionsByRealm\x122.w17.contrib.auth.GetUserRolePermissionsByRealmReq\x1a3.w17.contrib.auth.GetUserRolePermissionsByRealmResp\"\x84\x03\xf2\xf3\x18\xf2\x02B\xef\x02\n" +
 	"\x04main\x12\xe6\x02SELECT r.id AS role_id,        ROWS_TO_ARRAY(rp.permission_id) AS permission_ids,        r.all_permissions AS all_permissions FROM @module.UserRole ur JOIN @module.Role r ON r.id = ur.role_id LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id WHERE ur.user_id = :user_id AND r.token_type = :token_type GROUP BY r.id, r.all_permissions ORDER BY r.id ASC\x8a\xf5\x18\tapi_token\x12\x8e\x02\n" +
 	"\x18GetTokenPermissionSubset\x12-.w17.contrib.auth.GetTokenPermissionSubsetReq\x1a..w17.contrib.auth.GetTokenPermissionSubsetResp\"\x92\x01\xf2\xf3\x18\x80\x01B~\n" +

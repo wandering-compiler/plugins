@@ -146,7 +146,16 @@ func messageCarriesAUser(proto, msg string) bool {
 		body = body[:end]
 	}
 	for _, field := range strings.Split(body, ";") {
-		f := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(field), "repeated "))
+		// Drop the comment lines above the field. A documented field is a
+		// chunk that starts with `//`, and reading only its first word hid
+		// GetTokenWithTypeResp's `user` — the field this rule exists for.
+		var decl []string
+		for _, line := range strings.Split(field, "\n") {
+			if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "//") {
+				decl = append(decl, l)
+			}
+		}
+		f := strings.TrimSpace(strings.TrimPrefix(strings.Join(decl, " "), "repeated "))
 		if strings.HasPrefix(f, "User ") {
 			return true
 		}
