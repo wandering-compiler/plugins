@@ -4,7 +4,7 @@
 
 ### Run a project against Stripe's API mock
 
-- **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL is refused at startup.
+- **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL root (or carries credentials, a query or a fragment) is refused at startup, and so is a live key (`sk_live_…`, `rk_live_…`) together with it.
 - **Sandbox `stripemock`:** Stripe's own API mock (`stripe/stripe-mock:v0.205.0`). With `provider_api_base = http://stripemock:12111` and any `sk_test_…` key, customers, payments and refunds answer with the shape the real API returns (canned values, no state), so a local stack or a test suite needs no Stripe account. Webhooks are not part of the mock; test them with a signed payload.
 
 Nothing changes for a project that does not set the variable.

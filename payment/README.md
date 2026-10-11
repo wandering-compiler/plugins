@@ -133,6 +133,7 @@ must be exact. Amounts cross the API as decimal strings (`"19.99"`).
 | `payment_provider` | no | driver; v1: `stripe` (default) |
 | `provider_api_key` | **yes** | Stripe secret key (`sk_…`) |
 | `webhook_signing_secret` | **yes** | webhook HMAC secret (`whsec_…`) |
+| `provider_api_base` | no | root of a Stripe-compatible API instead of `https://api.stripe.com` (e.g. the `stripemock` sandbox, `http://stripemock:12111`); empty = the real API; test keys only |
 | `default_currency` | no | ISO-4217 applied when a charge omits one |
 
 ## Prepaid credit wallet (feature `prepaid`, Slice 2)

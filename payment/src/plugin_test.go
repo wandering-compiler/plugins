@@ -108,9 +108,18 @@ func TestResolveBackend_ProviderAPIBase(t *testing.T) {
 // A provider_api_base that is not an http(s) URL is refused at startup, not
 // discovered at the first charge.
 func TestResolveBackend_ProviderAPIBaseMustBeAURL(t *testing.T) {
-	for _, base := range []string{"stripe-mock:12111", "ftp://x", "http://"} {
+	for _, base := range []string{"stripe-mock:12111", "ftp://x", "http://", "http://u:p@stripemock:12111", "http://stripemock:12111?x=1", "http://stripemock:12111#f", "http://%zz"} {
 		if _, err := resolveBackend(&gen.EnvConfig{ProviderAPIKey: secret.New("sk_test_x"), ProviderAPIBase: base}); err == nil {
 			t.Errorf("provider_api_base %q accepted", base)
+		}
+	}
+}
+
+// A live key is never sent to a non-Stripe root.
+func TestResolveBackend_ProviderAPIBaseRefusesLiveKey(t *testing.T) {
+	for _, key := range []string{"sk_live_x", "rk_live_x"} {
+		if _, err := resolveBackend(&gen.EnvConfig{ProviderAPIKey: secret.New(key), ProviderAPIBase: "http://stripemock:12111"}); err == nil {
+			t.Errorf("live key %q accepted with provider_api_base", key)
 		}
 	}
 }
