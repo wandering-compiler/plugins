@@ -24,7 +24,7 @@ green. Run them locally with Go and docker:
 | `make lint` | golangci-lint with `tools/golangci.yml`, at the version pinned in `tools/golangci-version`: unchecked errors, `==` on errors that may be wrapped, dead code, staticcheck, gosec and the rest of the set the config names |
 | `make check-gen-pb` | the committed `src/gen/pb` is exactly what `proto/` generates; regenerate with `make gen-pb` |
 | `make check-modules` | each `go.mod` is tidy, with no `replace` onto a local path |
-| `make check-stage` | no Go file references a declaration that only another feature's files bring — a consumer enabling one feature without the other would not build |
+| `make check-stage` | no Go file references a declaration that only another feature's files bring, and no DQL statement names a table, column or request field that only another feature adds (ungated) — a consumer enabling one feature without the other would not build |
 | `make check-plugin-msgids` | the `//w17:msgid` sentences in the Go and the `msgids:` block of `plugin.yaml` agree (`make plugin-msgids-sync` rewrites the block from the Go) |
 | `make check-render` | the installable form renders with the pinned w17ctl: inert Go, tests carried, no pb |
 | `make check-published-tests` | the tests pass from the rendered form too, rehydrated as a reader would |

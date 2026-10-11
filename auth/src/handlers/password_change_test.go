@@ -259,7 +259,11 @@ func TestChangePassword_TheSweepSparesAPITokensOnlyWhereTheyExist(t *testing.T) 
 	if i < 0 {
 		t.Fatal("DeleteOtherSessionTokens not found")
 	}
-	body := src[i : i+strings.Index(src[i:], "\n  }\n")]
+	end := strings.Index(src[i:], "\n  }\n")
+	if end < 0 {
+		t.Fatal("DeleteOtherSessionTokens has no closing brace")
+	}
+	body := src[i : i+end]
 	if !strings.Contains(body, `"AND ?feature(api_token) token_type = 1"`) {
 		t.Errorf("DeleteOtherSessionTokens does not filter the session realm behind ?feature(api_token):\n%s", body)
 	}

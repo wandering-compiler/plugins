@@ -44,7 +44,7 @@ It covers plugin version 0.1.0-rc.24.
 | `sign_up_confirmation` | off | `sign_up_turnkey` | — |
 | `sign_in_turnkey` | on | — | — |
 | `tenant_scope` | off | `sign_up_turnkey` | `oauth` |
-| `api_token` | off | — | — |
+| `api_token` | off | `rbac` | — |
 | `devices` | off | `sign_in_turnkey` | — |
 | `oauth` | off | `email_verification` | — |
 | `two_factor` | off | `sign_in_turnkey` | — |
@@ -575,7 +575,7 @@ suspected defect until a build of that feature combination confirms it.
 - Events: none. Minting and revoking an API token emit nothing (see gaps).
 - Env: `api_token_default_ttl_hours` (default 2160 = 90 days; 0 = never expires; above 100 years the plugin refuses to boot).
 
-**Requires / conflicts / combined files.** The manifest declares no `requires` and no `conflicts_with` (an earlier conflict with `org_membership` was lifted once both narrowing axes began intersecting on role IDs). Go file: `handlers/apitoken.go`. `service_account` requires this feature and reuses its minting path.
+**Requires / conflicts / combined files.** Requires `rbac` (`GetUserRolePermissionsByRealm` reads its tables) and declares no `conflicts_with` (an earlier conflict with `org_membership` was lifted once both narrowing axes began intersecting on role IDs). Go file: `handlers/apitoken.go`. `service_account` requires this feature and reuses its minting path.
 
 | id | invariant | category | proof |
 |---|---|---|---|
@@ -605,7 +605,7 @@ suspected defect until a build of that feature combination confirms it.
 4. **`last_used_at` is never written.** `proto/types/models.proto:290` documents it as the audit column, `ListApiTokensByUser` returns it, and no mutation sets it. It is always NULL.
 5. **No events.** `IssueApiToken` and `DeleteApiToken` (`proto/mutations/auth_mutation.proto:1387`, `:1432`) emit neither `TokenIssued` nor `TokenRevoked`, so creating or revoking a long-lived credential is invisible to audit subscribers.
 6. **Revoke is two unguarded statements.** `src/handlers/apitoken.go:230-261`: if the subset cleanup fails after the token delete succeeded, the caller gets an error for a token that is already gone. Harmless for security, but it is a non-idempotent answer.
-7. **The manifest under-declares dependencies.** `api_token` declares no `requires`, yet `GetUserRolePermissionsByRealm` reads `UserRole`, `Role` and `RolePermission`, which `rbac` owns, and the resolver returns `RoleGrant`. An activation of `api_token` without `rbac` is either a codegen failure or depends on an implicit transitive requirement.
+7. **Fixed: the manifest under-declared dependencies.** `GetUserRolePermissionsByRealm` reads `UserRole`, `Role` and `RolePermission`, which `rbac` owns, so `api_token` without `rbac` could not generate. `api_token` now `requires: [rbac]`, and `make check-stage` reports a statement that names another feature's table.
 8. **A personal token is not bound to an organization.** With `org_membership`, an API token can select any organization its holder belongs to through `W17-Org`. A token minted "for" one company acts in all of the holder's companies. This is undocumented.
 
 ---
@@ -895,7 +895,7 @@ Proof column: exact unit-test names in `auth/src/handlers`, or `none`. A unit te
 | `interaction/api_token-devices-revocation-scope` | ap dv | Q T: `DeleteUndevicedSessions` filters `?feature(api_token) token_type = 1`. | RevokeDevice, RevokeOtherDevices and RevokeAllDevices end sessions only. API tokens survive. | TestRevokeAllDevices_PerDeviceSparesApiTokens, TestRevokeOtherDevices_KeepsCurrent, TestRevokeDevices_SweepSessionsNoDeviceHolds |
 | `interaction/api_token-logout` | ap at | Q | Logout from an API-token bearer is refused with `FailedPrecondition`; it is not reported as success. RevokeApiToken is the operation for API tokens. | TestLogout_NoSessionToken_Refused, TestLogout_RevokesCurrentSession, TestLogout_AlreadyRevoked_Idempotent |
 | `interaction/api_token-password_change-sessions-only` | ap pc at | T: `DeleteOtherSessionTokens` deletes `token_type = SESSION` rows other than the caller's `session_token_id`, in the same transaction as the conditional password update. | ChangePassword ends every other session and keeps the calling session and all API tokens. If the sign-out fails, the password is not changed. | TestChangePassword_EndsEveryOtherSession, TestChangePassword_AFailedSignOutFailsTheChange |
-| `interaction/password_change-without-api_token-build` | pc ap | T: the `DeleteOtherSessionTokens` DQL names `token_type` with no `?feature(api_token)` guard, but the column exists only with ap. | An activation with `password_change` and without `api_token` must build. The session-realm filter is gated `?feature(api_token)`. | `check-stage` (`tools/pluginstage`: a statement naming another feature's column ungated fails it), TestChangePassword_TheSweepSparesAPITokensOnlyWhereTheyExist |
+| `interaction/password_change-without-api_token-build` | pc ap | T: the `DeleteOtherSessionTokens` DQL names `token_type`, a column that exists only with ap. | An activation with `password_change` and without `api_token` must build. The session-realm filter is gated `?feature(api_token)`; `make check-stage` fails a statement that names another feature's column ungated. | TestChangePassword_TheSweepSparesAPITokensOnlyWhereTheyExist |
 | `interaction/api_token-password_reset-all-tokens` | ap pr | T: `DeleteUserSessionsForReset` deletes every `UserToken` of the user. | A completed reset revokes sessions **and** API tokens. Sweep failure is reported (`sessions_revoked=false`), not hidden. | TestResetPassword_ValidToken_UpdatesAndRevokes, TestResetPassword_ReportsWhenTheSessionSweepDidNotRun, TestResetPassword_ReportsASweepThatSucceeded |
 | `interaction/password_reset-sweep-outside-tx` | pr ap dv | O | The password write and the token sweep are **not** one unit of work: the sweep runs after commit, so a reset can succeed while an attacker's sessions survive. ChangePassword puts both in one transaction; ResetPassword should do the same. | TestResetPassword_ReportsWhenTheSessionSweepDidNotRun (documents the split) |
 | `interaction/credential-change-keeps-device-trust` | pr pc ua × dv | T | A reset, password change or disable deletes tokens but not `Device.trust_token_hash`. Under `new_devices`, a device that was trusted before the credential change still skips the second factor afterwards. Only RevokeDevice/Other/All clears trust. | none (gap) |
@@ -1036,4 +1036,4 @@ A unit test against a fake store cannot prove the invariants below. An example p
 8. **Forwarded headers reach the handler**: Host (tenant resolution under ts), `X-Device-Id` / `X-Device-Trust` / `User-Agent` / `X-Forwarded-For` (devices), and `W17-Org` header or path (om). Each feature depends on the gateway propagating its header, and the handler-level tests inject it directly.
 9. **Cross-feature flows**: the second factor under `new_devices` with a replayed trust token, then the same device after an OAuth sign-in (`interaction/oauth-devices-two_factor-trust-laundering`, expected red); an API token driving CliAuthorize → CliToken (`interaction/api_token-cli_login-realm-escalation`, expected red); an org-scoped API token whose permission is granted only by a realm-wide session role (must not survive); an OAuth link into an unverified and into a verified local account.
 10. **Secrets at rest on a real row**: legacy-token upgrade (seed a plaintext `token`, authenticate, assert `token_hash` set and `token` NULL); a TOTP seed and an OAuth client secret round-trip through the field keyring and move from their legacy columns.
-11. **Feature-combination builds**: each `go_files_combined` pair with and without its partner feature. A column named across a feature boundary is caught statically by `check-stage`.
+11. **Feature-combination builds**: each `go_files_combined` pair with and without its partner feature. A table, column or request field named across a feature boundary is caught statically by `check-stage`.
