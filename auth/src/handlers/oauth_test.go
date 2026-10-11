@@ -21,6 +21,8 @@ type oauthMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
+	issuedHash string // the token_hash IssueToken was handed
+
 	provider     *pb.OAuthProvider
 	identity     *pb.OAuthIdentity // existing identity (nil = first sign-in)
 	userByEmail  *pb.User          // existing account by email (nil = none)
@@ -91,7 +93,8 @@ func (m *oauthMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ..
 	return &pb.TrustDeviceResp{}, nil
 }
 func (m *oauthMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
-	return &pb.IssueTokenResp{Token: &pb.UserToken{Token: "oauth-tok"}}, nil
+	m.issuedHash = in.GetTokenHash()
+	return &pb.IssueTokenResp{Token: &pb.UserToken{}}, nil
 }
 
 func TestOAuthState_SignVerifyRoundTrip(t *testing.T) {
@@ -298,7 +301,7 @@ func TestOAuthCallback_UserinfoPath_CreatesUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
-	if resp.GetToken() != "oauth-tok" || resp.GetUserId() == "" {
+	if resp.GetToken() == "" || m.issuedHash != sha256Hex(resp.GetToken()) || resp.GetUserId() == "" {
 		t.Errorf("callback resp = %+v, want a token + user id", resp)
 	}
 	if resp.GetRedirectAfter() != "/welcome" {

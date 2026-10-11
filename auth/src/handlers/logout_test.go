@@ -133,7 +133,7 @@ func TestLogout_NoCaller_Unauthenticated(t *testing.T) {
 // the realm-aware override from apitoken.go's init.)
 func TestResolvePrincipalRealmAware_ReturnsTokenID(t *testing.T) {
 	m := &apiTokenQueryMock{
-		tok:        &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "tok-9", TokenType: pb.TokenType_TOKEN_TYPE_SESSION},
+		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "tok-9", TokenType: pb.TokenType_TOKEN_TYPE_SESSION},
 		realmPerms: []int32{1, 2},
 	}
 	h := &AuthServiceHandler{Query: m}
@@ -155,7 +155,7 @@ func TestResolvePrincipalRealmAware_ReturnsTokenID(t *testing.T) {
 // docstring already promises an API-token bearer "still gets a clean success".
 func TestResolvePrincipalRealmAware_ApiTokenHasNoSessionID(t *testing.T) {
 	m := &apiTokenQueryMock{
-		tok:        &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "api-7", TokenType: pb.TokenType_TOKEN_TYPE_API},
+		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "api-7", TokenType: pb.TokenType_TOKEN_TYPE_API},
 		realmPerms: []int32{1, 2},
 		subset:     []int32{1},
 	}

@@ -32,6 +32,8 @@ type mfaMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
+	issuedHash string // the token_hash IssueToken was handed
+
 	// totp secret state
 	totpSecretEnc string          // legacy `secret` (secretbox blob, rc.19 and earlier); "" = none
 	totpSeed      string          // `seed` as the storage layer hands it back: plaintext
@@ -248,7 +250,8 @@ func (m *mfaMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...g
 	return &pb.TrustDeviceResp{DeviceId: in.GetDeviceId()}, nil
 }
 func (m *mfaMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
-	return &pb.IssueTokenResp{Token: &pb.UserToken{Token: "tok-verify"}}, nil
+	m.issuedHash = in.GetTokenHash()
+	return &pb.IssueTokenResp{Token: &pb.UserToken{}}, nil
 }
 
 func mfaTestKey() string {
@@ -360,8 +363,8 @@ func TestEnrollConfirmVerify_TotpRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify (TOTP path): %v", err)
 	}
-	if vresp.GetToken() != "tok-verify" || vresp.GetUserId() != "u1" {
-		t.Errorf("verify resp = %+v, want token tok-verify / user u1", vresp)
+	if vresp.GetToken() == "" || m.issuedHash != sha256Hex(vresp.GetToken()) || vresp.GetUserId() != "u1" {
+		t.Errorf("verify resp = %+v, want a token whose sha256 was stored / user u1", vresp)
 	}
 }
 
@@ -382,8 +385,8 @@ func TestVerifyMfa_EventCodePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify (event path): %v", err)
 	}
-	if vresp.GetToken() != "tok-verify" {
-		t.Errorf("verify token = %q, want tok-verify", vresp.GetToken())
+	if vresp.GetToken() == "" || m.issuedHash != sha256Hex(vresp.GetToken()) {
+		t.Errorf("verify token = %q: the store must get its sha256", vresp.GetToken())
 	}
 }
 

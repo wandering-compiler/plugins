@@ -300,7 +300,10 @@ type IssueTokenReq struct {
 	// the old IssueTokenWithDeviceReq hid: it was a separate request only
 	// the device path ever built, so "required" was true there and is not
 	// true here.
-	DeviceId      string `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	DeviceId string `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// sha256(token), hex: the handler mints the token, stores only this, and
+	// returns the token to the caller itself (it is never read back).
+	TokenHash     string `protobuf:"bytes,4,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -356,6 +359,13 @@ func (x *IssueTokenReq) GetDeviceId() string {
 	return ""
 }
 
+func (x *IssueTokenReq) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
+	}
+	return ""
+}
+
 type IssueTokenResp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Token         *UserToken             `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
@@ -400,9 +410,11 @@ func (x *IssueTokenResp) GetToken() *UserToken {
 	return nil
 }
 
+// token_hash finds the row; token only a legacy one (see UserToken).
 type DeleteTokenReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	TokenHash     string                 `protobuf:"bytes,2,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -444,6 +456,104 @@ func (x *DeleteTokenReq) GetToken() string {
 	return ""
 }
 
+func (x *DeleteTokenReq) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
+	}
+	return ""
+}
+
+// UpgradeTokenHash moves a legacy row — found by its token in the clear —
+// to the hash, and clears the clear copy. Run by the lookup that found it;
+// a no-op on a row already moved.
+type UpgradeTokenHashReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	TokenHash     string                 `protobuf:"bytes,2,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpgradeTokenHashReq) Reset() {
+	*x = UpgradeTokenHashReq{}
+	mi := &file_mutations_auth_mutation_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpgradeTokenHashReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpgradeTokenHashReq) ProtoMessage() {}
+
+func (x *UpgradeTokenHashReq) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_auth_mutation_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpgradeTokenHashReq.ProtoReflect.Descriptor instead.
+func (*UpgradeTokenHashReq) Descriptor() ([]byte, []int) {
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *UpgradeTokenHashReq) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *UpgradeTokenHashReq) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
+	}
+	return ""
+}
+
+type UpgradeTokenHashResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpgradeTokenHashResp) Reset() {
+	*x = UpgradeTokenHashResp{}
+	mi := &file_mutations_auth_mutation_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpgradeTokenHashResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpgradeTokenHashResp) ProtoMessage() {}
+
+func (x *UpgradeTokenHashResp) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_auth_mutation_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpgradeTokenHashResp.ProtoReflect.Descriptor instead.
+func (*UpgradeTokenHashResp) Descriptor() ([]byte, []int) {
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{8}
+}
+
 // DeleteToken returns the deleted row's identifiers for the
 // caller's response. Consumers that don't need the IDs ignore the
 // response (or pin a `_ = resp` discard). (TokenRevoked is emitted
@@ -458,7 +568,7 @@ type DeleteTokenResp struct {
 
 func (x *DeleteTokenResp) Reset() {
 	*x = DeleteTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[7]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -470,7 +580,7 @@ func (x *DeleteTokenResp) String() string {
 func (*DeleteTokenResp) ProtoMessage() {}
 
 func (x *DeleteTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[7]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -483,7 +593,7 @@ func (x *DeleteTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTokenResp.ProtoReflect.Descriptor instead.
 func (*DeleteTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{7}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DeleteTokenResp) GetTokenId() string {
@@ -519,7 +629,7 @@ type DeleteSessionTokenReq struct {
 
 func (x *DeleteSessionTokenReq) Reset() {
 	*x = DeleteSessionTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[8]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -531,7 +641,7 @@ func (x *DeleteSessionTokenReq) String() string {
 func (*DeleteSessionTokenReq) ProtoMessage() {}
 
 func (x *DeleteSessionTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[8]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -544,7 +654,7 @@ func (x *DeleteSessionTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSessionTokenReq.ProtoReflect.Descriptor instead.
 func (*DeleteSessionTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{8}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DeleteSessionTokenReq) GetTokenId() string {
@@ -578,7 +688,7 @@ type DeleteSessionTokenResp struct {
 
 func (x *DeleteSessionTokenResp) Reset() {
 	*x = DeleteSessionTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[9]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -590,7 +700,7 @@ func (x *DeleteSessionTokenResp) String() string {
 func (*DeleteSessionTokenResp) ProtoMessage() {}
 
 func (x *DeleteSessionTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[9]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -603,7 +713,7 @@ func (x *DeleteSessionTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSessionTokenResp.ProtoReflect.Descriptor instead.
 func (*DeleteSessionTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{9}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DeleteSessionTokenResp) GetTokenId() string {
@@ -627,14 +737,16 @@ type IssueApiTokenReq struct {
 	TokenType TokenType              `protobuf:"varint,3,opt,name=token_type,json=tokenType,proto3,enum=w17.contrib.auth.TokenType" json:"token_type,omitempty"`
 	// Absent = NULL = never expires; the business handler decides, from the
 	// caller's request and the deployment's default.
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ExpiresAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	// sha256(token), hex — see IssueTokenReq.token_hash.
+	TokenHash     string `protobuf:"bytes,5,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *IssueApiTokenReq) Reset() {
 	*x = IssueApiTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[10]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -646,7 +758,7 @@ func (x *IssueApiTokenReq) String() string {
 func (*IssueApiTokenReq) ProtoMessage() {}
 
 func (x *IssueApiTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[10]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -659,7 +771,7 @@ func (x *IssueApiTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueApiTokenReq.ProtoReflect.Descriptor instead.
 func (*IssueApiTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{10}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *IssueApiTokenReq) GetUserId() string {
@@ -690,6 +802,13 @@ func (x *IssueApiTokenReq) GetExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *IssueApiTokenReq) GetTokenHash() string {
+	if x != nil {
+		return x.TokenHash
+	}
+	return ""
+}
+
 type IssueApiTokenResp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Token         *UserToken             `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
@@ -699,7 +818,7 @@ type IssueApiTokenResp struct {
 
 func (x *IssueApiTokenResp) Reset() {
 	*x = IssueApiTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[11]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -711,7 +830,7 @@ func (x *IssueApiTokenResp) String() string {
 func (*IssueApiTokenResp) ProtoMessage() {}
 
 func (x *IssueApiTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[11]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -724,7 +843,7 @@ func (x *IssueApiTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueApiTokenResp.ProtoReflect.Descriptor instead.
 func (*IssueApiTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{11}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *IssueApiTokenResp) GetToken() *UserToken {
@@ -744,7 +863,7 @@ type AddTokenPermissionReq struct {
 
 func (x *AddTokenPermissionReq) Reset() {
 	*x = AddTokenPermissionReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[12]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +875,7 @@ func (x *AddTokenPermissionReq) String() string {
 func (*AddTokenPermissionReq) ProtoMessage() {}
 
 func (x *AddTokenPermissionReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[12]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +888,7 @@ func (x *AddTokenPermissionReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddTokenPermissionReq.ProtoReflect.Descriptor instead.
 func (*AddTokenPermissionReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{12}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AddTokenPermissionReq) GetTokenId() string {
@@ -795,7 +914,7 @@ type AddTokenPermissionResp struct {
 
 func (x *AddTokenPermissionResp) Reset() {
 	*x = AddTokenPermissionResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[13]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -807,7 +926,7 @@ func (x *AddTokenPermissionResp) String() string {
 func (*AddTokenPermissionResp) ProtoMessage() {}
 
 func (x *AddTokenPermissionResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[13]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -820,7 +939,7 @@ func (x *AddTokenPermissionResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddTokenPermissionResp.ProtoReflect.Descriptor instead.
 func (*AddTokenPermissionResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{13}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AddTokenPermissionResp) GetTokenPermission() *TokenPermission {
@@ -841,7 +960,7 @@ type DeleteApiTokenReq struct {
 
 func (x *DeleteApiTokenReq) Reset() {
 	*x = DeleteApiTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[14]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -853,7 +972,7 @@ func (x *DeleteApiTokenReq) String() string {
 func (*DeleteApiTokenReq) ProtoMessage() {}
 
 func (x *DeleteApiTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[14]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -866,7 +985,7 @@ func (x *DeleteApiTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteApiTokenReq.ProtoReflect.Descriptor instead.
 func (*DeleteApiTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{14}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *DeleteApiTokenReq) GetTokenId() string {
@@ -899,7 +1018,7 @@ type DeleteApiTokenResp struct {
 
 func (x *DeleteApiTokenResp) Reset() {
 	*x = DeleteApiTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[15]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -911,7 +1030,7 @@ func (x *DeleteApiTokenResp) String() string {
 func (*DeleteApiTokenResp) ProtoMessage() {}
 
 func (x *DeleteApiTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[15]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -924,7 +1043,7 @@ func (x *DeleteApiTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteApiTokenResp.ProtoReflect.Descriptor instead.
 func (*DeleteApiTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{15}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeleteApiTokenResp) GetTokenId() string {
@@ -943,7 +1062,7 @@ type DeleteTokenPermissionsReq struct {
 
 func (x *DeleteTokenPermissionsReq) Reset() {
 	*x = DeleteTokenPermissionsReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[16]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -955,7 +1074,7 @@ func (x *DeleteTokenPermissionsReq) String() string {
 func (*DeleteTokenPermissionsReq) ProtoMessage() {}
 
 func (x *DeleteTokenPermissionsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[16]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -968,7 +1087,7 @@ func (x *DeleteTokenPermissionsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTokenPermissionsReq.ProtoReflect.Descriptor instead.
 func (*DeleteTokenPermissionsReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{16}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DeleteTokenPermissionsReq) GetTokenId() string {
@@ -987,7 +1106,7 @@ type DeleteTokenPermissionsResp struct {
 
 func (x *DeleteTokenPermissionsResp) Reset() {
 	*x = DeleteTokenPermissionsResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[17]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -999,7 +1118,7 @@ func (x *DeleteTokenPermissionsResp) String() string {
 func (*DeleteTokenPermissionsResp) ProtoMessage() {}
 
 func (x *DeleteTokenPermissionsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[17]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1012,7 +1131,7 @@ func (x *DeleteTokenPermissionsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTokenPermissionsResp.ProtoReflect.Descriptor instead.
 func (*DeleteTokenPermissionsResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{17}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DeleteTokenPermissionsResp) GetTokenId() string {
@@ -1037,7 +1156,7 @@ type CreateOAuthIdentityReq struct {
 
 func (x *CreateOAuthIdentityReq) Reset() {
 	*x = CreateOAuthIdentityReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[18]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1049,7 +1168,7 @@ func (x *CreateOAuthIdentityReq) String() string {
 func (*CreateOAuthIdentityReq) ProtoMessage() {}
 
 func (x *CreateOAuthIdentityReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[18]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1062,7 +1181,7 @@ func (x *CreateOAuthIdentityReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOAuthIdentityReq.ProtoReflect.Descriptor instead.
 func (*CreateOAuthIdentityReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{18}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CreateOAuthIdentityReq) GetUserId() string {
@@ -1102,7 +1221,7 @@ type CreateOAuthIdentityResp struct {
 
 func (x *CreateOAuthIdentityResp) Reset() {
 	*x = CreateOAuthIdentityResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[19]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1114,7 +1233,7 @@ func (x *CreateOAuthIdentityResp) String() string {
 func (*CreateOAuthIdentityResp) ProtoMessage() {}
 
 func (x *CreateOAuthIdentityResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[19]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1127,7 +1246,7 @@ func (x *CreateOAuthIdentityResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOAuthIdentityResp.ProtoReflect.Descriptor instead.
 func (*CreateOAuthIdentityResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{19}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CreateOAuthIdentityResp) GetIdentity() *OAuthIdentity {
@@ -1147,7 +1266,7 @@ type CreateTotpSecretReq struct {
 
 func (x *CreateTotpSecretReq) Reset() {
 	*x = CreateTotpSecretReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[20]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1159,7 +1278,7 @@ func (x *CreateTotpSecretReq) String() string {
 func (*CreateTotpSecretReq) ProtoMessage() {}
 
 func (x *CreateTotpSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[20]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1172,7 +1291,7 @@ func (x *CreateTotpSecretReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTotpSecretReq.ProtoReflect.Descriptor instead.
 func (*CreateTotpSecretReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{20}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CreateTotpSecretReq) GetUserId() string {
@@ -1198,7 +1317,7 @@ type CreateTotpSecretResp struct {
 
 func (x *CreateTotpSecretResp) Reset() {
 	*x = CreateTotpSecretResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[21]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1210,7 +1329,7 @@ func (x *CreateTotpSecretResp) String() string {
 func (*CreateTotpSecretResp) ProtoMessage() {}
 
 func (x *CreateTotpSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[21]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1223,7 +1342,7 @@ func (x *CreateTotpSecretResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTotpSecretResp.ProtoReflect.Descriptor instead.
 func (*CreateTotpSecretResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{21}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CreateTotpSecretResp) GetSecret() *UserTotpSecret {
@@ -1242,7 +1361,7 @@ type ConfirmTotpSecretReq struct {
 
 func (x *ConfirmTotpSecretReq) Reset() {
 	*x = ConfirmTotpSecretReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[22]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1254,7 +1373,7 @@ func (x *ConfirmTotpSecretReq) String() string {
 func (*ConfirmTotpSecretReq) ProtoMessage() {}
 
 func (x *ConfirmTotpSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[22]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1267,7 +1386,7 @@ func (x *ConfirmTotpSecretReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmTotpSecretReq.ProtoReflect.Descriptor instead.
 func (*ConfirmTotpSecretReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{22}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ConfirmTotpSecretReq) GetUserId() string {
@@ -1286,7 +1405,7 @@ type ConfirmTotpSecretResp struct {
 
 func (x *ConfirmTotpSecretResp) Reset() {
 	*x = ConfirmTotpSecretResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[23]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1298,7 +1417,7 @@ func (x *ConfirmTotpSecretResp) String() string {
 func (*ConfirmTotpSecretResp) ProtoMessage() {}
 
 func (x *ConfirmTotpSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[23]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1311,7 +1430,7 @@ func (x *ConfirmTotpSecretResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfirmTotpSecretResp.ProtoReflect.Descriptor instead.
 func (*ConfirmTotpSecretResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{23}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ConfirmTotpSecretResp) GetUserId() string {
@@ -1335,7 +1454,7 @@ type MoveOAuthProviderSecretReq struct {
 
 func (x *MoveOAuthProviderSecretReq) Reset() {
 	*x = MoveOAuthProviderSecretReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[24]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1347,7 +1466,7 @@ func (x *MoveOAuthProviderSecretReq) String() string {
 func (*MoveOAuthProviderSecretReq) ProtoMessage() {}
 
 func (x *MoveOAuthProviderSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[24]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1360,7 +1479,7 @@ func (x *MoveOAuthProviderSecretReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveOAuthProviderSecretReq.ProtoReflect.Descriptor instead.
 func (*MoveOAuthProviderSecretReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{24}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MoveOAuthProviderSecretReq) GetId() string {
@@ -1393,7 +1512,7 @@ type MoveOAuthProviderSecretResp struct {
 
 func (x *MoveOAuthProviderSecretResp) Reset() {
 	*x = MoveOAuthProviderSecretResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[25]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1405,7 +1524,7 @@ func (x *MoveOAuthProviderSecretResp) String() string {
 func (*MoveOAuthProviderSecretResp) ProtoMessage() {}
 
 func (x *MoveOAuthProviderSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[25]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1418,7 +1537,7 @@ func (x *MoveOAuthProviderSecretResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveOAuthProviderSecretResp.ProtoReflect.Descriptor instead.
 func (*MoveOAuthProviderSecretResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{25}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MoveOAuthProviderSecretResp) GetId() string {
@@ -1439,7 +1558,7 @@ type ClearOAuthProviderLegacySecretReq struct {
 
 func (x *ClearOAuthProviderLegacySecretReq) Reset() {
 	*x = ClearOAuthProviderLegacySecretReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[26]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1451,7 +1570,7 @@ func (x *ClearOAuthProviderLegacySecretReq) String() string {
 func (*ClearOAuthProviderLegacySecretReq) ProtoMessage() {}
 
 func (x *ClearOAuthProviderLegacySecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[26]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1464,7 +1583,7 @@ func (x *ClearOAuthProviderLegacySecretReq) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ClearOAuthProviderLegacySecretReq.ProtoReflect.Descriptor instead.
 func (*ClearOAuthProviderLegacySecretReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{26}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ClearOAuthProviderLegacySecretReq) GetId() string {
@@ -1483,7 +1602,7 @@ type ClearOAuthProviderLegacySecretResp struct {
 
 func (x *ClearOAuthProviderLegacySecretResp) Reset() {
 	*x = ClearOAuthProviderLegacySecretResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[27]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1495,7 +1614,7 @@ func (x *ClearOAuthProviderLegacySecretResp) String() string {
 func (*ClearOAuthProviderLegacySecretResp) ProtoMessage() {}
 
 func (x *ClearOAuthProviderLegacySecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[27]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1508,7 +1627,7 @@ func (x *ClearOAuthProviderLegacySecretResp) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ClearOAuthProviderLegacySecretResp.ProtoReflect.Descriptor instead.
 func (*ClearOAuthProviderLegacySecretResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{27}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ClearOAuthProviderLegacySecretResp) GetId() string {
@@ -1534,7 +1653,7 @@ type MoveTotpSeedReq struct {
 
 func (x *MoveTotpSeedReq) Reset() {
 	*x = MoveTotpSeedReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[28]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1546,7 +1665,7 @@ func (x *MoveTotpSeedReq) String() string {
 func (*MoveTotpSeedReq) ProtoMessage() {}
 
 func (x *MoveTotpSeedReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[28]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1559,7 +1678,7 @@ func (x *MoveTotpSeedReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveTotpSeedReq.ProtoReflect.Descriptor instead.
 func (*MoveTotpSeedReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{28}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *MoveTotpSeedReq) GetUserId() string {
@@ -1592,7 +1711,7 @@ type MoveTotpSeedResp struct {
 
 func (x *MoveTotpSeedResp) Reset() {
 	*x = MoveTotpSeedResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[29]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1604,7 +1723,7 @@ func (x *MoveTotpSeedResp) String() string {
 func (*MoveTotpSeedResp) ProtoMessage() {}
 
 func (x *MoveTotpSeedResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[29]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1617,7 +1736,7 @@ func (x *MoveTotpSeedResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveTotpSeedResp.ProtoReflect.Descriptor instead.
 func (*MoveTotpSeedResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{29}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *MoveTotpSeedResp) GetUserId() string {
@@ -1639,7 +1758,7 @@ type ClaimTotpStepReq struct {
 
 func (x *ClaimTotpStepReq) Reset() {
 	*x = ClaimTotpStepReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[30]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1651,7 +1770,7 @@ func (x *ClaimTotpStepReq) String() string {
 func (*ClaimTotpStepReq) ProtoMessage() {}
 
 func (x *ClaimTotpStepReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[30]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1664,7 +1783,7 @@ func (x *ClaimTotpStepReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimTotpStepReq.ProtoReflect.Descriptor instead.
 func (*ClaimTotpStepReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{30}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ClaimTotpStepReq) GetId() string {
@@ -1690,7 +1809,7 @@ type ClaimTotpStepResp struct {
 
 func (x *ClaimTotpStepResp) Reset() {
 	*x = ClaimTotpStepResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[31]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1702,7 +1821,7 @@ func (x *ClaimTotpStepResp) String() string {
 func (*ClaimTotpStepResp) ProtoMessage() {}
 
 func (x *ClaimTotpStepResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[31]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1715,7 +1834,7 @@ func (x *ClaimTotpStepResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimTotpStepResp.ProtoReflect.Descriptor instead.
 func (*ClaimTotpStepResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{31}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ClaimTotpStepResp) GetId() string {
@@ -1736,7 +1855,7 @@ type RecordStepUpAttemptReq struct {
 
 func (x *RecordStepUpAttemptReq) Reset() {
 	*x = RecordStepUpAttemptReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[32]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1748,7 +1867,7 @@ func (x *RecordStepUpAttemptReq) String() string {
 func (*RecordStepUpAttemptReq) ProtoMessage() {}
 
 func (x *RecordStepUpAttemptReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[32]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1761,7 +1880,7 @@ func (x *RecordStepUpAttemptReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordStepUpAttemptReq.ProtoReflect.Descriptor instead.
 func (*RecordStepUpAttemptReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{32}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *RecordStepUpAttemptReq) GetId() string {
@@ -1780,7 +1899,7 @@ type RecordStepUpAttemptResp struct {
 
 func (x *RecordStepUpAttemptResp) Reset() {
 	*x = RecordStepUpAttemptResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[33]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1792,7 +1911,7 @@ func (x *RecordStepUpAttemptResp) String() string {
 func (*RecordStepUpAttemptResp) ProtoMessage() {}
 
 func (x *RecordStepUpAttemptResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[33]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1805,7 +1924,7 @@ func (x *RecordStepUpAttemptResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordStepUpAttemptResp.ProtoReflect.Descriptor instead.
 func (*RecordStepUpAttemptResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{33}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *RecordStepUpAttemptResp) GetAttempts() int64 {
@@ -1825,7 +1944,7 @@ type LockStepUpReq struct {
 
 func (x *LockStepUpReq) Reset() {
 	*x = LockStepUpReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[34]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1837,7 +1956,7 @@ func (x *LockStepUpReq) String() string {
 func (*LockStepUpReq) ProtoMessage() {}
 
 func (x *LockStepUpReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[34]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1850,7 +1969,7 @@ func (x *LockStepUpReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockStepUpReq.ProtoReflect.Descriptor instead.
 func (*LockStepUpReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{34}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *LockStepUpReq) GetId() string {
@@ -1876,7 +1995,7 @@ type LockStepUpResp struct {
 
 func (x *LockStepUpResp) Reset() {
 	*x = LockStepUpResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[35]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1888,7 +2007,7 @@ func (x *LockStepUpResp) String() string {
 func (*LockStepUpResp) ProtoMessage() {}
 
 func (x *LockStepUpResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[35]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1901,7 +2020,7 @@ func (x *LockStepUpResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockStepUpResp.ProtoReflect.Descriptor instead.
 func (*LockStepUpResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{35}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *LockStepUpResp) GetId() string {
@@ -1920,7 +2039,7 @@ type ResetStepUpReq struct {
 
 func (x *ResetStepUpReq) Reset() {
 	*x = ResetStepUpReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[36]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1932,7 +2051,7 @@ func (x *ResetStepUpReq) String() string {
 func (*ResetStepUpReq) ProtoMessage() {}
 
 func (x *ResetStepUpReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[36]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1945,7 +2064,7 @@ func (x *ResetStepUpReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetStepUpReq.ProtoReflect.Descriptor instead.
 func (*ResetStepUpReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{36}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ResetStepUpReq) GetId() string {
@@ -1964,7 +2083,7 @@ type ResetStepUpResp struct {
 
 func (x *ResetStepUpResp) Reset() {
 	*x = ResetStepUpResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[37]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1976,7 +2095,7 @@ func (x *ResetStepUpResp) String() string {
 func (*ResetStepUpResp) ProtoMessage() {}
 
 func (x *ResetStepUpResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[37]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1989,7 +2108,7 @@ func (x *ResetStepUpResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetStepUpResp.ProtoReflect.Descriptor instead.
 func (*ResetStepUpResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{37}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ResetStepUpResp) GetId() string {
@@ -2009,7 +2128,7 @@ type CreateRecoveryCodeReq struct {
 
 func (x *CreateRecoveryCodeReq) Reset() {
 	*x = CreateRecoveryCodeReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[38]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2021,7 +2140,7 @@ func (x *CreateRecoveryCodeReq) String() string {
 func (*CreateRecoveryCodeReq) ProtoMessage() {}
 
 func (x *CreateRecoveryCodeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[38]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2034,7 +2153,7 @@ func (x *CreateRecoveryCodeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRecoveryCodeReq.ProtoReflect.Descriptor instead.
 func (*CreateRecoveryCodeReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{38}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *CreateRecoveryCodeReq) GetUserId() string {
@@ -2060,7 +2179,7 @@ type CreateRecoveryCodeResp struct {
 
 func (x *CreateRecoveryCodeResp) Reset() {
 	*x = CreateRecoveryCodeResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[39]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2072,7 +2191,7 @@ func (x *CreateRecoveryCodeResp) String() string {
 func (*CreateRecoveryCodeResp) ProtoMessage() {}
 
 func (x *CreateRecoveryCodeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[39]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2085,7 +2204,7 @@ func (x *CreateRecoveryCodeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRecoveryCodeResp.ProtoReflect.Descriptor instead.
 func (*CreateRecoveryCodeResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{39}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *CreateRecoveryCodeResp) GetId() string {
@@ -2104,7 +2223,7 @@ type DeleteRecoveryCodesReq struct {
 
 func (x *DeleteRecoveryCodesReq) Reset() {
 	*x = DeleteRecoveryCodesReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[40]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2116,7 +2235,7 @@ func (x *DeleteRecoveryCodesReq) String() string {
 func (*DeleteRecoveryCodesReq) ProtoMessage() {}
 
 func (x *DeleteRecoveryCodesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[40]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2129,7 +2248,7 @@ func (x *DeleteRecoveryCodesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRecoveryCodesReq.ProtoReflect.Descriptor instead.
 func (*DeleteRecoveryCodesReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{40}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DeleteRecoveryCodesReq) GetUserId() string {
@@ -2147,7 +2266,7 @@ type DeleteRecoveryCodesResp struct {
 
 func (x *DeleteRecoveryCodesResp) Reset() {
 	*x = DeleteRecoveryCodesResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[41]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2159,7 +2278,7 @@ func (x *DeleteRecoveryCodesResp) String() string {
 func (*DeleteRecoveryCodesResp) ProtoMessage() {}
 
 func (x *DeleteRecoveryCodesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[41]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2172,7 +2291,7 @@ func (x *DeleteRecoveryCodesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRecoveryCodesResp.ProtoReflect.Descriptor instead.
 func (*DeleteRecoveryCodesResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{41}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{43}
 }
 
 type ConsumeRecoveryCodeReq struct {
@@ -2185,7 +2304,7 @@ type ConsumeRecoveryCodeReq struct {
 
 func (x *ConsumeRecoveryCodeReq) Reset() {
 	*x = ConsumeRecoveryCodeReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[42]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2197,7 +2316,7 @@ func (x *ConsumeRecoveryCodeReq) String() string {
 func (*ConsumeRecoveryCodeReq) ProtoMessage() {}
 
 func (x *ConsumeRecoveryCodeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[42]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2210,7 +2329,7 @@ func (x *ConsumeRecoveryCodeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeRecoveryCodeReq.ProtoReflect.Descriptor instead.
 func (*ConsumeRecoveryCodeReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{42}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ConsumeRecoveryCodeReq) GetUserId() string {
@@ -2237,7 +2356,7 @@ type ConsumeRecoveryCodeResp struct {
 
 func (x *ConsumeRecoveryCodeResp) Reset() {
 	*x = ConsumeRecoveryCodeResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[43]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2249,7 +2368,7 @@ func (x *ConsumeRecoveryCodeResp) String() string {
 func (*ConsumeRecoveryCodeResp) ProtoMessage() {}
 
 func (x *ConsumeRecoveryCodeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[43]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2262,7 +2381,7 @@ func (x *ConsumeRecoveryCodeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeRecoveryCodeResp.ProtoReflect.Descriptor instead.
 func (*ConsumeRecoveryCodeResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{43}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ConsumeRecoveryCodeResp) GetId() string {
@@ -2288,7 +2407,7 @@ type DeleteTotpSecretReq struct {
 
 func (x *DeleteTotpSecretReq) Reset() {
 	*x = DeleteTotpSecretReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[44]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2300,7 +2419,7 @@ func (x *DeleteTotpSecretReq) String() string {
 func (*DeleteTotpSecretReq) ProtoMessage() {}
 
 func (x *DeleteTotpSecretReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[44]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2313,7 +2432,7 @@ func (x *DeleteTotpSecretReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTotpSecretReq.ProtoReflect.Descriptor instead.
 func (*DeleteTotpSecretReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{44}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *DeleteTotpSecretReq) GetUserId() string {
@@ -2332,7 +2451,7 @@ type DeleteTotpSecretResp struct {
 
 func (x *DeleteTotpSecretResp) Reset() {
 	*x = DeleteTotpSecretResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[45]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2344,7 +2463,7 @@ func (x *DeleteTotpSecretResp) String() string {
 func (*DeleteTotpSecretResp) ProtoMessage() {}
 
 func (x *DeleteTotpSecretResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[45]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2357,7 +2476,7 @@ func (x *DeleteTotpSecretResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTotpSecretResp.ProtoReflect.Descriptor instead.
 func (*DeleteTotpSecretResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{45}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *DeleteTotpSecretResp) GetUserId() string {
@@ -2390,7 +2509,7 @@ type CreateMfaChallengeReq struct {
 
 func (x *CreateMfaChallengeReq) Reset() {
 	*x = CreateMfaChallengeReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[46]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2402,7 +2521,7 @@ func (x *CreateMfaChallengeReq) String() string {
 func (*CreateMfaChallengeReq) ProtoMessage() {}
 
 func (x *CreateMfaChallengeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[46]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2415,7 +2534,7 @@ func (x *CreateMfaChallengeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMfaChallengeReq.ProtoReflect.Descriptor instead.
 func (*CreateMfaChallengeReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{46}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *CreateMfaChallengeReq) GetUserId() string {
@@ -2469,7 +2588,7 @@ type CreateMfaChallengeResp struct {
 
 func (x *CreateMfaChallengeResp) Reset() {
 	*x = CreateMfaChallengeResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[47]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2481,7 +2600,7 @@ func (x *CreateMfaChallengeResp) String() string {
 func (*CreateMfaChallengeResp) ProtoMessage() {}
 
 func (x *CreateMfaChallengeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[47]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2494,7 +2613,7 @@ func (x *CreateMfaChallengeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMfaChallengeResp.ProtoReflect.Descriptor instead.
 func (*CreateMfaChallengeResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{47}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *CreateMfaChallengeResp) GetChallenge() *MfaChallenge {
@@ -2516,7 +2635,7 @@ type SupersedePendingMfaChallengesReq struct {
 
 func (x *SupersedePendingMfaChallengesReq) Reset() {
 	*x = SupersedePendingMfaChallengesReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[48]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2528,7 +2647,7 @@ func (x *SupersedePendingMfaChallengesReq) String() string {
 func (*SupersedePendingMfaChallengesReq) ProtoMessage() {}
 
 func (x *SupersedePendingMfaChallengesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[48]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2541,7 +2660,7 @@ func (x *SupersedePendingMfaChallengesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SupersedePendingMfaChallengesReq.ProtoReflect.Descriptor instead.
 func (*SupersedePendingMfaChallengesReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{48}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SupersedePendingMfaChallengesReq) GetUserId() string {
@@ -2559,7 +2678,7 @@ type SupersedePendingMfaChallengesResp struct {
 
 func (x *SupersedePendingMfaChallengesResp) Reset() {
 	*x = SupersedePendingMfaChallengesResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[49]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2571,7 +2690,7 @@ func (x *SupersedePendingMfaChallengesResp) String() string {
 func (*SupersedePendingMfaChallengesResp) ProtoMessage() {}
 
 func (x *SupersedePendingMfaChallengesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[49]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2584,7 +2703,7 @@ func (x *SupersedePendingMfaChallengesResp) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use SupersedePendingMfaChallengesResp.ProtoReflect.Descriptor instead.
 func (*SupersedePendingMfaChallengesResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{49}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{51}
 }
 
 type ConsumeMfaChallengeReq struct {
@@ -2596,7 +2715,7 @@ type ConsumeMfaChallengeReq struct {
 
 func (x *ConsumeMfaChallengeReq) Reset() {
 	*x = ConsumeMfaChallengeReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[50]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2608,7 +2727,7 @@ func (x *ConsumeMfaChallengeReq) String() string {
 func (*ConsumeMfaChallengeReq) ProtoMessage() {}
 
 func (x *ConsumeMfaChallengeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[50]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2621,7 +2740,7 @@ func (x *ConsumeMfaChallengeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeMfaChallengeReq.ProtoReflect.Descriptor instead.
 func (*ConsumeMfaChallengeReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{50}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ConsumeMfaChallengeReq) GetChallengeId() string {
@@ -2641,7 +2760,7 @@ type ConsumeMfaChallengeResp struct {
 
 func (x *ConsumeMfaChallengeResp) Reset() {
 	*x = ConsumeMfaChallengeResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[51]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2653,7 +2772,7 @@ func (x *ConsumeMfaChallengeResp) String() string {
 func (*ConsumeMfaChallengeResp) ProtoMessage() {}
 
 func (x *ConsumeMfaChallengeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[51]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2666,7 +2785,7 @@ func (x *ConsumeMfaChallengeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeMfaChallengeResp.ProtoReflect.Descriptor instead.
 func (*ConsumeMfaChallengeResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{51}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ConsumeMfaChallengeResp) GetChallengeId() string {
@@ -2696,7 +2815,7 @@ type RecordMfaAttemptReq struct {
 
 func (x *RecordMfaAttemptReq) Reset() {
 	*x = RecordMfaAttemptReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[52]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2708,7 +2827,7 @@ func (x *RecordMfaAttemptReq) String() string {
 func (*RecordMfaAttemptReq) ProtoMessage() {}
 
 func (x *RecordMfaAttemptReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[52]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2721,7 +2840,7 @@ func (x *RecordMfaAttemptReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordMfaAttemptReq.ProtoReflect.Descriptor instead.
 func (*RecordMfaAttemptReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{52}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *RecordMfaAttemptReq) GetChallengeId() string {
@@ -2740,7 +2859,7 @@ type RecordMfaAttemptResp struct {
 
 func (x *RecordMfaAttemptResp) Reset() {
 	*x = RecordMfaAttemptResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[53]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2752,7 +2871,7 @@ func (x *RecordMfaAttemptResp) String() string {
 func (*RecordMfaAttemptResp) ProtoMessage() {}
 
 func (x *RecordMfaAttemptResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[53]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2765,7 +2884,7 @@ func (x *RecordMfaAttemptResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordMfaAttemptResp.ProtoReflect.Descriptor instead.
 func (*RecordMfaAttemptResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{53}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *RecordMfaAttemptResp) GetAttempts() int64 {
@@ -2795,7 +2914,7 @@ type CreatePendingSignUpReq struct {
 
 func (x *CreatePendingSignUpReq) Reset() {
 	*x = CreatePendingSignUpReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[54]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2807,7 +2926,7 @@ func (x *CreatePendingSignUpReq) String() string {
 func (*CreatePendingSignUpReq) ProtoMessage() {}
 
 func (x *CreatePendingSignUpReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[54]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2820,7 +2939,7 @@ func (x *CreatePendingSignUpReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePendingSignUpReq.ProtoReflect.Descriptor instead.
 func (*CreatePendingSignUpReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{54}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *CreatePendingSignUpReq) GetEmail() string {
@@ -2874,7 +2993,7 @@ type CreatePendingSignUpResp struct {
 
 func (x *CreatePendingSignUpResp) Reset() {
 	*x = CreatePendingSignUpResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[55]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2886,7 +3005,7 @@ func (x *CreatePendingSignUpResp) String() string {
 func (*CreatePendingSignUpResp) ProtoMessage() {}
 
 func (x *CreatePendingSignUpResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[55]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2899,7 +3018,7 @@ func (x *CreatePendingSignUpResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePendingSignUpResp.ProtoReflect.Descriptor instead.
 func (*CreatePendingSignUpResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{55}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *CreatePendingSignUpResp) GetPending() *PendingSignUp {
@@ -2921,7 +3040,7 @@ type RecordPendingSignUpAttemptReq struct {
 
 func (x *RecordPendingSignUpAttemptReq) Reset() {
 	*x = RecordPendingSignUpAttemptReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[56]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2933,7 +3052,7 @@ func (x *RecordPendingSignUpAttemptReq) String() string {
 func (*RecordPendingSignUpAttemptReq) ProtoMessage() {}
 
 func (x *RecordPendingSignUpAttemptReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[56]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2946,7 +3065,7 @@ func (x *RecordPendingSignUpAttemptReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordPendingSignUpAttemptReq.ProtoReflect.Descriptor instead.
 func (*RecordPendingSignUpAttemptReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{56}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *RecordPendingSignUpAttemptReq) GetPendingId() string {
@@ -2967,7 +3086,7 @@ type RecordPendingSignUpAttemptResp struct {
 
 func (x *RecordPendingSignUpAttemptResp) Reset() {
 	*x = RecordPendingSignUpAttemptResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[57]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2979,7 +3098,7 @@ func (x *RecordPendingSignUpAttemptResp) String() string {
 func (*RecordPendingSignUpAttemptResp) ProtoMessage() {}
 
 func (x *RecordPendingSignUpAttemptResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[57]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2992,7 +3111,7 @@ func (x *RecordPendingSignUpAttemptResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordPendingSignUpAttemptResp.ProtoReflect.Descriptor instead.
 func (*RecordPendingSignUpAttemptResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{57}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *RecordPendingSignUpAttemptResp) GetAttempts() int64 {
@@ -3027,7 +3146,7 @@ type ClaimPendingSignUpReq struct {
 
 func (x *ClaimPendingSignUpReq) Reset() {
 	*x = ClaimPendingSignUpReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[58]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3039,7 +3158,7 @@ func (x *ClaimPendingSignUpReq) String() string {
 func (*ClaimPendingSignUpReq) ProtoMessage() {}
 
 func (x *ClaimPendingSignUpReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[58]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3052,7 +3171,7 @@ func (x *ClaimPendingSignUpReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimPendingSignUpReq.ProtoReflect.Descriptor instead.
 func (*ClaimPendingSignUpReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{58}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ClaimPendingSignUpReq) GetPendingId() string {
@@ -3073,7 +3192,7 @@ type ClaimPendingSignUpResp struct {
 
 func (x *ClaimPendingSignUpResp) Reset() {
 	*x = ClaimPendingSignUpResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[59]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3085,7 +3204,7 @@ func (x *ClaimPendingSignUpResp) String() string {
 func (*ClaimPendingSignUpResp) ProtoMessage() {}
 
 func (x *ClaimPendingSignUpResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[59]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3098,7 +3217,7 @@ func (x *ClaimPendingSignUpResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimPendingSignUpResp.ProtoReflect.Descriptor instead.
 func (*ClaimPendingSignUpResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{59}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ClaimPendingSignUpResp) GetEmail() string {
@@ -3134,7 +3253,7 @@ type DeletePendingSignUpsForEmailReq struct {
 
 func (x *DeletePendingSignUpsForEmailReq) Reset() {
 	*x = DeletePendingSignUpsForEmailReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[60]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3146,7 +3265,7 @@ func (x *DeletePendingSignUpsForEmailReq) String() string {
 func (*DeletePendingSignUpsForEmailReq) ProtoMessage() {}
 
 func (x *DeletePendingSignUpsForEmailReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[60]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3159,7 +3278,7 @@ func (x *DeletePendingSignUpsForEmailReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePendingSignUpsForEmailReq.ProtoReflect.Descriptor instead.
 func (*DeletePendingSignUpsForEmailReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{60}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *DeletePendingSignUpsForEmailReq) GetEmail() string {
@@ -3177,7 +3296,7 @@ type DeletePendingSignUpsForEmailResp struct {
 
 func (x *DeletePendingSignUpsForEmailResp) Reset() {
 	*x = DeletePendingSignUpsForEmailResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[61]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3189,7 +3308,7 @@ func (x *DeletePendingSignUpsForEmailResp) String() string {
 func (*DeletePendingSignUpsForEmailResp) ProtoMessage() {}
 
 func (x *DeletePendingSignUpsForEmailResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[61]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3202,7 +3321,7 @@ func (x *DeletePendingSignUpsForEmailResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePendingSignUpsForEmailResp.ProtoReflect.Descriptor instead.
 func (*DeletePendingSignUpsForEmailResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{61}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{63}
 }
 
 type PurgeExpiredPendingSignUpsReq struct {
@@ -3214,7 +3333,7 @@ type PurgeExpiredPendingSignUpsReq struct {
 
 func (x *PurgeExpiredPendingSignUpsReq) Reset() {
 	*x = PurgeExpiredPendingSignUpsReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[62]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3226,7 +3345,7 @@ func (x *PurgeExpiredPendingSignUpsReq) String() string {
 func (*PurgeExpiredPendingSignUpsReq) ProtoMessage() {}
 
 func (x *PurgeExpiredPendingSignUpsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[62]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3239,7 +3358,7 @@ func (x *PurgeExpiredPendingSignUpsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeExpiredPendingSignUpsReq.ProtoReflect.Descriptor instead.
 func (*PurgeExpiredPendingSignUpsReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{62}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *PurgeExpiredPendingSignUpsReq) GetEmail() string {
@@ -3257,7 +3376,7 @@ type PurgeExpiredPendingSignUpsResp struct {
 
 func (x *PurgeExpiredPendingSignUpsResp) Reset() {
 	*x = PurgeExpiredPendingSignUpsResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[63]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3269,7 +3388,7 @@ func (x *PurgeExpiredPendingSignUpsResp) String() string {
 func (*PurgeExpiredPendingSignUpsResp) ProtoMessage() {}
 
 func (x *PurgeExpiredPendingSignUpsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[63]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3282,7 +3401,7 @@ func (x *PurgeExpiredPendingSignUpsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeExpiredPendingSignUpsResp.ProtoReflect.Descriptor instead.
 func (*PurgeExpiredPendingSignUpsResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{63}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{65}
 }
 
 // ── password_reset request/response messages (E1) ───────────
@@ -3305,7 +3424,7 @@ type CreatePasswordResetTokenReq struct {
 
 func (x *CreatePasswordResetTokenReq) Reset() {
 	*x = CreatePasswordResetTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[64]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3317,7 +3436,7 @@ func (x *CreatePasswordResetTokenReq) String() string {
 func (*CreatePasswordResetTokenReq) ProtoMessage() {}
 
 func (x *CreatePasswordResetTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[64]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3330,7 +3449,7 @@ func (x *CreatePasswordResetTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePasswordResetTokenReq.ProtoReflect.Descriptor instead.
 func (*CreatePasswordResetTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{64}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *CreatePasswordResetTokenReq) GetUserId() string {
@@ -3377,7 +3496,7 @@ type CreatePasswordResetTokenResp struct {
 
 func (x *CreatePasswordResetTokenResp) Reset() {
 	*x = CreatePasswordResetTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[65]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3389,7 +3508,7 @@ func (x *CreatePasswordResetTokenResp) String() string {
 func (*CreatePasswordResetTokenResp) ProtoMessage() {}
 
 func (x *CreatePasswordResetTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[65]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3402,7 +3521,7 @@ func (x *CreatePasswordResetTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePasswordResetTokenResp.ProtoReflect.Descriptor instead.
 func (*CreatePasswordResetTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{65}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *CreatePasswordResetTokenResp) GetToken() *PasswordResetToken {
@@ -3421,7 +3540,7 @@ type ConsumePasswordResetTokenReq struct {
 
 func (x *ConsumePasswordResetTokenReq) Reset() {
 	*x = ConsumePasswordResetTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[66]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3433,7 +3552,7 @@ func (x *ConsumePasswordResetTokenReq) String() string {
 func (*ConsumePasswordResetTokenReq) ProtoMessage() {}
 
 func (x *ConsumePasswordResetTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[66]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3446,7 +3565,7 @@ func (x *ConsumePasswordResetTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumePasswordResetTokenReq.ProtoReflect.Descriptor instead.
 func (*ConsumePasswordResetTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{66}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ConsumePasswordResetTokenReq) GetTokenHash() string {
@@ -3465,7 +3584,7 @@ type ConsumePasswordResetTokenResp struct {
 
 func (x *ConsumePasswordResetTokenResp) Reset() {
 	*x = ConsumePasswordResetTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[67]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3477,7 +3596,7 @@ func (x *ConsumePasswordResetTokenResp) String() string {
 func (*ConsumePasswordResetTokenResp) ProtoMessage() {}
 
 func (x *ConsumePasswordResetTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[67]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3490,7 +3609,7 @@ func (x *ConsumePasswordResetTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumePasswordResetTokenResp.ProtoReflect.Descriptor instead.
 func (*ConsumePasswordResetTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{67}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ConsumePasswordResetTokenResp) GetUserId() string {
@@ -3518,7 +3637,7 @@ type UpdateUserPasswordReq struct {
 
 func (x *UpdateUserPasswordReq) Reset() {
 	*x = UpdateUserPasswordReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[68]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3530,7 +3649,7 @@ func (x *UpdateUserPasswordReq) String() string {
 func (*UpdateUserPasswordReq) ProtoMessage() {}
 
 func (x *UpdateUserPasswordReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[68]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3543,7 +3662,7 @@ func (x *UpdateUserPasswordReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserPasswordReq.ProtoReflect.Descriptor instead.
 func (*UpdateUserPasswordReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{68}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *UpdateUserPasswordReq) GetUserId() string {
@@ -3569,7 +3688,7 @@ type UpdateUserPasswordResp struct {
 
 func (x *UpdateUserPasswordResp) Reset() {
 	*x = UpdateUserPasswordResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[69]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3581,7 +3700,7 @@ func (x *UpdateUserPasswordResp) String() string {
 func (*UpdateUserPasswordResp) ProtoMessage() {}
 
 func (x *UpdateUserPasswordResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[69]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3594,7 +3713,7 @@ func (x *UpdateUserPasswordResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserPasswordResp.ProtoReflect.Descriptor instead.
 func (*UpdateUserPasswordResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{69}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *UpdateUserPasswordResp) GetUserId() string {
@@ -3617,7 +3736,7 @@ type UpdateUserPasswordIfUnchangedReq struct {
 
 func (x *UpdateUserPasswordIfUnchangedReq) Reset() {
 	*x = UpdateUserPasswordIfUnchangedReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[70]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3629,7 +3748,7 @@ func (x *UpdateUserPasswordIfUnchangedReq) String() string {
 func (*UpdateUserPasswordIfUnchangedReq) ProtoMessage() {}
 
 func (x *UpdateUserPasswordIfUnchangedReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[70]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3642,7 +3761,7 @@ func (x *UpdateUserPasswordIfUnchangedReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserPasswordIfUnchangedReq.ProtoReflect.Descriptor instead.
 func (*UpdateUserPasswordIfUnchangedReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{70}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *UpdateUserPasswordIfUnchangedReq) GetUserId() string {
@@ -3675,7 +3794,7 @@ type UpdateUserPasswordIfUnchangedResp struct {
 
 func (x *UpdateUserPasswordIfUnchangedResp) Reset() {
 	*x = UpdateUserPasswordIfUnchangedResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[71]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3687,7 +3806,7 @@ func (x *UpdateUserPasswordIfUnchangedResp) String() string {
 func (*UpdateUserPasswordIfUnchangedResp) ProtoMessage() {}
 
 func (x *UpdateUserPasswordIfUnchangedResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[71]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3700,7 +3819,7 @@ func (x *UpdateUserPasswordIfUnchangedResp) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use UpdateUserPasswordIfUnchangedResp.ProtoReflect.Descriptor instead.
 func (*UpdateUserPasswordIfUnchangedResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{71}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *UpdateUserPasswordIfUnchangedResp) GetUserId() string {
@@ -3728,7 +3847,7 @@ type DeleteOtherSessionTokensReq struct {
 
 func (x *DeleteOtherSessionTokensReq) Reset() {
 	*x = DeleteOtherSessionTokensReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[72]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3740,7 +3859,7 @@ func (x *DeleteOtherSessionTokensReq) String() string {
 func (*DeleteOtherSessionTokensReq) ProtoMessage() {}
 
 func (x *DeleteOtherSessionTokensReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[72]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3753,7 +3872,7 @@ func (x *DeleteOtherSessionTokensReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOtherSessionTokensReq.ProtoReflect.Descriptor instead.
 func (*DeleteOtherSessionTokensReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{72}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *DeleteOtherSessionTokensReq) GetUserId() string {
@@ -3785,7 +3904,7 @@ type DeleteOtherSessionTokensResp struct {
 
 func (x *DeleteOtherSessionTokensResp) Reset() {
 	*x = DeleteOtherSessionTokensResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[73]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3797,7 +3916,7 @@ func (x *DeleteOtherSessionTokensResp) String() string {
 func (*DeleteOtherSessionTokensResp) ProtoMessage() {}
 
 func (x *DeleteOtherSessionTokensResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[73]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3810,7 +3929,7 @@ func (x *DeleteOtherSessionTokensResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOtherSessionTokensResp.ProtoReflect.Descriptor instead.
 func (*DeleteOtherSessionTokensResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{73}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{75}
 }
 
 // DeleteUserSessionsForReset — revoke ALL of a user's tokens after a
@@ -3827,7 +3946,7 @@ type DeleteUserSessionsForResetReq struct {
 
 func (x *DeleteUserSessionsForResetReq) Reset() {
 	*x = DeleteUserSessionsForResetReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[74]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3839,7 +3958,7 @@ func (x *DeleteUserSessionsForResetReq) String() string {
 func (*DeleteUserSessionsForResetReq) ProtoMessage() {}
 
 func (x *DeleteUserSessionsForResetReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[74]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3852,7 +3971,7 @@ func (x *DeleteUserSessionsForResetReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUserSessionsForResetReq.ProtoReflect.Descriptor instead.
 func (*DeleteUserSessionsForResetReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{74}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *DeleteUserSessionsForResetReq) GetUserId() string {
@@ -3871,7 +3990,7 @@ type DeleteUserSessionsForResetResp struct {
 
 func (x *DeleteUserSessionsForResetResp) Reset() {
 	*x = DeleteUserSessionsForResetResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[75]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3883,7 +4002,7 @@ func (x *DeleteUserSessionsForResetResp) String() string {
 func (*DeleteUserSessionsForResetResp) ProtoMessage() {}
 
 func (x *DeleteUserSessionsForResetResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[75]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3896,7 +4015,7 @@ func (x *DeleteUserSessionsForResetResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUserSessionsForResetResp.ProtoReflect.Descriptor instead.
 func (*DeleteUserSessionsForResetResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{75}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *DeleteUserSessionsForResetResp) GetUserId() string {
@@ -3921,7 +4040,7 @@ type CreateEmailVerificationTokenReq struct {
 
 func (x *CreateEmailVerificationTokenReq) Reset() {
 	*x = CreateEmailVerificationTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[76]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3933,7 +4052,7 @@ func (x *CreateEmailVerificationTokenReq) String() string {
 func (*CreateEmailVerificationTokenReq) ProtoMessage() {}
 
 func (x *CreateEmailVerificationTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[76]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3946,7 +4065,7 @@ func (x *CreateEmailVerificationTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEmailVerificationTokenReq.ProtoReflect.Descriptor instead.
 func (*CreateEmailVerificationTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{76}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *CreateEmailVerificationTokenReq) GetUserId() string {
@@ -3993,7 +4112,7 @@ type CreateEmailVerificationTokenResp struct {
 
 func (x *CreateEmailVerificationTokenResp) Reset() {
 	*x = CreateEmailVerificationTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[77]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4005,7 +4124,7 @@ func (x *CreateEmailVerificationTokenResp) String() string {
 func (*CreateEmailVerificationTokenResp) ProtoMessage() {}
 
 func (x *CreateEmailVerificationTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[77]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4018,7 +4137,7 @@ func (x *CreateEmailVerificationTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEmailVerificationTokenResp.ProtoReflect.Descriptor instead.
 func (*CreateEmailVerificationTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{77}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *CreateEmailVerificationTokenResp) GetToken() *EmailVerificationToken {
@@ -4037,7 +4156,7 @@ type ConsumeEmailVerificationTokenReq struct {
 
 func (x *ConsumeEmailVerificationTokenReq) Reset() {
 	*x = ConsumeEmailVerificationTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[78]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4049,7 +4168,7 @@ func (x *ConsumeEmailVerificationTokenReq) String() string {
 func (*ConsumeEmailVerificationTokenReq) ProtoMessage() {}
 
 func (x *ConsumeEmailVerificationTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[78]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4062,7 +4181,7 @@ func (x *ConsumeEmailVerificationTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeEmailVerificationTokenReq.ProtoReflect.Descriptor instead.
 func (*ConsumeEmailVerificationTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{78}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ConsumeEmailVerificationTokenReq) GetTokenHash() string {
@@ -4081,7 +4200,7 @@ type ConsumeEmailVerificationTokenResp struct {
 
 func (x *ConsumeEmailVerificationTokenResp) Reset() {
 	*x = ConsumeEmailVerificationTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[79]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4093,7 +4212,7 @@ func (x *ConsumeEmailVerificationTokenResp) String() string {
 func (*ConsumeEmailVerificationTokenResp) ProtoMessage() {}
 
 func (x *ConsumeEmailVerificationTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[79]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4106,7 +4225,7 @@ func (x *ConsumeEmailVerificationTokenResp) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ConsumeEmailVerificationTokenResp.ProtoReflect.Descriptor instead.
 func (*ConsumeEmailVerificationTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{79}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ConsumeEmailVerificationTokenResp) GetUserId() string {
@@ -4127,7 +4246,7 @@ type MarkEmailDerivedFromInviteReq struct {
 
 func (x *MarkEmailDerivedFromInviteReq) Reset() {
 	*x = MarkEmailDerivedFromInviteReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[80]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4139,7 +4258,7 @@ func (x *MarkEmailDerivedFromInviteReq) String() string {
 func (*MarkEmailDerivedFromInviteReq) ProtoMessage() {}
 
 func (x *MarkEmailDerivedFromInviteReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[80]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4152,7 +4271,7 @@ func (x *MarkEmailDerivedFromInviteReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkEmailDerivedFromInviteReq.ProtoReflect.Descriptor instead.
 func (*MarkEmailDerivedFromInviteReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{80}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *MarkEmailDerivedFromInviteReq) GetUserId() string {
@@ -4174,7 +4293,7 @@ type MarkEmailDerivedFromInviteResp struct {
 
 func (x *MarkEmailDerivedFromInviteResp) Reset() {
 	*x = MarkEmailDerivedFromInviteResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[81]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4186,7 +4305,7 @@ func (x *MarkEmailDerivedFromInviteResp) String() string {
 func (*MarkEmailDerivedFromInviteResp) ProtoMessage() {}
 
 func (x *MarkEmailDerivedFromInviteResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[81]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4199,7 +4318,7 @@ func (x *MarkEmailDerivedFromInviteResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkEmailDerivedFromInviteResp.ProtoReflect.Descriptor instead.
 func (*MarkEmailDerivedFromInviteResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{81}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *MarkEmailDerivedFromInviteResp) GetUserId() string {
@@ -4218,7 +4337,7 @@ type MarkEmailVerifiedReq struct {
 
 func (x *MarkEmailVerifiedReq) Reset() {
 	*x = MarkEmailVerifiedReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[82]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4230,7 +4349,7 @@ func (x *MarkEmailVerifiedReq) String() string {
 func (*MarkEmailVerifiedReq) ProtoMessage() {}
 
 func (x *MarkEmailVerifiedReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[82]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4243,7 +4362,7 @@ func (x *MarkEmailVerifiedReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkEmailVerifiedReq.ProtoReflect.Descriptor instead.
 func (*MarkEmailVerifiedReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{82}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *MarkEmailVerifiedReq) GetUserId() string {
@@ -4262,7 +4381,7 @@ type MarkEmailVerifiedResp struct {
 
 func (x *MarkEmailVerifiedResp) Reset() {
 	*x = MarkEmailVerifiedResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[83]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4274,7 +4393,7 @@ func (x *MarkEmailVerifiedResp) String() string {
 func (*MarkEmailVerifiedResp) ProtoMessage() {}
 
 func (x *MarkEmailVerifiedResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[83]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4287,7 +4406,7 @@ func (x *MarkEmailVerifiedResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkEmailVerifiedResp.ProtoReflect.Descriptor instead.
 func (*MarkEmailVerifiedResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{83}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *MarkEmailVerifiedResp) GetUserId() string {
@@ -4309,7 +4428,7 @@ type CreateDeviceReq struct {
 
 func (x *CreateDeviceReq) Reset() {
 	*x = CreateDeviceReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[84]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4321,7 +4440,7 @@ func (x *CreateDeviceReq) String() string {
 func (*CreateDeviceReq) ProtoMessage() {}
 
 func (x *CreateDeviceReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[84]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4334,7 +4453,7 @@ func (x *CreateDeviceReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDeviceReq.ProtoReflect.Descriptor instead.
 func (*CreateDeviceReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{84}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *CreateDeviceReq) GetUserId() string {
@@ -4374,7 +4493,7 @@ type CreateDeviceResp struct {
 
 func (x *CreateDeviceResp) Reset() {
 	*x = CreateDeviceResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[85]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4386,7 +4505,7 @@ func (x *CreateDeviceResp) String() string {
 func (*CreateDeviceResp) ProtoMessage() {}
 
 func (x *CreateDeviceResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[85]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4399,7 +4518,7 @@ func (x *CreateDeviceResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDeviceResp.ProtoReflect.Descriptor instead.
 func (*CreateDeviceResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{85}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *CreateDeviceResp) GetDevice() *Device {
@@ -4422,7 +4541,7 @@ type TrustDeviceReq struct {
 
 func (x *TrustDeviceReq) Reset() {
 	*x = TrustDeviceReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[86]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4434,7 +4553,7 @@ func (x *TrustDeviceReq) String() string {
 func (*TrustDeviceReq) ProtoMessage() {}
 
 func (x *TrustDeviceReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[86]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4447,7 +4566,7 @@ func (x *TrustDeviceReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrustDeviceReq.ProtoReflect.Descriptor instead.
 func (*TrustDeviceReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{86}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *TrustDeviceReq) GetUserId() string {
@@ -4480,7 +4599,7 @@ type TrustDeviceResp struct {
 
 func (x *TrustDeviceResp) Reset() {
 	*x = TrustDeviceResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[87]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4492,7 +4611,7 @@ func (x *TrustDeviceResp) String() string {
 func (*TrustDeviceResp) ProtoMessage() {}
 
 func (x *TrustDeviceResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[87]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4505,7 +4624,7 @@ func (x *TrustDeviceResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrustDeviceResp.ProtoReflect.Descriptor instead.
 func (*TrustDeviceResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{87}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *TrustDeviceResp) GetDeviceId() string {
@@ -4526,7 +4645,7 @@ type TouchDeviceReq struct {
 
 func (x *TouchDeviceReq) Reset() {
 	*x = TouchDeviceReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[88]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4538,7 +4657,7 @@ func (x *TouchDeviceReq) String() string {
 func (*TouchDeviceReq) ProtoMessage() {}
 
 func (x *TouchDeviceReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[88]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4551,7 +4670,7 @@ func (x *TouchDeviceReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TouchDeviceReq.ProtoReflect.Descriptor instead.
 func (*TouchDeviceReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{88}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *TouchDeviceReq) GetUserId() string {
@@ -4584,7 +4703,7 @@ type TouchDeviceResp struct {
 
 func (x *TouchDeviceResp) Reset() {
 	*x = TouchDeviceResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[89]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4596,7 +4715,7 @@ func (x *TouchDeviceResp) String() string {
 func (*TouchDeviceResp) ProtoMessage() {}
 
 func (x *TouchDeviceResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[89]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4609,7 +4728,7 @@ func (x *TouchDeviceResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TouchDeviceResp.ProtoReflect.Descriptor instead.
 func (*TouchDeviceResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{89}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *TouchDeviceResp) GetDeviceId() string {
@@ -4629,7 +4748,7 @@ type DeleteDeviceTokensReq struct {
 
 func (x *DeleteDeviceTokensReq) Reset() {
 	*x = DeleteDeviceTokensReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[90]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4641,7 +4760,7 @@ func (x *DeleteDeviceTokensReq) String() string {
 func (*DeleteDeviceTokensReq) ProtoMessage() {}
 
 func (x *DeleteDeviceTokensReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[90]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4654,7 +4773,7 @@ func (x *DeleteDeviceTokensReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeviceTokensReq.ProtoReflect.Descriptor instead.
 func (*DeleteDeviceTokensReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{90}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *DeleteDeviceTokensReq) GetUserId() string {
@@ -4680,7 +4799,7 @@ type DeleteDeviceTokensResp struct {
 
 func (x *DeleteDeviceTokensResp) Reset() {
 	*x = DeleteDeviceTokensResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[91]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4692,7 +4811,7 @@ func (x *DeleteDeviceTokensResp) String() string {
 func (*DeleteDeviceTokensResp) ProtoMessage() {}
 
 func (x *DeleteDeviceTokensResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[91]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4705,7 +4824,7 @@ func (x *DeleteDeviceTokensResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeviceTokensResp.ProtoReflect.Descriptor instead.
 func (*DeleteDeviceTokensResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{91}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *DeleteDeviceTokensResp) GetDeviceId() string {
@@ -4725,7 +4844,7 @@ type DeleteDeviceReq struct {
 
 func (x *DeleteDeviceReq) Reset() {
 	*x = DeleteDeviceReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[92]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4737,7 +4856,7 @@ func (x *DeleteDeviceReq) String() string {
 func (*DeleteDeviceReq) ProtoMessage() {}
 
 func (x *DeleteDeviceReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[92]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4750,7 +4869,7 @@ func (x *DeleteDeviceReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeviceReq.ProtoReflect.Descriptor instead.
 func (*DeleteDeviceReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{92}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *DeleteDeviceReq) GetUserId() string {
@@ -4776,7 +4895,7 @@ type DeleteDeviceResp struct {
 
 func (x *DeleteDeviceResp) Reset() {
 	*x = DeleteDeviceResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[93]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4788,7 +4907,7 @@ func (x *DeleteDeviceResp) String() string {
 func (*DeleteDeviceResp) ProtoMessage() {}
 
 func (x *DeleteDeviceResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[93]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4801,7 +4920,7 @@ func (x *DeleteDeviceResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeviceResp.ProtoReflect.Descriptor instead.
 func (*DeleteDeviceResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{93}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *DeleteDeviceResp) GetDeviceId() string {
@@ -4824,7 +4943,7 @@ type DeleteUndevicedSessionsReq struct {
 
 func (x *DeleteUndevicedSessionsReq) Reset() {
 	*x = DeleteUndevicedSessionsReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[94]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4836,7 +4955,7 @@ func (x *DeleteUndevicedSessionsReq) String() string {
 func (*DeleteUndevicedSessionsReq) ProtoMessage() {}
 
 func (x *DeleteUndevicedSessionsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[94]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4849,7 +4968,7 @@ func (x *DeleteUndevicedSessionsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUndevicedSessionsReq.ProtoReflect.Descriptor instead.
 func (*DeleteUndevicedSessionsReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{94}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *DeleteUndevicedSessionsReq) GetUserId() string {
@@ -4875,7 +4994,7 @@ type DeleteUndevicedSessionsResp struct {
 
 func (x *DeleteUndevicedSessionsResp) Reset() {
 	*x = DeleteUndevicedSessionsResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[95]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4887,7 +5006,7 @@ func (x *DeleteUndevicedSessionsResp) String() string {
 func (*DeleteUndevicedSessionsResp) ProtoMessage() {}
 
 func (x *DeleteUndevicedSessionsResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[95]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4900,7 +5019,7 @@ func (x *DeleteUndevicedSessionsResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUndevicedSessionsResp.ProtoReflect.Descriptor instead.
 func (*DeleteUndevicedSessionsResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{95}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *DeleteUndevicedSessionsResp) GetUserId() string {
@@ -4919,7 +5038,7 @@ type DeleteAllUserTokensReq struct {
 
 func (x *DeleteAllUserTokensReq) Reset() {
 	*x = DeleteAllUserTokensReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[96]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4931,7 +5050,7 @@ func (x *DeleteAllUserTokensReq) String() string {
 func (*DeleteAllUserTokensReq) ProtoMessage() {}
 
 func (x *DeleteAllUserTokensReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[96]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4944,7 +5063,7 @@ func (x *DeleteAllUserTokensReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAllUserTokensReq.ProtoReflect.Descriptor instead.
 func (*DeleteAllUserTokensReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{96}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *DeleteAllUserTokensReq) GetUserId() string {
@@ -4963,7 +5082,7 @@ type DeleteAllUserTokensResp struct {
 
 func (x *DeleteAllUserTokensResp) Reset() {
 	*x = DeleteAllUserTokensResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[97]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4975,7 +5094,7 @@ func (x *DeleteAllUserTokensResp) String() string {
 func (*DeleteAllUserTokensResp) ProtoMessage() {}
 
 func (x *DeleteAllUserTokensResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[97]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4988,7 +5107,7 @@ func (x *DeleteAllUserTokensResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAllUserTokensResp.ProtoReflect.Descriptor instead.
 func (*DeleteAllUserTokensResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{97}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *DeleteAllUserTokensResp) GetUserId() string {
@@ -5007,7 +5126,7 @@ type DeleteAllUserDevicesReq struct {
 
 func (x *DeleteAllUserDevicesReq) Reset() {
 	*x = DeleteAllUserDevicesReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[98]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5019,7 +5138,7 @@ func (x *DeleteAllUserDevicesReq) String() string {
 func (*DeleteAllUserDevicesReq) ProtoMessage() {}
 
 func (x *DeleteAllUserDevicesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[98]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5032,7 +5151,7 @@ func (x *DeleteAllUserDevicesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAllUserDevicesReq.ProtoReflect.Descriptor instead.
 func (*DeleteAllUserDevicesReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{98}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *DeleteAllUserDevicesReq) GetUserId() string {
@@ -5051,7 +5170,7 @@ type DeleteAllUserDevicesResp struct {
 
 func (x *DeleteAllUserDevicesResp) Reset() {
 	*x = DeleteAllUserDevicesResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[99]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5063,7 +5182,7 @@ func (x *DeleteAllUserDevicesResp) String() string {
 func (*DeleteAllUserDevicesResp) ProtoMessage() {}
 
 func (x *DeleteAllUserDevicesResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[99]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5076,7 +5195,7 @@ func (x *DeleteAllUserDevicesResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAllUserDevicesResp.ProtoReflect.Descriptor instead.
 func (*DeleteAllUserDevicesResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{99}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *DeleteAllUserDevicesResp) GetUserId() string {
@@ -5096,7 +5215,7 @@ type CreateRoleReq struct {
 
 func (x *CreateRoleReq) Reset() {
 	*x = CreateRoleReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[100]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5108,7 +5227,7 @@ func (x *CreateRoleReq) String() string {
 func (*CreateRoleReq) ProtoMessage() {}
 
 func (x *CreateRoleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[100]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5121,7 +5240,7 @@ func (x *CreateRoleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRoleReq.ProtoReflect.Descriptor instead.
 func (*CreateRoleReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{100}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *CreateRoleReq) GetName() string {
@@ -5147,7 +5266,7 @@ type CreateRoleResp struct {
 
 func (x *CreateRoleResp) Reset() {
 	*x = CreateRoleResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[101]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5159,7 +5278,7 @@ func (x *CreateRoleResp) String() string {
 func (*CreateRoleResp) ProtoMessage() {}
 
 func (x *CreateRoleResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[101]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5172,7 +5291,7 @@ func (x *CreateRoleResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRoleResp.ProtoReflect.Descriptor instead.
 func (*CreateRoleResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{101}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *CreateRoleResp) GetRole() *Role {
@@ -5191,7 +5310,7 @@ type DeleteRoleReq struct {
 
 func (x *DeleteRoleReq) Reset() {
 	*x = DeleteRoleReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[102]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5203,7 +5322,7 @@ func (x *DeleteRoleReq) String() string {
 func (*DeleteRoleReq) ProtoMessage() {}
 
 func (x *DeleteRoleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[102]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5216,7 +5335,7 @@ func (x *DeleteRoleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRoleReq.ProtoReflect.Descriptor instead.
 func (*DeleteRoleReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{102}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *DeleteRoleReq) GetRoleId() string {
@@ -5235,7 +5354,7 @@ type DeleteRoleResp struct {
 
 func (x *DeleteRoleResp) Reset() {
 	*x = DeleteRoleResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[103]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5247,7 +5366,7 @@ func (x *DeleteRoleResp) String() string {
 func (*DeleteRoleResp) ProtoMessage() {}
 
 func (x *DeleteRoleResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[103]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5260,7 +5379,7 @@ func (x *DeleteRoleResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRoleResp.ProtoReflect.Descriptor instead.
 func (*DeleteRoleResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{103}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *DeleteRoleResp) GetRoleId() string {
@@ -5287,7 +5406,7 @@ type UpdateRoleReq struct {
 
 func (x *UpdateRoleReq) Reset() {
 	*x = UpdateRoleReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[104]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5299,7 +5418,7 @@ func (x *UpdateRoleReq) String() string {
 func (*UpdateRoleReq) ProtoMessage() {}
 
 func (x *UpdateRoleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[104]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5312,7 +5431,7 @@ func (x *UpdateRoleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRoleReq.ProtoReflect.Descriptor instead.
 func (*UpdateRoleReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{104}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *UpdateRoleReq) GetRoleId() string {
@@ -5345,7 +5464,7 @@ type UpdateRoleResp struct {
 
 func (x *UpdateRoleResp) Reset() {
 	*x = UpdateRoleResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[105]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5357,7 +5476,7 @@ func (x *UpdateRoleResp) String() string {
 func (*UpdateRoleResp) ProtoMessage() {}
 
 func (x *UpdateRoleResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[105]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5370,7 +5489,7 @@ func (x *UpdateRoleResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRoleResp.ProtoReflect.Descriptor instead.
 func (*UpdateRoleResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{105}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *UpdateRoleResp) GetRoleId() string {
@@ -5399,7 +5518,7 @@ type DeleteUserReq struct {
 
 func (x *DeleteUserReq) Reset() {
 	*x = DeleteUserReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[106]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5411,7 +5530,7 @@ func (x *DeleteUserReq) String() string {
 func (*DeleteUserReq) ProtoMessage() {}
 
 func (x *DeleteUserReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[106]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5424,7 +5543,7 @@ func (x *DeleteUserReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUserReq.ProtoReflect.Descriptor instead.
 func (*DeleteUserReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{106}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *DeleteUserReq) GetUserId() string {
@@ -5443,7 +5562,7 @@ type DeleteUserResp struct {
 
 func (x *DeleteUserResp) Reset() {
 	*x = DeleteUserResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[107]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5455,7 +5574,7 @@ func (x *DeleteUserResp) String() string {
 func (*DeleteUserResp) ProtoMessage() {}
 
 func (x *DeleteUserResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[107]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5468,7 +5587,7 @@ func (x *DeleteUserResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteUserResp.ProtoReflect.Descriptor instead.
 func (*DeleteUserResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{107}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *DeleteUserResp) GetUserId() string {
@@ -5495,7 +5614,7 @@ type UpdateUserReq struct {
 
 func (x *UpdateUserReq) Reset() {
 	*x = UpdateUserReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[108]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5507,7 +5626,7 @@ func (x *UpdateUserReq) String() string {
 func (*UpdateUserReq) ProtoMessage() {}
 
 func (x *UpdateUserReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[108]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5520,7 +5639,7 @@ func (x *UpdateUserReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserReq.ProtoReflect.Descriptor instead.
 func (*UpdateUserReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{108}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *UpdateUserReq) GetUserId() string {
@@ -5547,7 +5666,7 @@ type UpdateUserResp struct {
 
 func (x *UpdateUserResp) Reset() {
 	*x = UpdateUserResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[109]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5559,7 +5678,7 @@ func (x *UpdateUserResp) String() string {
 func (*UpdateUserResp) ProtoMessage() {}
 
 func (x *UpdateUserResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[109]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5572,7 +5691,7 @@ func (x *UpdateUserResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateUserResp.ProtoReflect.Descriptor instead.
 func (*UpdateUserResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{109}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *UpdateUserResp) GetUserId() string {
@@ -5598,7 +5717,7 @@ type DisableUsersReq struct {
 
 func (x *DisableUsersReq) Reset() {
 	*x = DisableUsersReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[110]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5610,7 +5729,7 @@ func (x *DisableUsersReq) String() string {
 func (*DisableUsersReq) ProtoMessage() {}
 
 func (x *DisableUsersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[110]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5623,7 +5742,7 @@ func (x *DisableUsersReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisableUsersReq.ProtoReflect.Descriptor instead.
 func (*DisableUsersReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{110}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *DisableUsersReq) GetIds() []string {
@@ -5646,7 +5765,7 @@ type DisableUsersResp struct {
 
 func (x *DisableUsersResp) Reset() {
 	*x = DisableUsersResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[111]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5658,7 +5777,7 @@ func (x *DisableUsersResp) String() string {
 func (*DisableUsersResp) ProtoMessage() {}
 
 func (x *DisableUsersResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[111]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5671,7 +5790,7 @@ func (x *DisableUsersResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisableUsersResp.ProtoReflect.Descriptor instead.
 func (*DisableUsersResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{111}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{113}
 }
 
 type EnableUsersReq struct {
@@ -5683,7 +5802,7 @@ type EnableUsersReq struct {
 
 func (x *EnableUsersReq) Reset() {
 	*x = EnableUsersReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[112]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5695,7 +5814,7 @@ func (x *EnableUsersReq) String() string {
 func (*EnableUsersReq) ProtoMessage() {}
 
 func (x *EnableUsersReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[112]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5708,7 +5827,7 @@ func (x *EnableUsersReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnableUsersReq.ProtoReflect.Descriptor instead.
 func (*EnableUsersReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{112}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *EnableUsersReq) GetIds() []string {
@@ -5726,7 +5845,7 @@ type EnableUsersResp struct {
 
 func (x *EnableUsersResp) Reset() {
 	*x = EnableUsersResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[113]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5738,7 +5857,7 @@ func (x *EnableUsersResp) String() string {
 func (*EnableUsersResp) ProtoMessage() {}
 
 func (x *EnableUsersResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[113]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5751,7 +5870,7 @@ func (x *EnableUsersResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnableUsersResp.ProtoReflect.Descriptor instead.
 func (*EnableUsersResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{113}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{115}
 }
 
 type AssignRoleToUserReq struct {
@@ -5774,7 +5893,7 @@ type AssignRoleToUserReq struct {
 
 func (x *AssignRoleToUserReq) Reset() {
 	*x = AssignRoleToUserReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[114]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5786,7 +5905,7 @@ func (x *AssignRoleToUserReq) String() string {
 func (*AssignRoleToUserReq) ProtoMessage() {}
 
 func (x *AssignRoleToUserReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[114]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5799,7 +5918,7 @@ func (x *AssignRoleToUserReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignRoleToUserReq.ProtoReflect.Descriptor instead.
 func (*AssignRoleToUserReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{114}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *AssignRoleToUserReq) GetUserId() string {
@@ -5832,7 +5951,7 @@ type AssignRoleToUserResp struct {
 
 func (x *AssignRoleToUserResp) Reset() {
 	*x = AssignRoleToUserResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[115]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5844,7 +5963,7 @@ func (x *AssignRoleToUserResp) String() string {
 func (*AssignRoleToUserResp) ProtoMessage() {}
 
 func (x *AssignRoleToUserResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[115]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5857,7 +5976,7 @@ func (x *AssignRoleToUserResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignRoleToUserResp.ProtoReflect.Descriptor instead.
 func (*AssignRoleToUserResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{115}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *AssignRoleToUserResp) GetUserRole() *UserRole {
@@ -5886,7 +6005,7 @@ type RevokeRoleFromUserReq struct {
 
 func (x *RevokeRoleFromUserReq) Reset() {
 	*x = RevokeRoleFromUserReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[116]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5898,7 +6017,7 @@ func (x *RevokeRoleFromUserReq) String() string {
 func (*RevokeRoleFromUserReq) ProtoMessage() {}
 
 func (x *RevokeRoleFromUserReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[116]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5911,7 +6030,7 @@ func (x *RevokeRoleFromUserReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeRoleFromUserReq.ProtoReflect.Descriptor instead.
 func (*RevokeRoleFromUserReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{116}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *RevokeRoleFromUserReq) GetUserId() string {
@@ -5949,7 +6068,7 @@ type RevokeRoleFromUserResp struct {
 
 func (x *RevokeRoleFromUserResp) Reset() {
 	*x = RevokeRoleFromUserResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[117]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5961,7 +6080,7 @@ func (x *RevokeRoleFromUserResp) String() string {
 func (*RevokeRoleFromUserResp) ProtoMessage() {}
 
 func (x *RevokeRoleFromUserResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[117]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5974,7 +6093,7 @@ func (x *RevokeRoleFromUserResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeRoleFromUserResp.ProtoReflect.Descriptor instead.
 func (*RevokeRoleFromUserResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{117}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *RevokeRoleFromUserResp) GetUserId() string {
@@ -6013,7 +6132,7 @@ type AddPermissionToRoleReq struct {
 
 func (x *AddPermissionToRoleReq) Reset() {
 	*x = AddPermissionToRoleReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[118]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6025,7 +6144,7 @@ func (x *AddPermissionToRoleReq) String() string {
 func (*AddPermissionToRoleReq) ProtoMessage() {}
 
 func (x *AddPermissionToRoleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[118]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6038,7 +6157,7 @@ func (x *AddPermissionToRoleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPermissionToRoleReq.ProtoReflect.Descriptor instead.
 func (*AddPermissionToRoleReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{118}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *AddPermissionToRoleReq) GetRoleId() string {
@@ -6064,7 +6183,7 @@ type AddPermissionToRoleResp struct {
 
 func (x *AddPermissionToRoleResp) Reset() {
 	*x = AddPermissionToRoleResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[119]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6076,7 +6195,7 @@ func (x *AddPermissionToRoleResp) String() string {
 func (*AddPermissionToRoleResp) ProtoMessage() {}
 
 func (x *AddPermissionToRoleResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[119]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6089,7 +6208,7 @@ func (x *AddPermissionToRoleResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPermissionToRoleResp.ProtoReflect.Descriptor instead.
 func (*AddPermissionToRoleResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{119}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *AddPermissionToRoleResp) GetRolePermission() *RolePermission {
@@ -6109,7 +6228,7 @@ type RemovePermissionFromRoleReq struct {
 
 func (x *RemovePermissionFromRoleReq) Reset() {
 	*x = RemovePermissionFromRoleReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[120]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6121,7 +6240,7 @@ func (x *RemovePermissionFromRoleReq) String() string {
 func (*RemovePermissionFromRoleReq) ProtoMessage() {}
 
 func (x *RemovePermissionFromRoleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[120]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6134,7 +6253,7 @@ func (x *RemovePermissionFromRoleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePermissionFromRoleReq.ProtoReflect.Descriptor instead.
 func (*RemovePermissionFromRoleReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{120}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *RemovePermissionFromRoleReq) GetRoleId() string {
@@ -6161,7 +6280,7 @@ type RemovePermissionFromRoleResp struct {
 
 func (x *RemovePermissionFromRoleResp) Reset() {
 	*x = RemovePermissionFromRoleResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[121]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6173,7 +6292,7 @@ func (x *RemovePermissionFromRoleResp) String() string {
 func (*RemovePermissionFromRoleResp) ProtoMessage() {}
 
 func (x *RemovePermissionFromRoleResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[121]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6186,7 +6305,7 @@ func (x *RemovePermissionFromRoleResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePermissionFromRoleResp.ProtoReflect.Descriptor instead.
 func (*RemovePermissionFromRoleResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{121}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *RemovePermissionFromRoleResp) GetRoleId() string {
@@ -6218,7 +6337,7 @@ type RegisterAuthClientReq struct {
 
 func (x *RegisterAuthClientReq) Reset() {
 	*x = RegisterAuthClientReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[122]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6230,7 +6349,7 @@ func (x *RegisterAuthClientReq) String() string {
 func (*RegisterAuthClientReq) ProtoMessage() {}
 
 func (x *RegisterAuthClientReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[122]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6243,7 +6362,7 @@ func (x *RegisterAuthClientReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterAuthClientReq.ProtoReflect.Descriptor instead.
 func (*RegisterAuthClientReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{122}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *RegisterAuthClientReq) GetClientId() string {
@@ -6283,7 +6402,7 @@ type RegisterAuthClientResp struct {
 
 func (x *RegisterAuthClientResp) Reset() {
 	*x = RegisterAuthClientResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[123]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6295,7 +6414,7 @@ func (x *RegisterAuthClientResp) String() string {
 func (*RegisterAuthClientResp) ProtoMessage() {}
 
 func (x *RegisterAuthClientResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[123]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6308,7 +6427,7 @@ func (x *RegisterAuthClientResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterAuthClientResp.ProtoReflect.Descriptor instead.
 func (*RegisterAuthClientResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{123}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *RegisterAuthClientResp) GetClient() *AuthClient {
@@ -6328,7 +6447,7 @@ type SetAuthClientEnabledReq struct {
 
 func (x *SetAuthClientEnabledReq) Reset() {
 	*x = SetAuthClientEnabledReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[124]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6340,7 +6459,7 @@ func (x *SetAuthClientEnabledReq) String() string {
 func (*SetAuthClientEnabledReq) ProtoMessage() {}
 
 func (x *SetAuthClientEnabledReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[124]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6353,7 +6472,7 @@ func (x *SetAuthClientEnabledReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAuthClientEnabledReq.ProtoReflect.Descriptor instead.
 func (*SetAuthClientEnabledReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{124}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *SetAuthClientEnabledReq) GetId() string {
@@ -6379,7 +6498,7 @@ type SetAuthClientEnabledResp struct {
 
 func (x *SetAuthClientEnabledResp) Reset() {
 	*x = SetAuthClientEnabledResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[125]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6391,7 +6510,7 @@ func (x *SetAuthClientEnabledResp) String() string {
 func (*SetAuthClientEnabledResp) ProtoMessage() {}
 
 func (x *SetAuthClientEnabledResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[125]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6404,7 +6523,7 @@ func (x *SetAuthClientEnabledResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAuthClientEnabledResp.ProtoReflect.Descriptor instead.
 func (*SetAuthClientEnabledResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{125}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *SetAuthClientEnabledResp) GetId() string {
@@ -6423,7 +6542,7 @@ type DeleteAuthClientReq struct {
 
 func (x *DeleteAuthClientReq) Reset() {
 	*x = DeleteAuthClientReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[126]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6435,7 +6554,7 @@ func (x *DeleteAuthClientReq) String() string {
 func (*DeleteAuthClientReq) ProtoMessage() {}
 
 func (x *DeleteAuthClientReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[126]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6448,7 +6567,7 @@ func (x *DeleteAuthClientReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAuthClientReq.ProtoReflect.Descriptor instead.
 func (*DeleteAuthClientReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{126}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *DeleteAuthClientReq) GetId() string {
@@ -6467,7 +6586,7 @@ type DeleteAuthClientResp struct {
 
 func (x *DeleteAuthClientResp) Reset() {
 	*x = DeleteAuthClientResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[127]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6479,7 +6598,7 @@ func (x *DeleteAuthClientResp) String() string {
 func (*DeleteAuthClientResp) ProtoMessage() {}
 
 func (x *DeleteAuthClientResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[127]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6492,7 +6611,7 @@ func (x *DeleteAuthClientResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAuthClientResp.ProtoReflect.Descriptor instead.
 func (*DeleteAuthClientResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{127}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *DeleteAuthClientResp) GetId() string {
@@ -6521,7 +6640,7 @@ type CreateCliAuthCodeReq struct {
 
 func (x *CreateCliAuthCodeReq) Reset() {
 	*x = CreateCliAuthCodeReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[128]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6533,7 +6652,7 @@ func (x *CreateCliAuthCodeReq) String() string {
 func (*CreateCliAuthCodeReq) ProtoMessage() {}
 
 func (x *CreateCliAuthCodeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[128]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6546,7 +6665,7 @@ func (x *CreateCliAuthCodeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCliAuthCodeReq.ProtoReflect.Descriptor instead.
 func (*CreateCliAuthCodeReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{128}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *CreateCliAuthCodeReq) GetUserId() string {
@@ -6600,7 +6719,7 @@ type CreateCliAuthCodeResp struct {
 
 func (x *CreateCliAuthCodeResp) Reset() {
 	*x = CreateCliAuthCodeResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[129]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6612,7 +6731,7 @@ func (x *CreateCliAuthCodeResp) String() string {
 func (*CreateCliAuthCodeResp) ProtoMessage() {}
 
 func (x *CreateCliAuthCodeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[129]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6625,7 +6744,7 @@ func (x *CreateCliAuthCodeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCliAuthCodeResp.ProtoReflect.Descriptor instead.
 func (*CreateCliAuthCodeResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{129}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *CreateCliAuthCodeResp) GetCode() *CliAuthCode {
@@ -6644,7 +6763,7 @@ type ConsumeCliAuthCodeReq struct {
 
 func (x *ConsumeCliAuthCodeReq) Reset() {
 	*x = ConsumeCliAuthCodeReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[130]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6656,7 +6775,7 @@ func (x *ConsumeCliAuthCodeReq) String() string {
 func (*ConsumeCliAuthCodeReq) ProtoMessage() {}
 
 func (x *ConsumeCliAuthCodeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[130]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6669,7 +6788,7 @@ func (x *ConsumeCliAuthCodeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeCliAuthCodeReq.ProtoReflect.Descriptor instead.
 func (*ConsumeCliAuthCodeReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{130}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *ConsumeCliAuthCodeReq) GetCodeHash() string {
@@ -6700,7 +6819,7 @@ type ConsumeCliAuthCodeResp struct {
 
 func (x *ConsumeCliAuthCodeResp) Reset() {
 	*x = ConsumeCliAuthCodeResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[131]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6712,7 +6831,7 @@ func (x *ConsumeCliAuthCodeResp) String() string {
 func (*ConsumeCliAuthCodeResp) ProtoMessage() {}
 
 func (x *ConsumeCliAuthCodeResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[131]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6725,7 +6844,7 @@ func (x *ConsumeCliAuthCodeResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeCliAuthCodeResp.ProtoReflect.Descriptor instead.
 func (*ConsumeCliAuthCodeResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{131}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *ConsumeCliAuthCodeResp) GetUserId() string {
@@ -6781,7 +6900,7 @@ type CreateOrganizationReq struct {
 
 func (x *CreateOrganizationReq) Reset() {
 	*x = CreateOrganizationReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[132]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6793,7 +6912,7 @@ func (x *CreateOrganizationReq) String() string {
 func (*CreateOrganizationReq) ProtoMessage() {}
 
 func (x *CreateOrganizationReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[132]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6806,7 +6925,7 @@ func (x *CreateOrganizationReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOrganizationReq.ProtoReflect.Descriptor instead.
 func (*CreateOrganizationReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{132}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *CreateOrganizationReq) GetSlug() string {
@@ -6839,7 +6958,7 @@ type CreateOrganizationResp struct {
 
 func (x *CreateOrganizationResp) Reset() {
 	*x = CreateOrganizationResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[133]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6851,7 +6970,7 @@ func (x *CreateOrganizationResp) String() string {
 func (*CreateOrganizationResp) ProtoMessage() {}
 
 func (x *CreateOrganizationResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[133]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6864,7 +6983,7 @@ func (x *CreateOrganizationResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOrganizationResp.ProtoReflect.Descriptor instead.
 func (*CreateOrganizationResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{133}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *CreateOrganizationResp) GetOrganization() *Organization {
@@ -6887,7 +7006,7 @@ type AddOrgMembershipReq struct {
 
 func (x *AddOrgMembershipReq) Reset() {
 	*x = AddOrgMembershipReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[134]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6899,7 +7018,7 @@ func (x *AddOrgMembershipReq) String() string {
 func (*AddOrgMembershipReq) ProtoMessage() {}
 
 func (x *AddOrgMembershipReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[134]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6912,7 +7031,7 @@ func (x *AddOrgMembershipReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddOrgMembershipReq.ProtoReflect.Descriptor instead.
 func (*AddOrgMembershipReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{134}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *AddOrgMembershipReq) GetUserId() string {
@@ -6945,7 +7064,7 @@ type AddOrgMembershipResp struct {
 
 func (x *AddOrgMembershipResp) Reset() {
 	*x = AddOrgMembershipResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[135]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6957,7 +7076,7 @@ func (x *AddOrgMembershipResp) String() string {
 func (*AddOrgMembershipResp) ProtoMessage() {}
 
 func (x *AddOrgMembershipResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[135]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6970,7 +7089,7 @@ func (x *AddOrgMembershipResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddOrgMembershipResp.ProtoReflect.Descriptor instead.
 func (*AddOrgMembershipResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{135}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *AddOrgMembershipResp) GetMembership() *OrgMembership {
@@ -6994,7 +7113,7 @@ type DeleteOrganizationReq struct {
 
 func (x *DeleteOrganizationReq) Reset() {
 	*x = DeleteOrganizationReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[136]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7006,7 +7125,7 @@ func (x *DeleteOrganizationReq) String() string {
 func (*DeleteOrganizationReq) ProtoMessage() {}
 
 func (x *DeleteOrganizationReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[136]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7019,7 +7138,7 @@ func (x *DeleteOrganizationReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrganizationReq.ProtoReflect.Descriptor instead.
 func (*DeleteOrganizationReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{136}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *DeleteOrganizationReq) GetId() string {
@@ -7038,7 +7157,7 @@ type DeleteOrganizationResp struct {
 
 func (x *DeleteOrganizationResp) Reset() {
 	*x = DeleteOrganizationResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[137]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7050,7 +7169,7 @@ func (x *DeleteOrganizationResp) String() string {
 func (*DeleteOrganizationResp) ProtoMessage() {}
 
 func (x *DeleteOrganizationResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[137]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7063,7 +7182,7 @@ func (x *DeleteOrganizationResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrganizationResp.ProtoReflect.Descriptor instead.
 func (*DeleteOrganizationResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{137}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *DeleteOrganizationResp) GetOrgId() string {
@@ -7082,7 +7201,7 @@ type DeleteOrgMembershipReq struct {
 
 func (x *DeleteOrgMembershipReq) Reset() {
 	*x = DeleteOrgMembershipReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[138]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7094,7 +7213,7 @@ func (x *DeleteOrgMembershipReq) String() string {
 func (*DeleteOrgMembershipReq) ProtoMessage() {}
 
 func (x *DeleteOrgMembershipReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[138]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7107,7 +7226,7 @@ func (x *DeleteOrgMembershipReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrgMembershipReq.ProtoReflect.Descriptor instead.
 func (*DeleteOrgMembershipReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{138}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *DeleteOrgMembershipReq) GetId() string {
@@ -7126,7 +7245,7 @@ type DeleteOrgMembershipResp struct {
 
 func (x *DeleteOrgMembershipResp) Reset() {
 	*x = DeleteOrgMembershipResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[139]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7138,7 +7257,7 @@ func (x *DeleteOrgMembershipResp) String() string {
 func (*DeleteOrgMembershipResp) ProtoMessage() {}
 
 func (x *DeleteOrgMembershipResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[139]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7151,7 +7270,7 @@ func (x *DeleteOrgMembershipResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrgMembershipResp.ProtoReflect.Descriptor instead.
 func (*DeleteOrgMembershipResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{139}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *DeleteOrgMembershipResp) GetMembershipId() string {
@@ -7177,7 +7296,7 @@ type UpdateOrganizationReq struct {
 
 func (x *UpdateOrganizationReq) Reset() {
 	*x = UpdateOrganizationReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[140]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7189,7 +7308,7 @@ func (x *UpdateOrganizationReq) String() string {
 func (*UpdateOrganizationReq) ProtoMessage() {}
 
 func (x *UpdateOrganizationReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[140]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7202,7 +7321,7 @@ func (x *UpdateOrganizationReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateOrganizationReq.ProtoReflect.Descriptor instead.
 func (*UpdateOrganizationReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{140}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *UpdateOrganizationReq) GetId() string {
@@ -7242,7 +7361,7 @@ type UpdateOrganizationResp struct {
 
 func (x *UpdateOrganizationResp) Reset() {
 	*x = UpdateOrganizationResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[141]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7254,7 +7373,7 @@ func (x *UpdateOrganizationResp) String() string {
 func (*UpdateOrganizationResp) ProtoMessage() {}
 
 func (x *UpdateOrganizationResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[141]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7267,7 +7386,7 @@ func (x *UpdateOrganizationResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateOrganizationResp.ProtoReflect.Descriptor instead.
 func (*UpdateOrganizationResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{141}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *UpdateOrganizationResp) GetOrgId() string {
@@ -7297,7 +7416,7 @@ type UpdateOrgMembershipReq struct {
 
 func (x *UpdateOrgMembershipReq) Reset() {
 	*x = UpdateOrgMembershipReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[142]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7309,7 +7428,7 @@ func (x *UpdateOrgMembershipReq) String() string {
 func (*UpdateOrgMembershipReq) ProtoMessage() {}
 
 func (x *UpdateOrgMembershipReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[142]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7322,7 +7441,7 @@ func (x *UpdateOrgMembershipReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateOrgMembershipReq.ProtoReflect.Descriptor instead.
 func (*UpdateOrgMembershipReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{142}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *UpdateOrgMembershipReq) GetId() string {
@@ -7348,7 +7467,7 @@ type UpdateOrgMembershipResp struct {
 
 func (x *UpdateOrgMembershipResp) Reset() {
 	*x = UpdateOrgMembershipResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[143]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7360,7 +7479,7 @@ func (x *UpdateOrgMembershipResp) String() string {
 func (*UpdateOrgMembershipResp) ProtoMessage() {}
 
 func (x *UpdateOrgMembershipResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[143]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7373,7 +7492,7 @@ func (x *UpdateOrgMembershipResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateOrgMembershipResp.ProtoReflect.Descriptor instead.
 func (*UpdateOrgMembershipResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{143}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *UpdateOrgMembershipResp) GetMembershipId() string {
@@ -7394,7 +7513,7 @@ type RevokeUserTokenReq struct {
 
 func (x *RevokeUserTokenReq) Reset() {
 	*x = RevokeUserTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[144]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7406,7 +7525,7 @@ func (x *RevokeUserTokenReq) String() string {
 func (*RevokeUserTokenReq) ProtoMessage() {}
 
 func (x *RevokeUserTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[144]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7419,7 +7538,7 @@ func (x *RevokeUserTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeUserTokenReq.ProtoReflect.Descriptor instead.
 func (*RevokeUserTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{144}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *RevokeUserTokenReq) GetId() string {
@@ -7438,7 +7557,7 @@ type RevokeUserTokenResp struct {
 
 func (x *RevokeUserTokenResp) Reset() {
 	*x = RevokeUserTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[145]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7450,7 +7569,7 @@ func (x *RevokeUserTokenResp) String() string {
 func (*RevokeUserTokenResp) ProtoMessage() {}
 
 func (x *RevokeUserTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[145]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7463,7 +7582,7 @@ func (x *RevokeUserTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeUserTokenResp.ProtoReflect.Descriptor instead.
 func (*RevokeUserTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{145}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *RevokeUserTokenResp) GetTokenId() string {
@@ -7498,7 +7617,7 @@ type CreateOrgInviteReq struct {
 
 func (x *CreateOrgInviteReq) Reset() {
 	*x = CreateOrgInviteReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[146]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7510,7 +7629,7 @@ func (x *CreateOrgInviteReq) String() string {
 func (*CreateOrgInviteReq) ProtoMessage() {}
 
 func (x *CreateOrgInviteReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[146]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7523,7 +7642,7 @@ func (x *CreateOrgInviteReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOrgInviteReq.ProtoReflect.Descriptor instead.
 func (*CreateOrgInviteReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{146}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *CreateOrgInviteReq) GetOrgId() string {
@@ -7591,7 +7710,7 @@ type CreateOrgInviteResp struct {
 
 func (x *CreateOrgInviteResp) Reset() {
 	*x = CreateOrgInviteResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[147]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7603,7 +7722,7 @@ func (x *CreateOrgInviteResp) String() string {
 func (*CreateOrgInviteResp) ProtoMessage() {}
 
 func (x *CreateOrgInviteResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[147]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7616,7 +7735,7 @@ func (x *CreateOrgInviteResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOrgInviteResp.ProtoReflect.Descriptor instead.
 func (*CreateOrgInviteResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{147}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *CreateOrgInviteResp) GetInvite() *OrgInvite {
@@ -7636,7 +7755,7 @@ type ClearExpiredOrgInviteReq struct {
 
 func (x *ClearExpiredOrgInviteReq) Reset() {
 	*x = ClearExpiredOrgInviteReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[148]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7648,7 +7767,7 @@ func (x *ClearExpiredOrgInviteReq) String() string {
 func (*ClearExpiredOrgInviteReq) ProtoMessage() {}
 
 func (x *ClearExpiredOrgInviteReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[148]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7661,7 +7780,7 @@ func (x *ClearExpiredOrgInviteReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearExpiredOrgInviteReq.ProtoReflect.Descriptor instead.
 func (*ClearExpiredOrgInviteReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{148}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *ClearExpiredOrgInviteReq) GetOrgId() string {
@@ -7687,7 +7806,7 @@ type ClearExpiredOrgInviteResp struct {
 
 func (x *ClearExpiredOrgInviteResp) Reset() {
 	*x = ClearExpiredOrgInviteResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[149]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7699,7 +7818,7 @@ func (x *ClearExpiredOrgInviteResp) String() string {
 func (*ClearExpiredOrgInviteResp) ProtoMessage() {}
 
 func (x *ClearExpiredOrgInviteResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[149]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7712,7 +7831,7 @@ func (x *ClearExpiredOrgInviteResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearExpiredOrgInviteResp.ProtoReflect.Descriptor instead.
 func (*ClearExpiredOrgInviteResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{149}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *ClearExpiredOrgInviteResp) GetId() string {
@@ -7737,7 +7856,7 @@ type BindOpenOrgInviteReq struct {
 
 func (x *BindOpenOrgInviteReq) Reset() {
 	*x = BindOpenOrgInviteReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[150]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7749,7 +7868,7 @@ func (x *BindOpenOrgInviteReq) String() string {
 func (*BindOpenOrgInviteReq) ProtoMessage() {}
 
 func (x *BindOpenOrgInviteReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[150]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7762,7 +7881,7 @@ func (x *BindOpenOrgInviteReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindOpenOrgInviteReq.ProtoReflect.Descriptor instead.
 func (*BindOpenOrgInviteReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{150}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *BindOpenOrgInviteReq) GetTokenHash() string {
@@ -7787,7 +7906,7 @@ type BindOpenOrgInviteResp struct {
 
 func (x *BindOpenOrgInviteResp) Reset() {
 	*x = BindOpenOrgInviteResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[151]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7799,7 +7918,7 @@ func (x *BindOpenOrgInviteResp) String() string {
 func (*BindOpenOrgInviteResp) ProtoMessage() {}
 
 func (x *BindOpenOrgInviteResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[151]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7812,7 +7931,7 @@ func (x *BindOpenOrgInviteResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindOpenOrgInviteResp.ProtoReflect.Descriptor instead.
 func (*BindOpenOrgInviteResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{151}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{153}
 }
 
 type ConsumeOrgInviteByTokenReq struct {
@@ -7829,7 +7948,7 @@ type ConsumeOrgInviteByTokenReq struct {
 
 func (x *ConsumeOrgInviteByTokenReq) Reset() {
 	*x = ConsumeOrgInviteByTokenReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[152]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[154]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7841,7 +7960,7 @@ func (x *ConsumeOrgInviteByTokenReq) String() string {
 func (*ConsumeOrgInviteByTokenReq) ProtoMessage() {}
 
 func (x *ConsumeOrgInviteByTokenReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[152]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[154]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7854,7 +7973,7 @@ func (x *ConsumeOrgInviteByTokenReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeOrgInviteByTokenReq.ProtoReflect.Descriptor instead.
 func (*ConsumeOrgInviteByTokenReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{152}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{154}
 }
 
 func (x *ConsumeOrgInviteByTokenReq) GetTokenHash() string {
@@ -7897,7 +8016,7 @@ type ConsumeOrgInviteByTokenResp struct {
 
 func (x *ConsumeOrgInviteByTokenResp) Reset() {
 	*x = ConsumeOrgInviteByTokenResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[153]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[155]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7909,7 +8028,7 @@ func (x *ConsumeOrgInviteByTokenResp) String() string {
 func (*ConsumeOrgInviteByTokenResp) ProtoMessage() {}
 
 func (x *ConsumeOrgInviteByTokenResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[153]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[155]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7922,7 +8041,7 @@ func (x *ConsumeOrgInviteByTokenResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeOrgInviteByTokenResp.ProtoReflect.Descriptor instead.
 func (*ConsumeOrgInviteByTokenResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{153}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{155}
 }
 
 func (x *ConsumeOrgInviteByTokenResp) GetInviteId() string {
@@ -7977,7 +8096,7 @@ type DeleteOrgInviteReq struct {
 
 func (x *DeleteOrgInviteReq) Reset() {
 	*x = DeleteOrgInviteReq{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[154]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[156]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7989,7 +8108,7 @@ func (x *DeleteOrgInviteReq) String() string {
 func (*DeleteOrgInviteReq) ProtoMessage() {}
 
 func (x *DeleteOrgInviteReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[154]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[156]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8002,7 +8121,7 @@ func (x *DeleteOrgInviteReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrgInviteReq.ProtoReflect.Descriptor instead.
 func (*DeleteOrgInviteReq) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{154}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{156}
 }
 
 func (x *DeleteOrgInviteReq) GetInviteId() string {
@@ -8028,7 +8147,7 @@ type DeleteOrgInviteResp struct {
 
 func (x *DeleteOrgInviteResp) Reset() {
 	*x = DeleteOrgInviteResp{}
-	mi := &file_mutations_auth_mutation_proto_msgTypes[155]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[157]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8040,7 +8159,7 @@ func (x *DeleteOrgInviteResp) String() string {
 func (*DeleteOrgInviteResp) ProtoMessage() {}
 
 func (x *DeleteOrgInviteResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_auth_mutation_proto_msgTypes[155]
+	mi := &file_mutations_auth_mutation_proto_msgTypes[157]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8053,7 +8172,7 @@ func (x *DeleteOrgInviteResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrgInviteResp.ProtoReflect.Descriptor instead.
 func (*DeleteOrgInviteResp) Descriptor() ([]byte, []int) {
-	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{155}
+	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *DeleteOrgInviteResp) GetInviteId() string {
@@ -8078,16 +8197,25 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\rpassword_hash\x18\x02 \x01(\tB\x06\xca\xf3\x18\x02\bBR\fpasswordHash\x123\n" +
 	"\ttenant_id\x18\x03 \x01(\tB\x16\xca\xf3\x18\x02\b\x03\x92\xf5\x18\ftenant_scopeR\btenantId\"<\n" +
 	"\x0eCreateUserResp\x12*\n" +
-	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\"\x95\x01\n" +
+	"\x04user\x18\x01 \x01(\v2\x16.w17.contrib.auth.UserR\x04user\"\xbe\x01\n" +
 	"\rIssueTokenReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x129\n" +
 	"\n" +
 	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x120\n" +
-	"\tdevice_id\x18\x03 \x01(\tB\x13\xca\xf3\x18\x04\b\x03(\x01\x92\xf5\x18\adevicesR\bdeviceId\"C\n" +
+	"\tdevice_id\x18\x03 \x01(\tB\x13\xca\xf3\x18\x04\b\x03(\x01\x92\xf5\x18\adevicesR\bdeviceId\x12'\n" +
+	"\n" +
+	"token_hash\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\ttokenHash\"C\n" +
 	"\x0eIssueTokenResp\x121\n" +
-	"\x05token\x18\x01 \x01(\v2\x1b.w17.contrib.auth.UserTokenR\x05token\"&\n" +
+	"\x05token\x18\x01 \x01(\v2\x1b.w17.contrib.auth.UserTokenR\x05token\"E\n" +
 	"\x0eDeleteTokenReq\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"E\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1d\n" +
+	"\n" +
+	"token_hash\x18\x02 \x01(\tR\ttokenHash\"T\n" +
+	"\x13UpgradeTokenHashReq\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12'\n" +
+	"\n" +
+	"token_hash\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\ttokenHash\"\x16\n" +
+	"\x14UpgradeTokenHashResp\"E\n" +
 	"\x0fDeleteTokenResp\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\tR\atokenId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\"\xb1\x01\n" +
@@ -8098,14 +8226,16 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"token_type\x18\x03 \x01(\x0e2\x1b.w17.contrib.auth.TokenTypeR\ttokenType:\x18\xfa\xf4\x18\x14authenticate_turnkey\"f\n" +
 	"\x16DeleteSessionTokenResp\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\tR\atokenId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId:\x18\xfa\xf4\x18\x14authenticate_turnkey\"\xe2\x01\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId:\x18\xfa\xf4\x18\x14authenticate_turnkey\"\x8b\x02\n" +
 	"\x10IssueApiTokenReq\x12\x1f\n" +
 	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12\x1f\n" +
 	"\x04name\x18\x02 \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\x80\x01R\x04name\x12:\n" +
 	"\n" +
 	"token_type\x18\x03 \x01(\x0e2\x1b.w17.contrib.auth.TokenTypeR\ttokenType\x12A\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\texpiresAt:\r\xfa\xf4\x18\tapi_token\"U\n" +
+	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\texpiresAt\x12'\n" +
+	"\n" +
+	"token_hash\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\ttokenHash:\r\xfa\xf4\x18\tapi_token\"U\n" +
 	"\x11IssueApiTokenResp\x121\n" +
 	"\x05token\x18\x01 \x01(\v2\x1b.w17.contrib.auth.UserTokenR\x05token:\r\xfa\xf4\x18\tapi_token\"n\n" +
 	"\x15AddTokenPermissionReq\x12!\n" +
@@ -8571,7 +8701,7 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"org_invite\"B\n" +
 	"\x13DeleteOrgInviteResp\x12\x1b\n" +
 	"\tinvite_id\x18\x01 \x01(\tR\binviteId:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xff\xde\x01\n" +
+	"org_invite2\xf2\xe0\x01\n" +
 	"\fAuthMutation\x12\xd8\x02\n" +
 	"\rCreateBotUser\x12\".w17.contrib.auth.CreateBotUserReq\x1a#.w17.contrib.auth.CreateBotUserResp\"\xfd\x01\xf2\xf3\x18\xe5\x01B\xe2\x01\n" +
 	"\x04main\x12\xd9\x01INSERT INTO @module.User SET email = :email, password_hash = '!', kind = 1, ?feature(tenant_scope) tenant_id = :tenant_id RETURNING id AS user.id,           email AS user.email,           created_at AS user.created_at\x8a\xf5\x18\x0fservice_account\x12\xe5\x03\n" +
@@ -8585,28 +8715,30 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"'\n" +
 	"\n" +
 	"created_at\x12\x19$response.user.created_at\xf2\xf3\x18\x95\x02B\x92\x02\n" +
-	"\x04main\x12\x89\x02INSERT INTO @module.User SET email = :email, password_hash = :password_hash, ?feature(tenant_scope) tenant_id = :tenant_id RETURNING id AS user.id,           email AS user.email,           password_hash AS user.password_hash,           created_at AS user.created_at\x12\x9c\x04\n" +
+	"\x04main\x12\x89\x02INSERT INTO @module.User SET email = :email, password_hash = :password_hash, ?feature(tenant_scope) tenant_id = :tenant_id RETURNING id AS user.id,           email AS user.email,           password_hash AS user.password_hash,           created_at AS user.created_at\x12\x96\x04\n" +
 	"\n" +
-	"IssueToken\x12\x1f.w17.contrib.auth.IssueTokenReq\x1a .w17.contrib.auth.IssueTokenResp\"\xca\x03\x9a\xbd\x18|\n" +
+	"IssueToken\x12\x1f.w17.contrib.auth.IssueTokenReq\x1a .w17.contrib.auth.IssueTokenResp\"\xc4\x03\x9a\xbd\x18|\n" +
 	"\vTokenIssued\x12m\n" +
 	"\x1e\n" +
 	"\btoken_id\x12\x12$response.token.id\n" +
 	"\"\n" +
 	"\auser_id\x12\x17$response.token.user_id\n" +
 	"'\n" +
-	"\tissued_at\x12\x1a$response.token.created_at\xf2\xf3\x18\xc5\x02B\xc2\x02\n" +
-	"\x04main\x12\xb9\x02INSERT INTO @module.UserToken SET user_id = :user_id, expires_at = :expires_at, ?feature(devices) device_id = :device_id RETURNING id AS token.id,           token AS token.token,           user_id AS token.user_id,           ?feature(devices) device_id AS token.device_id,           created_at AS token.created_at\x12\xb6\x01\n" +
-	"\vDeleteToken\x12 .w17.contrib.auth.DeleteTokenReq\x1a!.w17.contrib.auth.DeleteTokenResp\"b\xf2\xf3\x18^B\\\n" +
-	"\x04main\x12TDELETE FROM @module.UserToken WHERE token = :token RETURNING id AS token_id, user_id\x12\xcd\x02\n" +
+	"\tissued_at\x12\x1a$response.token.created_at\xf2\xf3\x18\xbf\x02B\xbc\x02\n" +
+	"\x04main\x12\xb3\x02INSERT INTO @module.UserToken SET user_id = :user_id, token_hash = :token_hash, expires_at = :expires_at, ?feature(devices) device_id = :device_id RETURNING id AS token.id,           user_id AS token.user_id,           ?feature(devices) device_id AS token.device_id,           created_at AS token.created_at\x12\xd2\x01\n" +
+	"\vDeleteToken\x12 .w17.contrib.auth.DeleteTokenReq\x1a!.w17.contrib.auth.DeleteTokenResp\"~\xf2\xf3\x18zBx\n" +
+	"\x04main\x12pDELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :token RETURNING id AS token_id, user_id\x12\xe0\x01\n" +
+	"\x10UpgradeTokenHash\x12%.w17.contrib.auth.UpgradeTokenHashReq\x1a&.w17.contrib.auth.UpgradeTokenHashResp\"}\xf2\xf3\x18yBw\n" +
+	"\x04main\x12oUPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :token AND token_hash IS NULL\x12\xcd\x02\n" +
 	"\x12DeleteSessionToken\x12'.w17.contrib.auth.DeleteSessionTokenReq\x1a(.w17.contrib.auth.DeleteSessionTokenResp\"\xe3\x01\x9a\xbd\x18N\n" +
 	"\fTokenRevoked\x12>\n" +
 	"\x1e\n" +
 	"\btoken_id\x12\x12$response.token_id\n" +
 	"\x1c\n" +
 	"\auser_id\x12\x11$response.user_id\xf2\xf3\x18uBs\n" +
-	"\x04main\x12kDELETE FROM @module.UserToken WHERE id = :token_id AND user_id = :user_id RETURNING id AS token_id, user_id\x8a\xf5\x18\x14authenticate_turnkey\x12\xe8\x03\n" +
-	"\rIssueApiToken\x12\".w17.contrib.auth.IssueApiTokenReq\x1a#.w17.contrib.auth.IssueApiTokenResp\"\x8d\x03\xf2\xf3\x18\xfb\x02B\xf8\x02\n" +
-	"\x04main\x12\xef\x02INSERT INTO @module.UserToken SET user_id = :user_id, token_type = :token_type, name = :name, expires_at = :expires_at RETURNING id AS token.id,           token AS token.token,           user_id AS token.user_id,           token_type AS token.token_type,           name AS token.name,           created_at AS token.created_at,           expires_at AS token.expires_at\x8a\xf5\x18\tapi_token\x12\xa9\x03\n" +
+	"\x04main\x12kDELETE FROM @module.UserToken WHERE id = :token_id AND user_id = :user_id RETURNING id AS token_id, user_id\x8a\xf5\x18\x14authenticate_turnkey\x12\xe2\x03\n" +
+	"\rIssueApiToken\x12\".w17.contrib.auth.IssueApiTokenReq\x1a#.w17.contrib.auth.IssueApiTokenResp\"\x87\x03\xf2\xf3\x18\xf5\x02B\xf2\x02\n" +
+	"\x04main\x12\xe9\x02INSERT INTO @module.UserToken SET user_id = :user_id, token_hash = :token_hash, token_type = :token_type, name = :name, expires_at = :expires_at RETURNING id AS token.id,           user_id AS token.user_id,           token_type AS token.token_type,           name AS token.name,           created_at AS token.created_at,           expires_at AS token.expires_at\x8a\xf5\x18\tapi_token\x12\xa9\x03\n" +
 	"\x12AddTokenPermission\x12'.w17.contrib.auth.AddTokenPermissionReq\x1a(.w17.contrib.auth.AddTokenPermissionResp\"\xbf\x02\xf2\xf3\x18\xad\x02B\xaa\x02\n" +
 	"\x04main\x12\xa1\x02INSERT INTO @module.TokenPermission SET token_id = :token_id, permission_id = :permission_id RETURNING id AS token_permission.id,           token_id AS token_permission.token_id,           permission_id AS token_permission.permission_id,           created_at AS token_permission.created_at\x8a\xf5\x18\tapi_token\x12\xfa\x01\n" +
 	"\x0eDeleteApiToken\x12#.w17.contrib.auth.DeleteApiTokenReq\x1a$.w17.contrib.auth.DeleteApiTokenResp\"\x9c\x01\xf2\xf3\x18\x8a\x01B\x87\x01\n" +
@@ -8996,7 +9128,7 @@ func file_mutations_auth_mutation_proto_rawDescGZIP() []byte {
 	return file_mutations_auth_mutation_proto_rawDescData
 }
 
-var file_mutations_auth_mutation_proto_msgTypes = make([]protoimpl.MessageInfo, 156)
+var file_mutations_auth_mutation_proto_msgTypes = make([]protoimpl.MessageInfo, 158)
 var file_mutations_auth_mutation_proto_goTypes = []any{
 	(*CreateBotUserReq)(nil),                   // 0: w17.contrib.auth.CreateBotUserReq
 	(*CreateBotUserResp)(nil),                  // 1: w17.contrib.auth.CreateBotUserResp
@@ -9005,368 +9137,372 @@ var file_mutations_auth_mutation_proto_goTypes = []any{
 	(*IssueTokenReq)(nil),                      // 4: w17.contrib.auth.IssueTokenReq
 	(*IssueTokenResp)(nil),                     // 5: w17.contrib.auth.IssueTokenResp
 	(*DeleteTokenReq)(nil),                     // 6: w17.contrib.auth.DeleteTokenReq
-	(*DeleteTokenResp)(nil),                    // 7: w17.contrib.auth.DeleteTokenResp
-	(*DeleteSessionTokenReq)(nil),              // 8: w17.contrib.auth.DeleteSessionTokenReq
-	(*DeleteSessionTokenResp)(nil),             // 9: w17.contrib.auth.DeleteSessionTokenResp
-	(*IssueApiTokenReq)(nil),                   // 10: w17.contrib.auth.IssueApiTokenReq
-	(*IssueApiTokenResp)(nil),                  // 11: w17.contrib.auth.IssueApiTokenResp
-	(*AddTokenPermissionReq)(nil),              // 12: w17.contrib.auth.AddTokenPermissionReq
-	(*AddTokenPermissionResp)(nil),             // 13: w17.contrib.auth.AddTokenPermissionResp
-	(*DeleteApiTokenReq)(nil),                  // 14: w17.contrib.auth.DeleteApiTokenReq
-	(*DeleteApiTokenResp)(nil),                 // 15: w17.contrib.auth.DeleteApiTokenResp
-	(*DeleteTokenPermissionsReq)(nil),          // 16: w17.contrib.auth.DeleteTokenPermissionsReq
-	(*DeleteTokenPermissionsResp)(nil),         // 17: w17.contrib.auth.DeleteTokenPermissionsResp
-	(*CreateOAuthIdentityReq)(nil),             // 18: w17.contrib.auth.CreateOAuthIdentityReq
-	(*CreateOAuthIdentityResp)(nil),            // 19: w17.contrib.auth.CreateOAuthIdentityResp
-	(*CreateTotpSecretReq)(nil),                // 20: w17.contrib.auth.CreateTotpSecretReq
-	(*CreateTotpSecretResp)(nil),               // 21: w17.contrib.auth.CreateTotpSecretResp
-	(*ConfirmTotpSecretReq)(nil),               // 22: w17.contrib.auth.ConfirmTotpSecretReq
-	(*ConfirmTotpSecretResp)(nil),              // 23: w17.contrib.auth.ConfirmTotpSecretResp
-	(*MoveOAuthProviderSecretReq)(nil),         // 24: w17.contrib.auth.MoveOAuthProviderSecretReq
-	(*MoveOAuthProviderSecretResp)(nil),        // 25: w17.contrib.auth.MoveOAuthProviderSecretResp
-	(*ClearOAuthProviderLegacySecretReq)(nil),  // 26: w17.contrib.auth.ClearOAuthProviderLegacySecretReq
-	(*ClearOAuthProviderLegacySecretResp)(nil), // 27: w17.contrib.auth.ClearOAuthProviderLegacySecretResp
-	(*MoveTotpSeedReq)(nil),                    // 28: w17.contrib.auth.MoveTotpSeedReq
-	(*MoveTotpSeedResp)(nil),                   // 29: w17.contrib.auth.MoveTotpSeedResp
-	(*ClaimTotpStepReq)(nil),                   // 30: w17.contrib.auth.ClaimTotpStepReq
-	(*ClaimTotpStepResp)(nil),                  // 31: w17.contrib.auth.ClaimTotpStepResp
-	(*RecordStepUpAttemptReq)(nil),             // 32: w17.contrib.auth.RecordStepUpAttemptReq
-	(*RecordStepUpAttemptResp)(nil),            // 33: w17.contrib.auth.RecordStepUpAttemptResp
-	(*LockStepUpReq)(nil),                      // 34: w17.contrib.auth.LockStepUpReq
-	(*LockStepUpResp)(nil),                     // 35: w17.contrib.auth.LockStepUpResp
-	(*ResetStepUpReq)(nil),                     // 36: w17.contrib.auth.ResetStepUpReq
-	(*ResetStepUpResp)(nil),                    // 37: w17.contrib.auth.ResetStepUpResp
-	(*CreateRecoveryCodeReq)(nil),              // 38: w17.contrib.auth.CreateRecoveryCodeReq
-	(*CreateRecoveryCodeResp)(nil),             // 39: w17.contrib.auth.CreateRecoveryCodeResp
-	(*DeleteRecoveryCodesReq)(nil),             // 40: w17.contrib.auth.DeleteRecoveryCodesReq
-	(*DeleteRecoveryCodesResp)(nil),            // 41: w17.contrib.auth.DeleteRecoveryCodesResp
-	(*ConsumeRecoveryCodeReq)(nil),             // 42: w17.contrib.auth.ConsumeRecoveryCodeReq
-	(*ConsumeRecoveryCodeResp)(nil),            // 43: w17.contrib.auth.ConsumeRecoveryCodeResp
-	(*DeleteTotpSecretReq)(nil),                // 44: w17.contrib.auth.DeleteTotpSecretReq
-	(*DeleteTotpSecretResp)(nil),               // 45: w17.contrib.auth.DeleteTotpSecretResp
-	(*CreateMfaChallengeReq)(nil),              // 46: w17.contrib.auth.CreateMfaChallengeReq
-	(*CreateMfaChallengeResp)(nil),             // 47: w17.contrib.auth.CreateMfaChallengeResp
-	(*SupersedePendingMfaChallengesReq)(nil),   // 48: w17.contrib.auth.SupersedePendingMfaChallengesReq
-	(*SupersedePendingMfaChallengesResp)(nil),  // 49: w17.contrib.auth.SupersedePendingMfaChallengesResp
-	(*ConsumeMfaChallengeReq)(nil),             // 50: w17.contrib.auth.ConsumeMfaChallengeReq
-	(*ConsumeMfaChallengeResp)(nil),            // 51: w17.contrib.auth.ConsumeMfaChallengeResp
-	(*RecordMfaAttemptReq)(nil),                // 52: w17.contrib.auth.RecordMfaAttemptReq
-	(*RecordMfaAttemptResp)(nil),               // 53: w17.contrib.auth.RecordMfaAttemptResp
-	(*CreatePendingSignUpReq)(nil),             // 54: w17.contrib.auth.CreatePendingSignUpReq
-	(*CreatePendingSignUpResp)(nil),            // 55: w17.contrib.auth.CreatePendingSignUpResp
-	(*RecordPendingSignUpAttemptReq)(nil),      // 56: w17.contrib.auth.RecordPendingSignUpAttemptReq
-	(*RecordPendingSignUpAttemptResp)(nil),     // 57: w17.contrib.auth.RecordPendingSignUpAttemptResp
-	(*ClaimPendingSignUpReq)(nil),              // 58: w17.contrib.auth.ClaimPendingSignUpReq
-	(*ClaimPendingSignUpResp)(nil),             // 59: w17.contrib.auth.ClaimPendingSignUpResp
-	(*DeletePendingSignUpsForEmailReq)(nil),    // 60: w17.contrib.auth.DeletePendingSignUpsForEmailReq
-	(*DeletePendingSignUpsForEmailResp)(nil),   // 61: w17.contrib.auth.DeletePendingSignUpsForEmailResp
-	(*PurgeExpiredPendingSignUpsReq)(nil),      // 62: w17.contrib.auth.PurgeExpiredPendingSignUpsReq
-	(*PurgeExpiredPendingSignUpsResp)(nil),     // 63: w17.contrib.auth.PurgeExpiredPendingSignUpsResp
-	(*CreatePasswordResetTokenReq)(nil),        // 64: w17.contrib.auth.CreatePasswordResetTokenReq
-	(*CreatePasswordResetTokenResp)(nil),       // 65: w17.contrib.auth.CreatePasswordResetTokenResp
-	(*ConsumePasswordResetTokenReq)(nil),       // 66: w17.contrib.auth.ConsumePasswordResetTokenReq
-	(*ConsumePasswordResetTokenResp)(nil),      // 67: w17.contrib.auth.ConsumePasswordResetTokenResp
-	(*UpdateUserPasswordReq)(nil),              // 68: w17.contrib.auth.UpdateUserPasswordReq
-	(*UpdateUserPasswordResp)(nil),             // 69: w17.contrib.auth.UpdateUserPasswordResp
-	(*UpdateUserPasswordIfUnchangedReq)(nil),   // 70: w17.contrib.auth.UpdateUserPasswordIfUnchangedReq
-	(*UpdateUserPasswordIfUnchangedResp)(nil),  // 71: w17.contrib.auth.UpdateUserPasswordIfUnchangedResp
-	(*DeleteOtherSessionTokensReq)(nil),        // 72: w17.contrib.auth.DeleteOtherSessionTokensReq
-	(*DeleteOtherSessionTokensResp)(nil),       // 73: w17.contrib.auth.DeleteOtherSessionTokensResp
-	(*DeleteUserSessionsForResetReq)(nil),      // 74: w17.contrib.auth.DeleteUserSessionsForResetReq
-	(*DeleteUserSessionsForResetResp)(nil),     // 75: w17.contrib.auth.DeleteUserSessionsForResetResp
-	(*CreateEmailVerificationTokenReq)(nil),    // 76: w17.contrib.auth.CreateEmailVerificationTokenReq
-	(*CreateEmailVerificationTokenResp)(nil),   // 77: w17.contrib.auth.CreateEmailVerificationTokenResp
-	(*ConsumeEmailVerificationTokenReq)(nil),   // 78: w17.contrib.auth.ConsumeEmailVerificationTokenReq
-	(*ConsumeEmailVerificationTokenResp)(nil),  // 79: w17.contrib.auth.ConsumeEmailVerificationTokenResp
-	(*MarkEmailDerivedFromInviteReq)(nil),      // 80: w17.contrib.auth.MarkEmailDerivedFromInviteReq
-	(*MarkEmailDerivedFromInviteResp)(nil),     // 81: w17.contrib.auth.MarkEmailDerivedFromInviteResp
-	(*MarkEmailVerifiedReq)(nil),               // 82: w17.contrib.auth.MarkEmailVerifiedReq
-	(*MarkEmailVerifiedResp)(nil),              // 83: w17.contrib.auth.MarkEmailVerifiedResp
-	(*CreateDeviceReq)(nil),                    // 84: w17.contrib.auth.CreateDeviceReq
-	(*CreateDeviceResp)(nil),                   // 85: w17.contrib.auth.CreateDeviceResp
-	(*TrustDeviceReq)(nil),                     // 86: w17.contrib.auth.TrustDeviceReq
-	(*TrustDeviceResp)(nil),                    // 87: w17.contrib.auth.TrustDeviceResp
-	(*TouchDeviceReq)(nil),                     // 88: w17.contrib.auth.TouchDeviceReq
-	(*TouchDeviceResp)(nil),                    // 89: w17.contrib.auth.TouchDeviceResp
-	(*DeleteDeviceTokensReq)(nil),              // 90: w17.contrib.auth.DeleteDeviceTokensReq
-	(*DeleteDeviceTokensResp)(nil),             // 91: w17.contrib.auth.DeleteDeviceTokensResp
-	(*DeleteDeviceReq)(nil),                    // 92: w17.contrib.auth.DeleteDeviceReq
-	(*DeleteDeviceResp)(nil),                   // 93: w17.contrib.auth.DeleteDeviceResp
-	(*DeleteUndevicedSessionsReq)(nil),         // 94: w17.contrib.auth.DeleteUndevicedSessionsReq
-	(*DeleteUndevicedSessionsResp)(nil),        // 95: w17.contrib.auth.DeleteUndevicedSessionsResp
-	(*DeleteAllUserTokensReq)(nil),             // 96: w17.contrib.auth.DeleteAllUserTokensReq
-	(*DeleteAllUserTokensResp)(nil),            // 97: w17.contrib.auth.DeleteAllUserTokensResp
-	(*DeleteAllUserDevicesReq)(nil),            // 98: w17.contrib.auth.DeleteAllUserDevicesReq
-	(*DeleteAllUserDevicesResp)(nil),           // 99: w17.contrib.auth.DeleteAllUserDevicesResp
-	(*CreateRoleReq)(nil),                      // 100: w17.contrib.auth.CreateRoleReq
-	(*CreateRoleResp)(nil),                     // 101: w17.contrib.auth.CreateRoleResp
-	(*DeleteRoleReq)(nil),                      // 102: w17.contrib.auth.DeleteRoleReq
-	(*DeleteRoleResp)(nil),                     // 103: w17.contrib.auth.DeleteRoleResp
-	(*UpdateRoleReq)(nil),                      // 104: w17.contrib.auth.UpdateRoleReq
-	(*UpdateRoleResp)(nil),                     // 105: w17.contrib.auth.UpdateRoleResp
-	(*DeleteUserReq)(nil),                      // 106: w17.contrib.auth.DeleteUserReq
-	(*DeleteUserResp)(nil),                     // 107: w17.contrib.auth.DeleteUserResp
-	(*UpdateUserReq)(nil),                      // 108: w17.contrib.auth.UpdateUserReq
-	(*UpdateUserResp)(nil),                     // 109: w17.contrib.auth.UpdateUserResp
-	(*DisableUsersReq)(nil),                    // 110: w17.contrib.auth.DisableUsersReq
-	(*DisableUsersResp)(nil),                   // 111: w17.contrib.auth.DisableUsersResp
-	(*EnableUsersReq)(nil),                     // 112: w17.contrib.auth.EnableUsersReq
-	(*EnableUsersResp)(nil),                    // 113: w17.contrib.auth.EnableUsersResp
-	(*AssignRoleToUserReq)(nil),                // 114: w17.contrib.auth.AssignRoleToUserReq
-	(*AssignRoleToUserResp)(nil),               // 115: w17.contrib.auth.AssignRoleToUserResp
-	(*RevokeRoleFromUserReq)(nil),              // 116: w17.contrib.auth.RevokeRoleFromUserReq
-	(*RevokeRoleFromUserResp)(nil),             // 117: w17.contrib.auth.RevokeRoleFromUserResp
-	(*AddPermissionToRoleReq)(nil),             // 118: w17.contrib.auth.AddPermissionToRoleReq
-	(*AddPermissionToRoleResp)(nil),            // 119: w17.contrib.auth.AddPermissionToRoleResp
-	(*RemovePermissionFromRoleReq)(nil),        // 120: w17.contrib.auth.RemovePermissionFromRoleReq
-	(*RemovePermissionFromRoleResp)(nil),       // 121: w17.contrib.auth.RemovePermissionFromRoleResp
-	(*RegisterAuthClientReq)(nil),              // 122: w17.contrib.auth.RegisterAuthClientReq
-	(*RegisterAuthClientResp)(nil),             // 123: w17.contrib.auth.RegisterAuthClientResp
-	(*SetAuthClientEnabledReq)(nil),            // 124: w17.contrib.auth.SetAuthClientEnabledReq
-	(*SetAuthClientEnabledResp)(nil),           // 125: w17.contrib.auth.SetAuthClientEnabledResp
-	(*DeleteAuthClientReq)(nil),                // 126: w17.contrib.auth.DeleteAuthClientReq
-	(*DeleteAuthClientResp)(nil),               // 127: w17.contrib.auth.DeleteAuthClientResp
-	(*CreateCliAuthCodeReq)(nil),               // 128: w17.contrib.auth.CreateCliAuthCodeReq
-	(*CreateCliAuthCodeResp)(nil),              // 129: w17.contrib.auth.CreateCliAuthCodeResp
-	(*ConsumeCliAuthCodeReq)(nil),              // 130: w17.contrib.auth.ConsumeCliAuthCodeReq
-	(*ConsumeCliAuthCodeResp)(nil),             // 131: w17.contrib.auth.ConsumeCliAuthCodeResp
-	(*CreateOrganizationReq)(nil),              // 132: w17.contrib.auth.CreateOrganizationReq
-	(*CreateOrganizationResp)(nil),             // 133: w17.contrib.auth.CreateOrganizationResp
-	(*AddOrgMembershipReq)(nil),                // 134: w17.contrib.auth.AddOrgMembershipReq
-	(*AddOrgMembershipResp)(nil),               // 135: w17.contrib.auth.AddOrgMembershipResp
-	(*DeleteOrganizationReq)(nil),              // 136: w17.contrib.auth.DeleteOrganizationReq
-	(*DeleteOrganizationResp)(nil),             // 137: w17.contrib.auth.DeleteOrganizationResp
-	(*DeleteOrgMembershipReq)(nil),             // 138: w17.contrib.auth.DeleteOrgMembershipReq
-	(*DeleteOrgMembershipResp)(nil),            // 139: w17.contrib.auth.DeleteOrgMembershipResp
-	(*UpdateOrganizationReq)(nil),              // 140: w17.contrib.auth.UpdateOrganizationReq
-	(*UpdateOrganizationResp)(nil),             // 141: w17.contrib.auth.UpdateOrganizationResp
-	(*UpdateOrgMembershipReq)(nil),             // 142: w17.contrib.auth.UpdateOrgMembershipReq
-	(*UpdateOrgMembershipResp)(nil),            // 143: w17.contrib.auth.UpdateOrgMembershipResp
-	(*RevokeUserTokenReq)(nil),                 // 144: w17.contrib.auth.RevokeUserTokenReq
-	(*RevokeUserTokenResp)(nil),                // 145: w17.contrib.auth.RevokeUserTokenResp
-	(*CreateOrgInviteReq)(nil),                 // 146: w17.contrib.auth.CreateOrgInviteReq
-	(*CreateOrgInviteResp)(nil),                // 147: w17.contrib.auth.CreateOrgInviteResp
-	(*ClearExpiredOrgInviteReq)(nil),           // 148: w17.contrib.auth.ClearExpiredOrgInviteReq
-	(*ClearExpiredOrgInviteResp)(nil),          // 149: w17.contrib.auth.ClearExpiredOrgInviteResp
-	(*BindOpenOrgInviteReq)(nil),               // 150: w17.contrib.auth.BindOpenOrgInviteReq
-	(*BindOpenOrgInviteResp)(nil),              // 151: w17.contrib.auth.BindOpenOrgInviteResp
-	(*ConsumeOrgInviteByTokenReq)(nil),         // 152: w17.contrib.auth.ConsumeOrgInviteByTokenReq
-	(*ConsumeOrgInviteByTokenResp)(nil),        // 153: w17.contrib.auth.ConsumeOrgInviteByTokenResp
-	(*DeleteOrgInviteReq)(nil),                 // 154: w17.contrib.auth.DeleteOrgInviteReq
-	(*DeleteOrgInviteResp)(nil),                // 155: w17.contrib.auth.DeleteOrgInviteResp
-	(*User)(nil),                               // 156: w17.contrib.auth.User
-	(*timestamppb.Timestamp)(nil),              // 157: google.protobuf.Timestamp
-	(*UserToken)(nil),                          // 158: w17.contrib.auth.UserToken
-	(TokenType)(0),                             // 159: w17.contrib.auth.TokenType
-	(*TokenPermission)(nil),                    // 160: w17.contrib.auth.TokenPermission
-	(*OAuthIdentity)(nil),                      // 161: w17.contrib.auth.OAuthIdentity
-	(*UserTotpSecret)(nil),                     // 162: w17.contrib.auth.UserTotpSecret
-	(*MfaChallenge)(nil),                       // 163: w17.contrib.auth.MfaChallenge
-	(*PendingSignUp)(nil),                      // 164: w17.contrib.auth.PendingSignUp
-	(*PasswordResetToken)(nil),                 // 165: w17.contrib.auth.PasswordResetToken
-	(*EmailVerificationToken)(nil),             // 166: w17.contrib.auth.EmailVerificationToken
-	(*Device)(nil),                             // 167: w17.contrib.auth.Device
-	(*Role)(nil),                               // 168: w17.contrib.auth.Role
-	(*UserRole)(nil),                           // 169: w17.contrib.auth.UserRole
-	(*RolePermission)(nil),                     // 170: w17.contrib.auth.RolePermission
-	(*AuthClient)(nil),                         // 171: w17.contrib.auth.AuthClient
-	(*CliAuthCode)(nil),                        // 172: w17.contrib.auth.CliAuthCode
-	(*Organization)(nil),                       // 173: w17.contrib.auth.Organization
-	(*OrgMembership)(nil),                      // 174: w17.contrib.auth.OrgMembership
-	(*OrgInvite)(nil),                          // 175: w17.contrib.auth.OrgInvite
+	(*UpgradeTokenHashReq)(nil),                // 7: w17.contrib.auth.UpgradeTokenHashReq
+	(*UpgradeTokenHashResp)(nil),               // 8: w17.contrib.auth.UpgradeTokenHashResp
+	(*DeleteTokenResp)(nil),                    // 9: w17.contrib.auth.DeleteTokenResp
+	(*DeleteSessionTokenReq)(nil),              // 10: w17.contrib.auth.DeleteSessionTokenReq
+	(*DeleteSessionTokenResp)(nil),             // 11: w17.contrib.auth.DeleteSessionTokenResp
+	(*IssueApiTokenReq)(nil),                   // 12: w17.contrib.auth.IssueApiTokenReq
+	(*IssueApiTokenResp)(nil),                  // 13: w17.contrib.auth.IssueApiTokenResp
+	(*AddTokenPermissionReq)(nil),              // 14: w17.contrib.auth.AddTokenPermissionReq
+	(*AddTokenPermissionResp)(nil),             // 15: w17.contrib.auth.AddTokenPermissionResp
+	(*DeleteApiTokenReq)(nil),                  // 16: w17.contrib.auth.DeleteApiTokenReq
+	(*DeleteApiTokenResp)(nil),                 // 17: w17.contrib.auth.DeleteApiTokenResp
+	(*DeleteTokenPermissionsReq)(nil),          // 18: w17.contrib.auth.DeleteTokenPermissionsReq
+	(*DeleteTokenPermissionsResp)(nil),         // 19: w17.contrib.auth.DeleteTokenPermissionsResp
+	(*CreateOAuthIdentityReq)(nil),             // 20: w17.contrib.auth.CreateOAuthIdentityReq
+	(*CreateOAuthIdentityResp)(nil),            // 21: w17.contrib.auth.CreateOAuthIdentityResp
+	(*CreateTotpSecretReq)(nil),                // 22: w17.contrib.auth.CreateTotpSecretReq
+	(*CreateTotpSecretResp)(nil),               // 23: w17.contrib.auth.CreateTotpSecretResp
+	(*ConfirmTotpSecretReq)(nil),               // 24: w17.contrib.auth.ConfirmTotpSecretReq
+	(*ConfirmTotpSecretResp)(nil),              // 25: w17.contrib.auth.ConfirmTotpSecretResp
+	(*MoveOAuthProviderSecretReq)(nil),         // 26: w17.contrib.auth.MoveOAuthProviderSecretReq
+	(*MoveOAuthProviderSecretResp)(nil),        // 27: w17.contrib.auth.MoveOAuthProviderSecretResp
+	(*ClearOAuthProviderLegacySecretReq)(nil),  // 28: w17.contrib.auth.ClearOAuthProviderLegacySecretReq
+	(*ClearOAuthProviderLegacySecretResp)(nil), // 29: w17.contrib.auth.ClearOAuthProviderLegacySecretResp
+	(*MoveTotpSeedReq)(nil),                    // 30: w17.contrib.auth.MoveTotpSeedReq
+	(*MoveTotpSeedResp)(nil),                   // 31: w17.contrib.auth.MoveTotpSeedResp
+	(*ClaimTotpStepReq)(nil),                   // 32: w17.contrib.auth.ClaimTotpStepReq
+	(*ClaimTotpStepResp)(nil),                  // 33: w17.contrib.auth.ClaimTotpStepResp
+	(*RecordStepUpAttemptReq)(nil),             // 34: w17.contrib.auth.RecordStepUpAttemptReq
+	(*RecordStepUpAttemptResp)(nil),            // 35: w17.contrib.auth.RecordStepUpAttemptResp
+	(*LockStepUpReq)(nil),                      // 36: w17.contrib.auth.LockStepUpReq
+	(*LockStepUpResp)(nil),                     // 37: w17.contrib.auth.LockStepUpResp
+	(*ResetStepUpReq)(nil),                     // 38: w17.contrib.auth.ResetStepUpReq
+	(*ResetStepUpResp)(nil),                    // 39: w17.contrib.auth.ResetStepUpResp
+	(*CreateRecoveryCodeReq)(nil),              // 40: w17.contrib.auth.CreateRecoveryCodeReq
+	(*CreateRecoveryCodeResp)(nil),             // 41: w17.contrib.auth.CreateRecoveryCodeResp
+	(*DeleteRecoveryCodesReq)(nil),             // 42: w17.contrib.auth.DeleteRecoveryCodesReq
+	(*DeleteRecoveryCodesResp)(nil),            // 43: w17.contrib.auth.DeleteRecoveryCodesResp
+	(*ConsumeRecoveryCodeReq)(nil),             // 44: w17.contrib.auth.ConsumeRecoveryCodeReq
+	(*ConsumeRecoveryCodeResp)(nil),            // 45: w17.contrib.auth.ConsumeRecoveryCodeResp
+	(*DeleteTotpSecretReq)(nil),                // 46: w17.contrib.auth.DeleteTotpSecretReq
+	(*DeleteTotpSecretResp)(nil),               // 47: w17.contrib.auth.DeleteTotpSecretResp
+	(*CreateMfaChallengeReq)(nil),              // 48: w17.contrib.auth.CreateMfaChallengeReq
+	(*CreateMfaChallengeResp)(nil),             // 49: w17.contrib.auth.CreateMfaChallengeResp
+	(*SupersedePendingMfaChallengesReq)(nil),   // 50: w17.contrib.auth.SupersedePendingMfaChallengesReq
+	(*SupersedePendingMfaChallengesResp)(nil),  // 51: w17.contrib.auth.SupersedePendingMfaChallengesResp
+	(*ConsumeMfaChallengeReq)(nil),             // 52: w17.contrib.auth.ConsumeMfaChallengeReq
+	(*ConsumeMfaChallengeResp)(nil),            // 53: w17.contrib.auth.ConsumeMfaChallengeResp
+	(*RecordMfaAttemptReq)(nil),                // 54: w17.contrib.auth.RecordMfaAttemptReq
+	(*RecordMfaAttemptResp)(nil),               // 55: w17.contrib.auth.RecordMfaAttemptResp
+	(*CreatePendingSignUpReq)(nil),             // 56: w17.contrib.auth.CreatePendingSignUpReq
+	(*CreatePendingSignUpResp)(nil),            // 57: w17.contrib.auth.CreatePendingSignUpResp
+	(*RecordPendingSignUpAttemptReq)(nil),      // 58: w17.contrib.auth.RecordPendingSignUpAttemptReq
+	(*RecordPendingSignUpAttemptResp)(nil),     // 59: w17.contrib.auth.RecordPendingSignUpAttemptResp
+	(*ClaimPendingSignUpReq)(nil),              // 60: w17.contrib.auth.ClaimPendingSignUpReq
+	(*ClaimPendingSignUpResp)(nil),             // 61: w17.contrib.auth.ClaimPendingSignUpResp
+	(*DeletePendingSignUpsForEmailReq)(nil),    // 62: w17.contrib.auth.DeletePendingSignUpsForEmailReq
+	(*DeletePendingSignUpsForEmailResp)(nil),   // 63: w17.contrib.auth.DeletePendingSignUpsForEmailResp
+	(*PurgeExpiredPendingSignUpsReq)(nil),      // 64: w17.contrib.auth.PurgeExpiredPendingSignUpsReq
+	(*PurgeExpiredPendingSignUpsResp)(nil),     // 65: w17.contrib.auth.PurgeExpiredPendingSignUpsResp
+	(*CreatePasswordResetTokenReq)(nil),        // 66: w17.contrib.auth.CreatePasswordResetTokenReq
+	(*CreatePasswordResetTokenResp)(nil),       // 67: w17.contrib.auth.CreatePasswordResetTokenResp
+	(*ConsumePasswordResetTokenReq)(nil),       // 68: w17.contrib.auth.ConsumePasswordResetTokenReq
+	(*ConsumePasswordResetTokenResp)(nil),      // 69: w17.contrib.auth.ConsumePasswordResetTokenResp
+	(*UpdateUserPasswordReq)(nil),              // 70: w17.contrib.auth.UpdateUserPasswordReq
+	(*UpdateUserPasswordResp)(nil),             // 71: w17.contrib.auth.UpdateUserPasswordResp
+	(*UpdateUserPasswordIfUnchangedReq)(nil),   // 72: w17.contrib.auth.UpdateUserPasswordIfUnchangedReq
+	(*UpdateUserPasswordIfUnchangedResp)(nil),  // 73: w17.contrib.auth.UpdateUserPasswordIfUnchangedResp
+	(*DeleteOtherSessionTokensReq)(nil),        // 74: w17.contrib.auth.DeleteOtherSessionTokensReq
+	(*DeleteOtherSessionTokensResp)(nil),       // 75: w17.contrib.auth.DeleteOtherSessionTokensResp
+	(*DeleteUserSessionsForResetReq)(nil),      // 76: w17.contrib.auth.DeleteUserSessionsForResetReq
+	(*DeleteUserSessionsForResetResp)(nil),     // 77: w17.contrib.auth.DeleteUserSessionsForResetResp
+	(*CreateEmailVerificationTokenReq)(nil),    // 78: w17.contrib.auth.CreateEmailVerificationTokenReq
+	(*CreateEmailVerificationTokenResp)(nil),   // 79: w17.contrib.auth.CreateEmailVerificationTokenResp
+	(*ConsumeEmailVerificationTokenReq)(nil),   // 80: w17.contrib.auth.ConsumeEmailVerificationTokenReq
+	(*ConsumeEmailVerificationTokenResp)(nil),  // 81: w17.contrib.auth.ConsumeEmailVerificationTokenResp
+	(*MarkEmailDerivedFromInviteReq)(nil),      // 82: w17.contrib.auth.MarkEmailDerivedFromInviteReq
+	(*MarkEmailDerivedFromInviteResp)(nil),     // 83: w17.contrib.auth.MarkEmailDerivedFromInviteResp
+	(*MarkEmailVerifiedReq)(nil),               // 84: w17.contrib.auth.MarkEmailVerifiedReq
+	(*MarkEmailVerifiedResp)(nil),              // 85: w17.contrib.auth.MarkEmailVerifiedResp
+	(*CreateDeviceReq)(nil),                    // 86: w17.contrib.auth.CreateDeviceReq
+	(*CreateDeviceResp)(nil),                   // 87: w17.contrib.auth.CreateDeviceResp
+	(*TrustDeviceReq)(nil),                     // 88: w17.contrib.auth.TrustDeviceReq
+	(*TrustDeviceResp)(nil),                    // 89: w17.contrib.auth.TrustDeviceResp
+	(*TouchDeviceReq)(nil),                     // 90: w17.contrib.auth.TouchDeviceReq
+	(*TouchDeviceResp)(nil),                    // 91: w17.contrib.auth.TouchDeviceResp
+	(*DeleteDeviceTokensReq)(nil),              // 92: w17.contrib.auth.DeleteDeviceTokensReq
+	(*DeleteDeviceTokensResp)(nil),             // 93: w17.contrib.auth.DeleteDeviceTokensResp
+	(*DeleteDeviceReq)(nil),                    // 94: w17.contrib.auth.DeleteDeviceReq
+	(*DeleteDeviceResp)(nil),                   // 95: w17.contrib.auth.DeleteDeviceResp
+	(*DeleteUndevicedSessionsReq)(nil),         // 96: w17.contrib.auth.DeleteUndevicedSessionsReq
+	(*DeleteUndevicedSessionsResp)(nil),        // 97: w17.contrib.auth.DeleteUndevicedSessionsResp
+	(*DeleteAllUserTokensReq)(nil),             // 98: w17.contrib.auth.DeleteAllUserTokensReq
+	(*DeleteAllUserTokensResp)(nil),            // 99: w17.contrib.auth.DeleteAllUserTokensResp
+	(*DeleteAllUserDevicesReq)(nil),            // 100: w17.contrib.auth.DeleteAllUserDevicesReq
+	(*DeleteAllUserDevicesResp)(nil),           // 101: w17.contrib.auth.DeleteAllUserDevicesResp
+	(*CreateRoleReq)(nil),                      // 102: w17.contrib.auth.CreateRoleReq
+	(*CreateRoleResp)(nil),                     // 103: w17.contrib.auth.CreateRoleResp
+	(*DeleteRoleReq)(nil),                      // 104: w17.contrib.auth.DeleteRoleReq
+	(*DeleteRoleResp)(nil),                     // 105: w17.contrib.auth.DeleteRoleResp
+	(*UpdateRoleReq)(nil),                      // 106: w17.contrib.auth.UpdateRoleReq
+	(*UpdateRoleResp)(nil),                     // 107: w17.contrib.auth.UpdateRoleResp
+	(*DeleteUserReq)(nil),                      // 108: w17.contrib.auth.DeleteUserReq
+	(*DeleteUserResp)(nil),                     // 109: w17.contrib.auth.DeleteUserResp
+	(*UpdateUserReq)(nil),                      // 110: w17.contrib.auth.UpdateUserReq
+	(*UpdateUserResp)(nil),                     // 111: w17.contrib.auth.UpdateUserResp
+	(*DisableUsersReq)(nil),                    // 112: w17.contrib.auth.DisableUsersReq
+	(*DisableUsersResp)(nil),                   // 113: w17.contrib.auth.DisableUsersResp
+	(*EnableUsersReq)(nil),                     // 114: w17.contrib.auth.EnableUsersReq
+	(*EnableUsersResp)(nil),                    // 115: w17.contrib.auth.EnableUsersResp
+	(*AssignRoleToUserReq)(nil),                // 116: w17.contrib.auth.AssignRoleToUserReq
+	(*AssignRoleToUserResp)(nil),               // 117: w17.contrib.auth.AssignRoleToUserResp
+	(*RevokeRoleFromUserReq)(nil),              // 118: w17.contrib.auth.RevokeRoleFromUserReq
+	(*RevokeRoleFromUserResp)(nil),             // 119: w17.contrib.auth.RevokeRoleFromUserResp
+	(*AddPermissionToRoleReq)(nil),             // 120: w17.contrib.auth.AddPermissionToRoleReq
+	(*AddPermissionToRoleResp)(nil),            // 121: w17.contrib.auth.AddPermissionToRoleResp
+	(*RemovePermissionFromRoleReq)(nil),        // 122: w17.contrib.auth.RemovePermissionFromRoleReq
+	(*RemovePermissionFromRoleResp)(nil),       // 123: w17.contrib.auth.RemovePermissionFromRoleResp
+	(*RegisterAuthClientReq)(nil),              // 124: w17.contrib.auth.RegisterAuthClientReq
+	(*RegisterAuthClientResp)(nil),             // 125: w17.contrib.auth.RegisterAuthClientResp
+	(*SetAuthClientEnabledReq)(nil),            // 126: w17.contrib.auth.SetAuthClientEnabledReq
+	(*SetAuthClientEnabledResp)(nil),           // 127: w17.contrib.auth.SetAuthClientEnabledResp
+	(*DeleteAuthClientReq)(nil),                // 128: w17.contrib.auth.DeleteAuthClientReq
+	(*DeleteAuthClientResp)(nil),               // 129: w17.contrib.auth.DeleteAuthClientResp
+	(*CreateCliAuthCodeReq)(nil),               // 130: w17.contrib.auth.CreateCliAuthCodeReq
+	(*CreateCliAuthCodeResp)(nil),              // 131: w17.contrib.auth.CreateCliAuthCodeResp
+	(*ConsumeCliAuthCodeReq)(nil),              // 132: w17.contrib.auth.ConsumeCliAuthCodeReq
+	(*ConsumeCliAuthCodeResp)(nil),             // 133: w17.contrib.auth.ConsumeCliAuthCodeResp
+	(*CreateOrganizationReq)(nil),              // 134: w17.contrib.auth.CreateOrganizationReq
+	(*CreateOrganizationResp)(nil),             // 135: w17.contrib.auth.CreateOrganizationResp
+	(*AddOrgMembershipReq)(nil),                // 136: w17.contrib.auth.AddOrgMembershipReq
+	(*AddOrgMembershipResp)(nil),               // 137: w17.contrib.auth.AddOrgMembershipResp
+	(*DeleteOrganizationReq)(nil),              // 138: w17.contrib.auth.DeleteOrganizationReq
+	(*DeleteOrganizationResp)(nil),             // 139: w17.contrib.auth.DeleteOrganizationResp
+	(*DeleteOrgMembershipReq)(nil),             // 140: w17.contrib.auth.DeleteOrgMembershipReq
+	(*DeleteOrgMembershipResp)(nil),            // 141: w17.contrib.auth.DeleteOrgMembershipResp
+	(*UpdateOrganizationReq)(nil),              // 142: w17.contrib.auth.UpdateOrganizationReq
+	(*UpdateOrganizationResp)(nil),             // 143: w17.contrib.auth.UpdateOrganizationResp
+	(*UpdateOrgMembershipReq)(nil),             // 144: w17.contrib.auth.UpdateOrgMembershipReq
+	(*UpdateOrgMembershipResp)(nil),            // 145: w17.contrib.auth.UpdateOrgMembershipResp
+	(*RevokeUserTokenReq)(nil),                 // 146: w17.contrib.auth.RevokeUserTokenReq
+	(*RevokeUserTokenResp)(nil),                // 147: w17.contrib.auth.RevokeUserTokenResp
+	(*CreateOrgInviteReq)(nil),                 // 148: w17.contrib.auth.CreateOrgInviteReq
+	(*CreateOrgInviteResp)(nil),                // 149: w17.contrib.auth.CreateOrgInviteResp
+	(*ClearExpiredOrgInviteReq)(nil),           // 150: w17.contrib.auth.ClearExpiredOrgInviteReq
+	(*ClearExpiredOrgInviteResp)(nil),          // 151: w17.contrib.auth.ClearExpiredOrgInviteResp
+	(*BindOpenOrgInviteReq)(nil),               // 152: w17.contrib.auth.BindOpenOrgInviteReq
+	(*BindOpenOrgInviteResp)(nil),              // 153: w17.contrib.auth.BindOpenOrgInviteResp
+	(*ConsumeOrgInviteByTokenReq)(nil),         // 154: w17.contrib.auth.ConsumeOrgInviteByTokenReq
+	(*ConsumeOrgInviteByTokenResp)(nil),        // 155: w17.contrib.auth.ConsumeOrgInviteByTokenResp
+	(*DeleteOrgInviteReq)(nil),                 // 156: w17.contrib.auth.DeleteOrgInviteReq
+	(*DeleteOrgInviteResp)(nil),                // 157: w17.contrib.auth.DeleteOrgInviteResp
+	(*User)(nil),                               // 158: w17.contrib.auth.User
+	(*timestamppb.Timestamp)(nil),              // 159: google.protobuf.Timestamp
+	(*UserToken)(nil),                          // 160: w17.contrib.auth.UserToken
+	(TokenType)(0),                             // 161: w17.contrib.auth.TokenType
+	(*TokenPermission)(nil),                    // 162: w17.contrib.auth.TokenPermission
+	(*OAuthIdentity)(nil),                      // 163: w17.contrib.auth.OAuthIdentity
+	(*UserTotpSecret)(nil),                     // 164: w17.contrib.auth.UserTotpSecret
+	(*MfaChallenge)(nil),                       // 165: w17.contrib.auth.MfaChallenge
+	(*PendingSignUp)(nil),                      // 166: w17.contrib.auth.PendingSignUp
+	(*PasswordResetToken)(nil),                 // 167: w17.contrib.auth.PasswordResetToken
+	(*EmailVerificationToken)(nil),             // 168: w17.contrib.auth.EmailVerificationToken
+	(*Device)(nil),                             // 169: w17.contrib.auth.Device
+	(*Role)(nil),                               // 170: w17.contrib.auth.Role
+	(*UserRole)(nil),                           // 171: w17.contrib.auth.UserRole
+	(*RolePermission)(nil),                     // 172: w17.contrib.auth.RolePermission
+	(*AuthClient)(nil),                         // 173: w17.contrib.auth.AuthClient
+	(*CliAuthCode)(nil),                        // 174: w17.contrib.auth.CliAuthCode
+	(*Organization)(nil),                       // 175: w17.contrib.auth.Organization
+	(*OrgMembership)(nil),                      // 176: w17.contrib.auth.OrgMembership
+	(*OrgInvite)(nil),                          // 177: w17.contrib.auth.OrgInvite
 }
 var file_mutations_auth_mutation_proto_depIdxs = []int32{
-	156, // 0: w17.contrib.auth.CreateBotUserResp.user:type_name -> w17.contrib.auth.User
-	156, // 1: w17.contrib.auth.CreateUserResp.user:type_name -> w17.contrib.auth.User
-	157, // 2: w17.contrib.auth.IssueTokenReq.expires_at:type_name -> google.protobuf.Timestamp
-	158, // 3: w17.contrib.auth.IssueTokenResp.token:type_name -> w17.contrib.auth.UserToken
-	159, // 4: w17.contrib.auth.DeleteSessionTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
-	159, // 5: w17.contrib.auth.IssueApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
-	157, // 6: w17.contrib.auth.IssueApiTokenReq.expires_at:type_name -> google.protobuf.Timestamp
-	158, // 7: w17.contrib.auth.IssueApiTokenResp.token:type_name -> w17.contrib.auth.UserToken
-	160, // 8: w17.contrib.auth.AddTokenPermissionResp.token_permission:type_name -> w17.contrib.auth.TokenPermission
-	159, // 9: w17.contrib.auth.DeleteApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
-	161, // 10: w17.contrib.auth.CreateOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
-	162, // 11: w17.contrib.auth.CreateTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
-	157, // 12: w17.contrib.auth.LockStepUpReq.until:type_name -> google.protobuf.Timestamp
-	157, // 13: w17.contrib.auth.CreateMfaChallengeReq.expires_at:type_name -> google.protobuf.Timestamp
-	163, // 14: w17.contrib.auth.CreateMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
-	157, // 15: w17.contrib.auth.CreatePendingSignUpReq.expires_at:type_name -> google.protobuf.Timestamp
-	164, // 16: w17.contrib.auth.CreatePendingSignUpResp.pending:type_name -> w17.contrib.auth.PendingSignUp
-	157, // 17: w17.contrib.auth.CreatePasswordResetTokenReq.expires_at:type_name -> google.protobuf.Timestamp
-	165, // 18: w17.contrib.auth.CreatePasswordResetTokenResp.token:type_name -> w17.contrib.auth.PasswordResetToken
-	159, // 19: w17.contrib.auth.DeleteOtherSessionTokensReq.token_type:type_name -> w17.contrib.auth.TokenType
-	157, // 20: w17.contrib.auth.CreateEmailVerificationTokenReq.expires_at:type_name -> google.protobuf.Timestamp
-	166, // 21: w17.contrib.auth.CreateEmailVerificationTokenResp.token:type_name -> w17.contrib.auth.EmailVerificationToken
-	167, // 22: w17.contrib.auth.CreateDeviceResp.device:type_name -> w17.contrib.auth.Device
-	168, // 23: w17.contrib.auth.CreateRoleResp.role:type_name -> w17.contrib.auth.Role
-	169, // 24: w17.contrib.auth.AssignRoleToUserResp.user_role:type_name -> w17.contrib.auth.UserRole
-	170, // 25: w17.contrib.auth.AddPermissionToRoleResp.role_permission:type_name -> w17.contrib.auth.RolePermission
-	171, // 26: w17.contrib.auth.RegisterAuthClientResp.client:type_name -> w17.contrib.auth.AuthClient
-	157, // 27: w17.contrib.auth.CreateCliAuthCodeReq.expires_at:type_name -> google.protobuf.Timestamp
-	172, // 28: w17.contrib.auth.CreateCliAuthCodeResp.code:type_name -> w17.contrib.auth.CliAuthCode
-	173, // 29: w17.contrib.auth.CreateOrganizationResp.organization:type_name -> w17.contrib.auth.Organization
-	174, // 30: w17.contrib.auth.AddOrgMembershipResp.membership:type_name -> w17.contrib.auth.OrgMembership
-	157, // 31: w17.contrib.auth.CreateOrgInviteReq.expires_at:type_name -> google.protobuf.Timestamp
-	175, // 32: w17.contrib.auth.CreateOrgInviteResp.invite:type_name -> w17.contrib.auth.OrgInvite
+	158, // 0: w17.contrib.auth.CreateBotUserResp.user:type_name -> w17.contrib.auth.User
+	158, // 1: w17.contrib.auth.CreateUserResp.user:type_name -> w17.contrib.auth.User
+	159, // 2: w17.contrib.auth.IssueTokenReq.expires_at:type_name -> google.protobuf.Timestamp
+	160, // 3: w17.contrib.auth.IssueTokenResp.token:type_name -> w17.contrib.auth.UserToken
+	161, // 4: w17.contrib.auth.DeleteSessionTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
+	161, // 5: w17.contrib.auth.IssueApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
+	159, // 6: w17.contrib.auth.IssueApiTokenReq.expires_at:type_name -> google.protobuf.Timestamp
+	160, // 7: w17.contrib.auth.IssueApiTokenResp.token:type_name -> w17.contrib.auth.UserToken
+	162, // 8: w17.contrib.auth.AddTokenPermissionResp.token_permission:type_name -> w17.contrib.auth.TokenPermission
+	161, // 9: w17.contrib.auth.DeleteApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
+	163, // 10: w17.contrib.auth.CreateOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
+	164, // 11: w17.contrib.auth.CreateTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
+	159, // 12: w17.contrib.auth.LockStepUpReq.until:type_name -> google.protobuf.Timestamp
+	159, // 13: w17.contrib.auth.CreateMfaChallengeReq.expires_at:type_name -> google.protobuf.Timestamp
+	165, // 14: w17.contrib.auth.CreateMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
+	159, // 15: w17.contrib.auth.CreatePendingSignUpReq.expires_at:type_name -> google.protobuf.Timestamp
+	166, // 16: w17.contrib.auth.CreatePendingSignUpResp.pending:type_name -> w17.contrib.auth.PendingSignUp
+	159, // 17: w17.contrib.auth.CreatePasswordResetTokenReq.expires_at:type_name -> google.protobuf.Timestamp
+	167, // 18: w17.contrib.auth.CreatePasswordResetTokenResp.token:type_name -> w17.contrib.auth.PasswordResetToken
+	161, // 19: w17.contrib.auth.DeleteOtherSessionTokensReq.token_type:type_name -> w17.contrib.auth.TokenType
+	159, // 20: w17.contrib.auth.CreateEmailVerificationTokenReq.expires_at:type_name -> google.protobuf.Timestamp
+	168, // 21: w17.contrib.auth.CreateEmailVerificationTokenResp.token:type_name -> w17.contrib.auth.EmailVerificationToken
+	169, // 22: w17.contrib.auth.CreateDeviceResp.device:type_name -> w17.contrib.auth.Device
+	170, // 23: w17.contrib.auth.CreateRoleResp.role:type_name -> w17.contrib.auth.Role
+	171, // 24: w17.contrib.auth.AssignRoleToUserResp.user_role:type_name -> w17.contrib.auth.UserRole
+	172, // 25: w17.contrib.auth.AddPermissionToRoleResp.role_permission:type_name -> w17.contrib.auth.RolePermission
+	173, // 26: w17.contrib.auth.RegisterAuthClientResp.client:type_name -> w17.contrib.auth.AuthClient
+	159, // 27: w17.contrib.auth.CreateCliAuthCodeReq.expires_at:type_name -> google.protobuf.Timestamp
+	174, // 28: w17.contrib.auth.CreateCliAuthCodeResp.code:type_name -> w17.contrib.auth.CliAuthCode
+	175, // 29: w17.contrib.auth.CreateOrganizationResp.organization:type_name -> w17.contrib.auth.Organization
+	176, // 30: w17.contrib.auth.AddOrgMembershipResp.membership:type_name -> w17.contrib.auth.OrgMembership
+	159, // 31: w17.contrib.auth.CreateOrgInviteReq.expires_at:type_name -> google.protobuf.Timestamp
+	177, // 32: w17.contrib.auth.CreateOrgInviteResp.invite:type_name -> w17.contrib.auth.OrgInvite
 	0,   // 33: w17.contrib.auth.AuthMutation.CreateBotUser:input_type -> w17.contrib.auth.CreateBotUserReq
 	2,   // 34: w17.contrib.auth.AuthMutation.CreateUser:input_type -> w17.contrib.auth.CreateUserReq
 	4,   // 35: w17.contrib.auth.AuthMutation.IssueToken:input_type -> w17.contrib.auth.IssueTokenReq
 	6,   // 36: w17.contrib.auth.AuthMutation.DeleteToken:input_type -> w17.contrib.auth.DeleteTokenReq
-	8,   // 37: w17.contrib.auth.AuthMutation.DeleteSessionToken:input_type -> w17.contrib.auth.DeleteSessionTokenReq
-	10,  // 38: w17.contrib.auth.AuthMutation.IssueApiToken:input_type -> w17.contrib.auth.IssueApiTokenReq
-	12,  // 39: w17.contrib.auth.AuthMutation.AddTokenPermission:input_type -> w17.contrib.auth.AddTokenPermissionReq
-	14,  // 40: w17.contrib.auth.AuthMutation.DeleteApiToken:input_type -> w17.contrib.auth.DeleteApiTokenReq
-	16,  // 41: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:input_type -> w17.contrib.auth.DeleteTokenPermissionsReq
-	18,  // 42: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:input_type -> w17.contrib.auth.CreateOAuthIdentityReq
-	20,  // 43: w17.contrib.auth.AuthMutation.CreateTotpSecret:input_type -> w17.contrib.auth.CreateTotpSecretReq
-	22,  // 44: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:input_type -> w17.contrib.auth.ConfirmTotpSecretReq
-	24,  // 45: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:input_type -> w17.contrib.auth.MoveOAuthProviderSecretReq
-	26,  // 46: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:input_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretReq
-	28,  // 47: w17.contrib.auth.AuthMutation.MoveTotpSeed:input_type -> w17.contrib.auth.MoveTotpSeedReq
-	30,  // 48: w17.contrib.auth.AuthMutation.ClaimTotpStep:input_type -> w17.contrib.auth.ClaimTotpStepReq
-	32,  // 49: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:input_type -> w17.contrib.auth.RecordStepUpAttemptReq
-	34,  // 50: w17.contrib.auth.AuthMutation.LockStepUp:input_type -> w17.contrib.auth.LockStepUpReq
-	36,  // 51: w17.contrib.auth.AuthMutation.ResetStepUp:input_type -> w17.contrib.auth.ResetStepUpReq
-	38,  // 52: w17.contrib.auth.AuthMutation.CreateRecoveryCode:input_type -> w17.contrib.auth.CreateRecoveryCodeReq
-	40,  // 53: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:input_type -> w17.contrib.auth.DeleteRecoveryCodesReq
-	42,  // 54: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:input_type -> w17.contrib.auth.ConsumeRecoveryCodeReq
-	44,  // 55: w17.contrib.auth.AuthMutation.DeleteTotpSecret:input_type -> w17.contrib.auth.DeleteTotpSecretReq
-	46,  // 56: w17.contrib.auth.AuthMutation.CreateMfaChallenge:input_type -> w17.contrib.auth.CreateMfaChallengeReq
-	54,  // 57: w17.contrib.auth.AuthMutation.CreatePendingSignUp:input_type -> w17.contrib.auth.CreatePendingSignUpReq
-	56,  // 58: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:input_type -> w17.contrib.auth.RecordPendingSignUpAttemptReq
-	58,  // 59: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:input_type -> w17.contrib.auth.ClaimPendingSignUpReq
-	60,  // 60: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:input_type -> w17.contrib.auth.DeletePendingSignUpsForEmailReq
-	62,  // 61: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:input_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsReq
-	50,  // 62: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:input_type -> w17.contrib.auth.ConsumeMfaChallengeReq
-	52,  // 63: w17.contrib.auth.AuthMutation.RecordMfaAttempt:input_type -> w17.contrib.auth.RecordMfaAttemptReq
-	48,  // 64: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:input_type -> w17.contrib.auth.SupersedePendingMfaChallengesReq
-	84,  // 65: w17.contrib.auth.AuthMutation.CreateDevice:input_type -> w17.contrib.auth.CreateDeviceReq
-	86,  // 66: w17.contrib.auth.AuthMutation.TrustDevice:input_type -> w17.contrib.auth.TrustDeviceReq
-	88,  // 67: w17.contrib.auth.AuthMutation.TouchDevice:input_type -> w17.contrib.auth.TouchDeviceReq
-	94,  // 68: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:input_type -> w17.contrib.auth.DeleteUndevicedSessionsReq
-	90,  // 69: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:input_type -> w17.contrib.auth.DeleteDeviceTokensReq
-	92,  // 70: w17.contrib.auth.AuthMutation.DeleteDevice:input_type -> w17.contrib.auth.DeleteDeviceReq
-	96,  // 71: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:input_type -> w17.contrib.auth.DeleteAllUserTokensReq
-	98,  // 72: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:input_type -> w17.contrib.auth.DeleteAllUserDevicesReq
-	100, // 73: w17.contrib.auth.AuthMutation.CreateRole:input_type -> w17.contrib.auth.CreateRoleReq
-	104, // 74: w17.contrib.auth.AuthMutation.UpdateRole:input_type -> w17.contrib.auth.UpdateRoleReq
-	102, // 75: w17.contrib.auth.AuthMutation.DeleteRole:input_type -> w17.contrib.auth.DeleteRoleReq
-	108, // 76: w17.contrib.auth.AuthMutation.UpdateUser:input_type -> w17.contrib.auth.UpdateUserReq
-	106, // 77: w17.contrib.auth.AuthMutation.DeleteUser:input_type -> w17.contrib.auth.DeleteUserReq
-	110, // 78: w17.contrib.auth.AuthMutation.DisableUsers:input_type -> w17.contrib.auth.DisableUsersReq
-	112, // 79: w17.contrib.auth.AuthMutation.EnableUsers:input_type -> w17.contrib.auth.EnableUsersReq
-	114, // 80: w17.contrib.auth.AuthMutation.AssignRoleToUser:input_type -> w17.contrib.auth.AssignRoleToUserReq
-	116, // 81: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:input_type -> w17.contrib.auth.RevokeRoleFromUserReq
-	118, // 82: w17.contrib.auth.AuthMutation.AddPermissionToRole:input_type -> w17.contrib.auth.AddPermissionToRoleReq
-	120, // 83: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:input_type -> w17.contrib.auth.RemovePermissionFromRoleReq
-	64,  // 84: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:input_type -> w17.contrib.auth.CreatePasswordResetTokenReq
-	66,  // 85: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:input_type -> w17.contrib.auth.ConsumePasswordResetTokenReq
-	68,  // 86: w17.contrib.auth.AuthMutation.UpdateUserPassword:input_type -> w17.contrib.auth.UpdateUserPasswordReq
-	70,  // 87: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:input_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedReq
-	74,  // 88: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:input_type -> w17.contrib.auth.DeleteUserSessionsForResetReq
-	72,  // 89: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:input_type -> w17.contrib.auth.DeleteOtherSessionTokensReq
-	76,  // 90: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:input_type -> w17.contrib.auth.CreateEmailVerificationTokenReq
-	78,  // 91: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:input_type -> w17.contrib.auth.ConsumeEmailVerificationTokenReq
-	82,  // 92: w17.contrib.auth.AuthMutation.MarkEmailVerified:input_type -> w17.contrib.auth.MarkEmailVerifiedReq
-	80,  // 93: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:input_type -> w17.contrib.auth.MarkEmailDerivedFromInviteReq
-	122, // 94: w17.contrib.auth.AuthMutation.RegisterAuthClient:input_type -> w17.contrib.auth.RegisterAuthClientReq
-	124, // 95: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:input_type -> w17.contrib.auth.SetAuthClientEnabledReq
-	126, // 96: w17.contrib.auth.AuthMutation.DeleteAuthClient:input_type -> w17.contrib.auth.DeleteAuthClientReq
-	128, // 97: w17.contrib.auth.AuthMutation.CreateCliAuthCode:input_type -> w17.contrib.auth.CreateCliAuthCodeReq
-	130, // 98: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:input_type -> w17.contrib.auth.ConsumeCliAuthCodeReq
-	132, // 99: w17.contrib.auth.AuthMutation.CreateOrganization:input_type -> w17.contrib.auth.CreateOrganizationReq
-	134, // 100: w17.contrib.auth.AuthMutation.AddOrgMembership:input_type -> w17.contrib.auth.AddOrgMembershipReq
-	140, // 101: w17.contrib.auth.AuthMutation.UpdateOrganization:input_type -> w17.contrib.auth.UpdateOrganizationReq
-	136, // 102: w17.contrib.auth.AuthMutation.DeleteOrganization:input_type -> w17.contrib.auth.DeleteOrganizationReq
-	142, // 103: w17.contrib.auth.AuthMutation.UpdateOrgMembership:input_type -> w17.contrib.auth.UpdateOrgMembershipReq
-	138, // 104: w17.contrib.auth.AuthMutation.DeleteOrgMembership:input_type -> w17.contrib.auth.DeleteOrgMembershipReq
-	144, // 105: w17.contrib.auth.AuthMutation.RevokeUserToken:input_type -> w17.contrib.auth.RevokeUserTokenReq
-	146, // 106: w17.contrib.auth.AuthMutation.CreateOrgInvite:input_type -> w17.contrib.auth.CreateOrgInviteReq
-	150, // 107: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:input_type -> w17.contrib.auth.BindOpenOrgInviteReq
-	152, // 108: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:input_type -> w17.contrib.auth.ConsumeOrgInviteByTokenReq
-	148, // 109: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:input_type -> w17.contrib.auth.ClearExpiredOrgInviteReq
-	154, // 110: w17.contrib.auth.AuthMutation.DeleteOrgInvite:input_type -> w17.contrib.auth.DeleteOrgInviteReq
-	1,   // 111: w17.contrib.auth.AuthMutation.CreateBotUser:output_type -> w17.contrib.auth.CreateBotUserResp
-	3,   // 112: w17.contrib.auth.AuthMutation.CreateUser:output_type -> w17.contrib.auth.CreateUserResp
-	5,   // 113: w17.contrib.auth.AuthMutation.IssueToken:output_type -> w17.contrib.auth.IssueTokenResp
-	7,   // 114: w17.contrib.auth.AuthMutation.DeleteToken:output_type -> w17.contrib.auth.DeleteTokenResp
-	9,   // 115: w17.contrib.auth.AuthMutation.DeleteSessionToken:output_type -> w17.contrib.auth.DeleteSessionTokenResp
-	11,  // 116: w17.contrib.auth.AuthMutation.IssueApiToken:output_type -> w17.contrib.auth.IssueApiTokenResp
-	13,  // 117: w17.contrib.auth.AuthMutation.AddTokenPermission:output_type -> w17.contrib.auth.AddTokenPermissionResp
-	15,  // 118: w17.contrib.auth.AuthMutation.DeleteApiToken:output_type -> w17.contrib.auth.DeleteApiTokenResp
-	17,  // 119: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:output_type -> w17.contrib.auth.DeleteTokenPermissionsResp
-	19,  // 120: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:output_type -> w17.contrib.auth.CreateOAuthIdentityResp
-	21,  // 121: w17.contrib.auth.AuthMutation.CreateTotpSecret:output_type -> w17.contrib.auth.CreateTotpSecretResp
-	23,  // 122: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:output_type -> w17.contrib.auth.ConfirmTotpSecretResp
-	25,  // 123: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:output_type -> w17.contrib.auth.MoveOAuthProviderSecretResp
-	27,  // 124: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:output_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretResp
-	29,  // 125: w17.contrib.auth.AuthMutation.MoveTotpSeed:output_type -> w17.contrib.auth.MoveTotpSeedResp
-	31,  // 126: w17.contrib.auth.AuthMutation.ClaimTotpStep:output_type -> w17.contrib.auth.ClaimTotpStepResp
-	33,  // 127: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:output_type -> w17.contrib.auth.RecordStepUpAttemptResp
-	35,  // 128: w17.contrib.auth.AuthMutation.LockStepUp:output_type -> w17.contrib.auth.LockStepUpResp
-	37,  // 129: w17.contrib.auth.AuthMutation.ResetStepUp:output_type -> w17.contrib.auth.ResetStepUpResp
-	39,  // 130: w17.contrib.auth.AuthMutation.CreateRecoveryCode:output_type -> w17.contrib.auth.CreateRecoveryCodeResp
-	41,  // 131: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:output_type -> w17.contrib.auth.DeleteRecoveryCodesResp
-	43,  // 132: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:output_type -> w17.contrib.auth.ConsumeRecoveryCodeResp
-	45,  // 133: w17.contrib.auth.AuthMutation.DeleteTotpSecret:output_type -> w17.contrib.auth.DeleteTotpSecretResp
-	47,  // 134: w17.contrib.auth.AuthMutation.CreateMfaChallenge:output_type -> w17.contrib.auth.CreateMfaChallengeResp
-	55,  // 135: w17.contrib.auth.AuthMutation.CreatePendingSignUp:output_type -> w17.contrib.auth.CreatePendingSignUpResp
-	57,  // 136: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:output_type -> w17.contrib.auth.RecordPendingSignUpAttemptResp
-	59,  // 137: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:output_type -> w17.contrib.auth.ClaimPendingSignUpResp
-	61,  // 138: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:output_type -> w17.contrib.auth.DeletePendingSignUpsForEmailResp
-	63,  // 139: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:output_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsResp
-	51,  // 140: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:output_type -> w17.contrib.auth.ConsumeMfaChallengeResp
-	53,  // 141: w17.contrib.auth.AuthMutation.RecordMfaAttempt:output_type -> w17.contrib.auth.RecordMfaAttemptResp
-	49,  // 142: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:output_type -> w17.contrib.auth.SupersedePendingMfaChallengesResp
-	85,  // 143: w17.contrib.auth.AuthMutation.CreateDevice:output_type -> w17.contrib.auth.CreateDeviceResp
-	87,  // 144: w17.contrib.auth.AuthMutation.TrustDevice:output_type -> w17.contrib.auth.TrustDeviceResp
-	89,  // 145: w17.contrib.auth.AuthMutation.TouchDevice:output_type -> w17.contrib.auth.TouchDeviceResp
-	95,  // 146: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:output_type -> w17.contrib.auth.DeleteUndevicedSessionsResp
-	91,  // 147: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:output_type -> w17.contrib.auth.DeleteDeviceTokensResp
-	93,  // 148: w17.contrib.auth.AuthMutation.DeleteDevice:output_type -> w17.contrib.auth.DeleteDeviceResp
-	97,  // 149: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:output_type -> w17.contrib.auth.DeleteAllUserTokensResp
-	99,  // 150: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:output_type -> w17.contrib.auth.DeleteAllUserDevicesResp
-	101, // 151: w17.contrib.auth.AuthMutation.CreateRole:output_type -> w17.contrib.auth.CreateRoleResp
-	105, // 152: w17.contrib.auth.AuthMutation.UpdateRole:output_type -> w17.contrib.auth.UpdateRoleResp
-	103, // 153: w17.contrib.auth.AuthMutation.DeleteRole:output_type -> w17.contrib.auth.DeleteRoleResp
-	109, // 154: w17.contrib.auth.AuthMutation.UpdateUser:output_type -> w17.contrib.auth.UpdateUserResp
-	107, // 155: w17.contrib.auth.AuthMutation.DeleteUser:output_type -> w17.contrib.auth.DeleteUserResp
-	111, // 156: w17.contrib.auth.AuthMutation.DisableUsers:output_type -> w17.contrib.auth.DisableUsersResp
-	113, // 157: w17.contrib.auth.AuthMutation.EnableUsers:output_type -> w17.contrib.auth.EnableUsersResp
-	115, // 158: w17.contrib.auth.AuthMutation.AssignRoleToUser:output_type -> w17.contrib.auth.AssignRoleToUserResp
-	117, // 159: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:output_type -> w17.contrib.auth.RevokeRoleFromUserResp
-	119, // 160: w17.contrib.auth.AuthMutation.AddPermissionToRole:output_type -> w17.contrib.auth.AddPermissionToRoleResp
-	121, // 161: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:output_type -> w17.contrib.auth.RemovePermissionFromRoleResp
-	65,  // 162: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:output_type -> w17.contrib.auth.CreatePasswordResetTokenResp
-	67,  // 163: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:output_type -> w17.contrib.auth.ConsumePasswordResetTokenResp
-	69,  // 164: w17.contrib.auth.AuthMutation.UpdateUserPassword:output_type -> w17.contrib.auth.UpdateUserPasswordResp
-	71,  // 165: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:output_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedResp
-	75,  // 166: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:output_type -> w17.contrib.auth.DeleteUserSessionsForResetResp
-	73,  // 167: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:output_type -> w17.contrib.auth.DeleteOtherSessionTokensResp
-	77,  // 168: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:output_type -> w17.contrib.auth.CreateEmailVerificationTokenResp
-	79,  // 169: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:output_type -> w17.contrib.auth.ConsumeEmailVerificationTokenResp
-	83,  // 170: w17.contrib.auth.AuthMutation.MarkEmailVerified:output_type -> w17.contrib.auth.MarkEmailVerifiedResp
-	81,  // 171: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:output_type -> w17.contrib.auth.MarkEmailDerivedFromInviteResp
-	123, // 172: w17.contrib.auth.AuthMutation.RegisterAuthClient:output_type -> w17.contrib.auth.RegisterAuthClientResp
-	125, // 173: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:output_type -> w17.contrib.auth.SetAuthClientEnabledResp
-	127, // 174: w17.contrib.auth.AuthMutation.DeleteAuthClient:output_type -> w17.contrib.auth.DeleteAuthClientResp
-	129, // 175: w17.contrib.auth.AuthMutation.CreateCliAuthCode:output_type -> w17.contrib.auth.CreateCliAuthCodeResp
-	131, // 176: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:output_type -> w17.contrib.auth.ConsumeCliAuthCodeResp
-	133, // 177: w17.contrib.auth.AuthMutation.CreateOrganization:output_type -> w17.contrib.auth.CreateOrganizationResp
-	135, // 178: w17.contrib.auth.AuthMutation.AddOrgMembership:output_type -> w17.contrib.auth.AddOrgMembershipResp
-	141, // 179: w17.contrib.auth.AuthMutation.UpdateOrganization:output_type -> w17.contrib.auth.UpdateOrganizationResp
-	137, // 180: w17.contrib.auth.AuthMutation.DeleteOrganization:output_type -> w17.contrib.auth.DeleteOrganizationResp
-	143, // 181: w17.contrib.auth.AuthMutation.UpdateOrgMembership:output_type -> w17.contrib.auth.UpdateOrgMembershipResp
-	139, // 182: w17.contrib.auth.AuthMutation.DeleteOrgMembership:output_type -> w17.contrib.auth.DeleteOrgMembershipResp
-	145, // 183: w17.contrib.auth.AuthMutation.RevokeUserToken:output_type -> w17.contrib.auth.RevokeUserTokenResp
-	147, // 184: w17.contrib.auth.AuthMutation.CreateOrgInvite:output_type -> w17.contrib.auth.CreateOrgInviteResp
-	151, // 185: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:output_type -> w17.contrib.auth.BindOpenOrgInviteResp
-	153, // 186: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:output_type -> w17.contrib.auth.ConsumeOrgInviteByTokenResp
-	149, // 187: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:output_type -> w17.contrib.auth.ClearExpiredOrgInviteResp
-	155, // 188: w17.contrib.auth.AuthMutation.DeleteOrgInvite:output_type -> w17.contrib.auth.DeleteOrgInviteResp
-	111, // [111:189] is the sub-list for method output_type
-	33,  // [33:111] is the sub-list for method input_type
+	7,   // 37: w17.contrib.auth.AuthMutation.UpgradeTokenHash:input_type -> w17.contrib.auth.UpgradeTokenHashReq
+	10,  // 38: w17.contrib.auth.AuthMutation.DeleteSessionToken:input_type -> w17.contrib.auth.DeleteSessionTokenReq
+	12,  // 39: w17.contrib.auth.AuthMutation.IssueApiToken:input_type -> w17.contrib.auth.IssueApiTokenReq
+	14,  // 40: w17.contrib.auth.AuthMutation.AddTokenPermission:input_type -> w17.contrib.auth.AddTokenPermissionReq
+	16,  // 41: w17.contrib.auth.AuthMutation.DeleteApiToken:input_type -> w17.contrib.auth.DeleteApiTokenReq
+	18,  // 42: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:input_type -> w17.contrib.auth.DeleteTokenPermissionsReq
+	20,  // 43: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:input_type -> w17.contrib.auth.CreateOAuthIdentityReq
+	22,  // 44: w17.contrib.auth.AuthMutation.CreateTotpSecret:input_type -> w17.contrib.auth.CreateTotpSecretReq
+	24,  // 45: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:input_type -> w17.contrib.auth.ConfirmTotpSecretReq
+	26,  // 46: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:input_type -> w17.contrib.auth.MoveOAuthProviderSecretReq
+	28,  // 47: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:input_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretReq
+	30,  // 48: w17.contrib.auth.AuthMutation.MoveTotpSeed:input_type -> w17.contrib.auth.MoveTotpSeedReq
+	32,  // 49: w17.contrib.auth.AuthMutation.ClaimTotpStep:input_type -> w17.contrib.auth.ClaimTotpStepReq
+	34,  // 50: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:input_type -> w17.contrib.auth.RecordStepUpAttemptReq
+	36,  // 51: w17.contrib.auth.AuthMutation.LockStepUp:input_type -> w17.contrib.auth.LockStepUpReq
+	38,  // 52: w17.contrib.auth.AuthMutation.ResetStepUp:input_type -> w17.contrib.auth.ResetStepUpReq
+	40,  // 53: w17.contrib.auth.AuthMutation.CreateRecoveryCode:input_type -> w17.contrib.auth.CreateRecoveryCodeReq
+	42,  // 54: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:input_type -> w17.contrib.auth.DeleteRecoveryCodesReq
+	44,  // 55: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:input_type -> w17.contrib.auth.ConsumeRecoveryCodeReq
+	46,  // 56: w17.contrib.auth.AuthMutation.DeleteTotpSecret:input_type -> w17.contrib.auth.DeleteTotpSecretReq
+	48,  // 57: w17.contrib.auth.AuthMutation.CreateMfaChallenge:input_type -> w17.contrib.auth.CreateMfaChallengeReq
+	56,  // 58: w17.contrib.auth.AuthMutation.CreatePendingSignUp:input_type -> w17.contrib.auth.CreatePendingSignUpReq
+	58,  // 59: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:input_type -> w17.contrib.auth.RecordPendingSignUpAttemptReq
+	60,  // 60: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:input_type -> w17.contrib.auth.ClaimPendingSignUpReq
+	62,  // 61: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:input_type -> w17.contrib.auth.DeletePendingSignUpsForEmailReq
+	64,  // 62: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:input_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsReq
+	52,  // 63: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:input_type -> w17.contrib.auth.ConsumeMfaChallengeReq
+	54,  // 64: w17.contrib.auth.AuthMutation.RecordMfaAttempt:input_type -> w17.contrib.auth.RecordMfaAttemptReq
+	50,  // 65: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:input_type -> w17.contrib.auth.SupersedePendingMfaChallengesReq
+	86,  // 66: w17.contrib.auth.AuthMutation.CreateDevice:input_type -> w17.contrib.auth.CreateDeviceReq
+	88,  // 67: w17.contrib.auth.AuthMutation.TrustDevice:input_type -> w17.contrib.auth.TrustDeviceReq
+	90,  // 68: w17.contrib.auth.AuthMutation.TouchDevice:input_type -> w17.contrib.auth.TouchDeviceReq
+	96,  // 69: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:input_type -> w17.contrib.auth.DeleteUndevicedSessionsReq
+	92,  // 70: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:input_type -> w17.contrib.auth.DeleteDeviceTokensReq
+	94,  // 71: w17.contrib.auth.AuthMutation.DeleteDevice:input_type -> w17.contrib.auth.DeleteDeviceReq
+	98,  // 72: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:input_type -> w17.contrib.auth.DeleteAllUserTokensReq
+	100, // 73: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:input_type -> w17.contrib.auth.DeleteAllUserDevicesReq
+	102, // 74: w17.contrib.auth.AuthMutation.CreateRole:input_type -> w17.contrib.auth.CreateRoleReq
+	106, // 75: w17.contrib.auth.AuthMutation.UpdateRole:input_type -> w17.contrib.auth.UpdateRoleReq
+	104, // 76: w17.contrib.auth.AuthMutation.DeleteRole:input_type -> w17.contrib.auth.DeleteRoleReq
+	110, // 77: w17.contrib.auth.AuthMutation.UpdateUser:input_type -> w17.contrib.auth.UpdateUserReq
+	108, // 78: w17.contrib.auth.AuthMutation.DeleteUser:input_type -> w17.contrib.auth.DeleteUserReq
+	112, // 79: w17.contrib.auth.AuthMutation.DisableUsers:input_type -> w17.contrib.auth.DisableUsersReq
+	114, // 80: w17.contrib.auth.AuthMutation.EnableUsers:input_type -> w17.contrib.auth.EnableUsersReq
+	116, // 81: w17.contrib.auth.AuthMutation.AssignRoleToUser:input_type -> w17.contrib.auth.AssignRoleToUserReq
+	118, // 82: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:input_type -> w17.contrib.auth.RevokeRoleFromUserReq
+	120, // 83: w17.contrib.auth.AuthMutation.AddPermissionToRole:input_type -> w17.contrib.auth.AddPermissionToRoleReq
+	122, // 84: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:input_type -> w17.contrib.auth.RemovePermissionFromRoleReq
+	66,  // 85: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:input_type -> w17.contrib.auth.CreatePasswordResetTokenReq
+	68,  // 86: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:input_type -> w17.contrib.auth.ConsumePasswordResetTokenReq
+	70,  // 87: w17.contrib.auth.AuthMutation.UpdateUserPassword:input_type -> w17.contrib.auth.UpdateUserPasswordReq
+	72,  // 88: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:input_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedReq
+	76,  // 89: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:input_type -> w17.contrib.auth.DeleteUserSessionsForResetReq
+	74,  // 90: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:input_type -> w17.contrib.auth.DeleteOtherSessionTokensReq
+	78,  // 91: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:input_type -> w17.contrib.auth.CreateEmailVerificationTokenReq
+	80,  // 92: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:input_type -> w17.contrib.auth.ConsumeEmailVerificationTokenReq
+	84,  // 93: w17.contrib.auth.AuthMutation.MarkEmailVerified:input_type -> w17.contrib.auth.MarkEmailVerifiedReq
+	82,  // 94: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:input_type -> w17.contrib.auth.MarkEmailDerivedFromInviteReq
+	124, // 95: w17.contrib.auth.AuthMutation.RegisterAuthClient:input_type -> w17.contrib.auth.RegisterAuthClientReq
+	126, // 96: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:input_type -> w17.contrib.auth.SetAuthClientEnabledReq
+	128, // 97: w17.contrib.auth.AuthMutation.DeleteAuthClient:input_type -> w17.contrib.auth.DeleteAuthClientReq
+	130, // 98: w17.contrib.auth.AuthMutation.CreateCliAuthCode:input_type -> w17.contrib.auth.CreateCliAuthCodeReq
+	132, // 99: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:input_type -> w17.contrib.auth.ConsumeCliAuthCodeReq
+	134, // 100: w17.contrib.auth.AuthMutation.CreateOrganization:input_type -> w17.contrib.auth.CreateOrganizationReq
+	136, // 101: w17.contrib.auth.AuthMutation.AddOrgMembership:input_type -> w17.contrib.auth.AddOrgMembershipReq
+	142, // 102: w17.contrib.auth.AuthMutation.UpdateOrganization:input_type -> w17.contrib.auth.UpdateOrganizationReq
+	138, // 103: w17.contrib.auth.AuthMutation.DeleteOrganization:input_type -> w17.contrib.auth.DeleteOrganizationReq
+	144, // 104: w17.contrib.auth.AuthMutation.UpdateOrgMembership:input_type -> w17.contrib.auth.UpdateOrgMembershipReq
+	140, // 105: w17.contrib.auth.AuthMutation.DeleteOrgMembership:input_type -> w17.contrib.auth.DeleteOrgMembershipReq
+	146, // 106: w17.contrib.auth.AuthMutation.RevokeUserToken:input_type -> w17.contrib.auth.RevokeUserTokenReq
+	148, // 107: w17.contrib.auth.AuthMutation.CreateOrgInvite:input_type -> w17.contrib.auth.CreateOrgInviteReq
+	152, // 108: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:input_type -> w17.contrib.auth.BindOpenOrgInviteReq
+	154, // 109: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:input_type -> w17.contrib.auth.ConsumeOrgInviteByTokenReq
+	150, // 110: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:input_type -> w17.contrib.auth.ClearExpiredOrgInviteReq
+	156, // 111: w17.contrib.auth.AuthMutation.DeleteOrgInvite:input_type -> w17.contrib.auth.DeleteOrgInviteReq
+	1,   // 112: w17.contrib.auth.AuthMutation.CreateBotUser:output_type -> w17.contrib.auth.CreateBotUserResp
+	3,   // 113: w17.contrib.auth.AuthMutation.CreateUser:output_type -> w17.contrib.auth.CreateUserResp
+	5,   // 114: w17.contrib.auth.AuthMutation.IssueToken:output_type -> w17.contrib.auth.IssueTokenResp
+	9,   // 115: w17.contrib.auth.AuthMutation.DeleteToken:output_type -> w17.contrib.auth.DeleteTokenResp
+	8,   // 116: w17.contrib.auth.AuthMutation.UpgradeTokenHash:output_type -> w17.contrib.auth.UpgradeTokenHashResp
+	11,  // 117: w17.contrib.auth.AuthMutation.DeleteSessionToken:output_type -> w17.contrib.auth.DeleteSessionTokenResp
+	13,  // 118: w17.contrib.auth.AuthMutation.IssueApiToken:output_type -> w17.contrib.auth.IssueApiTokenResp
+	15,  // 119: w17.contrib.auth.AuthMutation.AddTokenPermission:output_type -> w17.contrib.auth.AddTokenPermissionResp
+	17,  // 120: w17.contrib.auth.AuthMutation.DeleteApiToken:output_type -> w17.contrib.auth.DeleteApiTokenResp
+	19,  // 121: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:output_type -> w17.contrib.auth.DeleteTokenPermissionsResp
+	21,  // 122: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:output_type -> w17.contrib.auth.CreateOAuthIdentityResp
+	23,  // 123: w17.contrib.auth.AuthMutation.CreateTotpSecret:output_type -> w17.contrib.auth.CreateTotpSecretResp
+	25,  // 124: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:output_type -> w17.contrib.auth.ConfirmTotpSecretResp
+	27,  // 125: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:output_type -> w17.contrib.auth.MoveOAuthProviderSecretResp
+	29,  // 126: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:output_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretResp
+	31,  // 127: w17.contrib.auth.AuthMutation.MoveTotpSeed:output_type -> w17.contrib.auth.MoveTotpSeedResp
+	33,  // 128: w17.contrib.auth.AuthMutation.ClaimTotpStep:output_type -> w17.contrib.auth.ClaimTotpStepResp
+	35,  // 129: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:output_type -> w17.contrib.auth.RecordStepUpAttemptResp
+	37,  // 130: w17.contrib.auth.AuthMutation.LockStepUp:output_type -> w17.contrib.auth.LockStepUpResp
+	39,  // 131: w17.contrib.auth.AuthMutation.ResetStepUp:output_type -> w17.contrib.auth.ResetStepUpResp
+	41,  // 132: w17.contrib.auth.AuthMutation.CreateRecoveryCode:output_type -> w17.contrib.auth.CreateRecoveryCodeResp
+	43,  // 133: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:output_type -> w17.contrib.auth.DeleteRecoveryCodesResp
+	45,  // 134: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:output_type -> w17.contrib.auth.ConsumeRecoveryCodeResp
+	47,  // 135: w17.contrib.auth.AuthMutation.DeleteTotpSecret:output_type -> w17.contrib.auth.DeleteTotpSecretResp
+	49,  // 136: w17.contrib.auth.AuthMutation.CreateMfaChallenge:output_type -> w17.contrib.auth.CreateMfaChallengeResp
+	57,  // 137: w17.contrib.auth.AuthMutation.CreatePendingSignUp:output_type -> w17.contrib.auth.CreatePendingSignUpResp
+	59,  // 138: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:output_type -> w17.contrib.auth.RecordPendingSignUpAttemptResp
+	61,  // 139: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:output_type -> w17.contrib.auth.ClaimPendingSignUpResp
+	63,  // 140: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:output_type -> w17.contrib.auth.DeletePendingSignUpsForEmailResp
+	65,  // 141: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:output_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsResp
+	53,  // 142: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:output_type -> w17.contrib.auth.ConsumeMfaChallengeResp
+	55,  // 143: w17.contrib.auth.AuthMutation.RecordMfaAttempt:output_type -> w17.contrib.auth.RecordMfaAttemptResp
+	51,  // 144: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:output_type -> w17.contrib.auth.SupersedePendingMfaChallengesResp
+	87,  // 145: w17.contrib.auth.AuthMutation.CreateDevice:output_type -> w17.contrib.auth.CreateDeviceResp
+	89,  // 146: w17.contrib.auth.AuthMutation.TrustDevice:output_type -> w17.contrib.auth.TrustDeviceResp
+	91,  // 147: w17.contrib.auth.AuthMutation.TouchDevice:output_type -> w17.contrib.auth.TouchDeviceResp
+	97,  // 148: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:output_type -> w17.contrib.auth.DeleteUndevicedSessionsResp
+	93,  // 149: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:output_type -> w17.contrib.auth.DeleteDeviceTokensResp
+	95,  // 150: w17.contrib.auth.AuthMutation.DeleteDevice:output_type -> w17.contrib.auth.DeleteDeviceResp
+	99,  // 151: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:output_type -> w17.contrib.auth.DeleteAllUserTokensResp
+	101, // 152: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:output_type -> w17.contrib.auth.DeleteAllUserDevicesResp
+	103, // 153: w17.contrib.auth.AuthMutation.CreateRole:output_type -> w17.contrib.auth.CreateRoleResp
+	107, // 154: w17.contrib.auth.AuthMutation.UpdateRole:output_type -> w17.contrib.auth.UpdateRoleResp
+	105, // 155: w17.contrib.auth.AuthMutation.DeleteRole:output_type -> w17.contrib.auth.DeleteRoleResp
+	111, // 156: w17.contrib.auth.AuthMutation.UpdateUser:output_type -> w17.contrib.auth.UpdateUserResp
+	109, // 157: w17.contrib.auth.AuthMutation.DeleteUser:output_type -> w17.contrib.auth.DeleteUserResp
+	113, // 158: w17.contrib.auth.AuthMutation.DisableUsers:output_type -> w17.contrib.auth.DisableUsersResp
+	115, // 159: w17.contrib.auth.AuthMutation.EnableUsers:output_type -> w17.contrib.auth.EnableUsersResp
+	117, // 160: w17.contrib.auth.AuthMutation.AssignRoleToUser:output_type -> w17.contrib.auth.AssignRoleToUserResp
+	119, // 161: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:output_type -> w17.contrib.auth.RevokeRoleFromUserResp
+	121, // 162: w17.contrib.auth.AuthMutation.AddPermissionToRole:output_type -> w17.contrib.auth.AddPermissionToRoleResp
+	123, // 163: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:output_type -> w17.contrib.auth.RemovePermissionFromRoleResp
+	67,  // 164: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:output_type -> w17.contrib.auth.CreatePasswordResetTokenResp
+	69,  // 165: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:output_type -> w17.contrib.auth.ConsumePasswordResetTokenResp
+	71,  // 166: w17.contrib.auth.AuthMutation.UpdateUserPassword:output_type -> w17.contrib.auth.UpdateUserPasswordResp
+	73,  // 167: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:output_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedResp
+	77,  // 168: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:output_type -> w17.contrib.auth.DeleteUserSessionsForResetResp
+	75,  // 169: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:output_type -> w17.contrib.auth.DeleteOtherSessionTokensResp
+	79,  // 170: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:output_type -> w17.contrib.auth.CreateEmailVerificationTokenResp
+	81,  // 171: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:output_type -> w17.contrib.auth.ConsumeEmailVerificationTokenResp
+	85,  // 172: w17.contrib.auth.AuthMutation.MarkEmailVerified:output_type -> w17.contrib.auth.MarkEmailVerifiedResp
+	83,  // 173: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:output_type -> w17.contrib.auth.MarkEmailDerivedFromInviteResp
+	125, // 174: w17.contrib.auth.AuthMutation.RegisterAuthClient:output_type -> w17.contrib.auth.RegisterAuthClientResp
+	127, // 175: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:output_type -> w17.contrib.auth.SetAuthClientEnabledResp
+	129, // 176: w17.contrib.auth.AuthMutation.DeleteAuthClient:output_type -> w17.contrib.auth.DeleteAuthClientResp
+	131, // 177: w17.contrib.auth.AuthMutation.CreateCliAuthCode:output_type -> w17.contrib.auth.CreateCliAuthCodeResp
+	133, // 178: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:output_type -> w17.contrib.auth.ConsumeCliAuthCodeResp
+	135, // 179: w17.contrib.auth.AuthMutation.CreateOrganization:output_type -> w17.contrib.auth.CreateOrganizationResp
+	137, // 180: w17.contrib.auth.AuthMutation.AddOrgMembership:output_type -> w17.contrib.auth.AddOrgMembershipResp
+	143, // 181: w17.contrib.auth.AuthMutation.UpdateOrganization:output_type -> w17.contrib.auth.UpdateOrganizationResp
+	139, // 182: w17.contrib.auth.AuthMutation.DeleteOrganization:output_type -> w17.contrib.auth.DeleteOrganizationResp
+	145, // 183: w17.contrib.auth.AuthMutation.UpdateOrgMembership:output_type -> w17.contrib.auth.UpdateOrgMembershipResp
+	141, // 184: w17.contrib.auth.AuthMutation.DeleteOrgMembership:output_type -> w17.contrib.auth.DeleteOrgMembershipResp
+	147, // 185: w17.contrib.auth.AuthMutation.RevokeUserToken:output_type -> w17.contrib.auth.RevokeUserTokenResp
+	149, // 186: w17.contrib.auth.AuthMutation.CreateOrgInvite:output_type -> w17.contrib.auth.CreateOrgInviteResp
+	153, // 187: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:output_type -> w17.contrib.auth.BindOpenOrgInviteResp
+	155, // 188: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:output_type -> w17.contrib.auth.ConsumeOrgInviteByTokenResp
+	151, // 189: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:output_type -> w17.contrib.auth.ClearExpiredOrgInviteResp
+	157, // 190: w17.contrib.auth.AuthMutation.DeleteOrgInvite:output_type -> w17.contrib.auth.DeleteOrgInviteResp
+	112, // [112:191] is the sub-list for method output_type
+	33,  // [33:112] is the sub-list for method input_type
 	33,  // [33:33] is the sub-list for extension type_name
 	33,  // [33:33] is the sub-list for extension extendee
 	0,   // [0:33] is the sub-list for field type_name
@@ -9385,7 +9521,7 @@ func file_mutations_auth_mutation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mutations_auth_mutation_proto_rawDesc), len(file_mutations_auth_mutation_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   156,
+			NumMessages:   158,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

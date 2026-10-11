@@ -234,12 +234,16 @@ func getDevice(ctx context.Context, h *AuthServiceHandler, userID, identifier st
 // returned trust token is empty (the device simply re-challenges next
 // new-device sign-in — fail-safe). The token is rotated every login.
 func issueSessionWithDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID string) (string, string, error) {
-	tok, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
+	token, hash, err := newBearerToken()
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
 		UserId:    userID,
 		DeviceId:  deviceID,
 		ExpiresAt: h.sessionTokenExpiry(),
-	})
-	if err != nil {
+		TokenHash: hash,
+	}); err != nil {
 		return "", "", err
 	}
 	var trustToken string
@@ -254,7 +258,7 @@ func issueSessionWithDevice(ctx context.Context, h *AuthServiceHandler, userID, 
 			}
 		}
 	}
-	return tok.GetToken().GetToken(), trustToken, nil
+	return token, trustToken, nil
 }
 
 // ListDevices returns the caller's devices, deriving `trusted`

@@ -1,5 +1,19 @@
 # auth — changelog
 
+## 0.1.0-rc.24
+
+### Bearer tokens are stored as a hash
+
+Session and API tokens (`UserToken`) used to be stored as they are handed out, so whoever could read the table or a backup of it held every live token. A token is now stored only as `token_hash`, the sha256 of the token. The handler that mints a token generates it, stores the hash, and returns the token to the caller once. A lookup hashes the bearer it is presented and compares.
+
+What changes:
+
+- **New column `UserToken.token_hash`.** Generate a migration as usual (`w17ctl migrate generate`). `UserToken.token` becomes nullable and nothing writes it any more.
+- **Existing tokens keep working.** A token minted before this release is still found by its value. The first request that uses it moves the row to `token_hash` and clears `token` (`AuthMutation.UpgradeTokenHash`). Nobody is signed out by the upgrade.
+- **A token that is never used stays in the clear** until a later release drops the `token` column, which ends every such token. To close it sooner, revoke the tokens that are still unhashed (`token_hash IS NULL`): their owners sign in again or reissue an API token.
+- **Storage callers:** `IssueToken` and `IssueApiToken` take the hash (`token_hash`) and no longer return the token. `GetUserByToken`, `GetUserByTokenWithPermissions`, `GetTokenWithType` and `DeleteToken` take `token_hash` next to `token`. Hand-written code that calls these RPCs directly hashes the token with sha256 and hex-encodes it.
+- **Fixtures** that seed a `UserToken` with a known `token` keep working through the legacy path. A fixture may instead seed `token_hash` with the sha256 of the token.
+
 ## 0.1.0-rc.23
 
 ### A successful OAuth sign-in no longer spends the per-address limit twice

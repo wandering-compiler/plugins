@@ -184,14 +184,18 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, err
 	}
-	resp, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
-		UserId:    userID,
-		ExpiresAt: h.sessionTokenExpiry(),
-	})
+	token, hash, err := newBearerToken()
 	if err != nil {
 		return nil, err
 	}
-	return &pb.CliTokenResp{Token: resp.GetToken().GetToken(), UserId: userID}, nil
+	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
+		UserId:    userID,
+		ExpiresAt: h.sessionTokenExpiry(),
+		TokenHash: hash,
+	}); err != nil {
+		return nil, err
+	}
+	return &pb.CliTokenResp{Token: token, UserId: userID}, nil
 }
 
 // authenticateClient verifies a confidential client's secret at the token

@@ -53,7 +53,7 @@ func (m *apiTokenQueryMock) GetTokenPermissionSubset(ctx context.Context, in *pb
 
 func TestResolvePrincipalRealmAware_Session_NoSubsetLookup(t *testing.T) {
 	mock := &apiTokenQueryMock{
-		tok:        &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION},
+		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION},
 		realmPerms: []int32{1, 2, 3},
 		subset:     []int32{1}, // present, but a SESSION token must NOT consult it
 	}
@@ -92,7 +92,7 @@ func sortedInt32(in []int32) []int32 {
 // ignoring any RolePermission-derived realm perms.
 func TestResolvePrincipalRealmAware_Wildcard_GrantsAll(t *testing.T) {
 	mock := &apiTokenQueryMock{
-		tok:        &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION},
+		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION},
 		realmPerms: []int32{1}, // must be ignored — wildcard grants the whole lock
 		wildcard:   true,
 	}
@@ -112,7 +112,7 @@ func TestResolvePrincipalRealmAware_Wildcard_GrantsAll(t *testing.T) {
 // grant is GrantAll(lock) ∩ subset, never an escalation past the subset.
 func TestResolvePrincipalRealmAware_API_Wildcard_NarrowedBySubset(t *testing.T) {
 	mock := &apiTokenQueryMock{
-		tok:      &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_API},
+		tok:      &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_API},
 		wildcard: true,
 		subset:   []int32{2, 3, 99}, // 99 not in the catalogue → dropped
 	}
@@ -130,7 +130,7 @@ func TestResolvePrincipalRealmAware_API_Wildcard_NarrowedBySubset(t *testing.T) 
 
 func TestResolvePrincipalRealmAware_API_EmptySubset_NoNarrowing(t *testing.T) {
 	mock := &apiTokenQueryMock{
-		tok:        &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_API},
+		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_API},
 		realmPerms: []int32{10, 20},
 		subset:     nil, // empty subset = no narrowing
 	}
@@ -148,7 +148,7 @@ func TestResolvePrincipalRealmAware_API_EmptySubset_NoNarrowing(t *testing.T) {
 
 func TestResolvePrincipalRealmAware_API_Subset_Intersects(t *testing.T) {
 	mock := &apiTokenQueryMock{
-		tok:        &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_API},
+		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "t1", TokenType: pb.TokenType_TOKEN_TYPE_API},
 		realmPerms: []int32{10, 20, 30},
 		subset:     []int32{20, 30, 99}, // 99 not in realm perms -> dropped (no escalation)
 	}

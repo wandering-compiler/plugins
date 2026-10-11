@@ -114,10 +114,23 @@ message IssueTokenReq {
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "devices"
   ];
+  // sha256(token), hex: the handler mints the token, stores only this, and
+  // returns the token to the caller itself (it is never read back).
+  string token_hash = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
 }
 message IssueTokenResp { UserToken token = 1; }
 
-message DeleteTokenReq  { string token = 1; }
+// token_hash finds the row; token only a legacy one (see UserToken).
+message DeleteTokenReq  { string token = 1; string token_hash = 2; }
+
+// UpgradeTokenHash moves a legacy row — found by its token in the clear —
+// to the hash, and clears the clear copy. Run by the lookup that found it;
+// a no-op on a row already moved.
+message UpgradeTokenHashReq {
+  string token      = 1;
+  string token_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message UpgradeTokenHashResp {}
 // DeleteToken returns the deleted row's identifiers for the
 // caller's response. Consumers that don't need the IDs ignore the
 // response (or pin a `_ = resp` discard). (TokenRevoked is emitted
@@ -163,6 +176,8 @@ message IssueApiTokenReq {
   // Absent = NULL = never expires; the business handler decides, from the
   // caller's request and the deployment's default.
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+  // sha256(token), hex — see IssueTokenReq.token_hash.
+  string    token_hash = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
 }
 message IssueApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -1258,10 +1273,10 @@ service AuthMutation {
         dql:
           "INSERT INTO @module.UserToken SET "
           "user_id = :user_id, "
+          "token_hash = :token_hash, "
           "expires_at = :expires_at, "
           "?feature(devices) device_id = :device_id "
           "RETURNING id AS token.id, "
-          "          token AS token.token, "
           "          user_id AS token.user_id, "
           "          ?feature(devices) device_id AS token.device_id, "
           "          created_at AS token.created_at"
@@ -1301,7 +1316,22 @@ service AuthMutation {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserToken WHERE token = :token RETURNING id AS token_id, user_id"
+        dql:  "DELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :token RETURNING id AS token_id, user_id"
+      }
+    };
+  }
+
+  // UpgradeTokenHash — moves a legacy UserToken row (token in the clear,
+  // minted before the hash) to token_hash and clears the clear copy. The
+  // lookups find a legacy row by its token and report an empty
+  // stored_token_hash; the caller then runs this. Guarded on token_hash IS
+  // NULL, so a second run, or a race with another request presenting the
+  // same token, changes nothing.
+  rpc UpgradeTokenHash(UpgradeTokenHashReq) returns (UpgradeTokenHashResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:  "UPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :token AND token_hash IS NULL"
       }
     };
   }
@@ -1361,11 +1391,11 @@ service AuthMutation {
         dql:
           "INSERT INTO @module.UserToken SET "
           "user_id = :user_id, "
+          "token_hash = :token_hash, "
           "token_type = :token_type, "
           "name = :name, "
           "expires_at = :expires_at "
           "RETURNING id AS token.id, "
-          "          token AS token.token, "
           "          user_id AS token.user_id, "
           "          token_type AS token.token_type, "
           "          name AS token.name, "

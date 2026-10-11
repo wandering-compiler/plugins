@@ -318,10 +318,11 @@ func (p *authPrincipal) effectivePermissions(lock *acllock.Lock) []int32 {
 // Declared here (always-present) so Authenticate compiles with no
 // feature file staged; the override only ships when api_token is on.
 var resolvePrincipal = func(ctx context.Context, h *AuthServiceHandler, token string) (*authPrincipal, error) {
-	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{Token: token})
+	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{Token: token, TokenHash: sha256Hex(token)})
 	if err != nil {
 		return nil, err
 	}
+	h.upgradeLegacyToken(ctx, token, resp.GetStoredTokenHash())
 	// SESSION: with api_token off there is only one credential class, and
 	// this is it. Stamping it rather than leaving the zero value keeps the
 	// ownership rule (session-only) reading the same in both builds.
@@ -613,11 +614,14 @@ var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.Us
 // + store the device-trust token. Shared by SignIn, OAuth, and (under
 // two_factor) VerifyMfa so they all honour device binding.
 var issueSession = func(ctx context.Context, h *AuthServiceHandler, userID, deviceID string) (token, trustToken string, err error) {
-	resp, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry()})
+	token, hash, err := newBearerToken()
 	if err != nil {
 		return "", "", err
 	}
-	return resp.GetToken().GetToken(), "", nil
+	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry(), TokenHash: hash}); err != nil {
+		return "", "", err
+	}
+	return token, "", nil
 }
 
 // sessionTokenExpiry returns the absolute expiry stamped into a freshly
