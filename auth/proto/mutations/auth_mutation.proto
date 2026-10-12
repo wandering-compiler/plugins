@@ -522,6 +522,14 @@ message CreatePasswordResetTokenResp {
   PasswordResetToken token = 1;
 }
 
+message SpendPasswordResetTokensReq {
+  option (w17.contrib.plugin_feature) = "password_reset";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message SpendPasswordResetTokensResp {
+  option (w17.contrib.plugin_feature) = "password_reset";
+}
+
 message ConsumePasswordResetTokenReq {
   option (w17.contrib.plugin_feature) = "password_reset";
   string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
@@ -2446,6 +2454,23 @@ service AuthMutation {
           "consumed_at = NOW() "
           "WHERE token_hash = :token_hash AND consumed_at IS NULL AND expires_at > NOW() "
           "RETURNING user_id"
+      }
+    };
+  }
+
+  // SpendPasswordResetTokens — mark every live reset link of an account used.
+  // Runs in the same transaction as a password reset or change: a link the
+  // person asked for before is a way to set the password again, and after
+  // the password changed nobody should hold one.
+  rpc SpendPasswordResetTokens(SpendPasswordResetTokensReq) returns (SpendPasswordResetTokensResp) {
+    option (w17.contrib.plugin_feature_rpc) = "password_reset";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.PasswordResetToken SET "
+          "consumed_at = NOW() "
+          "WHERE user_id = :user_id AND consumed_at IS NULL"
       }
     };
   }

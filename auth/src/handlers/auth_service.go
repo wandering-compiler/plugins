@@ -395,6 +395,14 @@ type signupRoles struct {
 	fallback  []string
 }
 
+// spendResetLinks marks every live password-reset link of an account used.
+// A reset and a password change both call it inside their transaction: after
+// the password changed, an older link is a way to change it again. Base
+// no-op — the PasswordResetToken table exists only under `password_reset`,
+// whose file (handlers/reset.go) installs the real one via init(), so
+// `password_change` without `password_reset` stages nothing it cannot build.
+var spendResetLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error { return nil }
+
 // SignIn seams — always-present default behaviours opt-in feature
 // files override via init(), mirroring resolvePrincipal /
 // signupCreateUser / scopeDecorators. They let `devices` and

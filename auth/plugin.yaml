@@ -196,7 +196,7 @@ features:
       - handlers/mfa.go
       - handlers/mfa_recovery.go
   - name: password_reset
-    description: "Self-service password reset (E1). Adds the PasswordResetToken table + the RequestPasswordReset / ResetPassword RPCs (both unauthenticated, REST-exposed). RequestPasswordReset always returns success regardless of whether the email exists (anti-enumeration) and emits PasswordResetRequested carrying a single-use, time-bounded plaintext token (only its hash is stored) for a hand-written e-mail delivery channel. ResetPassword consumes the token atomically (single-use + expiry), sets the new password, and revokes every existing token (sessions + API). TTL via env (password_reset_ttl_seconds, default 1h). Off by default."
+    description: "Self-service password reset (E1). Adds the PasswordResetToken table + the RequestPasswordReset / ResetPassword RPCs (both unauthenticated, REST-exposed). RequestPasswordReset always returns success regardless of whether the email exists (anti-enumeration) and emits PasswordResetRequested carrying a single-use, time-bounded plaintext token (only its hash is stored) for a hand-written e-mail delivery channel. ResetPassword consumes the token atomically (single-use + expiry), sets the new password, spends every other live reset link of the account in the same transaction, and revokes every existing token (sessions + API). TTL via env (password_reset_ttl_seconds, default 1h). Off by default."
     default: false
     go_files:
       - handlers/reset.go
@@ -262,7 +262,7 @@ features:
     go_files:
       - handlers/org_invite.go
   - name: password_change
-    description: "Authenticated password change — the signed-in principal supplies its current password and a new one. Distinct from `password_reset`, which is the FORGOTTEN-password flow and needs a mail channel to deliver a token; this one needs no channel at all, because the proof is the current password. A deployment that cannot send mail can still let people rotate their own credentials. Adds the ChangePassword business RPC over AuthMutation.UpdateUserPasswordIfUnchanged, and AuthMutation.DeleteOtherSessionTokens, which signs the person out of every other session in the same unit of work (API tokens are kept). Off by default."
+    description: "Authenticated password change — the signed-in principal supplies its current password and a new one. Distinct from `password_reset`, which is the FORGOTTEN-password flow and needs a mail channel to deliver a token; this one needs no channel at all, because the proof is the current password. A deployment that cannot send mail can still let people rotate their own credentials. Adds the ChangePassword business RPC over AuthMutation.UpdateUserPasswordIfUnchanged, and AuthMutation.DeleteOtherSessionTokens, which signs the person out of every other session in the same unit of work (API tokens are kept). With `password_reset` staged too, the change also spends every live reset link of the account in that unit of work. Off by default."
     default: false
     go_files:
       - handlers/password_change.go

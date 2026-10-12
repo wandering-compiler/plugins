@@ -82,6 +82,7 @@ const (
 	AuthMutation_RemovePermissionFromRole_FullMethodName       = "/w17.contrib.auth.AuthMutation/RemovePermissionFromRole"
 	AuthMutation_CreatePasswordResetToken_FullMethodName       = "/w17.contrib.auth.AuthMutation/CreatePasswordResetToken"
 	AuthMutation_ConsumePasswordResetToken_FullMethodName      = "/w17.contrib.auth.AuthMutation/ConsumePasswordResetToken"
+	AuthMutation_SpendPasswordResetTokens_FullMethodName       = "/w17.contrib.auth.AuthMutation/SpendPasswordResetTokens"
 	AuthMutation_UpdateUserPassword_FullMethodName             = "/w17.contrib.auth.AuthMutation/UpdateUserPassword"
 	AuthMutation_UpdateUserPasswordIfUnchanged_FullMethodName  = "/w17.contrib.auth.AuthMutation/UpdateUserPasswordIfUnchanged"
 	AuthMutation_DeleteUserSessionsForReset_FullMethodName     = "/w17.contrib.auth.AuthMutation/DeleteUserSessionsForReset"
@@ -382,6 +383,11 @@ type AuthMutationClient interface {
 	// the WHERE, so a replay / expired / already-used token matches zero rows
 	// (empty user_id). No TOCTOU between validate + consume.
 	ConsumePasswordResetToken(ctx context.Context, in *ConsumePasswordResetTokenReq, opts ...grpc.CallOption) (*ConsumePasswordResetTokenResp, error)
+	// SpendPasswordResetTokens — mark every live reset link of an account used.
+	// Runs in the same transaction as a password reset or change: a link the
+	// person asked for before is a way to set the password again, and after
+	// the password changed nobody should hold one.
+	SpendPasswordResetTokens(ctx context.Context, in *SpendPasswordResetTokensReq, opts ...grpc.CallOption) (*SpendPasswordResetTokensResp, error)
 	// UpdateUserPassword — apply a reset: set the user's password_hash.
 	UpdateUserPassword(ctx context.Context, in *UpdateUserPasswordReq, opts ...grpc.CallOption) (*UpdateUserPasswordResp, error)
 	// UpdateUserPasswordIfUnchanged — apply a CHANGE: set the password_hash
@@ -1107,6 +1113,16 @@ func (c *authMutationClient) ConsumePasswordResetToken(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *authMutationClient) SpendPasswordResetTokens(ctx context.Context, in *SpendPasswordResetTokensReq, opts ...grpc.CallOption) (*SpendPasswordResetTokensResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SpendPasswordResetTokensResp)
+	err := c.cc.Invoke(ctx, AuthMutation_SpendPasswordResetTokens_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authMutationClient) UpdateUserPassword(ctx context.Context, in *UpdateUserPasswordReq, opts ...grpc.CallOption) (*UpdateUserPasswordResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateUserPasswordResp)
@@ -1657,6 +1673,11 @@ type AuthMutationServer interface {
 	// the WHERE, so a replay / expired / already-used token matches zero rows
 	// (empty user_id). No TOCTOU between validate + consume.
 	ConsumePasswordResetToken(context.Context, *ConsumePasswordResetTokenReq) (*ConsumePasswordResetTokenResp, error)
+	// SpendPasswordResetTokens — mark every live reset link of an account used.
+	// Runs in the same transaction as a password reset or change: a link the
+	// person asked for before is a way to set the password again, and after
+	// the password changed nobody should hold one.
+	SpendPasswordResetTokens(context.Context, *SpendPasswordResetTokensReq) (*SpendPasswordResetTokensResp, error)
 	// UpdateUserPassword — apply a reset: set the user's password_hash.
 	UpdateUserPassword(context.Context, *UpdateUserPasswordReq) (*UpdateUserPasswordResp, error)
 	// UpdateUserPasswordIfUnchanged — apply a CHANGE: set the password_hash
@@ -2002,6 +2023,9 @@ func (UnimplementedAuthMutationServer) CreatePasswordResetToken(context.Context,
 }
 func (UnimplementedAuthMutationServer) ConsumePasswordResetToken(context.Context, *ConsumePasswordResetTokenReq) (*ConsumePasswordResetTokenResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConsumePasswordResetToken not implemented")
+}
+func (UnimplementedAuthMutationServer) SpendPasswordResetTokens(context.Context, *SpendPasswordResetTokensReq) (*SpendPasswordResetTokensResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method SpendPasswordResetTokens not implemented")
 }
 func (UnimplementedAuthMutationServer) UpdateUserPassword(context.Context, *UpdateUserPasswordReq) (*UpdateUserPasswordResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateUserPassword not implemented")
@@ -3079,6 +3103,24 @@ func _AuthMutation_ConsumePasswordResetToken_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthMutation_SpendPasswordResetTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SpendPasswordResetTokensReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).SpendPasswordResetTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_SpendPasswordResetTokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).SpendPasswordResetTokens(ctx, req.(*SpendPasswordResetTokensReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthMutation_UpdateUserPassword_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdateUserPasswordReq)
 	if err := dec(in); err != nil {
@@ -3805,6 +3847,10 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ConsumePasswordResetToken",
 			Handler:    _AuthMutation_ConsumePasswordResetToken_Handler,
+		},
+		{
+			MethodName: "SpendPasswordResetTokens",
+			Handler:    _AuthMutation_SpendPasswordResetTokens_Handler,
 		},
 		{
 			MethodName: "UpdateUserPassword",

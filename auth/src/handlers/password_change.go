@@ -136,6 +136,10 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 	}); err != nil {
 		return fail(err)
 	}
+	// A reset link asked for before the change would undo it.
+	if err := spendResetLinks(txCtx, h, userID); err != nil {
+		return fail(err)
+	}
 	if tx != nil {
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
