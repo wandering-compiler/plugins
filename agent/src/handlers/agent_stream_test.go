@@ -215,15 +215,12 @@ func TestStreamRefusesAnEmptyRequest(t *testing.T) {
 // provider.
 func TestCompleteStream_TheCallersDeadlineIsNotAModelFailure(t *testing.T) {
 	logs := captureLog(t)
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	sink := &syncSink{}
 	h := &AgentServiceHandler{
-		// What the SDK returns when the request's context has expired.
-		StreamClient: errStreamer{err: &url.Error{
-			Op: "Post", URL: "https://acme-ai.example.com/openai/deployments/secret-deploy/responses",
-			Err: context.DeadlineExceeded,
-		}},
+		// What the SDK returns when the request's context expires mid-call.
+		StreamClient: blockingStreamer{url: "https://acme-ai.example.com/openai/deployments/secret-deploy/responses"},
 		DefaultModel: "gpt-4o", DefaultMaxTokens: 100, Usage: sink,
 	}
 	err := h.CompleteStream(&pb.CompleteReq{}, &recorder{ctx: ctx})
@@ -236,6 +233,45 @@ func TestCompleteStream_TheCallersDeadlineIsNotAModelFailure(t *testing.T) {
 	if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed {
 		t.Errorf("recorded %+v, want one FAILED row", evs)
 	}
+}
+
+// A stream whose context had already ended sends nothing: the caller's own
+// code and no usage row, as Complete and RunAgent do.
+func TestCompleteStream_ACallerAlreadyGoneSendsNothingAndWritesNoRow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sink := &syncSink{}
+	asked := false
+	h := &AgentServiceHandler{
+		StreamClient: countingStreamer{asked: &asked},
+		DefaultModel: "gpt-4o", DefaultMaxTokens: 100, Usage: sink,
+	}
+	err := h.CompleteStream(&pb.CompleteReq{}, &recorder{ctx: ctx})
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("err = %v, want Canceled", err)
+	}
+	if asked {
+		t.Error("the provider was asked after the caller had gone")
+	}
+	if evs := sink.all(); len(evs) != 0 {
+		t.Errorf("recorded %+v, want no row: nothing was sent", evs)
+	}
+}
+
+// blockingStreamer fails only when the request's context ends, with the
+// error the SDK returns then.
+type blockingStreamer struct{ url string }
+
+func (b blockingStreamer) NewStreaming(ctx context.Context, _ responses.ResponseNewParams, _ ...option.RequestOption) *ssestream.Stream[responses.ResponseStreamEventUnion] {
+	<-ctx.Done()
+	return ssestream.NewStream[responses.ResponseStreamEventUnion](nil, &url.Error{Op: "Post", URL: b.url, Err: ctx.Err()})
+}
+
+type countingStreamer struct{ asked *bool }
+
+func (c countingStreamer) NewStreaming(context.Context, responses.ResponseNewParams, ...option.RequestOption) *ssestream.Stream[responses.ResponseStreamEventUnion] {
+	*c.asked = true
+	return ssestream.NewStream[responses.ResponseStreamEventUnion](nil, errors.New("the provider was asked"))
 }
 
 // A Send that fails on the SERVER's side is not the client leaving, on this

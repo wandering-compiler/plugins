@@ -30,6 +30,12 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 
 	m := h.modelFor(req)
 
+	// As in Complete: a stream whose context has already ended sends nothing,
+	// so it answers with the caller's own code and writes no usage row.
+	if ctxErr := srv.Context().Err(); ctxErr != nil {
+		return status.FromContextError(ctxErr).Err()
+	}
+
 	startedAt := time.Now()
 	// The transport's own failure, kept so it can be told apart from the
 	// model's below.
