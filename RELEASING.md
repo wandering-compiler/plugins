@@ -7,7 +7,11 @@ in a **fragment**: `<plugin>/changes/<name>.md`, starting with a `### ` heading,
 a few lines under it. Pull requests never edit `CHANGELOG.md` itself, so they
 never conflict over it. CI (`tools/check-changelog.sh`) refuses a pull request
 that changes a plugin without a fragment, unless it carries the `no-changelog`
-label (tests, comments: nothing a user of the plugin can notice).
+label (tests, comments: nothing a user of the plugin can notice). A fragment
+sits directly in `changes/` and ends in `.md`; anything else is never collected.
+A release pull request (branch `release/<plugin>-v0.1.0-rc.N`) is exempt only
+in the shape `tools/release-pr.sh` gives it: the manifest says that version, and
+it changes `plugin.yaml` and `CHANGELOG.md` and deletes fragments, nothing else.
 
 ## Cutting a release
 
@@ -24,7 +28,8 @@ label (tests, comments: nothing a user of the plugin can notice).
    not a new minor. The pull request sets the version in `plugin.yaml`,
    collects the fragments into `CHANGELOG.md` under `## <version>` (an
    `## Unreleased` section becomes it), and deletes the fragments. Merging it
-   is the release decision.
+   is the release decision. `DRY_RUN=1` prepares the commit on the local
+   branch and pushes nothing; delete the branch afterwards.
 2. **Cut the release** from `main` with that merge:
 
    ```sh
@@ -35,6 +40,9 @@ label (tests, comments: nothing a user of the plugin can notice).
 `tools/release.sh` refuses unless:
 - the version is `v0.1.0-rc.N`;
 - the manifest says that version;
+- `CHANGELOG.md` starts with that version's section and `<plugin>/changes/`
+  holds no fragment (one merged after the release pull request would ship
+  unlisted: open the release pull request again);
 - `HEAD` is `origin/main`;
 - the tag does not exist yet.
 

@@ -14,7 +14,8 @@
 #
 # Merging it is the release decision. Nothing here tags, signs or pushes main:
 # the branch goes up, and the pull request goes through CI like any other.
-#   env: DRY_RUN=1  prepare the commit on a local branch, push nothing
+#   env: DRY_RUN=1  prepare the commit on a local branch, push nothing; from
+#                   any HEAD (for trying it out), so delete the branch after
 set -euo pipefail
 
 PLUGIN="${1:?usage: $0 <plugin>}"
@@ -28,6 +29,7 @@ if [ "${DRY_RUN:-0}" != 1 ] && [ "$(git rev-parse HEAD)" != "$(git rev-parse ori
 fi
 
 manifest="$(sed -n 's/^version:[[:space:]]*//p' "$PLUGIN/plugin.yaml" | head -1 | tr -d "\"' ")"
+echo "$manifest" | grep -Eq '^0\.1\.0-rc\.[0-9]+$' || { echo "!! $PLUGIN/plugin.yaml says $manifest, not on the version line 0.1.0-rc.N" >&2; exit 1; }
 rc() { echo "${1##*.}"; }
 last="$(git tag -l "$PLUGIN/v0.1.0-rc.*" | sed "s|^$PLUGIN/v||" | sort -V | tail -1)"
 if [ -z "$last" ] || [ "$(rc "$manifest")" -gt "$(rc "$last")" ]; then
@@ -41,14 +43,21 @@ echo "$version" | grep -Eq '^0\.1\.0-rc\.[0-9]+$' || { echo "!! $version is not 
 
 shopt -s nullglob
 fragments=("$PLUGIN"/changes/*.md)
-top="$(grep -m1 '^## ' "$PLUGIN/CHANGELOG.md" || true)"
+top="$(grep -m1 '^## ' "$PLUGIN/CHANGELOG.md" 2>/dev/null || true)"
 if [ ${#fragments[@]} -eq 0 ] && [ "$top" != "## Unreleased" ] && [ "$top" != "## $version" ]; then
 	echo "!! $PLUGIN has no change fragments and no unreleased changelog section — nothing to release" >&2
 	exit 1
 fi
 
 branch="release/$PLUGIN-v$version"
+if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+	echo "!! a local branch $branch exists already (a DRY_RUN's?) — delete it: git branch -D $branch" >&2; exit 1
+fi
+if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+	echo "!! $branch is on origin already — its pull request is open, or was closed without deleting it" >&2; exit 1
+fi
 git switch --quiet -c "$branch"
+[ -f "$PLUGIN/CHANGELOG.md" ] || printf '# %s — changelog\n' "$PLUGIN" > "$PLUGIN/CHANGELOG.md"
 
 sed -i "s/^version:.*/version: $version/" "$PLUGIN/plugin.yaml"
 
@@ -67,11 +76,20 @@ if idx is not None and lines[idx] in ("## Unreleased", head):
     lines[idx] = head
     if body:
         # Fragments go first in the section: they are the newest changes.
-        lines[idx + 1:idx + 1] = [""] + body.split("\n")
+        rest = lines[idx + 1:]
+        while rest and rest[0] == "":
+            rest.pop(0)
+        lines[idx + 1:] = [""] + body.split("\n") + ([""] + rest if rest else [""])
 else:
-    at = idx if idx is not None else len(lines)
-    lines[at:at] = [head, ""] + body.split("\n") + [""]
-open(path, "w").write("\n".join(lines))
+    if idx is None:
+        # No release yet: the section goes after the title, at the end.
+        while lines and lines[-1] == "":
+            lines.pop()
+        lines += [""] if lines else []
+        idx = len(lines)
+    lines[idx:idx] = [head, ""] + body.split("\n") + [""]
+text = "\n".join(lines)
+open(path, "w").write(text if text.endswith("\n") else text + "\n")
 PY
 [ ${#fragments[@]} -eq 0 ] || git rm --quiet "${fragments[@]}"
 git add "$PLUGIN/plugin.yaml" "$PLUGIN/CHANGELOG.md"

@@ -60,6 +60,20 @@ git fetch --quiet origin main releases --tags
 	echo "!! HEAD is not origin/main — check out main as merged and pull first" >&2
 	exit 1
 }
+# What ships is what the changelog says: the release pull request
+# (tools/release-pr.sh) collected every fragment under this version. A fragment
+# merged after it would ship unlisted, and be listed under the next version.
+fragments="$(git ls-tree --name-only HEAD "$PLUGIN/changes/" | grep '\.md$' || true)"
+[ -z "$fragments" ] || {
+	echo "!! $PLUGIN/changes/ holds fragments the changelog does not list yet:" >&2
+	echo "$fragments" >&2
+	echo "   open the release pull request again (make release-pr PLUGIN=$PLUGIN), merge it, then release" >&2
+	exit 1
+}
+[ "$(grep -m1 '^## ' "$PLUGIN/CHANGELOG.md" 2>/dev/null)" = "## ${VERSION#v}" ] || {
+	echo "!! $PLUGIN/CHANGELOG.md does not start with a ## ${VERSION#v} section — release through make release-pr" >&2
+	exit 1
+}
 # The REMOTE decides whether a tag exists; a local leftover from a failed run
 # is not a release.
 if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
