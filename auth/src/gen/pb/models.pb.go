@@ -2416,7 +2416,10 @@ type OAuthLoginCode struct {
 	ConsumedAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=consumed_at,json=consumedAt,proto3" json:"consumed_at,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// The provider-verified identity, kept for a code whose account does not
-	// exist yet (user_id NULL).
+	// exist yet (user_id NULL). The defaults fill the rows written before these
+	// columns existed: login codes are never purged, so adding a NOT NULL
+	// column without one fails the migration of any deployment that has
+	// signed someone in through a provider.
 	ProviderId    *string `protobuf:"bytes,8,opt,name=provider_id,json=providerId,proto3,oneof" json:"provider_id,omitempty"`
 	ExternalId    string  `protobuf:"bytes,9,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
 	Email         string  `protobuf:"bytes,10,opt,name=email,proto3" json:"email,omitempty"`
@@ -3331,7 +3334,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\xca\xf3\x18\x06\b\x06\x10\x01@ R\x04slot\x12\x1f\n" +
 	"\auser_id\x18\x02 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12F\n" +
 	"\n" +
-	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\f\xc2\xf3\x18\x00\xfa\xf4\x18\x04rbac\"\xe3\x04\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\f\xc2\xf3\x18\x00\xfa\xf4\x18\x04rbac\"\xe9\x04\n" +
 	"\x0eOAuthLoginCode\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12,\n" +
 	"\auser_id\x18\x02 \x01(\tB\x0e\xca\xf3\x18\x04\b\x03(\x01\xd2\xf3\x18\x02\b\x01H\x00R\x06userId\x88\x01\x01\x12'\n" +
@@ -3345,11 +3348,13 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12.\n" +
 	"\vprovider_id\x18\b \x01(\tB\b\xca\xf3\x18\x04\b\x03(\x01H\x01R\n" +
-	"providerId\x88\x01\x01\x12,\n" +
-	"\vexternal_id\x18\t \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xff\x01R\n" +
-	"externalId\x12!\n" +
+	"providerId\x88\x01\x01\x12/\n" +
+	"\vexternal_id\x18\t \x01(\tB\x0e\xca\xf3\x18\n" +
+	"\b\x010\x01@\xff\x01\xa2\x01\x00R\n" +
+	"externalId\x12$\n" +
 	"\x05email\x18\n" +
-	" \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xc0\x02R\x05email\x12.\n" +
+	" \x01(\tB\x0e\xca\xf3\x18\n" +
+	"\b\x010\x01@\xc0\x02\xa2\x01\x00R\x05email\x12.\n" +
 	"\x0eemail_verified\x18\v \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1fR\remailVerified:\r\xc2\xf3\x18\x00\xfa\xf4\x18\x05oauthB\n" +
 	"\n" +
 	"\b_user_idB\x0e\n" +

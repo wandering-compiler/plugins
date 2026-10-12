@@ -980,10 +980,13 @@ message OAuthLoginCode {
   google.protobuf.Timestamp consumed_at = 6 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at  = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   // The provider-verified identity, kept for a code whose account does not
-  // exist yet (user_id NULL).
+  // exist yet (user_id NULL). The defaults fill the rows written before these
+  // columns existed: login codes are never purged, so adding a NOT NULL
+  // column without one fails the migration of any deployment that has
+  // signed someone in through a provider.
   optional string provider_id = 8 [(w17.field) = { type: UUID, null: true }];
-  string external_id    = 9  [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
-  string email          = 10 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  string external_id    = 9  [(w17.field) = { type: CHAR, max_len: 255, blank: true, default_string: "" }];
+  string email          = 10 [(w17.field) = { type: CHAR, max_len: 320, blank: true, default_string: "" }];
   bool   email_verified = 11 [(w17.field) = { default_auto: FALSE }];
 }
 

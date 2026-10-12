@@ -101,3 +101,22 @@ func TestOAuthExchange_AnExistingAccountIgnoresTheInvitation(t *testing.T) {
 		t.Error("an existing account's sign-in went through the sign-up gate")
 	}
 }
+
+// An identity that gained an account between the callback and the exchange
+// (a second tab's code redeemed first) signs in to it: the exchange resolves
+// again instead of creating a second account for the same subject.
+func TestOAuthExchange_AnAccountMadeSinceTheCallbackIsUsed(t *testing.T) {
+	h, m, state := exchangeHandler(t)
+	resp, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "google", Code: "c", State: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.identity = &pb.OAuthIdentity{Id: "id-1", UserId: "u-meanwhile"}
+	ex, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
+	if err != nil || ex.GetUserId() != "u-meanwhile" {
+		t.Fatalf("exchange = %+v, %v; want the account made since the callback", ex, err)
+	}
+	if m.createdUser != nil || m.createdIdent != nil {
+		t.Error("a second account or link was created for a subject that already has one")
+	}
+}

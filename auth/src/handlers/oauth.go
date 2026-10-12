@@ -134,9 +134,11 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 }
 
 // OAuthCallback completes the provider side of the flow: validate state,
-// exchange the provider's code, read the subject + email, find-or-create the
-// user, link the identity — and hand the browser a single-use login code,
-// not a session. The callback is a URL; whatever it carries can be put in
+// exchange the provider's code, read the subject + email, resolve the account
+// (linking an existing one when both sides verified the address) — and hand
+// the browser a single-use login code, not a session. It creates no account:
+// an identity with none is kept on the code, and OAuthExchange creates it
+// with the invitation the page passes there. The callback is a URL; whatever it carries can be put in
 // front of anyone. The session is issued by OAuthExchange, to the browser
 // holding the verifier of the challenge it sent to OAuthAuthorizeURL.
 //
@@ -224,14 +226,37 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	}
 	userID := consumed.GetUserId()
 	if userID == "" {
-		// The identity has no account yet: this is the sign-up, and the
-		// invitation (if any) comes with this request.
-		userID, err = h.createOAuthAccount(ctx, consumed.GetProviderId(), consumed.GetExternalId(),
-			consumed.GetEmail(), consumed.GetEmailVerified(), req.GetInviteToken())
+		// The identity had no account at the callback. A code always names
+		// one or the other; a row with neither is refused, never turned into
+		// an account for an empty subject.
+		providerID, subject, email := consumed.GetProviderId(), consumed.GetExternalId(), consumed.GetEmail()
+		if providerID == "" || subject == "" || email == "" {
+			return nil, Unauthenticated(errOAuthCodeInvalid)
+		}
+		// Resolved AGAIN: up to two minutes passed since the callback, and the
+		// identity may have gained an account meanwhile (a second tab's code
+		// for the same subject redeemed first, or a registration by another
+		// path). The callback's rules decide it as they would now: a linked
+		// identity wins, and an existing account is linked only when both
+		// sides verified the address.
+		userID, err = h.findOAuthAccount(ctx, providerID, subject, email, consumed.GetEmailVerified())
 		if err != nil {
-			// As SignUp answers it: the invitation and allowlist gates refuse
-			// with a code and a sentence the page can show.
-			return nil, err
+			return nil, Unauthenticated(err)
+		}
+		if userID == "" {
+			// This is the sign-up, and the invitation (if any) comes with
+			// this request.
+			userID, err = h.createOAuthAccount(ctx, providerID, subject, email, consumed.GetEmailVerified(), req.GetInviteToken())
+			if isEmailTaken(err) {
+				// The unique address, lost to a registration racing this one
+				// after the lookup above: answered as SignUp answers it.
+				return nil, emailTaken(ctx)
+			}
+			if err != nil {
+				// As SignUp answers it: the invitation and allowlist gates
+				// refuse with a code and a sentence the page can show.
+				return nil, err
+			}
 		}
 	}
 	// The account may have changed since the callback; and the device is the

@@ -19,8 +19,9 @@ Under `invite_only`, an OPEN invitation (one that names no address, for example 
 - **The callback no longer creates an account.** For an identity that has none, the login code keeps the provider-verified identity (subject, address, whether the provider verified it). `OAuthLoginCode` gains `provider_id`, `external_id`, `email` and `email_verified`, and `user_id` is now nullable.
 - **`OAuthExchange` creates it, with the new `invite_token`.** The rules are the same as `SignUp`: the allowlist, `invite_only`, a bound invitation's address, and an open link spent by its first registration. Without a valid invitation the exchange refuses with the gate's coded refusal. The token travels only in the page's own exchange request, never in a URL or through the provider.
 - **The user, its roles, the verified address, the spent invitation and the identity link commit together.** Before, the identity link was written after the user's transaction.
-- **An identity that already has an account ignores the token.**
-
+- **An identity that already has an account ignores the token.** The exchange resolves the identity again before creating, so a second login code for the same subject (another tab) signs in to the account the first one made instead of failing.
+- **A refused registration spends the login code.** The page has to start the sign-in again, with the invitation, to retry.
+- **Generate a migration.** `OAuthLoginCode` gains four columns and `user_id` becomes nullable; the new text columns default to empty, so existing rows migrate.
 
 ### One bootstrap administrator, even under concurrent first sign-ups
 
