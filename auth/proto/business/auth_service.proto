@@ -871,6 +871,12 @@ service AuthService {
   // `sign_in_turnkey`, SignUp → `sign_up_turnkey`.
   rpc Authenticate(AuthReq) returns (AuthResp) {
     option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
+  }  // AuthenticateAdmin — Authenticate for the admin plane (the admin
+  // preset's user_lookup). Only realm-wide roles count: no organization is
+  // selected, so a role scoped to one organization grants nothing in the
+  // console that spans them all.
+  rpc AuthenticateAdmin(AuthReq) returns (AuthResp) {
+    option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
   }
   rpc SignIn(SignInReq) returns (SignInResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_in_turnkey";

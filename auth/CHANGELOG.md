@@ -2,6 +2,15 @@
 
 ## 0.1.0-rc.25
 
+### The admin counts only realm-wide roles
+
+The admin preset authenticated through `Authenticate`, which selects an organization (from the request, or the caller's only one) and lets that organization's roles grant permissions. A role scoped to one organization, a wildcard one above all, therefore passed every admin page for every organization. The same was true of organization ownership.
+
+- **New `AuthService.AuthenticateAdmin`**, which the admin preset now uses as its `user_lookup`. It is `Authenticate` with no organization selected, so only realm-wide roles survive the narrowing, and ownership grants nothing. The admin is one console across every organization.
+- **App endpoints are unchanged.** They keep `Authenticate` and its organization scoping.
+- **A project that wires `user_lookup` by hand** should point it at `AuthenticateAdmin`.
+
+
 ### One bootstrap administrator, even under concurrent first sign-ups
 
 The `first_user` roles (typically every permission) were decided by reading "no users yet" before the sign-up transaction. Two sign-ups racing on an empty deployment both read zero, and both became administrators.

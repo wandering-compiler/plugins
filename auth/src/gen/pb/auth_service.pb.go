@@ -5728,9 +5728,10 @@ const file_business_auth_service_proto_rawDesc = "" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId:\r\xfa\xf4\x18\tcli_login\"#\n" +
 	"\rListMyOrgsReq:\x12\xfa\xf4\x18\x0eorg_membership\"S\n" +
 	"\x0eListMyOrgsResp\x12-\n" +
-	"\x04orgs\x18\x01 \x03(\v2\x19.w17.contrib.auth.UserOrgR\x04orgs:\x12\xfa\xf4\x18\x0eorg_membership2\xcf'\n" +
+	"\x04orgs\x18\x01 \x03(\v2\x19.w17.contrib.auth.UserOrgR\x04orgs:\x12\xfa\xf4\x18\x0eorg_membership2\xb5(\n" +
 	"\vAuthService\x12_\n" +
-	"\fAuthenticate\x12\x19.w17.contrib.auth.AuthReq\x1a\x1a.w17.contrib.auth.AuthResp\"\x18\x8a\xf5\x18\x14authenticate_turnkey\x12X\n" +
+	"\fAuthenticate\x12\x19.w17.contrib.auth.AuthReq\x1a\x1a.w17.contrib.auth.AuthResp\"\x18\x8a\xf5\x18\x14authenticate_turnkey\x12d\n" +
+	"\x11AuthenticateAdmin\x12\x19.w17.contrib.auth.AuthReq\x1a\x1a.w17.contrib.auth.AuthResp\"\x18\x8a\xf5\x18\x14authenticate_turnkey\x12X\n" +
 	"\x06SignIn\x12\x1b.w17.contrib.auth.SignInReq\x1a\x1c.w17.contrib.auth.SignInResp\"\x13\x8a\xf5\x18\x0fsign_in_turnkey\x12X\n" +
 	"\x06SignUp\x12\x1b.w17.contrib.auth.SignUpReq\x1a\x1c.w17.contrib.auth.SignUpResp\"\x13\x8a\xf5\x18\x0fsign_up_turnkey\x12r\n" +
 	"\rConfirmSignUp\x12\".w17.contrib.auth.ConfirmSignUpReq\x1a#.w17.contrib.auth.ConfirmSignUpResp\"\x18\x8a\xf5\x18\x14sign_up_confirmation\x12]\n" +
@@ -5943,101 +5944,103 @@ var file_business_auth_service_proto_depIdxs = []int32{
 	107, // 23: w17.contrib.auth.ListClientsResp.clients:type_name -> w17.contrib.auth.AuthClient
 	104, // 24: w17.contrib.auth.ListMyOrgsResp.orgs:type_name -> w17.contrib.auth.UserOrg
 	0,   // 25: w17.contrib.auth.AuthService.Authenticate:input_type -> w17.contrib.auth.AuthReq
-	2,   // 26: w17.contrib.auth.AuthService.SignIn:input_type -> w17.contrib.auth.SignInReq
-	4,   // 27: w17.contrib.auth.AuthService.SignUp:input_type -> w17.contrib.auth.SignUpReq
-	6,   // 28: w17.contrib.auth.AuthService.ConfirmSignUp:input_type -> w17.contrib.auth.ConfirmSignUpReq
-	8,   // 29: w17.contrib.auth.AuthService.WhoAmI:input_type -> w17.contrib.auth.WhoAmIReq
-	10,  // 30: w17.contrib.auth.AuthService.Logout:input_type -> w17.contrib.auth.LogoutReq
-	22,  // 31: w17.contrib.auth.AuthService.CreateApiToken:input_type -> w17.contrib.auth.CreateApiTokenReq
-	89,  // 32: w17.contrib.auth.AuthService.RegisterClient:input_type -> w17.contrib.auth.RegisterClientReq
-	91,  // 33: w17.contrib.auth.AuthService.ListClients:input_type -> w17.contrib.auth.ListClientsReq
-	93,  // 34: w17.contrib.auth.AuthService.SetClientEnabled:input_type -> w17.contrib.auth.SetClientEnabledReq
-	95,  // 35: w17.contrib.auth.AuthService.DeleteClient:input_type -> w17.contrib.auth.DeleteClientReq
-	12,  // 36: w17.contrib.auth.AuthService.CreateBot:input_type -> w17.contrib.auth.CreateBotReq
-	14,  // 37: w17.contrib.auth.AuthService.ListBots:input_type -> w17.contrib.auth.ListBotsReq
-	17,  // 38: w17.contrib.auth.AuthService.ListBotRoles:input_type -> w17.contrib.auth.ListBotRolesReq
-	20,  // 39: w17.contrib.auth.AuthService.IssueBotToken:input_type -> w17.contrib.auth.IssueBotTokenReq
-	24,  // 40: w17.contrib.auth.AuthService.ListApiTokens:input_type -> w17.contrib.auth.ListApiTokensReq
-	26,  // 41: w17.contrib.auth.AuthService.RevokeApiToken:input_type -> w17.contrib.auth.RevokeApiTokenReq
-	28,  // 42: w17.contrib.auth.AuthService.OAuthAuthorizeURL:input_type -> w17.contrib.auth.OAuthAuthorizeURLReq
-	30,  // 43: w17.contrib.auth.AuthService.OAuthCallback:input_type -> w17.contrib.auth.OAuthCallbackReq
-	32,  // 44: w17.contrib.auth.AuthService.OAuthExchange:input_type -> w17.contrib.auth.OAuthExchangeReq
-	34,  // 45: w17.contrib.auth.AuthService.EnrollTotp:input_type -> w17.contrib.auth.EnrollTotpReq
-	36,  // 46: w17.contrib.auth.AuthService.ConfirmTotp:input_type -> w17.contrib.auth.ConfirmTotpReq
-	38,  // 47: w17.contrib.auth.AuthService.DisableTotp:input_type -> w17.contrib.auth.DisableTotpReq
-	40,  // 48: w17.contrib.auth.AuthService.GetMfaStatus:input_type -> w17.contrib.auth.GetMfaStatusReq
-	42,  // 49: w17.contrib.auth.AuthService.GenerateRecoveryCodes:input_type -> w17.contrib.auth.GenerateRecoveryCodesReq
-	44,  // 50: w17.contrib.auth.AuthService.VerifyMfa:input_type -> w17.contrib.auth.VerifyMfaReq
-	47,  // 51: w17.contrib.auth.AuthService.ListDevices:input_type -> w17.contrib.auth.ListDevicesReq
-	49,  // 52: w17.contrib.auth.AuthService.RevokeDevice:input_type -> w17.contrib.auth.RevokeDeviceReq
-	51,  // 53: w17.contrib.auth.AuthService.RevokeOtherDevices:input_type -> w17.contrib.auth.RevokeOtherDevicesReq
-	53,  // 54: w17.contrib.auth.AuthService.RevokeAllDevices:input_type -> w17.contrib.auth.RevokeAllDevicesReq
-	79,  // 55: w17.contrib.auth.AuthService.RequestPasswordReset:input_type -> w17.contrib.auth.RequestPasswordResetReq
-	81,  // 56: w17.contrib.auth.AuthService.ResetPassword:input_type -> w17.contrib.auth.ResetPasswordReq
-	83,  // 57: w17.contrib.auth.AuthService.RequestEmailVerification:input_type -> w17.contrib.auth.RequestEmailVerificationReq
-	85,  // 58: w17.contrib.auth.AuthService.VerifyEmail:input_type -> w17.contrib.auth.VerifyEmailReq
-	87,  // 59: w17.contrib.auth.AuthService.CliAuthorize:input_type -> w17.contrib.auth.CliAuthorizeReq
-	97,  // 60: w17.contrib.auth.AuthService.CliToken:input_type -> w17.contrib.auth.CliTokenReq
-	99,  // 61: w17.contrib.auth.AuthService.ListMyOrgs:input_type -> w17.contrib.auth.ListMyOrgsReq
-	59,  // 62: w17.contrib.auth.AuthService.ListOrgMembers:input_type -> w17.contrib.auth.ListOrgMembersReq
-	55,  // 63: w17.contrib.auth.AuthService.UpdateOrgMembershipRole:input_type -> w17.contrib.auth.UpdateOrgMembershipRoleReq
-	57,  // 64: w17.contrib.auth.AuthService.RemoveOrgMembership:input_type -> w17.contrib.auth.RemoveOrgMembershipReq
-	62,  // 65: w17.contrib.auth.AuthService.ListAssignableRoles:input_type -> w17.contrib.auth.ListAssignableRolesReq
-	65,  // 66: w17.contrib.auth.AuthService.InviteToOrg:input_type -> w17.contrib.auth.InviteToOrgReq
-	68,  // 67: w17.contrib.auth.AuthService.ListOrgInvites:input_type -> w17.contrib.auth.ListOrgInvitesReq
-	70,  // 68: w17.contrib.auth.AuthService.RevokeOrgInvite:input_type -> w17.contrib.auth.RevokeOrgInviteReq
-	73,  // 69: w17.contrib.auth.AuthService.ListMyInvites:input_type -> w17.contrib.auth.ListMyInvitesReq
-	75,  // 70: w17.contrib.auth.AuthService.AcceptOrgInvite:input_type -> w17.contrib.auth.AcceptOrgInviteReq
-	77,  // 71: w17.contrib.auth.AuthService.ChangePassword:input_type -> w17.contrib.auth.ChangePasswordReq
-	1,   // 72: w17.contrib.auth.AuthService.Authenticate:output_type -> w17.contrib.auth.AuthResp
-	3,   // 73: w17.contrib.auth.AuthService.SignIn:output_type -> w17.contrib.auth.SignInResp
-	5,   // 74: w17.contrib.auth.AuthService.SignUp:output_type -> w17.contrib.auth.SignUpResp
-	7,   // 75: w17.contrib.auth.AuthService.ConfirmSignUp:output_type -> w17.contrib.auth.ConfirmSignUpResp
-	9,   // 76: w17.contrib.auth.AuthService.WhoAmI:output_type -> w17.contrib.auth.WhoAmIResp
-	11,  // 77: w17.contrib.auth.AuthService.Logout:output_type -> w17.contrib.auth.LogoutResp
-	23,  // 78: w17.contrib.auth.AuthService.CreateApiToken:output_type -> w17.contrib.auth.CreateApiTokenResp
-	90,  // 79: w17.contrib.auth.AuthService.RegisterClient:output_type -> w17.contrib.auth.RegisterClientResp
-	92,  // 80: w17.contrib.auth.AuthService.ListClients:output_type -> w17.contrib.auth.ListClientsResp
-	94,  // 81: w17.contrib.auth.AuthService.SetClientEnabled:output_type -> w17.contrib.auth.SetClientEnabledResp
-	96,  // 82: w17.contrib.auth.AuthService.DeleteClient:output_type -> w17.contrib.auth.DeleteClientResp
-	13,  // 83: w17.contrib.auth.AuthService.CreateBot:output_type -> w17.contrib.auth.CreateBotResp
-	15,  // 84: w17.contrib.auth.AuthService.ListBots:output_type -> w17.contrib.auth.ListBotsResp
-	18,  // 85: w17.contrib.auth.AuthService.ListBotRoles:output_type -> w17.contrib.auth.ListBotRolesResp
-	21,  // 86: w17.contrib.auth.AuthService.IssueBotToken:output_type -> w17.contrib.auth.IssueBotTokenResp
-	25,  // 87: w17.contrib.auth.AuthService.ListApiTokens:output_type -> w17.contrib.auth.ListApiTokensResp
-	27,  // 88: w17.contrib.auth.AuthService.RevokeApiToken:output_type -> w17.contrib.auth.RevokeApiTokenResp
-	29,  // 89: w17.contrib.auth.AuthService.OAuthAuthorizeURL:output_type -> w17.contrib.auth.OAuthAuthorizeURLResp
-	31,  // 90: w17.contrib.auth.AuthService.OAuthCallback:output_type -> w17.contrib.auth.OAuthCallbackResp
-	33,  // 91: w17.contrib.auth.AuthService.OAuthExchange:output_type -> w17.contrib.auth.OAuthExchangeResp
-	35,  // 92: w17.contrib.auth.AuthService.EnrollTotp:output_type -> w17.contrib.auth.EnrollTotpResp
-	37,  // 93: w17.contrib.auth.AuthService.ConfirmTotp:output_type -> w17.contrib.auth.ConfirmTotpResp
-	39,  // 94: w17.contrib.auth.AuthService.DisableTotp:output_type -> w17.contrib.auth.DisableTotpResp
-	41,  // 95: w17.contrib.auth.AuthService.GetMfaStatus:output_type -> w17.contrib.auth.GetMfaStatusResp
-	43,  // 96: w17.contrib.auth.AuthService.GenerateRecoveryCodes:output_type -> w17.contrib.auth.GenerateRecoveryCodesResp
-	45,  // 97: w17.contrib.auth.AuthService.VerifyMfa:output_type -> w17.contrib.auth.VerifyMfaResp
-	48,  // 98: w17.contrib.auth.AuthService.ListDevices:output_type -> w17.contrib.auth.ListDevicesResp
-	50,  // 99: w17.contrib.auth.AuthService.RevokeDevice:output_type -> w17.contrib.auth.RevokeDeviceResp
-	52,  // 100: w17.contrib.auth.AuthService.RevokeOtherDevices:output_type -> w17.contrib.auth.RevokeOtherDevicesResp
-	54,  // 101: w17.contrib.auth.AuthService.RevokeAllDevices:output_type -> w17.contrib.auth.RevokeAllDevicesResp
-	80,  // 102: w17.contrib.auth.AuthService.RequestPasswordReset:output_type -> w17.contrib.auth.RequestPasswordResetResp
-	82,  // 103: w17.contrib.auth.AuthService.ResetPassword:output_type -> w17.contrib.auth.ResetPasswordResp
-	84,  // 104: w17.contrib.auth.AuthService.RequestEmailVerification:output_type -> w17.contrib.auth.RequestEmailVerificationResp
-	86,  // 105: w17.contrib.auth.AuthService.VerifyEmail:output_type -> w17.contrib.auth.VerifyEmailResp
-	88,  // 106: w17.contrib.auth.AuthService.CliAuthorize:output_type -> w17.contrib.auth.CliAuthorizeResp
-	98,  // 107: w17.contrib.auth.AuthService.CliToken:output_type -> w17.contrib.auth.CliTokenResp
-	100, // 108: w17.contrib.auth.AuthService.ListMyOrgs:output_type -> w17.contrib.auth.ListMyOrgsResp
-	60,  // 109: w17.contrib.auth.AuthService.ListOrgMembers:output_type -> w17.contrib.auth.ListOrgMembersResp
-	56,  // 110: w17.contrib.auth.AuthService.UpdateOrgMembershipRole:output_type -> w17.contrib.auth.UpdateOrgMembershipRoleResp
-	58,  // 111: w17.contrib.auth.AuthService.RemoveOrgMembership:output_type -> w17.contrib.auth.RemoveOrgMembershipResp
-	63,  // 112: w17.contrib.auth.AuthService.ListAssignableRoles:output_type -> w17.contrib.auth.ListAssignableRolesResp
-	66,  // 113: w17.contrib.auth.AuthService.InviteToOrg:output_type -> w17.contrib.auth.InviteToOrgResp
-	69,  // 114: w17.contrib.auth.AuthService.ListOrgInvites:output_type -> w17.contrib.auth.ListOrgInvitesResp
-	71,  // 115: w17.contrib.auth.AuthService.RevokeOrgInvite:output_type -> w17.contrib.auth.RevokeOrgInviteResp
-	74,  // 116: w17.contrib.auth.AuthService.ListMyInvites:output_type -> w17.contrib.auth.ListMyInvitesResp
-	76,  // 117: w17.contrib.auth.AuthService.AcceptOrgInvite:output_type -> w17.contrib.auth.AcceptOrgInviteResp
-	78,  // 118: w17.contrib.auth.AuthService.ChangePassword:output_type -> w17.contrib.auth.ChangePasswordResp
-	72,  // [72:119] is the sub-list for method output_type
-	25,  // [25:72] is the sub-list for method input_type
+	0,   // 26: w17.contrib.auth.AuthService.AuthenticateAdmin:input_type -> w17.contrib.auth.AuthReq
+	2,   // 27: w17.contrib.auth.AuthService.SignIn:input_type -> w17.contrib.auth.SignInReq
+	4,   // 28: w17.contrib.auth.AuthService.SignUp:input_type -> w17.contrib.auth.SignUpReq
+	6,   // 29: w17.contrib.auth.AuthService.ConfirmSignUp:input_type -> w17.contrib.auth.ConfirmSignUpReq
+	8,   // 30: w17.contrib.auth.AuthService.WhoAmI:input_type -> w17.contrib.auth.WhoAmIReq
+	10,  // 31: w17.contrib.auth.AuthService.Logout:input_type -> w17.contrib.auth.LogoutReq
+	22,  // 32: w17.contrib.auth.AuthService.CreateApiToken:input_type -> w17.contrib.auth.CreateApiTokenReq
+	89,  // 33: w17.contrib.auth.AuthService.RegisterClient:input_type -> w17.contrib.auth.RegisterClientReq
+	91,  // 34: w17.contrib.auth.AuthService.ListClients:input_type -> w17.contrib.auth.ListClientsReq
+	93,  // 35: w17.contrib.auth.AuthService.SetClientEnabled:input_type -> w17.contrib.auth.SetClientEnabledReq
+	95,  // 36: w17.contrib.auth.AuthService.DeleteClient:input_type -> w17.contrib.auth.DeleteClientReq
+	12,  // 37: w17.contrib.auth.AuthService.CreateBot:input_type -> w17.contrib.auth.CreateBotReq
+	14,  // 38: w17.contrib.auth.AuthService.ListBots:input_type -> w17.contrib.auth.ListBotsReq
+	17,  // 39: w17.contrib.auth.AuthService.ListBotRoles:input_type -> w17.contrib.auth.ListBotRolesReq
+	20,  // 40: w17.contrib.auth.AuthService.IssueBotToken:input_type -> w17.contrib.auth.IssueBotTokenReq
+	24,  // 41: w17.contrib.auth.AuthService.ListApiTokens:input_type -> w17.contrib.auth.ListApiTokensReq
+	26,  // 42: w17.contrib.auth.AuthService.RevokeApiToken:input_type -> w17.contrib.auth.RevokeApiTokenReq
+	28,  // 43: w17.contrib.auth.AuthService.OAuthAuthorizeURL:input_type -> w17.contrib.auth.OAuthAuthorizeURLReq
+	30,  // 44: w17.contrib.auth.AuthService.OAuthCallback:input_type -> w17.contrib.auth.OAuthCallbackReq
+	32,  // 45: w17.contrib.auth.AuthService.OAuthExchange:input_type -> w17.contrib.auth.OAuthExchangeReq
+	34,  // 46: w17.contrib.auth.AuthService.EnrollTotp:input_type -> w17.contrib.auth.EnrollTotpReq
+	36,  // 47: w17.contrib.auth.AuthService.ConfirmTotp:input_type -> w17.contrib.auth.ConfirmTotpReq
+	38,  // 48: w17.contrib.auth.AuthService.DisableTotp:input_type -> w17.contrib.auth.DisableTotpReq
+	40,  // 49: w17.contrib.auth.AuthService.GetMfaStatus:input_type -> w17.contrib.auth.GetMfaStatusReq
+	42,  // 50: w17.contrib.auth.AuthService.GenerateRecoveryCodes:input_type -> w17.contrib.auth.GenerateRecoveryCodesReq
+	44,  // 51: w17.contrib.auth.AuthService.VerifyMfa:input_type -> w17.contrib.auth.VerifyMfaReq
+	47,  // 52: w17.contrib.auth.AuthService.ListDevices:input_type -> w17.contrib.auth.ListDevicesReq
+	49,  // 53: w17.contrib.auth.AuthService.RevokeDevice:input_type -> w17.contrib.auth.RevokeDeviceReq
+	51,  // 54: w17.contrib.auth.AuthService.RevokeOtherDevices:input_type -> w17.contrib.auth.RevokeOtherDevicesReq
+	53,  // 55: w17.contrib.auth.AuthService.RevokeAllDevices:input_type -> w17.contrib.auth.RevokeAllDevicesReq
+	79,  // 56: w17.contrib.auth.AuthService.RequestPasswordReset:input_type -> w17.contrib.auth.RequestPasswordResetReq
+	81,  // 57: w17.contrib.auth.AuthService.ResetPassword:input_type -> w17.contrib.auth.ResetPasswordReq
+	83,  // 58: w17.contrib.auth.AuthService.RequestEmailVerification:input_type -> w17.contrib.auth.RequestEmailVerificationReq
+	85,  // 59: w17.contrib.auth.AuthService.VerifyEmail:input_type -> w17.contrib.auth.VerifyEmailReq
+	87,  // 60: w17.contrib.auth.AuthService.CliAuthorize:input_type -> w17.contrib.auth.CliAuthorizeReq
+	97,  // 61: w17.contrib.auth.AuthService.CliToken:input_type -> w17.contrib.auth.CliTokenReq
+	99,  // 62: w17.contrib.auth.AuthService.ListMyOrgs:input_type -> w17.contrib.auth.ListMyOrgsReq
+	59,  // 63: w17.contrib.auth.AuthService.ListOrgMembers:input_type -> w17.contrib.auth.ListOrgMembersReq
+	55,  // 64: w17.contrib.auth.AuthService.UpdateOrgMembershipRole:input_type -> w17.contrib.auth.UpdateOrgMembershipRoleReq
+	57,  // 65: w17.contrib.auth.AuthService.RemoveOrgMembership:input_type -> w17.contrib.auth.RemoveOrgMembershipReq
+	62,  // 66: w17.contrib.auth.AuthService.ListAssignableRoles:input_type -> w17.contrib.auth.ListAssignableRolesReq
+	65,  // 67: w17.contrib.auth.AuthService.InviteToOrg:input_type -> w17.contrib.auth.InviteToOrgReq
+	68,  // 68: w17.contrib.auth.AuthService.ListOrgInvites:input_type -> w17.contrib.auth.ListOrgInvitesReq
+	70,  // 69: w17.contrib.auth.AuthService.RevokeOrgInvite:input_type -> w17.contrib.auth.RevokeOrgInviteReq
+	73,  // 70: w17.contrib.auth.AuthService.ListMyInvites:input_type -> w17.contrib.auth.ListMyInvitesReq
+	75,  // 71: w17.contrib.auth.AuthService.AcceptOrgInvite:input_type -> w17.contrib.auth.AcceptOrgInviteReq
+	77,  // 72: w17.contrib.auth.AuthService.ChangePassword:input_type -> w17.contrib.auth.ChangePasswordReq
+	1,   // 73: w17.contrib.auth.AuthService.Authenticate:output_type -> w17.contrib.auth.AuthResp
+	1,   // 74: w17.contrib.auth.AuthService.AuthenticateAdmin:output_type -> w17.contrib.auth.AuthResp
+	3,   // 75: w17.contrib.auth.AuthService.SignIn:output_type -> w17.contrib.auth.SignInResp
+	5,   // 76: w17.contrib.auth.AuthService.SignUp:output_type -> w17.contrib.auth.SignUpResp
+	7,   // 77: w17.contrib.auth.AuthService.ConfirmSignUp:output_type -> w17.contrib.auth.ConfirmSignUpResp
+	9,   // 78: w17.contrib.auth.AuthService.WhoAmI:output_type -> w17.contrib.auth.WhoAmIResp
+	11,  // 79: w17.contrib.auth.AuthService.Logout:output_type -> w17.contrib.auth.LogoutResp
+	23,  // 80: w17.contrib.auth.AuthService.CreateApiToken:output_type -> w17.contrib.auth.CreateApiTokenResp
+	90,  // 81: w17.contrib.auth.AuthService.RegisterClient:output_type -> w17.contrib.auth.RegisterClientResp
+	92,  // 82: w17.contrib.auth.AuthService.ListClients:output_type -> w17.contrib.auth.ListClientsResp
+	94,  // 83: w17.contrib.auth.AuthService.SetClientEnabled:output_type -> w17.contrib.auth.SetClientEnabledResp
+	96,  // 84: w17.contrib.auth.AuthService.DeleteClient:output_type -> w17.contrib.auth.DeleteClientResp
+	13,  // 85: w17.contrib.auth.AuthService.CreateBot:output_type -> w17.contrib.auth.CreateBotResp
+	15,  // 86: w17.contrib.auth.AuthService.ListBots:output_type -> w17.contrib.auth.ListBotsResp
+	18,  // 87: w17.contrib.auth.AuthService.ListBotRoles:output_type -> w17.contrib.auth.ListBotRolesResp
+	21,  // 88: w17.contrib.auth.AuthService.IssueBotToken:output_type -> w17.contrib.auth.IssueBotTokenResp
+	25,  // 89: w17.contrib.auth.AuthService.ListApiTokens:output_type -> w17.contrib.auth.ListApiTokensResp
+	27,  // 90: w17.contrib.auth.AuthService.RevokeApiToken:output_type -> w17.contrib.auth.RevokeApiTokenResp
+	29,  // 91: w17.contrib.auth.AuthService.OAuthAuthorizeURL:output_type -> w17.contrib.auth.OAuthAuthorizeURLResp
+	31,  // 92: w17.contrib.auth.AuthService.OAuthCallback:output_type -> w17.contrib.auth.OAuthCallbackResp
+	33,  // 93: w17.contrib.auth.AuthService.OAuthExchange:output_type -> w17.contrib.auth.OAuthExchangeResp
+	35,  // 94: w17.contrib.auth.AuthService.EnrollTotp:output_type -> w17.contrib.auth.EnrollTotpResp
+	37,  // 95: w17.contrib.auth.AuthService.ConfirmTotp:output_type -> w17.contrib.auth.ConfirmTotpResp
+	39,  // 96: w17.contrib.auth.AuthService.DisableTotp:output_type -> w17.contrib.auth.DisableTotpResp
+	41,  // 97: w17.contrib.auth.AuthService.GetMfaStatus:output_type -> w17.contrib.auth.GetMfaStatusResp
+	43,  // 98: w17.contrib.auth.AuthService.GenerateRecoveryCodes:output_type -> w17.contrib.auth.GenerateRecoveryCodesResp
+	45,  // 99: w17.contrib.auth.AuthService.VerifyMfa:output_type -> w17.contrib.auth.VerifyMfaResp
+	48,  // 100: w17.contrib.auth.AuthService.ListDevices:output_type -> w17.contrib.auth.ListDevicesResp
+	50,  // 101: w17.contrib.auth.AuthService.RevokeDevice:output_type -> w17.contrib.auth.RevokeDeviceResp
+	52,  // 102: w17.contrib.auth.AuthService.RevokeOtherDevices:output_type -> w17.contrib.auth.RevokeOtherDevicesResp
+	54,  // 103: w17.contrib.auth.AuthService.RevokeAllDevices:output_type -> w17.contrib.auth.RevokeAllDevicesResp
+	80,  // 104: w17.contrib.auth.AuthService.RequestPasswordReset:output_type -> w17.contrib.auth.RequestPasswordResetResp
+	82,  // 105: w17.contrib.auth.AuthService.ResetPassword:output_type -> w17.contrib.auth.ResetPasswordResp
+	84,  // 106: w17.contrib.auth.AuthService.RequestEmailVerification:output_type -> w17.contrib.auth.RequestEmailVerificationResp
+	86,  // 107: w17.contrib.auth.AuthService.VerifyEmail:output_type -> w17.contrib.auth.VerifyEmailResp
+	88,  // 108: w17.contrib.auth.AuthService.CliAuthorize:output_type -> w17.contrib.auth.CliAuthorizeResp
+	98,  // 109: w17.contrib.auth.AuthService.CliToken:output_type -> w17.contrib.auth.CliTokenResp
+	100, // 110: w17.contrib.auth.AuthService.ListMyOrgs:output_type -> w17.contrib.auth.ListMyOrgsResp
+	60,  // 111: w17.contrib.auth.AuthService.ListOrgMembers:output_type -> w17.contrib.auth.ListOrgMembersResp
+	56,  // 112: w17.contrib.auth.AuthService.UpdateOrgMembershipRole:output_type -> w17.contrib.auth.UpdateOrgMembershipRoleResp
+	58,  // 113: w17.contrib.auth.AuthService.RemoveOrgMembership:output_type -> w17.contrib.auth.RemoveOrgMembershipResp
+	63,  // 114: w17.contrib.auth.AuthService.ListAssignableRoles:output_type -> w17.contrib.auth.ListAssignableRolesResp
+	66,  // 115: w17.contrib.auth.AuthService.InviteToOrg:output_type -> w17.contrib.auth.InviteToOrgResp
+	69,  // 116: w17.contrib.auth.AuthService.ListOrgInvites:output_type -> w17.contrib.auth.ListOrgInvitesResp
+	71,  // 117: w17.contrib.auth.AuthService.RevokeOrgInvite:output_type -> w17.contrib.auth.RevokeOrgInviteResp
+	74,  // 118: w17.contrib.auth.AuthService.ListMyInvites:output_type -> w17.contrib.auth.ListMyInvitesResp
+	76,  // 119: w17.contrib.auth.AuthService.AcceptOrgInvite:output_type -> w17.contrib.auth.AcceptOrgInviteResp
+	78,  // 120: w17.contrib.auth.AuthService.ChangePassword:output_type -> w17.contrib.auth.ChangePasswordResp
+	73,  // [73:121] is the sub-list for method output_type
+	25,  // [25:73] is the sub-list for method input_type
 	25,  // [25:25] is the sub-list for extension type_name
 	25,  // [25:25] is the sub-list for extension extendee
 	0,   // [0:25] is the sub-list for field type_name

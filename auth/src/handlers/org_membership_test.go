@@ -630,3 +630,22 @@ func TestResolveOrgScope_SoleOrgInferenceAlsoStampsTheSlug(t *testing.T) {
 		t.Fatalf("scopes = %v, want both id and slug for the sole org", sc)
 	}
 }
+
+// On the admin plane no organization is selected — not from the header, not
+// by inferring the caller's only one — so only realm-wide roles survive the
+// narrowing (TestNarrowGrants_NoActiveOrg) and a role scoped to one
+// organization grants nothing in the console that spans them all.
+func TestResolveOrgScope_TheAdminPlaneSelectsNoOrganization(t *testing.T) {
+	h := &AuthServiceHandler{Query: &orgMock{orgsByUser: map[string][]*pb.UserOrg{
+		"solo": {{OrgId: "org-solo", Slug: "solo", Role: "owner"}},
+	}}}
+	for name, ctx := range map[string]context.Context{"inferred": ctxWithOrg(""), "named": ctxWithOrg("solo")} {
+		sc, lb := map[string]string{}, map[string]string{}
+		if err := resolveOrgScope(context.WithValue(ctx, adminPlaneKey{}, true), h, "solo", map[string]string{"w17-org": "solo"}, sc, lb); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if sc["org_id"] != "" || lb["org_id"] != "" {
+			t.Errorf("%s: the admin plane selected organization %q", name, sc["org_id"])
+		}
+	}
+}

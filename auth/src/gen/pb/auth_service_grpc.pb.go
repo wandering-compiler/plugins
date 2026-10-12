@@ -75,6 +75,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	AuthService_Authenticate_FullMethodName             = "/w17.contrib.auth.AuthService/Authenticate"
+	AuthService_AuthenticateAdmin_FullMethodName        = "/w17.contrib.auth.AuthService/AuthenticateAdmin"
 	AuthService_SignIn_FullMethodName                   = "/w17.contrib.auth.AuthService/SignIn"
 	AuthService_SignUp_FullMethodName                   = "/w17.contrib.auth.AuthService/SignUp"
 	AuthService_ConfirmSignUp_FullMethodName            = "/w17.contrib.auth.AuthService/ConfirmSignUp"
@@ -133,6 +134,10 @@ type AuthServiceClient interface {
 	// tag. Authenticate → `authenticate_turnkey`, SignIn →
 	// `sign_in_turnkey`, SignUp → `sign_up_turnkey`.
 	Authenticate(ctx context.Context, in *AuthReq, opts ...grpc.CallOption) (*AuthResp, error)
+	// preset's user_lookup). Only realm-wide roles count: no organization is
+	// selected, so a role scoped to one organization grants nothing in the
+	// console that spans them all.
+	AuthenticateAdmin(ctx context.Context, in *AuthReq, opts ...grpc.CallOption) (*AuthResp, error)
 	SignIn(ctx context.Context, in *SignInReq, opts ...grpc.CallOption) (*SignInResp, error)
 	SignUp(ctx context.Context, in *SignUpReq, opts ...grpc.CallOption) (*SignUpResp, error)
 	// ConfirmSignUp — create the account a `sign_up_confirmation` SignUp parked,
@@ -306,6 +311,16 @@ func (c *authServiceClient) Authenticate(ctx context.Context, in *AuthReq, opts 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthResp)
 	err := c.cc.Invoke(ctx, AuthService_Authenticate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) AuthenticateAdmin(ctx context.Context, in *AuthReq, opts ...grpc.CallOption) (*AuthResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthResp)
+	err := c.cc.Invoke(ctx, AuthService_AuthenticateAdmin_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -782,6 +797,10 @@ type AuthServiceServer interface {
 	// tag. Authenticate → `authenticate_turnkey`, SignIn →
 	// `sign_in_turnkey`, SignUp → `sign_up_turnkey`.
 	Authenticate(context.Context, *AuthReq) (*AuthResp, error)
+	// preset's user_lookup). Only realm-wide roles count: no organization is
+	// selected, so a role scoped to one organization grants nothing in the
+	// console that spans them all.
+	AuthenticateAdmin(context.Context, *AuthReq) (*AuthResp, error)
 	SignIn(context.Context, *SignInReq) (*SignInResp, error)
 	SignUp(context.Context, *SignUpReq) (*SignUpResp, error)
 	// ConfirmSignUp — create the account a `sign_up_confirmation` SignUp parked,
@@ -952,6 +971,9 @@ type UnimplementedAuthServiceServer struct{}
 
 func (UnimplementedAuthServiceServer) Authenticate(context.Context, *AuthReq) (*AuthResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method Authenticate not implemented")
+}
+func (UnimplementedAuthServiceServer) AuthenticateAdmin(context.Context, *AuthReq) (*AuthResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method AuthenticateAdmin not implemented")
 }
 func (UnimplementedAuthServiceServer) SignIn(context.Context, *SignInReq) (*SignInResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method SignIn not implemented")
@@ -1125,6 +1147,24 @@ func _AuthService_Authenticate_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthServiceServer).Authenticate(ctx, req.(*AuthReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_AuthenticateAdmin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuthReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).AuthenticateAdmin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_AuthenticateAdmin_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).AuthenticateAdmin(ctx, req.(*AuthReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1967,6 +2007,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Authenticate",
 			Handler:    _AuthService_Authenticate_Handler,
+		},
+		{
+			MethodName: "AuthenticateAdmin",
+			Handler:    _AuthService_AuthenticateAdmin_Handler,
 		},
 		{
 			MethodName: "SignIn",

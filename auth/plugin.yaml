@@ -566,12 +566,14 @@ presets:
     # methods, so an admin author who activates auth writes NO auth
     # block (the admin surface is auth-required — gateway-parser
     # enforced). login_method issues a token from credentials; user_lookup
-    # (Authenticate) resolves a token → user_id + permission_ids + scopes
+    # (AuthenticateAdmin) resolves a token → user_id + permission_ids + scopes
     # the admin gateway enforces ACL against. Injection qualifies these
     # plugin-relative refs with the activation's registered name.
     auth:
       login_method: AuthService.SignIn
-      user_lookup: AuthService.Authenticate
+      # AuthenticateAdmin, not Authenticate: the admin spans every
+      # organization, so only realm-wide roles may count there.
+      user_lookup: AuthService.AuthenticateAdmin
       feature: authenticate_turnkey
     # Admin overview widgets the plugin contributes — custom-JS slots
     # (`overview:widget:<slot>`). The project supplies the slot's JS; the
