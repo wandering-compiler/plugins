@@ -49,11 +49,24 @@ type WorkerStore interface {
 // empty set: empty is "nobody is banned", and a database blip must not lift
 // every ban at once.
 func (h *ClusterServiceHandler) withBans(ctx context.Context) (context.Context, error) {
+	return h.withBansFrom(ctx, h.cachedBans)
+}
+
+// withFreshBans is withBans reading the registry, never the cache: the push
+// after a decision must carry that decision, and a disabled relay hears of
+// it through nothing else.
+func (h *ClusterServiceHandler) withFreshBans(ctx context.Context) (context.Context, error) {
+	return h.withBansFrom(ctx, h.readBans)
+}
+
+func (h *ClusterServiceHandler) withBansFrom(
+	ctx context.Context, read func(context.Context) ([]string, int64, error),
+) (context.Context, error) {
 	if h.Workers == nil {
 		return nil, status.Error(codes.FailedPrecondition,
 			"cluster: no worker registry is wired — the ban set cannot be sent to a relay")
 	}
-	bans, version, err := h.cachedBans(ctx)
+	bans, version, err := read(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err)
 	}

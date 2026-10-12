@@ -52,7 +52,7 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context) {
 	if h.Relays == nil || h.Dial == nil {
 		return
 	}
-	ctx, err := h.withBans(context.WithoutCancel(ctx))
+	ctx, err := h.withFreshBans(context.WithoutCancel(ctx))
 	if err != nil {
 		return
 	}

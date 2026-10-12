@@ -14,8 +14,8 @@ A reservation handle was an unguessable credential, but anyone holding it, for e
 ### Placement and polling cost less
 
 - **The ban set is cached for two seconds** instead of being read from the registry on every relay-bound call. A decision through a replica drops that replica's cache at once, and the replica pushes the new set to every relay.
-- **`Worker.state` is indexed.** The ban set is read by state, and worker rows are never deleted. Generate a migration as usual.
-- **A reachable relay's `last_seen_at` is written at most every 30 seconds,** not once per relay on every placement. A failure is still recorded every time, and the next success after it is recorded at once.
+- **`Worker.state` and `Worker.decided_at` are indexed.** The ban set is read by state and its version is `MAX(decided_at)`, and worker rows are never deleted. Generate a migration as usual.
+- **A placement writes a reachable relay's `last_seen_at` at most every 30 seconds per replica,** not once per relay on every placement. A failure is still recorded every time, and the next success after it is recorded at once. Operator actions (Check for workers, Issue a registration code, Drain) still record every time. The writes a placement does make run in parallel, so a slow database delays it by one write timeout, not one per relay.
 
 
 ### Bans reach every relay, in order, and survive a relay restart

@@ -110,11 +110,16 @@ type ClusterServiceHandler struct {
 	// replica drops the cache at once (forgetBans); one made through another
 	// replica reaches it within the TTL, and the deciding replica has already
 	// pushed the new set to every relay.
+	//
+	// bansGen counts decisions through this replica. A read that began before
+	// one is not cached: it may hold the set from before the decision, and
+	// caching it would undo forgetBans for a whole TTL.
 	bansMu   sync.Mutex
 	bans     []string
 	bansVer  int64
 	bansAt   time.Time
 	bansFull bool
+	bansGen  uint64
 
 	// reached remembers when each relay was last recorded as reached, so a
 	// healthy relay's row is written at most once per reachedEvery instead of
@@ -131,6 +136,8 @@ const banCacheTTL = 2 * time.Second
 const reachedEvery = 30 * time.Second
 
 // cachedBans returns the ban set and its version, from the cache while fresh.
+// A read error is returned, never a stale set in its place: the caller refuses
+// the call (see withBans).
 func (h *ClusterServiceHandler) cachedBans(ctx context.Context) ([]string, int64, error) {
 	h.bansMu.Lock()
 	if h.bansFull && time.Since(h.bansAt) < banCacheTTL {
@@ -139,12 +146,24 @@ func (h *ClusterServiceHandler) cachedBans(ctx context.Context) ([]string, int64
 		return bans, v, nil
 	}
 	h.bansMu.Unlock()
+	return h.readBans(ctx)
+}
+
+// readBans reads the ban set from the registry and caches it, unless a
+// decision through this replica happened while it was being read, or the
+// cache already holds a newer version.
+func (h *ClusterServiceHandler) readBans(ctx context.Context) ([]string, int64, error) {
+	h.bansMu.Lock()
+	gen := h.bansGen
+	h.bansMu.Unlock()
 	bans, v, err := h.Workers.Banned(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 	h.bansMu.Lock()
-	h.bans, h.bansVer, h.bansAt, h.bansFull = bans, v, time.Now(), true
+	if gen == h.bansGen && (!h.bansFull || v >= h.bansVer) {
+		h.bans, h.bansVer, h.bansAt, h.bansFull = bans, v, time.Now(), true
+	}
 	h.bansMu.Unlock()
 	return bans, v, nil
 }
@@ -153,6 +172,7 @@ func (h *ClusterServiceHandler) cachedBans(ctx context.Context) ([]string, int64
 func (h *ClusterServiceHandler) forgetBans() {
 	h.bansMu.Lock()
 	h.bansFull = false
+	h.bansGen++
 	h.bansMu.Unlock()
 }
 
