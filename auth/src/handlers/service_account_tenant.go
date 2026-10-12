@@ -52,9 +52,9 @@ func fillBotTenant(ctx context.Context, req *pb.CreateBotUserReq) error {
 // without organizations is one organization only when it is not multi-tenant.
 // With tenant_scope on and no organizations, the realm-wide directory was every
 // tenant's machine accounts, and an operator in one tenant could mint a working
-// credential for another's — the 2026-09-21 cross-organization leak, on the
-// tenant axis. With organizations on as well this narrows nothing an org does
-// not already narrow, and costs nothing.
+// credential for another's — the cross-organization leak ListBots guards
+// against, on the tenant axis. With organizations on as well this narrows
+// nothing an org does not already narrow, and costs nothing.
 func init() {
 	botVisible = append(botVisible, botInCallersTenant)
 }

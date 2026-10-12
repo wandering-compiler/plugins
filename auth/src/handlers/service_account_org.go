@@ -29,9 +29,9 @@ func init() {
 // the org axis counts only for roles declared realm-wide — so the grant applies
 // NOWHERE and the bot authenticates with an empty permission set. And without a
 // membership there is no organization for the console to infer, so an
-// unattended caller with no `W17-Org` header has no scope either. Both were
-// live: a token minted through the UI pushed nothing and reported "no
-// permissions resolved for this principal" (2026-09-20).
+// unattended caller with no `W17-Org` header has no scope either: a token
+// minted through the UI pushes nothing and reports "no permissions resolved
+// for this principal".
 func enrollBotInOrg(txCtx context.Context, h *AuthServiceHandler, userID, roleID, orgID string) error {
 	if _, err := h.Mutation.AddOrgMembership(txCtx, &pb.AddOrgMembershipReq{
 		UserId: userID, OrgId: orgID, Role: "member",

@@ -91,7 +91,7 @@ func TestUnauthenticated_TwoCallsWithDifferentCauses_WireResponseIdentical(t *te
 	}
 }
 
-// --- a consumer 2026-09-23: an outage is not a refusal --------------------------
+// --- an outage is not a refusal -------------------------------------------------
 //
 // GRPCStatus was fixed "regardless of cause", and its own comment listed what
 // that collapsed: "no such email", "wrong password", "DB transient failure".

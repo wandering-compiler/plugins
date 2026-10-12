@@ -50,6 +50,6 @@ func render(size int, black func(x, y int) bool) string {
 		}
 	}
 	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" shape-rendering="crispEdges">`+
-		`<rect width="%d" height="%d" fill="#fff"/><path fill="#000" d="%s"/></svg>`,
+		`<rect width="%d" height="%d" fill="#fff"/><path fill="#000000" d="%s"/></svg>`,
 		side, side, side, side, path.String())
 }

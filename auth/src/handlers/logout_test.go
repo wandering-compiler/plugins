@@ -16,7 +16,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// Q51-auth-2 — base-tier logout (no `devices` feature): revoke the
+// Base-tier logout (no `devices` feature): revoke the
 // caller's CURRENT session token, identified by the session_token_id
 // Authenticate threads in the auth envelope (never the raw bearer).
 
@@ -66,11 +66,11 @@ func TestLogout_RevokesCurrentSession(t *testing.T) {
 
 // No session_token_id in the envelope → REFUSE, and delete nothing.
 //
-// ⚠️ This asserted an idempotent NO-OP until 2026-09-24, on the reasoning that
-// an API-token bearer should not get an error. It is the assertion that let
-// a consumer ship: their own facade VerifyRes carried fields 1-3 and not
-// field 4, so every sign-out answered 200 with nothing revoked — the UI said
-// "signed out", the cookie went, and the token kept working until it expired.
+// ⚠️ An idempotent NO-OP here, on the reasoning that an API-token bearer
+// should not get an error, lets a broken facade ship: one whose VerifyRes
+// carries fields 1-3 and not field 4 answers every sign-out 200 with nothing
+// revoked — the UI says "signed out", the cookie goes, and the token keeps
+// working until it expires.
 //
 // The distinction the old behaviour lost: "this session is already gone"
 // (idempotent, and still a success — see the NotFound arm below) versus "I was
@@ -147,12 +147,13 @@ func TestResolvePrincipalRealmAware_ReturnsTokenID(t *testing.T) {
 	}
 }
 
-// B21-auth-1: an API-token bearer must resolve with an EMPTY session_token_id,
-// so Logout (which deletes the session_token_id) NO-OPs for them. Otherwise it
-// deletes the API TOKEN itself — DeleteSessionToken's DQL drops the token_type
-// filter (Q64-auth-1), so an id+user_id match revokes the API token by mistake,
-// a credential that should only be removed via RevokeApiToken. The Logout
-// docstring already promises an API-token bearer "still gets a clean success".
+// An API-token bearer must resolve with an EMPTY session_token_id, so Logout
+// (which deletes the session_token_id) NO-OPs for them. Otherwise it deletes
+// the API TOKEN itself — DeleteSessionToken's DQL drops the token_type filter
+// (the column is api_token-gated), so an id+user_id match revokes the API token
+// by mistake, a credential that should only be removed via RevokeApiToken. The
+// Logout docstring already promises an API-token bearer "still gets a clean
+// success".
 func TestResolvePrincipalRealmAware_ApiTokenHasNoSessionID(t *testing.T) {
 	m := &apiTokenQueryMock{
 		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "api-7", TokenType: pb.TokenType_TOKEN_TYPE_API},

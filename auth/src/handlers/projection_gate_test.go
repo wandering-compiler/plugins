@@ -9,13 +9,13 @@ import (
 
 // A gate cannot read a column its query never selected.
 //
-// This has now happened three times with the SAME column. IssueBotToken
+// This has happened three times with the SAME column. IssueBotToken
 // refuses any target that is not `kind = BOT`; GetUserById did not project
 // `kind`, so it arrived as its zero value — HUMAN — and every mint was refused
-// as if the target were a person (found live, 2026-09-20). A test was written
-// then, naming that one rpc. Two more instances were sitting beside it:
+// as if the target were a person. A test naming that one rpc did not see the
+// two more instances sitting beside it:
 // GetUserByEmail, so signInBotGate never fired and a machine account that set
-// itself a password signed in as a person (reported by a consumer); and GetUser, so
+// itself a password signed in as a person; and GetUser, so
 // labelMachineAccount never stamped the machine-account ACL label and every
 // rule written against it matched nothing.
 //

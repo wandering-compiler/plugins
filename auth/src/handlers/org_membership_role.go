@@ -135,12 +135,11 @@ func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membe
 // Two refusals for the two reasons a role name is not org-assignable, a typo
 // and a realm role, which a caller fixes in completely different ways.
 //
-// ⚠️ They used to be one, and the adjective carried the whole distinction — "no
+// ⚠️ As one refusal, the adjective would carry the whole distinction — "no
 // ORG-ASSIGNABLE role by that name exists". A realm role exists and is still
-// refused, and calling that "does not exist" sent the reader hunting for a typo
-// that was not there: a consumer measured three states, got one message, and
-// went looking for a row that WAS there (member-management-audit-findings, from
-// #71/#72). Each now carries its own code, and both name the `role` field.
+// refused, and calling that "does not exist" sends the reader hunting for a
+// typo that is not there, or for a row that IS there. Each carries its own
+// code, and both name the `role` field.
 
 // assignableRoles is the ONE catalogue every org-role grant reads — an
 // invitation, its acceptance, a membership's role change: the roles an org

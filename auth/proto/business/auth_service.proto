@@ -13,8 +13,7 @@ syntax = "proto3";
 // The plugin author's contract:
 //   - AuthReq mirrors the gateway's required shape:
 //     `map<string, string> headers = 1` (validated by the
-//     gateway parser; see srcgo/domains/gateway/parser/parser.go
-//     §validateAuthRequestShape).
+//     gateway parser when it reads the auth method).
 //   - AuthResp carries the two fields the gateway router
 //     consumes: `repeated int32 permission_ids` (the deduped
 //     numeric IDs of granted permissions from the activating
@@ -93,7 +92,7 @@ message AuthReq {
 // `(w17.field).type = UUID` annotation drives validation on
 // the wire shape end-to-end.
 //
-// `scopes` carries REV-147 data-scope values the gateway threads
+// `scopes` carries data-scope values the gateway threads
 // into outgoing gRPC metadata as `x-w17-scope-<name>`, for the
 // storage codegen's per-model `(w17.db.scope)` auto-stamp (INSERT)
 // + auto-WHERE (SELECT). The plugin publishes the canonical
@@ -162,7 +161,7 @@ message SignInResp {
   bool   mfa_required = 3 [(w17.contrib.plugin_feature_field) = "two_factor"];
   string challenge_id = 4 [(w17.contrib.plugin_feature_field) = "two_factor"];
 
-  // C2 — the server-minted device-trust token for this login (devices
+  // The server-minted device-trust token for this login (devices
   // feature). The client stores it and replays it as `X-Device-Trust` on
   // the next sign-in so a trusted device skips new-device 2FA without
   // relying on a client-chosen X-Device-Id. Rotated every login; the
@@ -525,7 +524,7 @@ message ConfirmTotpResp {
 
 message DisableTotpReq {
   option (w17.contrib.plugin_feature) = "two_factor";
-  // B1 — a current TOTP code, re-verified before a CONFIRMED
+  // A current TOTP code, re-verified before a CONFIRMED
   // authenticator is removed so a hijacked session can't permanently
   // disable the victim's 2FA (a transient compromise then can't
   // weaken the account). Ignored when no confirmed authenticator
@@ -571,7 +570,7 @@ message VerifyMfaResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string token   = 2;
-  // C2 — server-minted device-trust token (see SignInResp). Issued here
+  // Server-minted device-trust token (see SignInResp). Issued here
   // because passing VerifyMfa is exactly the new-device 2FA pass that
   // should let the device skip the challenge next time.
   string device_trust_token = 3 [(w17.contrib.plugin_feature_field) = "devices"];
@@ -1029,7 +1028,7 @@ service AuthService {
     option (w17.contrib.plugin_feature_rpc) = "devices";
   }
 
-  // ── password_reset — request + apply (E1) ───────────────────
+  // ── password_reset — request + apply ────────────────────────
   // RequestPasswordReset (unauthenticated) mints + e-mails a reset token;
   // it ALWAYS returns success regardless of whether the email exists
   // (anti-enumeration). ResetPassword (unauthenticated) consumes the token,
@@ -1042,7 +1041,7 @@ service AuthService {
     option (w17.contrib.plugin_feature_rpc) = "password_reset";
   }
 
-  // ── email_verification — request + confirm (E1) ─────────────
+  // ── email_verification — request + confirm ──────────────────
   // RequestEmailVerification (bearer-authenticated — you verify your own
   // address) mints + e-mails a verification token. VerifyEmail
   // (unauthenticated — the link click carries no session) consumes the
@@ -1111,8 +1110,8 @@ service AuthService {
   // invitation is validated against the catalogue (roleIDByName), so a typo is
   // refused — but only after the invitation is submitted, and the refusal
   // cannot say what the valid answers were, because nothing on this surface
-  // could enumerate them. A console UI had a free-text field for this and no
-  // way to populate a picker (2026-09-11).
+  // could enumerate them. A UI could offer only a free-text field for this,
+  // with no way to populate a picker.
   //
   // Returns ORG-SCOPED roles only. A realm role is not something one member
   // hands another inside an organization — it is platform-wide, and offering
@@ -1161,7 +1160,7 @@ service AuthService {
   }
 }
 
-// ── password_reset / email_verification business messages (E1) ──
+// ── password_reset / email_verification business messages ───────
 
 message RequestPasswordResetReq {
   option (w17.contrib.plugin_feature) = "password_reset";
@@ -1191,7 +1190,7 @@ message ResetPasswordResp {
   // call site under a comment claiming "logged by the caller's interceptor",
   // and the plugin has no logging at all: grep handlers/ for slog, log or
   // logger and there is nothing. So a reset after a theft could leave the
-  // thief's session alive, report success, and end there (a consumer).
+  // thief's session alive, report success, and end there.
   //
   // `false` means: your password IS changed, and the old sessions may still
   // be live — sign out everywhere, or reset again. A caller that ignores this

@@ -78,7 +78,7 @@ func (m *deviceMock) DeleteAllUserDevices(ctx context.Context, in *pb.DeleteAllU
 }
 
 // ctxWithDeviceTrust builds a request context carrying X-Device-Id +
-// X-Device-Trust (C2), so a test can exercise the trust-token replay path.
+// X-Device-Trust, so a test can exercise the trust-token replay path.
 func ctxWithDeviceTrust(uid, deviceID, trustToken string) context.Context {
 	pairs := []string{scopeUserIDKey, uid}
 	if deviceID != "" {
@@ -151,7 +151,7 @@ func TestResolveSignInDevice_NewDevice_Creates_Untrusted(t *testing.T) {
 	}
 }
 
-// C2 — a device with a stored trust hash is trusted only when the request
+// A device with a stored trust hash is trusted only when the request
 // replays the matching token (proving possession of the server-issued
 // secret). The X-Device-Id alone no longer trusts.
 func TestResolveSignInDevice_ValidTrustToken_Trusted(t *testing.T) {
@@ -172,9 +172,9 @@ func TestResolveSignInDevice_ValidTrustToken_Trusted(t *testing.T) {
 	}
 }
 
-// C2 (the core fix) — a device flagged trusted_at but presenting NO trust
-// token (e.g. a pre-C2 row, or an attacker who only learnt the victim's
-// X-Device-Id) is NOT trusted: it re-challenges.
+// A device flagged trusted_at but presenting NO trust token (e.g. a row stored
+// before the device-trust token existed, or an attacker who only learnt the
+// victim's X-Device-Id) is NOT trusted: it re-challenges.
 func TestResolveSignInDevice_TrustedAtButNoToken_NotTrusted(t *testing.T) {
 	m := &deviceMock{getByIdent: map[string]*pb.Device{
 		devKey("u1", "phone-1"): {Id: "dev-7", Identifier: "phone-1", TrustedAt: timestamppb.Now()}, // no TrustTokenHash
@@ -189,7 +189,7 @@ func TestResolveSignInDevice_TrustedAtButNoToken_NotTrusted(t *testing.T) {
 	}
 }
 
-// C2 — a wrong trust token does not trust the device.
+// A wrong trust token does not trust the device.
 func TestResolveSignInDevice_WrongTrustToken_NotTrusted(t *testing.T) {
 	m := &deviceMock{getByIdent: map[string]*pb.Device{
 		devKey("u1", "phone-1"): {Id: "dev-7", Identifier: "phone-1", TrustedAt: timestamppb.Now(), TrustTokenHash: hashDeviceTrustToken("the-real-token")},
@@ -204,7 +204,7 @@ func TestResolveSignInDevice_WrongTrustToken_NotTrusted(t *testing.T) {
 	}
 }
 
-// C2 — issueSessionWithDevice mints a fresh trust token, stores its hash,
+// issueSessionWithDevice mints a fresh trust token, stores its hash,
 // and returns the plaintext for the client to replay.
 func TestIssueSessionWithDevice_IssuesMintsAndTrusts(t *testing.T) {
 	m := &deviceMock{}
@@ -315,7 +315,7 @@ func TestRevokeOtherDevices_KeepsCurrent(t *testing.T) {
 	}
 }
 
-// B22-auth-2: RevokeAllDevices must revoke each device's tokens individually
+// RevokeAllDevices must revoke each device's tokens individually
 // (DeleteDeviceTokens is device_id-filtered) + the device row — NOT the broad
 // DeleteAllUserTokens, which has no token_type filter and would also delete the
 // user's API tokens (device_id NULL), credentials that should only be removed
@@ -370,8 +370,7 @@ func TestRevokeDevice_IdempotentOnMissing(t *testing.T) {
 // Not every session is device-bound — SignUp, ConfirmSignUp, the OAuth
 // callback and CliToken issue one with no device — so "log out everywhere"
 // must sweep those too, keeping none; "log out the others" keeps only the
-// caller's own. Found live by examples/auth-proof: a registration's session
-// survived RevokeAllDevices.
+// caller's own: a registration's session must not survive RevokeAllDevices.
 func TestRevokeDevices_SweepSessionsNoDeviceHolds(t *testing.T) {
 	m := &deviceMock{listResult: []*pb.Device{{Id: "dev-a", Identifier: "laptop-a"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}

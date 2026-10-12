@@ -120,7 +120,7 @@ func init() {
 // Before this, ownership was folded into the same `all_permissions` bool as a
 // wildcard ROLE and therefore arrived inside the narrowing — where it could
 // only subtract. An owner holding no role intersected "everything" with
-// "nothing" and got nothing (verified live 2026-09-10), so owners needed seeded
+// "nothing" and got nothing, so owners needed seeded
 // grants like anyone else.
 func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
 	orgID := scopes["org_id"]
@@ -215,8 +215,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	// reports no row as NotFound. Returned as an error it skipped both the
 	// owner fallback below — so an owner whose membership row was gone could
 	// not reach their own org — and the ORG_NOT_MEMBER answer, so a caller who
-	// named the wrong org read "You are not signed in." (found live by
-	// examples/auth-proof).
+	// named the wrong org read "You are not signed in.".
 	resp, err := h.Query.GetUserOrgBySlug(ctx, &pb.GetUserOrgBySlugReq{UserId: userID, Slug: slug})
 	if notFoundOK(err) != nil {
 		return err

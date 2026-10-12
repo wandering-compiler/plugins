@@ -25,17 +25,15 @@ func (m *autolinkMock) GetUserByEmail(context.Context, *pb.GetUserByEmailReq, ..
 	return &pb.GetUserByEmailResp{User: m.user}, nil
 }
 
-// TestOAuthAutoLink_RefusesAnUnverifiedLocalAccount — T3-7 pass #14,
-// `B14-2`.
+// TestOAuthAutoLink_RefusesAnUnverifiedLocalAccount.
 //
-// Q36-auth-1 closed half of this: auto-link now requires the IdP to assert
-// the email is verified, because otherwise anyone who set their IdP profile
-// email to a victim's got a session for the victim's account.
+// Half of this is the IdP side: auto-link requires the IdP to assert the
+// email is verified, because otherwise anyone who set their IdP profile
+// email to a victim's gets a session for the victim's account.
 //
-// The other half was left open, and the verifier is what found it. The check
-// interrogates the IdP side only. The LOCAL account may itself have been
-// created from a claim nobody verified — by OAuth's own create branch, or by
-// password sign-up. So:
+// The other half is the local side, which that check does not interrogate. The
+// LOCAL account may itself have been created from a claim nobody verified — by
+// OAuth's own create branch, or by password sign-up. So:
 //
 //  1. the attacker signs in through an IdP whose profile email is the
 //     victim's and which does NOT assert verification. No existing account,
@@ -47,10 +45,9 @@ func (m *autolinkMock) GetUserByEmail(context.Context, *pb.GetUserByEmailReq, ..
 //     attacker also holds.
 //
 // What is broken is not either branch on its own: it is that a VERIFIED
-// assertion is bound to an UNVERIFIED local claim. My first plan was to
-// require verification in the create branch, and the verifier showed that
-// closes nothing — password sign-up is a second door to the same squat, and
-// gating one leaves the other.
+// assertion is bound to an UNVERIFIED local claim. Requiring verification in
+// the create branch closes nothing — password sign-up is a second door to the
+// same squat, and gating one leaves the other.
 //
 // So the check belongs on the local side, and this test pins it there.
 func TestOAuthAutoLink_RefusesAnUnverifiedLocalAccount(t *testing.T) {

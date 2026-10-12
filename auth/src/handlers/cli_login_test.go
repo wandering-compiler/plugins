@@ -326,7 +326,7 @@ func TestVerifyPKCES256(t *testing.T) {
 	}
 }
 
-// --- a consumer: the flow can serve a browser app, and only a registered one --
+// --- the flow can serve a browser app, and only a registered one ------------
 //
 // CliAuthorize refused every non-loopback redirect, which is right for a CLI
 // and made the flow unusable for web SSO: a sign-in app on its own origin

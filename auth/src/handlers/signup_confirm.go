@@ -36,7 +36,7 @@ const (
 	// A cap on how many codes one address may be sent is a lever anybody can
 	// pull: send that many registrations and the owner's own request is
 	// refused — the address blocked again, renewably, which is the thing this
-	// feature exists to prevent (review of #221). Floods are bounded per
+	// feature exists to prevent. Floods are bounded per
 	// CALLER instead, by the gateway's limiter on unauthenticated methods.
 	//
 	// So the space carries it: eight characters of Crockford base32 (32^8 ≈

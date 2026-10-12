@@ -288,7 +288,7 @@ func TestOAuthAuthorizeURL_DisabledProvider(t *testing.T) {
 	}
 }
 
-// TestOAuthAuthorizeURL_EmptyClientSecret_Rejected — Q36-auth-2. An
+// TestOAuthAuthorizeURL_EmptyClientSecret_Rejected — an
 // enabled provider with no client_secret must be rejected, not used to
 // sign the state CSRF token with an empty (public) HMAC key — which an
 // attacker could recompute to forge any state (login-CSRF / arbitrary
@@ -305,7 +305,7 @@ func TestOAuthAuthorizeURL_EmptyClientSecret_Rejected(t *testing.T) {
 	}
 }
 
-// Q45-auth-1: an absolute / protocol-relative redirect_after is an open
+// An absolute / protocol-relative redirect_after is an open
 // redirect (CWE-601) — the authorize side must reject it before signing.
 func TestOAuthAuthorizeURL_RejectsUnsafeRedirect(t *testing.T) {
 	for _, bad := range []string{"https://evil.com", "//evil.com", "http://x", "javascript:alert(1)", "/\\evil.com", "\\\\evil"} {
@@ -329,7 +329,7 @@ func TestOAuthAuthorizeURL_RejectsUnsafeRedirect(t *testing.T) {
 	}
 }
 
-// Q45-auth-1 defense-in-depth: a state signed (by an older build) with an
+// Defense in depth: a state signed (by an older build) with an
 // unsafe redirect_after must be neutralised at callback — the response must
 // not carry an off-origin redirect target.
 func TestOAuthCallback_DropsUnsafeRedirect(t *testing.T) {
@@ -352,7 +352,8 @@ func TestOAuthCallback_DropsUnsafeRedirect(t *testing.T) {
 	}
 }
 
-// TestOAuthCallback_EmptyClientSecret_Rejected — Q36-auth-2 (verify side).
+// TestOAuthCallback_EmptyClientSecret_Rejected — the verify side of the same
+// empty-client_secret refusal.
 func TestOAuthCallback_EmptyClientSecret_Rejected(t *testing.T) {
 	m := &oauthMock{provider: &pb.OAuthProvider{
 		Name: "google", ClientId: "cid", ClientSecret: "", Enabled: true,
@@ -417,7 +418,7 @@ func TestOAuthCallback_UserinfoPath_CreatesUser(t *testing.T) {
 		t.Errorf("expected an identity for ext-1, got %+v", m.createdIdent)
 	}
 	// The account is a full account: the turnkey default roles, like SignUp's.
-	// It used to hold none, and every endpoint answered 403 (examples/auth-proof).
+	// Holding none, every endpoint would answer 403.
 	if len(m.assigned) != 1 || m.assigned[0].GetRoleId() != "r-account" {
 		t.Errorf("the OAuth-created account got roles %+v, want the default role", m.assigned)
 	}
@@ -555,7 +556,7 @@ func TestOAuthCallback_BadState_Unauthenticated(t *testing.T) {
 	}
 }
 
-// TestOAuthCallback_UnverifiedEmail_RefusesLinkToExisting — Q36-auth-1.
+// TestOAuthCallback_UnverifiedEmail_RefusesLinkToExisting.
 // When the IdP does NOT assert `email_verified`, an external identity must
 // NOT auto-link to a pre-existing local account with the same email —
 // otherwise an attacker who set their IdP profile email to a victim's gets
@@ -581,7 +582,7 @@ func TestOAuthCallback_UnverifiedEmail_RefusesLinkToExisting(t *testing.T) {
 	}
 }
 
-// TestOAuthCallback_VerifiedEmail_LinksToExisting — Q36-auth-1. With
+// TestOAuthCallback_VerifiedEmail_LinksToExisting — with
 // email_verified=true the auto-link to a pre-existing account is the
 // intended behaviour (no new user created).
 func TestOAuthCallback_VerifiedEmail_LinksToExisting(t *testing.T) {
@@ -591,7 +592,7 @@ func TestOAuthCallback_VerifiedEmail_LinksToExisting(t *testing.T) {
 			Id: "p1", Name: "google", ClientId: "cid", Secret: "csec",
 			TokenUrl: srv.URL + "/token", UserinfoUrl: srv.URL + "/userinfo", Enabled: true,
 		},
-		// EmailVerifiedAt set: since T3-7 pass #14 (B14-2) the auto-link
+		// EmailVerifiedAt set: the auto-link
 		// requires BOTH sides to have verified the address. The IdP side is
 		// what this test is about; the local side is a precondition of the
 		// scenario rather than its subject, so it belongs in the fixture.

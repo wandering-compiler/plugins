@@ -69,7 +69,7 @@ env:
   - name: invite_only
     type: bool
     default: "true"
-    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. This text used to claim the window closes once `email_verification` is enabled — it does not, and never did: that feature adds a column and two RPCs and blocks nothing (a consumer measured 19 unverified accounts of 19 with it on). Set `invite_requires_verified_email` to close it."
+    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. Enabling `email_verification` does not close the window: that feature adds a column and two RPCs and blocks nothing — accounts still sign up unverified with it on. Set `invite_requires_verified_email` to close it."
   - name: email_proof_required
     type: string
     default: "none"
@@ -107,7 +107,7 @@ features:
       # gated `rbac` — and auth_service.go calls it unconditionally. Without
       # this, activating the turnkey resolver alone fails the BUNDLE build on
       # `undefined: pb.GetUserByTokenWithPermissionsReq`, pointing at a file
-      # the project never wrote and cannot edit (a consumer).
+      # the project never wrote and cannot edit.
       - rbac
     description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids. AuthService.AuthenticateAdmin (the admin preset's user_lookup) is the same resolver with no organization selected, so only realm-wide roles count."
     default: true
@@ -139,14 +139,14 @@ features:
       # baseline CreateUser and has no tenant to resolve, so an OAuth sign-in
       # under tenant_scope hits the NOT NULL tenant_id at RUNTIME — the worst
       # place to learn it. A documented incompatibility that codegen does not
-      # know about is a promise the compiler cannot keep (a consumer).
+      # know about is a promise the compiler cannot keep.
       - oauth
     description: "Multi-tenant isolation. Adds the Tenant table + a required User.tenant_id column + AuthQuery.GetUserTenant, and makes Authenticate stamp scopes[tenant_id] for the principal's tenant (resolved from auth, never client-sent). A project scoping its rows by name: tenant_id then gets per-tenant isolation. The NOT NULL tenant_id is written by AuthMutation.CreateUser through a feature-gated SET assignment (?feature(tenant_scope)), so there is ONE create rpc for every activation — this feature used to gate the baseline out and replace it with a CreateUserWithTenant twin, which cost the UserCreated event its only emit site. NOT compatible with `oauth`: handlers/oauth.go creates users through the baseline CreateUser and has no tenant to resolve (it was already broken before the gate — an OAuth sign-in under tenant_scope produced a NOT NULL violation at runtime; making OAuth tenant-aware is its own change). Compatible with `service_account`: a machine account is created in the tenant its minting operator is acting in, written by handlers/service_account_tenant.go, which is staged only when both features are on. Off by default — opt in for multi-tenant deployments."
     default: false
     go_files:
       - handlers/tenant.go
   - name: api_token
-    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. This used to `conflicts_with: org_membership`, because two narrowings over bare permission-id SETS cannot compose. Lifted 2026-09-20: both axes now resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (a consumer asked 2026-09-06; the anonymous case with NO permissions is a custom auth method, as in a public-link view)."
+    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. Two narrowings over bare permission-id SETS cannot compose, so both axes resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (the anonymous case with NO permissions is a custom auth method, as in a public-link view)."
     requires:
       # GetUserRolePermissionsByRealm resolves an API token's permissions
       # from UserRole, Role and RolePermission — rbac's tables. Without rbac
@@ -173,8 +173,8 @@ features:
     # ⚠️ REQUIRED, and the reason is a takeover rather than a compile error.
     #
     # OAuth auto-links an incoming identity to an existing account with the
-    # same address. Q36-auth-1 made that conditional on the IdP asserting
-    # the address is verified — one half of the question. The other half is
+    # same address only when the IdP asserts the address is verified —
+    # one half of the question. The other half is
     # whether the LOCAL account ever verified it, and without this feature
     # there is no field in which that answer could be recorded
     # (`User.email_verified_at` is gated on it).
@@ -187,8 +187,7 @@ features:
     #
     # Requiring verification in the create branch instead does NOT close it —
     # password sign-up is a second door to the same squat. The property is
-    # about the account being linked into, so the field has to exist
-    # (T3-7 pass #14, B14-2).
+    # about the account being linked into, so the field has to exist.
     requires:
       - email_verification
   - name: two_factor
@@ -202,12 +201,12 @@ features:
       - handlers/mfa.go
       - handlers/mfa_recovery.go
   - name: password_reset
-    description: "Self-service password reset (E1). Adds the PasswordResetToken table + the RequestPasswordReset / ResetPassword RPCs (both unauthenticated, REST-exposed). RequestPasswordReset always returns success regardless of whether the email exists (anti-enumeration) and emits PasswordResetRequested carrying a single-use, time-bounded plaintext token (only its hash is stored) for a hand-written e-mail delivery channel. ResetPassword consumes the token atomically (single-use + expiry), sets the new password, spends every other live reset link of the account in the same transaction, and revokes every existing token (sessions + API). TTL via env (password_reset_ttl_seconds, default 1h). Off by default."
+    description: "Self-service password reset. Adds the PasswordResetToken table + the RequestPasswordReset / ResetPassword RPCs (both unauthenticated, REST-exposed). RequestPasswordReset always returns success regardless of whether the email exists (anti-enumeration) and emits PasswordResetRequested carrying a single-use, time-bounded plaintext token (only its hash is stored) for a hand-written e-mail delivery channel. ResetPassword consumes the token atomically (single-use + expiry), sets the new password, spends every other live reset link of the account in the same transaction, and revokes every existing token (sessions + API). TTL via env (password_reset_ttl_seconds, default 1h). Off by default."
     default: false
     go_files:
       - handlers/reset.go
   - name: email_verification
-    description: "E-mail ownership verification (E1). Adds the EmailVerificationToken table + a nullable User.email_verified_at column + the RequestEmailVerification (bearer-authenticated) / VerifyEmail (unauthenticated link click) RPCs. RequestEmailVerification emits EmailVerificationRequested with a single-use plaintext token (hash stored) for a hand-written delivery channel; VerifyEmail consumes it and stamps email_verified_at. Non-blocking by default (SignIn does not reject unverified users; a project can layer that policy). TTL via env (email_verification_ttl_seconds, default 24h). Off by default."
+    description: "E-mail ownership verification. Adds the EmailVerificationToken table + a nullable User.email_verified_at column + the RequestEmailVerification (bearer-authenticated) / VerifyEmail (unauthenticated link click) RPCs. RequestEmailVerification emits EmailVerificationRequested with a single-use plaintext token (hash stored) for a hand-written delivery channel; VerifyEmail consumes it and stamps email_verified_at. Non-blocking by default (SignIn does not reject unverified users; a project can layer that policy). TTL via env (email_verification_ttl_seconds, default 24h). Off by default."
     default: false
     go_files:
       - handlers/emailverify.go
@@ -284,7 +283,7 @@ features:
       # which reads the caller's resolved permissions off the AuthResp
       # envelope — authenticate_turnkey's.
       - authenticate_turnkey
-      # org_membership is NOT required (it was until 2026-10-07). What
+      # org_membership is NOT required. What
       # organizations add — the membership written before the grant, the
       # org-scoped listing and minting — lives in service_account_org.go,
       # staged only when both are on (go_files_combined below), so a realm
@@ -333,13 +332,13 @@ presets:
     # plugin owns. Gated `devices`.
     forward_headers:
       - { name: X-Device-Id, feature: devices }
-      - { name: X-Device-Trust, feature: devices } # C2 — server-issued device-trust token replay
+      - { name: X-Device-Trust, feature: devices } # server-issued device-trust token replay
       - { name: User-Agent,      feature: devices }
       - { name: X-Forwarded-For, feature: devices }
       # tenant_scope resolves a registration's tenant from the request's Host
       # (Tenant.domain). restgw forwards it as x-forwarded-host — the gRPC hop
       # has an :authority of its own. Without this the Host never left the
-      # gateway and every tenant_scope sign-up was refused (examples/auth-proof).
+      # gateway and every tenant_scope sign-up was refused.
       - { name: Host, feature: tenant_scope }
       # The active-org selector — a slug the client sends to scope a request
       # into one of its orgs. NOT in the reserved x-w17-* namespace (that's
@@ -443,7 +442,7 @@ presets:
           - { ref: AuthService.RevokeDevice,       method: DELETE, path: "/{device_id}",  feature: devices }
           - { ref: AuthService.RevokeOtherDevices, method: POST,   path: "/revoke-others", feature: devices }
           - { ref: AuthService.RevokeAllDevices,   method: POST,   path: "/revoke-all",    feature: devices }
-      # Password reset (E1) — both unauthenticated (the caller has no token:
+      # Password reset — both unauthenticated (the caller has no token:
       # forgot-password flow). Gated password_reset.
       - prefix: /auth/password
         description: "Self-service password reset — request a token (e-mailed) + apply a new password."
@@ -457,7 +456,7 @@ presets:
           # deployment with no way to send mail still gets this one — and
           # NOT exclude_auth: it acts on the caller's own account.
           - { ref: AuthService.ChangePassword,       method: POST, path: /change,                            feature: password_change }
-      # E-mail verification (E1) — request is bearer-authenticated (verify
+      # E-mail verification — request is bearer-authenticated (verify
       # your own address); the verify link click is unauthenticated. Gated
       # email_verification.
       - prefix: /auth/email
@@ -480,15 +479,15 @@ presets:
       # ⚠ THE PLUGIN AUTHENTICATES THESE, IT DOES NOT AUTHORIZE THEM. The
       # handlers require a resolved principal and nothing more: any account
       # that can sign in can register a callback. Gating them to an
-      # administrator is the PROJECT's job, through the endpoint ACL axis
-      # (REV-146) — and a project that leaves the ACL axis off entirely gets
-      # no gate at all.
+      # administrator is the PROJECT's job, through the endpoint ACL axis —
+      # and a project that leaves the ACL axis off entirely gets no gate at
+      # all.
       #
-      # This comment used to read "admin-scoped by the ACL", which describes
-      # a property the plugin does not have and a consumer read it as one
-      # (a consumer). What makes a registration safe today is the other end:
-      # registering issues a client_secret, and a code minted for a registered
-      # client cannot be redeemed without it. The gate still matters — it is
+      # These routes are NOT admin-scoped by the ACL; reading them that way
+      # assumes a property the plugin does not have. What makes a
+      # registration safe is the other end: registering issues a
+      # client_secret, and a code minted for a registered client cannot be
+      # redeemed without it. The gate still matters — it is
       # what keeps an attacker from registering at all — but it is yours.
       #
       # Gated cli_login.

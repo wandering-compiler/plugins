@@ -33,12 +33,11 @@ func (m *inviteGateMock) GetUserByEmail(context.Context, *pb.GetUserByEmailReq, 
 	return &pb.GetUserByEmailResp{}, nil // no account with this address
 }
 
-// TestInviteGate_RefusesAnUninvitedAddress is the regression pin for the
-// defect this file was written for: `invite_only` was a flag nothing read.
-// The seam that enforces it defaulted to permissive and the init() its own
-// comment promised was never written, so a console that declared
-// invite-only registration accepted anybody — over a public, exclude_auth
-// /register endpoint.
+// TestInviteGate_RefusesAnUninvitedAddress pins `invite_only` as a flag
+// something reads. The seam that enforces it defaults to permissive, so
+// without the init() that installs the real check, a deployment that
+// declares invite-only registration accepts anybody — over a public,
+// exclude_auth /register endpoint.
 //
 // The assertion is on the SEAM rather than on SignUp because the seam is
 // what a second account-creating surface (OAuth) also has to consult; a

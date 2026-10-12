@@ -12,7 +12,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// This file implements the `password_reset` feature (E1). It is staged into
+// This file implements the `password_reset` feature. It is staged into
 // a bundle only when the activation enables `password_reset` (plugin.yaml
 // maps the feature to this file via go_files). Standalone (the plugin
 // author's own `go test`) always compiles it.
@@ -73,7 +73,7 @@ func (h *AuthServiceHandler) ResetPassword(ctx context.Context, req *pb.ResetPas
 	// Apart, the token is spent before the password changes: a failure in
 	// between burns a valid link and leaves the old password in place, so the
 	// person is left with NEITHER — and they asked for that link precisely
-	// because they could not get in (a consumer). The consume must come first
+	// because they could not get in. The consume must come first
 	// (it is the check), so the only honest arrangement is to roll the pair
 	// back together.
 	var tx *distx.TxHandle
@@ -127,11 +127,11 @@ func (h *AuthServiceHandler) consumeAndSetPassword(txCtx context.Context, tokenH
 		// Through the opaque constructor, not raw.
 		//
 		// The statement carries RETURNING, so "no live row" arrives as
-		// NotFound — an ERROR, not an empty response. Returned raw it told a
-		// caller apart "this token is unknown/used/expired" from every other
-		// outcome, which is the enumeration the opaque refusal exists to
-		// prevent, and it made the `== ""` branch below unreachable: written
-		// for a shape this mutation never produces (a consumer).
+		// NotFound — an ERROR, not an empty response. Returned raw it would
+		// tell a caller apart "this token is unknown/used/expired" from every
+		// other outcome, which is the enumeration the opaque refusal exists to
+		// prevent, and the `== ""` branch below is unreachable for it: that
+		// branch handles a shape this mutation never produces.
 		//
 		// Unauthenticated() classifies: a refusal stays opaque, an outage
 		// comes back as Unavailable rather than dressed as a bad token.

@@ -13,7 +13,7 @@ import (
 // # Why this exists, and what it replaced
 //
 // Three handlers hold a pair of writes together in one transaction, each
-// because a consumer lost something real when they were apart (a consumer): a
+// because something real is lost when they are apart: a
 // reset that burned the link without changing the password, and a bot token
 // minted LIVE with no narrowing — which the resolver reads as
 // `all_permissions`, so a caller who asked for a narrow credential and got an

@@ -28,8 +28,8 @@ option go_package = "@project;@pkg";
 //
 // A bot has no password, and the column stores the UNUSABLE sentinel `!`
 // rather than an empty string. Empty is not available: `password_hash` carries
-// a blank CHECK, so an empty write is refused outright (found live, 2026-09-20
-// — CreateBot returned "password_hash value violates constraint").
+// a blank CHECK, so an empty write is refused outright (CreateBot would
+// return "password_hash value violates constraint").
 //
 // `!` is the Django convention and it is unusable by CONSTRUCTION, not by
 // policy: the verifier reads the leading PHC prefix to pick an algorithm, and
@@ -148,7 +148,7 @@ message DeleteTokenResp {
 // handler reads it from the auth envelope; an API-token bearer no-ops),
 // so an API token can't be hit. Idempotent — an absent token deletes zero
 // rows and returns an empty token_id. (token_type is NOT in the DQL — see
-// the rpc comment: that column is api_token-gated; Q64-auth-1.)
+// the rpc comment: that column is api_token-gated.)
 message DeleteSessionTokenReq {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
   string    token_id   = 1 [(w17.field) = { type: UUID }];
@@ -422,7 +422,7 @@ message ConsumeMfaChallengeResp {
 }
 
 // RecordMfaAttemptReq/Resp — atomically bump a challenge's failed-attempt
-// counter (Q43-auth-mfa). Resp.attempts is the NEW count so the handler
+// counter (brute-force lockout). Resp.attempts is the NEW count so the handler
 // can log/observe it; the lockout itself is enforced by VerifyMfa's
 // pre-check on the loaded challenge.attempts.
 message RecordMfaAttemptReq {
@@ -502,7 +502,7 @@ message PurgeExpiredPendingSignUpsResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
 }
 
-// ── password_reset request/response messages (E1) ───────────
+// ── password_reset request/response messages ────────────────
 //
 // CreatePasswordResetToken stores ONLY the token hash + expiry; the
 // plaintext token + email are event-only (no w17.field) so they ride the
@@ -604,7 +604,7 @@ message DeleteUserSessionsForResetResp {
   string user_id = 1;
 }
 
-// ── email_verification request/response messages (E1) ───────
+// ── email_verification request/response messages ────────────
 message CreateEmailVerificationTokenReq {
   option (w17.contrib.plugin_feature) = "email_verification";
   string user_id    = 1 [(w17.field) = { type: UUID }];
@@ -674,7 +674,7 @@ message TrustDeviceReq {
   option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
-  // C2 — SHA-256 hex of the freshly-minted device-trust token stored on
+  // SHA-256 hex of the freshly-minted device-trust token stored on
   // the row; the client must present the matching plaintext to be trusted.
   string trust_token_hash = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
 }
@@ -812,7 +812,7 @@ message DeleteUserResp {
 // owns that write, gated `password_reset`, so credential material never
 // rides an admin form), and disabled_at belongs to the Disable/Enable
 // bulk actions. Refuses on a duplicate email — the unique violation
-// surfaces as AlreadyExists via REV-026 DB-error classification, same
+// surfaces as AlreadyExists via the storage DB-error classification, same
 // as CreateUser. Gated user_admin.
 message UpdateUserReq {
   option (w17.contrib.plugin_feature) = "user_admin";
@@ -1258,7 +1258,7 @@ service AuthMutation {
   // AuthService.SignUp handler computes it via
   // passwordhash.Settings.Hash() before calling. Refuses on
   // duplicate email (unique violation surfaces as
-  // AlreadyExists via REV-026 DB-error classification).
+  // AlreadyExists via the storage DB-error classification).
   //
   // ONE create for every activation. `tenant_scope` adds a NOT NULL
   // `User.tenant_id`, and the gated SET assignment below writes it, so
@@ -1320,7 +1320,7 @@ service AuthMutation {
 
 
   // IssueToken — INSERT UserToken. The `token` column fills
-  // app-side via the CRYPTO_RANDOM default (Phase N) — request
+  // app-side via the CRYPTO_RANDOM default — request
   // doesn't carry the token value; codegen preamble generates
   // it before SQL emit.
   rpc IssueToken(IssueTokenReq) returns (IssueTokenResp) {
@@ -1399,7 +1399,7 @@ service AuthMutation {
   // TokenRevoked emit site (the live logout path) so cache-invalidation
   // subscribers react on logout; DeleteToken no longer emits. Idempotent.
   //
-  // Q64-auth-1: the DQL deliberately does NOT filter on token_type — that
+  // The DQL deliberately does NOT filter on token_type — that
   // column is gated by the `api_token` feature, so referencing it here (a
   // base-tier authenticate_turnkey mutation) breaks typecheck on the
   // default config where api_token is off and the column doesn't exist.
@@ -1917,7 +1917,7 @@ service AuthMutation {
   }
 
   // RecordMfaAttempt — atomically increment the challenge's failed-attempt
-  // counter (Q43-auth-mfa). Guarded `consumed_at IS NULL` so a consumed
+  // counter (brute-force lockout). Guarded `consumed_at IS NULL` so a consumed
   // challenge isn't bumped; RETURNING the new count. No event (internal
   // brute-force guard, not a user-visible lifecycle step).
   rpc RecordMfaAttempt(RecordMfaAttemptReq) returns (RecordMfaAttemptResp) {
@@ -1937,7 +1937,7 @@ service AuthMutation {
   // SupersedePendingMfaChallenges — retire every still-pending challenge
   // of a user, so issuing a new one leaves exactly one live code. Without
   // it, N sign-ins leave N codes alive, each with its own attempt budget,
-  // and the budget on any one of them bounds nothing (a consumer).
+  // and the budget on any one of them bounds nothing.
   //
   // NO RETURNING, deliberately. Zero rows is the ORDINARY case — a first
   // sign-in has nothing to supersede — and a mutation carrying RETURNING
@@ -2033,16 +2033,14 @@ service AuthMutation {
     };
   }
 
-  // DeleteDeviceTokens — DELETE every session token a device owns
-  // (the "log out this device" primitive). Ownership-guarded by
-  // user_id so a caller can't drop another user's sessions.
-  // Idempotent.
-  // DeleteUndevicedSessions — DELETE the user's session tokens that carry no
-  // device. Not every session is device-bound: SignUp, ConfirmSignUp, the
-  // OAuth callback and CliToken issue a session with no device, so "log out
-  // everywhere" swept device by device and left those standing (found live by
-  // examples/auth-proof). API tokens are spared — they are not sessions, and
-  // are removed only through RevokeApiToken.
+  // DeleteDeviceTokens — DELETE every session token a device owns (the "log out
+  // this device" primitive). Ownership-guarded by user_id so a caller can't
+  // drop another user's sessions. Idempotent. DeleteUndevicedSessions — DELETE
+  // the user's session tokens that carry no device. Not every session is
+  // device-bound: SignUp, ConfirmSignUp, the OAuth callback and CliToken issue
+  // a session with no device, so "log out everywhere" swept device by device
+  // would leave those standing. API tokens are spared — they are not sessions,
+  // and are removed only through RevokeApiToken.
   rpc DeleteUndevicedSessions(DeleteUndevicedSessionsReq) returns (DeleteUndevicedSessionsResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
@@ -2116,7 +2114,7 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
 
   // CreateRole — INSERT Role. Refuses duplicate name (unique
-  // violation → AlreadyExists via REV-026 DB-error classification).
+  // violation → AlreadyExists via the storage DB-error classification).
   rpc CreateRole(CreateRoleReq) returns (CreateRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
@@ -2284,7 +2282,7 @@ service AuthMutation {
   }
 
   // EnableUsers — bulk re-enable (clear disabled_at); returns the ids it
-  // re-enabled. Single-op for the same F-A2 reason as DisableUsers.
+  // re-enabled. Single-op, so its `IN (:ids)` binds on the final leg.
   // Gated user_admin.
   rpc EnableUsers(EnableUsersReq) returns (EnableUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
@@ -2418,7 +2416,7 @@ service AuthMutation {
     };
   }
 
-  // ── password_reset mutations (E1) ───────────────────────────
+  // ── password_reset mutations ────────────────────────────────
 
   // CreatePasswordResetToken — INSERT the hashed reset token + expiry and
   // emit PasswordResetRequested carrying the plaintext token + email (the
@@ -2560,7 +2558,7 @@ service AuthMutation {
   }
 
 
-  // ── email_verification mutations (E1) ───────────────────────
+  // ── email_verification mutations ────────────────────────────
 
   rpc CreateEmailVerificationToken(CreateEmailVerificationTokenReq) returns (CreateEmailVerificationTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "email_verification";
@@ -2821,7 +2819,7 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
 
   // CreateOrganization — INSERT Organization. Refuses a duplicate slug
-  // (unique violation → AlreadyExists via REV-026 DB-error
+  // (unique violation → AlreadyExists via the storage DB-error
   // classification). Emits OrganizationCreated — the keystone
   // provisioning hook (a subscriber seeds the org's default data off
   // org_id) so a project never has to INSERT into this plugin's tables
@@ -2897,7 +2895,7 @@ service AuthMutation {
   // org's memberships first (link table, app-enforced — no DB FK, same
   // caveat as the rest of the plugin), then the org, atomically. The
   // membership purge is a NON-final leg (scalar :id bind — no array
-  // expansion, so the F-A2 final-leg rule doesn't apply). Emits
+  // expansion, so the final-leg rule for `IN (:ids)` doesn't apply). Emits
   // OrganizationDeleted for downstream per-org cleanup. Gated
   // org_membership.
   // UpdateOrganization — the admin Organizations page detail `update`.
@@ -2962,10 +2960,10 @@ service AuthMutation {
   // (user_id, org_id) index makes an in-place move a constraint trap).
   // Gated org_membership.
   // The membership's role label and the org-scoped grant behind it change
-  // TOGETHER. The label alone used to change, so a demotion revoked nothing:
-  // the member kept every permission of the role they were demoted from,
-  // because permissions are read from UserRole and never from this label
-  // (D13-3). One method, one transaction: read whose membership it is, check
+  // TOGETHER. Changing the label alone would revoke nothing on a demotion:
+  // the member would keep every permission of the role they were demoted
+  // from, because permissions are read from UserRole and never from this
+  // label. One method, one transaction: read whose membership it is, check
   // the new role is still an org role, drop every grant the member holds IN
   // THIS ORGANIZATION, and grant the new one. Realm-wide grants are not
   // touched. Called by AuthService.UpdateOrgMembershipRole, which holds the
@@ -2984,11 +2982,11 @@ service AuthMutation {
         // AuthService.UpdateOrgMembershipRole (which the plugin's own admin
         // page binds) the role was resolved by name a moment ago, so a miss is
         // a race: deleted, or stopped being an org role, in between. A project
-        // that calls this mutation ITSELF with a role_id — a consumer's admin
-        // binding did, 2026-10-04 — most often misses on a role that never was
-        // assignable here: realm-wide, or no such id. The sentence names both;
-        // the first version spoke only of the race and sent that consumer
-        // looking for one. Not a missing membership, which op "m" answers.
+        // that calls this mutation ITSELF with a role_id — an admin binding of
+        // its own — most often misses on a role that never was assignable here:
+        // realm-wide, or no such id. The sentence names both; speaking only of
+        // the race would send that caller looking for one. Not a missing
+        // membership, which op "m" answers.
         on_empty: {
           code:       ON_EMPTY_FAILED_PRECONDITION
           error_code: "ORG_ROLE_NOT_ASSIGNABLE"
@@ -3032,10 +3030,10 @@ service AuthMutation {
   }
 
   // A membership leaves WITH its org-scoped grants. Removed alone, the grants
-  // stayed and kept counting — permissions read UserRole by (user, org) and
-  // join no membership — so a member re-invited at a LESSER role came back with
-  // their old one, and one re-invited at the same role hit the unique grant and
-  // could never accept (D13-3). The request names only the membership, so the
+  // would stay and keep counting — permissions read UserRole by (user, org) and
+  // join no membership — so a member re-invited at a LESSER role would come back
+  // with their old one, and one re-invited at the same role would hit the unique
+  // grant and could never accept. The request names only the membership, so the
   // first op reads whose it is. An owner without a membership is unaffected:
   // ownership is read off the organization.
   rpc DeleteOrgMembership(DeleteOrgMembershipReq) returns (DeleteOrgMembershipResp) {
@@ -3188,13 +3186,12 @@ service AuthMutation {
           "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot"
       }
     };
-    // The acceptance's announcement. OrgInviteAccepted was declared and
-    // nothing emitted it: acceptance moved to this token-keyed claim and the
-    // emit stayed behind with nobody (an id-keyed claim that nothing called, removed in rc.19),
-    // so a subscriber waiting for "joined" never fired (found live by
-    // examples/auth-proof). Emitted after commit, so a claim the
-    // transaction rolls back — a role that moved since the invitation —
-    // announces nothing.
+    // The acceptance's announcement. OrgInviteAccepted was declared and nothing
+    // emitted it: acceptance moved to this token-keyed claim and the emit
+    // stayed behind with nobody (an id-keyed claim that nothing called, removed
+    // in rc.19), so a subscriber waiting for "joined" never fired. Emitted
+    // after commit, so a claim the transaction rolls back — a role that moved
+    // since the invitation — announces nothing.
     option (w17.event_emit) = {
       event: "OrgInviteAccepted"
       payload: {

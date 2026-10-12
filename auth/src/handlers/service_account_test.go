@@ -272,8 +272,8 @@ func TestCreateBot_RoleIsRequired(t *testing.T) {
 //
 // Two constraints meet here and only one value satisfies both: the column
 // carries a blank CHECK, so the natural "no password" — the empty string — is
-// refused by the database (found live 2026-09-20, after handler tests with a
-// mocked mutation had passed: the mock made the storage layer invisible). And
+// refused by the database (handler tests with a mocked mutation cannot see
+// it: the mock makes the storage layer invisible). And
 // whatever is stored must never verify.
 func TestBotPasswordSentinel_IsNonEmptyAndCannotVerify(t *testing.T) {
 	const sentinel = "!"
@@ -297,10 +297,9 @@ func TestBotPasswordSentinel_IsNonEmptyAndCannotVerify(t *testing.T) {
 // permission set. And with no membership there is no organization to infer,
 // so an unattended caller sending no W17-Org header has no scope either.
 //
-// Both were live: a token minted through the console UI pushed nothing and
-// reported "no permissions resolved for this principal" (2026-09-20). Neither
-// the handler tests nor the live token mint caught it — the account looked
-// correct in every listing.
+// The symptom is a token minted through the UI that pushes nothing and
+// reports "no permissions resolved for this principal", while the account
+// looks correct in every listing.
 func TestCreateBot_JoinsTheOrgAndScopesTheGrantToIt(t *testing.T) {
 	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
@@ -418,8 +417,8 @@ func (m *botAdminMock) GetOrgMember(ctx context.Context, in *pb.GetOrgMemberReq,
 
 // `User` is not an org-scoped model — a person belongs to several — so the
 // request scope does not narrow this list on its own. Without the filter the
-// answer is every machine account on the console, and one company's operator
-// saw another's on production (2026-09-21).
+// answer is every machine account on the deployment, and one company's
+// operator sees another's.
 func TestListBots_AsksOnlyForTheActiveOrganization(t *testing.T) {
 	m := &botAdminMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
@@ -466,16 +465,16 @@ func TestIssueBotToken_RefusesABotFromAnotherOrganization(t *testing.T) {
 	}
 }
 
-// --- a consumer 2026-09-23: the claim, driven through SignIn -------------------
+// --- the claim, driven through SignIn ------------------------------------------
 //
 // TestSignInBotGate above calls the gate DIRECTLY, with a `pb.User` it builds
 // itself carrying `Kind: BOT`. That proves the function refuses a bot. It
-// proves nothing about the thing we told a consumer on 2026-09-20 — "a
-// `kind = BOT` account cannot sign in with a password at all; that path is
-// closed for it" — because the User SignIn actually holds comes from
-// GetUserByEmail, and for a month that projection did not select `kind`. The
-// gate read an unset AccountKind, HUMAN is zero, and the door was open. The
-// test agreed with the mock, and the mock agreed with the wrong reading.
+// proves nothing about the promise — "a `kind = BOT` account cannot sign in
+// with a password at all; that path is closed for it" — because the User
+// SignIn actually holds comes from GetUserByEmail, and a projection that does
+// not select `kind` leaves the gate reading an unset AccountKind: HUMAN is
+// zero, and the door is open. The test agrees with the mock, and the mock
+// agrees with the wrong reading.
 //
 // So this one goes through SignIn. It is one half of a pair, and neither half
 // is worth much alone:
@@ -483,9 +482,6 @@ func TestIssueBotToken_RefusesABotFromAnotherOrganization(t *testing.T) {
 //   - TestEveryUserProjectionFillsTheFieldsItsGatesRead reads the DQL and
 //     asserts GetUserByEmail actually SELECTs kind;
 //   - this asserts that SignIn consults it on the user that lookup returned.
-//
-// Reported by a consumer, who noticed the fix riding silently in a plugin diff and
-// pointed out that the claim it corrected had never been tested.
 
 // signInBotQuery answers GetUserByEmail the way the fixed projection does —
 // every field the SELECT names, kind included.
@@ -526,7 +522,7 @@ func TestSignIn_RefusesAMachineAccountThatHasAPassword(t *testing.T) {
 	h := &AuthServiceHandler{Query: signInBotQuery{kind: pb.AccountKind_BOT, hash: hash}, PasswordHash: s}
 	_, err = h.SignIn(context.Background(), &pb.SignInReq{Email: "ci@example.com", Password: "correct-horse"})
 	if err == nil {
-		t.Error("a machine account signed in with its correct password — the path we told a consumer was closed")
+		t.Error("a machine account signed in with its correct password — the path documented as closed")
 	} else if status.Code(err) != codes.Unauthenticated {
 		t.Errorf("refusal reached the caller as %v, not the opaque Unauthenticated every SignIn arm uses", status.Code(err))
 	}

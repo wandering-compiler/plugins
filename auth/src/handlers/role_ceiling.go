@@ -113,7 +113,7 @@ func (h *AuthServiceHandler) roleCatalogue(ctx context.Context) (map[string][]in
 // GrantAll answers nil for both an absent lock and an empty one, and read as
 // "cannot be expanded" that refused every acceptance of an invitation to an
 // all_permissions role in such a domain, and wrote snapshots that never
-// matched (reported by a consumer, 2026-10-06). nil stays for the case it
+// matched. nil stays for the case it
 // means: no lock at all.
 func expandRoleGrant(g *pb.RoleGrant, lock *acllock.Lock) []int32 {
 	if g.GetAllPermissions() {

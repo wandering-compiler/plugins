@@ -86,8 +86,8 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		// oauth knob (ignored unless the `oauth` feature is staged).
 		OAuthRedirectBase: cfg.OauthRedirectBase,
 
-		// E1 token lifetimes (<=0 → the handler file's default; ignored
-		// unless the matching feature is staged).
+		// Reset / verification token lifetimes (<=0 → the handler file's
+		// default; ignored unless the matching feature is staged).
 		PasswordResetTTLSeconds:     cfg.PasswordResetTtlSeconds,
 		EmailVerificationTTLSeconds: cfg.EmailVerificationTtlSeconds,
 

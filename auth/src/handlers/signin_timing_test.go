@@ -18,11 +18,11 @@ func (signInNotFoundQuery) GetUserByEmail(context.Context, *pb.GetUserByEmailReq
 	return nil, errors.New("user not found")
 }
 
-// B48-auth-1: SignIn must run a dummy password verification on the
+// SignIn must run a dummy password verification on the
 // user-not-found path so its response time doesn't leak account existence
 // (timing oracle → user enumeration). Without it, a non-existent email returns
 // fast (no argon2) while a real email pays the derivation.
-func TestSignIn_UserNotFound_RunsDummyVerify_B48(t *testing.T) {
+func TestSignIn_UserNotFound_RunsDummyVerify(t *testing.T) {
 	called := false
 	orig := signInDummyVerify
 	signInDummyVerify = func(*AuthServiceHandler, string) { called = true }
@@ -33,11 +33,11 @@ func TestSignIn_UserNotFound_RunsDummyVerify_B48(t *testing.T) {
 		t.Fatal("SignIn for an unknown user must return Unauthenticated")
 	}
 	if !called {
-		t.Error("B48-auth-1: SignIn must run the dummy verify on the user-not-found path (anti-enumeration timing)")
+		t.Error("SignIn must run the dummy verify on the user-not-found path (anti-enumeration timing)")
 	}
 }
 
-// B48-auth-2: SignIn must normalize (trim + lowercase) the email before the
+// SignIn must normalize (trim + lowercase) the email before the
 // GetUserByEmail lookup, so a cross-case / whitespace sign-in matches the
 // account stored at signup (type:EMAIL is a case-sensitive unique constraint).
 type emailRecorderQuery struct {
@@ -50,7 +50,7 @@ func (m *emailRecorderQuery) GetUserByEmail(_ context.Context, in *pb.GetUserByE
 	return nil, errors.New("not found")
 }
 
-func TestSignIn_NormalizesEmailForLookup_B48(t *testing.T) {
+func TestSignIn_NormalizesEmailForLookup(t *testing.T) {
 	orig := signInDummyVerify // stub out the argon2 dummy verify
 	signInDummyVerify = func(*AuthServiceHandler, string) {}
 	t.Cleanup(func() { signInDummyVerify = orig })

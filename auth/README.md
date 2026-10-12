@@ -1,50 +1,26 @@
-# auth plugin (v3 POC)
+# auth plugin
 
 Authored Go business handlers + DQL primitives + proto schema for
 email/password authentication and bearer tokens.
 
-This is the **G3-POC** snapshot — manual rewrite of the v2 auth
-plugin to the v3 layout (the plugin source lives here, at
-`plugins/auth/`). Coexistence is intentional: w17 storage codegen
-still uses the v2 location + emits the F3/G2-F templates today;
-G3-D deletes those once the v3 staging pipeline (G3-B/C) lands.
-
 Layout:
 
 ```
-plugins/auth/
-├── go.mod              ← module github.com/wandering-compiler/plugins/auth
-├── plugin.yaml         ← manifest (go_module field is v3-new)
-├── proto/              ← schema source (same content as v2)
+auth/
+├── plugin.yaml         ← manifest: env contract, features, presets
+├── SPEC.md             ← behaviour reference
+├── proto/              ← schema source
 │   ├── types/
 │   ├── queries/
 │   ├── mutations/
-│   ├── services/
+│   ├── business/
 │   └── events/
-├── pb/                 ← Go pb (POC: hand-written stubs; G3-F regenerates from proto)
-└── handlers/           ← authored Go business handlers
-    └── auth_service.go ← Authenticate + SignIn (formerly F3/G2-F template emit)
+├── sandboxes/fakeidp/  ← dev-only fake OIDC provider for exercising `oauth`
+└── src/                ← module github.com/wandering-compiler/plugins/auth
+    ├── gen/pb/         ← committed pb for the local dev/test loop (see below)
+    ├── handlers/       ← authored Go business handlers
+    └── lib/            ← helpers the handlers share
 ```
-
-## POC scope
-
-- Layout proves compileable in isolation (`go build ./...` green)
-- Handler source matches the spec's reference shape
-  (`*Handler` struct, SDK-injected deps, opaque
-  Unauthenticated failure mode, anti-enumeration)
-- pb/ contains hand-written stubs covering only the surface
-  the POC handler imports — G3-F (`w17ctl plugin build`) will
-  regenerate from proto with full coverage
-
-## Out of scope for POC
-
-- Real protoc-driven pb generation (G3-F)
-- Staging + per-activation import rewriting (G3-B)
-- Handler discovery + RegisterPlugin codegen (G3-C)
-- Deleting v2 templates + old proto location (G3-D)
-- SDK auditor (G3-G)
-
-The v2 auth plugin keeps functioning unchanged until G3-D.
 
 ## What a consumer has to know
 

@@ -1,7 +1,7 @@
 // Package passwordhash hashes + verifies credentials for every
 // PASSWORD-typed field a wandering-compiler project declares.
 //
-// REV-151 — invoked by the storage codegen at INSERT / UPDATE
+// Invoked by the storage codegen at INSERT / UPDATE
 // time (Hash) and by hand-written auth backends at credential
 // check time (Verify). The per-project algorithm + tuning live
 // in the lock's `password:` block; LoadProject reads

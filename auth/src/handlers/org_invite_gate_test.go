@@ -23,10 +23,10 @@ func (q *gateQuery) ListPendingInvitesForEmail(_ context.Context, _ *pb.ListPend
 // The gate that decides whether an uninvited address may register lives in
 // a package-level var, permissive by default, replaced by org_invite.go's
 // init(). Nothing REFERENCES that init, so nothing makes it survive a
-// refactor — and on 2026-09-08 it did not: a move of unrelated symbols out
-// of that file took it along, the package compiled (removing an init is
-// always valid Go), every existing test stayed green, and the deployed
-// console accepted an uninvited registration from the open internet.
+// refactor: a move of unrelated symbols out of that file can take it along,
+// the package compiles (removing an init is always valid Go), every other
+// test stays green, and the deployment accepts an uninvited registration
+// from the open internet.
 //
 // This test exists to make that specific loss loud. It asserts on the
 // INSTALLED behaviour, not on the file's contents: the permissive default

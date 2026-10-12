@@ -62,7 +62,7 @@ type EnvConfig struct {
 	TwoFactorScope    string // two_factor_scope — all_logins | new_devices
 	MfaCodeTtlSeconds int    // mfa_code_ttl_seconds — event-flow code lifetime
 
-	// Issuance cap for MFA challenges (a consumer). maxMfaAttempts is per
+	// Issuance cap for MFA challenges. maxMfaAttempts is per
 	// CHALLENGE and a new sign-in mints a new one, so these bound how many
 	// challenges — and so how many attempt budgets — one user can be issued
 	// in a window. <= 0 → 10 per 900s.
@@ -77,11 +77,12 @@ type EnvConfig struct {
 	TotpIssuer             string // totp_issuer — otpauth issuer label
 	TwoFactorSecretKey     string // two_factor_secret_key — base64 32-byte at-rest key for TOTP seeds
 
-	// oauth knob (Phase O). Public base URL the OAuth callback is reachable
+	// oauth knob. Public base URL the OAuth callback is reachable
 	// at; empty → derived from the request host.
 	OauthRedirectBase string // oauth_redirect_base
 
-	// E1 token lifetimes. Ignored unless the matching feature is enabled.
+	// Reset / verification token lifetimes. Ignored unless the matching feature
+	// is enabled.
 	PasswordResetTtlSeconds     int // password_reset_ttl_seconds (default 3600)
 	EmailVerificationTtlSeconds int // email_verification_ttl_seconds (default 86400)
 

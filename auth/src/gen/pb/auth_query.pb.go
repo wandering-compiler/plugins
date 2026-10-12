@@ -380,7 +380,7 @@ func (x *GetUserByTokenWithPermissionsReq) GetTokenHash() string {
 
 // UserWithPermissions packs identity + the deduped permission
 // IDs the user holds across every assigned role. One SQL
-// round-trip via ROWS_TO_ARRAY (Phase E1) — no separate
+// round-trip via ROWS_TO_ARRAY — no separate
 // permission lookup. `permission_ids` is always populated
 // (never nil); an empty list means the user has no role
 // assignments or none of their roles carry any permissions.
@@ -898,9 +898,8 @@ type ListOrgMemberAccountsReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The ACTIVE organization. Not optional: User is not an org-scoped model —
 	// a person belongs to several — so without this the list would be every
-	// account on the console. The machine-account directory once was exactly
-	// that, and one company's operator saw another's bots (reported on
-	// production 2026-09-21).
+	// account on the deployment, and one company's operator would see another's
+	// bots in the machine-account directory.
 	OrgId         string `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3420,10 +3419,10 @@ func (x *GetMfaChallengeResp) GetChallenge() *MfaChallenge {
 // LockUserForIssuance takes a row lock on the user for the duration of the
 // caller's transaction, so MFA challenge issuance for ONE user serialises.
 //
-// The cap read the count and then decided, which is only a cap when nothing
-// runs beside it. a consumer measured twenty concurrent sign-ins producing twenty
-// challenges past a limit of ten (#65): every one of them read zero before any
-// of them committed. An attacker who already holds the password — the whole
+// The cap reads the count and then decides, which is only a cap when nothing
+// runs beside it. Twenty concurrent sign-ins against a limit of ten would each
+// read zero before any of them committed, and all twenty would issue a
+// challenge. An attacker who already holds the password — the whole
 // threat the second factor is for — sends twenty at once as easily as twenty
 // in a row.
 //
@@ -3524,7 +3523,7 @@ func (x *LockUserForIssuanceResp) GetUserId() string {
 // MfaChallenge bounds guesses against ONE challenge; a new challenge starts
 // a fresh budget, so without a second cap the total number of guesses an
 // attacker who already has the password can buy is unbounded — they just
-// sign in again (a consumer).
+// sign in again.
 type CountRecentMfaChallengesReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -4093,8 +4092,7 @@ type UserOrg struct {
 	// (Organization.owner_id). Distinct from `role`, which is a GRANT somebody
 	// was given and can be changed by an admin; ownership is a property of the
 	// organization. Without this the person who created an org is
-	// indistinguishable from anyone they promoted, which is what a console
-	// showed on 2026-09-11.
+	// indistinguishable from anyone they promoted.
 	Owner         bool `protobuf:"varint,6,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4584,10 +4582,9 @@ type GetUserOwnsOrgResp struct {
 	// Split out of `all_permissions`, which used to mean "a wildcard role OR
 	// ownership". Conflating them made ownership INERT: it arrived in the
 	// narrowing step, narrowing can only subtract, and an owner holding no
-	// role intersected "everything" with "nothing" and got nothing. Verified
-	// on a live console 2026-09-10 — owner_id set, auth_userrole empty ⇒
-	// PermissionDenied. Owners needed seeded grants like anybody else, which
-	// is what the bootstrap script was quietly doing.
+	// role intersected "everything" with "nothing" and got nothing — owner_id
+	// set, auth_userrole empty ⇒ PermissionDenied — so owners needed seeded
+	// grants like anybody else.
 	//
 	// ⚠️ This is the ONE flag in the plugin that WIDENS rather than narrows,
 	// and the exception is deliberate, argued here rather than slipped in:

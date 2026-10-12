@@ -12,7 +12,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// a consumer — the authorization-code flow was built for CLIs (2026-06-28),
+// The authorization-code flow was built for CLIs,
 // where a secret cannot be kept and PKCE alone is the right answer (RFC 8252).
 // Taking it past loopback to browser and server apps carried that PUBLIC
 // client shape onto clients that can keep a secret, leaving the registry's

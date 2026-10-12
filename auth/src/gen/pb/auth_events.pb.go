@@ -327,7 +327,7 @@ func (x *TokenIssued) GetIssuedAt() *timestamppb.Timestamp {
 // logout path; the eventbus allows one emit site per event and the
 // uncalled DeleteToken primitive no longer emits). Idempotent upstream
 // → the event fires only when an actual row DELETE occurred; a
-// no-such-token logout doesn't emit (Phase D gates emit on
+// no-such-token logout doesn't emit (emit is gated on
 // RowsAffected > 0 via the storage codegen's per-mutation conditional
 // emit path).
 type TokenRevoked struct {
@@ -1144,7 +1144,7 @@ func (x *RecoveryCodeUsed) GetUserId() string {
 // only its hash is stored) + email for a hand-written delivery channel
 // (e-mail with a reset link). The handler emits only on a known email and
 // silently no-ops an unknown one (anti-enumeration), so a subscriber only
-// ever sees a request for a real account. E1.
+// ever sees a request for a real account.
 type PasswordResetRequested struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -1289,7 +1289,7 @@ func (x *SignUpConfirmationRequested) GetExpiresAt() *timestamppb.Timestamp {
 
 // email_verification lifecycle — emitted by CreateEmailVerificationToken
 // when a verification is requested (e.g. just after sign-up). Same shape
-// + single-plaintext-delivery contract as PasswordResetRequested. E1.
+// + single-plaintext-delivery contract as PasswordResetRequested.
 type EmailVerificationRequested struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`

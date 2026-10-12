@@ -32,7 +32,7 @@ import (
 // coarsely rather than crashing.
 const (
 	deviceIDMetadataKey    = "x-device-id"    // stable client-managed device id
-	deviceTrustMetadataKey = "x-device-trust" // C2: server-issued device-trust token (replayed by the client)
+	deviceTrustMetadataKey = "x-device-trust" // server-issued device-trust token (replayed by the client)
 	userAgentMetadataKey   = "user-agent"     // → Device.label (friendly name)
 	// forwardedUserAgentMetadataKey — where restgw puts the BROWSER's UA.
 	forwardedUserAgentMetadataKey = "x-forwarded-user-agent"
@@ -72,7 +72,7 @@ func init() {
 
 // deviceIdentity is the resolved device coordinates for the current
 // request: a stable identifier (header or fingerprint), a friendly label
-// (user-agent), the client IP, and the C2 server-issued device-trust
+// (user-agent), the client IP, and the server-issued device-trust
 // token the client replays (empty if none).
 type deviceIdentity struct {
 	identifier string
@@ -87,15 +87,15 @@ type deviceIdentity struct {
 // user-agent + IP. The fingerprint is best-effort: UA/IP churn yields a
 // new identifier → a new-device read → (under two_factor new-device mode)
 // an extra challenge, which is the safe failure, never fail-open. The
-// X-Device-Trust token (C2) is read straight through — it proves device
+// X-Device-Trust token is read straight through — it proves device
 // trust, distinct from the X-Device-Id which only names the device.
 func resolveDeviceIdentity(ctx context.Context) deviceIdentity {
 	md, _ := metadata.FromIncomingContext(ctx)
 	// The browser's User-Agent travels under x-forwarded-user-agent: the gRPC
 	// hop from the gateway replaces user-agent with its own ("grpc-go/…"), so
 	// read there every device was labelled grpc-go and the UA+IP fingerprint
-	// collapsed every browser of a user into one device (found live by
-	// examples/auth-proof). user-agent stays the fallback for an in-process call.
+	// collapsed every browser of a user into one device. user-agent stays the
+	// fallback for an in-process call.
 	ua := firstMeta(md, forwardedUserAgentMetadataKey)
 	if ua == "" {
 		ua = firstMeta(md, userAgentMetadataKey)
@@ -119,7 +119,7 @@ func resolveDeviceIdentity(ctx context.Context) deviceIdentity {
 // newDeviceTrustToken mints a fresh high-entropy device-trust token: the
 // plaintext to hand back to the client and its SHA-256 hex to store on the
 // Device row. The plaintext is never persisted — a DB read can't
-// impersonate a trusted device. (C2)
+// impersonate a trusted device.
 func newDeviceTrustToken() (token, hash string, err error) {
 	b := make([]byte, 32) // 256-bit
 	if _, err := rand.Read(b); err != nil {
@@ -136,12 +136,12 @@ func hashDeviceTrustToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// deviceTrustValid reports whether the presented trust token proves the
-// device is trusted: the row must carry a stored hash AND the presented
-// token must hash to it (constant-time). A device with trusted_at but no
-// stored hash (e.g. a pre-C2 row) or a request with no/empty token is NOT
-// trusted — the safe direction, costing at most one extra new-device
-// challenge after which a fresh token is minted. (C2)
+// deviceTrustValid reports whether the presented trust token proves the device
+// is trusted: the row must carry a stored hash AND the presented token must
+// hash to it (constant-time). A device with trusted_at but no stored hash (e.g.
+// a row stored before the device-trust token existed) or a request with
+// no/empty token is NOT trusted — the safe direction, costing at most one extra
+// new-device challenge after which a fresh token is minted.
 func deviceTrustValid(dev *pb.Device, presented string) bool {
 	stored := dev.GetTrustTokenHash()
 	if stored == "" || presented == "" {
@@ -187,7 +187,7 @@ func resolveSignInDeviceImpl(ctx context.Context, h *AuthServiceHandler, userID 
 	di := resolveDeviceIdentity(ctx)
 
 	if dev := getDevice(ctx, h, userID, di.identifier); dev != nil {
-		// C2 — trust requires proving possession of the server-issued
+		// Trust requires proving possession of the server-issued
 		// trust token, not merely a trusted_at flag on a client-named
 		// device (which an attacker who learns the victim's X-Device-Id
 		// could otherwise ride to skip new-device 2FA).
@@ -225,7 +225,7 @@ func getDevice(ctx context.Context, h *AuthServiceHandler, userID, identifier st
 }
 
 // issueSessionWithDevice mints a device-bound session token and trusts the
-// device (a completed login means this device passed every gate). C2: it
+// device (a completed login means this device passed every gate). It
 // also mints a fresh device-trust token, stores its hash on the row, and
 // returns the plaintext for the caller to hand back to the client (which
 // replays it as X-Device-Trust to skip the next new-device challenge).
@@ -335,10 +335,10 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 // RevokeAllDevices logs out everywhere (including the caller): revoke every
 // device's tokens + Device row. Idempotent.
 //
-// B22-auth-2: this revokes each device individually via revokeOneDevice
+// This revokes each device individually via revokeOneDevice
 // (DeleteDeviceTokens is device_id-filtered) rather than the broad
 // DeleteAllUserTokens. DeleteAllUserTokens has no token_type filter (that
-// column is api_token-gated, Q64-auth-1), so it would ALSO delete the user's
+// column is api_token-gated), so it would ALSO delete the user's
 // API tokens — credentials that aren't device-bound (device_id NULL) and must
 // only be removed via RevokeApiToken. "Every interactive session is device-bound"
 // was the premise here, and it is false — see revokeUndevicedSessions, which
@@ -373,7 +373,7 @@ const noTokenKept = "00000000-0000-0000-0000-000000000000"
 // them: SignUp, ConfirmSignUp, the OAuth callback and CliToken issue a session
 // with no device, so the "every interactive session is device-bound" premise
 // this file once rested on was false, and "log out everywhere" left a
-// registration's session standing (found live by examples/auth-proof).
+// registration's session standing.
 func revokeUndevicedSessions(ctx context.Context, h *AuthServiceHandler, userID, keep string) error {
 	if keep == "" {
 		keep = noTokenKept

@@ -221,7 +221,7 @@ func TestResolveOrgScope_HeaderWinsOverInference(t *testing.T) {
 
 func TestListMyOrgs(t *testing.T) {
 	orgs := []*pb.UserOrg{
-		{OrgId: "o1", Slug: "jiri", Name: "Jiri (osobní)", Kind: "private", Role: "owner"},
+		{OrgId: "o1", Slug: "jana", Name: "Jana (personal)", Kind: "private", Role: "owner"},
 		{OrgId: "o2", Slug: "acme", Name: "Acme s.r.o.", Kind: "company", Role: "member"},
 	}
 	m := &orgMock{orgsByUser: map[string][]*pb.UserOrg{"u1": orgs}}
@@ -503,7 +503,7 @@ func TestResolveOrgScope_NoSelectorFallsBackToInference(t *testing.T) {
 
 // An OWNER with no membership row can still scope into the org they own.
 //
-// This is the state D13-3 makes reachable: DeleteOrgMembership removes the row
+// DeleteOrgMembership makes this state reachable: it removes the row
 // and nothing anywhere adds one back, so without the ownership fallback the
 // owner of an organization is locked out of it permanently — and the refusal
 // they get is the opaque Unauthenticated every other auth failure returns, so

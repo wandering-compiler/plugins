@@ -17,11 +17,8 @@
 // `@project` / `@pkg` / `@self` expanded.
 //
 // Tables target the project's lock-declared default connection
-// (per Phase A) — this v1 plugin omits any
-// (w17.module).connection annotation. Phase M (alias maps)
-// adds a `(w17.module).connection = "main"` annotation that
-// the activation maps to a real project connection; until
-// then, default-connection binding stays implicit.
+// — this plugin omits any (w17.module).connection annotation,
+// so default-connection binding stays implicit.
 //
 // Identifier strategy — every PK + every FK across this plugin
 // is UUID (string carrier, type: UUID). PKs carry
@@ -243,7 +240,6 @@ type User struct {
 	// unverified user (a project can layer that policy on); the column just
 	// records the fact for projects that want to gate features on it. Field-
 	// gated `email_verification`: absent entirely when the feature is off.
-	// E1.
 	EmailVerifiedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=email_verified_at,json=emailVerifiedAt,proto3" json:"email_verified_at,omitempty"`
 	// HOW that address was proved, because "verified" stopped being one thing.
 	//
@@ -686,7 +682,7 @@ type Device struct {
 	TrustedAt  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=trusted_at,json=trustedAt,proto3" json:"trusted_at,omitempty"`
 	LastSeenAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
 	CreatedAt  *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	// C2 — SHA-256 hex of the SERVER-issued device-trust token. A device
+	// SHA-256 hex of the SERVER-issued device-trust token. A device
 	// counts as trusted (new-device 2FA is skipped) only when the client
 	// presents a trust token whose hash matches this column — proving
 	// possession of a server-minted secret rather than a client-chosen
@@ -806,9 +802,9 @@ func (x *Device) GetTrustTokenHash() string {
 // cannot seed `secret` (the console holds no key), so seeding the legacy
 // column is how a dev sandbox gets one until it is removed in a later release.
 //
-// It was PASSWORD until 2026-09-09 — the annotation for a hash you VERIFY
-// against, whose rules all follow from that. The one that bit: fixtures refuse
-// a PASSWORD value that is not PHC-encoded, correctly for a credential and
+// It is not PASSWORD — the annotation for a hash you VERIFY against, whose
+// rules all follow from that. The one that would bite: fixtures refuse a
+// PASSWORD value that is not PHC-encoded, correctly for a credential and
 // wrongly here, so this row could not be seeded at all.
 //
 // Operators CRUD these through the generated admin. Same no-DB-FK caveat as
@@ -1298,7 +1294,7 @@ type MfaChallenge struct {
 	// attempts — failed VerifyMfa tries against this challenge. VerifyMfa
 	// increments it on every wrong code and refuses once it reaches the
 	// lockout threshold, so a 6-digit second factor can't be brute-forced
-	// within the TTL (Q43-auth-mfa).
+	// within the TTL.
 	Attempts      int64 `protobuf:"varint,6,opt,name=attempts,proto3" json:"attempts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1502,7 +1498,7 @@ func (x *PendingSignUp) GetTenantId() string {
 // password. Only the SHA-256 hash of the token is stored (a DB read
 // can't reset an account); the plaintext travels once, in the
 // PasswordResetRequested event, for a hand-written delivery channel
-// (e-mail). E1.
+// (e-mail).
 type PasswordResetToken struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -1590,7 +1586,7 @@ func (x *PasswordResetToken) GetCreatedAt() *timestamppb.Timestamp {
 // EmailVerificationToken — single-use, time-bounded token the
 // `email_verification` flow mints to confirm a user owns their address.
 // Same hashed-at-rest + single-plaintext-delivery contract as
-// PasswordResetToken. E1.
+// PasswordResetToken.
 type EmailVerificationToken struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -1746,7 +1742,7 @@ type Role struct {
 	// from the declaration — so a change in how that derivation is spelled
 	// re-minted every id, the upsert matched nothing, and the INSERT collided
 	// with the unique over `name`, taking `stack build` down on any database
-	// old enough to hold the previous ids (two consumers, 2026-09-24).
+	// old enough to hold the previous ids.
 	//
 	// NULL stays NULL-able and PostgreSQL treats NULLs as DISTINCT, so the
 	// customer's own rows — the whole point of this column — are untouched by
@@ -1776,10 +1772,9 @@ type Role struct {
 	// declaration asked for, so both queries ask this column before they
 	// honour a NULL.
 	//
-	// This comment used to name "the project's own role-assignment surface"
-	// as the reader, and no such reader existed — the column was written by
-	// the seed and read by nothing, so `scope: ORG` was a declaration with
-	// no enforcement point anywhere (T2-5 pass #11, D11-3). Enforcement sits
+	// The project has no role-assignment surface that reads this column; a
+	// column written by the seed and read by nothing would make `scope: ORG`
+	// a declaration with no enforcement point anywhere. Enforcement sits
 	// on the READ side deliberately: a write-side check would only bind rows
 	// written after it, while the queries decide what every existing row
 	// means, every time they run.
@@ -2207,8 +2202,8 @@ func (x *TokenPermission) GetCreatedAt() *timestamppb.Timestamp {
 // the hot path of an auth check, to hold one label — and `enabled` is per row
 // so an operator can retire a single callback without touching the others.
 //
-// Requested by a consumer who had the whole flow working on loopback and
-// could not deploy it (a consumer, 2026-09-23).
+// Without it, a flow that works on loopback cannot be deployed behind any
+// other callback.
 type AuthClient struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -2231,11 +2226,11 @@ type AuthClient struct {
 	// registration either — loopback is served without one, per RFC 8252 §7.3,
 	// and that is the only public-client shape this flow offers.
 	//
-	// The flow was built for CLIs (2026-06-28), where a secret cannot be kept
-	// and PKCE alone is the right answer. Extending it past loopback to browser
-	// and server apps (a consumer) carried that shape onto clients that CAN keep
-	// one, which left the redirect allowlist as the only thing standing between
-	// a registration and a delivered code (a consumer).
+	// The flow was built for CLIs, where a secret cannot be kept and PKCE
+	// alone is the right answer. Extending it past loopback to browser and
+	// server apps carries that shape onto clients that CAN keep one, which
+	// without a secret would leave the redirect allowlist as the only thing
+	// standing between a registration and a delivered code.
 	ClientSecret  string                 `protobuf:"bytes,7,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2542,7 +2537,7 @@ func (x *OAuthLoginCode) GetEmailVerified() bool {
 // code is bound to the approving user + the CLI's PKCE challenge and
 // expires in seconds. consumed_at enforces single-use (the atomic
 // ConsumeCliAuthCode flips it under a not-consumed/not-expired WHERE).
-// Mirrors PasswordResetToken (E1).
+// Mirrors PasswordResetToken.
 type CliAuthCode struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -2874,12 +2869,9 @@ func (x *OrgMembership) GetCreatedAt() *timestamppb.Timestamp {
 // account's email. That leaves a window: someone who guesses an invited
 // address and registers it first inherits the membership and the role.
 //
-// ⚠️ This comment used to say the window "closes when `email_verification` is
-// enabled". IT DOES NOT, and did not on the day it was written. That feature
-// adds a column and two RPCs; it blocks nothing. A project could turn it on,
-// verify nobody, and be told by this file that it was covered — which is what
-// happened: a consumer measured 19 accounts of 19 with the column NULL and
-// asked which side was supposed to enforce it (a consumer).
+// ⚠️ Enabling `email_verification` does NOT close the window. That feature
+// adds a column and two RPCs; it blocks nothing. A project can turn it on,
+// verify nobody, and every account still has the column NULL.
 //
 // What closes it today is `invite_requires_verified_email`, which refuses an
 // acceptance from an unverified account. It is off by default, so the weak

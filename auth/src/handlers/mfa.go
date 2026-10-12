@@ -32,14 +32,14 @@ const (
 	totpSkewSteps            = 1   // accept ±1 30s window of clock drift
 	mfaCodeDigits            = 6
 	// maxMfaAttempts is the failed-VerifyMfa ceiling per challenge
-	// (Q43-auth-mfa). At this count the challenge is locked — even the
+	// (brute-force lockout). At this count the challenge is locked — even the
 	// correct code is refused — so a 6-digit factor (10^6 space) can't be
 	// brute-forced within the TTL.
 	//
 	// PER CHALLENGE is the whole of what it claims. Restarting the sign-in
 	// flow yields a fresh challenge with a fresh budget, so this number
 	// alone bounds nothing; the ISSUANCE cap below is the other half, and
-	// neither is sufficient on its own (a consumer).
+	// neither is sufficient on its own.
 	maxMfaAttempts = 5
 
 	// defaultMaxMfaChallengesPerWindow / defaultMfaChallengeWindowSeconds
@@ -141,7 +141,7 @@ func (h *AuthServiceHandler) mfaTTL() time.Duration {
 // and "the enrolment store did not answer" are opposite facts about a second
 // factor, and collapsing them let a read failure downgrade every caller: the
 // sign-in gate skipped the challenge, VerifyMfa fell to the weaker code path,
-// and GetMfaStatus told the user they had no authenticator (reported by a consumer). The
+// and GetMfaStatus told the user they had no authenticator. The
 // call sites now refuse instead, which is the direction a factor may fail in.
 //
 // NotFound stays a value, not an error: it is the genuine "not enrolled".
@@ -185,7 +185,7 @@ func (h *AuthServiceHandler) maxMfaChallengesPerWindow() int64 {
 // read as if it bounded guessing. It does not: a new challenge is a new row
 // with attempts = 0, so an attacker who already holds the password buys five
 // more guesses per sign-in, for as long as they care to sign in. Five of a
-// six-digit space is a real bound; five-times-unbounded is none (a consumer).
+// six-digit space is a real bound; five-times-unbounded is none.
 //
 // The threat model this closes is exactly the one the second factor exists
 // for — an attacker WITH the password and without the delivery channel. The
@@ -199,7 +199,7 @@ func (h *AuthServiceHandler) maxMfaChallengesPerWindow() int64 {
 //
 // Called ONLY from issueMfaChallenge, inside the transaction that holds the
 // user row lock. Counting outside that lock reads a number that another
-// request is already making wrong (a consumer) — the count and the insert it
+// request is already making wrong — the count and the insert it
 // gates have to be one serialised section or the cap is decorative.
 func (h *AuthServiceHandler) enforceMfaChallengeBudget(ctx context.Context, userID string) error {
 	since := timestamppb.New(time.Now().Add(-h.mfaChallengeWindow()))
@@ -247,15 +247,15 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 		}
 		return nil, err
 	}
-	// Serialise issuance for THIS user, then decide. The cap used to count
-	// outside any transaction and decide on the answer, which bounds nothing
-	// against anything concurrent: a consumer sent twenty sign-ins at once and got
-	// twenty challenges past a limit of ten, because all twenty read zero
-	// before any of them committed (#65).
+	// Serialise issuance for THIS user, then decide. A cap that counts
+	// outside any transaction and decides on the answer bounds nothing
+	// against anything concurrent: twenty sign-ins at once against a limit of
+	// ten all read zero before any of them commits, and all twenty get a
+	// challenge.
 	//
 	// The lock is on the USER row, not on the challenges being counted —
 	// there may be none yet, and a row that does not exist cannot be locked,
-	// which is precisely the case that was measured.
+	// which is precisely that case.
 	if _, err := h.Query.LockUserForIssuance(txCtx, &pb.LockUserForIssuanceReq{
 		UserId: req.GetUserId(),
 	}); err != nil {
@@ -357,7 +357,7 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	if err := h.enrolmentAllowed(ctx); err != nil {
 		return nil, err
 	}
-	// Same reasoning as DisableTotp's B1: without this, the code DisableTotp
+	// Same reasoning as DisableTotp's step-up: without this, the code DisableTotp
 	// demands was one EnrollTotp call away from irrelevant.
 	enrolled, row, err := h.totpEnrolled(ctx, userID)
 	if err != nil {
@@ -380,8 +380,8 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	// two independent writes. Run apart, a failure of the create leaves the
 	// user with NO second factor: their working authenticator was already
 	// deleted, and they are locked out of the thing that was protecting them
-	// — by an operation whose entire purpose was to move it to a new phone
-	// (a consumer). Same distx shape AcceptOrgInvite uses.
+	// — by an operation whose entire purpose was to move it to a new phone.
+	// Same distx shape AcceptOrgInvite uses.
 	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
 		return h.replaceTotpSecret(txCtx, userID, secret)
 	}); err != nil {
@@ -469,8 +469,8 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	return &pb.ConfirmTotpResp{RecoveryCodes: codes}, nil
 }
 
-// DisableTotp removes the caller's authenticator and its recovery codes. B1:
-// a CONFIRMED authenticator is re-verified against a live TOTP code — or a
+// DisableTotp removes the caller's authenticator and its recovery codes.
+// A CONFIRMED authenticator is re-verified against a live TOTP code — or a
 // recovery code — first (stepUp) so a hijacked session
 // can't permanently disable the victim's 2FA — a transient compromise
 // then can't weaken the account. A missing or still-pending
@@ -485,7 +485,7 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	// `err == nil && …` made the whole condition false on a read failure, so
 	// the TOTP check was SKIPPED and the delete ran anyway: a signed-in
 	// session could drop a confirmed second factor without presenting a code,
-	// for as long as the read was failing (reported by a consumer). Going through
+	// for as long as the read was failing. Going through
 	// totpEnrolled keeps that impossible — the error is now a refusal.
 	enrolled, row, err := h.totpEnrolled(ctx, userID)
 	if err != nil {
@@ -564,7 +564,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	if created := ch.GetCreatedAt(); created != nil && time.Now().After(created.AsTime().Add(h.mfaTTL())) {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
-	// Brute-force lockout (Q43-auth-mfa). The budget is CLAIMED before the
+	// Brute-force lockout. The budget is CLAIMED before the
 	// code is checked, and the claim is the same statement that counts it.
 	//
 	// It used to read `ch.GetAttempts()` — the value loaded at the top of
