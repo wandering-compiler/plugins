@@ -117,6 +117,8 @@ func (s *Server) ScheduleTask(
 		// Draining, with the reason a control plane falls through on: this
 		// relay will not place anything, and another one may.
 		return refusal.New(codes.Unavailable, refusal.RelayDraining, "relay: draining — place elsewhere")
+	case errors.Is(err, relaycore.ErrQueueFull):
+		return refusal.New(codes.ResourceExhausted, refusal.QueueFull, "relay: the queue is full — place elsewhere or retry later")
 	case err != nil:
 		// Context errors land here — the caller left, or its deadline passed.
 		// Both are the caller's own status, not a failure of this relay.

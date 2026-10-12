@@ -33,6 +33,13 @@ A worker's slot count is its own claim, and nothing checked it. One key could an
 
 The manifest described it as how long a granted ticket stays claimable, but nothing read it. The claim window is the relay's `--ticket-ttl` (`RELAY_TICKET_TTL`), which the relay that holds the slot decides. A project that sets the old variable loses nothing. Set the relay flag instead.
 
+### A relay's queue of waiting callers is bounded
+
+The relay queued every caller that asked for a slot, without limit and in strict order, and it scanned the whole queue for each position report. A flood of reservations grew memory and timers without end.
+
+- **New relay flag `--max-queue`** (env `RELAY_MAX_QUEUE`, default 1000, at least 1). Past it, a new waiter is refused with `RESOURCE_EXHAUSTED` and the reason `QUEUE_FULL`. A caller that gets a slot at once never counts against the queue.
+- **The control plane falls through to the next relay on `QUEUE_FULL`**, as on a draining one.
+
 ## 0.1.0-rc.12
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update cluster`.

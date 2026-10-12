@@ -63,6 +63,8 @@ var (
 	// ErrDraining is a relay taking no new work. It is not a failure of the
 	// caller's request: another relay may take it now.
 	ErrDraining = errors.New("relaycore: relay is draining")
+	// ErrQueueFull refuses a new waiter while the queue holds MaxQueue.
+	ErrQueueFull = errors.New("relaycore: the queue of waiting callers is full")
 )
 
 // reservation is one place in the queue, and later the slot it was granted.
@@ -123,6 +125,7 @@ type Pool struct {
 	byTicket     map[string]*reservation
 	reservations map[string]*reservation
 	queue        []*reservation
+	maxQueue     int
 	// draining is one-way for the life of the process. A relay is drained to
 	// be taken away; bringing it back is a restart, which is also what clears
 	// every other piece of state it holds.
@@ -145,6 +148,10 @@ type Options struct {
 	// before it is abandoned. Zero uses DefaultPollTimeout. Size it at a few
 	// poll intervals: one late poll must not cost a client its place.
 	PollTimeout time.Duration
+	// MaxQueue bounds the callers waiting for a slot; 0 means
+	// DefaultMaxQueue. Each waiter holds memory and a timer, and the queue
+	// is scanned for positions, so it cannot be allowed to grow without end.
+	MaxQueue int
 	// Now and NewID are seams for tests. Nil uses the real ones.
 	Now   func() time.Time
 	NewID func() string
@@ -156,6 +163,7 @@ type Options struct {
 const (
 	DefaultPollInterval = 3 * time.Second
 	DefaultPollTimeout  = 10 * time.Second
+	DefaultMaxQueue     = 1000
 )
 
 func New(o Options) (*Pool, error) {
@@ -165,6 +173,12 @@ func New(o Options) (*Pool, error) {
 	if o.TicketTTL <= 0 {
 		return nil, fmt.Errorf("relaycore: ticket TTL must be positive, got %s", o.TicketTTL)
 	}
+	if o.MaxQueue < 0 {
+		return nil, fmt.Errorf("relaycore: queue limit cannot be negative, got %d", o.MaxQueue)
+	}
+	if o.MaxQueue == 0 {
+		o.MaxQueue = DefaultMaxQueue
+	}
 	if o.PollTimeout < 0 {
 		return nil, fmt.Errorf("relaycore: poll timeout cannot be negative, got %s", o.PollTimeout)
 	}
@@ -172,6 +186,7 @@ func New(o Options) (*Pool, error) {
 		ceiling:      o.Capacity,
 		ttl:          o.TicketTTL,
 		pollTimeout:  o.PollTimeout,
+		maxQueue:     o.MaxQueue,
 		now:          o.Now,
 		newID:        o.NewID,
 		tickets:      map[string]*time.Timer{},
@@ -212,7 +227,10 @@ func (p *Pool) Reserve() (Reservation, error) {
 	if p.draining {
 		return Reservation{}, ErrDraining
 	}
-	r := p.enqueueLocked()
+	r, err := p.enqueueLocked()
+	if err != nil {
+		return Reservation{}, err
+	}
 	r.abandon = time.AfterFunc(p.pollTimeout, func() { p.abandonReservation(r) })
 	st, err := p.pollLocked(r)
 	return Reservation{ID: r.id, State: st}, err
@@ -303,8 +321,11 @@ func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, err
 		p.mu.Unlock()
 		return Grant{}, ErrDraining
 	}
-	r := p.enqueueLocked()
+	r, err := p.enqueueLocked()
 	p.mu.Unlock()
+	if err != nil {
+		return Grant{}, err
+	}
 
 	if onPosition == nil {
 		onPosition = func(int) error { return nil }
@@ -341,12 +362,15 @@ func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, err
 	}
 }
 
-func (p *Pool) enqueueLocked() *reservation {
+func (p *Pool) enqueueLocked() (*reservation, error) {
+	if len(p.queue) >= p.maxQueue {
+		return nil, ErrQueueFull
+	}
 	r := &reservation{id: p.newID(), changed: make(chan struct{}, 1)}
 	p.reservations[r.id] = r
 	p.queue = append(p.queue, r)
 	p.promoteLocked()
-	return r
+	return r, nil
 }
 
 func (p *Pool) positionLocked(r *reservation) int {

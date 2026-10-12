@@ -357,3 +357,40 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition never became true")
 }
+
+// The queue of waiters is bounded: past MaxQueue a new waiter is refused, and
+// a place frees up when a waiter leaves. A caller that gets a slot at once
+// never counts against the queue.
+func TestReserve_TheQueueIsBounded(t *testing.T) {
+	p, err := New(Options{TicketTTL: time.Minute, PollTimeout: time.Minute, MaxQueue: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCapacity(1)
+	granted, err := p.Reserve() // takes the slot, never queues
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = granted
+	var waiting []Reservation
+	for i := 0; i < 2; i++ {
+		r, err := p.Reserve()
+		if err != nil {
+			t.Fatalf("waiter %d: %v", i, err)
+		}
+		waiting = append(waiting, r)
+	}
+	if _, err := p.Reserve(); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("third waiter: err = %v, want ErrQueueFull", err)
+	}
+	p.Cancel(waiting[0].ID)
+	if _, err := p.Reserve(); err != nil {
+		t.Errorf("after a waiter left: %v, want a place", err)
+	}
+}
+
+func TestNew_RefusesANegativeQueueLimit(t *testing.T) {
+	if _, err := New(Options{TicketTTL: time.Minute, MaxQueue: -1}); err == nil {
+		t.Error("a negative queue limit was accepted")
+	}
+}

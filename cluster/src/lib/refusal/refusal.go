@@ -47,6 +47,11 @@ const (
 	// a caller holding a reservation on it places again.
 	RelayDraining = "RELAY_DRAINING"
 
+	// QueueFull — the relay's queue of waiting callers is at its limit
+	// (--max-queue). A control plane falls through to another relay; a caller
+	// told this directly retries later.
+	QueueFull = "QUEUE_FULL"
+
 	// RelayMisconfigured — the relay is running without something it needs to
 	// answer at all (its advertised work address, a wired registry). An
 	// operator fixes it; a control plane falls through to another relay.
