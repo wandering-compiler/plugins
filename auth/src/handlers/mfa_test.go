@@ -90,8 +90,8 @@ func (m *mfaMock) verifyCalls() int {
 
 func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ ...grpc.CallOption) (*pb.GetTotpSecretResp, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.verifyCount++
-	m.mu.Unlock()
 	if m.totpReadErr != nil {
 		return nil, m.totpReadErr
 	}
@@ -131,6 +131,11 @@ func (m *mfaMock) CreateTotpSecret(ctx context.Context, in *pb.CreateTotpSecretR
 	return &pb.CreateTotpSecretResp{Secret: &pb.UserTotpSecret{UserId: in.GetUserId()}}, nil
 }
 func (m *mfaMock) ClaimTotpStep(ctx context.Context, in *pb.ClaimTotpStepReq, _ ...grpc.CallOption) (*pb.ClaimTotpStepResp, error) {
+	// Atomic, like the conditional UPDATE it stands for: without the lock,
+	// concurrent claims of one step all saw it free and the concurrency test
+	// failed on the fake, not on the handler.
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.claimErr != nil {
 		return nil, m.claimErr
 	}
