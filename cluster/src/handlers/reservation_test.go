@@ -1,6 +1,10 @@
 package handlers
 
 import (
+	"context"
+	"encoding/base64"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 	"strings"
 	"testing"
 	"time"
@@ -116,8 +120,8 @@ func TestGetReservation_QueuedThenGranted(t *testing.T) {
 func TestGetReservation_GoneIsExpired(t *testing.T) {
 	h, _, _ := twoRelays(t, 1, 0)
 	for _, handle := range []string{
-		"11111111-1111-1111-1111-111111111111.deadbeef",
-		"99999999-9999-9999-9999-999999999999.deadbeef",
+		handleFor("11111111-1111-1111-1111-111111111111", "deadbeef"),
+		handleFor("99999999-9999-9999-9999-999999999999", "deadbeef"),
 	} {
 		st, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: handle})
 		if err != nil {
@@ -212,4 +216,41 @@ func TestReserveTask_NoPlaceableRelayIsNoRelay(t *testing.T) {
 		}
 	}
 	t.Fatalf("err = %v, want ErrorInfo{%s, %s}", err, refusal.Domain, refusal.NoRelay)
+}
+
+// handleFor is the handle ReserveTask would hand a caller with no signed-in
+// principal (the project's own code) for this relay and reservation.
+func handleFor(relayID, local string) string {
+	return relayID + handleSep + local + handleSep + holderTag(context.Background(), local)
+}
+
+// A handle works only for the caller it was handed to: another signed-in
+// caller holding it reads it as expired and cancels nothing.
+func TestReservationHandle_BelongsToItsHolder(t *testing.T) {
+	h, _, _ := twoRelays(t, 1, 0)
+	alice, bob := asUser("alice"), asUser("bob")
+	st, err := h.ReserveTask(alice, &pb.ReserveTaskReq{})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if got, err := h.GetReservation(alice, &pb.GetReservationReq{Reservation: st.GetReservation()}); err != nil || got.GetExpired() != nil {
+		t.Fatalf("the holder's poll: %v, %v", got, err)
+	}
+	got, err := h.GetReservation(bob, &pb.GetReservationReq{Reservation: st.GetReservation()})
+	if err != nil || got.GetExpired().GetReason() != refusal.ReservationUnknown {
+		t.Errorf("another caller's poll = %v, %v; want expired as unknown", got, err)
+	}
+	if _, err := h.CancelReservation(bob, &pb.CancelReservationReq{Reservation: st.GetReservation()}); err != nil {
+		t.Fatalf("another caller's cancel: %v", err)
+	}
+	if got, err := h.GetReservation(alice, &pb.GetReservationReq{Reservation: st.GetReservation()}); err != nil || got.GetExpired() != nil {
+		t.Errorf("another caller's cancel took the holder's place: %v, %v", got, err)
+	}
+}
+
+// asUser is a request through the gateway for uid: the envelope carries the
+// caller at field 2 (pb.Caller has the same shape).
+func asUser(uid string) context.Context {
+	raw, _ := proto.Marshal(&pb.Caller{UserId: uid})
+	return metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-w17-user", base64.StdEncoding.EncodeToString(raw)))
 }

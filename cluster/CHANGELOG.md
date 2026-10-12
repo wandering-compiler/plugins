@@ -1,5 +1,15 @@
 # cluster — changelog
 
+## Unreleased
+
+### A reservation handle works only for the caller it was handed to
+
+A reservation handle was an unguessable credential, but anyone holding it, for example one that leaked through a log or a client, could poll the reservation, collect its grant or cancel the place.
+
+- **The handle gains a third part:** a hash of the signed-in caller (read from the gateway envelope, field 2) and the relay's reservation id. The control plane still stores nothing. It recomputes the hash on every call.
+- **Another caller's handle answers like a reservation the relay forgot.** A poll reads it as expired (`RESERVATION_UNKNOWN`), and a cancel succeeds without touching the place, so the answer does not confirm the handle was real.
+- **Handles minted by an earlier version** (two parts) are refused as malformed. Reservations are short-lived, so one in flight across the upgrade has to be made again.
+
 ## 0.1.0-rc.12
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update cluster`.
