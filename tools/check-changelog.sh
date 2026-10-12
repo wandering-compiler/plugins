@@ -9,8 +9,9 @@
 #   - a release pull request (branch release/<plugin>-v0.1.0-rc.N), which
 #     collects them. A branch name is anyone's to choose, so the exemption
 #     holds only for the shape tools/release-pr.sh produces: the manifest
-#     says that version, and the pull request changes <plugin>/plugin.yaml and
-#     <plugin>/CHANGELOG.md and deletes fragments of that plugin, nothing else;
+#     says that version, and the pull request changes the version line of
+#     <plugin>/plugin.yaml, <plugin>/CHANGELOG.md, and deletes fragments of
+#     that plugin, nothing else;
 #   - a pull request labelled no-changelog (CI passes NO_CHANGELOG=1): a change
 #     a plugin's user cannot notice, such as tests or comments.
 set -euo pipefail
@@ -25,6 +26,13 @@ if [[ "${HEAD_REF:-}" =~ ^release/(.+)-v(0\.1\.0-rc\.[0-9]+)$ ]] && [ -f "${BASH
 	p="${BASH_REMATCH[1]}" version="${BASH_REMATCH[2]}"
 	manifest="$(sed -n 's/^version:[[:space:]]*//p' "$p/plugin.yaml" | head -1 | tr -d "\"' ")"
 	[ "$manifest" = "$version" ] || { echo "!! $p/plugin.yaml says $manifest, the branch releases $version"; exit 1; }
+	# The manifest's version line is the only one a release changes.
+	manifest_edits="$(git diff --no-renames -U0 "$BASE"...HEAD -- "$p/plugin.yaml" | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[-+]version:' || true)"
+	if [ -n "$manifest_edits" ]; then
+		echo "!! a release pull request changes only the version in $p/plugin.yaml; this one also changes:"
+		printf '%s\n' "$manifest_edits"
+		exit 1
+	fi
 	deleted="$(changed_files --diff-filter=D)"
 	other="$(grep -vxF -e "$p/plugin.yaml" -e "$p/CHANGELOG.md" <<<"$changed" || true)"
 	stray=""
@@ -52,9 +60,9 @@ for m in */plugin.yaml; do
 		echo "!! $p/CHANGELOG.md is edited directly: add $p/changes/<name>.md instead (the release collects it)"
 		bad=1
 	fi
-	# Only <plugin>/changes/<name>.md is collected: one in a subdirectory, or
-	# without .md, would never reach the CHANGELOG.
-	added="$(changed_files --diff-filter=A | grep -E "^$p/changes/[^/]+\.md$" || true)"
+	# Only <plugin>/changes/<name>.md is collected: one in a subdirectory,
+	# without .md, or hidden (.<name>.md) would never reach the CHANGELOG.
+	added="$(changed_files --diff-filter=A | grep -E "^$p/changes/[^/.][^/]*\.md$" || true)"
 	if [ -z "$added" ]; then
 		echo "!! $p changed and no fragment was added: add $p/changes/<name>.md, or label the pull request no-changelog"
 		bad=1

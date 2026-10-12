@@ -54,7 +54,7 @@ if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
 	echo "!! a local branch $branch exists already (a DRY_RUN's?) — delete it: git branch -D $branch" >&2; exit 1
 fi
 if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
-	echo "!! $branch is on origin already — its pull request is open, or was closed without deleting it" >&2; exit 1
+	echo "!! $branch is on origin already — its pull request is open, or was merged or closed without deleting the branch" >&2; exit 1
 fi
 git switch --quiet -c "$branch"
 [ -f "$PLUGIN/CHANGELOG.md" ] || printf '# %s — changelog\n' "$PLUGIN" > "$PLUGIN/CHANGELOG.md"

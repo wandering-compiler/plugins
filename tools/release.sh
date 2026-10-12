@@ -63,7 +63,8 @@ git fetch --quiet origin main releases --tags
 # What ships is what the changelog says: the release pull request
 # (tools/release-pr.sh) collected every fragment under this version. A fragment
 # merged after it would ship unlisted, and be listed under the next version.
-fragments="$(git ls-tree --name-only HEAD "$PLUGIN/changes/" | grep '\.md$' || true)"
+# -z: a name git would quote (non-ASCII, a double quote) still ends in .md.
+fragments="$(git ls-tree -z --name-only HEAD "$PLUGIN/changes/" | tr '\0' '\n' | grep '\.md$' || true)"
 [ -z "$fragments" ] || {
 	echo "!! $PLUGIN/changes/ holds fragments the changelog does not list yet:" >&2
 	echo "$fragments" >&2

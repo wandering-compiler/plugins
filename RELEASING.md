@@ -8,10 +8,12 @@ a few lines under it. Pull requests never edit `CHANGELOG.md` itself, so they
 never conflict over it. CI (`tools/check-changelog.sh`) refuses a pull request
 that changes a plugin without a fragment, unless it carries the `no-changelog`
 label (tests, comments: nothing a user of the plugin can notice). A fragment
-sits directly in `changes/` and ends in `.md`; anything else is never collected.
+sits directly in `changes/`, ends in `.md` and does not start with a dot;
+anything else is never collected.
 A release pull request (branch `release/<plugin>-v0.1.0-rc.N`) is exempt only
 in the shape `tools/release-pr.sh` gives it: the manifest says that version, and
-it changes `plugin.yaml` and `CHANGELOG.md` and deletes fragments, nothing else.
+it changes the version in `plugin.yaml`, `CHANGELOG.md`, and deletes fragments,
+nothing else.
 
 ## Cutting a release
 
