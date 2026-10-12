@@ -129,7 +129,7 @@ which.
 | `base/refund-outcome-recorded` | A refund's provider status (pending, succeeded, failed, canceled) MUST be recorded and reconciled, so a refund the provider fails is not reported as done. | Consistency & concurrency | none. **Not guaranteed today** (finding 6). |
 | `base/payment-status-reflects-provider` | `Payment.status` MUST follow the provider: initial status from the create response (unknown → `REQUIRES_ACTION`, never `SUCCEEDED` unless the provider said so), then `SUCCEEDED`, `FAILED`, `CANCELED` and `REFUNDED` from the provider's events. | Consistency & concurrency | `TestMapInitialStatus` (initial mapping only). **Not guaranteed** for `CANCELED` and `REFUNDED` (finding 6). |
 | `base/provider-error-classes` | A declined payment MUST surface as `FailedPrecondition`, a request the provider or driver refuses as invalid (bad amount, over-refund, key reused with other parameters) as `InvalidArgument`, and only network, 5xx, 409, 429 and key failures as `Unavailable`, so automatic retries never loop on a request that cannot succeed. | Failure & configuration | `TestFlow_ProviderErrorMapping`, `TestProviderFailure_MapsByClass`, `TestPost_ClassifiesProviderErrors`, `TestCreatePayment_ProviderFailureIsUnavailable`, `TestDriver_EveryCallSurfacesProviderErrors` |
-| `base/no-store-failure-swallowed` | A store failure on any lookup, including the replay lookup after a unique violation, MUST surface as that failure. It MUST NOT become `AlreadyExists` or a success. | Failure & configuration | `TestFlow_StoreReadFailuresSurface`, `TestFlow_ReplayLookupFailureSurfaces` |
+| `base/no-store-failure-swallowed` | A store failure on any lookup, including the replay lookup after a unique violation, MUST surface as that failure. It MUST NOT become `AlreadyExists` or a success. | Failure & configuration | `TestFlow_StoreReadFailuresSurface`, `TestFlow_ReplayLookupFailureSurfaces`, `TestFlow_RawKeyKindLookupFailureSurfaces` |
 | `base/provider-call-bounded` | Every provider call MUST be bounded in time (20 s client timeout and the request context) and read at most 1 MiB of response. A response without an object id MUST be an error, not an empty id stored locally. | Performance | `TestNew_DefaultsAndOptions`, `TestDriver_RefusesResponsesWithoutAnID`, `TestPost_TransportAndDecodeFailures` |
 
 **Gaps / suspected defects**
@@ -141,12 +141,14 @@ which.
    user id from the gateway-stamped principal and ignore the body field, and
    give the reads a handler (or a scoped query joining `Customer.user_id`).
 2. **A charge retried after the provider's window is not recognised.**
-   Unlike refunds, `charge` does not look the key up locally before calling
-   the provider. After the window the provider mints a new, unconfirmed
-   intent (orphaned at the provider) and the caller gets `AlreadyExists`
-   instead of its recorded payment. No money moves, but the retry promise in
-   `ChargeReq` holds only inside the window. A `GetPaymentByIdempotencyKey`
-   read before the provider call would close it.
+   Unlike refunds, `charge` looks a key up locally before calling the
+   provider only to find a payment an earlier version stored under the
+   caller's raw key, never under the scoped key it stores now. After the
+   window the provider mints a new, unconfirmed intent (orphaned at the
+   provider) and the caller gets `AlreadyExists` instead of its recorded
+   payment. No money moves, but the retry promise in `ChargeReq` holds only
+   inside the window. A `GetPaymentByIdempotencyKey` read of the scoped key
+   before the provider call would close it.
 3. **`EnsureCustomer` sends no idempotency key.** A retried or racing first
    charge leaves an unreferenced provider customer. Documented in the code,
    but it accumulates without bound.
