@@ -52,6 +52,17 @@ type stripeFake struct {
 	subStatus string            // status a created subscription reports ("" = active)
 	origins   map[string]string // object id → metadata[w17_payment] it was created with
 	installs  map[string]string // object id → metadata[w17_install] it was created with
+	refunds   []fakeRefund      // in creation order
+	subs      []fakeSub         // in creation order
+}
+
+type fakeSub struct {
+	id, customer, price, key string // key = metadata[w17_subscribe]
+}
+
+type fakeRefund struct {
+	id, intent, currency, key string // key = metadata[w17_refund]
+	amount                    int64
 }
 
 type idemEntry struct {
@@ -127,6 +138,14 @@ func stripeErr(w http.ResponseWriter, status int, typ, msg string) (int, []byte)
 }
 
 func (f *stripeFake) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/refunds" {
+		f.listRefunds(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/subscriptions" {
+		f.listSubs(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -250,7 +269,10 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 				"Refund amount is greater than unrefunded amount on charge")
 		}
 		in.refunded += amount
-		return okJSON(map[string]any{"id": f.id("re"), "object": "refund", "amount": amount, "status": "succeeded"})
+		re := fakeRefund{id: f.id("re"), intent: in.id, currency: in.currency, amount: amount, key: r.PostForm.Get("metadata[w17_refund]")}
+		f.refunds = append(f.refunds, re)
+		return okJSON(map[string]any{"id": re.id, "object": "refund", "amount": amount, "status": "succeeded",
+			"metadata": map[string]string{"w17_refund": re.key}})
 
 	case "/v1/prices":
 		n, err := strconv.ParseInt(r.PostForm.Get("unit_amount"), 10, 64)
@@ -264,6 +286,7 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 			return stripeErr(w, http.StatusBadRequest, "invalid_request_error", "Missing required param")
 		}
 		id := f.id("sub")
+		f.subs = append(f.subs, fakeSub{id: id, customer: r.PostForm.Get("customer"), price: r.PostForm.Get("items[0][price]"), key: r.PostForm.Get("metadata[w17_subscribe]")})
 		f.origins[id] = r.PostForm.Get("metadata[w17_payment]")
 		f.installs[id] = r.PostForm.Get("metadata[w17_install]")
 		st := f.subStatus
@@ -351,4 +374,44 @@ func withCreated(t *testing.T, body []byte, created int64) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// listRefunds answers GET /v1/refunds?payment_intent=… with the intent's
+// refunds, one page, as the provider's list endpoint does.
+func (f *stripeFake) listRefunds(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests["GET /v1/refunds"]++
+	var data []map[string]any
+	for _, re := range f.refunds {
+		if re.intent == r.URL.Query().Get("payment_intent") {
+			data = append(data, map[string]any{"id": re.id, "object": "refund", "status": "succeeded",
+				"amount": re.amount, "currency": re.currency, "metadata": map[string]string{"w17_refund": re.key}})
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"object": "list", "data": data, "has_more": false})
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
+}
+
+// listSubs answers GET /v1/subscriptions?customer=… (status=all).
+func (f *stripeFake) listSubs(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests["GET /v1/subscriptions"]++
+	var data []map[string]any
+	for _, s := range f.subs {
+		if s.customer == r.URL.Query().Get("customer") {
+			st := f.subStatus
+			if st == "" {
+				st = "active"
+			}
+			data = append(data, map[string]any{"id": s.id, "object": "subscription", "status": st,
+				"current_period_end": 1893456000, "metadata": map[string]string{"w17_subscribe": s.key},
+				"items": map[string]any{"data": []map[string]any{{"price": map[string]any{"id": s.price}}}}})
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"object": "list", "data": data, "has_more": false})
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
 }

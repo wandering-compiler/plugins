@@ -150,7 +150,7 @@ func TestRefundPayment_EmptyAmountIsAFullRefundAtTheProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasAmount || form != "payment_intent=pi_9" || idem != "rk" {
+	if hasAmount || form != "metadata%5Bw17_refund%5D=rk&payment_intent=pi_9" || idem != "rk" {
 		t.Errorf("form=%q hasAmount=%v idem=%q", form, hasAmount, idem)
 	}
 	if res.ProviderRefundID != "re_9" || res.Status != "pending" {
@@ -465,6 +465,70 @@ func TestPost_CarriesTheReasonCode(t *testing.T) {
 		}
 		if c.status == 402 && !errors.Is(err, backend.ErrDeclined) {
 			t.Errorf("%s: the class is lost under the code: %v", c.body, err)
+		}
+	}
+}
+
+// FindRefund recognises a refund by the key in its metadata, across pages.
+func TestFindRefund_MatchesTheKeyInMetadataAcrossPages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Query().Get("payment_intent") != "pi_9" {
+			t.Errorf("request = %s %s", r.Method, r.URL)
+		}
+		if r.URL.Query().Get("starting_after") == "" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"re_1","status":"succeeded","metadata":{"w17_refund":"other"}}],"has_more":true}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"re_2","status":"succeeded","metadata":{"w17_refund":"rk"}}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	res, ok, err := testBackend(srv).FindRefund(context.Background(), "pi_9", "rk")
+	if err != nil || !ok || res.ProviderRefundID != "re_2" {
+		t.Fatalf("FindRefund = %+v, %v, %v; want re_2", res, ok, err)
+	}
+	if _, ok, err := testBackend(srv).FindRefund(context.Background(), "pi_9", "nope"); err != nil || ok {
+		t.Errorf("an unknown key was found (%v, %v)", ok, err)
+	}
+}
+
+// FindRefund reports the found refund's amount as a decimal of its currency,
+// for the caller to compare with the amount a retry asks for.
+func TestFindRefund_ReportsTheAmount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"re_1","status":"succeeded","amount":1999,"currency":"usd","metadata":{"w17_refund":"rk"}}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	res, ok, err := testBackend(srv).FindRefund(context.Background(), "pi_9", "rk")
+	if err != nil || !ok || res.Amount != (backend.Money{Amount: "19.99", Currency: "usd"}) {
+		t.Fatalf("FindRefund = %+v, %v, %v; want 19.99 usd", res, ok, err)
+	}
+}
+
+// FindSubscription lists every status (a canceled subscription still holds
+// its key) and reports the price the subscription is on.
+func TestFindSubscription_AllStatusesAndThePrice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/subscriptions" || q.Get("customer") != "cus_1" || q.Get("status") != "all" {
+			t.Errorf("request = %s %s", r.Method, r.URL)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"sub_1","status":"canceled","current_period_end":5,"metadata":{"w17_subscribe":"sk"},"items":{"data":[{"price":{"id":"price_1"}}]}}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	res, ok, err := testBackend(srv).FindSubscription(context.Background(), "cus_1", "sk")
+	want := backend.SubscriptionResult{ProviderSubscriptionID: "sub_1", Status: "canceled", CurrentPeriodEnd: 5, ProviderPriceID: "price_1"}
+	if err != nil || !ok || res != want {
+		t.Fatalf("FindSubscription = %+v, %v, %v; want %+v", res, ok, err, want)
+	}
+}
+
+func TestFromMinorUnits(t *testing.T) {
+	for _, c := range []struct {
+		n        int64
+		cur, out string
+	}{{1999, "usd", "19.99"}, {5, "eur", "0.05"}, {500, "jpy", "500"}, {500, "ugx", "5.00"}, {500, "ISK", "5.00"}} {
+		if got := fromMinorUnits(c.n, c.cur); got != c.out {
+			t.Errorf("fromMinorUnits(%d, %s) = %q, want %q", c.n, c.cur, got, c.out)
 		}
 	}
 }

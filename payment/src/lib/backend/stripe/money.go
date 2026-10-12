@@ -3,6 +3,7 @@ package stripe
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
@@ -135,4 +136,18 @@ func positiveMinorUnits(amount, currency string) (int64, error) {
 		return 0, invalidAmount("amount %q must be positive", amount)
 	}
 	return n, nil
+}
+
+// fromMinorUnits is toMinorUnits reversed, for an amount the provider
+// reports: 1999 usd is "19.99", 500 jpy is "500", 500 ugx is "5.00" (the
+// whole-unit currencies travel as two-decimal values).
+func fromMinorUnits(n int64, currency string) string {
+	if zeroDecimalCurrencies[strings.ToLower(strings.TrimSpace(currency))] {
+		return strconv.FormatInt(n, 10)
+	}
+	sign := ""
+	if n < 0 {
+		sign, n = "-", -n
+	}
+	return fmt.Sprintf("%s%d.%02d", sign, n/100, n%100)
 }

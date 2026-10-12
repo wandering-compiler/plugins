@@ -34,6 +34,8 @@ type fakeBackend struct {
 	lastRefund     backend.Money
 	lastRefundFor  string
 	lastRefundIdem string // provider Idempotency-Key the handler passed
+	findRes        backend.RefundResult
+	findOK         bool
 }
 
 func (f *fakeBackend) Name() string { return "fake" }
@@ -49,6 +51,12 @@ func (f *fakeBackend) RefundPayment(_ context.Context, providerPaymentID string,
 	f.lastRefundFor = providerPaymentID
 	f.lastRefundIdem = idemKey
 	return f.refundRes, nil
+}
+func (f *fakeBackend) FindSubscription(_ context.Context, _ string, _ string) (backend.SubscriptionResult, bool, error) {
+	return backend.SubscriptionResult{}, false, nil
+}
+func (f *fakeBackend) FindRefund(_ context.Context, _ string, _ string) (backend.RefundResult, bool, error) {
+	return f.findRes, f.findOK, nil
 }
 func (f *fakeBackend) UpsertPlan(_ context.Context, spec backend.PlanSpec) (string, error) {
 	f.lastPlan = spec

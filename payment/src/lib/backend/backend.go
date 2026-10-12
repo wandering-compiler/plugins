@@ -161,6 +161,10 @@ type PaymentResult struct {
 type RefundResult struct {
 	ProviderRefundID string
 	Status           string
+	// Amount is the refund's amount, in the payment's currency. FindRefund
+	// must set it: the caller compares it with the amount a retry asks
+	// for, and a key that names a refund of another amount is refused.
+	Amount Money
 }
 
 // PlanSpec is the input to UpsertPlan — a recurring price the provider
@@ -189,6 +193,10 @@ type SubscriptionResult struct {
 	ProviderSubscriptionID string
 	Status                 string
 	CurrentPeriodEnd       int64
+	// ProviderPriceID is the price the subscription is on. FindSubscription
+	// must set it: the caller compares it with the plan a retry asks for,
+	// and a key that names a subscription to another plan is refused.
+	ProviderPriceID string
 }
 
 // Backend is a payment provider. Implementations are constructed with
@@ -207,6 +215,12 @@ type Backend interface {
 
 	// RefundPayment reverses (part of) a payment. idemKey guards retries.
 	RefundPayment(ctx context.Context, providerPaymentID string, amount Money, idemKey string) (RefundResult, error)
+	// FindRefund returns the refund of providerPaymentID made under idemKey,
+	// if the provider holds one, with its Amount set. It is how a retry
+	// recognises a refund whose local record was never written, after the
+	// provider has forgotten the idempotency key. A provider that cannot
+	// look a refund up by key returns (_, false, nil): the old behaviour.
+	FindRefund(ctx context.Context, providerPaymentID, idemKey string) (RefundResult, bool, error)
 
 	// UpsertPlan creates (or returns) the provider price object for a
 	// recurring plan and returns its opaque provider price id.
@@ -214,4 +228,8 @@ type Backend interface {
 
 	// StartSubscription subscribes a provider customer to a price.
 	StartSubscription(ctx context.Context, spec SubscriptionSpec) (SubscriptionResult, error)
+	// FindSubscription returns the customer's subscription started under
+	// idemKey, if the provider holds one, whatever its status, with its
+	// ProviderPriceID set (see FindRefund).
+	FindSubscription(ctx context.Context, providerCustomerID, idemKey string) (SubscriptionResult, bool, error)
 }

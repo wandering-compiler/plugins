@@ -291,11 +291,27 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	// a refusal: a key reused on another payment is InvalidArgument (from the
 	// lookup above, or — while the first refund's row is missing — from the
 	// provider's own idempotency check), never money.
-	res, err := h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
-		backend.Money{Amount: amount, Currency: payment.GetCurrency()},
-		req.GetIdempotencyKey())
+	//
+	// No local row does not mean no refund: the provider may have made it on
+	// an earlier attempt whose local insert then failed. Within a day the
+	// provider's idempotency check replays it; after that only the key in the
+	// refund's metadata recognises it, so ask before refunding again.
+	res, found, err := h.Backend.FindRefund(ctx, payment.GetProviderPaymentId(), req.GetIdempotencyKey())
 	if err != nil {
 		return nil, providerFailure(err)
+	}
+	if found && !sameDecimal(res.Amount.Amount, amount) {
+		// The key names a refund of another amount, which the provider's
+		// idempotency check would refuse too: answered like sameRefund.
+		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
+	}
+	if !found {
+		res, err = h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
+			backend.Money{Amount: amount, Currency: payment.GetCurrency()},
+			req.GetIdempotencyKey())
+		if err != nil {
+			return nil, providerFailure(err)
+		}
 	}
 
 	created, err := h.Mutation.CreateRefund(ctx, &pb.CreateRefundReq{

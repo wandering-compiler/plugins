@@ -25,8 +25,17 @@ type paymentIntentResp struct {
 
 // refundResp ← POST /v1/refunds
 type refundResp struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID       string            `json:"id"`
+	Status   string            `json:"status"`
+	Amount   int64             `json:"amount"`   // minor units
+	Currency string            `json:"currency"` // lowercase ISO-4217
+	Metadata map[string]string `json:"metadata"`
+}
+
+// refundList ← GET /v1/refunds
+type refundList struct {
+	Data    []refundResp `json:"data"`
+	HasMore bool         `json:"has_more"`
 }
 
 // priceResp ← POST /v1/prices
@@ -36,9 +45,31 @@ type priceResp struct {
 
 // subscriptionResp ← POST /v1/subscriptions
 type subscriptionResp struct {
-	ID               string `json:"id"`
-	Status           string `json:"status"`
-	CurrentPeriodEnd int64  `json:"current_period_end"`
+	ID               string            `json:"id"`
+	Status           string            `json:"status"`
+	CurrentPeriodEnd int64             `json:"current_period_end"`
+	Metadata         map[string]string `json:"metadata"`
+	Items            struct {
+		Data []struct {
+			Price struct {
+				ID string `json:"id"`
+			} `json:"price"`
+		} `json:"data"`
+	} `json:"items"`
+}
+
+// priceID is the price of the subscription's first (only) item.
+func (s subscriptionResp) priceID() string {
+	if len(s.Items.Data) == 0 {
+		return ""
+	}
+	return s.Items.Data[0].Price.ID
+}
+
+// subscriptionList ← GET /v1/subscriptions
+type subscriptionList struct {
+	Data    []subscriptionResp `json:"data"`
+	HasMore bool               `json:"has_more"`
 }
 
 // apiError ← any non-2xx Stripe response body.

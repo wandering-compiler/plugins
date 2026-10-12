@@ -272,3 +272,118 @@ func TestFlow_ALateSuccessDoesNotResurrectACanceledPayment(t *testing.T) {
 		}
 	}
 }
+
+// The window the local record cannot cover: the provider made the refund,
+// the local insert failed, and the retry comes after the provider forgot the
+// key. The key in the refund's metadata recognises it, so the retry records
+// that refund instead of making a second one.
+func TestFlow_RefundWhoseLocalRecordFailed_RetriedAfterTheProviderForgotTheKey_RefundsOnce(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "10", "k")
+	r.store.injectBefore("CreateRefund", errTransient)
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"}); err == nil {
+		t.Fatal("the first attempt was meant to fail at the local insert")
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 400 {
+		t.Fatalf("setup: provider refunded %d, want 400 before the retry", got)
+	}
+	r.stripe.forgetKeys() // a day later
+	again, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"})
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 400 {
+		t.Errorf("provider refunded %d minor units, want 400 — the retry refunded a second time", got)
+	}
+	if again.GetRefund().GetProviderRefundId() == "" || r.store.count("refunds") != 1 {
+		t.Errorf("the retry did not record the provider's refund: %+v (local refunds %d)", again.GetRefund(), r.store.count("refunds"))
+	}
+}
+
+// A subscription keeps no key locally, so a subscribe retried after the
+// provider forgot the key used to start a second subscription — whether or
+// not the first was recorded. The key in the subscription's metadata
+// recognises it in both cases.
+func TestFlow_SubscribeRetriedAfterTheProviderForgotTheKey_SubscribesOnce(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		r := newRig(t)
+		if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+			t.Fatal(err)
+		}
+		if lost {
+			r.store.injectBefore("CreateSubscription", errTransient)
+		}
+		first, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "pro", IdempotencyKey: "sub-k"})
+		if lost != (err != nil) {
+			t.Fatalf("lost=%v: first attempt err = %v", lost, err)
+		}
+		r.stripe.forgetKeys() // a day later
+		again, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "pro", IdempotencyKey: "sub-k"})
+		if err != nil {
+			t.Fatalf("lost=%v: retry: %v", lost, err)
+		}
+		if n := r.stripe.count("/v1/subscriptions"); n != 1 {
+			t.Errorf("lost=%v: provider subscriptions created = %d, want 1", lost, n)
+		}
+		if n := r.store.count("subs"); n != 1 {
+			t.Errorf("lost=%v: local subscriptions = %d, want 1", lost, n)
+		}
+		if !lost && again.GetSubscription().GetId() != first.GetSubscription().GetId() {
+			t.Errorf("the retry answered another subscription")
+		}
+	}
+}
+
+// A refund found under the key is the answer only when it is the refund the
+// retry asks for. One of another amount used to be recorded at the amount
+// the retry asked for — the local row said 6 went back while the provider
+// had refunded 4 — and that held even inside the provider's window, where
+// its own idempotency check would have refused the changed amount.
+func TestFlow_RefundFoundUnderTheKeyForAnotherAmount_IsRefused(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "10", "k")
+	r.store.injectBefore("CreateRefund", errTransient)
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"}); err == nil {
+		t.Fatal("the first attempt was meant to fail at the local insert")
+	}
+	r.stripe.forgetKeys()
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "6", IdempotencyKey: "r1"})
+	wantCode(t, err, codes.AlreadyExists, "different refund")
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 400 {
+		t.Errorf("provider refunded %d minor units, want 400", got)
+	}
+	if n := r.store.count("refunds"); n != 0 {
+		t.Errorf("local refunds = %d, want 0 — the provider's refund of 4 was recorded as 6", n)
+	}
+	// The same amount still recognises it ("4.00" is 4).
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4.00", IdempotencyKey: "r1"}); err != nil {
+		t.Fatalf("retry at the first amount: %v", err)
+	}
+	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 400 {
+		t.Errorf("provider refunded %d minor units, want 400", got)
+	}
+}
+
+// A subscription found under the key is the answer only when it is on the
+// plan the retry asks for. One on another plan used to be recorded under the
+// plan the retry named.
+func TestFlow_SubscriptionFoundUnderTheKeyOnAnotherPlan_IsRefused(t *testing.T) {
+	r := newRig(t)
+	for _, slug := range []string{"pro", "basic"} {
+		if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: slug, Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.store.injectBefore("CreateSubscription", errTransient)
+	if _, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "pro", IdempotencyKey: "sub-k"}); err == nil {
+		t.Fatal("the first attempt was meant to fail at the local insert")
+	}
+	_, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "basic", IdempotencyKey: "sub-k"})
+	wantCode(t, err, codes.AlreadyExists, "different subscription")
+	if n := r.stripe.count("/v1/subscriptions"); n != 1 {
+		t.Errorf("provider subscriptions created = %d, want 1", n)
+	}
+	if n := r.store.count("subs"); n != 0 {
+		t.Errorf("local subscriptions = %d, want 0 — the pro subscription was filed under basic", n)
+	}
+}
