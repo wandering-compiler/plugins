@@ -450,8 +450,8 @@ func callerGone(ctx context.Context, err error) bool {
 // on: ResourceExhausted, a message over the size limit, stays that — retrying
 // it is pointless, which is exactly what the Unavailable it used to become
 // invited. Anything else is our defect: Internal, with a short message. Logged
-// as what it is, a stream failure, never a model failure; the run's spend was
-// already recorded once, before this.
+// as what it is, a stream failure, never a model failure; every turn the run
+// sent was already recorded, as it ended.
 func streamFailure(model string, runErr, sendErr, recvErr error) error {
 	switch {
 	case sendErr != nil && errors.Is(runErr, sendErr):

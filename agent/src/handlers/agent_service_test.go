@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,6 +173,7 @@ func TestComplete_CallerEndingIsNotAModelFailure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := tc.ctx()
 			cancel()
+			logs := captureLog(t)
 			sink := &capturingSink{}
 			h := &AgentServiceHandler{
 				Client:       &fakeCompleter{err: tc.ctxErr},
@@ -179,6 +181,9 @@ func TestComplete_CallerEndingIsNotAModelFailure(t *testing.T) {
 				DefaultModel: "gpt-4o", DefaultMaxTokens: 10,
 			}
 			_, err := h.Complete(ctx, &pb.CompleteReq{})
+			if strings.Contains(logs.String(), "model call failed") {
+				t.Errorf("the caller's own ending was logged as a model failure: %q", logs.String())
+			}
 			if got := status.Code(err); got != tc.want {
 				t.Fatalf("code = %v, want %v (err %v)", got, tc.want, err)
 			}
