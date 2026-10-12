@@ -213,25 +213,43 @@ func TestApplyCredit_ADebitNeverProposesANegativeRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := bytes.Index(src, []byte("rpc ApplyCredit("))
-	end := bytes.Index(src[start:], []byte("option (w17.event_emit)"))
-	if start < 0 || end < 0 {
+	if start < 0 {
 		t.Fatal("ApplyCredit not found in payment_mutation.proto")
 	}
+	end := bytes.Index(src[start:], []byte("option (w17.event_emit)"))
+	if end < 0 {
+		t.Fatal("ApplyCredit's event_emit not found in payment_mutation.proto")
+	}
 	block := string(src[start : start+end])
-	var updates int
-	for _, op := range regexp.MustCompile(`(?s)dql:((?:\s*"[^"]*")+)`).FindAllStringSubmatch(block, -1) {
-		dql := strings.Join(regexp.MustCompile(`"([^"]*)"`).FindAllString(op[1], -1), "")
-		if !strings.Contains(dql, "@module.CreditBalance") {
+	part := regexp.MustCompile(`"([^"]*)"`)
+	var zeroRowAt, updateAt []int
+	for i, op := range regexp.MustCompile(`(?s)dql:((?:\s*"[^"]*")+)`).FindAllStringSubmatch(block, -1) {
+		var dql strings.Builder
+		for _, p := range part.FindAllStringSubmatch(op[1], -1) {
+			dql.WriteString(p[1])
+		}
+		q := strings.Join(strings.Fields(dql.String()), " ")
+		if !strings.Contains(q, "@module.CreditBalance") {
 			continue
 		}
-		if regexp.MustCompile(`^"(INSERT|UPSERT)`).MatchString(dql) && strings.Contains(dql, ":delta") {
-			t.Errorf("an insert into CreditBalance carries the delta, so it refuses every debit:\n%s", dql)
-		}
-		if strings.HasPrefix(dql, `"UPDATE`) && strings.Contains(dql, "balance + :delta") {
-			updates++
+		switch {
+		case regexp.MustCompile(`^(INSERT|UPSERT)\b`).MatchString(q):
+			if strings.Contains(q, ":delta") {
+				t.Errorf("an insert into CreditBalance carries the delta, so it refuses every debit:\n%s", q)
+			}
+			if strings.Contains(q, "balance = 0") && strings.HasSuffix(q, "DO NOTHING") {
+				zeroRowAt = append(zeroRowAt, i)
+			}
+		case strings.HasPrefix(q, "UPDATE ") && strings.Contains(q, "balance = balance + :delta"):
+			updateAt = append(updateAt, i)
 		}
 	}
-	if updates != 1 {
-		t.Errorf("ApplyCredit applies the delta with %d UPDATEs of CreditBalance, want 1", updates)
+	if len(updateAt) != 1 {
+		t.Fatalf("ApplyCredit applies the delta with %d UPDATEs of CreditBalance, want 1", len(updateAt))
+	}
+	// Without the zero row first, a principal's first grant would update
+	// nothing.
+	if len(zeroRowAt) != 1 || zeroRowAt[0] > updateAt[0] {
+		t.Errorf("ApplyCredit must make the CreditBalance row at zero (DO NOTHING) once, before the UPDATE; zero-row ops at %v, UPDATE at %v", zeroRowAt, updateAt)
 	}
 }
