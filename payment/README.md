@@ -36,7 +36,9 @@ driver.**
   - `IngestStripe` — webhook sink (gated `stripe_webhooks`): verify the
     `Stripe-Signature` HMAC (constant-time, multi-`v1`) + timestamp
     tolerance (5-min replay window), dispatch the terminal state to
-    `MarkPaymentSucceeded` / `MarkPaymentFailed` (transition-guarded, so a
+    `MarkPaymentSucceeded` / `MarkPaymentFailed` / `MarkPaymentCanceled`
+    (`payment_intent.canceled`) / `MarkPaymentRefunded` (`charge.refunded`
+    with the charge fully refunded) (transition-guarded, so a
     redelivered or out-of-order event changes and emits nothing; CANCELED
     and REFUNDED are terminal, and an older subscription event never
     overwrites a newer one), then record the event id. Every object the
@@ -65,8 +67,11 @@ before any provider call.
 `PaymentService.GetMy*`, which answer only with the signed-in caller's
 rows (see "Who a request acts for"). The storage `PaymentQuery` tier
 takes any id and is for the project's own code only.
-- **Events** — `PaymentSucceeded`, `PaymentFailed` (provider-neutral),
-  emitted from the reconciliation mutations after the provider confirms.
+- **Events** — `PaymentSucceeded`, `PaymentFailed`, `PaymentCanceled`,
+  `PaymentRefunded` (provider-neutral), emitted from the reconciliation
+  mutations after the provider confirms. A payment reads `REFUNDED` once its
+  refunds reach its amount: `RefundPayment` sets it when its refund completes
+  the amount, and the provider's `charge.refunded` settles it otherwise.
 - **Stripe driver** (`src/lib/backend/stripe`) — `EnsureCustomer`,
   `CreatePayment`, `RefundPayment` over the Stripe REST API (no vendored
   SDK), plus webhook signature verification. Exact money handling

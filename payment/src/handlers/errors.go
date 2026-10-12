@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -200,6 +201,14 @@ func sameDecimal(a, b string) bool {
 		return strings.TrimLeft(i, "0") + "." + strings.TrimRight(f, "0")
 	}
 	return norm(a) == norm(b)
+}
+
+// decimalAtLeast reports a >= b for two decimal strings; false when either
+// does not parse.
+func decimalAtLeast(a, b string) bool {
+	x, ok1 := new(big.Rat).SetString(strings.TrimSpace(a))
+	y, ok2 := new(big.Rat).SetString(strings.TrimSpace(b))
+	return ok1 && ok2 && x.Cmp(y) >= 0
 }
 
 // isCurrencyCode reports whether c (already trimmed + lowercased) has

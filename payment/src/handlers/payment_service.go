@@ -347,7 +347,20 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		}
 		return nil, err
 	}
+	h.markRefundedIfFull(ctx, payment)
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
+}
+
+// markRefundedIfFull moves a payment to REFUNDED once its recorded refunds
+// reach its amount. Best effort: the refund itself is done and recorded, and
+// the provider's charge.refunded webhook settles the status if this misses
+// (a failed read, or partial refunds completing the amount concurrently).
+func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment *pb.Payment) {
+	sum, err := h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
+	if err != nil || !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
+		return
+	}
+	_, _ = h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
 }
 
 // stampRefundKey records the kept key on a refund row the key lookup could

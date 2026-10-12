@@ -133,6 +133,29 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 			err = h.requirePayment(ctx, ev)
 		}
 		return err
+	case ev.Type == "payment_intent.canceled":
+		_, err := h.Mutation.MarkPaymentCanceled(ctx, &pb.MarkPaymentCanceledReq{
+			ProviderPaymentId: ev.PaymentIntentID,
+		})
+		if guardRefused(err) {
+			// Already terminal or SUCCEEDED, or absent: resolved like the
+			// failure above.
+			err = h.requirePayment(ctx, ev)
+		}
+		return err
+	case ev.Type == "charge.refunded" && ev.ChargeRefunded && ev.ChargePaymentIntent != "":
+		// The charge is fully refunded — however many refunds it took, and
+		// whether or not they were made through this plugin.
+		_, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{
+			ProviderPaymentId: ev.ChargePaymentIntent,
+		})
+		if guardRefused(err) {
+			// Already REFUNDED (redelivery), not SUCCEEDED locally yet, or
+			// not a payment this installation made: nothing to settle. A
+			// refund comes long after the payment, so no wait-and-retry.
+			return nil
+		}
+		return err
 	case strings.HasPrefix(ev.Type, "customer.subscription."):
 		// Cross-feature: reconcile subscription lifecycle (subscriptions
 		// feature; no-op when off — hook is nil). The hook resolves its

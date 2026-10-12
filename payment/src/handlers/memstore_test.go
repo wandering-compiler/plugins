@@ -489,6 +489,49 @@ func (s *memStore) MarkPaymentFailed(_ context.Context, in *pb.MarkPaymentFailed
 	return &pb.MarkPaymentFailedResp{Payment: p}, s.leave("MarkPaymentFailed", nil)
 }
 
+// MarkPaymentRefunded: `WHERE … AND status = 3`.
+func (s *memStore) MarkPaymentRefunded(_ context.Context, in *pb.MarkPaymentRefundedReq, _ ...grpc.CallOption) (*pb.MarkPaymentRefundedResp, error) {
+	if err := s.enter("MarkPaymentRefunded"); err != nil {
+		return nil, s.leave("", err)
+	}
+	p, err := s.setPaymentStatus("MarkPaymentRefunded", in.GetProviderPaymentId(), pb.Payment_REFUNDED,
+		pb.Payment_STATUS_UNSPECIFIED, pb.Payment_REQUIRES_ACTION, pb.Payment_PROCESSING, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
+	if err != nil {
+		return nil, s.leave("MarkPaymentRefunded", err)
+	}
+	s.emitted = append(s.emitted, "PaymentRefunded")
+	return &pb.MarkPaymentRefundedResp{Payment: p}, s.leave("MarkPaymentRefunded", nil)
+}
+
+// MarkPaymentCanceled: not from SUCCEEDED, FAILED, CANCELED or REFUNDED.
+func (s *memStore) MarkPaymentCanceled(_ context.Context, in *pb.MarkPaymentCanceledReq, _ ...grpc.CallOption) (*pb.MarkPaymentCanceledResp, error) {
+	if err := s.enter("MarkPaymentCanceled"); err != nil {
+		return nil, s.leave("", err)
+	}
+	p, err := s.setPaymentStatus("MarkPaymentCanceled", in.GetProviderPaymentId(), pb.Payment_CANCELED,
+		pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
+	if err != nil {
+		return nil, s.leave("MarkPaymentCanceled", err)
+	}
+	s.emitted = append(s.emitted, "PaymentCanceled")
+	return &pb.MarkPaymentCanceledResp{Payment: p}, s.leave("MarkPaymentCanceled", nil)
+}
+
+// SumRefundsForPayment: COALESCE(SUM(amount), 0).
+func (s *memStore) SumRefundsForPayment(_ context.Context, in *pb.SumRefundsForPaymentReq, _ ...grpc.CallOption) (*pb.SumRefundsForPaymentResp, error) {
+	if err := s.enter("SumRefundsForPayment"); err != nil {
+		return nil, s.leave("", err)
+	}
+	total := new(big.Rat)
+	for _, r := range s.refunds {
+		if r.GetPaymentId() == in.GetPaymentId() {
+			a, _ := decimal4(r.GetAmount())
+			total.Add(total, a)
+		}
+	}
+	return &pb.SumRefundsForPaymentResp{Total: fmt4(total)}, s.leave("SumRefundsForPayment", nil)
+}
+
 func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...grpc.CallOption) (*pb.CreateRefundResp, error) {
 	if err := s.enter("CreateRefund"); err != nil {
 		return nil, s.leave("", err)

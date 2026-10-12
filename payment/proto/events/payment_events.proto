@@ -56,6 +56,35 @@ message PaymentFailed {
   google.protobuf.Timestamp failed_at           = 4;
 }
 
+// PaymentRefunded — the payment is fully refunded (terminal).
+message PaymentRefunded {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.payment.refunded"
+  };
+
+  string                    payment_id          = 1;
+  string                    customer_id         = 2;
+  string                    provider_payment_id = 3;
+  string                    amount              = 4;
+  string                    currency            = 5;
+  google.protobuf.Timestamp refunded_at         = 6;
+}
+
+// PaymentCanceled — the provider canceled a payment that never completed
+// (terminal).
+message PaymentCanceled {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.payment.canceled"
+  };
+
+  string                    payment_id          = 1;
+  string                    customer_id         = 2;
+  string                    provider_payment_id = 3;
+  google.protobuf.Timestamp canceled_at         = 4;
+}
+
 // CreditApplied — emitted on ApplyCredit after the ledger row + balance
 // commit (prepaid feature). A subscriber might fire a low-balance alert
 // or a usage-allowance refresh. `delta` is signed (+ grant, − spend);

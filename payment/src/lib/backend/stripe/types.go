@@ -96,6 +96,10 @@ type webhookEnvelope struct {
 			Status           string            `json:"status"`
 			CurrentPeriodEnd int64             `json:"current_period_end"`
 			Metadata         map[string]string `json:"metadata"`
+			// On a charge: the PaymentIntent it belongs to, and whether it
+			// is fully refunded.
+			PaymentIntent string `json:"payment_intent"`
+			Refunded      bool   `json:"refunded"`
 		} `json:"object"`
 	} `json:"data"`
 }

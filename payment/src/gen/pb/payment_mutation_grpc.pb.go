@@ -32,6 +32,8 @@ const (
 	PaymentMutation_CreateCustomer_FullMethodName          = "/w17.contrib.payment.PaymentMutation/CreateCustomer"
 	PaymentMutation_CreatePayment_FullMethodName           = "/w17.contrib.payment.PaymentMutation/CreatePayment"
 	PaymentMutation_MarkPaymentSucceeded_FullMethodName    = "/w17.contrib.payment.PaymentMutation/MarkPaymentSucceeded"
+	PaymentMutation_MarkPaymentRefunded_FullMethodName     = "/w17.contrib.payment.PaymentMutation/MarkPaymentRefunded"
+	PaymentMutation_MarkPaymentCanceled_FullMethodName     = "/w17.contrib.payment.PaymentMutation/MarkPaymentCanceled"
 	PaymentMutation_MarkPaymentFailed_FullMethodName       = "/w17.contrib.payment.PaymentMutation/MarkPaymentFailed"
 	PaymentMutation_CreateRefund_FullMethodName            = "/w17.contrib.payment.PaymentMutation/CreateRefund"
 	PaymentMutation_SetRefundIdempotencyKey_FullMethodName = "/w17.contrib.payment.PaymentMutation/SetRefundIdempotencyKey"
@@ -102,6 +104,15 @@ type PaymentMutationClient interface {
 	// a separate object); `status <> 4` makes a redelivered failure a
 	// no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
 	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
+	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
+	// only a captured payment can be refunded, and REFUNDED is terminal. Set
+	// by RefundPayment when its refund completes the amount, and by the
+	// provider's charge.refunded webhook, which also covers partial refunds
+	// that completed it concurrently.
+	MarkPaymentRefunded(ctx context.Context, in *MarkPaymentRefundedReq, opts ...grpc.CallOption) (*MarkPaymentRefundedResp, error)
+	// MarkPaymentCanceled — the provider canceled a payment that never
+	// completed. Not from SUCCEEDED, FAILED, CANCELED or REFUNDED.
+	MarkPaymentCanceled(ctx context.Context, in *MarkPaymentCanceledReq, opts ...grpc.CallOption) (*MarkPaymentCanceledResp, error)
 	MarkPaymentFailed(ctx context.Context, in *MarkPaymentFailedReq, opts ...grpc.CallOption) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.
@@ -223,6 +234,26 @@ func (c *paymentMutationClient) MarkPaymentSucceeded(ctx context.Context, in *Ma
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MarkPaymentSucceededResp)
 	err := c.cc.Invoke(ctx, PaymentMutation_MarkPaymentSucceeded_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentMutationClient) MarkPaymentRefunded(ctx context.Context, in *MarkPaymentRefundedReq, opts ...grpc.CallOption) (*MarkPaymentRefundedResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkPaymentRefundedResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_MarkPaymentRefunded_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentMutationClient) MarkPaymentCanceled(ctx context.Context, in *MarkPaymentCanceledReq, opts ...grpc.CallOption) (*MarkPaymentCanceledResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkPaymentCanceledResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_MarkPaymentCanceled_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -396,6 +427,15 @@ type PaymentMutationServer interface {
 	// a separate object); `status <> 4` makes a redelivered failure a
 	// no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
 	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
+	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
+	// only a captured payment can be refunded, and REFUNDED is terminal. Set
+	// by RefundPayment when its refund completes the amount, and by the
+	// provider's charge.refunded webhook, which also covers partial refunds
+	// that completed it concurrently.
+	MarkPaymentRefunded(context.Context, *MarkPaymentRefundedReq) (*MarkPaymentRefundedResp, error)
+	// MarkPaymentCanceled — the provider canceled a payment that never
+	// completed. Not from SUCCEEDED, FAILED, CANCELED or REFUNDED.
+	MarkPaymentCanceled(context.Context, *MarkPaymentCanceledReq) (*MarkPaymentCanceledResp, error)
 	MarkPaymentFailed(context.Context, *MarkPaymentFailedReq) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.
@@ -501,6 +541,12 @@ func (UnimplementedPaymentMutationServer) CreatePayment(context.Context, *Create
 func (UnimplementedPaymentMutationServer) MarkPaymentSucceeded(context.Context, *MarkPaymentSucceededReq) (*MarkPaymentSucceededResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MarkPaymentSucceeded not implemented")
 }
+func (UnimplementedPaymentMutationServer) MarkPaymentRefunded(context.Context, *MarkPaymentRefundedReq) (*MarkPaymentRefundedResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkPaymentRefunded not implemented")
+}
+func (UnimplementedPaymentMutationServer) MarkPaymentCanceled(context.Context, *MarkPaymentCanceledReq) (*MarkPaymentCanceledResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkPaymentCanceled not implemented")
+}
 func (UnimplementedPaymentMutationServer) MarkPaymentFailed(context.Context, *MarkPaymentFailedReq) (*MarkPaymentFailedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MarkPaymentFailed not implemented")
 }
@@ -604,6 +650,42 @@ func _PaymentMutation_MarkPaymentSucceeded_Handler(srv interface{}, ctx context.
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentMutationServer).MarkPaymentSucceeded(ctx, req.(*MarkPaymentSucceededReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentMutation_MarkPaymentRefunded_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkPaymentRefundedReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).MarkPaymentRefunded(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_MarkPaymentRefunded_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).MarkPaymentRefunded(ctx, req.(*MarkPaymentRefundedReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentMutation_MarkPaymentCanceled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkPaymentCanceledReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).MarkPaymentCanceled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_MarkPaymentCanceled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).MarkPaymentCanceled(ctx, req.(*MarkPaymentCanceledReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -824,6 +906,14 @@ var PaymentMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MarkPaymentSucceeded",
 			Handler:    _PaymentMutation_MarkPaymentSucceeded_Handler,
+		},
+		{
+			MethodName: "MarkPaymentRefunded",
+			Handler:    _PaymentMutation_MarkPaymentRefunded_Handler,
+		},
+		{
+			MethodName: "MarkPaymentCanceled",
+			Handler:    _PaymentMutation_MarkPaymentCanceled_Handler,
 		},
 		{
 			MethodName: "MarkPaymentFailed",

@@ -44,6 +44,16 @@ The provider remembers an idempotency key for about a day. After that a retried 
 - **A custom backend implements the two lookups (breaking for a custom `backend.Backend`).** A found refund reports its `Amount` and a found subscription its `ProviderPriceID`. A provider without metadata can return "not found", which keeps the old behaviour.
 - A refund or subscription made before this version carries no key in its metadata and is not recognised this way.
 
+### A payment's status follows refunds and cancellation
+
+Nothing ever wrote `REFUNDED`, and `CANCELED` came only from the create response. A fully refunded payment read `SUCCEEDED` forever.
+
+- **`REFUNDED` once the refunds reach the amount.** `RefundPayment` sets it when its refund completes the amount (new query `SumRefundsForPayment`, new mutation `MarkPaymentRefunded`, only from `SUCCEEDED`). The provider's `charge.refunded` webhook, for a charge that is fully refunded, settles it too. That covers partial refunds completing the amount concurrently, and refunds made outside the plugin.
+- **`CANCELED` from the provider's `payment_intent.canceled`** (`MarkPaymentCanceled`, never from `SUCCEEDED`, `FAILED` or `REFUNDED`).
+- **New events `PaymentRefunded` and `PaymentCanceled`.**
+- **Still open:** a refund the provider fails later (`refund.failed`) is not reflected locally yet.
+
+
 ### Run a project against Stripe's API mock
 
 - **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL root (or carries credentials, a query or a fragment) is refused at startup, and so is a live key (`sk_live_…`, `rk_live_…`) together with it.
