@@ -360,7 +360,7 @@ func TestRemoteToolTranslation(t *testing.T) {
 		want   string
 	}{
 		{`{"type":"object","properties":{"q":{"type":"string"}}}`, `{"type":"object","properties":{"q":{"type":"string"}}}`},
-		{`{"type":`, ""},
+		{`{"type":`, `{"type":`}, // passed through; the loop refuses it before the first turn
 		{"", ""},
 	} {
 		rt := &remoteTool{spec: &pb.ToolSpec{Name: "n", Purpose: "p", ParamsSchema: tc.schema, Mutating: true}}
@@ -856,5 +856,19 @@ func TestRunAgent_AWrappedRecvEOFIsAHalfClose(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "receiving from the caller failed") {
 		t.Errorf("a half-close was logged as a recv failure: %q", logs.String())
+	}
+}
+
+// has is what keeps a remote call made from inside another (same context,
+// same loop id) from reusing a waiting id and overwriting its waiter.
+func TestPendingCalls_HasSeesAWaitingCall(t *testing.T) {
+	p := newPendingCalls()
+	p.add("loop-id")
+	if !p.has("loop-id") {
+		t.Fatal("a waiting call is not seen")
+	}
+	p.drop("loop-id")
+	if p.has("loop-id") {
+		t.Error("a dropped call is still seen")
 	}
 }

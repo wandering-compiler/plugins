@@ -496,7 +496,8 @@ type ToolSpec struct {
 	// the declaration and not to your method, because the same method is phrased
 	// differently in different agents.
 	Activity string `protobuf:"bytes,3,opt,name=activity,proto3" json:"activity,omitempty"`
-	// JSON Schema of the arguments. Empty means a tool that takes none.
+	// JSON Schema of the arguments. Empty means a tool that takes none; anything
+	// else MUST be a JSON object, or the run is refused before the first turn.
 	//
 	// Be opt-IN about what you put here: the model only knows what this says, and
 	// a field you leave out is a field it cannot ask you to filter on.
@@ -577,7 +578,8 @@ func (x *ToolSpec) GetMutating() bool {
 	return false
 }
 
-// Limits bound one run. Every field has a default; zero means "use it".
+// Limits bound one run. Zero means "use the default"; tool_timeout_seconds is
+// the exception, where zero means no bound.
 type Limits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// How many model turns before the run gives up. A turn is one model call plus
@@ -591,7 +593,10 @@ type Limits struct {
 	// How many read-only calls run at once.
 	MaxParallel int32 `protobuf:"varint,3,opt,name=max_parallel,json=maxParallel,proto3" json:"max_parallel,omitempty"`
 	// Per-tool deadline in seconds. A tool that exceeds it fails ALONE: its error
-	// becomes the tool result, the model reacts, and the run continues.
+	// becomes the tool result, the model reacts, and the run continues. The
+	// ToolCall is abandoned, not withdrawn: a ToolResult that arrives later is
+	// dropped, and for a mutating tool the model is told the outcome is unknown.
+	// The one field with no default: zero or less means no per-tool bound.
 	ToolTimeoutSeconds int32 `protobuf:"varint,4,opt,name=tool_timeout_seconds,json=toolTimeoutSeconds,proto3" json:"tool_timeout_seconds,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
@@ -740,7 +745,9 @@ func (*RunAgentReq_ToolResult_) isRunAgentReq_Msg() {}
 // ToolCall asks the caller to run one tool.
 //
 // Several may be outstanding at once — read-only tools run in parallel — so
-// answer by `call_id` and do not assume order.
+// answer by `call_id` and do not assume order. A call not answered within
+// `Limits.tool_timeout_seconds` is abandoned and its late result dropped;
+// nothing tells you it was, so a slow write may still be applied by you.
 type ToolCall struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	CallId string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
@@ -808,11 +815,14 @@ func (x *ToolCall) GetArguments() string {
 // Activity is what is happening, for whoever is watching. Never required for
 // correctness — a consumer that ignores every Activity gets the same answer.
 type Activity struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	ActivityId string                 `protobuf:"bytes,1,opt,name=activity_id,json=activityId,proto3" json:"activity_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// For a tool, the `call_id` of the ToolCall this activity brackets. A tool
+	// name the model invented gets no Activity at all.
+	ActivityId string `protobuf:"bytes,1,opt,name=activity_id,json=activityId,proto3" json:"activity_id,omitempty"`
 	// Empty at the top level; otherwise the activity this one runs inside.
 	ParentActivityId string `protobuf:"bytes,2,opt,name=parent_activity_id,json=parentActivityId,proto3" json:"parent_activity_id,omitempty"`
-	// What to show — the ToolSpec.activity of the tool being run.
+	// What to show — the ToolSpec.activity of the tool being run, or its name
+	// when that is empty.
 	Text string `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
 	// True when this activity has ended.
 	Finished bool `protobuf:"varint,4,opt,name=finished,proto3" json:"finished,omitempty"`

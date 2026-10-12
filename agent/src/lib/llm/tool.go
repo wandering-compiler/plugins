@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Tool is one thing an agent may call.
@@ -47,6 +48,10 @@ type Limits struct {
 	MaxTurns     int
 	MaxToolCalls int
 	MaxParallel  int
+	// ToolTimeout bounds one tool call. A call that exceeds it fails ALONE:
+	// the model reads that it did not answer in time and the run goes on.
+	// Zero means no bound beyond the run's own context.
+	ToolTimeout time.Duration
 }
 
 const (
@@ -147,4 +152,20 @@ func (r *results) set(i int, out string, err error) {
 	defer r.mu.Unlock()
 	r.out[i] = out
 	r.errs[i] = err
+}
+
+// Activity is what a tool may also implement: the display-ready text a
+// person is shown while it runs. A tool without it shows its name.
+type Activity interface {
+	Activity() string
+}
+
+type callIDKey struct{}
+
+// CallID is the id the loop gave the tool call running under ctx — the same
+// id its ToolStarted and ToolFinished events carry, so whoever runs the call
+// can name it the same way. Empty outside a dispatched call.
+func CallID(ctx context.Context) string {
+	id, _ := ctx.Value(callIDKey{}).(string)
+	return id
 }

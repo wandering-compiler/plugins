@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/responses"
@@ -15,6 +17,21 @@ import (
 // ErrTurnsExhausted ends a run whose model kept asking for tools and never
 // produced an answer.
 var ErrTurnsExhausted = errors.New("agent: the model did not finish within the turn limit")
+
+// ErrToolTimeout is a tool call that exceeded Limits.ToolTimeout. Not fatal.
+var ErrToolTimeout = errors.New("agent: the tool did not answer in time")
+
+// describe is what a watcher may be shown about a call: nothing for a name
+// the model invented, else the tool's activity text, or its declared name.
+func describe(t Tool, name string) (declared bool, activity string) {
+	if t == nil {
+		return false, ""
+	}
+	if a, ok := t.(Activity); ok && strings.TrimSpace(a.Activity()) != "" {
+		return true, a.Activity()
+	}
+	return true, name
+}
 
 // RunEvent is something that happened during a run. Exactly one field is set.
 type RunEvent struct {
@@ -29,8 +46,16 @@ type RunEvent struct {
 
 // ToolEvent describes one tool call in flight.
 type ToolEvent struct {
+	// CallID is fresh per dispatched call, not the provider's id: the same
+	// value reaches the tool (CallID(ctx)), so a watcher can correlate.
 	CallID string
 	Name   string
+	// Declared is false for a name the model invented; nothing about such a
+	// call is display-safe.
+	Declared bool
+	// Activity is the declared tool's display text (its name when it has
+	// none).
+	Activity string
 	// Arguments is what the model asked for, verbatim. Telemetry only — it is
 	// model output and must not be displayed.
 	Arguments string
@@ -73,6 +98,15 @@ func Run(
 		if t == nil || t.Name() == "" {
 			return nil, preflight("a tool has no name")
 		}
+		if raw := t.Params(); len(raw) > 0 {
+			// Refused up front like a bad name: a schema that is not a JSON
+			// object used to be replaced by {"type":"object"}, so the tool
+			// was offered with no argument contract at all.
+			var obj map[string]any
+			if json.Unmarshal(raw, &obj) != nil || obj == nil {
+				return nil, preflight(fmt.Sprintf("tool %q: params_schema is not a JSON object", t.Name()))
+			}
+		}
 		if _, dup := byName[t.Name()]; dup {
 			// Two tools under one name means the model's choice is decided by
 			// map iteration order. Refused rather than resolved, because
@@ -81,6 +115,27 @@ func Run(
 			return nil, preflight(fmt.Sprintf("two tools named %q", t.Name()))
 		}
 		byName[t.Name()] = t
+	}
+
+	// shown is every delta the reader was sent, across every turn: the text
+	// the run's answer reports. Only the last turn's text used to be kept,
+	// so text streamed beside tool calls was shown and then missing.
+	// Guarded: tool events reach the sink from parallel calls.
+	var (
+		shownMu sync.Mutex
+		shown   strings.Builder
+	)
+	userSink := sink
+	sink = func(e RunEvent) error {
+		if err := userSink(e); err != nil {
+			return err
+		}
+		if e.Delta != "" {
+			shownMu.Lock()
+			shown.WriteString(e.Delta)
+			shownMu.Unlock()
+		}
+		return nil
 	}
 
 	b := &budget{maxToolCalls: limits.maxToolCalls()}
@@ -143,7 +198,16 @@ func Run(
 		if len(calls) == 0 {
 			answer := *res
 			answer.Usage = spent.usage()
+			shownMu.Lock()
+			answer.Text = shown.String()
+			shownMu.Unlock()
 			return &answer, nil
+		}
+		if turn == limits.maxTurns()-1 {
+			// The last turn offered no tools. A provider that returns calls
+			// anyway does not get them run: the model would never read the
+			// results, and a mutating call would be applied for nothing.
+			break
 		}
 
 		// Everything the model produced this turn goes back into the input, or
@@ -151,7 +215,7 @@ func Run(
 		// them.
 		input = append(input, assistantToolCalls(calls)...)
 
-		out, err := dispatch(ctx, calls, byName, b, limits.maxParallel(), sink)
+		out, err := dispatch(ctx, calls, byName, b, limits, sink)
 		if err != nil {
 			return nil, withSpent(err, spent.usage())
 		}
@@ -172,7 +236,7 @@ func dispatch(
 	calls []toolCall,
 	byName map[string]Tool,
 	b *budget,
-	maxParallel int,
+	limits Limits,
 	sink func(RunEvent) error,
 ) ([]string, error) {
 	// The whole round is reserved up front — see budget.reserve.
@@ -182,15 +246,17 @@ func dispatch(
 	res := newResults(len(calls))
 
 	run := func(rctx context.Context, idx int, tc toolCall) error {
+		id := NewCallID()
+		declared, activity := describe(byName[tc.Name], tc.Name)
 		if err := sink(RunEvent{ToolStarted: &ToolEvent{
-			CallID: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
+			CallID: id, Name: tc.Name, Declared: declared, Activity: activity, Arguments: tc.Arguments,
 		}}); err != nil {
 			return Fatal(err)
 		}
-		out, toolErr := execTool(rctx, tc, byName)
+		out, toolErr := execTool(context.WithValue(rctx, callIDKey{}, id), tc, byName, limits.ToolTimeout)
 		res.set(idx, out, toolErr)
 		if err := sink(RunEvent{ToolFinished: &ToolEvent{
-			CallID: tc.ID, Name: tc.Name, Result: out, Err: toolErr,
+			CallID: id, Name: tc.Name, Declared: declared, Activity: activity, Result: out, Err: toolErr,
 		}}); err != nil {
 			return Fatal(err)
 		}
@@ -227,7 +293,7 @@ func dispatch(
 	}
 	if len(readOnly) > 0 {
 		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(maxParallel)
+		g.SetLimit(limits.maxParallel())
 		for _, r := range readOnly {
 			g.Go(func() error {
 				if err := gctx.Err(); err != nil {
@@ -247,7 +313,7 @@ func dispatch(
 // text, so the model sees it and can react, and as the error, so the activity
 // says it failed. The run continues either way — a tool failing is information,
 // not a crash.
-func execTool(ctx context.Context, tc toolCall, byName map[string]Tool) (string, error) {
+func execTool(ctx context.Context, tc toolCall, byName map[string]Tool, timeout time.Duration) (string, error) {
 	t, ok := byName[tc.Name]
 	if !ok {
 		// The model invented a tool. Told plainly rather than failed: it
@@ -255,8 +321,28 @@ func execTool(ctx context.Context, tc toolCall, byName map[string]Tool) (string,
 		// discard everything it had got right so far.
 		return fmt.Sprintf("There is no tool named %q.", tc.Name), nil
 	}
-	out, err := t.Call(ctx, tc.Arguments)
+	callCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	out, err := t.Call(callCtx, tc.Arguments)
 	if err != nil {
+		// The tool's own deadline, not the run's: it fails ALONE, and the
+		// model reads that it did not answer. Only when the error IS that
+		// deadline: a fatal error that merely lands after it (the caller
+		// closing its side, a failed send) must still end the run.
+		if ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) &&
+			errors.Is(err, context.DeadlineExceeded) {
+			if t.Mutating() {
+				// Abandoned is not undone: whoever runs the tool may still
+				// apply it. Told so, or the model retries and applies it twice.
+				return fmt.Sprintf("The tool did not answer within %s. Its outcome is unknown: "+
+					"it may still have been applied, so do not repeat it without checking.", timeout), ErrToolTimeout
+			}
+			return fmt.Sprintf("The tool did not answer within %s.", timeout), ErrToolTimeout
+		}
 		if isFatal(err) {
 			return "", err
 		}
