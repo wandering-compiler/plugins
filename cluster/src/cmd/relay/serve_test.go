@@ -787,11 +787,42 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 }
 
+// --max-worker-slots reads its variable like every other flag, a flag beats
+// the variable, and a value outside 1..65536 is refused naming where it came
+// from.
+func TestParseConfig_MaxWorkerSlots(t *testing.T) {
+	quiet(t)
+	cfg, err := parseConfig(nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.maxWorkerSlots != relayserver.DefaultMaxWorkerSlots {
+		t.Errorf("default max-worker-slots = %d, want %d", cfg.maxWorkerSlots, relayserver.DefaultMaxWorkerSlots)
+	}
+	t.Setenv("RELAY_MAX_WORKER_SLOTS", "8")
+	if cfg, err = parseConfig(nil, io.Discard); err != nil || cfg.maxWorkerSlots != 8 {
+		t.Errorf("RELAY_MAX_WORKER_SLOTS=8 gave %d, %v", cfg.maxWorkerSlots, err)
+	}
+	if cfg, err = parseConfig([]string{"--max-worker-slots", "4"}, io.Discard); err != nil || cfg.maxWorkerSlots != 4 {
+		t.Errorf("--max-worker-slots 4 over RELAY_MAX_WORKER_SLOTS=8 gave %d, %v", cfg.maxWorkerSlots, err)
+	}
+	for _, v := range []string{"0", "65537"} {
+		t.Setenv("RELAY_MAX_WORKER_SLOTS", v)
+		if _, err := parseConfig(nil, io.Discard); err == nil || !strings.Contains(err.Error(), "RELAY_MAX_WORKER_SLOTS") {
+			t.Errorf("RELAY_MAX_WORKER_SLOTS=%s: %v, want a refusal naming the variable", v, err)
+		}
+		if _, err := parseConfig([]string{"--max-worker-slots", v}, io.Discard); err == nil || !strings.Contains(err.Error(), "--max-worker-slots") {
+			t.Errorf("--max-worker-slots %s: %v, want a refusal naming the flag", v, err)
+		}
+	}
+}
+
 // malformedVariables are RELAY_* values that do not parse, each with the flag
 // that overrides the variable and a valid value for it.
 var malformedVariables = []struct{ key, val, flag, good string }{
 	{"RELAY_CAPACITY", "8x", "--capacity", "5"},
 	{"RELAY_CAPACITY", "-2", "--capacity", "5"},
+	{"RELAY_MAX_WORKER_SLOTS", "8x", "--max-worker-slots", "5"},
 	{"RELAY_TICKET_TTL", "60", "--ticket-ttl", "1m"},
 	{"RELAY_TICKET_TTL", "0s", "--ticket-ttl", "1m"},
 	{"RELAY_DRAIN_TIMEOUT", "-1m", "--drain-timeout", "1m"},

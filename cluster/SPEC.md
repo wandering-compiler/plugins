@@ -83,7 +83,8 @@ listeners `--listen` (management, 13444), `--attach-listen` (13446),
 `--tunnel-listen` (13445), `--proxy-listen` (callers, 9000); `--proxy-address`
 and `--control-plane-fingerprint` (required); identity `--cert/--key` or
 `--identity-dir`; worker CA `--ca-cert/--ca-key` or `--identity-dir`;
-`--capacity` (optional ceiling, 0 = none), `--ticket-ttl` (30s),
+`--capacity` (optional ceiling, 0 = none), `--max-worker-slots` (64, 1–65536:
+the most slots one worker is credited with), `--ticket-ttl` (30s),
 `--poll-interval` (3s), `--poll-timeout` (10s, at least twice the interval),
 `--registration-code-ttl` (15m), `--worker-cert-lifetime` (30 days),
 `--drain-timeout` (15m). Subcommands `mint` and `issue-worker`.
@@ -111,7 +112,6 @@ which.
 |---|---|---|---|
 | 1 | The reservation handle is a bearer credential that the plugin does not bind to the principal that created it. Any caller the ACL lets reach `GetReservation` collects the grant (address and ticket) of any handle it holds, and any caller of `CancelReservation` gives away another caller's place. The proto says the binding is the caller's job, but no hook or principal check exists for a project to use. Guessing is infeasible (256 random bits plus the relay id); the exposure is a leaked handle, for example in a log or a shared client. | `base/reservation-handle-bound` | `src/handlers/reservation.go` (`GetReservation`, `CancelReservation`, `resolveHandle`) |
 | 2 | Nothing bounds the queue. `Pool.Reserve` and `Pool.Wait` append to an unbounded slice and map, with no limit per relay and none per caller. A caller allowed `ReserveTask` can add reservations as fast as it can call (each lives 10 s unpolled, indefinitely when polled), which grows relay memory and pushes every later caller back in a strict FIFO. Queue position and change notification are linear scans, so the cost per mutation and per poll grows with the queue. | `base/queue-bounded`, `cluster/fairness` | `src/lib/relaycore/relaycore.go` (`Reserve`, `enqueueLocked`, `positionLocked`, `notifyLocked`); `src/handlers/reservation.go` (`ReserveTask`) |
-| 3 | A worker's capacity is whatever it announces. `Attach` takes `AttachReq.slots` (uint32) unchecked; `capacityLocked` sums it; `RelayStats` reports it as `int32`. On a relay without `--capacity` (the default), one enrolled worker announcing a huge slot count makes its relay grant a ticket to every queued caller and `take` route all of them to that worker, and a total above 2^31−1 makes the reported capacity negative, so the control plane ranks the relay as full while it keeps granting. `--capacity` caps the grants and the reported figure, but `take` still routes every granted call to the worker that claims the most room. Workers are machines on the public internet, so a single compromised key attracts the relay's whole load. | `base/worker-slots-bounded` | `src/lib/relayserver/workerattach.go` (`Attach`), `backends.go` (`capacityLocked`, `take`), `relayserver.go` (`RelayStats`) |
 | 4 | A ban ends the worker's attach stream and stops new work reaching it, but neither its tunnel nor the work already running on it. The tunnel is checked against bans and certificate validity only when it is accepted, so a tunnel opened before a ban (or before the certificate expired) stays a connected backend until the worker hangs up. The admin's ban confirmation says relays "drop their connections". | `base/ban-ends-running-work`, `base/tunnel-revalidated` | `src/lib/relayserver/tunnellistener.go` (`acceptTunnel`), `workerattach.go` (`holdAdmitted`) |
 | 5 | Bans reach a relay only as the complete set on the next control-plane call, and the relay replaces its set wholesale with whatever arrives, with no version. (a) Two console replicas can deliver an older set after a newer one, lifting a fresh ban until the next call. (b) A restarted relay holds no bans until its first contact, and in that window a banned key can attach and **renew its certificate** (`Renew` checks only the in-memory set). (c) A disabled relay is never contacted (`ListEnabled`), so it never learns bans taken after it was disabled and keeps renewing those workers' certificates. | `base/ban-reaches-every-relay`, `base/banned-key-cannot-renew` | `src/lib/workeradmit/workeradmit.go` (`SetBanned`), `src/lib/relayserver/enroll.go` (`Renew`), `src/handlers/schedule_task.go` (`placeable`), `check_workers.go` (`CheckWorkers`) |
 | 6 | `ticket_ttl_seconds` is inert. The manifest describes it as "how long a granted ticket stays claimable"; `RegisterPlugin` never reads it and the generated config calls it advisory. The claim window is the relay's `--ticket-ttl`. An operator who sets the knob changes nothing. | `cluster/boot-no-inert-knob` | `src/plugin.go` (`RegisterPlugin`), `src/gen/interfaces.go` (`EnvConfig.TicketTtlSeconds`) |
@@ -311,7 +311,7 @@ which.
 | `base/tunnel-revalidated` | A tunnel MUST stop being a backend when the certificate it was opened with expires. | Security | none (finding 4) |
 | `base/attach-expiry-ends-stream` | An attach stream MUST end when the worker's certificate expires, so the worker reconnects with the renewed one. | Security | `TestAttach_CertificateExpiryEndsTheStream`, `TestRun_StopsOnceTheCertificateRunsOutUnrenewed` |
 | `base/capacity-needs-admission-and-readiness` | A worker MUST contribute capacity only while admitted, attached, holding a tunnel and reporting READY. A worker that announces DRAINING or UNHEALTHY MUST never be counted ready, and MUST keep its tunnel for the work already running. | Consistency & concurrency | `TestAttachment_CapacityNeedsApprovalAndReadinessBoth`, `TestBackends_AnUnadmittedWorkerAddsNoCapacity`, `TestAttach_AnnouncedDrainingIsNeverReady`, `TestAttach_AWorkerThatStartsDrainingIsNeverCountedReady`, `TestBackends_DrainingTakesNoWorkButKeepsItsTunnel`, `TestBackends_ATunnelWithoutAnAnnouncementCarriesNothing`, `TestAttach_ReadinessDrivesCapacityForTheLifeOfTheStream` |
-| `base/worker-slots-bounded` | A worker's declared slots MUST be bounded, and the relay's reported capacity MUST NOT overflow. | Security | none (finding 3) |
+| `base/worker-slots-bounded` | A worker's declared slots MUST be bounded, and the relay's reported capacity MUST NOT overflow. | Security | `TestAttach_SlotsAboveTheCapAreHeldToIt`, `TestServer_RelayStatsCapacityDoesNotWrap`, `TestParseConfig_MaxWorkerSlots` |
 | `base/pick-most-room` | A redeemed ticket MUST go to the admitted ready worker with the most free slots, MUST NOT exceed any worker's declared slots, and MUST alternate between equals. | Performance | `TestBackends_TakePrefersTheWorkerWithTheMostRoom` (most room and the slot bound; no test has two workers with equal room, so alternation is unproven) |
 | `base/reconnect-generations` | A worker reconnecting MUST replace its old tunnel and attachment. A late unwind of the old one MUST NOT erase the new profile, free a slot booked on the new tunnel, or remove the new tunnel. | Consistency & concurrency | `TestAttach_AReconnectSurvivesTheOldStreamsUnwind`, `TestBackends_AStaleReleaseDoesNotFreeTheNewTunnel`, `TestBackends_AStaleClearDoesNotEraseTheNewAttachment`, `TestBackends_AStaleStatusDoesNotOverwriteTheNewAttachment`, `TestBackends_AnOldTunnelClosingKeepsTheNewOne` |
 | `base/dead-tunnel-leaves` | A tunnel that dies (hang-up, black hole, no HTTP/2) MUST stop being a backend and MUST remove its capacity, without deadlocking the relay. | Failure & configuration | `TestTunnel_ADeadTunnelStopsBeingABackend`, `TestBackends_ADeadTunnelLeavesTheCapacity`, `TestTunnel_ABlackHoledTunnelStopsBeingABackend`, `TestTunnel_ARelayThatNeverSpeaksHTTP2EndsTheWorkersTunnel`, `TestTunnel_ABlackHoledRelayEndsTheWorkersTunnel`, `TestBackends_AWorkerHangingUpDoesNotDeadlockTheRelay`, `TestClientOverConn_ADeadTunnelFiresTheHookOnceAndIsNeverRedialled` |
@@ -322,9 +322,8 @@ which.
 
 **Gaps / suspected defects**
 
-1. **Self-declared slots** (finding 3).
-2. **Bans do not cut tunnels or running work** (finding 4).
-3. **A worker sees the work in clear.** TLS ends at the relay and is
+1. **Bans do not cut tunnels or running work** (finding 4).
+2. **A worker sees the work in clear.** TLS ends at the relay and is
    re-established on the tunnel; the relay and the worker both see the
    payload. That is inherent to the design, but a project that places
    sensitive input must treat every enrolled machine as trusted with it.
@@ -567,8 +566,8 @@ real gateway, the real relay binary and a real worker.
    refused by the relay; a worker pointed at an impostor relay refuses it.
 8. **Capacity truth:** a worker announcing DRAINING contributes nothing and
    keeps its running call; a relay with no ready worker grants nothing. A
-   worker announcing an absurd slot count is expected red until finding 3 is
-   fixed.
+   worker announcing an absurd slot count is admitted with, and credited
+   only, `--max-worker-slots`.
 9. **Two activations:** `codegen` and `browser` pools in one project keep
    separate registries, placements and bans
    (`interaction/activation-activation-isolation`).
