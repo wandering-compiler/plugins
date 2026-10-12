@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -53,7 +54,16 @@ const (
 	creditGrant creditKind = "grant"
 	creditSpend creditKind = "spend"
 	creditTopup creditKind = "topup" // the webhook's grant for a paid top-up; idem = provider payment id
+
+	// A refunded top-up's credit taken back (−), and given back (+) when the
+	// provider refuses the refund for good. Own kinds, so the ledger keys
+	// are out of reach of a caller's SpendCredit / GrantCredit key.
+	creditTopupRefund     creditKind = "topup-refund"
+	creditTopupRefundUndo creditKind = "topup-refund-undo" //nolint:gosec // G101: a ledger kind name, not a credential
 )
+
+// debit reports whether an apply of this kind takes credit away.
+func (k creditKind) debit() bool { return k == creditSpend || k == creditTopupRefund }
 
 // applyCredit is the shared grant/spend path. A spend negates the
 // (unsigned) amount. The atomic ledger+balance write lives in the
@@ -89,7 +99,7 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 	if err := idempotencyKeyTooLong(idem); err != nil {
 		return nil, err
 	}
-	if kind != creditTopup {
+	if kind == creditGrant || kind == creditSpend { // only caller keys were ever stored raw
 		dup, err := h.appliedUnderRawKey(ctx, userID, amount, kind, idem)
 		if err != nil {
 			return nil, err
@@ -99,7 +109,7 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 		}
 	}
 	delta := amount
-	if kind == creditSpend {
+	if kind.debit() {
 		delta = "-" + amount
 	}
 	resp, err := h.Mutation.ApplyCredit(ctx, &pb.ApplyCreditReq{
@@ -308,8 +318,19 @@ func init() { takeBackRefundedCredit = takeBackTopupCredit }
 // of a top-up payment returns as money. A top-up whose credit is already
 // spent cannot be refunded past what is left, and one whose credit has not
 // been granted yet cannot be refunded at all: the grant would land after the
-// refund. Idempotent per refund key, like the rest of the ledger.
-func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, idem string) (func(), error) {
+// refund.
+//
+// Idempotent per refund key AND attempt generation. The spend is keyed by
+// the refund key; a refusal the provider repeats gives the credit back under
+// the matching undo key. A retry of the same refund after such an undo must
+// take the credit again — under the spend key alone it would find the
+// earlier spend, skip, and pay the money out with the credit kept — so each
+// undone take-back moves the retry on to the next generation's keys.
+//
+// Both keys live in their own ledger kinds, so no caller's SpendCredit /
+// GrantCredit key can name them, and the caller's refund key is hashed
+// before it reaches applyCredit, so a key at the length limit still fits.
+func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, idem string) (func() error, error) {
 	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: payment.GetProviderPaymentId()})
 	if err != nil {
 		if absent(err) {
@@ -324,15 +345,37 @@ func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment 
 	if topup.GetGrantedAt() == nil {
 		return nil, status.Error(codes.FailedPrecondition, "payment: the top-up's credit is not granted yet; refund it after the payment has settled")
 	}
-	key := "topup-refund:" + idem
-	if _, err := h.applyCredit(ctx, topup.GetUserId(), amount, creditSpend, "topup refund", payment.GetId(), key); err != nil {
+	userID := topup.GetUserId()
+	key, err := h.topupRefundGeneration(ctx, userID, idem)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := h.applyCredit(ctx, userID, amount, creditTopupRefund, "topup refund", payment.GetId(), key); err != nil {
 		if status.Code(err) == codes.FailedPrecondition {
 			return nil, status.Error(codes.FailedPrecondition, "payment: the top-up's credit is already spent; it cannot be refunded")
 		}
 		return nil, err
 	}
-	undo := func() {
-		_, _ = h.applyCredit(ctx, topup.GetUserId(), amount, creditGrant, "topup refund refused", payment.GetId(), "undo:"+key)
+	undo := func() error {
+		_, err := h.applyCredit(ctx, userID, amount, creditTopupRefundUndo, "topup refund refused", payment.GetId(), key)
+		return err
 	}
 	return undo, nil
+}
+
+// topupRefundGeneration returns the take-back key for this attempt of the
+// refund keyed idem: the first generation whose take-back was not given back
+// (an undo row under it means a permanent refusal reversed it). Each step
+// past the first needs an earlier refused attempt, so the walk is short.
+func (h *PaymentServiceHandler) topupRefundGeneration(ctx context.Context, userID, idem string) (string, error) {
+	for gen := 0; ; gen++ {
+		key := scopedKey("topup-refund", strconv.Itoa(gen), idem)
+		_, err := h.Query.GetCreditLedgerByKey(ctx, &pb.GetCreditLedgerByKeyReq{IdempotencyKey: ledgerKey(creditTopupRefundUndo, userID, key)})
+		if absent(err) {
+			return key, nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
 }

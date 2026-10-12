@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -70,5 +71,53 @@ func TestFlow_RefusedTopUpRefundGivesTheCreditBack(t *testing.T) {
 	wantCode(t, err, codes.InvalidArgument, "refund the provider refused")
 	if got := r.store.balance(t, "user-a"); got != "10.0000" {
 		t.Errorf("balance = %s, want 10.0000 after the refusal", got)
+	}
+}
+
+// A retry after a refusal that gave the credit back takes it again: the
+// earlier take-back is undone, so finding it must not skip this one.
+func TestFlow_RetryAfterARefusedTopUpRefundTakesTheCreditAgain(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	r.stripe.failNext(400)
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"})
+	wantCode(t, err, codes.InvalidArgument, "refund the provider refused")
+	for i := 0; i < 2; i++ {
+		if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"}); err != nil {
+			t.Fatalf("retry %d: %v", i, err)
+		}
+	}
+	if got := r.store.balance(t, "user-a"); got != "6.0000" {
+		t.Errorf("balance = %s, want 6.0000 (the refund paid out, its credit taken once)", got)
+	}
+}
+
+// A refund key at the length limit refunds a top-up too: the take-back's
+// ledger key is derived from it, never longer than the limit.
+func TestFlow_TopUpRefundUnderALongKey(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	key := strings.Repeat("k", maxIdempotencyKeyLen)
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: key}); err != nil {
+		t.Fatalf("refund: %v", err)
+	}
+	if got := r.store.balance(t, "user-a"); got != "6.0000" {
+		t.Errorf("balance = %s, want 6.0000", got)
+	}
+}
+
+// A caller's spend under a key shaped like the take-back's cannot stand in
+// for it: the refund still takes its credit.
+func TestFlow_CallerSpendKeyCannotNameTheTakeBack(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "topup-refund:rt"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"}); err != nil {
+		t.Fatalf("refund: %v", err)
+	}
+	if got := r.store.balance(t, "user-a"); got != "5.0000" {
+		t.Errorf("balance = %s, want 5.0000 (1 spent, 4 refunded)", got)
 	}
 }

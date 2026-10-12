@@ -38,10 +38,10 @@ A failed provider call used to reach the caller as `payment provider error: <the
 
 Refunding a top-up payment returned the money and left the credit spendable, so the customer kept both.
 
-- **`RefundPayment` on a top-up spends the refunded amount from the owner's credit** before the provider is asked. This is idempotent per refund key, so a retry does not take the credit twice.
+- **`RefundPayment` on a top-up spends the refunded amount from the owner's credit** before the provider is asked. This is idempotent per refund key, so a retry does not take the credit twice — and a retry after a refusal that gave the credit back takes it again. Its ledger entries are out of reach of a caller's `SpendCredit` / `GrantCredit` key, and a refund key at the length limit works.
 - **Credit already spent cannot be refunded as money.** Such a refund is refused with `FAILED_PRECONDITION`, and the provider is never called.
 - **A top-up whose credit has not been granted yet cannot be refunded.** Otherwise the grant would land after the refund. Refund it once the payment has settled.
-- **When the provider refuses the refund for good** (invalid or declined), the credit is given back. After a transient failure it stays taken for the retry.
+- **When the provider refuses the refund for good** (invalid or declined), the credit is given back. After a transient failure it stays taken for the retry. When giving it back fails, the refund answers `UNAVAILABLE`, so the retry gives it back.
 
 
 ### A retried refund or subscribe is recognised after the provider forgets its key
