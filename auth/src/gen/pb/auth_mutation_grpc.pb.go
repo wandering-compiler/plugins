@@ -41,6 +41,7 @@ const (
 	AuthMutation_CreateOAuthIdentity_FullMethodName            = "/w17.contrib.auth.AuthMutation/CreateOAuthIdentity"
 	AuthMutation_CreateTotpSecret_FullMethodName               = "/w17.contrib.auth.AuthMutation/CreateTotpSecret"
 	AuthMutation_ConfirmTotpSecret_FullMethodName              = "/w17.contrib.auth.AuthMutation/ConfirmTotpSecret"
+	AuthMutation_UpsertOAuthProvider_FullMethodName            = "/w17.contrib.auth.AuthMutation/UpsertOAuthProvider"
 	AuthMutation_MoveOAuthProviderSecret_FullMethodName        = "/w17.contrib.auth.AuthMutation/MoveOAuthProviderSecret"
 	AuthMutation_ClearOAuthProviderLegacySecret_FullMethodName = "/w17.contrib.auth.AuthMutation/ClearOAuthProviderLegacySecret"
 	AuthMutation_MoveTotpSeed_FullMethodName                   = "/w17.contrib.auth.AuthMutation/MoveTotpSeed"
@@ -216,6 +217,11 @@ type AuthMutationClient interface {
 	ConfirmTotpSecret(ctx context.Context, in *ConfirmTotpSecretReq, opts ...grpc.CallOption) (*ConfirmTotpSecretResp, error)
 	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
 	// `secret` and clear it. No event: the provider's configuration is the same.
+	// UpsertOAuthProvider — create or rewrite the provider named `name`,
+	// with its secret encrypted (see UpsertOAuthProviderReq). Idempotent: the
+	// same request twice leaves one row with the same settings. No event:
+	// provider configuration is an operator's, not a user's, change.
+	UpsertOAuthProvider(ctx context.Context, in *UpsertOAuthProviderReq, opts ...grpc.CallOption) (*UpsertOAuthProviderResp, error)
 	MoveOAuthProviderSecret(ctx context.Context, in *MoveOAuthProviderSecretReq, opts ...grpc.CallOption) (*MoveOAuthProviderSecretResp, error)
 	// ClearOAuthProviderLegacySecret — drop the plaintext copy of a provider
 	// whose encrypted `secret` is set (a fixture re-seeds the legacy column).
@@ -695,6 +701,16 @@ func (c *authMutationClient) ConfirmTotpSecret(ctx context.Context, in *ConfirmT
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ConfirmTotpSecretResp)
 	err := c.cc.Invoke(ctx, AuthMutation_ConfirmTotpSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) UpsertOAuthProvider(ctx context.Context, in *UpsertOAuthProviderReq, opts ...grpc.CallOption) (*UpsertOAuthProviderResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpsertOAuthProviderResp)
+	err := c.cc.Invoke(ctx, AuthMutation_UpsertOAuthProvider_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1504,6 +1520,11 @@ type AuthMutationServer interface {
 	ConfirmTotpSecret(context.Context, *ConfirmTotpSecretReq) (*ConfirmTotpSecretResp, error)
 	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
 	// `secret` and clear it. No event: the provider's configuration is the same.
+	// UpsertOAuthProvider — create or rewrite the provider named `name`,
+	// with its secret encrypted (see UpsertOAuthProviderReq). Idempotent: the
+	// same request twice leaves one row with the same settings. No event:
+	// provider configuration is an operator's, not a user's, change.
+	UpsertOAuthProvider(context.Context, *UpsertOAuthProviderReq) (*UpsertOAuthProviderResp, error)
 	MoveOAuthProviderSecret(context.Context, *MoveOAuthProviderSecretReq) (*MoveOAuthProviderSecretResp, error)
 	// ClearOAuthProviderLegacySecret — drop the plaintext copy of a provider
 	// whose encrypted `secret` is set (a fixture re-seeds the legacy column).
@@ -1896,6 +1917,9 @@ func (UnimplementedAuthMutationServer) CreateTotpSecret(context.Context, *Create
 }
 func (UnimplementedAuthMutationServer) ConfirmTotpSecret(context.Context, *ConfirmTotpSecretReq) (*ConfirmTotpSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfirmTotpSecret not implemented")
+}
+func (UnimplementedAuthMutationServer) UpsertOAuthProvider(context.Context, *UpsertOAuthProviderReq) (*UpsertOAuthProviderResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpsertOAuthProvider not implemented")
 }
 func (UnimplementedAuthMutationServer) MoveOAuthProviderSecret(context.Context, *MoveOAuthProviderSecretReq) (*MoveOAuthProviderSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MoveOAuthProviderSecret not implemented")
@@ -2357,6 +2381,24 @@ func _AuthMutation_ConfirmTotpSecret_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthMutationServer).ConfirmTotpSecret(ctx, req.(*ConfirmTotpSecretReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_UpsertOAuthProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertOAuthProviderReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).UpsertOAuthProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_UpsertOAuthProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).UpsertOAuthProvider(ctx, req.(*UpsertOAuthProviderReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3679,6 +3721,10 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ConfirmTotpSecret",
 			Handler:    _AuthMutation_ConfirmTotpSecret_Handler,
+		},
+		{
+			MethodName: "UpsertOAuthProvider",
+			Handler:    _AuthMutation_UpsertOAuthProvider_Handler,
 		},
 		{
 			MethodName: "MoveOAuthProviderSecret",

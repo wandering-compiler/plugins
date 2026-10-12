@@ -259,6 +259,37 @@ message ConfirmTotpSecretResp {
 // MoveOAuthProviderSecretReq moves a provider's legacy plaintext
 // client_secret into the encrypted `secret` — only while the legacy column
 // still holds `legacy`, so a value an operator wrote in between is not lost.
+// UpsertOAuthProviderReq creates or rewrites one OAuth provider, found by
+// name: what the project's own code calls to configure a provider from its
+// deployment's environment (a client id and secret kept with the other
+// secrets), so changing a secret is a deploy and needs no admin. The secret
+// is stored encrypted with the project's field key; the plaintext legacy
+// column is cleared.
+message UpsertOAuthProviderReq {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string name          = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string display_name  = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string client_id     = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string secret        = 4 [(w17.field) = { type: CRYPTED_SECRET }];
+  string authorize_url = 5 [(w17.field) = { type: URL }];
+  string token_url     = 6 [(w17.field) = { type: URL }];
+  string userinfo_url  = 7 [(w17.field) = { type: URL, blank: true }];
+  string scopes        = 8 [(w17.field) = { type: CHAR, max_len: 512, blank: true }];
+  string subject_path  = 9 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string email_path    = 10 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  bool   enabled       = 11;
+  // The owning tenant under `tenant_scope`, written when the provider is
+  // created. A provider's name is unique across tenants.
+  string tenant_id     = 12 [
+    (w17.field) = { type: UUID },
+    (w17.contrib.plugin_feature_field) = "tenant_scope"
+  ];
+}
+message UpsertOAuthProviderResp {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string id = 1;
+}
+
 message MoveOAuthProviderSecretReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string id     = 1 [(w17.field) = { type: UUID }];
@@ -1597,6 +1628,47 @@ service AuthMutation {
 
   // MoveOAuthProviderSecret — store a legacy plaintext client_secret in
   // `secret` and clear it. No event: the provider's configuration is the same.
+  // UpsertOAuthProvider — create or rewrite the provider named `name`,
+  // with its secret encrypted (see UpsertOAuthProviderReq). Idempotent: the
+  // same request twice leaves one row with the same settings. No event:
+  // provider configuration is an operator's, not a user's, change.
+  rpc UpsertOAuthProvider(UpsertOAuthProviderReq) returns (UpsertOAuthProviderResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.OAuthProvider SET "
+          "name = :name, "
+          "display_name = :display_name, "
+          "client_id = :client_id, "
+          "secret = :secret, "
+          "client_secret = NULL, "
+          "authorize_url = :authorize_url, "
+          "token_url = :token_url, "
+          "userinfo_url = :userinfo_url, "
+          "scopes = :scopes, "
+          "subject_path = :subject_path, "
+          "email_path = :email_path, "
+          "enabled = :enabled, "
+          "?feature(tenant_scope) tenant_id = :tenant_id "
+          "ON CONFLICT (name) DO UPDATE SET "
+          "display_name = :display_name, "
+          "client_id = :client_id, "
+          "secret = :secret, "
+          "client_secret = NULL, "
+          "authorize_url = :authorize_url, "
+          "token_url = :token_url, "
+          "userinfo_url = :userinfo_url, "
+          "scopes = :scopes, "
+          "subject_path = :subject_path, "
+          "email_path = :email_path, "
+          "enabled = :enabled "
+          "RETURNING id"
+      }
+    };
+  }
+
   rpc MoveOAuthProviderSecret(MoveOAuthProviderSecretReq) returns (MoveOAuthProviderSecretResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
     option (w17.db.method) = {

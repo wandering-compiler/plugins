@@ -2,6 +2,13 @@
 
 ## 0.1.0-rc.25
 
+### A provider can be configured outside the admin
+
+`OAuthProvider` could only be created or edited on the generated admin page, and a fixture could set only the plaintext legacy `client_secret`, which the plugin moves to the encrypted `secret` and clears. A deployment that does not expose the admin had no way to put a provider's secret in place.
+
+- **New mutation `AuthMutation.UpsertOAuthProvider`** (`oauth`) creates or rewrites a provider by `name`, writes `secret` encrypted with the project's field key and clears `client_secret`. Call it from the project's own code, for example at start with values from the deployment's secrets.
+- **The provider's `name` is unique across tenants**; under `tenant_scope` the tenant is set when the provider is created.
+
 ### The admin counts only realm-wide roles
 
 The admin preset authenticated through `Authenticate`, which selects an organization (from the request, or the caller's only one) and lets that organization's roles grant permissions. A role scoped to one organization, a wildcard one above all, therefore passed every admin page for every organization. The same was true of organization ownership.
