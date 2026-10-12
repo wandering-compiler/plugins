@@ -951,6 +951,18 @@ message DeleteAuthClientResp {
   string id = 1;
 }
 
+message ClaimBootstrapAdminReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+  string slot    = 1 [(w17.field) = { type: SLUG, max_len: 32 }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+}
+message ClaimBootstrapAdminResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  // 1 when this call took the slot, 0 when another sign-up holds it.
+  // `optional` so the 0 reaches the caller instead of reading as absent.
+  optional int32 written = 1;
+}
+
 message CreateOAuthLoginCodeReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string user_id        = 1 [(w17.field) = { type: UUID }];
@@ -2658,6 +2670,23 @@ service AuthMutation {
       ops: {
         name: "main"
         dql: "DELETE FROM @module.AuthClient WHERE id = :id RETURNING id AS id"
+      }
+    };
+  }
+  // ClaimBootstrapAdmin takes the bootstrap-administrator slot for the user
+  // being created, inside its sign-up transaction. `written` is 1 for the
+  // one sign-up that took it and 0 for every other: a concurrent sign-up
+  // waits on the key and then conflicts. See BootstrapClaim.
+  rpc ClaimBootstrapAdmin(ClaimBootstrapAdminReq) returns (ClaimBootstrapAdminResp) {
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.BootstrapClaim SET "
+          "slot = :slot, "
+          "user_id = :user_id "
+          "ON CONFLICT (slot) DO NOTHING"
       }
     };
   }

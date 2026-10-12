@@ -98,7 +98,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 
 	// Role decision from committed state, before the tx (see
 	// resolveSignupRoleIDs). No-op unless the `rbac` feature is staged.
-	roleIDs, err := signupResolveRoleIDs(ctx, h)
+	roles, err := signupResolveRoleIDs(ctx, h)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 		}
 	}
 
-	resp, err := h.signUpTx(txCtx, req, hashed, roleIDs)
+	resp, err := h.signUpTx(txCtx, req, hashed, roles)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -133,7 +133,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 // when a transaction is open): create the user, link its turnkey roles, mint
 // the session token. Every storage call uses txCtx so all three join the one
 // transaction.
-func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roleIDs []string) (*pb.SignUpResp, error) {
+func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles) (*pb.SignUpResp, error) {
 	if signupCreateUser == nil {
 		// Neither create path staged — see the seam's declaration. This
 		// is a bundle-composition fault, not something a caller did, so
@@ -153,7 +153,7 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 		}
 		return nil, err
 	}
-	if err := signupAssignRoleIDs(txCtx, h, userID, roleIDs); err != nil {
+	if err := signupAssignRoleIDs(txCtx, h, userID, roles); err != nil {
 		return nil, err
 	}
 	if err := signupClaimInvite(txCtx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken()); err != nil {

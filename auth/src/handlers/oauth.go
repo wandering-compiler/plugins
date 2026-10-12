@@ -602,7 +602,7 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 	// account held no role, so every endpoint answered 403 MISSING_PERMISSION,
 	// and the provider's verification was thrown away, so the address-proof
 	// floor on invitations refused it (found live by examples/auth-proof).
-	roleIDs, err := signupResolveRoleIDs(ctx, h)
+	roles, err := signupResolveRoleIDs(ctx, h)
 	if err != nil {
 		return "", err
 	}
@@ -613,7 +613,7 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 			return "", err
 		}
 	}
-	userID, err := h.createOAuthUserTx(txCtx, email, hash, roleIDs, emailVerified)
+	userID, err := h.createOAuthUserTx(txCtx, email, hash, roles, emailVerified)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -628,13 +628,13 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 	return userID, nil
 }
 
-func (h *AuthServiceHandler) createOAuthUserTx(txCtx context.Context, email, hash string, roleIDs []string, emailVerified bool) (string, error) {
+func (h *AuthServiceHandler) createOAuthUserTx(txCtx context.Context, email, hash string, roles signupRoles, emailVerified bool) (string, error) {
 	created, err := h.Mutation.CreateUser(txCtx, &pb.CreateUserReq{Email: email, PasswordHash: hash})
 	if err != nil {
 		return "", err
 	}
 	userID := created.GetUser().GetId()
-	if err := signupAssignRoleIDs(txCtx, h, userID, roleIDs); err != nil {
+	if err := signupAssignRoleIDs(txCtx, h, userID, roles); err != nil {
 		return "", err
 	}
 	// The provider vouched for the address the way a returned code does.

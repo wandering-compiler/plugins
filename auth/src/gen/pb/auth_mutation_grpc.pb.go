@@ -93,6 +93,7 @@ const (
 	AuthMutation_RegisterAuthClient_FullMethodName             = "/w17.contrib.auth.AuthMutation/RegisterAuthClient"
 	AuthMutation_SetAuthClientEnabled_FullMethodName           = "/w17.contrib.auth.AuthMutation/SetAuthClientEnabled"
 	AuthMutation_DeleteAuthClient_FullMethodName               = "/w17.contrib.auth.AuthMutation/DeleteAuthClient"
+	AuthMutation_ClaimBootstrapAdmin_FullMethodName            = "/w17.contrib.auth.AuthMutation/ClaimBootstrapAdmin"
 	AuthMutation_CreateOAuthLoginCode_FullMethodName           = "/w17.contrib.auth.AuthMutation/CreateOAuthLoginCode"
 	AuthMutation_ConsumeOAuthLoginCode_FullMethodName          = "/w17.contrib.auth.AuthMutation/ConsumeOAuthLoginCode"
 	AuthMutation_CreateCliAuthCode_FullMethodName              = "/w17.contrib.auth.AuthMutation/CreateCliAuthCode"
@@ -434,6 +435,11 @@ type AuthMutationClient interface {
 	SetAuthClientEnabled(ctx context.Context, in *SetAuthClientEnabledReq, opts ...grpc.CallOption) (*SetAuthClientEnabledResp, error)
 	// DeleteAuthClient — remove a registration outright.
 	DeleteAuthClient(ctx context.Context, in *DeleteAuthClientReq, opts ...grpc.CallOption) (*DeleteAuthClientResp, error)
+	// ClaimBootstrapAdmin takes the bootstrap-administrator slot for the user
+	// being created, inside its sign-up transaction. `written` is 1 for the
+	// one sign-up that took it and 0 for every other: a concurrent sign-up
+	// waits on the key and then conflicts. See BootstrapClaim.
+	ClaimBootstrapAdmin(ctx context.Context, in *ClaimBootstrapAdminReq, opts ...grpc.CallOption) (*ClaimBootstrapAdminResp, error)
 	// CreateOAuthLoginCode stores the single-use code an OAuth callback hands
 	// the browser, bound to a sha256 digest of the authorize step's PKCE challenge.
 	CreateOAuthLoginCode(ctx context.Context, in *CreateOAuthLoginCodeReq, opts ...grpc.CallOption) (*CreateOAuthLoginCodeResp, error)
@@ -1211,6 +1217,16 @@ func (c *authMutationClient) DeleteAuthClient(ctx context.Context, in *DeleteAut
 	return out, nil
 }
 
+func (c *authMutationClient) ClaimBootstrapAdmin(ctx context.Context, in *ClaimBootstrapAdminReq, opts ...grpc.CallOption) (*ClaimBootstrapAdminResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimBootstrapAdminResp)
+	err := c.cc.Invoke(ctx, AuthMutation_ClaimBootstrapAdmin_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authMutationClient) CreateOAuthLoginCode(ctx context.Context, in *CreateOAuthLoginCodeReq, opts ...grpc.CallOption) (*CreateOAuthLoginCodeResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateOAuthLoginCodeResp)
@@ -1694,6 +1710,11 @@ type AuthMutationServer interface {
 	SetAuthClientEnabled(context.Context, *SetAuthClientEnabledReq) (*SetAuthClientEnabledResp, error)
 	// DeleteAuthClient — remove a registration outright.
 	DeleteAuthClient(context.Context, *DeleteAuthClientReq) (*DeleteAuthClientResp, error)
+	// ClaimBootstrapAdmin takes the bootstrap-administrator slot for the user
+	// being created, inside its sign-up transaction. `written` is 1 for the
+	// one sign-up that took it and 0 for every other: a concurrent sign-up
+	// waits on the key and then conflicts. See BootstrapClaim.
+	ClaimBootstrapAdmin(context.Context, *ClaimBootstrapAdminReq) (*ClaimBootstrapAdminResp, error)
 	// CreateOAuthLoginCode stores the single-use code an OAuth callback hands
 	// the browser, bound to a sha256 digest of the authorize step's PKCE challenge.
 	CreateOAuthLoginCode(context.Context, *CreateOAuthLoginCodeReq) (*CreateOAuthLoginCodeResp, error)
@@ -2014,6 +2035,9 @@ func (UnimplementedAuthMutationServer) SetAuthClientEnabled(context.Context, *Se
 }
 func (UnimplementedAuthMutationServer) DeleteAuthClient(context.Context, *DeleteAuthClientReq) (*DeleteAuthClientResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteAuthClient not implemented")
+}
+func (UnimplementedAuthMutationServer) ClaimBootstrapAdmin(context.Context, *ClaimBootstrapAdminReq) (*ClaimBootstrapAdminResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClaimBootstrapAdmin not implemented")
 }
 func (UnimplementedAuthMutationServer) CreateOAuthLoginCode(context.Context, *CreateOAuthLoginCodeReq) (*CreateOAuthLoginCodeResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateOAuthLoginCode not implemented")
@@ -3253,6 +3277,24 @@ func _AuthMutation_DeleteAuthClient_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthMutation_ClaimBootstrapAdmin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimBootstrapAdminReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).ClaimBootstrapAdmin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_ClaimBootstrapAdmin_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).ClaimBootstrapAdmin(ctx, req.(*ClaimBootstrapAdminReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthMutation_CreateOAuthLoginCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateOAuthLoginCodeReq)
 	if err := dec(in); err != nil {
@@ -3807,6 +3849,10 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteAuthClient",
 			Handler:    _AuthMutation_DeleteAuthClient_Handler,
+		},
+		{
+			MethodName: "ClaimBootstrapAdmin",
+			Handler:    _AuthMutation_ClaimBootstrapAdmin_Handler,
 		},
 		{
 			MethodName: "CreateOAuthLoginCode",
