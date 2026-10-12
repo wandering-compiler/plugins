@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -403,7 +404,10 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 			// permanent refusal instead would strand it.
 			if undo != nil && (errors.Is(err, backend.ErrInvalidRequest) || errors.Is(err, backend.ErrDeclined)) {
 				if uerr := undo(); uerr != nil {
-					return nil, status.Errorf(codes.Unavailable, "payment: the refund was refused (%v) and its credit could not be given back yet; retry: %v", err, uerr)
+					// The provider's text stays in the log, like every other
+					// provider failure: it can carry the request's details.
+					slog.Warn("payment: refund refused, credit not given back yet", "err", err, "undo_err", uerr)
+					return nil, status.Error(codes.Unavailable, "payment: the refund was refused and its credit could not be given back yet; retry")
 				}
 			}
 			return nil, providerFailure(err)

@@ -121,3 +121,23 @@ func TestFlow_CallerSpendKeyCannotNameTheTakeBack(t *testing.T) {
 		t.Errorf("balance = %s, want 5.0000 (1 spent, 4 refunded)", got)
 	}
 }
+
+// A refused top-up refund whose credit cannot be given back yet answers
+// Unavailable, so the caller retries, and like every provider failure it
+// does not hand the caller the provider's text.
+func TestFlow_RefusedTopUpRefundWithAFailedUndo_KeepsTheProviderTextInside(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	r.stripe.failNext(400)
+	// Let the take-back apply, then fail the undo that follows the refusal.
+	r.store.onceBefore("ApplyCredit", func() {
+		r.store.onceBefore("ApplyCredit", func() { r.store.injectBefore("ApplyCredit", errTransient) })
+	})
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"})
+	wantCode(t, err, codes.Unavailable, "refused refund with a failed undo")
+	for _, leak := range []string{"injected", "/v1/", "stripe", "connection reset"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("the answer carries %q: %v", leak, err)
+		}
+	}
+}

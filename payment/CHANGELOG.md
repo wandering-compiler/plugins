@@ -16,6 +16,14 @@ What changes:
 - **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
 
+### The provider's text stays out of one more answer
+
+When a top-up refund was refused and giving its credit back then failed, `RefundPayment` answered with the provider's error text and the store error in the message. It now answers with a fixed sentence, like every other provider failure, and logs both causes.
+
+### Refunds are indexed by payment
+
+`Refund.payment_id` gains an index. `SumRefundsForPayment` totals a payment's refunds on every refund, and it scanned the table. The migration adds one index.
+
 ### Spending credit works on a real database
 
 `SpendCredit`, and taking back a refunded top-up's credit, were refused as "insufficient credit balance" whatever the balance. `ApplyCredit` wrote the balance with an upsert that inserted the delta, and the database checks `balance >= 0` on the row an INSERT proposes before it notices the conflict that would turn the insert into an update. For a debit, the proposed balance is negative. The in-memory store the tests used did not behave like that.

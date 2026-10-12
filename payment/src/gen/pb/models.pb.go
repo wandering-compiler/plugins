@@ -386,8 +386,9 @@ func (x *Payment) GetUpdatedAt() *timestamppb.Timestamp {
 // Refund — a reversal of a Payment. v1 records the provider refund id +
 // amount; partial refunds are supported (amount may be < the payment).
 type Refund struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Indexed: SumRefundsForPayment totals a payment's refunds on every refund.
 	PaymentId        string                 `protobuf:"bytes,2,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
 	ProviderRefundId string                 `protobuf:"bytes,3,opt,name=provider_refund_id,json=providerRefundId,proto3" json:"provider_refund_id,omitempty"`
 	Amount           string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
@@ -1268,11 +1269,11 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"\x06FAILED\x10\x04\x12\f\n" +
 	"\bCANCELED\x10\x05\x12\f\n" +
-	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\xe2\x02\n" +
+	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\xe8\x02\n" +
 	"\x06Refund\x12\x1b\n" +
-	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
+	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12+\n" +
 	"\n" +
-	"payment_id\x18\x02 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\tpaymentId\x129\n" +
+	"payment_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\tpaymentId\x129\n" +
 	"\x12provider_refund_id\x18\x03 \x01(\tB\v\xca\xf3\x18\a\b\x018\x01@\xff\x01R\x10providerRefundId\x12-\n" +
 	"\x06amount\x18\x04 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x06amount\x12$\n" +
 	"\bcurrency\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x12F\n" +
