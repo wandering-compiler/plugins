@@ -300,6 +300,11 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	if err != nil {
 		return nil, providerFailure(err)
 	}
+	if found && !sameDecimal(res.Amount.Amount, amount) {
+		// The key names a refund of another amount, which the provider's
+		// idempotency check would refuse too: answered like sameRefund.
+		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
+	}
 	if !found {
 		res, err = h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
 			backend.Money{Amount: amount, Currency: payment.GetCurrency()},

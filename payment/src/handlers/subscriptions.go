@@ -187,6 +187,12 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 	if err != nil {
 		return nil, providerFailure(err)
 	}
+	if found && res.ProviderPriceID != plan.GetProviderPriceId() {
+		// The key names a subscription to another plan, which the provider's
+		// idempotency check would refuse too. Recording it would file that
+		// subscription under this plan.
+		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different subscription")
+	}
 	if !found {
 		res, err = h.Backend.StartSubscription(ctx, backend.SubscriptionSpec{
 			ProviderCustomerID: cust.GetProviderCustomerId(),

@@ -40,8 +40,9 @@ The provider remembers an idempotency key for about a day. After that a retried 
 
 - **The key now also rides in the refund's and the subscription's metadata** (`w17_refund`, `w17_subscribe`), where it does not expire.
 - **Before making a refund or starting a subscription, the plugin asks the provider** whether one exists under that key, using the new `Backend.FindRefund` and `Backend.FindSubscription`. If one does, the plugin records it and makes no second one.
-- **A custom backend implements the two lookups.** A provider without metadata can return "not found", which keeps the old behaviour.
-
+- **The found object must be the one the retry asks for.** A refund found under the key with another amount, or a subscription found under it on another plan, is `AlreadyExists` — as when the local record holds the key — and is not recorded.
+- **A custom backend implements the two lookups (breaking for a custom `backend.Backend`).** A found refund reports its `Amount` and a found subscription its `ProviderPriceID`. A provider without metadata can return "not found", which keeps the old behaviour.
+- A refund or subscription made before this version carries no key in its metadata and is not recognised this way.
 
 ### Run a project against Stripe's API mock
 

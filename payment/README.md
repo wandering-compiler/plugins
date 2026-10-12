@@ -26,8 +26,12 @@ driver.**
     sent verbatim): a retry with the same key, payment and amount returns
     the recorded refund; the same key with another amount is
     `AlreadyExists`, on another payment `InvalidArgument`. The key is kept
-    and looked up before the provider is asked, so a retry after the
-    provider has forgotten its idempotency key does not refund twice.
+    and looked up before the provider is asked, and it also rides in the
+    provider refund's metadata (`w17_refund`), which the plugin searches
+    before refunding: a retry after the provider has forgotten its
+    idempotency key does not refund twice, even when the first attempt's
+    local record failed. A refund made before rc.5 carries no such
+    metadata.
     Privileged / internal (not REST-exposed).
   - `IngestStripe` — webhook sink (gated `stripe_webhooks`): verify the
     `Stripe-Signature` HMAC (constant-time, multi-`v1`) + timestamp
@@ -210,7 +214,7 @@ defines plans; the plugin pushes each to the provider and stamps the
 returned `provider_price_id`); **subscription lifecycle status is
 provider-authoritative** (created on subscribe, reconciled from
 webhooks). Off by default. This is the one feature that extends
-`backend.Backend` (`UpsertPlan`, `StartSubscription`).
+`backend.Backend` (`UpsertPlan`, `StartSubscription`, `FindSubscription`).
 
 - **Models** — `Plan` (slug-keyed catalogue, `provider_price_id`) +
   `Subscription` (status enum, `current_period_end`). The status is the
@@ -225,7 +229,12 @@ webhooks). Off by default. This is the one feature that extends
     different amount / currency / interval is `AlreadyExists`).
     Privileged / admin — NOT REST-exposed.
   - `Subscribe` — ensure the customer, start the provider subscription,
-    persist the local record (`POST /subscriptions`).
+    persist the local record (`POST /subscriptions`). The
+    `idempotency_key` rides in the subscription's metadata
+    (`w17_subscribe`); before starting one the plugin looks for the
+    customer's subscription under that key, in any status, so a retry
+    after the provider has forgotten the key starts no second one. The
+    same key with another plan is `AlreadyExists`.
   - read one of the caller's via `GET /subscriptions/{id}` →
     `PaymentService.GetMySubscription` (another customer's reads as not
     found).

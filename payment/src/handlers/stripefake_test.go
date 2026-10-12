@@ -57,11 +57,12 @@ type stripeFake struct {
 }
 
 type fakeSub struct {
-	id, customer, key string // key = metadata[w17_subscribe]
+	id, customer, price, key string // key = metadata[w17_subscribe]
 }
 
 type fakeRefund struct {
-	id, intent, key string // key = metadata[w17_refund]
+	id, intent, currency, key string // key = metadata[w17_refund]
+	amount                    int64
 }
 
 type idemEntry struct {
@@ -268,7 +269,7 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 				"Refund amount is greater than unrefunded amount on charge")
 		}
 		in.refunded += amount
-		re := fakeRefund{id: f.id("re"), intent: in.id, key: r.PostForm.Get("metadata[w17_refund]")}
+		re := fakeRefund{id: f.id("re"), intent: in.id, currency: in.currency, amount: amount, key: r.PostForm.Get("metadata[w17_refund]")}
 		f.refunds = append(f.refunds, re)
 		return okJSON(map[string]any{"id": re.id, "object": "refund", "amount": amount, "status": "succeeded",
 			"metadata": map[string]string{"w17_refund": re.key}})
@@ -285,7 +286,7 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 			return stripeErr(w, http.StatusBadRequest, "invalid_request_error", "Missing required param")
 		}
 		id := f.id("sub")
-		f.subs = append(f.subs, fakeSub{id: id, customer: r.PostForm.Get("customer"), key: r.PostForm.Get("metadata[w17_subscribe]")})
+		f.subs = append(f.subs, fakeSub{id: id, customer: r.PostForm.Get("customer"), price: r.PostForm.Get("items[0][price]"), key: r.PostForm.Get("metadata[w17_subscribe]")})
 		f.origins[id] = r.PostForm.Get("metadata[w17_payment]")
 		f.installs[id] = r.PostForm.Get("metadata[w17_install]")
 		st := f.subStatus
@@ -385,7 +386,7 @@ func (f *stripeFake) listRefunds(w http.ResponseWriter, r *http.Request) {
 	for _, re := range f.refunds {
 		if re.intent == r.URL.Query().Get("payment_intent") {
 			data = append(data, map[string]any{"id": re.id, "object": "refund", "status": "succeeded",
-				"metadata": map[string]string{"w17_refund": re.key}})
+				"amount": re.amount, "currency": re.currency, "metadata": map[string]string{"w17_refund": re.key}})
 		}
 	}
 	body, _ := json.Marshal(map[string]any{"object": "list", "data": data, "has_more": false})
@@ -406,7 +407,8 @@ func (f *stripeFake) listSubs(w http.ResponseWriter, r *http.Request) {
 				st = "active"
 			}
 			data = append(data, map[string]any{"id": s.id, "object": "subscription", "status": st,
-				"current_period_end": 1893456000, "metadata": map[string]string{"w17_subscribe": s.key}})
+				"current_period_end": 1893456000, "metadata": map[string]string{"w17_subscribe": s.key},
+				"items": map[string]any{"data": []map[string]any{{"price": map[string]any{"id": s.price}}}}})
 		}
 	}
 	body, _ := json.Marshal(map[string]any{"object": "list", "data": data, "has_more": false})

@@ -159,7 +159,11 @@ func (b *Backend) FindRefund(ctx context.Context, providerPaymentID, idemKey str
 		}
 		for _, r := range list.Data {
 			if r.Metadata[refundKeyMeta] == idemKey {
-				return backend.RefundResult{ProviderRefundID: r.ID, Status: r.Status}, true, nil
+				return backend.RefundResult{
+					ProviderRefundID: r.ID,
+					Status:           r.Status,
+					Amount:           backend.Money{Amount: fromMinorUnits(r.Amount, r.Currency), Currency: r.Currency},
+				}, true, nil
 			}
 		}
 		if !list.HasMore || len(list.Data) == 0 {
@@ -242,7 +246,12 @@ func (b *Backend) FindSubscription(ctx context.Context, providerCustomerID, idem
 		}
 		for _, s := range list.Data {
 			if s.Metadata[subscribeKeyMeta] == idemKey {
-				return backend.SubscriptionResult{ProviderSubscriptionID: s.ID, Status: s.Status, CurrentPeriodEnd: s.CurrentPeriodEnd}, true, nil
+				return backend.SubscriptionResult{
+					ProviderSubscriptionID: s.ID,
+					Status:                 s.Status,
+					CurrentPeriodEnd:       s.CurrentPeriodEnd,
+					ProviderPriceID:        s.priceID(),
+				}, true, nil
 			}
 		}
 		if !list.HasMore || len(list.Data) == 0 {
