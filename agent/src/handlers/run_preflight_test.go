@@ -10,7 +10,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 )
 
-// a consumer — the third path.
+// The third path.
 //
 // The rule, established on the unary path: a request the LLM layer refuses
 // BEFORE the provider is not a failed call. Recording one invents spend, and `Unavailable` sends the

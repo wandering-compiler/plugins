@@ -14,7 +14,7 @@ func line(cost *int64, currency string, priced int64) *pb.ScopeSpendLine {
 
 func minor(v int64) *int64 { return &v }
 
-// a consumer — the two changes that met.
+// Two changes that met.
 //
 // The usage rollup's currency fix made an absent `cost_minor` mean a SECOND
 // thing: not only "nothing here was priced" but also "the currencies inside
@@ -59,7 +59,7 @@ func TestTotalSpend(t *testing.T) {
 			refused: reasonUnpriced,
 		},
 		{
-			// The reported case itself. Absent cost WITH priced calls is a line
+			// The case this refusal exists for. Absent cost WITH priced calls is a line
 			// whose spend is real and whose amount cannot be expressed.
 			name:    "a line whose currencies disagreed cannot be totalled",
 			lines:   []*pb.ScopeSpendLine{line(minor(500), "USD", 2), line(nil, "", 4)},

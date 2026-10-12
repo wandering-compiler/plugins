@@ -116,10 +116,10 @@ type Model struct {
 	//
 	// Not the same thing as saying so in the prompt. An instruction is a
 	// request the model may decline, and the decline surfaces as a parse error
-	// at the far end of whatever the answer was feeding — a consumer who lost
-	// this had to add a markdown-fence stripper to get it back, and said so:
-	// anything more than that is repairing model output, which is where a wrong
-	// answer stops looking wrong.
+	// at the far end of whatever the answer was feeding. Without this a caller
+	// ends up adding a markdown-fence stripper, and anything more than that is
+	// repairing model output, which is where a wrong answer stops looking
+	// wrong.
 	JSONObject bool
 }
 
@@ -306,10 +306,10 @@ func usageFrom(res *responses.Response) Usage {
 //
 // Returning nothing but "the model call failed" was the previous behaviour,
 // and the comment justifying it claimed the detail was in the bundle's logs.
-// Nothing logged it. A consumer bisected a one-field regression with two PAID
-// runs against a live model because the failure named neither the field nor
-// the status — so the summary is now built here, where the provider's type is
-// known, and the full error is logged by the caller.
+// Nothing logged it, and a one-field regression cost PAID runs against a live
+// model to bisect because the failure named neither the field nor the status —
+// so the summary is now built here, where the provider's type is known, and
+// the full error is logged by the caller.
 // ProviderLogLine is what the CALLER may log: everything ProviderFault gives a
 // caller, plus the request URL — and nothing else.
 //

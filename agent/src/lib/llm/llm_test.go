@@ -271,8 +271,8 @@ func TestNoFormatIsSentUnlessAsked(t *testing.T) {
 
 // TestJSONObject_RefusedLocallyWhenThePromptNeverAsksForJSON — the provider
 // refuses this format unless the prompt says the word, and refuses with a bare
-// 400 that names nothing. A consumer paid for two runs to find out which field
-// was at fault.
+// 400 that names nothing, so finding out which field was at fault costs paid
+// runs.
 //
 // The check is narrow on purpose: absent everywhere → refuse here, for free,
 // naming the cause; present anywhere → send it, and whatever the provider

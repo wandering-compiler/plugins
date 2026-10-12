@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// a consumer. Both model-call handlers logged the provider error with `%v`,
+// Both model-call handlers logged the provider error with `%v`,
 // justified by a comment saying the deployment URL is acceptable in a log. The
 // full text also carries the RESPONSE BODY, and this package's own doc records
 // that the body sometimes quotes the prompt — so user input reached a log that

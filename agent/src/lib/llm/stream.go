@@ -274,8 +274,8 @@ func paramsFor(m Model, instructions string, history []Message) (*responses.Resp
 // the system prompt travels in `instructions`, a field of its own, so a caller
 // who put "reply with JSON" there has said it — and a caller who said it
 // nowhere has a request that cannot succeed. Catching it here costs nothing
-// and names the cause; the alternative is what a consumer actually got, which
-// was an unexplained `Unavailable` bisected over two paid runs.
+// and names the cause; the alternative is an unexplained `Unavailable`,
+// bisected over paid runs.
 //
 // Deliberately NARROW: it fires only when the word is absent everywhere. It is
 // not a claim about what else may make this format fail on a given model or

@@ -119,9 +119,6 @@ type UsageQueryClient interface {
 	// The limit in force at an instant. Newest `valid_from` not after it —
 	// the same rule as a price, because a limit changed today must not
 	// retroactively make yesterday an overspend.
-	//
-	// (This paragraph spent a while stranded above ListModelPrices, where it
-	// described the wrong RPC and left this one undocumented — a consumer.)
 	GetScopeLimit(ctx context.Context, in *GetScopeLimitReq, opts ...grpc.CallOption) (*GetScopeLimitResp, error)
 }
 
@@ -259,9 +256,6 @@ type UsageQueryServer interface {
 	// The limit in force at an instant. Newest `valid_from` not after it —
 	// the same rule as a price, because a limit changed today must not
 	// retroactively make yesterday an overspend.
-	//
-	// (This paragraph spent a while stranded above ListModelPrices, where it
-	// described the wrong RPC and left this one undocumented — a consumer.)
 	GetScopeLimit(context.Context, *GetScopeLimitReq) (*GetScopeLimitResp, error)
 }
 

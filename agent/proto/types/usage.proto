@@ -16,8 +16,8 @@ option go_package = "@project;@pkg";
 // that leaves it off gets no tables and no writes — and the obligation to
 // record spend goes back to the caller, which is exactly the hole this layer
 // exists to close: a caller that must remember to record is a caller that can
-// forget, and the first consumer did forget, in one branch, for calls the
-// provider did not measure.
+// forget, and the branch it forgets is the one for calls the provider did not
+// measure.
 //
 // ── Why the fact table holds no strings ───────────────────────────────────
 //
@@ -228,10 +228,10 @@ enum LimitWindow {
 
 // Label — one interned attribution key/value pair.
 //
-// The decisive requirement from the first consumer: without a way to pin a
-// caller's own attribution to a call, the plugin answers "what did this tenant
-// spend" while their question is "what did THIS RUN cost and who is it charged
-// to" — and they keep a second set of books. Two sets of books drift, and
+// The decisive requirement: without a way to pin a caller's own attribution to
+// a call, the plugin answers "what did this tenant spend" while the caller's
+// question is "what did THIS RUN cost and who is it charged to" — and the
+// caller keeps a second set of books. Two sets of books drift, and
 // nobody notices for months.
 //
 // Interned, so the fact side stays integers. A call carries as many labels as

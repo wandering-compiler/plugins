@@ -14,8 +14,8 @@
 // of it. The v4 codegen emits a ClientSet and a three-argument RegisterPlugin
 // for EVERY plugin, so a plugin that omits them does not link — which is how
 // this one shipped unusable: the author-side contract said two arguments, the
-// bundle-side wiring called three, and nothing compared them until a consumer
-// ran `go build`.
+// bundle-side wiring called three, and nothing compared them short of a
+// consumer's `go build`.
 //
 // That the plugin ignores what it is handed is a fact about this plugin, not a
 // reason to narrow the shared contract.

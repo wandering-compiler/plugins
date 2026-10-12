@@ -33,7 +33,7 @@ func (failingCompleter) New(context.Context, responses.ResponseNewParams, ...opt
 	return nil, errors.New("provider said no")
 }
 
-// The case the first consumer got wrong, one level up: a call that FAILED is
+// The case a caller recording its own spend gets wrong, one level up: a call that FAILED is
 // still a call that may have spent tokens at the provider. Recording only the
 // happy path produces a bill that is short by exactly the calls nobody looks
 // at.
@@ -269,10 +269,10 @@ func TestRecordUsage_AnUnkeyedLabelIsDroppedNotFatal(t *testing.T) {
 // used to be the four words `agent: the model call failed`, with a comment
 // claiming the detail was in the bundle's logs. Nothing logged it.
 //
-// A consumer turned one field on, got that sentence, and had to bisect the
-// cause with two PAID runs against a live model — because the message named
+// A caller who turns one field on and gets that sentence has to bisect the
+// cause with PAID runs against a live model — because the message names
 // neither the status, nor the error type, nor the request field the provider
-// objected to. All three were in the error the whole time.
+// objected to. All three are in the error the whole time.
 func TestModelCallFailure_NamesTheProvidersObjection(t *testing.T) {
 	apiErr := &openai.Error{
 		StatusCode: 400,
@@ -304,7 +304,7 @@ func TestModelCallFailure_NamesTheProvidersObjection(t *testing.T) {
 	}
 }
 
-// a consumer. A request refused BEFORE the provider is called is not a failed
+// A request refused BEFORE the provider is called is not a failed
 // call: nothing was spent and nothing was unavailable. Recording one invents
 // spend, and `Unavailable` sends the caller to the provider's status page for
 // what is an invalid argument.

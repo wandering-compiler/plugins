@@ -256,8 +256,8 @@ func (w *Writer) loop() {
 				w.failedEvents.Add(uint64(failed))
 				// SAY so. The counters existed and nothing read them, so the only
 				// way to learn that a bill had a hole in it was to query the table
-				// and find it empty — which is what a consumer did, after
-				// hundreds of calls, with no error anywhere. A best-effort layer
+				// and find it empty, after hundreds of calls, with no error
+				// anywhere. A best-effort layer
 				// may lose a batch; it may not lose it quietly.
 				log.Printf("agent usage: flush of %d event(s) failed for %d of them: %v (%d batch(es) failed so far)",
 					len(batch), failed, err, w.failedBatches.Load())
