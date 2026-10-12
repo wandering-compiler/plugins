@@ -978,10 +978,15 @@ message ClaimBootstrapAdminResp {
 
 message CreateOAuthLoginCodeReq {
   option (w17.contrib.plugin_feature) = "oauth";
-  string user_id        = 1 [(w17.field) = { type: UUID }];
+  // Unset for a code whose account OAuthExchange will create.
+  optional string user_id = 1 [(w17.field) = { type: UUID, null: true }];
   string code_hash      = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
   string code_challenge = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+  optional string provider_id = 5 [(w17.field) = { type: UUID, null: true }];
+  string external_id    = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  string email          = 7 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  bool   email_verified = 8;
 }
 message CreateOAuthLoginCodeResp {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -994,8 +999,12 @@ message ConsumeOAuthLoginCodeReq {
 message ConsumeOAuthLoginCodeResp {
   option (w17.contrib.plugin_feature) = "oauth";
   // Empty when no unconsumed, unexpired code matched.
-  string user_id        = 1;
+  optional string user_id = 1;
   string code_challenge = 2;
+  optional string provider_id = 3;
+  string external_id    = 4;
+  string email          = 5;
+  bool   email_verified = 6;
 }
 
 message CreateCliAuthCodeReq {
@@ -2733,7 +2742,11 @@ service AuthMutation {
           "user_id = :user_id, "
           "code_hash = :code_hash, "
           "code_challenge = :code_challenge, "
-          "expires_at = :expires_at "
+          "expires_at = :expires_at, "
+          "provider_id = :provider_id, "
+          "external_id = :external_id, "
+          "email = :email, "
+          "email_verified = :email_verified "
           "RETURNING id"
       }
     };
@@ -2751,7 +2764,7 @@ service AuthMutation {
           "UPDATE @module.OAuthLoginCode SET "
           "consumed_at = NOW() "
           "WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() "
-          "RETURNING user_id, code_challenge"
+          "RETURNING user_id, code_challenge, provider_id, external_id, email, email_verified"
       }
     };
   }

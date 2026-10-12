@@ -38,6 +38,7 @@ type oauthMock struct {
 	// loginCodes mirrors OAuthLoginCode: code_hash -> row. Consume is the
 	// conditional UPDATE's semantics: one unconsumed match, then none.
 	trustedDevice bool
+	userDisabled  bool // GetUserById answers with a disabled account
 
 	loginCodes map[string]*pb.CreateOAuthLoginCodeReq
 	consumed   map[string]bool
@@ -57,7 +58,10 @@ func (m *oauthMock) ConsumeOAuthLoginCode(_ context.Context, in *pb.ConsumeOAuth
 		return &pb.ConsumeOAuthLoginCodeResp{}, nil
 	}
 	m.consumed[in.GetCodeHash()] = true
-	return &pb.ConsumeOAuthLoginCodeResp{UserId: row.GetUserId(), CodeChallenge: row.GetCodeChallenge()}, nil
+	return &pb.ConsumeOAuthLoginCodeResp{
+		UserId: row.UserId, CodeChallenge: row.GetCodeChallenge(),
+		ProviderId: row.ProviderId, ExternalId: row.GetExternalId(), Email: row.GetEmail(), EmailVerified: row.GetEmailVerified(),
+	}, nil
 }
 
 // testState signs a state the way OAuthAuthorizeURL does, bound to the
@@ -506,9 +510,11 @@ func TestOAuthCallback_GitHubNumericId(t *testing.T) {
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
 	state := testState(t, "csec", "github", "")
-	if _, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "github", Code: "c", State: state}); err != nil {
+	resp, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "github", Code: "c", State: state})
+	if err != nil {
 		t.Fatalf("callback (github): %v", err)
 	}
+	redeem(t, h, resp) // the new account and its identity are made by the exchange
 	if m.createdIdent.GetExternalId() != "987654" {
 		t.Errorf("github numeric id → external_id = %q, want 987654", m.createdIdent.GetExternalId())
 	}
@@ -610,5 +616,9 @@ func TestOAuthCallback_VerifiedEmail_LinksToExisting(t *testing.T) {
 }
 
 func (m *oauthMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+	u := &pb.User{Id: in.GetUserId()}
+	if m.userDisabled {
+		u.DisabledAt = timestamppb.Now()
+	}
+	return &pb.GetUserByIdResp{User: u}, nil
 }

@@ -105,11 +105,18 @@ func claimOpenInvite(ctx context.Context, h *AuthServiceHandler, email, inviteTo
 	case err != nil && status.Code(err) != codes.NotFound:
 		return err
 	}
+	boundElsewhere := err == nil // found, and bound to another address
 	resp, err := h.Query.ListPendingInvitesForEmail(ctx, &pb.ListPendingInvitesForEmailReq{Email: email})
 	if err != nil {
 		return err
 	}
 	if len(resp.GetInvites()) == 0 {
+		if boundElsewhere {
+			// Said apart from "not invited": the person holds a real
+			// invitation and registered with another address, which they
+			// can fix. The invitation's address is not revealed.
+			return errInviteOtherAddress
+		}
 		return errSignUpNotInvited
 	}
 	return nil
@@ -142,6 +149,7 @@ func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email, inv
 	//
 	// Read, not consumed. Acceptance is what spends a single-use invitation, and a
 	// signup that fails after this point must leave the link usable.
+	boundElsewhere := false
 	if inviteToken != "" {
 		pending, err := h.Query.GetPendingOrgInviteByToken(ctx, &pb.GetPendingOrgInviteByTokenReq{
 			TokenHash: sha256Hex(inviteToken),
@@ -152,6 +160,7 @@ func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email, inv
 			if invited := pending.GetEmail(); invited == "" || invited == email {
 				return nil
 			}
+			boundElsewhere = true
 		} else if status.Code(err) != codes.NotFound {
 			// Fail-CLOSED on a real query failure, for the reason below: the
 			// alternative admits everybody exactly when nobody is watching.
@@ -167,6 +176,9 @@ func requirePendingInvite(ctx context.Context, h *AuthServiceHandler, email, inv
 		return err
 	}
 	if len(resp.GetInvites()) == 0 {
+		if boundElsewhere {
+			return errInviteOtherAddress
+		}
 		return errSignUpNotInvited
 	}
 	return nil

@@ -6793,11 +6793,16 @@ func (x *ClaimBootstrapAdminResp) GetWritten() int32 {
 }
 
 type CreateOAuthLoginCodeReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unset for a code whose account OAuthExchange will create.
+	UserId        *string                `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
 	CodeHash      string                 `protobuf:"bytes,2,opt,name=code_hash,json=codeHash,proto3" json:"code_hash,omitempty"`
 	CodeChallenge string                 `protobuf:"bytes,3,opt,name=code_challenge,json=codeChallenge,proto3" json:"code_challenge,omitempty"`
 	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ProviderId    *string                `protobuf:"bytes,5,opt,name=provider_id,json=providerId,proto3,oneof" json:"provider_id,omitempty"`
+	ExternalId    string                 `protobuf:"bytes,6,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
+	Email         string                 `protobuf:"bytes,7,opt,name=email,proto3" json:"email,omitempty"`
+	EmailVerified bool                   `protobuf:"varint,8,opt,name=email_verified,json=emailVerified,proto3" json:"email_verified,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6833,8 +6838,8 @@ func (*CreateOAuthLoginCodeReq) Descriptor() ([]byte, []int) {
 }
 
 func (x *CreateOAuthLoginCodeReq) GetUserId() string {
-	if x != nil {
-		return x.UserId
+	if x != nil && x.UserId != nil {
+		return *x.UserId
 	}
 	return ""
 }
@@ -6858,6 +6863,34 @@ func (x *CreateOAuthLoginCodeReq) GetExpiresAt() *timestamppb.Timestamp {
 		return x.ExpiresAt
 	}
 	return nil
+}
+
+func (x *CreateOAuthLoginCodeReq) GetProviderId() string {
+	if x != nil && x.ProviderId != nil {
+		return *x.ProviderId
+	}
+	return ""
+}
+
+func (x *CreateOAuthLoginCodeReq) GetExternalId() string {
+	if x != nil {
+		return x.ExternalId
+	}
+	return ""
+}
+
+func (x *CreateOAuthLoginCodeReq) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *CreateOAuthLoginCodeReq) GetEmailVerified() bool {
+	if x != nil {
+		return x.EmailVerified
+	}
+	return false
 }
 
 type CreateOAuthLoginCodeResp struct {
@@ -6951,8 +6984,12 @@ func (x *ConsumeOAuthLoginCodeReq) GetCodeHash() string {
 type ConsumeOAuthLoginCodeResp struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Empty when no unconsumed, unexpired code matched.
-	UserId        string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	CodeChallenge string `protobuf:"bytes,2,opt,name=code_challenge,json=codeChallenge,proto3" json:"code_challenge,omitempty"`
+	UserId        *string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
+	CodeChallenge string  `protobuf:"bytes,2,opt,name=code_challenge,json=codeChallenge,proto3" json:"code_challenge,omitempty"`
+	ProviderId    *string `protobuf:"bytes,3,opt,name=provider_id,json=providerId,proto3,oneof" json:"provider_id,omitempty"`
+	ExternalId    string  `protobuf:"bytes,4,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
+	Email         string  `protobuf:"bytes,5,opt,name=email,proto3" json:"email,omitempty"`
+	EmailVerified bool    `protobuf:"varint,6,opt,name=email_verified,json=emailVerified,proto3" json:"email_verified,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6988,8 +7025,8 @@ func (*ConsumeOAuthLoginCodeResp) Descriptor() ([]byte, []int) {
 }
 
 func (x *ConsumeOAuthLoginCodeResp) GetUserId() string {
-	if x != nil {
-		return x.UserId
+	if x != nil && x.UserId != nil {
+		return *x.UserId
 	}
 	return ""
 }
@@ -6999,6 +7036,34 @@ func (x *ConsumeOAuthLoginCodeResp) GetCodeChallenge() string {
 		return x.CodeChallenge
 	}
 	return ""
+}
+
+func (x *ConsumeOAuthLoginCodeResp) GetProviderId() string {
+	if x != nil && x.ProviderId != nil {
+		return *x.ProviderId
+	}
+	return ""
+}
+
+func (x *ConsumeOAuthLoginCodeResp) GetExternalId() string {
+	if x != nil {
+		return x.ExternalId
+	}
+	return ""
+}
+
+func (x *ConsumeOAuthLoginCodeResp) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *ConsumeOAuthLoginCodeResp) GetEmailVerified() bool {
+	if x != nil {
+		return x.EmailVerified
+	}
+	return false
 }
 
 type CreateCliAuthCodeReq struct {
@@ -8979,20 +9044,38 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\x17ClaimBootstrapAdminResp\x12\x1d\n" +
 	"\awritten\x18\x01 \x01(\x05H\x00R\awritten\x88\x01\x01:\b\xfa\xf4\x18\x04rbacB\n" +
 	"\n" +
-	"\b_written\"\xe0\x01\n" +
-	"\x17CreateOAuthLoginCodeReq\x12\x1f\n" +
-	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12%\n" +
+	"\b_written\"\xab\x03\n" +
+	"\x17CreateOAuthLoginCodeReq\x12&\n" +
+	"\auser_id\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x03(\x01H\x00R\x06userId\x88\x01\x01\x12%\n" +
 	"\tcode_hash\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\bcodeHash\x12/\n" +
 	"\x0ecode_challenge\x18\x03 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\rcodeChallenge\x12A\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\texpiresAt:\t\xfa\xf4\x18\x05oauth\"5\n" +
+	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\texpiresAt\x12.\n" +
+	"\vprovider_id\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x03(\x01H\x01R\n" +
+	"providerId\x88\x01\x01\x12,\n" +
+	"\vexternal_id\x18\x06 \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xff\x01R\n" +
+	"externalId\x12!\n" +
+	"\x05email\x18\a \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xc0\x02R\x05email\x12%\n" +
+	"\x0eemail_verified\x18\b \x01(\bR\remailVerified:\t\xfa\xf4\x18\x05oauthB\n" +
+	"\n" +
+	"\b_user_idB\x0e\n" +
+	"\f_provider_id\"5\n" +
 	"\x18CreateOAuthLoginCodeResp\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id:\t\xfa\xf4\x18\x05oauth\"L\n" +
 	"\x18ConsumeOAuthLoginCodeReq\x12%\n" +
-	"\tcode_hash\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\bcodeHash:\t\xfa\xf4\x18\x05oauth\"f\n" +
-	"\x19ConsumeOAuthLoginCodeResp\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\tR\x06userId\x12%\n" +
-	"\x0ecode_challenge\x18\x02 \x01(\tR\rcodeChallenge:\t\xfa\xf4\x18\x05oauth\"\xbc\x02\n" +
+	"\tcode_hash\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\bcodeHash:\t\xfa\xf4\x18\x05oauth\"\x8b\x02\n" +
+	"\x19ConsumeOAuthLoginCodeResp\x12\x1c\n" +
+	"\auser_id\x18\x01 \x01(\tH\x00R\x06userId\x88\x01\x01\x12%\n" +
+	"\x0ecode_challenge\x18\x02 \x01(\tR\rcodeChallenge\x12$\n" +
+	"\vprovider_id\x18\x03 \x01(\tH\x01R\n" +
+	"providerId\x88\x01\x01\x12\x1f\n" +
+	"\vexternal_id\x18\x04 \x01(\tR\n" +
+	"externalId\x12\x14\n" +
+	"\x05email\x18\x05 \x01(\tR\x05email\x12%\n" +
+	"\x0eemail_verified\x18\x06 \x01(\bR\remailVerified:\t\xfa\xf4\x18\x05oauthB\n" +
+	"\n" +
+	"\b_user_idB\x0e\n" +
+	"\f_provider_id\"\xbc\x02\n" +
 	"\x14CreateCliAuthCodeReq\x12\x1f\n" +
 	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12&\n" +
 	"\tcode_hash\x18\x02 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\x80\x01R\bcodeHash\x120\n" +
@@ -9103,7 +9186,7 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"org_invite\"B\n" +
 	"\x13DeleteOrgInviteResp\x12\x1b\n" +
 	"\tinvite_id\x18\x01 \x01(\tR\binviteId:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xdc\xe9\x01\n" +
+	"org_invite2\xf7\xea\x01\n" +
 	"\fAuthMutation\x12\xd8\x02\n" +
 	"\rCreateBotUser\x12\".w17.contrib.auth.CreateBotUserReq\x1a#.w17.contrib.auth.CreateBotUserResp\"\xfd\x01\xf2\xf3\x18\xe5\x01B\xe2\x01\n" +
 	"\x04main\x12\xd9\x01INSERT INTO @module.User SET email = :email, password_hash = '!', kind = 1, ?feature(tenant_scope) tenant_id = :tenant_id RETURNING id AS user.id,           email AS user.email,           created_at AS user.created_at\x8a\xf5\x18\x0fservice_account\x12\xe5\x03\n" +
@@ -9405,11 +9488,11 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\x10DeleteAuthClient\x12%.w17.contrib.auth.DeleteAuthClientReq\x1a&.w17.contrib.auth.DeleteAuthClientResp\"[\xf2\xf3\x18JBH\n" +
 	"\x04main\x12@DELETE FROM @module.AuthClient WHERE id = :id RETURNING id AS id\x8a\xf5\x18\tcli_login\x12\xe7\x01\n" +
 	"\x13ClaimBootstrapAdmin\x12(.w17.contrib.auth.ClaimBootstrapAdminReq\x1a).w17.contrib.auth.ClaimBootstrapAdminResp\"{\xf2\xf3\x18oBm\n" +
-	"\x04main\x12eUPSERT INTO @module.BootstrapClaim SET slot = :slot, user_id = :user_id ON CONFLICT (slot) DO NOTHING\x8a\xf5\x18\x04rbac\x12\xa4\x02\n" +
-	"\x14CreateOAuthLoginCode\x12).w17.contrib.auth.CreateOAuthLoginCodeReq\x1a*.w17.contrib.auth.CreateOAuthLoginCodeResp\"\xb4\x01\xf2\xf3\x18\xa6\x01B\xa3\x01\n" +
-	"\x04main\x12\x9a\x01INSERT INTO @module.OAuthLoginCode SET user_id = :user_id, code_hash = :code_hash, code_challenge = :code_challenge, expires_at = :expires_at RETURNING id\x8a\xf5\x18\x05oauth\x12\xb0\x02\n" +
-	"\x15ConsumeOAuthLoginCode\x12*.w17.contrib.auth.ConsumeOAuthLoginCodeReq\x1a+.w17.contrib.auth.ConsumeOAuthLoginCodeResp\"\xbd\x01\xf2\xf3\x18\xaf\x01B\xac\x01\n" +
-	"\x04main\x12\xa3\x01UPDATE @module.OAuthLoginCode SET consumed_at = NOW() WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() RETURNING user_id, code_challenge\x8a\xf5\x18\x05oauth\x12\xd5\x04\n" +
+	"\x04main\x12eUPSERT INTO @module.BootstrapClaim SET slot = :slot, user_id = :user_id ON CONFLICT (slot) DO NOTHING\x8a\xf5\x18\x04rbac\x12\x8e\x03\n" +
+	"\x14CreateOAuthLoginCode\x12).w17.contrib.auth.CreateOAuthLoginCodeReq\x1a*.w17.contrib.auth.CreateOAuthLoginCodeResp\"\x9e\x02\xf2\xf3\x18\x90\x02B\x8d\x02\n" +
+	"\x04main\x12\x84\x02INSERT INTO @module.OAuthLoginCode SET user_id = :user_id, code_hash = :code_hash, code_challenge = :code_challenge, expires_at = :expires_at, provider_id = :provider_id, external_id = :external_id, email = :email, email_verified = :email_verified RETURNING id\x8a\xf5\x18\x05oauth\x12\xe1\x02\n" +
+	"\x15ConsumeOAuthLoginCode\x12*.w17.contrib.auth.ConsumeOAuthLoginCodeReq\x1a+.w17.contrib.auth.ConsumeOAuthLoginCodeResp\"\xee\x01\xf2\xf3\x18\xe0\x01B\xdd\x01\n" +
+	"\x04main\x12\xd4\x01UPDATE @module.OAuthLoginCode SET consumed_at = NOW() WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() RETURNING user_id, code_challenge, provider_id, external_id, email, email_verified\x8a\xf5\x18\x05oauth\x12\xd5\x04\n" +
 	"\x11CreateCliAuthCode\x12&.w17.contrib.auth.CreateCliAuthCodeReq\x1a'.w17.contrib.auth.CreateCliAuthCodeResp\"\xee\x03\xf2\xf3\x18\xdc\x03B\xd9\x03\n" +
 	"\x04main\x12\xd0\x03INSERT INTO @module.CliAuthCode SET user_id = :user_id, code_hash = :code_hash, code_challenge = :code_challenge, redirect_uri = :redirect_uri, client_id = :client_id, expires_at = :expires_at RETURNING id AS code.id,           user_id AS code.user_id,           code_hash AS code.code_hash,           code_challenge AS code.code_challenge,           expires_at AS code.expires_at,           consumed_at AS code.consumed_at,           created_at AS code.created_at\x8a\xf5\x18\tcli_login\x12\xc1\x02\n" +
 	"\x12ConsumeCliAuthCode\x12'.w17.contrib.auth.ConsumeCliAuthCodeReq\x1a(.w17.contrib.auth.ConsumeCliAuthCodeResp\"\xd7\x01\xf2\xf3\x18\xc5\x01B\xc2\x01\n" +
@@ -9942,6 +10025,8 @@ func file_mutations_auth_mutation_proto_init() {
 	file_types_models_proto_init()
 	file_events_auth_events_proto_init()
 	file_mutations_auth_mutation_proto_msgTypes[133].OneofWrappers = []any{}
+	file_mutations_auth_mutation_proto_msgTypes[134].OneofWrappers = []any{}
+	file_mutations_auth_mutation_proto_msgTypes[137].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

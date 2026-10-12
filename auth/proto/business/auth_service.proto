@@ -466,6 +466,13 @@ message OAuthExchangeReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string code          = 1;
   string code_verifier = 2;
+  // invite_token is the invitation a NEW account registers with — the same
+  // token SignUp takes, checked by the same rules (invite_only, a bound
+  // invitation's address, an open link spent by its first registration).
+  // Ignored when the identity already belongs to an account. It travels
+  // only here, in the page's own request, never through a URL or the
+  // provider.
+  string invite_token  = 3;
 }
 message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";

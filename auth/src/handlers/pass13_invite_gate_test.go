@@ -109,7 +109,7 @@ func TestInviteGate_RefusalIsOpaque(t *testing.T) {
 }
 
 // TestOAuthCreate_ConsultsTheInviteGate is the second door. OAuth's
-// resolveOrCreateUserByEmail creates an account for any address the IdP
+// createOAuthAccount creates an account for any address the IdP
 // asserts, so a fix that only reached SignUp would leave invite-only
 // registration open to anyone with a Google account.
 func TestOAuthCreate_ConsultsTheInviteGate(t *testing.T) {
@@ -117,7 +117,7 @@ func TestOAuthCreate_ConsultsTheInviteGate(t *testing.T) {
 		Query:      &inviteGateMock{},
 		InviteOnly: true,
 	}
-	_, err := h.resolveOrCreateUserByEmail(context.Background(), "stranger@example.com", true)
+	_, err := h.createOAuthAccount(context.Background(), "p1", "sub-1", "stranger@example.com", true, "")
 	if err == nil {
 		t.Fatal("OAuth created an account for an uninvited address under invite_only")
 	}

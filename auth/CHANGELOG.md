@@ -12,6 +12,39 @@ The admin preset authenticated through `Authenticate`, which selects an organiza
 - **An admin page over an `org_id`-scoped model now refuses** with `missing required scope: org_id`, for every caller. No organization means no `org_id` scope on the admin's storage calls. Such a page used to serve whichever single organization the caller belonged to, which was never the whole console.
 - **`tenant_scope` is unchanged.** The admin still stamps the caller's `tenant_id`, so it stays inside the caller's tenant.
 
+### OAuth and sign-up refusals carry a code
+
+An OAuth refusal used to be the bare opaque `invalid credentials`, so a page could not tell a person what to do. Every OAuth handler now answers with an `ErrorDetail` code. The status code and message stay as they were.
+
+| Code | When |
+|---|---|
+| `OAUTH_ACCOUNT_UNVERIFIED` | An account exists for the provider's address and never verified it, so it is not linked. |
+| `OAUTH_EMAIL_UNVERIFIED` | An account exists for the address and the provider did not verify it. |
+| `ACCOUNT_DISABLED` | The sign-in resolved to a disabled account. Only OAuth says this; a password sign-in still answers `INVALID_CREDENTIALS`. |
+| `OAUTH_FAILED` | Everything else: the state, the login code, the verifier, the provider's answer. |
+
+Saying these plainly tells an attacker nothing new. `OAUTH_ACCOUNT_UNVERIFIED` and `ACCOUNT_DISABLED` are reached only after the provider proved that the caller owns the address. `OAUTH_EMAIL_UNVERIFIED` is not, because the provider did not verify the address. It says only what the refusal already said: the callback succeeds when no account holds the address and refuses when one does.
+
+Only refusals this plugin made pass through as they are. A storage answer that carries its own detail (not found, a timeout) is still classified, as an outage or as `OAUTH_FAILED`.
+
+The sign-up gates gain codes too, on `SignUp` and the OAuth exchange alike. Outages still answer `AUTH_UNAVAILABLE`.
+
+| Code | When |
+|---|---|
+| `SIGNUP_NOT_INVITED` | `invite_only`, and nothing invites the address. |
+| `INVITE_OTHER_ADDRESS` | The invitation link is bound to another address (or an open link was already used by another registration), and nothing invites this one. The other address is not revealed. |
+| `SIGNUP_CLOSED` | The address is outside `sign_up_allowlist`. |
+
+### Registering through a provider can carry an invitation
+
+Under `invite_only`, an OPEN invitation (one that names no address, for example sent by SMS) could not be used to register through a provider. The callback created the account and had no way to receive the token. Only a bound invitation whose address matched the provider's worked.
+
+- **The callback no longer creates an account.** For an identity that has none, the login code keeps the provider-verified identity (subject, address, whether the provider verified it). `OAuthLoginCode` gains `provider_id`, `external_id`, `email` and `email_verified`, and `user_id` is now nullable.
+- **`OAuthExchange` creates it, with the new `invite_token`.** The rules are the same as `SignUp`: the allowlist, `invite_only`, a bound invitation's address, and an open link spent by its first registration. Without a valid invitation the exchange refuses with the gate's coded refusal. The token travels only in the page's own exchange request, never in a URL or through the provider.
+- **The user, its roles, the verified address, the spent invitation and the identity link commit together.** Before, the identity link was written after the user's transaction.
+- **An identity that already has an account ignores the token.** The exchange resolves the identity again before creating, so a second login code for the same subject (another tab) signs in to the account the first one made instead of failing.
+- **A refused registration spends the login code.** The page has to start the sign-in again, with the invitation, to retry.
+- **Generate a migration.** `OAuthLoginCode` gains four columns and `user_id` becomes nullable; the new text columns default to empty, so existing rows migrate.
 
 ### One bootstrap administrator, even under concurrent first sign-ups
 
