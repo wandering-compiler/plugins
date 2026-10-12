@@ -238,7 +238,7 @@ which.
   transaction; emits `CreditApplied`),
   `CreateCreditTopup`, `MarkTopupGranted` (guarded `granted_at IS NULL`).
   Service methods `GrantCredit`, `SpendCredit`, `TopUpCredit`. REST endpoint
-  `GET /billing/credit/balance` (storage query direct, bearer). The
+  `GET /billing/credit/balance` (`GetMyCreditBalance`, the caller's own, bearer). The
   payment-succeeded hook `grantTopupOnPaymentSuccess`.
 - **Requires / conflicts / combined files.** None declared (see finding 3).
 
@@ -250,7 +250,7 @@ which.
 | `prepaid/key-scoped` | A key MUST be scoped by operation and principal, so the same key on another principal, or a spend reusing a grant's key, is a separate apply and never a silent no-op reported as done. A caller key shaped like a stored scoped or top-up key MUST NOT match one. | Consistency & concurrency | `TestFlow_Credit_KeyReuseAcrossPrincipalsAndKinds_IsNotASilentNoOp`, `TestFlow_Credit_CallerKeyShapedLikeAScopedKey_IsNotAMatch`, `TestScopedKey`, `TestScopedKey_PartsCannotShiftAcrossEachOther` |
 | `prepaid/amount-unsigned` | Grant and spend MUST take an unsigned positive amount (validated after trimming) and apply the sign themselves. A key MUST be required. | Consistency & concurrency | `TestGrantCredit_ValidatesAmount`, `TestSpendCredit_NegatesDelta`, `TestApplyCredit_RequiresIdempotencyKey`, `TestGrantCredit` |
 | `prepaid/grant-spend-privileged` | `GrantCredit`, `SpendCredit` and `TopUpCredit` MUST NOT be in the REST preset. | Security | none (manifest only) |
-| `prepaid/read-own-balance-only` | `GET /billing/credit/balance` MUST answer only the caller's balance. | Security | none. **Not guaranteed today** (finding 1). |
+| `prepaid/read-own-balance-only` | `GET /billing/credit/balance` MUST answer only the caller's balance, and zero before the caller's first credit. | Security | `TestGetMyBalanceAndMeter_TheCallersOwn`, `TestGetMyBalanceAndMeter_ZeroBeforeTheFirstApply` |
 | `prepaid/topup-default-currency` | A top-up MUST be charged in `default_currency` only, because credit has no currency and is granted 1:1. | Consistency & concurrency | `TestFlow_TopUp_RefusesAForeignCurrency` |
 | `prepaid/topup-grants-once` | A top-up MUST grant its credit exactly once, under the key `topup:<provider payment id>`, however many times, and however concurrently, the success event arrives, including when the grant committed and the stamp failed. | Consistency & concurrency | `TestFlow_TopUpStampFailure_DoesNotDoubleGrant`, `TestFlow_TopUp_ConcurrentDuplicateDeliveries`, `TestIngestStripe_TopUpAlreadyGranted_NoOp`, `TestFlow_TopUpStampLostToAConcurrentDelivery_IsNotAFailure`, `TestFlow_TopUpGrantKeepsTheKeyEarlierVersionsWrote`. **Unit (mock) only** for the concurrent case. |
 | `prepaid/topup-grant-not-lost` | A top-up whose grant failed transiently, or whose success arrived before its `CreditTopup` row, MUST be granted on a later delivery. | Failure & configuration | `TestFlow_TopUpGrant_SurvivesATransientFailure`, `TestFlow_TopUpSuccessBeforeItsTopupRow_IsRetriedNotLost`, `TestTopupHook_MissingRow_RetriedOnlyForThisInstallation`, `TestFlow_TopUpFailurePaths` |
@@ -282,7 +282,7 @@ which.
   `reported_total`). Queries `GetUsageMeter`, `GetUsageRecordByKey`. Mutation
   `RecordUsage` (record insert and meter upsert in one transaction; emits
   `UsageRecorded`). Service method `ReportUsage`. REST endpoint
-  `GET /billing/usage/{meter}/{period}` (storage query direct, bearer).
+  `GET /billing/usage/{meter}/{period}` (`GetMyUsageMeter`, the caller's own, bearer).
 - **Requires / conflicts / combined files.** None.
 
 | id | invariant | category | proof |
@@ -293,7 +293,7 @@ which.
 | `usage/report-valid` | A report MUST name a principal, meter, period, a positive quantity and a key of at most 255 bytes. | Consistency & concurrency | `TestReportUsage_Validates`, `TestRequiredFieldRefusals` |
 | `usage/failure-surfaces` | A store failure MUST surface; it MUST NOT be answered as a duplicate. | Failure & configuration | `TestFlow_Usage_TransientFailureSurfaces` |
 | `usage/report-privileged` | `ReportUsage` MUST NOT be in the REST preset: the measuring service reports usage, not the consumer. | Security | none (manifest only) |
-| `usage/read-own-meter-only` | `GET /billing/usage/{meter}/{period}` MUST answer only the caller's meter. | Security | none. **Not guaranteed today** (finding 1). |
+| `usage/read-own-meter-only` | `GET /billing/usage/{meter}/{period}` MUST answer only the caller's meter, and zero before the caller's first report. | Security | `TestGetMyBalanceAndMeter_TheCallersOwn`, `TestGetMyBalanceAndMeter_ZeroBeforeTheFirstApply` |
 | `usage/meter-lookup-indexed` | Meter reads and upserts MUST use the composite unique index. | Performance | none (schema only) |
 
 **Gaps / suspected defects**
