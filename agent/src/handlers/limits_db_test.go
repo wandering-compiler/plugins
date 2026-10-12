@@ -290,9 +290,16 @@ func TestDBLimiter_EveryWindowIsEnforced(t *testing.T) {
 func TestDBLimiter_UnpricedSpendUnderACapFailsClosed(t *testing.T) {
 	store, l := newTestLimiter(t)
 	store.setLimit("tenant-a", 1_000_000, "USD")
-	store.setSpend("tenant-a", &pb.ScopeSpendLine{Model: "m", Calls: 4})
-	if d := l.Allow(context.Background(), "tenant-a"); d.Allowed || d.Reason != reasonUnpriced {
-		t.Errorf("decision = %+v, want the unpriced refusal", d)
+	store.setSpend("tenant-a", &pb.ScopeSpendLine{Model: "m", Calls: 4, OutputTokens: 900})
+	for i := 0; i < 5; i++ {
+		if d := l.Allow(context.Background(), "tenant-a"); d.Allowed || d.Reason != reasonUnpriced {
+			t.Fatalf("decision = %+v, want the unpriced refusal", d)
+		}
+	}
+	// The refusal is cached like a figure: a refused scope retrying must not
+	// cost a spend read per call.
+	if n := store.count("GetScopeSpend"); n != 1 {
+		t.Errorf("GetScopeSpend ran %d times for 5 refused calls, want once per TTL", n)
 	}
 }
 

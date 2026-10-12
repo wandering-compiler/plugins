@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,20 +48,18 @@ type scopeLimit struct {
 	none     bool
 }
 
-// scopeSpend is one scope's month-to-date spend as last read. currency is empty
-// when nothing priced was spent.
+// scopeSpend is one scope's spend within one window as last read. currency is
+// empty when nothing priced was spent. refused is the fail-closed reason when
+// the spend could not be totalled at all; it is cached like a figure, so a
+// refused scope does not cost a spend read on every call it makes.
 type scopeSpend struct {
 	minor    int64
 	currency string
+	refused  string
 }
 
-// dbLimiter enforces a per-scope monthly cap.
-//
-// MONTH is the only window enforced today, and that is a choice rather than an
-// omission: it is the one every consumer asked for, and a window nobody
-// exercises is a window whose arithmetic nobody has checked. DAY and TOTAL are
-// in the schema and readable; enforcing them is a small step once something
-// needs it.
+// dbLimiter enforces a per-scope cap in every window a limit can be set in:
+// the UTC day, the UTC month and all time (limitWindows).
 type dbLimiter struct {
 	q pb.UsageQueryClient
 	m pb.UsageMutationClient
@@ -85,7 +84,8 @@ const (
 	reasonOverLimit = "agent: this scope has reached its spending limit"
 
 	reasonUnpriced = "agent: this scope has a spending limit and has made calls on a model with no " +
-		"price, so its spending cannot be totalled. Price the model, or lift the limit."
+		"price, so its spending cannot be totalled. Price the model from before those calls (a price " +
+		"reaches only calls made after its valid_from), or lift the limit."
 
 	reasonMixedCurrency = "agent: this scope's spending cannot be totalled — its models are priced in " +
 		"more than one currency, and a limit is a single amount. Price them alike, or lift the limit."
@@ -177,7 +177,12 @@ func (l *dbLimiter) allowIn(ctx context.Context, scope string, scopeID int64, w 
 		return LimitDecision{Allowed: true}
 	}
 
-	spent, ok := l.spend.get(key, now)
+	// The window's start is part of the spend key: a figure read just before
+	// midnight UTC (or the month's end) is yesterday's total, and reusing it
+	// for its TTL into the new window refused a scope that had spent nothing
+	// in it yet.
+	spendKey := key + "\x00" + strconv.FormatInt(windowStart(w, now).Unix(), 10)
+	spent, ok := l.spend.get(spendKey, now)
 	if !ok {
 		resp, sErr := l.q.GetScopeSpend(ctx, &pb.GetScopeSpendReq{
 			ScopeId: scopeID,
@@ -198,10 +203,18 @@ func (l *dbLimiter) allowIn(ctx context.Context, scope string, scopeID int64, w 
 			// overspend against a limit somebody set deliberately. An
 			// operator fixes it by pricing the scope's models (alike); a
 			// caller cannot fix it by retrying, so the reason says which it is.
+			//
+			// Cached for the spend TTL like any figure: the reason does not
+			// change between calls, and re-reading the spend on every refused
+			// call put a database round trip in front of each retry.
+			l.spend.put(spendKey, scopeSpend{refused: verdict}, now)
 			return LimitDecision{Allowed: false, Reason: verdict}
 		}
 		spent = scopeSpend{minor: total, currency: currency}
-		l.spend.put(key, spent, now)
+		l.spend.put(spendKey, spent, now)
+	}
+	if spent.refused != "" {
+		return LimitDecision{Allowed: false, Reason: spent.refused}
 	}
 
 	// The other place, for the same reason. The spend was totalled within ONE
@@ -256,6 +269,11 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 //	                        to contribute nothing, so a capped scope that used
 //	                        only unpriced models was never refused, however
 //	                        much it spent. Tokens nobody priced are not free.
+//	priced = 0, no tokens   contributes nothing: those calls spent nothing.
+//	                        A failed call is recorded under the model the
+//	                        CALLER asked for, so refusing here let one typo in
+//	                        a model name lock the scope out — for the rest of
+//	                        the window, and for good under a TOTAL limit.
 //
 // A pure function because the decision is the thing worth pinning, and the
 // generated clients around it are not: there was no test on this file at all
@@ -265,6 +283,8 @@ func totalSpend(lines []*pb.ScopeSpendLine) (int64, string, string) {
 	byCurrency := map[string]int64{}
 	for _, line := range lines {
 		switch {
+		case line.GetPricedCalls() == 0 && line.GetInputTokens() == 0 && line.GetOutputTokens() == 0 &&
+			line.GetCachedInputTokens() == 0 && line.GetReasoningTokens() == 0:
 		case line.GetCalls() > line.GetPricedCalls():
 			return 0, "", reasonUnpriced
 		case line.CostMinor != nil:

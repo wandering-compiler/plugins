@@ -42,8 +42,16 @@ func TestTotalSpend(t *testing.T) {
 			// model with no price used to contribute nothing, so a scope on
 			// unpriced models was never refused.
 			name:    "calls on an unpriced model cannot be totalled",
-			lines:   []*pb.ScopeSpendLine{line(minor(500), "USD", 2), {Calls: 3}},
+			lines:   []*pb.ScopeSpendLine{line(minor(500), "USD", 2), {Calls: 3, InputTokens: 10}},
 			refused: reasonUnpriced,
+		},
+		{
+			// A failed call on a model name the caller made up spent nothing,
+			// and is recorded under that name. Refusing it locked the scope
+			// out over a typo.
+			name:  "unpriced calls that spent no tokens contribute nothing",
+			lines: []*pb.ScopeSpendLine{line(minor(500), "USD", 2), {Calls: 3}},
+			want:  500, currency: "USD",
 		},
 		{
 			name:    "a line priced only in part cannot be totalled",

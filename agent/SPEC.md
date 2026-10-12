@@ -194,8 +194,9 @@ which.
 - **Mechanics.** An asynchronous writer (`lib/usage`): queue 4096, batch 64,
   flush every 5 s or at 64 events, 30 s per flush, drained by a shutdown hook.
   Interning runs in the flush, cached in bounded two-generation caches. The
-  limiter enforces a monthly cap per scope from a spend figure cached 30 s and
-  a limit cached 5 minutes, per process.
+  limiter enforces a cap per scope in each window a limit is set in (UTC day,
+  UTC month, all time), from a spend figure cached 30 s and a limit cached
+  5 minutes, per scope and window, per process.
 - **Requires / conflicts / combined files.** None.
 
 | id | invariant | category | proof |
@@ -235,7 +236,7 @@ which.
 
 1. **Admission, not reservation.** The cap is read before a call and never reserves the call's cost. One admitted `RunAgent` (asked once at its start) or one call with `max_tokens < 0` can spend any amount past the cap. The slack also multiplies by the number of replicas, and a crash loses whatever is queued (up to 4096 events), which the cap then never sees.
 2. **The first call for a new scope writes in front of the provider.** `scopeID` interns the scope (an UPSERT) on the request path when the id is not cached. The cache is bounded, so a caller cycling through many scopes makes this a write per call.
-3. **No composite index for spend reads.** `GetScopeSpend` and `GetLabelSpend` filter `scope_id` and a `started_at` range, but `Usage` has only single-column indexes. The limiter re-reads month-to-date spend every 30 s per scope per replica, so the cost of that read grows with the scope's history inside the month and, without a `(scope_id, started_at)` index, with all of it.
+3. **No composite index for spend reads.** `GetScopeSpend` and `GetLabelSpend` filter `scope_id` and a `started_at` range, but `Usage` has only single-column indexes. The limiter re-reads each capped window's spend every 30 s per scope per replica, so the cost of that read grows with the scope's history inside the window — for a `TOTAL` limit, all of it — and, without a `(scope_id, started_at)` index, with all of it for every window.
 4. **`ScopeLimit` has no uniqueness.** Two limits for one scope and window with the same `valid_from` are both accepted, and `GetScopeLimit` picks one of them arbitrarily.
 5. **A row and its labels are not one unit of work.** `RecordUsage` and each `AttachUsageLabel` are separate statements; a failure or crash between them leaves a row with part of its attribution. It is counted, not prevented.
 6. **The flush log line quotes the database error,** which can carry a scope or label value. Labels are the caller's free text.
@@ -411,13 +412,15 @@ With such a sandbox, the suite should cover:
    rollup; half-open boundaries; a call labelled with two values of one key
    counted under both (`usage_persistence/cost-computed-not-stored`,
    `unpriced-is-absent`, `half-open-periods`).
-4. **Limits**: a monthly cap refuses the next call once the spend is flushed
-   and the cache expires; the measured overspend stays within the stated
-   bound (`usage_persistence/limit-slack-bounded`); currency mismatch fails
-   closed; the database down fails open; the UTC month boundary. Expected red
-   until fixed: a `DAY` or `TOTAL` cap (finding 10), a scope over 128
-   characters (finding 9), a capped scope on an unpriced model (finding 11),
-   a bundle missing a usage client (finding 12).
+4. **Limits**: a `DAY`, `MONTH` and `TOTAL` cap each refuses the next call
+   once the spend is flushed and the cache expires; the measured overspend
+   stays within the stated bound (`usage_persistence/limit-slack-bounded`);
+   currency mismatch fails closed; the database down fails open; the UTC day
+   and month boundaries; a scope over 128 characters is refused (finding 9);
+   a capped scope with unpriced calls that spent tokens is refused, and stays
+   refused after a price that starts later, until the window ends or the
+   price is backdated (finding 11); a bundle missing a usage client does not
+   boot (finding 12).
 5. **Streams over the real gateway**: SSE framing of `CompleteStream`; a client
    disconnect mid-answer closes the sandbox's stream and records one failed,
    unmeasured row (`base/stream-cancel-stops-spend`); the caller's deadline

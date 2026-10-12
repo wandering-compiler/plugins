@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -85,6 +86,18 @@ const (
 // failed open, and the usage row could not be written. A label too long for
 // its column took its whole batch down at flush the same way.
 func (h *AgentServiceHandler) admitSpend(ctx context.Context, scope string, labels map[string]string) error {
+	// A NUL is valid UTF-8 and so passes the wire, but PostgreSQL text cannot
+	// hold one: the scope would fail to intern (the limiter fails open) and
+	// the row would fail at flush — the same served-and-lost path as a scope
+	// that is too long.
+	if strings.ContainsRune(scope, 0) {
+		return status.Error(codes.InvalidArgument, "agent: usage_scope contains a NUL character")
+	}
+	for k, v := range labels {
+		if strings.ContainsRune(k, 0) || strings.ContainsRune(v, 0) {
+			return status.Error(codes.InvalidArgument, "agent: a usage label contains a NUL character")
+		}
+	}
 	if n := utf8.RuneCountInString(scope); n > MaxUsageScopeLen {
 		return status.Errorf(codes.InvalidArgument,
 			"agent: usage_scope is %d characters; at most %d are accepted", n, MaxUsageScopeLen)
