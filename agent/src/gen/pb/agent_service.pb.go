@@ -496,7 +496,8 @@ type ToolSpec struct {
 	// the declaration and not to your method, because the same method is phrased
 	// differently in different agents.
 	Activity string `protobuf:"bytes,3,opt,name=activity,proto3" json:"activity,omitempty"`
-	// JSON Schema of the arguments. Empty means a tool that takes none.
+	// JSON Schema of the arguments. Empty means a tool that takes none; anything
+	// else MUST be a JSON object, or the run is refused before the first turn.
 	//
 	// Be opt-IN about what you put here: the model only knows what this says, and
 	// a field you leave out is a field it cannot ask you to filter on.
@@ -808,8 +809,10 @@ func (x *ToolCall) GetArguments() string {
 // Activity is what is happening, for whoever is watching. Never required for
 // correctness — a consumer that ignores every Activity gets the same answer.
 type Activity struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	ActivityId string                 `protobuf:"bytes,1,opt,name=activity_id,json=activityId,proto3" json:"activity_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// For a tool, the `call_id` of the ToolCall this activity brackets. A tool
+	// name the model invented gets no Activity at all.
+	ActivityId string `protobuf:"bytes,1,opt,name=activity_id,json=activityId,proto3" json:"activity_id,omitempty"`
 	// Empty at the top level; otherwise the activity this one runs inside.
 	ParentActivityId string `protobuf:"bytes,2,opt,name=parent_activity_id,json=parentActivityId,proto3" json:"parent_activity_id,omitempty"`
 	// What to show — the ToolSpec.activity of the tool being run.

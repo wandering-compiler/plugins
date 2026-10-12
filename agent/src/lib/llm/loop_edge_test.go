@@ -320,7 +320,8 @@ func TestRun_TheGuardStopsALoopingAnswer(t *testing.T) {
 }
 
 // A model that asks for a tool nobody declared is told so; the run goes on.
-// The answer goes back under the model's own call id.
+// The answer goes back to the provider under the model's own call id; the
+// event carries the loop's fresh id and is marked undeclared.
 func TestRun_AnInventedToolIsToldSoUnderItsCallID(t *testing.T) {
 	var seen []string
 	_, err := runWith(t, [][]map[string]any{
@@ -328,7 +329,10 @@ func TestRun_AnInventedToolIsToldSoUnderItsCallID(t *testing.T) {
 		{delta("ok"), completed(StatusCompleted, "", 5)},
 	}, []Tool{&testTool{name: "search"}}, Limits{}, func(e RunEvent) error {
 		if e.ToolFinished != nil {
-			seen = append(seen, e.ToolFinished.CallID+"="+e.ToolFinished.Result)
+			if e.ToolFinished.Declared || e.ToolFinished.CallID == "c9" {
+				t.Errorf("event = %+v; want an undeclared call under a fresh id", e.ToolFinished)
+			}
+			seen = append(seen, "c9="+e.ToolFinished.Result)
 			if e.ToolFinished.Err != nil {
 				t.Error("an unknown tool was reported as a failed call — it is information, not a failure")
 			}

@@ -10,6 +10,14 @@
 - **A missing limiter refuses the boot.** With `usage_persistence` on, a client set without `UsageQuery` or `UsageMutation` used to install the allow-all limiter silently. `RegisterPlugin` now fails, as it already did for a missing usage sink.
 - The over-limit reason no longer says "for the current month", since any window can refuse.
 
+### RunAgent keeps its contract
+
+- **`Limits.tool_timeout_seconds` works.** It was ignored, so a caller that never answered a `ToolCall` held the run open. A tool past it now fails alone: the model reads that it did not answer in time, the activity ends as failed, and the run goes on. A late result is dropped.
+- **`Activity` shows the declared `ToolSpec.activity`** (the tool's name when it has none). Its `activity_id` is the `call_id` of the `ToolCall` it brackets. A tool name the model invented gets no `Activity`; the model is still told there is no such tool.
+- **`Finished.text` is every delta shown,** across all turns. It used to hold only the last turn's text, so text streamed beside tool calls was missing.
+- **The last turn applies nothing.** It offers no tools. Calls a provider returns on it anyway are no longer run, and the run ends with the turn limit as before.
+- **A `params_schema` that is not a JSON object is refused before the first turn.** It used to be replaced by `{"type":"object"}`, offering the tool with no argument contract.
+
 ## 0.1.0-rc.5
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sync`, `x/crypto`, `x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update agent`.

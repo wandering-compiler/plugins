@@ -360,7 +360,7 @@ func TestRemoteToolTranslation(t *testing.T) {
 		want   string
 	}{
 		{`{"type":"object","properties":{"q":{"type":"string"}}}`, `{"type":"object","properties":{"q":{"type":"string"}}}`},
-		{`{"type":`, ""},
+		{`{"type":`, `{"type":`}, // passed through; the loop refuses it before the first turn
 		{"", ""},
 	} {
 		rt := &remoteTool{spec: &pb.ToolSpec{Name: "n", Purpose: "p", ParamsSchema: tc.schema, Mutating: true}}

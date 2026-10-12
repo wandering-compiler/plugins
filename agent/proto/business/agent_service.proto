@@ -195,7 +195,8 @@ message ToolSpec {
   // differently in different agents.
   string activity = 3;
 
-  // JSON Schema of the arguments. Empty means a tool that takes none.
+  // JSON Schema of the arguments. Empty means a tool that takes none; anything
+  // else MUST be a JSON object, or the run is refused before the first turn.
   //
   // Be opt-IN about what you put here: the model only knows what this says, and
   // a field you leave out is a field it cannot ask you to filter on.
@@ -290,6 +291,8 @@ message ToolCall {
 // Activity is what is happening, for whoever is watching. Never required for
 // correctness — a consumer that ignores every Activity gets the same answer.
 message Activity {
+  // For a tool, the `call_id` of the ToolCall this activity brackets. A tool
+  // name the model invented gets no Activity at all.
   string activity_id = 1;
   // Empty at the top level; otherwise the activity this one runs inside.
   string parent_activity_id = 2;

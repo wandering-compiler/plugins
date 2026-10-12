@@ -197,25 +197,29 @@ type remoteTool struct {
 	pending *pendingCalls
 }
 
-func (t *remoteTool) Name() string    { return t.spec.GetName() }
-func (t *remoteTool) Purpose() string { return t.spec.GetPurpose() }
-func (t *remoteTool) Mutating() bool  { return t.spec.GetMutating() }
+func (t *remoteTool) Name() string     { return t.spec.GetName() }
+func (t *remoteTool) Purpose() string  { return t.spec.GetPurpose() }
+func (t *remoteTool) Mutating() bool   { return t.spec.GetMutating() }
+func (t *remoteTool) Activity() string { return t.spec.GetActivity() }
 
 func (t *remoteTool) Params() json.RawMessage {
 	s := t.spec.GetParamsSchema()
 	if s == "" {
 		return nil
 	}
-	// Validated here rather than passed through: a schema the provider rejects
-	// fails the whole turn, and the caller who wrote it would see only that.
-	if !json.Valid([]byte(s)) {
-		return nil
-	}
+	// Passed through as written: the loop refuses a schema that is not a JSON
+	// object before the first turn. It used to be dropped here, and the tool
+	// was offered with no argument contract.
 	return json.RawMessage(s)
 }
 
 func (t *remoteTool) Call(ctx context.Context, args string) (string, error) {
-	callID := llm.NewCallID()
+	// The loop's id for this call, so the ToolCall and the Activity that
+	// brackets it carry the same one.
+	callID := llm.CallID(ctx)
+	if callID == "" {
+		callID = llm.NewCallID()
+	}
 	wait := t.pending.add(callID)
 	defer t.pending.drop(callID)
 
@@ -346,12 +350,20 @@ func sendRunEvent(send func(*pb.RunAgentEvent) error, e llm.RunEvent) error {
 	case e.Delta != "":
 		return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Delta{Delta: &pb.TextDelta{Text: e.Delta}}})
 	case e.ToolStarted != nil:
+		if !e.ToolStarted.Declared {
+			// A name the model invented: nothing about it is display-safe,
+			// and the model reads "no such tool" as the result.
+			return nil
+		}
 		return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Activity{Activity: &pb.Activity{
 			ActivityId: e.ToolStarted.CallID,
-			Text:       e.ToolStarted.Name,
+			Text:       e.ToolStarted.Activity,
 		}}})
 	case e.ToolFinished != nil:
-		a := &pb.Activity{ActivityId: e.ToolFinished.CallID, Text: e.ToolFinished.Name, Finished: true}
+		if !e.ToolFinished.Declared {
+			return nil
+		}
+		a := &pb.Activity{ActivityId: e.ToolFinished.CallID, Text: e.ToolFinished.Activity, Finished: true}
 		if e.ToolFinished.Err != nil {
 			// Deliberately not the error's text: a tool's error is the caller's
 			// own string and may quote anything. The activity says THAT it
@@ -485,6 +497,7 @@ func limitsFrom(l *pb.Limits) llm.Limits {
 		MaxTurns:     int(l.GetMaxTurns()),
 		MaxToolCalls: int(l.GetMaxToolCalls()),
 		MaxParallel:  int(l.GetMaxParallel()),
+		ToolTimeout:  time.Duration(l.GetToolTimeoutSeconds()) * time.Second,
 	}
 }
 
