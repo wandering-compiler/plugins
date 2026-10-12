@@ -9,6 +9,8 @@ The admin preset authenticated through `Authenticate`, which selects an organiza
 - **New `AuthService.AuthenticateAdmin`**, which the admin preset now uses as its `user_lookup`. It is `Authenticate` with no organization selected, so only realm-wide roles survive the narrowing, and ownership grants nothing. The admin is one console across every organization.
 - **App endpoints are unchanged.** They keep `Authenticate` and its organization scoping.
 - **A project that wires `user_lookup` by hand** should point it at `AuthenticateAdmin`.
+- **An admin page over an `org_id`-scoped model now refuses** with `missing required scope: org_id`, for every caller. No organization means no `org_id` scope on the admin's storage calls. Such a page used to serve whichever single organization the caller belonged to, which was never the whole console.
+- **`tenant_scope` is unchanged.** The admin still stamps the caller's `tenant_id`, so it stays inside the caller's tenant.
 
 
 ### One bootstrap administrator, even under concurrent first sign-ups

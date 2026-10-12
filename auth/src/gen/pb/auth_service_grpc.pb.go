@@ -134,6 +134,7 @@ type AuthServiceClient interface {
 	// tag. Authenticate → `authenticate_turnkey`, SignIn →
 	// `sign_in_turnkey`, SignUp → `sign_up_turnkey`.
 	Authenticate(ctx context.Context, in *AuthReq, opts ...grpc.CallOption) (*AuthResp, error)
+	// AuthenticateAdmin — Authenticate for the admin plane (the admin
 	// preset's user_lookup). Only realm-wide roles count: no organization is
 	// selected, so a role scoped to one organization grants nothing in the
 	// console that spans them all.
@@ -797,6 +798,7 @@ type AuthServiceServer interface {
 	// tag. Authenticate → `authenticate_turnkey`, SignIn →
 	// `sign_in_turnkey`, SignUp → `sign_up_turnkey`.
 	Authenticate(context.Context, *AuthReq) (*AuthResp, error)
+	// AuthenticateAdmin — Authenticate for the admin plane (the admin
 	// preset's user_lookup). Only realm-wide roles count: no organization is
 	// selected, so a role scoped to one organization grants nothing in the
 	// console that spans them all.

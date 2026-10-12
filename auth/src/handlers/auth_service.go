@@ -728,14 +728,27 @@ func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) 
 // AuthenticateAdmin is Authenticate for the admin plane, which the admin
 // preset wires as its user_lookup.
 //
-// The admin is one console across every tenant and organization, so only a
-// REALM-wide role may count there. Authenticate selects an organization (from
+// The admin is one console across every organization, so only a REALM-wide
+// role may count there. Authenticate selects an organization (from
 // the request, or the caller's only one) and lets that organization's roles
 // grant permissions — right for an app endpoint that works inside the
 // organization, and wrong for the admin: a role scoped to one organization,
 // a wildcard one above all, would pass every admin page for every
 // organization. Here no organization is selected, so the grants that survive
 // are the realm-wide ones, and organization ownership grants nothing.
+//
+// Two consequences a project sees:
+//
+//   - no org_id scope reaches the admin's storage calls, so an admin page over
+//     a model scoped by name: "org_id" is refused ("missing required scope:
+//     org_id") for every caller. Before, it served the one organization the
+//     sole-org inference happened to pick, which was never the whole console.
+//   - the other decorators still run. Under tenant_scope the caller's tenant_id
+//     is still stamped, so the admin stays inside the caller's tenant.
+//
+// The mark is a context value of an unexported type, set only here: nothing a
+// caller sends can put a request on the admin plane, and the mark only ever
+// removes an organization, never adds one.
 func (h *AuthServiceHandler) AuthenticateAdmin(ctx context.Context, req *pb.AuthReq) (*pb.AuthResp, error) {
 	return h.authenticate(context.WithValue(ctx, adminPlaneKey{}, true), req)
 }

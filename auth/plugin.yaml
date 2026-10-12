@@ -109,7 +109,7 @@ features:
       # `undefined: pb.GetUserByTokenWithPermissionsReq`, pointing at a file
       # the project never wrote and cannot edit (a consumer).
       - rbac
-    description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids."
+    description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids. AuthService.AuthenticateAdmin (the admin preset's user_lookup) is the same resolver with no organization selected, so only realm-wide roles count."
     default: true
   - name: sign_up_turnkey
     description: "AuthService.SignUp — authored Go handler composing PasswordHash.Hash + CreateUser + IssueToken. Project's REST endpoint points directly at SignUp — no business glue. Disable for custom register flows (rate limit, captcha, email confirmation, invite codes). Staged from handlers/signup.go so the pb.SignUpReq/Resp reference vanishes with the feature (an admin auth realm omits it and seeds accounts instead)."
