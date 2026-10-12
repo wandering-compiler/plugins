@@ -329,9 +329,18 @@ func execTool(ctx context.Context, tc toolCall, byName map[string]Tool, timeout 
 	}
 	out, err := t.Call(callCtx, tc.Arguments)
 	if err != nil {
-		if ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-			// The tool's own deadline, not the run's: it fails ALONE, and the
-			// model reads that it did not answer.
+		// The tool's own deadline, not the run's: it fails ALONE, and the
+		// model reads that it did not answer. Only when the error IS that
+		// deadline: a fatal error that merely lands after it (the caller
+		// closing its side, a failed send) must still end the run.
+		if ctx.Err() == nil && errors.Is(callCtx.Err(), context.DeadlineExceeded) &&
+			errors.Is(err, context.DeadlineExceeded) {
+			if t.Mutating() {
+				// Abandoned is not undone: whoever runs the tool may still
+				// apply it. Told so, or the model retries and applies it twice.
+				return fmt.Sprintf("The tool did not answer within %s. Its outcome is unknown: "+
+					"it may still have been applied, so do not repeat it without checking.", timeout), ErrToolTimeout
+			}
 			return fmt.Sprintf("The tool did not answer within %s.", timeout), ErrToolTimeout
 		}
 		if isFatal(err) {

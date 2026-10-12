@@ -211,7 +211,8 @@ message ToolSpec {
   bool mutating = 5;
 }
 
-// Limits bound one run. Every field has a default; zero means "use it".
+// Limits bound one run. Zero means "use the default"; tool_timeout_seconds is
+// the exception, where zero means no bound.
 message Limits {
   // How many model turns before the run gives up. A turn is one model call plus
   // whatever tools it asked for.
@@ -227,7 +228,10 @@ message Limits {
   int32 max_parallel = 3;
 
   // Per-tool deadline in seconds. A tool that exceeds it fails ALONE: its error
-  // becomes the tool result, the model reacts, and the run continues.
+  // becomes the tool result, the model reacts, and the run continues. The
+  // ToolCall is abandoned, not withdrawn: a ToolResult that arrives later is
+  // dropped, and for a mutating tool the model is told the outcome is unknown.
+  // The one field with no default: zero or less means no per-tool bound.
   int32 tool_timeout_seconds = 4;
 }
 
@@ -276,7 +280,9 @@ message RunAgentReq {
 // ToolCall asks the caller to run one tool.
 //
 // Several may be outstanding at once — read-only tools run in parallel — so
-// answer by `call_id` and do not assume order.
+// answer by `call_id` and do not assume order. A call not answered within
+// `Limits.tool_timeout_seconds` is abandoned and its late result dropped;
+// nothing tells you it was, so a slow write may still be applied by you.
 message ToolCall {
   string call_id = 1;
   string name    = 2;
@@ -296,7 +302,8 @@ message Activity {
   string activity_id = 1;
   // Empty at the top level; otherwise the activity this one runs inside.
   string parent_activity_id = 2;
-  // What to show — the ToolSpec.activity of the tool being run.
+  // What to show — the ToolSpec.activity of the tool being run, or its name
+  // when that is empty.
   string text = 3;
   // True when this activity has ended.
   bool finished = 4;

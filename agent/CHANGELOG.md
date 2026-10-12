@@ -12,7 +12,7 @@
 
 ### RunAgent keeps its contract
 
-- **`Limits.tool_timeout_seconds` works.** It was ignored, so a caller that never answered a `ToolCall` held the run open. A tool past it now fails alone: the model reads that it did not answer in time, the activity ends as failed, and the run goes on. A late result is dropped.
+- **`Limits.tool_timeout_seconds` works.** It was ignored, so a caller that never answered a `ToolCall` held the run open. A tool past it now fails alone: the model reads that it did not answer in time, the activity ends as failed, and the run goes on. For a mutating tool the model is told the outcome is unknown, because the caller may still apply it. A late result is dropped. Zero (the default) means no per-tool bound.
 - **`Activity` shows the declared `ToolSpec.activity`** (the tool's name when it has none). Its `activity_id` is the `call_id` of the `ToolCall` it brackets. A tool name the model invented gets no `Activity`; the model is still told there is no such tool.
 - **`Finished.text` is every delta shown,** across all turns. It used to hold only the last turn's text, so text streamed beside tool calls was missing.
 - **The last turn applies nothing.** It offers no tools. Calls a provider returns on it anyway are no longer run, and the run ends with the turn limit as before.

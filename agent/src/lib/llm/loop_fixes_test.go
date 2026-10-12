@@ -90,6 +90,49 @@ func TestRun_ASlowToolFailsAlone(t *testing.T) {
 	}
 }
 
+// A mutating tool past its deadline is abandoned, not undone: the model is
+// told its outcome is unknown, so it does not simply apply it a second time.
+func TestRun_ASlowWriteIsNotSaidToHaveFailed(t *testing.T) {
+	slow := &testTool{name: "write", mutating: true, fn: func(ctx context.Context, _ string) (string, error) {
+		<-ctx.Done()
+		return "", Fatal(ctx.Err())
+	}}
+	var finished *ToolEvent
+	_, err := runWith(t, [][]map[string]any{
+		{toolCallEvent("c1", "write", `{}`)},
+		{delta("ok"), completed(StatusCompleted, "", 5)},
+	}, []Tool{slow}, Limits{ToolTimeout: 20 * time.Millisecond}, func(e RunEvent) error {
+		if e.ToolFinished != nil {
+			finished = e.ToolFinished
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished == nil || !errors.Is(finished.Err, ErrToolTimeout) ||
+		!strings.Contains(finished.Result, "may still have been applied") {
+		t.Errorf("finished = %+v", finished)
+	}
+}
+
+// A fatal error that is not the deadline stays fatal even when it arrives
+// after the deadline: the caller closing its side must still end the run.
+func TestRun_AFatalErrorAfterTheDeadlineStillEndsTheRun(t *testing.T) {
+	gone := errors.New("caller closed its side")
+	tool := &testTool{name: "slow", fn: func(ctx context.Context, _ string) (string, error) {
+		<-ctx.Done()
+		return "", Fatal(gone)
+	}}
+	_, err := runWith(t, [][]map[string]any{
+		{toolCallEvent("c1", "slow", `{}`)},
+		{delta("should not be asked"), completed(StatusCompleted, "", 5)},
+	}, []Tool{tool}, Limits{ToolTimeout: 20 * time.Millisecond}, func(RunEvent) error { return nil })
+	if !errors.Is(err, gone) {
+		t.Fatalf("err = %v; want the fatal error, not a timeout the run survives", err)
+	}
+}
+
 // The event's id is the one the tool sees, and the activity is the declared
 // text.
 func TestRun_TheEventAndTheToolShareAnID(t *testing.T) {
