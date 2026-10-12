@@ -11,6 +11,16 @@ A reservation handle was an unguessable credential, but anyone holding it, for e
 - **Another caller's handle answers like a reservation the relay forgot.** A poll reads it as expired (`RESERVATION_UNKNOWN`), and a cancel succeeds without touching the place, so the answer does not confirm the handle was real.
 - **Handles minted by an earlier version** (two parts) are refused as malformed. Reservations are short-lived, so one in flight across the upgrade has to be made again.
 
+### A ban cuts the banned worker's open tunnel
+
+A ban stopped new work at the next check, but the tunnel a worker had already opened stayed connected, and the call running on it finished. The admin's ban confirmation says connections are dropped.
+
+- **The relay closes a banned worker's tunnel as soon as the ban set reaches it** (`workeradmit.Registry.OnBansChanged` → `Backends.DropWhere`). Closing the connection ends the calls still running on it.
+- **The attach stream** still ends at its next poll, as before.
+- **A call cut that way ends with `WORKER_LOST`** (Unavailable) at the caller, not a `Canceled` that read as the caller's own doing, and its ticket's slot is returned.
+- **A tunnel that was opening when the ban arrived** is closed too: admission is checked again once the tunnel is registered.
+- **A worker banned and unbanned before its attach stream noticed** keeps its announced capacity when it reconnects its tunnel.
+
 ## 0.1.0-rc.12
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update cluster`.

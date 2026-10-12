@@ -66,6 +66,7 @@ type Worker struct {
 
 // Registry is one relay's admission state.
 type Registry struct {
+	onBans func() // see OnBansChanged
 	mu     sync.Mutex
 	banned map[string]struct{}
 	known  map[string]Worker
@@ -81,11 +82,33 @@ func New() *Registry {
 // and a merge would make that impossible to express.
 func (r *Registry) SetBanned(ids []string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	old := r.banned
 	r.banned = make(map[string]struct{}, len(ids))
+	added := false
 	for _, id := range ids {
-		r.banned[strings.ToLower(id)] = struct{}{}
+		id = strings.ToLower(id)
+		r.banned[id] = struct{}{}
+		if _, was := old[id]; !was {
+			added = true
+		}
 	}
+	notify := r.onBans
+	r.mu.Unlock()
+	// Only when someone is NEWLY banned. The set arrives on every management
+	// call, almost always unchanged, and the hook scans every tunnel.
+	if added && notify != nil {
+		notify() // outside the lock: it asks Admitted
+	}
+}
+
+// OnBansChanged registers f to run after a SetBanned that bans someone who
+// was not banned before. The relay uses it to cut a banned worker's open
+// tunnel, which an Admitted check at the next piece of work would leave
+// serving whatever it is already running.
+func (r *Registry) OnBansChanged(f func()) {
+	r.mu.Lock()
+	r.onBans = f
+	r.mu.Unlock()
 }
 
 // Admitted reports whether a worker may work right now — whether it is not
