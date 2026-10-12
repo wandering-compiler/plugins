@@ -30,6 +30,7 @@ const (
 	PaymentQuery_GetCustomerByUserId_FullMethodName         = "/w17.contrib.payment.PaymentQuery/GetCustomerByUserId"
 	PaymentQuery_GetPayment_FullMethodName                  = "/w17.contrib.payment.PaymentQuery/GetPayment"
 	PaymentQuery_GetPaymentByProviderId_FullMethodName      = "/w17.contrib.payment.PaymentQuery/GetPaymentByProviderId"
+	PaymentQuery_GetPaymentByIdempotencyKey_FullMethodName  = "/w17.contrib.payment.PaymentQuery/GetPaymentByIdempotencyKey"
 	PaymentQuery_GetRefundByProviderId_FullMethodName       = "/w17.contrib.payment.PaymentQuery/GetRefundByProviderId"
 	PaymentQuery_SumRefundsForPayment_FullMethodName        = "/w17.contrib.payment.PaymentQuery/SumRefundsForPayment"
 	PaymentQuery_GetRefundByIdempotencyKey_FullMethodName   = "/w17.contrib.payment.PaymentQuery/GetRefundByIdempotencyKey"
@@ -66,6 +67,11 @@ type PaymentQueryClient interface {
 	//     or out-of-order event — acknowledge), a row that does not exist is
 	//     not here yet (fail, so the provider redelivers).
 	GetPaymentByProviderId(ctx context.Context, in *GetPaymentByProviderIdReq, opts ...grpc.CallOption) (*GetPaymentByProviderIdResp, error)
+	// GetPaymentByIdempotencyKey — the payment stored under a key. The create
+	// paths read it for a key an earlier version stored as the caller sent it,
+	// before keys were scoped by principal, so a retry of such a payment is
+	// still answered with it.
+	GetPaymentByIdempotencyKey(ctx context.Context, in *GetPaymentByIdempotencyKeyReq, opts ...grpc.CallOption) (*GetPaymentByIdempotencyKeyResp, error)
 	// GetRefundByProviderId — fetch one Refund by the provider's refund id.
 	// RefundPayment reads it when a retried refund (same idempotency key, so
 	// the provider replays the same refund object) hits the unique key on
@@ -147,6 +153,16 @@ func (c *paymentQueryClient) GetPaymentByProviderId(ctx context.Context, in *Get
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPaymentByProviderIdResp)
 	err := c.cc.Invoke(ctx, PaymentQuery_GetPaymentByProviderId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) GetPaymentByIdempotencyKey(ctx context.Context, in *GetPaymentByIdempotencyKeyReq, opts ...grpc.CallOption) (*GetPaymentByIdempotencyKeyResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPaymentByIdempotencyKeyResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetPaymentByIdempotencyKey_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -286,6 +302,11 @@ type PaymentQueryServer interface {
 	//     or out-of-order event — acknowledge), a row that does not exist is
 	//     not here yet (fail, so the provider redelivers).
 	GetPaymentByProviderId(context.Context, *GetPaymentByProviderIdReq) (*GetPaymentByProviderIdResp, error)
+	// GetPaymentByIdempotencyKey — the payment stored under a key. The create
+	// paths read it for a key an earlier version stored as the caller sent it,
+	// before keys were scoped by principal, so a retry of such a payment is
+	// still answered with it.
+	GetPaymentByIdempotencyKey(context.Context, *GetPaymentByIdempotencyKeyReq) (*GetPaymentByIdempotencyKeyResp, error)
 	// GetRefundByProviderId — fetch one Refund by the provider's refund id.
 	// RefundPayment reads it when a retried refund (same idempotency key, so
 	// the provider replays the same refund object) hits the unique key on
@@ -350,6 +371,9 @@ func (UnimplementedPaymentQueryServer) GetPayment(context.Context, *GetPaymentRe
 }
 func (UnimplementedPaymentQueryServer) GetPaymentByProviderId(context.Context, *GetPaymentByProviderIdReq) (*GetPaymentByProviderIdResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPaymentByProviderId not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetPaymentByIdempotencyKey(context.Context, *GetPaymentByIdempotencyKeyReq) (*GetPaymentByIdempotencyKeyResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPaymentByIdempotencyKey not implemented")
 }
 func (UnimplementedPaymentQueryServer) GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRefundByProviderId not implemented")
@@ -454,6 +478,24 @@ func _PaymentQuery_GetPaymentByProviderId_Handler(srv interface{}, ctx context.C
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentQueryServer).GetPaymentByProviderId(ctx, req.(*GetPaymentByProviderIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_GetPaymentByIdempotencyKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPaymentByIdempotencyKeyReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetPaymentByIdempotencyKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetPaymentByIdempotencyKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetPaymentByIdempotencyKey(ctx, req.(*GetPaymentByIdempotencyKeyReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -674,6 +716,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPaymentByProviderId",
 			Handler:    _PaymentQuery_GetPaymentByProviderId_Handler,
+		},
+		{
+			MethodName: "GetPaymentByIdempotencyKey",
+			Handler:    _PaymentQuery_GetPaymentByIdempotencyKey_Handler,
 		},
 		{
 			MethodName: "GetRefundByProviderId",

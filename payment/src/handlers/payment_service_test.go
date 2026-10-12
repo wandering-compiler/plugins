@@ -134,6 +134,9 @@ func (q *fakeQuery) GetPaymentByProviderId(_ context.Context, _ *pb.GetPaymentBy
 	}
 	return &pb.GetPaymentByProviderIdResp{Payment: q.paymentByProvider}, nil
 }
+func (q *fakeQuery) GetPaymentByIdempotencyKey(_ context.Context, _ *pb.GetPaymentByIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.GetPaymentByIdempotencyKeyResp, error) {
+	return nil, noRow()
+}
 func (q *fakeQuery) GetRefundByProviderId(_ context.Context, _ *pb.GetRefundByProviderIdReq, _ ...grpc.CallOption) (*pb.GetRefundByProviderIdResp, error) {
 	return nil, noRow()
 }
