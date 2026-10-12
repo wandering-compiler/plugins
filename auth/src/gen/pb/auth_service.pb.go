@@ -5603,7 +5603,7 @@ const file_business_auth_service_proto_rawDesc = "" +
 	"\x14RevokeAllDevicesResp:\v\xfa\xf4\x18\adevices\"f\n" +
 	"\x1aUpdateOrgMembershipRoleReq\x12\x16\n" +
 	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id\x12\x1c\n" +
-	"\x04role\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x01@ R\x04role:\x12\xfa\xf4\x18\x0eorg_membership\"V\n" +
+	"\x04role\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x01@dR\x04role:\x12\xfa\xf4\x18\x0eorg_membership\"V\n" +
 	"\x1bUpdateOrgMembershipRoleResp\x12#\n" +
 	"\rmembership_id\x18\x01 \x01(\tR\fmembershipId:\x12\xfa\xf4\x18\x0eorg_membership\"D\n" +
 	"\x16RemoveOrgMembershipReq\x12\x16\n" +

@@ -655,7 +655,7 @@ message RevokeAllDevicesResp {
 message UpdateOrgMembershipRoleReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string id   = 1 [(w17.field) = { type: UUID }];
-  string role = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+  string role = 2 [(w17.field) = { type: CHAR, max_len: 100 }];
 }
 message UpdateOrgMembershipRoleResp {
   option (w17.contrib.plugin_feature) = "org_membership";

@@ -54,6 +54,12 @@ The `first_user` roles (typically every permission) were decided by reading "no 
 - **The sign-up that receives the `first_user` roles writes the claim** in its own transaction (`AuthMutation.ClaimBootstrapAdmin`, `UPSERT … ON CONFLICT DO NOTHING`). A concurrent sign-up waits on the key, conflicts, and gets the default roles. A rolled-back sign-up leaves the claim free.
 - **The claim is never reopened.** Once an administrator was handed out, an empty user table does not hand out another. A deployment that already has users never writes the claim, and behaves as before: deleting every account there still reopens the bootstrap. The same holds for a seeded first account.
 
+### An invitation to a role with a long name can be accepted
+
+`OrgMembership.role` held 32 characters, while a role name holds 100. An invitation to a role whose name was longer than 32 characters was created, and then every acceptance failed when it wrote the membership. Changing a member to such a role on the admin's OrgMemberships page failed the same way.
+
+- **`OrgMembership.role`, `AddOrgMembershipReq.role` and `UpdateOrgMembershipRoleReq.role` hold 100 characters**, as wide as `Role.name` (org_membership). Generate a migration as usual; it widens one column.
+
 ### A reset or a password change spends every other reset link
 
 Each reset request inserts a new link, and a successful reset consumed only the link it used. Any other link the person had asked for, or one intercepted from their mailbox earlier, could set the password again until it expired. A password change left them all alive too.

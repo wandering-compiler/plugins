@@ -1078,7 +1078,7 @@ message AddOrgMembershipReq {
   string org_id  = 2 [(w17.field) = { type: UUID }];
   // role: owner | admin | member. Free-form CHAR — project policy owns
   // the vocabulary; the plugin passes it through (mirrors OrgMembership.role).
-  string role    = 3 [(w17.field) = { type: CHAR, max_len: 32 }];
+  string role    = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
 }
 message AddOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
