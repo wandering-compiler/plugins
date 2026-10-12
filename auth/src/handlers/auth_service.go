@@ -476,8 +476,8 @@ func parseSignUpAllowlist(raw string) ([]string, error) {
 // errSignUpClosed is the refusal for an address outside sign_up_allowlist.
 // The same answer whatever else is true of the address — an account, an
 // invitation — so the form cannot be used to read the list.
-var errSignUpClosed = status.Error(codes.PermissionDenied,
-	"registration is not open for this address")
+var errSignUpClosed = withUserDetail(status.New(codes.PermissionDenied,
+	"registration is not open for this address"), CodeSignUpClosed, MsgSignUpClosed).Err()
 
 // signUpAllowlistGate refuses an address sign_up_allowlist does not name. It
 // is called by every door that creates an account for whoever is knocking —
@@ -595,8 +595,16 @@ var markEmailDerived = func(_ context.Context, _ *AuthServiceHandler, _ string) 
 // saying "internal error" — the caller would see a server fault instead of
 // the sentence that tells them what to do. Measured, not assumed: the
 // first version of this was a bare error and answered HTTP 500.
-var errSignUpNotInvited = status.Error(codes.PermissionDenied,
-	"registration is by invitation only — ask an administrator of the organization you are joining to invite this address")
+var errSignUpNotInvited = withUserDetail(status.New(codes.PermissionDenied,
+	"registration is by invitation only — ask an administrator of the organization you are joining to invite this address"),
+	CodeSignUpNotInvited, MsgSignUpNotInvited).Err()
+
+// errInviteOtherAddress refuses a registration whose invitation link is bound
+// to another address, when nothing else invites this one. It does not say
+// which address the invitation names.
+var errInviteOtherAddress = withUserDetail(status.New(codes.PermissionDenied,
+	"the invitation link is bound to a different address than the one registering"),
+	CodeInviteOtherAddress, MsgInviteOtherAddress).Err()
 
 // signupInviteGate decides whether an address may create an account at all.
 //
@@ -944,6 +952,13 @@ var stampDeviceTrust = func(msg proto.Message, trustToken string) {}
 // Unauthenticated (anti-enumeration) — the caller never learns the
 // account exists but is disabled.
 var signInDisabledGate = func(user *pb.User) error { return nil }
+
+// errAuthnUserDisabled is the internal cause behind the opaque
+// Unauthenticated a disabled account gets on SignIn. Never surfaced to
+// the caller (SignIn maps every failure to the same opaque code) — it
+// exists for logs / tests.
+// Declared here, with every feature, because oauthRefusal names it.
+var errAuthnUserDisabled = errors.New("account disabled")
 
 // signInBotGate refuses a password sign-in for a MACHINE account.
 //

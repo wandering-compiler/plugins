@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -97,17 +98,17 @@ const (
 func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAuthAuthorizeURLReq) (*pb.OAuthAuthorizeURLResp, error) {
 	p, err := h.loadEnabledProvider(ctx, req.GetProvider())
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	if !isSafeRelativeRedirect(req.GetRedirectAfter()) {
-		return nil, Unauthenticated(errOAuthUnsafeRedirect)
+		return nil, oauthRefusal(errOAuthUnsafeRedirect)
 	}
 	if !isPKCEChallenge(req.GetCodeChallenge()) {
-		return nil, Unauthenticated(errOAuthChallengeMissing)
+		return nil, oauthRefusal(errOAuthChallengeMissing)
 	}
 	state, nonce, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter(), challengeDigest(req.GetCodeChallenge()), time.Now())
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	q := url.Values{}
 	q.Set("client_id", p.GetClientId())
@@ -146,11 +147,11 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCallbackReq) (*pb.OAuthCallbackResp, error) {
 	p, err := h.loadEnabledProvider(ctx, req.GetProvider())
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	st, err := verifyOAuthState(p.GetSecret(), p.GetName(), req.GetState(), time.Now())
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	// Defense in depth: the authorize side rejects an unsafe redirect_after
 	// before signing, but a state from an older build must not be trusted.
@@ -161,16 +162,16 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 
 	tok, err := h.exchangeCode(ctx, p, req.GetCode(), providerVerifier(p.GetSecret(), st.Nonce))
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	subject, email, emailVerified, err := h.fetchIdentity(ctx, p, tok, oidcNonce(p.GetSecret(), st.Nonce))
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 
 	userID, err := h.findOAuthAccount(ctx, p.GetId(), subject, email, emailVerified)
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	if userID != "" {
 		if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
@@ -180,7 +181,7 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 
 	code, err := randomURLToken()
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	// A known account is named by id. An identity with no account yet is
 	// kept as verified by the provider, and OAuthExchange creates the account
@@ -199,7 +200,7 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 		codeReq.EmailVerified = emailVerified
 	}
 	if _, err := h.Mutation.CreateOAuthLoginCode(ctx, codeReq); err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	return &pb.OAuthCallbackResp{Code: code, RedirectAfter: redirectAfter}, nil
 }
@@ -210,19 +211,19 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 // burns it rather than leaving it open to guesses.
 func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExchangeReq) (*pb.OAuthExchangeResp, error) {
 	if len(req.GetCodeVerifier()) < pkceMinVerifierLen || req.GetCode() == "" {
-		return nil, Unauthenticated(errOAuthVerifierInvalid)
+		return nil, oauthRefusal(errOAuthVerifierInvalid)
 	}
 	consumed, err := h.Mutation.ConsumeOAuthLoginCode(ctx, &pb.ConsumeOAuthLoginCodeReq{CodeHash: sha256Hex(req.GetCode())})
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	// Every live code carries its challenge digest; none back means no
 	// unconsumed, unexpired code matched.
 	if consumed.GetCodeChallenge() == "" {
-		return nil, Unauthenticated(errOAuthCodeInvalid)
+		return nil, oauthRefusal(errOAuthCodeInvalid)
 	}
 	if !verifyChallengeDigest(req.GetCodeVerifier(), consumed.GetCodeChallenge()) {
-		return nil, Unauthenticated(errOAuthVerifierInvalid)
+		return nil, oauthRefusal(errOAuthVerifierInvalid)
 	}
 	userID := consumed.GetUserId()
 	if userID == "" {
@@ -231,7 +232,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 		// an account for an empty subject.
 		providerID, subject, email := consumed.GetProviderId(), consumed.GetExternalId(), consumed.GetEmail()
 		if providerID == "" || subject == "" || email == "" {
-			return nil, Unauthenticated(errOAuthCodeInvalid)
+			return nil, oauthRefusal(errOAuthCodeInvalid)
 		}
 		// Resolved AGAIN: up to two minutes passed since the callback, and the
 		// identity may have gained an account meanwhile (a second tab's code
@@ -241,7 +242,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 		// sides verified the address.
 		userID, err = h.findOAuthAccount(ctx, providerID, subject, email, consumed.GetEmailVerified())
 		if err != nil {
-			return nil, Unauthenticated(err)
+			return nil, oauthRefusal(err)
 		}
 		if userID == "" {
 			// This is the sign-up, and the invitation (if any) comes with
@@ -266,14 +267,14 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	}
 	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	// Bound to the device, never trusting it: this sign-in skipped the
 	// plugin's second factor, and a trusted device skips it later for a
 	// password sign-in too.
 	token, trustToken, err := issueSession(ctx, h, userID, deviceID, false)
 	if err != nil {
-		return nil, Unauthenticated(err)
+		return nil, oauthRefusal(err)
 	}
 	resp := &pb.OAuthExchangeResp{UserId: userID, Token: token}
 	stampDeviceTrust(resp, trustToken) // devices-gated field; seam is a no-op without `devices`
@@ -817,4 +818,23 @@ func randomToken(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// oauthRefusal is how every OAuth handler refuses. A refusal that already
+// carries its own answer (a sign-up gate's coded status, an outage) passes
+// through; the causes a person can act on get their code; the rest are
+// OAUTH_FAILED. All keep the opaque status message.
+func oauthRefusal(cause error) error {
+	if st, ok := status.FromError(cause); ok && cause != nil && len(st.Details()) > 0 {
+		return cause
+	}
+	switch {
+	case errors.Is(cause, errOAuthLocalUnverified):
+		return &authnError{cause: cause, userCode: CodeOAuthAccountUnverified, userMsg: MsgOAuthAccountUnverified}
+	case errors.Is(cause, errOAuthEmailUnverified):
+		return &authnError{cause: cause, userCode: CodeOAuthEmailUnverified, userMsg: MsgOAuthEmailUnverified}
+	case errors.Is(cause, errAuthnUserDisabled):
+		return &authnError{cause: cause, userCode: CodeAccountDisabled, userMsg: MsgAccountDisabled}
+	}
+	return &authnError{cause: cause, userCode: CodeOAuthFailed, userMsg: MsgOAuthFailed}
 }

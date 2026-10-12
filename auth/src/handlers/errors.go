@@ -165,6 +165,38 @@ const (
 	// token, a CLI session, an authenticator, recovery codes, a trusted
 	// callback) called with an API token. It needs a signed-in session.
 	CodeSessionRequired = "SESSION_REQUIRED"
+
+	// CodeSignUpNotInvited: under invite_only, a registration with no
+	// pending invitation for its address and no valid invitation link.
+	CodeSignUpNotInvited = "SIGNUP_NOT_INVITED"
+
+	// CodeInviteOtherAddress: the invitation link is bound to a different
+	// address than the one registering. Says nothing about which address.
+	CodeInviteOtherAddress = "INVITE_OTHER_ADDRESS"
+
+	// CodeSignUpClosed: the address is outside sign_up_allowlist.
+	CodeSignUpClosed = "SIGNUP_CLOSED"
+
+	// The OAuth refusals below are said plainly because the provider has
+	// already proven that the caller owns the address: none of them tells an
+	// attacker anything about an address they did not sign in as.
+
+	// CodeOAuthAccountUnverified: an account exists for the provider's
+	// address, and that account never verified it, so it is not linked.
+	CodeOAuthAccountUnverified = "OAUTH_ACCOUNT_UNVERIFIED"
+
+	// CodeOAuthEmailUnverified: an account exists for the address, and the
+	// provider did not verify it, so it is not linked.
+	CodeOAuthEmailUnverified = "OAUTH_EMAIL_UNVERIFIED"
+
+	// CodeAccountDisabled: the provider sign-in resolved to an account an
+	// administrator disabled. Only OAuth says this; a password sign-in to a
+	// disabled account stays INVALID_CREDENTIALS.
+	CodeAccountDisabled = "ACCOUNT_DISABLED"
+
+	// CodeOAuthFailed: every other OAuth refusal — the state, the login code,
+	// the verifier, the provider's answer. The sign-in starts again.
+	CodeOAuthFailed = "OAUTH_FAILED"
 )
 
 // The sentences a person reads, and the ONE place each is written.
@@ -195,6 +227,20 @@ const (
 	MsgOrgNotMember = "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
 
 	MsgOrgMismatch = "This request names two different organizations. Name one."
+
+	MsgSignUpNotInvited = "Registration is by invitation only. Ask the organization you are joining to invite you."
+
+	MsgInviteOtherAddress = "This invitation was sent to a different email address. Register with that address, or ask for a new invitation."
+
+	MsgSignUpClosed = "Registration is not open for this email address."
+
+	MsgOAuthAccountUnverified = "An account with this email address exists but has not verified it. Sign in with your password and verify the address first."
+
+	MsgOAuthEmailUnverified = "An account with this email address exists, and the sign-in provider has not verified the address. Sign in with your password instead."
+
+	MsgAccountDisabled = "This account has been disabled."
+
+	MsgOAuthFailed = "Signing in with the provider did not complete. Please start again."
 
 	// Not "try again": the generic AlreadyExists sentence ("Another change
 	// reached this first. Please try again.") sent a person who already has an

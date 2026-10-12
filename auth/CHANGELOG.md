@@ -12,6 +12,27 @@ The admin preset authenticated through `Authenticate`, which selects an organiza
 - **An admin page over an `org_id`-scoped model now refuses** with `missing required scope: org_id`, for every caller. No organization means no `org_id` scope on the admin's storage calls. Such a page used to serve whichever single organization the caller belonged to, which was never the whole console.
 - **`tenant_scope` is unchanged.** The admin still stamps the caller's `tenant_id`, so it stays inside the caller's tenant.
 
+### OAuth and sign-up refusals carry a code
+
+An OAuth refusal used to be the bare opaque `invalid credentials`, so a page could not tell a person what to do. Every OAuth handler now answers with an `ErrorDetail` code. The status code and message stay as they were.
+
+| Code | When |
+|---|---|
+| `OAUTH_ACCOUNT_UNVERIFIED` | An account exists for the provider's address and never verified it, so it is not linked. |
+| `OAUTH_EMAIL_UNVERIFIED` | An account exists for the address and the provider did not verify it. |
+| `ACCOUNT_DISABLED` | The sign-in resolved to a disabled account. Only OAuth says this; a password sign-in still answers `INVALID_CREDENTIALS`. |
+| `OAUTH_FAILED` | Everything else: the state, the login code, the verifier, the provider's answer. |
+
+Saying these plainly is safe because the provider has already proven that the caller owns the address.
+
+The sign-up gates gain codes too, on `SignUp` and the OAuth exchange alike. Outages still answer `AUTH_UNAVAILABLE`.
+
+| Code | When |
+|---|---|
+| `SIGNUP_NOT_INVITED` | `invite_only`, and nothing invites the address. |
+| `INVITE_OTHER_ADDRESS` | The invitation link is bound to another address, and nothing invites this one. The other address is not revealed. |
+| `SIGNUP_CLOSED` | The address is outside `sign_up_allowlist`. |
+
 ### Registering through a provider can carry an invitation
 
 Under `invite_only`, an OPEN invitation (one that names no address, for example sent by SMS) could not be used to register through a provider. The callback created the account and had no way to receive the token. Only a bound invitation whose address matched the provider's worked.
