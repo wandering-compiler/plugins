@@ -219,10 +219,14 @@ func (b *Backend) post(ctx context.Context, path string, form url.Values, idemKe
 		if e.Error.Message != "" {
 			detail = fmt.Sprintf("%s (%s)", e.Error.Message, e.Error.Type)
 		}
+		err := fmt.Errorf("stripe: %s: %s", path, detail)
 		if class := classifyAPIError(resp.StatusCode, e.Error.Type); class != nil {
-			return fmt.Errorf("stripe: %s: %s: %w", path, detail, class)
+			err = fmt.Errorf("stripe: %s: %s: %w", path, detail, class)
 		}
-		return fmt.Errorf("stripe: %s: %s", path, detail)
+		if code := reasonCode(e.Error.DeclineCode, e.Error.Code); code != "" {
+			err = &backend.CodedError{Code: code, Err: err}
+		}
+		return err
 	}
 	if out != nil {
 		if err := json.Unmarshal(body, out); err != nil {
@@ -230,6 +234,19 @@ func (b *Backend) post(ctx context.Context, path string, form url.Values, idemKe
 		}
 	}
 	return nil
+}
+
+// reasonCode picks the most specific machine code a Stripe error names
+// (decline_code before code), or "" when neither is a plain identifier. Only
+// [a-z0-9_] up to 64 bytes passes: the code may reach the caller, so nothing
+// that could carry prose (or anything else the provider put there) does.
+func reasonCode(candidates ...string) string {
+	for _, c := range candidates {
+		if c != "" && len(c) <= 64 && strings.Trim(c, "abcdefghijklmnopqrstuvwxyz0123456789_") == "" {
+			return c
+		}
+	}
+	return ""
 }
 
 // classifyAPIError maps a Stripe error response onto the provider-

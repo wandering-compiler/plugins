@@ -31,7 +31,8 @@ A failed provider call used to reach the caller as `payment provider error: <the
 
 - **The caller gets the class** (`FAILED_PRECONDITION` for a decline, `INVALID_ARGUMENT` for a refused request, `UNAVAILABLE` otherwise) **and a fixed sentence.** The full cause is logged at WARN.
 - **The exception is the caller's own input.** An amount the currency cannot represent is still explained, because that message names only the input (`backend.InputError`, which matches `backend.ErrInvalidRequest`).
-
+- **The provider's reason code still reaches the caller**, as the `w17.ErrorDetail` code (upper-case): `INSUFFICIENT_FUNDS`, `EXPIRED_CARD`, `CHARGE_ALREADY_REFUNDED`. It is Stripe's `decline_code` (or else `code`), passed only when it is a plain identifier (`[a-z0-9_]`, at most 64 bytes), so a decline can be shown and acted on without the provider's prose.
+- **A call the caller cancelled is `CANCELED`**, not `UNAVAILABLE`, and is not logged.
 
 ### Run a project against Stripe's API mock
 

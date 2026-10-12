@@ -51,6 +51,21 @@ func (e *InputError) Error() string { return e.Msg }
 // Is makes an InputError an [ErrInvalidRequest].
 func (e *InputError) Is(target error) bool { return target == ErrInvalidRequest }
 
+// CodedError is a provider failure that names its reason with the provider's
+// machine code (Stripe's decline_code or code: "insufficient_funds",
+// "charge_already_refunded"). Code is a fixed identifier the driver checked
+// to be one ([a-z0-9_], at most 64 bytes), never the provider's prose, so it
+// may be shown to the caller; Err, the full cause, may not.
+type CodedError struct {
+	Code string
+	Err  error
+}
+
+func (e *CodedError) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the cause, so the failure class it wraps still matches.
+func (e *CodedError) Unwrap() error { return e.Err }
+
 // Money is a currency amount as a decimal string (e.g. "19.99") plus a
 // lowercase ISO-4217 currency code. String carrier = exact, lossless —
 // the same representation the DECIMAL columns use.

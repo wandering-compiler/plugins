@@ -32,7 +32,9 @@ var wholeUnitsSentAsCents = map[string]bool{"isk": true, "ugx": true}
 var unsupportedCurrencies = map[string]bool{"bhd": true, "jod": true, "kwd": true, "omr": true, "tnd": true}
 
 // invalidAmount is the error every amount refusal carries: the request
-// cannot succeed as written, so it wraps backend.ErrInvalidRequest.
+// cannot succeed as written, so it is a backend.InputError (which matches
+// backend.ErrInvalidRequest). Its message may reach the caller: it names
+// only the caller's own amount and currency.
 func invalidAmount(format string, args ...any) error {
 	return &backend.InputError{Msg: fmt.Sprintf(format, args...)}
 }
@@ -91,7 +93,7 @@ func toMinorUnits(amount, currency string) (int64, error) {
 		fracPart = fracPart[:len(fracPart)-1]
 	}
 	if len(fracPart) > scale {
-		return 0, invalidAmount("amount %q has more fractional digits than %s allows (scale %d)", amount, currency, scale)
+		return 0, invalidAmount("amount %q has more fractional digits than %s allows (scale %d)", amount, cur, scale)
 	}
 	for len(fracPart) < scale {
 		fracPart += "0"

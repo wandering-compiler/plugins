@@ -352,3 +352,26 @@ func TestProviderFailure_DoesNotEchoTheProvider(t *testing.T) {
 		}
 	}
 }
+
+// A provider reason code reaches the caller as a w17.ErrorDetail code; the
+// message stays the fixed sentence. A cancelled call is Canceled, not
+// "try again later".
+func TestProviderFailure_PassesTheReasonCode(t *testing.T) {
+	cause := &backend.CodedError{Code: "insufficient_funds", Err: fmt.Errorf("stripe: /v1/payment_intents: Your card has insufficient funds. (card_error): %w", backend.ErrDeclined)}
+	err := providerFailure(fmt.Errorf("charge: %w", cause))
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("code = %v, want FailedPrecondition", status.Code(err))
+	}
+	if got := constraintCode(err); got != "INSUFFICIENT_FUNDS" {
+		t.Errorf("detail code = %q, want INSUFFICIENT_FUNDS", got)
+	}
+	if msg := status.Convert(err).Message(); msg != "the payment was declined" {
+		t.Errorf("message = %q", msg)
+	}
+	if got := constraintCode(providerFailure(fmt.Errorf("x: %w", backend.ErrDeclined))); got != "" {
+		t.Errorf("no code named, detail %q attached", got)
+	}
+	if got := status.Code(providerFailure(fmt.Errorf("stripe: /v1/refunds: %w", context.Canceled))); got != codes.Canceled {
+		t.Errorf("cancelled call = %v, want Canceled", got)
+	}
+}

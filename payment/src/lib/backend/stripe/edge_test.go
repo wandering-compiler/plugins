@@ -430,3 +430,41 @@ func TestVerifyAndParse_RequiresIDAndType(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// The provider's machine code travels with the error (decline_code before
+// code), and only when it is a plain identifier: it may reach the caller,
+// the message may not.
+func TestPost_CarriesTheReasonCode(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		want   string // "" = no CodedError
+	}{
+		{402, `{"error":{"message":"Your card has insufficient funds.","type":"card_error","code":"card_declined","decline_code":"insufficient_funds"}}`, "insufficient_funds"},
+		{402, `{"error":{"message":"Your card has expired.","type":"card_error","code":"expired_card"}}`, "expired_card"},
+		{400, `{"error":{"message":"Charge ch_1 has already been refunded.","type":"invalid_request_error","code":"charge_already_refunded"}}`, "charge_already_refunded"},
+		{400, `{"error":{"message":"x","type":"invalid_request_error","code":"Bad Code: sk_live_123"}}`, ""},
+		{402, `{"error":{"message":"x","type":"card_error","decline_code":"has space","code":"card_declined"}}`, "card_declined"},
+		{400, `{"error":{"message":"x","type":"invalid_request_error","code":"` + strings.Repeat("a", 65) + `"}}`, ""},
+		{500, `{"error":{"message":"boom","type":"api_error"}}`, ""},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(c.status)
+			_, _ = w.Write([]byte(c.body))
+		}))
+		_, err := testBackend(srv).CreatePayment(context.Background(), backend.PaymentSpec{Amount: backend.Money{Amount: "5", Currency: "usd"}})
+		srv.Close()
+		var coded *backend.CodedError
+		got := ""
+		if errors.As(err, &coded) {
+			got = coded.Code
+		}
+		if got != c.want {
+			t.Errorf("%s: code = %q, want %q (err %v)", c.body, got, c.want, err)
+		}
+		if c.status == 402 && !errors.Is(err, backend.ErrDeclined) {
+			t.Errorf("%s: the class is lost under the code: %v", c.body, err)
+		}
+	}
+}
