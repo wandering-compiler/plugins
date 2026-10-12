@@ -28,10 +28,14 @@ permissions:
   contents: read
   checks: read
 
-# One release at a time, never cancelled: a cancelled run could leave a tag
-# pushed and the next one refusing it.
+# One run per commit, never cancelled: a cancelled run could leave a tag
+# pushed and the next one refusing it. Keyed by the commit, not one group for
+# the workflow: a group holds ONE pending run and cancels the one pending before
+# it, so three merges in a row would have lost the middle release. Runs for
+# different commits need no ordering; two that race for one tag are settled by
+# the push, which the loser fails.
 concurrency:
-  group: release
+  group: release-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
 
 defaults:
@@ -61,12 +65,14 @@ jobs:
           if [ -n "$INPUT_PLUGIN" ]; then
             list="$INPUT_PLUGIN"
           else
-            # The plugins whose version line this commit changed. A merge
-            # commit is compared with the main it merged into (its first
-            # parent), so the whole pull request counts.
+            # The plugins whose version this commit changed. A merge commit is
+            # compared with the main it merged into (its first parent), so the
+            # whole pull request counts. The VALUE is compared, not the line:
+            # quoting or spacing the line again releases nothing.
+            ver() { sed -n 's/^version:[[:space:]]*//p' | head -1 | tr -d "\"' "; }
             list=""
             for m in */plugin.yaml; do
-              if git diff HEAD^1 HEAD -- "$m" | grep -Eq '^[-+]version:'; then
+              if [ "$(ver < "$m")" != "$(git show "HEAD^1:$m" 2>/dev/null | ver)" ]; then
                 list="$list ${m%/plugin.yaml}"
               fi
             done
@@ -93,7 +99,17 @@ jobs:
           # The pinned w17ctl signs too: one binary for every release.
           W17CTL="$(tools/w17ctl.sh)"
           export W17CTL
+          # Every plugin is tried, and the run fails if any did not release.
+          # A version whose tag exists is skipped, not refused: a re-run after
+          # one of two plugins released, or a revert to a released version,
+          # has nothing left to do for it.
+          failed=""
           for p in $LIST; do
             v="$(sed -n 's/^version:[[:space:]]*//p' "$p/plugin.yaml" | head -1 | tr -d "\"' ")"
-            tools/release.sh "$p@v$v"
+            if git ls-remote --exit-code --tags origin "refs/tags/$p/v$v" >/dev/null; then
+              echo ">> $p/v$v is already released — nothing to do"
+              continue
+            fi
+            tools/release.sh "$p@v$v" || failed="$failed $p"
           done
+          [ -z "$failed" ] || { echo "::error::not released:$failed"; exit 1; }

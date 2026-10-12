@@ -90,7 +90,9 @@ fi
 
 if [ "${SKIP_CHECK:-0}" = 1 ]; then
 	# Allowed only when CI already passed on this exact commit of main.
-	state="$(gh api "repos/{owner}/{repo}/commits/$(git rev-parse HEAD)/check-runs" \
+	# check_name: the list is paged (30 a page), and every plugin and example
+	# adds a check run; filtered, ci-ok cannot fall off the first page.
+	state="$(gh api "repos/{owner}/{repo}/commits/$(git rev-parse HEAD)/check-runs?check_name=ci-ok" \
 		-q '[.check_runs[] | select(.name == "ci-ok")][0].conclusion' 2>/dev/null || true)"
 	[ "$state" = "success" ] || {
 		echo "!! SKIP_CHECK=1 needs a green \`ci-ok\` on $(git rev-parse --short HEAD) (got: ${state:-none})" >&2
@@ -116,8 +118,11 @@ SHA="$(git rev-parse HEAD)"
 git archive "$SHA" "$PLUGIN" | tar -x -C "$WORK"
 
 # The tag message: a title, where it came from, and the signature block. The
-# block is exactly what `plugin sign --print` writes, which also confirms the
-# console verifies it before printing.
+# block is the plugin.sig `w17ctl plugin sign` writes into the extracted tree,
+# verbatim. Not `--print`: that also writes the console's verdict line
+# ("signature ok …") to stdout ahead of the signature, and its confirmation is
+# over the digest as taken, where the writing mode re-digests the tree the
+# signature landed in and confirms the console verifies that.
 {
 	printf '%s %s\n\nFrom main %s.\n\n' "$PLUGIN" "$VERSION" "$SHA"
 	echo "-----BEGIN W17 PLUGIN SIGNATURE-----"
@@ -125,18 +130,19 @@ git archive "$SHA" "$PLUGIN" | tar -x -C "$WORK"
 		echo "(DRY RUN: not signed — that asks the console)"
 	else
 		echo ">> signing $PLUGIN ..." >&2
-		sig="$("$W17CTL" plugin sign --print "$WORK/$PLUGIN")" || {
+		rm -f "$WORK/$PLUGIN/plugin.sig"
+		"$W17CTL" plugin sign "$WORK/$PLUGIN" >&2 || {
 			echo "!! signing failed — not tagging an unsigned release. Check W17_CONSOLE_ADDR and" >&2
 			echo "   that you are signed in (or W17_TOKEN is set) with a role that may sign." >&2
 			exit 1
 		}
-		# $(…) drops the trailing newlines; the block's own lines are kept as written.
-		[ "$(printf '%s\n' "$sig" | head -1)" = "w17-plugin-sig-file/1" ] || {
-			echo "!! plugin sign printed something that is not a signature file:" >&2
-			printf '%s\n' "$sig" >&2
+		[ "$(head -1 "$WORK/$PLUGIN/plugin.sig" 2>/dev/null)" = "w17-plugin-sig-file/1" ] || {
+			echo "!! plugin sign left no signature file in $WORK/$PLUGIN/plugin.sig" >&2
 			exit 1
 		}
-		printf '%s\n' "$sig"
+		# Its own lines, as written; the block ends on a line of its own.
+		cat "$WORK/$PLUGIN/plugin.sig"
+		[ -z "$(tail -c1 "$WORK/$PLUGIN/plugin.sig")" ] || echo
 	fi
 	echo "-----END W17 PLUGIN SIGNATURE-----"
 } > "$WORK/message"

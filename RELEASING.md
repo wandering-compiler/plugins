@@ -34,8 +34,10 @@ nothing else.
    branch and pushes nothing; delete the branch afterwards.
 2. **The release workflow cuts it** (`.github/workflows/release.yml`). When CI
    passes on the merge commit, it runs `tools/release.sh` for every plugin
-   whose version line that commit changed: it signs the plugin and tags the
-   commit. Nothing else is needed. To retry a failed run, or release from
+   whose version that commit changed: it signs the plugin and tags the
+   commit. Nothing else is needed. A version whose tag already exists is
+   skipped, and every plugin is tried before the run fails, so a re-run
+   releases only what is still missing. To retry a failed run, or release from
    `main` by hand, run the workflow with the plugin's name ("Run workflow" on
    the Actions page), or locally:
 
@@ -63,9 +65,10 @@ It then does three things:
 1. Runs `make check` for the plugin. `SKIP_CHECK=1` replaces this run with a
    check that CI's `ci-ok` passed on that exact commit; the workflow uses it.
 2. Signs the plugin as committed (`git archive`, so nothing untracked can reach
-   it) through `w17ctl plugin sign --print`, which digests the tree, asks the
-   console to sign the digest and confirms the console verifies the result. The
-   key never leaves the console. An unsigned release is never tagged.
+   it) through `w17ctl plugin sign`, which digests the tree, asks the console to
+   sign the digest and confirms the console verifies the result. The key never
+   leaves the console. An unsigned release is never tagged. By hand this is the
+   `w17ctl` on your PATH (or `W17CTL`); the workflow signs with the pinned one.
 3. Tags the commit with an annotated tag whose message carries the signature
    between `-----BEGIN W17 PLUGIN SIGNATURE-----` and
    `-----END W17 PLUGIN SIGNATURE-----`, and pushes the tag. A tag that failed to
@@ -78,8 +81,8 @@ write.
 **Why the author tree is signed.** The render depends on the version of
 `w17ctl` that runs it, and a consumer renders with their own. The committed tree
 is the same for everyone, so every client computes the digest that was signed.
-A `w17ctl` newer than v0.1.0-rc.71 reads the signature from the tag; an older
-one installs such a release as unsigned (it does not refuse it).
+A `w17ctl` that reads the signature from the tag verifies it; an older one
+installs such a release as unsigned (it does not refuse it).
 
 **The workflow's secrets** live in the `release` environment, which only `main`
 may use, so a workflow edited on another branch never sees them:

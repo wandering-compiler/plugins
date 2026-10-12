@@ -49,8 +49,8 @@ requires. An SDK too old to ship the vocabulary falls back to the version in
 
 **The render** is `w17ctl plugin render` at the version pinned in
 `tools/w17ctl-version`; `tools/w17ctl.sh` installs exactly that version, and
-releases and the checks never use whatever `w17ctl` is on your PATH. Bump the
-pin in a pull request.
+the checks never use whatever `w17ctl` is on your PATH. Bump the pin in a pull
+request.
 
 ## Changelog
 
