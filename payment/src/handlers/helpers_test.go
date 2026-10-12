@@ -313,3 +313,16 @@ func TestValidateConfig_NoWebhookSecretNeededWhileWebhooksAreOff(t *testing.T) {
 		t.Fatalf("webhooks off, no secret: %v", err)
 	}
 }
+
+// Without the webhook surface a top-up would charge and never grant the
+// credit, so it is refused before anything reaches the provider.
+func TestTopUpCredit_RefusesWithoutWebhooks(t *testing.T) {
+	saved := webhooksStaged
+	webhooksStaged = false
+	t.Cleanup(func() { webhooksStaged = saved })
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	_, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: "5.00", Currency: "usd"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("err = %v, want FailedPrecondition", err)
+	}
+}

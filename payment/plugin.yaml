@@ -47,10 +47,10 @@ features:
       - handlers/webhook_stripe.go
   - name: prepaid
     default: false
-    # A top-up's credit is granted only when the provider's webhook confirms
-    # the payment; without the webhook surface TopUpCredit takes the money
-    # and the credit never lands.
-    requires: [stripe_webhooks]
+    # No `requires`: the wallet itself (GrantCredit / SpendCredit / the
+    # balance) is local. Only TopUpCredit needs the webhook, which grants the
+    # credit when the provider confirms the payment, so it refuses to charge
+    # when stripe_webhooks is off.
     description: "Prepaid credit wallet: append-only CreditLedger + materialized CreditBalance (non-negative CHECK), the atomic ApplyCredit mutation (ledger insert + balance increment in one tx), and PaymentService.GrantCredit/SpendCredit/GetBalance + the CreditApplied event. Off by default — opt in for credit/wallet billing."
     go_files:
       - handlers/prepaid.go

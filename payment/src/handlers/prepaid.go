@@ -192,6 +192,11 @@ func (h *PaymentServiceHandler) TopUpCredit(ctx context.Context, req *pb.TopUpCr
 		return nil, err
 	}
 	req.UserId = uid
+	// The credit is granted by the provider's webhook. Without the webhook
+	// surface the charge would go through and the credit never land.
+	if !webhooksStaged {
+		return nil, status.Error(codes.FailedPrecondition, "payment: top-ups need the stripe_webhooks feature, which grants the credit when the provider confirms the payment")
+	}
 	if req.GetUserId() == "" {
 		return nil, invalidArg("user_id is required")
 	}
