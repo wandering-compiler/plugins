@@ -248,11 +248,11 @@ func TestHandlers_AnUnreadableRegistryIsUnavailable(t *testing.T) {
 		"ScheduleTask": func() error { _, err := run(t, h); return err },
 		"ReserveTask":  func() error { _, err := h.ReserveTask(ctx, &pb.ReserveTaskReq{}); return err },
 		"GetReservation": func() error {
-			_, err := h.GetReservation(ctx, &pb.GetReservationReq{Reservation: "id-a.r1"})
+			_, err := h.GetReservation(ctx, &pb.GetReservationReq{Reservation: handleFor("id-a", "r1")})
 			return err
 		},
 		"CancelReservation": func() error {
-			_, err := h.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: "id-a.r1"})
+			_, err := h.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: handleFor("id-a", "r1")})
 			return err
 		},
 		"DrainRelay": func() error { _, err := h.DrainRelay(ctx, &pb.DrainRelayReq{Ids: []string{"id-a"}}); return err },
@@ -278,11 +278,11 @@ func TestHandlers_AnUnreadableBanSetRefusesEveryCall(t *testing.T) {
 	for name, call := range map[string]func() error{
 		"ReserveTask": func() error { _, err := h.ReserveTask(ctx, &pb.ReserveTaskReq{}); return err },
 		"GetReservation": func() error {
-			_, err := h.GetReservation(ctx, &pb.GetReservationReq{Reservation: "id-a.r1"})
+			_, err := h.GetReservation(ctx, &pb.GetReservationReq{Reservation: handleFor("id-a", "r1")})
 			return err
 		},
 		"CancelReservation": func() error {
-			_, err := h.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: "id-a.r1"})
+			_, err := h.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: handleFor("id-a", "r1")})
 			return err
 		},
 		"DrainRelay": func() error { _, err := h.DrainRelay(ctx, &pb.DrainRelayReq{Ids: []string{"id-a"}}); return err },
@@ -304,14 +304,14 @@ func TestHandlers_AnUnreadableBanSetRefusesEveryCall(t *testing.T) {
 // must not cost a client its place. The failure is recorded on the relay's row.
 func TestGetReservation_AnUnreachableRelayIsNotExpired(t *testing.T) {
 	h, st := pool(t, map[string]*scripted{}, "")
-	_, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: "id-.r1"})
+	_, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: handleFor("id-", "r1")})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want Unavailable (the place may still be there)", err)
 	}
 	if len(st.failedFor("id-")) == 0 {
 		t.Error("the unreachable relay was not noted on its row")
 	}
-	if _, err := h.CancelReservation(t.Context(), &pb.CancelReservationReq{Reservation: "id-.r1"}); status.Code(err) != codes.Unavailable {
+	if _, err := h.CancelReservation(t.Context(), &pb.CancelReservationReq{Reservation: handleFor("id-", "r1")}); status.Code(err) != codes.Unavailable {
 		t.Errorf("cancel on an unreachable relay: %v, want Unavailable", err)
 	}
 }
@@ -322,17 +322,17 @@ func TestGetReservation_AnUnreachableRelayIsNotExpired(t *testing.T) {
 func TestGetReservation_StampsTheRelaysAnswer(t *testing.T) {
 	r := &scripted{}
 	h, _ := pool(t, map[string]*scripted{"a": r}, "a")
-	st, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: "id-a.r7"})
+	st, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: handleFor("id-a", "r7")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.GetReservation() != "id-a.r7" || st.GetQueued().GetRelay() != "relay-a" || st.GetQueued().GetPosition() != 3 {
-		t.Errorf("poll = %v, want handle id-a.r7, relay-a, position 3", st)
+	if st.GetReservation() != handleFor("id-a", "r7") || st.GetQueued().GetRelay() != "relay-a" || st.GetQueued().GetPosition() != 3 {
+		t.Errorf("poll = %v, want the handle for id-a.r7, relay-a, position 3", st)
 	}
 	r.get = func(string) (*pb.ReservationState, error) {
 		return nil, status.Error(codes.Internal, "relay: polling: boom")
 	}
-	if _, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: "id-a.r7"}); status.Code(err) != codes.Internal {
+	if _, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: handleFor("id-a", "r7")}); status.Code(err) != codes.Internal {
 		t.Errorf("a relay's own error became %v", err)
 	}
 }
@@ -342,7 +342,7 @@ func TestGetReservation_StampsTheRelaysAnswer(t *testing.T) {
 // mistake.
 func TestCancelReservation_GoneAndMalformed(t *testing.T) {
 	h, _ := pool(t, map[string]*scripted{}, "a")
-	if _, err := h.CancelReservation(t.Context(), &pb.CancelReservationReq{Reservation: "id-removed.r1"}); err != nil {
+	if _, err := h.CancelReservation(t.Context(), &pb.CancelReservationReq{Reservation: handleFor("id-removed", "r1")}); err != nil {
 		t.Errorf("cancelling on a removed relay: %v, want success", err)
 	}
 	for _, bad := range []string{"", "no-separator", ".r1", "id-a."} {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
@@ -116,8 +118,8 @@ func TestGetReservation_QueuedThenGranted(t *testing.T) {
 func TestGetReservation_GoneIsExpired(t *testing.T) {
 	h, _, _ := twoRelays(t, 1, 0)
 	for _, handle := range []string{
-		"11111111-1111-1111-1111-111111111111.deadbeef",
-		"99999999-9999-9999-9999-999999999999.deadbeef",
+		handleFor("11111111-1111-1111-1111-111111111111", "deadbeef"),
+		handleFor("99999999-9999-9999-9999-999999999999", "deadbeef"),
 	} {
 		st, err := h.GetReservation(t.Context(), &pb.GetReservationReq{Reservation: handle})
 		if err != nil {
@@ -212,4 +214,68 @@ func TestReserveTask_NoPlaceableRelayIsNoRelay(t *testing.T) {
 		}
 	}
 	t.Fatalf("err = %v, want ErrorInfo{%s, %s}", err, refusal.Domain, refusal.NoRelay)
+}
+
+// handleFor is the handle ReserveTask would hand a caller with no signed-in
+// principal (the project's own code) for this relay and reservation.
+func handleFor(relayID, local string) string {
+	return relayID + handleSep + local + handleSep + holderTag("", relayID, local)
+}
+
+// A handle works only for the caller it was handed to: another signed-in
+// caller holding it reads it as expired and cancels nothing, and neither does
+// a call with no principal at all.
+func TestReservationHandle_BelongsToItsHolder(t *testing.T) {
+	h, _, _ := twoRelays(t, 1, 0)
+	alice, bob := signedIn("alice"), signedIn("bob")
+	st, err := h.ReserveTask(alice, &pb.ReserveTaskReq{})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if got, err := h.GetReservation(alice, &pb.GetReservationReq{Reservation: st.GetReservation()}); err != nil || got.GetExpired() != nil {
+		t.Fatalf("the holder's poll: %v, %v", got, err)
+	}
+	for name, other := range map[string]context.Context{"another user": bob, "no principal": context.Background()} {
+		got, err := h.GetReservation(other, &pb.GetReservationReq{Reservation: st.GetReservation()})
+		if err != nil || got.GetExpired().GetReason() != refusal.ReservationUnknown {
+			t.Errorf("%s's poll = %v, %v; want expired as unknown", name, got, err)
+		}
+		if _, err := h.CancelReservation(other, &pb.CancelReservationReq{Reservation: st.GetReservation()}); err != nil {
+			t.Fatalf("%s's cancel: %v", name, err)
+		}
+	}
+	if got, err := h.GetReservation(alice, &pb.GetReservationReq{Reservation: st.GetReservation()}); err != nil || got.GetExpired() != nil {
+		t.Errorf("another caller's cancel took the holder's place: %v, %v", got, err)
+	}
+}
+
+// The tag covers the whole handle: the holder's own tag does not carry over to
+// a handle naming a different relay.
+func TestReservationHandle_TagCoversTheRelay(t *testing.T) {
+	h, _, _ := twoRelays(t, 1, 0)
+	st, err := h.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	parts := strings.Split(st.GetReservation(), handleSep)
+	parts[0] = "99999999-9999-9999-9999-999999999999"
+	if holderTag("", parts[0], parts[1]) == parts[2] {
+		t.Fatal("the tag does not depend on the relay")
+	}
+}
+
+// An envelope that is present but unreadable is refused, never read as "no
+// principal": that would give every such caller the one identity they share.
+func TestReservationHandle_AnUnreadableEnvelopeIsRefused(t *testing.T) {
+	h, _, _ := twoRelays(t, 1, 0)
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-w17-user", "not base64!"))
+	if _, err := h.ReserveTask(ctx, &pb.ReserveTaskReq{}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("reserve: %v, want Unauthenticated", err)
+	}
+	if _, err := h.GetReservation(ctx, &pb.GetReservationReq{Reservation: handleFor("id-a", "r1")}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("poll: %v, want Unauthenticated", err)
+	}
+	if _, err := h.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: handleFor("id-a", "r1")}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("cancel: %v, want Unauthenticated", err)
+	}
 }
