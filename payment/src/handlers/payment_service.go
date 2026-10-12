@@ -6,6 +6,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -312,10 +313,22 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
 	}
 	if !found {
+		// A top-up's credit leaves with its money (prepaid; no-op otherwise).
+		// Taken before the provider is asked, so a refund of spent credit is
+		// refused instead of paid out.
+		undo, err := takeBackRefundedCredit(ctx, h, payment, amount, req.GetIdempotencyKey())
+		if err != nil {
+			return nil, err
+		}
 		res, err = h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
 			backend.Money{Amount: amount, Currency: payment.GetCurrency()},
 			req.GetIdempotencyKey())
 		if err != nil {
+			// A refusal the provider will repeat on every retry gives the
+			// credit back; a transient failure keeps it taken, for the retry.
+			if undo != nil && (errors.Is(err, backend.ErrInvalidRequest) || errors.Is(err, backend.ErrDeclined)) {
+				undo()
+			}
 			return nil, providerFailure(err)
 		}
 	}
@@ -370,6 +383,14 @@ func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment 
 		return
 	}
 	_, _ = h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+}
+
+// takeBackRefundedCredit removes the credit a refunded top-up granted,
+// before the money goes back. Base no-op; handlers/prepaid.go installs the
+// real one, since the top-up records exist only under `prepaid`. The undo it
+// returns gives the credit back; nil when nothing was taken.
+var takeBackRefundedCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, idem string) (undo func(), err error) {
+	return nil, nil
 }
 
 // stampRefundKey records the kept key on a refund row the key lookup could

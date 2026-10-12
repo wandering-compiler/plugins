@@ -301,3 +301,38 @@ func (h *PaymentServiceHandler) GetMyCreditBalance(ctx context.Context, _ *pb.Ge
 	}
 	return h.Query.GetCreditBalance(ctx, &pb.GetCreditBalanceReq{UserId: caller})
 }
+
+func init() { takeBackRefundedCredit = takeBackTopupCredit }
+
+// takeBackTopupCredit spends, from the top-up's owner, the credit a refund
+// of a top-up payment returns as money. A top-up whose credit is already
+// spent cannot be refunded past what is left, and one whose credit has not
+// been granted yet cannot be refunded at all: the grant would land after the
+// refund. Idempotent per refund key, like the rest of the ledger.
+func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, idem string) (func(), error) {
+	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+	if err != nil {
+		if absent(err) {
+			return nil, nil // not a top-up
+		}
+		return nil, err
+	}
+	topup := got.GetTopup()
+	if topup == nil {
+		return nil, nil
+	}
+	if topup.GetGrantedAt() == nil {
+		return nil, status.Error(codes.FailedPrecondition, "payment: the top-up's credit is not granted yet; refund it after the payment has settled")
+	}
+	key := "topup-refund:" + idem
+	if _, err := h.applyCredit(ctx, topup.GetUserId(), amount, creditSpend, "topup refund", payment.GetId(), key); err != nil {
+		if status.Code(err) == codes.FailedPrecondition {
+			return nil, status.Error(codes.FailedPrecondition, "payment: the top-up's credit is already spent; it cannot be refunded")
+		}
+		return nil, err
+	}
+	undo := func() {
+		_, _ = h.applyCredit(ctx, topup.GetUserId(), amount, creditGrant, "topup refund refused", payment.GetId(), "undo:"+key)
+	}
+	return undo, nil
+}
