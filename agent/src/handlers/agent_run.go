@@ -94,10 +94,8 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	// Once at the start rather than per turn: a limit that fails mid-run would
 	// abandon a conversation that has already spent tool calls, and the
 	// per-turn budget a caller wants for that is `Limits` on the Start message.
-	if h.Limits != nil {
-		if d := h.Limits.Allow(srv.Context(), start.GetUsageScope()); !d.Allowed {
-			return status.Error(codes.ResourceExhausted, d.Reason)
-		}
+	if err := h.admitSpend(srv.Context(), start.GetUsageScope(), start.GetUsageLabels()); err != nil {
+		return err
 	}
 
 	tools := make([]llm.Tool, 0, len(start.GetTools()))

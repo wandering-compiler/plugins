@@ -82,7 +82,10 @@ type dbLimiter struct {
 }
 
 const (
-	reasonOverLimit = "agent: this scope has reached its spending limit for the current month"
+	reasonOverLimit = "agent: this scope has reached its spending limit"
+
+	reasonUnpriced = "agent: this scope has a spending limit and has made calls on a model with no " +
+		"price, so its spending cannot be totalled. Price the model, or lift the limit."
 
 	reasonMixedCurrency = "agent: this scope's spending cannot be totalled — its models are priced in " +
 		"more than one currency, and a limit is a single amount. Price them alike, or lift the limit."
@@ -112,11 +115,44 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 		return LimitDecision{Allowed: true}
 	}
 
-	limit, ok := l.limits.get(scope, now)
+	// Every window a limit can be set in is enforced. Only MONTH used to be
+	// asked, so a DAY or TOTAL limit was accepted, read back and enforced
+	// nothing. The first window that refuses answers.
+	for _, w := range limitWindows {
+		if d := l.allowIn(ctx, scope, scopeID, w, now); !d.Allowed {
+			return d
+		}
+	}
+	return LimitDecision{Allowed: true}
+}
+
+// limitWindows are the windows Allow checks, each with where it starts.
+var limitWindows = []pb.LimitWindow{
+	pb.LimitWindow_LIMIT_WINDOW_DAY,
+	pb.LimitWindow_LIMIT_WINDOW_MONTH,
+	pb.LimitWindow_LIMIT_WINDOW_TOTAL,
+}
+
+// windowStart is the first instant a window counts spend from.
+func windowStart(w pb.LimitWindow, now time.Time) time.Time {
+	switch w {
+	case pb.LimitWindow_LIMIT_WINDOW_DAY:
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	case pb.LimitWindow_LIMIT_WINDOW_MONTH:
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	default:
+		return time.Unix(0, 0).UTC()
+	}
+}
+
+// allowIn decides one window: its limit, then the scope's spend within it.
+func (l *dbLimiter) allowIn(ctx context.Context, scope string, scopeID int64, w pb.LimitWindow, now time.Time) LimitDecision {
+	key := scope + "\x00" + w.String()
+	limit, ok := l.limits.get(key, now)
 	if !ok {
 		resp, lErr := l.q.GetScopeLimit(ctx, &pb.GetScopeLimitReq{
 			ScopeId: scopeID,
-			Window:  pb.LimitWindow_LIMIT_WINDOW_MONTH,
+			Window:  w,
 			At:      timestamppb.New(now),
 		})
 		switch {
@@ -124,7 +160,7 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 			// No row is the common case — most scopes have no cap — and it
 			// arrives as NotFound. Cache the absence so a scope without a
 			// limit does not ask on every call.
-			l.limits.put(scope, scopeLimit{none: true}, now)
+			l.limits.put(key, scopeLimit{none: true}, now)
 			return LimitDecision{Allowed: true}
 		case lErr != nil:
 			// Any OTHER failure is the database, not an answer. Fail open as
@@ -135,25 +171,24 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 			return LimitDecision{Allowed: true}
 		}
 		limit = scopeLimit{minor: resp.GetLimitMinor(), currency: resp.GetCurrency()}
-		l.limits.put(scope, limit, now)
+		l.limits.put(key, limit, now)
 	}
 	if limit.none || limit.minor < 0 {
 		return LimitDecision{Allowed: true}
 	}
 
-	spent, ok := l.spend.get(scope, now)
+	spent, ok := l.spend.get(key, now)
 	if !ok {
-		from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		resp, sErr := l.q.GetScopeSpend(ctx, &pb.GetScopeSpendReq{
 			ScopeId: scopeID,
-			From:    timestamppb.New(from),
+			From:    timestamppb.New(windowStart(w, now)),
 			To:      timestamppb.New(now.Add(time.Second)),
 		})
 		if sErr != nil {
 			return LimitDecision{Allowed: true}
 		}
-		total, currency, ok := totalSpend(resp.GetLines())
-		if !ok {
+		total, currency, verdict := totalSpend(resp.GetLines())
+		if verdict != "" {
 			// Fail CLOSED, and this is one of the two places in this file
 			// that does. Everywhere else the limiter fails open on purpose —
 			// an unreachable database must not become a second outage —
@@ -161,12 +196,12 @@ func (l *dbLimiter) Allow(ctx context.Context, scope string) LimitDecision {
 			// Here the data arrived and says the cap cannot be evaluated at
 			// all: the spend exists, and letting it through is an unbounded
 			// overspend against a limit somebody set deliberately. An
-			// operator fixes it by pricing a scope's models alike; a caller
-			// cannot fix it by retrying, so the reason says which it is.
-			return LimitDecision{Allowed: false, Reason: reasonMixedCurrency}
+			// operator fixes it by pricing the scope's models (alike); a
+			// caller cannot fix it by retrying, so the reason says which it is.
+			return LimitDecision{Allowed: false, Reason: verdict}
 		}
 		spent = scopeSpend{minor: total, currency: currency}
-		l.spend.put(scope, spent, now)
+		l.spend.put(key, spent, now)
 	}
 
 	// The other place, for the same reason. The spend was totalled within ONE
@@ -201,7 +236,7 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 }
 
 // totalSpend reduces a scope's spend lines to ONE comparable amount and the
-// currency it is in, reporting whether that is possible at all.
+// currency it is in, or the refusal reason when no such amount exists.
 //
 // Minor units are only comparable within a currency, and a cap is one integer
 // with no currency of its own. The loop this replaced added them flat — dollars
@@ -217,29 +252,32 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 //	                        old `if CostMinor != nil` skipped it, so real spend
 //	                        vanished and a scope priced in two currencies never
 //	                        reached its cap.
-//	cost absent, priced = 0 contributes nothing, as before: a model nobody
-//	                        priced must not make a scope look cheap, and must not
-//	                        make it look expensive either.
+//	calls > priced_calls    UNTOTALLABLE: some calls had no price. This used
+//	                        to contribute nothing, so a capped scope that used
+//	                        only unpriced models was never refused, however
+//	                        much it spent. Tokens nobody priced are not free.
 //
 // A pure function because the decision is the thing worth pinning, and the
 // generated clients around it are not: there was no test on this file at all
 // when the rollup started leaving mixed-currency lines without a cost, which is
 // how two correct changes met and nobody noticed.
-func totalSpend(lines []*pb.ScopeSpendLine) (int64, string, bool) {
+func totalSpend(lines []*pb.ScopeSpendLine) (int64, string, string) {
 	byCurrency := map[string]int64{}
 	for _, line := range lines {
 		switch {
+		case line.GetCalls() > line.GetPricedCalls():
+			return 0, "", reasonUnpriced
 		case line.CostMinor != nil:
 			byCurrency[strings.ToUpper(line.GetCurrency())] += line.GetCostMinor()
 		case line.GetPricedCalls() > 0:
-			return 0, "", false
+			return 0, "", reasonMixedCurrency
 		}
 	}
 	if len(byCurrency) > 1 {
-		return 0, "", false
+		return 0, "", reasonMixedCurrency
 	}
 	for currency, total := range byCurrency {
-		return total, currency, true
+		return total, currency, ""
 	}
-	return 0, "", true
+	return 0, "", ""
 }

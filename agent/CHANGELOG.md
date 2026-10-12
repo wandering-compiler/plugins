@@ -1,5 +1,15 @@
 # agent — changelog
 
+## Unreleased
+
+### Spending limits hold
+
+- **Every limit window is enforced.** `SetScopeLimit` accepted `DAY` and `TOTAL` limits and only `MONTH` was ever checked. Each window now counts its own spend: from the start of the UTC day, the start of the UTC month, or all time. The first window over its limit refuses.
+- **Unpriced calls refuse under a limit.** Calls on a model with no price contributed nothing, so a capped scope on unpriced models was never refused. A scope with a limit and unpriced calls in a window is now refused with a reason that names the fix: price the model, or lift the limit. A scope with no limit is unaffected.
+- **A scope or label too long to record is refused up front.** `usage_scope` over 128 characters, a label key over 64 or a label value over 256 is refused with `InvalidArgument` before the model is called, in every activation. Before, it was served, never capped, and lost at flush.
+- **A missing limiter refuses the boot.** With `usage_persistence` on, a client set without `UsageQuery` or `UsageMutation` used to install the allow-all limiter silently. `RegisterPlugin` now fails, as it already did for a missing usage sink.
+- The over-limit reason no longer says "for the current month", since any window can refuse.
+
 ## 0.1.0-rc.5
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sync`, `x/crypto`, `x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update agent`.

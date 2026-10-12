@@ -2,8 +2,14 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	gen "github.com/wandering-compiler/plugins/agent/gen"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // LimitDecision is what a limiter says about one scope.
@@ -45,6 +51,64 @@ func (allowAllLimiter) Allow(context.Context, string) LimitDecision {
 }
 
 var newLimiter = func(clients any) Limiter { return allowAllLimiter{} }
+
+// VerifyLimiterWiring refuses to boot when the activation says usage
+// persistence is ON and the limiter is still the allow-all one.
+//
+// The same drift VerifyUsageWiring guards: the database limiter is installed
+// by a staged file, and only when the client set has both usage clients. It
+// used to fall back to allow-all silently, so every cap was off with no error.
+var errLimiterWiring = errors.New(
+	"agent: usage_persistence is active for this activation but no spending limiter was wired — " +
+		"handlers/limits_enabled.go needs the UsageQuery and UsageMutation clients; every limit would be ignored")
+
+func VerifyLimiterWiring(l Limiter) error {
+	if _, allowAll := l.(allowAllLimiter); gen.FeatureUsagePersistence && allowAll {
+		return errLimiterWiring
+	}
+	return nil
+}
+
+// The longest `usage_scope`, label key and label value a request may carry, in
+// characters: the `Scope.external_id`, `Label.key` and `Label.value` columns.
+const (
+	MaxUsageScopeLen      = 128
+	MaxUsageLabelKeyLen   = 64
+	MaxUsageLabelValueLen = 256
+)
+
+// admitSpend is asked before every model call: the scope must be one the
+// layer can record and cap, and it must be under its limits.
+//
+// The lengths are checked up front, in every activation, because a longer
+// scope was served and then lost: no Scope row could hold it, the limiter
+// failed open, and the usage row could not be written. A label too long for
+// its column took its whole batch down at flush the same way.
+func (h *AgentServiceHandler) admitSpend(ctx context.Context, scope string, labels map[string]string) error {
+	if n := utf8.RuneCountInString(scope); n > MaxUsageScopeLen {
+		return status.Errorf(codes.InvalidArgument,
+			"agent: usage_scope is %d characters; at most %d are accepted", n, MaxUsageScopeLen)
+	}
+	for k, v := range labels {
+		if n := utf8.RuneCountInString(k); n > MaxUsageLabelKeyLen {
+			return status.Errorf(codes.InvalidArgument,
+				"agent: a usage label key is %d characters; at most %d are accepted", n, MaxUsageLabelKeyLen)
+		}
+		if n := utf8.RuneCountInString(v); n > MaxUsageLabelValueLen {
+			return status.Errorf(codes.InvalidArgument,
+				"agent: usage label %q has a %d-character value; at most %d are accepted", k, n, MaxUsageLabelValueLen)
+		}
+	}
+	// Asked BEFORE the call, which is the entire difference between a limit
+	// and a report: out of credit has to fail the first request, not show up
+	// on the next invoice.
+	if h.Limits != nil {
+		if d := h.Limits.Allow(ctx, scope); !d.Allowed {
+			return status.Error(codes.ResourceExhausted, d.Reason)
+		}
+	}
+	return nil
+}
 
 // NewLimiter builds the limiter for this activation.
 func NewLimiter(clients any) Limiter { return newLimiter(clients) }

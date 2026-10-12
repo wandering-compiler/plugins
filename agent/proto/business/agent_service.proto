@@ -60,7 +60,9 @@ message CompleteReq {
   // touching a single caller.
 
   // Who the spend is charged to, in the CALLER's own vocabulary — a tenant
-  // id, in every case we know of. The plugin never parses it.
+  // id, in every case we know of. The plugin never parses it. At most 128
+  // characters; a longer scope is refused with InvalidArgument before the
+  // model is called, in every activation.
   string usage_scope = 5;
 
   // The caller's own attribution, recorded verbatim and aggregatable in the
@@ -71,6 +73,9 @@ message CompleteReq {
   // A call that cannot be attributed to ONE subject should carry no label
   // rather than a share of each — aggregating later is always possible,
   // splitting back never is.
+  //
+  // Keys are at most 64 characters and values at most 256; a longer one is
+  // refused with InvalidArgument before the model is called.
   map<string, string> usage_labels = 6;
 }
 
@@ -234,7 +239,8 @@ message RunAgentReq {
     repeated ToolSpec tools = 4;
     Limits limits = 5;
 
-    // Same two fields as CompleteReq, and ungated for the same reason.
+    // Same two fields as CompleteReq, with the same length limits, and
+    // ungated for the same reason.
     //
     // A run is MANY model calls — one per turn of the tool loop — and each is
     // recorded as its own row carrying these labels. That is deliberate: "one

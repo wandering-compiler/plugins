@@ -24,10 +24,8 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 
 	// Same cap as Complete, for the same reason: a stream spends tokens the
 	// moment it starts.
-	if h.Limits != nil {
-		if d := h.Limits.Allow(srv.Context(), req.GetUsageScope()); !d.Allowed {
-			return status.Error(codes.ResourceExhausted, d.Reason)
-		}
+	if err := h.admitSpend(srv.Context(), req.GetUsageScope(), req.GetUsageLabels()); err != nil {
+		return err
 	}
 
 	m := h.modelFor(req)

@@ -68,6 +68,10 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	if err := handlers.VerifyUsageWiring(sink); err != nil {
 		return err
 	}
+	limiter := handlers.NewLimiter(clients)
+	if err := handlers.VerifyLimiterWiring(limiter); err != nil {
+		return err
+	}
 
 	// Drain the usage queue at teardown.
 	//
@@ -87,7 +91,7 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 
 	registry.RegisterAgentServiceServer(&handlers.AgentServiceHandler{
 		Usage:  sink,
-		Limits: handlers.NewLimiter(clients),
+		Limits: limiter,
 		// One object satisfies both halves of the seam; they are separate
 		// interfaces so a test can fake either alone.
 		Client:           client,

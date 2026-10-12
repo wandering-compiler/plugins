@@ -96,7 +96,9 @@ type CompleteReq struct {
 	// next.
 	ResponseFormat ResponseFormat `protobuf:"varint,4,opt,name=response_format,json=responseFormat,proto3,enum=w17.contrib.agent.ResponseFormat" json:"response_format,omitempty"`
 	// Who the spend is charged to, in the CALLER's own vocabulary — a tenant
-	// id, in every case we know of. The plugin never parses it.
+	// id, in every case we know of. The plugin never parses it. At most 128
+	// characters; a longer scope is refused with InvalidArgument before the
+	// model is called, in every activation.
 	UsageScope string `protobuf:"bytes,5,opt,name=usage_scope,json=usageScope,proto3" json:"usage_scope,omitempty"`
 	// The caller's own attribution, recorded verbatim and aggregatable in the
 	// usage API. `{"run": "...", "subject": "..."}` is the shape the first
@@ -106,6 +108,9 @@ type CompleteReq struct {
 	// A call that cannot be attributed to ONE subject should carry no label
 	// rather than a share of each — aggregating later is always possible,
 	// splitting back never is.
+	//
+	// Keys are at most 64 characters and values at most 256; a longer one is
+	// refused with InvalidArgument before the model is called.
 	UsageLabels   map[string]string `protobuf:"bytes,6,rep,name=usage_labels,json=usageLabels,proto3" json:"usage_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1004,7 +1009,8 @@ type RunAgentReq_Start struct {
 	Messages     []*Message             `protobuf:"bytes,3,rep,name=messages,proto3" json:"messages,omitempty"`
 	Tools        []*ToolSpec            `protobuf:"bytes,4,rep,name=tools,proto3" json:"tools,omitempty"`
 	Limits       *Limits                `protobuf:"bytes,5,opt,name=limits,proto3" json:"limits,omitempty"`
-	// Same two fields as CompleteReq, and ungated for the same reason.
+	// Same two fields as CompleteReq, with the same length limits, and
+	// ungated for the same reason.
 	//
 	// A run is MANY model calls — one per turn of the tool loop — and each is
 	// recorded as its own row carrying these labels. That is deliberate: "one
