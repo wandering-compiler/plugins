@@ -249,6 +249,9 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 //
 // A payment an earlier version recorded under the caller's raw key keeps that
 // key, so a retry of it is still the same payment rather than a second one.
+// Only the caller's own payment of the same kind is such a retry: a top-up
+// under the raw key of an earlier payment (or the reverse) is another charge,
+// and sent under the raw key the provider would refuse it as a reuse.
 func (h *PaymentServiceHandler) chargeKey(ctx context.Context, cust *pb.Customer, origin, callerKey string) (string, error) {
 	if callerKey == "" {
 		return idempotencyKeyOrNew(""), nil
@@ -258,11 +261,45 @@ func (h *PaymentServiceHandler) chargeKey(ctx context.Context, cust *pb.Customer
 		if err != nil && !absent(err) {
 			return "", err
 		}
-		if got.GetPayment().GetCustomerId() == cust.GetId() && cust.GetId() != "" {
-			return callerKey, nil
+		if p := got.GetPayment(); p != nil && cust.GetId() != "" && p.GetCustomerId() == cust.GetId() {
+			other, err := otherKindOfCharge(ctx, h, p, origin)
+			if err != nil {
+				return "", err
+			}
+			if !other {
+				return callerKey, nil
+			}
 		}
 	}
 	return scopedKey("charge", origin, cust.GetUserId(), callerKey), nil
+}
+
+// topupDescription is the description every version gave a top-up's payment.
+const topupDescription = "credit top-up"
+
+// otherKindOfCharge reports whether p is certainly not of the kind origin
+// names. When that cannot be told, p counts as the same kind: adopting its
+// key for another kind only makes the provider refuse the charge, while
+// scoping a genuine retry would create a second intent for one charge.
+//
+// A top-up's payment always carries topupDescription, so a payment without it
+// is no top-up. A payment with it may be either (a caller can describe a
+// payment so); its CreditTopup row says it is a top-up (isTopupPayment).
+func otherKindOfCharge(ctx context.Context, h *PaymentServiceHandler, p *pb.Payment, origin string) (bool, error) {
+	if p.GetDescription() != topupDescription {
+		return origin == backend.OriginTopup, nil
+	}
+	if origin == backend.OriginTopup {
+		return false, nil
+	}
+	return isTopupPayment(ctx, h, p)
+}
+
+// isTopupPayment reports whether p is a recorded top-up. Base: false, since
+// the top-up records exist only under `prepaid`; handlers/prepaid.go installs
+// the real one.
+var isTopupPayment = func(ctx context.Context, h *PaymentServiceHandler, p *pb.Payment) (bool, error) {
+	return false, nil
 }
 
 // RefundPayment reverses a payment (full when amount is empty), via the

@@ -193,40 +193,58 @@ func TestFlow_PaymentAndTopUpUnderOneKey_AreTwoCharges(t *testing.T) {
 	}
 }
 
+// rawKeyCharge plants what an earlier version did for a charge: the caller's
+// raw key sent to the provider and stored on the Payment, and for a top-up
+// the CreditTopup row.
+func (r *rig) rawKeyCharge(user, amount, key, origin string) *pb.Payment {
+	r.t.Helper()
+	cust, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: user})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	description := ""
+	if origin == backend.OriginTopup {
+		description = topupDescription
+	}
+	pr, err := r.h.Backend.CreatePayment(bg, backend.PaymentSpec{
+		ProviderCustomerID: cust.GetCustomer().GetProviderCustomerId(),
+		Amount:             backend.Money{Amount: amount, Currency: "usd"},
+		IdempotencyKey:     key,
+		Description:        description,
+		Origin:             origin,
+		Install:            r.h.installID(),
+	})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	got, err := r.store.CreatePayment(bg, &pb.CreatePaymentReq{
+		CustomerId: cust.GetCustomer().GetId(), ProviderPaymentId: pr.ProviderPaymentID,
+		Amount: amount, Currency: "usd", IdempotencyKey: key, Description: description,
+	})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if origin == backend.OriginTopup {
+		if _, err := r.store.CreateCreditTopup(bg, &pb.CreateCreditTopupReq{ProviderPaymentId: pr.ProviderPaymentID, UserId: user, Amount: amount}); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	return got.GetPayment()
+}
+
 // A payment an earlier version stored under the caller's raw key: a retry of
 // it is still that payment. Scoping the key on the retry would send the
 // provider a key it never saw, and a second intent would be created.
 func TestFlow_RetryOfAPaymentStoredUnderTheRawKey_IsThatPayment(t *testing.T) {
 	r := newRig(t)
-	cust, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-a"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// What an earlier version did: the raw key to the provider and the store.
-	pr, err := r.h.Backend.CreatePayment(bg, backend.PaymentSpec{
-		ProviderCustomerID: cust.GetCustomer().GetProviderCustomerId(),
-		Amount:             backend.Money{Amount: "5.00", Currency: "usd"},
-		IdempotencyKey:     "order-9",
-		Origin:             backend.OriginCharge,
-		Install:            r.h.installID(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	old, err := r.store.CreatePayment(bg, &pb.CreatePaymentReq{
-		CustomerId: cust.GetCustomer().GetId(), ProviderPaymentId: pr.ProviderPaymentID,
-		Amount: "5.00", Currency: "usd", IdempotencyKey: "order-9",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	old := r.rawKeyCharge("user-a", "5.00", "order-9", backend.OriginCharge)
 
 	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "order-9"})
 	if err != nil {
 		t.Fatalf("retry of the earlier payment: %v", err)
 	}
-	if resp.GetPayment().GetId() != old.GetPayment().GetId() {
-		t.Errorf("retry = %s, want the earlier payment %s", resp.GetPayment().GetId(), old.GetPayment().GetId())
+	if resp.GetPayment().GetId() != old.GetId() {
+		t.Errorf("retry = %s, want the earlier payment %s", resp.GetPayment().GetId(), old.GetId())
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != 1 {
 		t.Errorf("provider intents = %d, want 1", n)
@@ -235,8 +253,38 @@ func TestFlow_RetryOfAPaymentStoredUnderTheRawKey_IsThatPayment(t *testing.T) {
 	// Another principal's raw key is not theirs to retry: user-b's
 	// "order-9" is a charge of its own.
 	b := r.charge("user-b", "5.00", "order-9")
-	if b.GetId() == old.GetPayment().GetId() {
+	if b.GetId() == old.GetId() {
 		t.Fatal("user-b was handed user-a's earlier payment")
+	}
+}
+
+// The same for a top-up an earlier version stored under the raw key.
+func TestFlow_RetryOfATopUpStoredUnderTheRawKey_IsThatTopUp(t *testing.T) {
+	r := newRig(t)
+	old := r.rawKeyCharge("user-a", "5.00", "tu-9", backend.OriginTopup)
+	if again := r.topUp("user-a", "5.00", "tu-9"); again.GetId() != old.GetId() {
+		t.Errorf("retry = %s, want the earlier top-up %s", again.GetId(), old.GetId())
+	}
+	if n := r.stripe.count("/v1/payment_intents"); n != 1 {
+		t.Errorf("provider intents = %d, want 1", n)
+	}
+}
+
+// A raw key an earlier version stored for one kind of charge, reused by the
+// same principal for the other kind, is a new charge: adopting the raw key
+// would make the provider refuse it as a reuse with other parameters.
+func TestFlow_OtherKindUnderAnEarlierRawKey_IsANewCharge(t *testing.T) {
+	r := newRig(t)
+	pay := r.rawKeyCharge("user-a", "5.00", "k-raw-1", backend.OriginCharge)
+	if tu := r.topUp("user-a", "5.00", "k-raw-1"); tu.GetId() == pay.GetId() {
+		t.Fatal("the top-up is the earlier payment")
+	}
+	topup := r.rawKeyCharge("user-a", "5.00", "k-raw-2", backend.OriginTopup)
+	if p := r.charge("user-a", "5.00", "k-raw-2"); p.GetId() == topup.GetId() {
+		t.Fatal("the payment is the earlier top-up")
+	}
+	if n := r.stripe.count("/v1/payment_intents"); n != 4 {
+		t.Errorf("provider intents = %d, want 4", n)
 	}
 }
 
