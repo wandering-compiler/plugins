@@ -229,7 +229,7 @@ func (h *PaymentServiceHandler) TopUpCredit(ctx context.Context, req *pb.TopUpCr
 	if err != nil {
 		return nil, err
 	}
-	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, idempotencyKeyOrNew(req.GetIdempotencyKey()), "credit top-up", backend.OriginTopup)
+	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, req.GetIdempotencyKey(), "credit top-up", backend.OriginTopup)
 	if err != nil {
 		return nil, err
 	}

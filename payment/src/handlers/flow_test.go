@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 // rig wires a PaymentServiceHandler to the stateful store (memStore) and
@@ -99,7 +100,7 @@ func TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment(t *testing.T) {
 		t.Errorf("provider intents created = %d, want 1 (the retry must replay, not charge twice)", n)
 	}
 	p := resp.GetPayment()
-	if p.GetIdempotencyKey() != "order-1" || p.GetAmount() != "19.9900" {
+	if p.GetAmount() != "19.9900" {
 		t.Errorf("returned payment = %+v", p)
 	}
 	if resp.GetClientSecret() != p.GetProviderPaymentId()+"_secret_fake" {
@@ -148,36 +149,95 @@ func TestFlow_KeylessCharges_DoNotCollide(t *testing.T) {
 	}
 }
 
-// Tenant isolation on the replay path: another principal reusing a key
-// must never be handed the first principal's payment.
-func TestFlow_IdempotencyKeyReusedByAnotherUser_NeverLeaksThePayment(t *testing.T) {
+// A key names one of the CALLER's charges. Another principal choosing the
+// same key is making a different charge: it gets its own payment, never the
+// first principal's, and is not refused because someone else used the key
+// first. Stored and sent unscoped, the key was one space for everybody, and
+// the provider refused the second principal's charge.
+func TestFlow_IdempotencyKeyReusedByAnotherUser_IsTheirOwnCharge(t *testing.T) {
 	r := newRig(t)
 	a := r.charge("user-a", "5.00", "shared-key")
-
-	// Inside the provider's key window: same key, different customer →
-	// the provider refuses (idempotency_error) — a caller error.
-	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-b", Amount: "5.00", Currency: "usd", IdempotencyKey: "shared-key"})
-	wantCode(t, err, codes.InvalidArgument, "key reused with other parameters")
-
-	// After the provider forgot the key: it mints a NEW intent, the local
-	// INSERT conflicts on the idempotency key of user-a's row — and the
-	// replay lookup finds no row for the new intent.
-	r.stripe.forgetKeys()
-	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-b", Amount: "5.00", Currency: "usd", IdempotencyKey: "shared-key"})
-	wantCode(t, err, codes.AlreadyExists, "key reused after the provider window")
-	if resp != nil || strings.Contains(err.Error(), a.GetId()) || strings.Contains(err.Error(), a.GetProviderPaymentId()) {
-		t.Errorf("user-b's failure must not carry user-a's payment: resp=%v err=%v", resp, err)
+	b := r.charge("user-b", "5.00", "shared-key")
+	if b.GetId() == a.GetId() || b.GetProviderPaymentId() == a.GetProviderPaymentId() || b.GetCustomerId() == a.GetCustomerId() {
+		t.Fatalf("user-b's charge is user-a's: a=%+v b=%+v", a, b)
 	}
-	if n := r.store.count("payments"); n != 1 {
-		t.Errorf("payments = %d, want only user-a's", n)
+	if n := r.stripe.count("/v1/payment_intents"); n != 2 {
+		t.Errorf("provider intents = %d, want 2", n)
+	}
+	if again := r.charge("user-b", "5.00", "shared-key"); again.GetId() != b.GetId() {
+		t.Errorf("user-b's retry = %s, want its own payment %s", again.GetId(), b.GetId())
 	}
 
-	// And user-a's own retry after the window: the provider mints a new
-	// intent, the lookup finds no row for it — AlreadyExists, not some
+	// user-a's own retry after the provider forgot the key: the provider
+	// mints a new intent, the local INSERT conflicts on user-a's key, and
+	// the lookup finds no row for the new intent: AlreadyExists, not some
 	// other payment.
 	r.stripe.forgetKeys()
-	_, err = r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "shared-key"})
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "shared-key"})
 	wantCode(t, err, codes.AlreadyExists, "own key reused after the provider window")
+	if n := r.store.count("payments"); n != 2 {
+		t.Errorf("payments = %d, want 2", n)
+	}
+}
+
+// A payment and a top-up are different charges even under one key.
+func TestFlow_PaymentAndTopUpUnderOneKey_AreTwoCharges(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "5.00", "k-1")
+	tu := r.topUp("user-a", "5.00", "k-1")
+	if p.GetId() == tu.GetId() || p.GetProviderPaymentId() == tu.GetProviderPaymentId() {
+		t.Fatalf("the top-up is the payment: %+v", tu)
+	}
+	if n := r.stripe.count("/v1/payment_intents"); n != 2 {
+		t.Errorf("provider intents = %d, want 2", n)
+	}
+}
+
+// A payment an earlier version stored under the caller's raw key: a retry of
+// it is still that payment. Scoping the key on the retry would send the
+// provider a key it never saw, and a second intent would be created.
+func TestFlow_RetryOfAPaymentStoredUnderTheRawKey_IsThatPayment(t *testing.T) {
+	r := newRig(t)
+	cust, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What an earlier version did: the raw key to the provider and the store.
+	pr, err := r.h.Backend.CreatePayment(bg, backend.PaymentSpec{
+		ProviderCustomerID: cust.GetCustomer().GetProviderCustomerId(),
+		Amount:             backend.Money{Amount: "5.00", Currency: "usd"},
+		IdempotencyKey:     "order-9",
+		Origin:             backend.OriginCharge,
+		Install:            r.h.installID(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := r.store.CreatePayment(bg, &pb.CreatePaymentReq{
+		CustomerId: cust.GetCustomer().GetId(), ProviderPaymentId: pr.ProviderPaymentID,
+		Amount: "5.00", Currency: "usd", IdempotencyKey: "order-9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "order-9"})
+	if err != nil {
+		t.Fatalf("retry of the earlier payment: %v", err)
+	}
+	if resp.GetPayment().GetId() != old.GetPayment().GetId() {
+		t.Errorf("retry = %s, want the earlier payment %s", resp.GetPayment().GetId(), old.GetPayment().GetId())
+	}
+	if n := r.stripe.count("/v1/payment_intents"); n != 1 {
+		t.Errorf("provider intents = %d, want 1", n)
+	}
+
+	// Another principal's raw key is not theirs to retry: user-b's
+	// "order-9" is a charge of its own.
+	b := r.charge("user-b", "5.00", "order-9")
+	if b.GetId() == old.GetPayment().GetId() {
+		t.Fatal("user-b was handed user-a's earlier payment")
+	}
 }
 
 // Each principal is charged on its OWN provider customer.

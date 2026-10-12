@@ -29,6 +29,10 @@ message GetPaymentResp { Payment payment = 1; }
 message GetPaymentByProviderIdReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
 message GetPaymentByProviderIdResp { Payment payment = 1; }
 
+// GetPaymentByIdempotencyKey — idempotency_key is UNIQUE (models.proto).
+message GetPaymentByIdempotencyKeyReq  { string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message GetPaymentByIdempotencyKeyResp { Payment payment = 1; }
+
 // GetRefundByProviderId — provider_refund_id is UNIQUE (models.proto).
 message GetRefundByProviderIdReq  { string provider_refund_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
 message GetRefundByProviderIdResp { Refund refund = 1; }
@@ -182,6 +186,30 @@ service PaymentQuery {
           "       p.created_at AS payment.created_at, "
           "       p.updated_at AS payment.updated_at "
           "FROM @module.Payment p WHERE p.provider_payment_id = :provider_payment_id"
+      }
+    };
+  }
+
+  // GetPaymentByIdempotencyKey — the payment stored under a key. The create
+  // paths read it for a key an earlier version stored as the caller sent it,
+  // before keys were scoped by principal, so a retry of such a payment is
+  // still answered with it.
+  rpc GetPaymentByIdempotencyKey(GetPaymentByIdempotencyKeyReq) returns (GetPaymentByIdempotencyKeyResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS payment.id, "
+          "       p.customer_id AS payment.customer_id, "
+          "       p.provider_payment_id AS payment.provider_payment_id, "
+          "       p.amount AS payment.amount, "
+          "       p.currency AS payment.currency, "
+          "       p.status AS payment.status, "
+          "       p.idempotency_key AS payment.idempotency_key, "
+          "       p.description AS payment.description, "
+          "       p.created_at AS payment.created_at, "
+          "       p.updated_at AS payment.updated_at "
+          "FROM @module.Payment p WHERE p.idempotency_key = :idempotency_key"
       }
     };
   }
