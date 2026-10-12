@@ -57,7 +57,7 @@ func ValidateConfig(h *PaymentServiceHandler) error {
 // with the stripe_webhooks feature.
 var webhooksStaged bool
 
-// Shutdown is the bundle drain hook. No background work in Slice 1.
+// Shutdown is the bundle drain hook. No background work.
 func (h *PaymentServiceHandler) Shutdown(context.Context) error { return nil }
 
 // CreateCustomer establishes the principal ↔ provider-customer link:

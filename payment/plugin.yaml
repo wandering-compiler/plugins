@@ -7,7 +7,7 @@ requires_w17: ">=1.11"
 # Also the package base w17ctl plugin gen-pb regenerates src/gen/pb under.
 go_module: github.com/wandering-compiler/plugins/payment
 
-description: "Provider-agnostic billing — customers, payments, refunds + webhook ingestion. Stripe driver. Slice 1 (core)."
+description: "Provider-agnostic billing — customers, payments, refunds + webhook ingestion. Stripe driver."
 license: "Apache-2.0"
 
 channels:

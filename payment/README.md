@@ -3,10 +3,9 @@
 Provider-agnostic billing primitives for w17 projects. The public proto
 surface (models / service / events) names no provider; the concrete
 gateway plugs in behind an internal `backend.Backend` interface selected
-by the `payment_provider` env. **Slice 1 ships the core + the Stripe
-driver.**
+by the `payment_provider` env. **The core ships with one driver, Stripe.**
 
-## What Slice 1 (core) provides
+## What the core provides
 
 - **Models** — `Customer` (principal ↔ provider-customer link),
   `Payment` (one charge, provider-owned status), `Refund`,
@@ -161,7 +160,7 @@ must be exact. Amounts cross the API as decimal strings (`"19.99"`).
 | `provider_api_base` | no | root of a Stripe-compatible API instead of `https://api.stripe.com` (e.g. the `stripemock` sandbox, `http://stripemock:12111`); empty = the real API; test keys only |
 | `default_currency` | no | ISO-4217 applied when a charge omits one |
 
-## Prepaid credit wallet (feature `prepaid`, Slice 2)
+## Prepaid credit wallet (feature `prepaid`)
 
 An append-only credit ledger keyed by the project principal — independent
 of the provider (credits are local; a Stripe top-up that funds them is a
@@ -188,7 +187,7 @@ follow-up). Off by default.
     business ops.
 - **Event** — `CreditApplied` (signed delta + new balance).
 
-## Metered / pay-as-you-go (feature `usage`, Slice 3)
+## Metered / pay-as-you-go (feature `usage`)
 
 Append-only usage ledger + materialized per-period meter, keyed by the
 principal. "Burning time" (a bare quantity) and "ordering a service" (a
@@ -212,7 +211,7 @@ quantity carrying `item_ref`/`metadata`) are the SAME operation — one
     `PaymentService.GetMyUsageMeter`.
 - **Event** — `UsageRecorded` (quantity + new total).
 
-## Subscriptions (feature `subscriptions`, Slice 4)
+## Subscriptions (feature `subscriptions`)
 
 Recurring plans. The **catalogue is locally authoritative** (the project
 defines plans; the plugin pushes each to the provider and stamps the
@@ -271,7 +270,7 @@ that uses `TopUpCredit`.
 The baseline (customers / payments / refunds) carries no feature tag —
 always present.
 
-## Cross-feature webhook wiring (Slice 5)
+## Cross-feature webhook wiring
 
 When `stripe_webhooks` runs alongside `prepaid` / `subscriptions`, the
 webhook handler dispatches to feature logic via nil-checked hooks

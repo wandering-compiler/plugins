@@ -2,7 +2,7 @@
 //
 // The public proto surface (Customer / Payment / events / PaymentService)
 // names no provider; this interface is where a concrete gateway plugs
-// in. Slice 1 ships one implementation — lib/backend/stripe — selected
+// in. There is one implementation — lib/backend/stripe — selected
 // at RegisterPlugin time by the `payment_provider` env. The interface
 // is INTERNAL and unversioned (not a proto contract): adding a second
 // driver (Paddle, Adyen, …) is an additive package, and the first

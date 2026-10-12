@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: mutations/payment_mutation.proto
 
-// Payment plugin — PaymentMutation write primitives (Slice 1).
+// Payment plugin — PaymentMutation write primitives.
 //
 // Each method is one atomic DB write. The business PaymentService
 // handler composes them with the backend driver (create the provider

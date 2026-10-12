@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: business/payment_service.proto
 
-// Payment plugin — PaymentService (turnkey, gateway-facing) (Slice 1).
+// Payment plugin — PaymentService (turnkey, gateway-facing).
 //
 // Hand-written business handlers (no (w17.db.method) — the plugin
 // author owns the bodies in src/handlers/). Each composes the backend

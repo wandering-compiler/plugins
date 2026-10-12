@@ -4,7 +4,7 @@
 // - protoc             (unknown)
 // source: queries/payment_query.proto
 
-// Payment plugin — PaymentQuery read primitives (Slice 1).
+// Payment plugin — PaymentQuery read primitives.
 //
 // Pure SELECTs via (w17.db.method).query; codegen emits the handler
 // bodies generically. The business PaymentService handler composes
