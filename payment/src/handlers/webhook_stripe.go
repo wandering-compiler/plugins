@@ -177,3 +177,5 @@ func metadataValue(ctx context.Context, key string) string {
 	}
 	return ""
 }
+
+func init() { webhooksStaged = true }

@@ -1,6 +1,6 @@
 name: payment
 version: 0.1.0-rc.5
-requires_w17: ">=1.5"
+requires_w17: ">=1.11"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in
 # src/handlers/ + src/lib/ + plugin.go to the per-activation pb path.
@@ -47,6 +47,9 @@ features:
       - handlers/webhook_stripe.go
   - name: prepaid
     default: false
+    # Credit is granted / a subscription settles only when the provider's
+    # webhook confirms it; without the webhook surface neither ever happens.
+    requires: [stripe_webhooks]
     description: "Prepaid credit wallet: append-only CreditLedger + materialized CreditBalance (non-negative CHECK), the atomic ApplyCredit mutation (ledger insert + balance increment in one tx), and PaymentService.GrantCredit/SpendCredit/GetBalance + the CreditApplied event. Off by default — opt in for credit/wallet billing."
     go_files:
       - handlers/prepaid.go
@@ -57,6 +60,9 @@ features:
       - handlers/usage.go
   - name: subscriptions
     default: false
+    # Credit is granted / a subscription settles only when the provider's
+    # webhook confirms it; without the webhook surface neither ever happens.
+    requires: [stripe_webhooks]
     description: "Recurring plans: locally-authoritative Plan catalogue (pushed to the provider) + Subscription records (provider-authoritative lifecycle). PaymentService.CreatePlan/Subscribe/GetSubscription, MarkSubscriptionStatus (webhook reconciliation), SubscriptionStarted/SubscriptionStatusChanged events. Off by default — opt in for subscription billing."
     go_files:
       - handlers/subscriptions.go
@@ -99,7 +105,10 @@ presets:
       - prefix: /webhooks
         description: "Inbound payment-provider webhooks (signature-verified, unauthenticated)."
         endpoints:
-          - { ref: PaymentService.IngestStripe, method: POST, path: /stripe, exclude_auth: true, raw_body_field: raw_payload, feature: stripe_webhooks }
+          # failed_only: a genuine, signed delivery spends no per-address
+          # budget, so a burst of them from the provider is never answered
+          # 429; a forged one (bad signature) does.
+          - { ref: PaymentService.IngestStripe, method: POST, path: /stripe, exclude_auth: true, public_limit: failed_only, raw_body_field: raw_payload, feature: stripe_webhooks }
 
 sandboxes:
   # Stripe's own API mock, for running a project against the payment plugin

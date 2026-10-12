@@ -14,6 +14,14 @@ What changes:
 - **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
 
+Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on the webhook endpoint.
+
+### Webhook configuration is checked at boot
+
+- **`webhook_signing_secret` is required while `stripe_webhooks` is on** (the default). A bundle without it used to boot and then refuse every delivery, leaving payments pending forever. It now fails `RegisterPlugin`.
+- **`prepaid` and `subscriptions` require `stripe_webhooks`.** Credit is granted, and a subscription settles, only when the provider's webhook confirms it. Without the webhook surface, `TopUpCredit` took the money and never granted credit.
+- **`POST /webhooks/stripe` is `public_limit: failed_only`.** A genuine, signed delivery spends no per-address budget, so a burst of them from the provider is never answered 429. A delivery with a bad signature does spend it.
+
 
 ### Run a project against Stripe's API mock
 
