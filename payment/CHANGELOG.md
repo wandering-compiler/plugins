@@ -34,6 +34,15 @@ A failed provider call used to reach the caller as `payment provider error: <the
 - **The provider's reason code still reaches the caller**, as the `w17.ErrorDetail` code (upper-case): `INSUFFICIENT_FUNDS`, `EXPIRED_CARD`, `CHARGE_ALREADY_REFUNDED`. It is Stripe's `decline_code` (or else `code`), passed only when it is a plain identifier (`[a-z0-9_]`, at most 64 bytes), so a decline can be shown and acted on without the provider's prose.
 - **A call the caller cancelled is `CANCELED`**, not `UNAVAILABLE`, and is not logged.
 
+### A retried refund or subscribe is recognised after the provider forgets its key
+
+The provider remembers an idempotency key for about a day. After that a retried `RefundPayment` refunded a second time whenever the first attempt's local record had failed. A retried `Subscribe` started a second subscription even when the first had been recorded, because a subscription keeps no key locally.
+
+- **The key now also rides in the refund's and the subscription's metadata** (`w17_refund`, `w17_subscribe`), where it does not expire.
+- **Before making a refund or starting a subscription, the plugin asks the provider** whether one exists under that key, using the new `Backend.FindRefund` and `Backend.FindSubscription`. If one does, the plugin records it and makes no second one.
+- **A custom backend implements the two lookups.** A provider without metadata can return "not found", which keeps the old behaviour.
+
+
 ### Run a project against Stripe's API mock
 
 - **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL root (or carries credentials, a query or a fragment) is refused at startup, and so is a live key (`sk_live_…`, `rk_live_…`) together with it.

@@ -131,11 +131,43 @@ func (b *Backend) RefundPayment(ctx context.Context, providerPaymentID string, a
 		}
 		form.Set("amount", strconv.FormatInt(minor, 10))
 	}
+	// The key also rides in the refund's metadata, where it outlives the
+	// provider's idempotency window (a day): FindRefund matches on it.
+	form.Set("metadata["+refundKeyMeta+"]", idemKey)
 	var resp refundResp
 	if err := b.post(ctx, "/v1/refunds", form, idemKey, &resp); err != nil {
 		return backend.RefundResult{}, err
 	}
 	return backend.RefundResult{ProviderRefundID: resp.ID, Status: resp.Status}, nil
+}
+
+// refundKeyMeta is the refund metadata key carrying the caller's
+// idempotency key.
+const refundKeyMeta = "w17_refund"
+
+// FindRefund looks for a refund of the PaymentIntent made under idemKey,
+// by the key RefundPayment stores in the refund's metadata. It walks the
+// intent's refunds page by page; a PaymentIntent has few.
+func (b *Backend) FindRefund(ctx context.Context, providerPaymentID, idemKey string) (backend.RefundResult, bool, error) {
+	q := url.Values{}
+	q.Set("payment_intent", providerPaymentID)
+	q.Set("limit", "100")
+	for page := 0; page < 20; page++ {
+		var list refundList
+		if err := b.get(ctx, "/v1/refunds", q, &list); err != nil {
+			return backend.RefundResult{}, false, err
+		}
+		for _, r := range list.Data {
+			if r.Metadata[refundKeyMeta] == idemKey {
+				return backend.RefundResult{ProviderRefundID: r.ID, Status: r.Status}, true, nil
+			}
+		}
+		if !list.HasMore || len(list.Data) == 0 {
+			return backend.RefundResult{}, false, nil
+		}
+		q.Set("starting_after", list.Data[len(list.Data)-1].ID)
+	}
+	return backend.RefundResult{}, false, fmt.Errorf("stripe: /v1/refunds: more refunds on %s than this lookup walks", providerPaymentID)
 }
 
 // UpsertPlan creates a recurring Stripe Price (with an inline product)
@@ -174,6 +206,9 @@ func (b *Backend) StartSubscription(ctx context.Context, spec backend.Subscripti
 	if spec.Install != "" {
 		form.Set("metadata["+backend.InstallMetadataKey+"]", spec.Install)
 	}
+	// As for refunds: the key outlives the provider's idempotency window
+	// in the subscription's metadata, where FindSubscription matches it.
+	form.Set("metadata["+subscribeKeyMeta+"]", spec.IdempotencyKey)
 	var resp subscriptionResp
 	if err := b.post(ctx, "/v1/subscriptions", form, spec.IdempotencyKey, &resp); err != nil {
 		return backend.SubscriptionResult{}, err
@@ -188,6 +223,36 @@ func (b *Backend) StartSubscription(ctx context.Context, spec backend.Subscripti
 	}, nil
 }
 
+// subscribeKeyMeta is the subscription metadata key carrying the caller's
+// idempotency key.
+const subscribeKeyMeta = "w17_subscribe"
+
+// FindSubscription looks for a subscription of the customer started under
+// idemKey, by the key StartSubscription stores in its metadata, whatever its
+// status.
+func (b *Backend) FindSubscription(ctx context.Context, providerCustomerID, idemKey string) (backend.SubscriptionResult, bool, error) {
+	q := url.Values{}
+	q.Set("customer", providerCustomerID)
+	q.Set("status", "all")
+	q.Set("limit", "100")
+	for page := 0; page < 20; page++ {
+		var list subscriptionList
+		if err := b.get(ctx, "/v1/subscriptions", q, &list); err != nil {
+			return backend.SubscriptionResult{}, false, err
+		}
+		for _, s := range list.Data {
+			if s.Metadata[subscribeKeyMeta] == idemKey {
+				return backend.SubscriptionResult{ProviderSubscriptionID: s.ID, Status: s.Status, CurrentPeriodEnd: s.CurrentPeriodEnd}, true, nil
+			}
+		}
+		if !list.HasMore || len(list.Data) == 0 {
+			return backend.SubscriptionResult{}, false, nil
+		}
+		q.Set("starting_after", list.Data[len(list.Data)-1].ID)
+	}
+	return backend.SubscriptionResult{}, false, fmt.Errorf("stripe: /v1/subscriptions: more subscriptions on %s than this lookup walks", providerCustomerID)
+}
+
 // post issues a form-encoded POST to the Stripe API with bearer auth +
 // an optional idempotency key, and decodes the JSON response into out.
 // A non-2xx surfaces the Stripe error message.
@@ -196,8 +261,21 @@ func (b *Backend) post(ctx context.Context, path string, form url.Values, idemKe
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+b.apiKey)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return b.do(req, path, idemKey, out)
+}
+
+// get issues a GET with query parameters.
+func (b *Backend) get(ctx context.Context, path string, query url.Values, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.baseURL+path+"?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	return b.do(req, path, "", out)
+}
+
+func (b *Backend) do(req *http.Request, path, idemKey string, out any) error {
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
 	req.Header.Set("Accept", "application/json")
 	if idemKey != "" {
 		req.Header.Set("Idempotency-Key", idemKey)

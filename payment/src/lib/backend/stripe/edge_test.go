@@ -150,7 +150,7 @@ func TestRefundPayment_EmptyAmountIsAFullRefundAtTheProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasAmount || form != "payment_intent=pi_9" || idem != "rk" {
+	if hasAmount || form != "metadata%5Bw17_refund%5D=rk&payment_intent=pi_9" || idem != "rk" {
 		t.Errorf("form=%q hasAmount=%v idem=%q", form, hasAmount, idem)
 	}
 	if res.ProviderRefundID != "re_9" || res.Status != "pending" {
@@ -466,5 +466,27 @@ func TestPost_CarriesTheReasonCode(t *testing.T) {
 		if c.status == 402 && !errors.Is(err, backend.ErrDeclined) {
 			t.Errorf("%s: the class is lost under the code: %v", c.body, err)
 		}
+	}
+}
+
+// FindRefund recognises a refund by the key in its metadata, across pages.
+func TestFindRefund_MatchesTheKeyInMetadataAcrossPages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Query().Get("payment_intent") != "pi_9" {
+			t.Errorf("request = %s %s", r.Method, r.URL)
+		}
+		if r.URL.Query().Get("starting_after") == "" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"re_1","status":"succeeded","metadata":{"w17_refund":"other"}}],"has_more":true}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"re_2","status":"succeeded","metadata":{"w17_refund":"rk"}}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	res, ok, err := testBackend(srv).FindRefund(context.Background(), "pi_9", "rk")
+	if err != nil || !ok || res.ProviderRefundID != "re_2" {
+		t.Fatalf("FindRefund = %+v, %v, %v; want re_2", res, ok, err)
+	}
+	if _, ok, err := testBackend(srv).FindRefund(context.Background(), "pi_9", "nope"); err != nil || ok {
+		t.Errorf("an unknown key was found (%v, %v)", ok, err)
 	}
 }

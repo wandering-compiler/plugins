@@ -25,8 +25,15 @@ type paymentIntentResp struct {
 
 // refundResp ← POST /v1/refunds
 type refundResp struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID       string            `json:"id"`
+	Status   string            `json:"status"`
+	Metadata map[string]string `json:"metadata"`
+}
+
+// refundList ← GET /v1/refunds
+type refundList struct {
+	Data    []refundResp `json:"data"`
+	HasMore bool         `json:"has_more"`
 }
 
 // priceResp ← POST /v1/prices
@@ -36,9 +43,16 @@ type priceResp struct {
 
 // subscriptionResp ← POST /v1/subscriptions
 type subscriptionResp struct {
-	ID               string `json:"id"`
-	Status           string `json:"status"`
-	CurrentPeriodEnd int64  `json:"current_period_end"`
+	ID               string            `json:"id"`
+	Status           string            `json:"status"`
+	CurrentPeriodEnd int64             `json:"current_period_end"`
+	Metadata         map[string]string `json:"metadata"`
+}
+
+// subscriptionList ← GET /v1/subscriptions
+type subscriptionList struct {
+	Data    []subscriptionResp `json:"data"`
+	HasMore bool               `json:"has_more"`
 }
 
 // apiError ← any non-2xx Stripe response body.

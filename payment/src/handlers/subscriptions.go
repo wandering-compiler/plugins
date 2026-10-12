@@ -180,14 +180,23 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 		return nil, err
 	}
 
-	res, err := h.Backend.StartSubscription(ctx, backend.SubscriptionSpec{
-		ProviderCustomerID: cust.GetProviderCustomerId(),
-		ProviderPriceID:    plan.GetProviderPriceId(),
-		IdempotencyKey:     req.GetIdempotencyKey(),
-		Install:            h.installID(),
-	})
+	// The subscription keeps no key locally, so a retry after the provider
+	// forgot the key (a day) would start a second one — even when the first
+	// was recorded. The key in the subscription's metadata recognises it.
+	res, found, err := h.Backend.FindSubscription(ctx, cust.GetProviderCustomerId(), req.GetIdempotencyKey())
 	if err != nil {
 		return nil, providerFailure(err)
+	}
+	if !found {
+		res, err = h.Backend.StartSubscription(ctx, backend.SubscriptionSpec{
+			ProviderCustomerID: cust.GetProviderCustomerId(),
+			ProviderPriceID:    plan.GetProviderPriceId(),
+			IdempotencyKey:     req.GetIdempotencyKey(),
+			Install:            h.installID(),
+		})
+		if err != nil {
+			return nil, providerFailure(err)
+		}
 	}
 
 	created, err := h.Mutation.CreateSubscription(ctx, &pb.CreateSubscriptionReq{

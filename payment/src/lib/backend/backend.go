@@ -207,6 +207,11 @@ type Backend interface {
 
 	// RefundPayment reverses (part of) a payment. idemKey guards retries.
 	RefundPayment(ctx context.Context, providerPaymentID string, amount Money, idemKey string) (RefundResult, error)
+	// FindRefund returns the refund of providerPaymentID made under idemKey,
+	// if the provider holds one. It is how a retry recognises a refund whose
+	// local record was never written, after the provider has forgotten the
+	// idempotency key.
+	FindRefund(ctx context.Context, providerPaymentID, idemKey string) (RefundResult, bool, error)
 
 	// UpsertPlan creates (or returns) the provider price object for a
 	// recurring plan and returns its opaque provider price id.
@@ -214,4 +219,8 @@ type Backend interface {
 
 	// StartSubscription subscribes a provider customer to a price.
 	StartSubscription(ctx context.Context, spec SubscriptionSpec) (SubscriptionResult, error)
+	// FindSubscription returns the customer's subscription started under
+	// idemKey, if the provider holds one, whatever its status (see
+	// FindRefund).
+	FindSubscription(ctx context.Context, providerCustomerID, idemKey string) (SubscriptionResult, bool, error)
 }
