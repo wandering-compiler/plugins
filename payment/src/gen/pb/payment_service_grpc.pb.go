@@ -20,7 +20,8 @@
 //                       filtered to the caller's customer / user id)
 //   - IngestStripe    → verify signature (metadata) + dedup
 //                       (MarkWebhookProcessed) + dispatch
-//                       MarkPaymentSucceeded / MarkPaymentFailed
+//                       MarkPaymentSucceeded / MarkPaymentFailed /
+//                       MarkPaymentCanceled / MarkPaymentRefunded
 //
 // The webhook RPC is gated `stripe_webhooks` (its handler body lives in
 // the feature-staged handlers/webhook_stripe.go). The signature rides

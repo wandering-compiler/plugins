@@ -85,6 +85,11 @@ type fakeQuery struct {
 	ledgerEntry  *pb.CreditLedger // GetCreditLedgerByKey answer (prepaid)
 
 	paymentByProvider *pb.Payment // GetPaymentByProviderId answer
+	refundedTotal     string      // SumRefundsForPayment answer
+}
+
+func (q *fakeQuery) SumRefundsForPayment(context.Context, *pb.SumRefundsForPaymentReq, ...grpc.CallOption) (*pb.SumRefundsForPaymentResp, error) {
+	return &pb.SumRefundsForPaymentResp{Total: q.refundedTotal}, nil
 }
 
 func (q *fakeQuery) GetCustomerByUserId(_ context.Context, _ *pb.GetCustomerByUserIdReq, _ ...grpc.CallOption) (*pb.GetCustomerByUserIdResp, error) {
@@ -164,7 +169,9 @@ type fakeMutation struct {
 	succeededErr     error  // transient failure on MarkPaymentSucceeded
 	succeededFor     string // captured provider_payment_id
 	failedFor        string
-	markedProcessed  bool // MarkWebhookProcessed was invoked
+	markedProcessed  bool   // MarkWebhookProcessed was invoked
+	refundedFor      string // MarkPaymentRefunded's provider_payment_id
+	canceledFor      string // MarkPaymentCanceled's provider_payment_id
 
 	// prepaid test knobs
 	applyErr  error // constraint error to simulate
@@ -484,4 +491,14 @@ func TestValidateConfig(t *testing.T) {
 	if err := ValidateConfig(&PaymentServiceHandler{Backend: &fakeBackend{}}); err == nil {
 		t.Error("want error when clients nil")
 	}
+}
+
+func (m *fakeMutation) MarkPaymentRefunded(_ context.Context, in *pb.MarkPaymentRefundedReq, _ ...grpc.CallOption) (*pb.MarkPaymentRefundedResp, error) {
+	m.refundedFor = in.GetProviderPaymentId()
+	return &pb.MarkPaymentRefundedResp{Payment: &pb.Payment{ProviderPaymentId: in.GetProviderPaymentId()}}, nil
+}
+
+func (m *fakeMutation) MarkPaymentCanceled(_ context.Context, in *pb.MarkPaymentCanceledReq, _ ...grpc.CallOption) (*pb.MarkPaymentCanceledResp, error) {
+	m.canceledFor = in.GetProviderPaymentId()
+	return &pb.MarkPaymentCanceledResp{Payment: &pb.Payment{ProviderPaymentId: in.GetProviderPaymentId()}}, nil
 }

@@ -275,7 +275,13 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		if err != nil {
 			return nil, err
 		}
-		return sameRefund(prior, payment, amount)
+		resp, err := sameRefund(prior, payment, amount)
+		if err == nil {
+			// A retry is where a first attempt's missed status settle is
+			// caught up (no-op once REFUNDED).
+			h.markRefundedIfFull(ctx, payment)
+		}
+		return resp, err
 	}
 
 	// The provider gets the caller's key VERBATIM, so one key names one
@@ -347,7 +353,23 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		}
 		return nil, err
 	}
+	h.markRefundedIfFull(ctx, payment)
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
+}
+
+// markRefundedIfFull moves a payment to REFUNDED once its recorded refunds
+// reach its amount. Best effort: the refund itself is done and recorded, and
+// the provider's charge.refunded webhook settles the status if this misses
+// (a failed read, or partial refunds completing the amount concurrently).
+func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment *pb.Payment) {
+	if payment.GetStatus() != pb.Payment_SUCCEEDED {
+		return // the mutation's own guard: only SUCCEEDED moves to REFUNDED
+	}
+	sum, err := h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
+	if err != nil || !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
+		return
+	}
+	_, _ = h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
 }
 
 // stampRefundKey records the kept key on a refund row the key lookup could

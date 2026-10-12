@@ -51,7 +51,12 @@ type Event struct {
 	// installation that created the object (backend.InstallID); empty on
 	// objects no installation marked.
 	Install string
-	Raw     []byte
+	// ChargePaymentIntent and ChargeRefunded are data.object.payment_intent
+	// and data.object.refunded on charge.* events: the payment a charge
+	// belongs to, and whether the charge is fully refunded.
+	ChargePaymentIntent string
+	ChargeRefunded      bool
+	Raw                 []byte
 }
 
 // ErrBadSignature is returned when the Stripe-Signature HMAC does not
@@ -124,16 +129,18 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 		return Event{}, fmt.Errorf("stripe: malformed webhook body: missing event id or type")
 	}
 	return Event{
-		ID:               raw.ID,
-		Type:             raw.Type,
-		ObjectID:         raw.Data.Object.ID,
-		PaymentIntentID:  raw.Data.Object.ID,
-		ObjectStatus:     raw.Data.Object.Status,
-		CurrentPeriodEnd: raw.Data.Object.CurrentPeriodEnd,
-		Created:          raw.Created,
-		Origin:           raw.Data.Object.Metadata[backend.OriginMetadataKey],
-		Install:          raw.Data.Object.Metadata[backend.InstallMetadataKey],
-		Raw:              payload,
+		ID:                  raw.ID,
+		Type:                raw.Type,
+		ObjectID:            raw.Data.Object.ID,
+		PaymentIntentID:     raw.Data.Object.ID,
+		ObjectStatus:        raw.Data.Object.Status,
+		CurrentPeriodEnd:    raw.Data.Object.CurrentPeriodEnd,
+		Created:             raw.Created,
+		Origin:              raw.Data.Object.Metadata[backend.OriginMetadataKey],
+		Install:             raw.Data.Object.Metadata[backend.InstallMetadataKey],
+		Raw:                 payload,
+		ChargePaymentIntent: raw.Data.Object.PaymentIntent,
+		ChargeRefunded:      raw.Data.Object.Refunded,
 	}, nil
 }
 

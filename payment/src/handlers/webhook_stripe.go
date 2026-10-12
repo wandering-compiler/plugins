@@ -133,6 +133,26 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 			err = h.requirePayment(ctx, ev)
 		}
 		return err
+	case ev.Type == "payment_intent.canceled":
+		_, err := h.Mutation.MarkPaymentCanceled(ctx, &pb.MarkPaymentCanceledReq{
+			ProviderPaymentId: ev.PaymentIntentID,
+		})
+		if guardRefused(err) {
+			// Already terminal or SUCCEEDED, or absent: resolved like the
+			// failure above.
+			err = h.requirePayment(ctx, ev)
+		}
+		return err
+	case ev.Type == "charge.refunded" && ev.ChargeRefunded && ev.ChargePaymentIntent != "":
+		// The charge is fully refunded — however many refunds it took, and
+		// whether or not they were made through this plugin.
+		_, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{
+			ProviderPaymentId: ev.ChargePaymentIntent,
+		})
+		if guardRefused(err) {
+			return h.refundNotSettled(ctx, ev.ChargePaymentIntent)
+		}
+		return err
 	case strings.HasPrefix(ev.Type, "customer.subscription."):
 		// Cross-feature: reconcile subscription lifecycle (subscriptions
 		// feature; no-op when off — hook is nil). The hook resolves its
@@ -163,6 +183,31 @@ func (h *PaymentServiceHandler) requirePayment(ctx context.Context, ev stripe.Ev
 		return nil
 	}
 	return errNoLocalRecord
+}
+
+// refundNotSettled resolves a refused MarkPaymentRefunded on a fully refunded
+// charge. Already REFUNDED (a redelivery), CANCELED, or absent (not a payment
+// this installation made): acknowledged. Still before SUCCEEDED locally — the
+// payment_intent.succeeded delivery is late or being retried, which Stripe
+// does not order against charge.refunded: an error, so the event is NOT
+// recorded and its redelivery settles the status once SUCCEEDED has landed.
+// Acknowledged, the REFUNDED was lost for good, and the late success then
+// read SUCCEEDED (and granted a top-up's credit) on a refunded payment.
+func (h *PaymentServiceHandler) refundNotSettled(ctx context.Context, providerPaymentID string) error {
+	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: providerPaymentID})
+	if err != nil && !absent(err) {
+		return err
+	}
+	p := got.GetPayment()
+	if p == nil {
+		return nil
+	}
+	switch p.GetStatus() {
+	case pb.Payment_REFUNDED, pb.Payment_CANCELED:
+		return nil
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"charge.refunded for %q before its success landed locally; redeliver", providerPaymentID)
 }
 
 // metadataValue reads the first value for a lowercase metadata key from

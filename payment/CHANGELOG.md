@@ -44,6 +44,15 @@ The provider remembers an idempotency key for about a day. After that a retried 
 - **A custom backend implements the two lookups (breaking for a custom `backend.Backend`).** A found refund reports its `Amount` and a found subscription its `ProviderPriceID`. A provider without metadata can return "not found", which keeps the old behaviour.
 - A refund or subscription made before this version carries no key in its metadata and is not recognised this way.
 
+### A payment's status follows refunds and cancellation
+
+Nothing ever wrote `REFUNDED`, and `CANCELED` came only from the create response. A fully refunded payment read `SUCCEEDED` forever.
+
+- **`REFUNDED` once the refunds reach the amount.** `RefundPayment` sets it when its refund completes the amount (new query `SumRefundsForPayment`, new mutation `MarkPaymentRefunded`, only from `SUCCEEDED`). The provider's `charge.refunded` webhook, for a charge that is fully refunded, settles it too. That covers partial refunds completing the amount concurrently, and refunds made outside the plugin. A `charge.refunded` that arrives before the payment's success has landed locally is not recorded, so its redelivery settles the status once it has; and a top-up refunded before its credit was granted is not granted by a redelivered success.
+- **`CANCELED` from the provider's `payment_intent.canceled`** (`MarkPaymentCanceled`, never from `SUCCEEDED` or `REFUNDED`; from `FAILED` it is allowed, since a failed attempt leaves the PaymentIntent open and canceling it is how an abandoned payment ends).
+- **New events `PaymentRefunded` and `PaymentCanceled`.**
+- **Still open:** a refund the provider fails later (`refund.failed`) is not reflected locally yet, and refunding a top-up whose credit was already granted does not take the credit back.
+
 ### Run a project against Stripe's API mock
 
 - **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL root (or carries credentials, a query or a fragment) is refused at startup, and so is a live key (`sk_live_…`, `rk_live_…`) together with it.

@@ -42,7 +42,7 @@ features:
   # plugin's User/UserToken core. Only the webhook surface is toggleable.
   - name: stripe_webhooks
     default: true
-    description: "Inbound Stripe webhook ingestion: the ProcessedWebhookEvent idempotency ledger, the MarkWebhookProcessed mutation, and PaymentService.IngestStripe (signature verify + dedup + dispatch to MarkPaymentSucceeded/MarkPaymentFailed). Disable for projects that reconcile payment status another way (polling, manual)."
+    description: "Inbound Stripe webhook ingestion: the ProcessedWebhookEvent idempotency ledger, the MarkWebhookProcessed mutation, and PaymentService.IngestStripe (signature verify + dedup + dispatch to MarkPaymentSucceeded/MarkPaymentFailed/MarkPaymentCanceled/MarkPaymentRefunded). Disable for projects that reconcile payment status another way (polling, manual)."
     go_files:
       - handlers/webhook_stripe.go
   - name: prepaid

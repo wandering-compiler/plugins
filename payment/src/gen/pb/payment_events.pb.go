@@ -8,10 +8,12 @@
 //
 // Provider-neutral notifications a consuming project subscribes to in
 // order to integrate billing: PaymentSucceeded unlocks an entitlement
-// / sends a receipt; PaymentFailed triggers a dunning flow. Both fire
-// from the webhook-reconciliation mutations (MarkPaymentSucceeded /
-// MarkPaymentFailed) AFTER the provider confirms the charge — never
-// speculatively at intent time.
+// / sends a receipt; PaymentFailed triggers a dunning flow; PaymentCanceled
+// and PaymentRefunded close it. They fire from the reconciliation
+// mutations (MarkPaymentSucceeded / MarkPaymentFailed / MarkPaymentCanceled
+// / MarkPaymentRefunded) AFTER the provider confirms — never speculatively
+// at intent time. PaymentRefunded also fires from RefundPayment once its
+// refund completes the amount.
 //
 // Channel reference uses the plugin-internal alias `events`; the
 // activation maps it to a real project channel (NATS / Redis /
@@ -193,6 +195,161 @@ func (x *PaymentFailed) GetFailedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// PaymentRefunded — the payment is fully refunded (terminal).
+type PaymentRefunded struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	PaymentId         string                 `protobuf:"bytes,1,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
+	CustomerId        string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	ProviderPaymentId string                 `protobuf:"bytes,3,opt,name=provider_payment_id,json=providerPaymentId,proto3" json:"provider_payment_id,omitempty"`
+	Amount            string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
+	Currency          string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`
+	RefundedAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=refunded_at,json=refundedAt,proto3" json:"refunded_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PaymentRefunded) Reset() {
+	*x = PaymentRefunded{}
+	mi := &file_events_payment_events_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PaymentRefunded) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PaymentRefunded) ProtoMessage() {}
+
+func (x *PaymentRefunded) ProtoReflect() protoreflect.Message {
+	mi := &file_events_payment_events_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PaymentRefunded.ProtoReflect.Descriptor instead.
+func (*PaymentRefunded) Descriptor() ([]byte, []int) {
+	return file_events_payment_events_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PaymentRefunded) GetPaymentId() string {
+	if x != nil {
+		return x.PaymentId
+	}
+	return ""
+}
+
+func (x *PaymentRefunded) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *PaymentRefunded) GetProviderPaymentId() string {
+	if x != nil {
+		return x.ProviderPaymentId
+	}
+	return ""
+}
+
+func (x *PaymentRefunded) GetAmount() string {
+	if x != nil {
+		return x.Amount
+	}
+	return ""
+}
+
+func (x *PaymentRefunded) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *PaymentRefunded) GetRefundedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RefundedAt
+	}
+	return nil
+}
+
+// PaymentCanceled — the provider canceled a payment that never completed
+// (terminal).
+type PaymentCanceled struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	PaymentId         string                 `protobuf:"bytes,1,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
+	CustomerId        string                 `protobuf:"bytes,2,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	ProviderPaymentId string                 `protobuf:"bytes,3,opt,name=provider_payment_id,json=providerPaymentId,proto3" json:"provider_payment_id,omitempty"`
+	CanceledAt        *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=canceled_at,json=canceledAt,proto3" json:"canceled_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PaymentCanceled) Reset() {
+	*x = PaymentCanceled{}
+	mi := &file_events_payment_events_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PaymentCanceled) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PaymentCanceled) ProtoMessage() {}
+
+func (x *PaymentCanceled) ProtoReflect() protoreflect.Message {
+	mi := &file_events_payment_events_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PaymentCanceled.ProtoReflect.Descriptor instead.
+func (*PaymentCanceled) Descriptor() ([]byte, []int) {
+	return file_events_payment_events_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PaymentCanceled) GetPaymentId() string {
+	if x != nil {
+		return x.PaymentId
+	}
+	return ""
+}
+
+func (x *PaymentCanceled) GetCustomerId() string {
+	if x != nil {
+		return x.CustomerId
+	}
+	return ""
+}
+
+func (x *PaymentCanceled) GetProviderPaymentId() string {
+	if x != nil {
+		return x.ProviderPaymentId
+	}
+	return ""
+}
+
+func (x *PaymentCanceled) GetCanceledAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CanceledAt
+	}
+	return nil
+}
+
 // CreditApplied — emitted on ApplyCredit after the ledger row + balance
 // commit (prepaid feature). A subscriber might fire a low-balance alert
 // or a usage-allowance refresh. `delta` is signed (+ grant, − spend);
@@ -210,7 +367,7 @@ type CreditApplied struct {
 
 func (x *CreditApplied) Reset() {
 	*x = CreditApplied{}
-	mi := &file_events_payment_events_proto_msgTypes[2]
+	mi := &file_events_payment_events_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -222,7 +379,7 @@ func (x *CreditApplied) String() string {
 func (*CreditApplied) ProtoMessage() {}
 
 func (x *CreditApplied) ProtoReflect() protoreflect.Message {
-	mi := &file_events_payment_events_proto_msgTypes[2]
+	mi := &file_events_payment_events_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -235,7 +392,7 @@ func (x *CreditApplied) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreditApplied.ProtoReflect.Descriptor instead.
 func (*CreditApplied) Descriptor() ([]byte, []int) {
-	return file_events_payment_events_proto_rawDescGZIP(), []int{2}
+	return file_events_payment_events_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CreditApplied) GetUserId() string {
@@ -291,7 +448,7 @@ type UsageRecorded struct {
 
 func (x *UsageRecorded) Reset() {
 	*x = UsageRecorded{}
-	mi := &file_events_payment_events_proto_msgTypes[3]
+	mi := &file_events_payment_events_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -303,7 +460,7 @@ func (x *UsageRecorded) String() string {
 func (*UsageRecorded) ProtoMessage() {}
 
 func (x *UsageRecorded) ProtoReflect() protoreflect.Message {
-	mi := &file_events_payment_events_proto_msgTypes[3]
+	mi := &file_events_payment_events_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -316,7 +473,7 @@ func (x *UsageRecorded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageRecorded.ProtoReflect.Descriptor instead.
 func (*UsageRecorded) Descriptor() ([]byte, []int) {
-	return file_events_payment_events_proto_rawDescGZIP(), []int{3}
+	return file_events_payment_events_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *UsageRecorded) GetUserId() string {
@@ -385,7 +542,7 @@ type SubscriptionStarted struct {
 
 func (x *SubscriptionStarted) Reset() {
 	*x = SubscriptionStarted{}
-	mi := &file_events_payment_events_proto_msgTypes[4]
+	mi := &file_events_payment_events_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -397,7 +554,7 @@ func (x *SubscriptionStarted) String() string {
 func (*SubscriptionStarted) ProtoMessage() {}
 
 func (x *SubscriptionStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_events_payment_events_proto_msgTypes[4]
+	mi := &file_events_payment_events_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -410,7 +567,7 @@ func (x *SubscriptionStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionStarted.ProtoReflect.Descriptor instead.
 func (*SubscriptionStarted) Descriptor() ([]byte, []int) {
-	return file_events_payment_events_proto_rawDescGZIP(), []int{4}
+	return file_events_payment_events_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SubscriptionStarted) GetSubscriptionId() string {
@@ -491,7 +648,7 @@ type SubscriptionStatusChanged struct {
 
 func (x *SubscriptionStatusChanged) Reset() {
 	*x = SubscriptionStatusChanged{}
-	mi := &file_events_payment_events_proto_msgTypes[5]
+	mi := &file_events_payment_events_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -503,7 +660,7 @@ func (x *SubscriptionStatusChanged) String() string {
 func (*SubscriptionStatusChanged) ProtoMessage() {}
 
 func (x *SubscriptionStatusChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_events_payment_events_proto_msgTypes[5]
+	mi := &file_events_payment_events_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -516,7 +673,7 @@ func (x *SubscriptionStatusChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionStatusChanged.ProtoReflect.Descriptor instead.
 func (*SubscriptionStatusChanged) Descriptor() ([]byte, []int) {
-	return file_events_payment_events_proto_rawDescGZIP(), []int{5}
+	return file_events_payment_events_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SubscriptionStatusChanged) GetSubscriptionId() string {
@@ -569,7 +726,27 @@ const file_events_payment_events_proto_rawDesc = "" +
 	"customerId\x12.\n" +
 	"\x13provider_payment_id\x18\x03 \x01(\tR\x11providerPaymentId\x127\n" +
 	"\tfailed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt:$\x92\xbd\x18 \n" +
-	"\x06events\x12\x16payment.payment.failed\"\xe3\x01\n" +
+	"\x06events\x12\x16payment.payment.failed\"\x9a\x02\n" +
+	"\x0fPaymentRefunded\x12\x1d\n" +
+	"\n" +
+	"payment_id\x18\x01 \x01(\tR\tpaymentId\x12\x1f\n" +
+	"\vcustomer_id\x18\x02 \x01(\tR\n" +
+	"customerId\x12.\n" +
+	"\x13provider_payment_id\x18\x03 \x01(\tR\x11providerPaymentId\x12\x16\n" +
+	"\x06amount\x18\x04 \x01(\tR\x06amount\x12\x1a\n" +
+	"\bcurrency\x18\x05 \x01(\tR\bcurrency\x12;\n" +
+	"\vrefunded_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"refundedAt:&\x92\xbd\x18\"\n" +
+	"\x06events\x12\x18payment.payment.refunded\"\xe6\x01\n" +
+	"\x0fPaymentCanceled\x12\x1d\n" +
+	"\n" +
+	"payment_id\x18\x01 \x01(\tR\tpaymentId\x12\x1f\n" +
+	"\vcustomer_id\x18\x02 \x01(\tR\n" +
+	"customerId\x12.\n" +
+	"\x13provider_payment_id\x18\x03 \x01(\tR\x11providerPaymentId\x12;\n" +
+	"\vcanceled_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"canceledAt:&\x92\xbd\x18\"\n" +
+	"\x06events\x12\x18payment.payment.canceled\"\xe3\x01\n" +
 	"\rCreditApplied\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05delta\x18\x02 \x01(\tR\x05delta\x12\x16\n" +
@@ -619,31 +796,35 @@ func file_events_payment_events_proto_rawDescGZIP() []byte {
 	return file_events_payment_events_proto_rawDescData
 }
 
-var file_events_payment_events_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_events_payment_events_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_events_payment_events_proto_goTypes = []any{
 	(*PaymentSucceeded)(nil),          // 0: w17.contrib.payment.PaymentSucceeded
 	(*PaymentFailed)(nil),             // 1: w17.contrib.payment.PaymentFailed
-	(*CreditApplied)(nil),             // 2: w17.contrib.payment.CreditApplied
-	(*UsageRecorded)(nil),             // 3: w17.contrib.payment.UsageRecorded
-	(*SubscriptionStarted)(nil),       // 4: w17.contrib.payment.SubscriptionStarted
-	(*SubscriptionStatusChanged)(nil), // 5: w17.contrib.payment.SubscriptionStatusChanged
-	(*timestamppb.Timestamp)(nil),     // 6: google.protobuf.Timestamp
-	(Subscription_Status)(0),          // 7: w17.contrib.payment.Subscription.Status
+	(*PaymentRefunded)(nil),           // 2: w17.contrib.payment.PaymentRefunded
+	(*PaymentCanceled)(nil),           // 3: w17.contrib.payment.PaymentCanceled
+	(*CreditApplied)(nil),             // 4: w17.contrib.payment.CreditApplied
+	(*UsageRecorded)(nil),             // 5: w17.contrib.payment.UsageRecorded
+	(*SubscriptionStarted)(nil),       // 6: w17.contrib.payment.SubscriptionStarted
+	(*SubscriptionStatusChanged)(nil), // 7: w17.contrib.payment.SubscriptionStatusChanged
+	(*timestamppb.Timestamp)(nil),     // 8: google.protobuf.Timestamp
+	(Subscription_Status)(0),          // 9: w17.contrib.payment.Subscription.Status
 }
 var file_events_payment_events_proto_depIdxs = []int32{
-	6, // 0: w17.contrib.payment.PaymentSucceeded.succeeded_at:type_name -> google.protobuf.Timestamp
-	6, // 1: w17.contrib.payment.PaymentFailed.failed_at:type_name -> google.protobuf.Timestamp
-	6, // 2: w17.contrib.payment.CreditApplied.applied_at:type_name -> google.protobuf.Timestamp
-	6, // 3: w17.contrib.payment.UsageRecorded.recorded_at:type_name -> google.protobuf.Timestamp
-	6, // 4: w17.contrib.payment.SubscriptionStarted.started_at:type_name -> google.protobuf.Timestamp
-	7, // 5: w17.contrib.payment.SubscriptionStarted.status:type_name -> w17.contrib.payment.Subscription.Status
-	7, // 6: w17.contrib.payment.SubscriptionStatusChanged.status:type_name -> w17.contrib.payment.Subscription.Status
-	6, // 7: w17.contrib.payment.SubscriptionStatusChanged.changed_at:type_name -> google.protobuf.Timestamp
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	8,  // 0: w17.contrib.payment.PaymentSucceeded.succeeded_at:type_name -> google.protobuf.Timestamp
+	8,  // 1: w17.contrib.payment.PaymentFailed.failed_at:type_name -> google.protobuf.Timestamp
+	8,  // 2: w17.contrib.payment.PaymentRefunded.refunded_at:type_name -> google.protobuf.Timestamp
+	8,  // 3: w17.contrib.payment.PaymentCanceled.canceled_at:type_name -> google.protobuf.Timestamp
+	8,  // 4: w17.contrib.payment.CreditApplied.applied_at:type_name -> google.protobuf.Timestamp
+	8,  // 5: w17.contrib.payment.UsageRecorded.recorded_at:type_name -> google.protobuf.Timestamp
+	8,  // 6: w17.contrib.payment.SubscriptionStarted.started_at:type_name -> google.protobuf.Timestamp
+	9,  // 7: w17.contrib.payment.SubscriptionStarted.status:type_name -> w17.contrib.payment.Subscription.Status
+	9,  // 8: w17.contrib.payment.SubscriptionStatusChanged.status:type_name -> w17.contrib.payment.Subscription.Status
+	8,  // 9: w17.contrib.payment.SubscriptionStatusChanged.changed_at:type_name -> google.protobuf.Timestamp
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_events_payment_events_proto_init() }
@@ -658,7 +839,7 @@ func file_events_payment_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_payment_events_proto_rawDesc), len(file_events_payment_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

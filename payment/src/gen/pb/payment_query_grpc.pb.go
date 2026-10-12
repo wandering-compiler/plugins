@@ -31,6 +31,7 @@ const (
 	PaymentQuery_GetPayment_FullMethodName                  = "/w17.contrib.payment.PaymentQuery/GetPayment"
 	PaymentQuery_GetPaymentByProviderId_FullMethodName      = "/w17.contrib.payment.PaymentQuery/GetPaymentByProviderId"
 	PaymentQuery_GetRefundByProviderId_FullMethodName       = "/w17.contrib.payment.PaymentQuery/GetRefundByProviderId"
+	PaymentQuery_SumRefundsForPayment_FullMethodName        = "/w17.contrib.payment.PaymentQuery/SumRefundsForPayment"
 	PaymentQuery_GetRefundByIdempotencyKey_FullMethodName   = "/w17.contrib.payment.PaymentQuery/GetRefundByIdempotencyKey"
 	PaymentQuery_GetCreditBalance_FullMethodName            = "/w17.contrib.payment.PaymentQuery/GetCreditBalance"
 	PaymentQuery_GetCreditLedgerByKey_FullMethodName        = "/w17.contrib.payment.PaymentQuery/GetCreditLedgerByKey"
@@ -70,6 +71,8 @@ type PaymentQueryClient interface {
 	// the provider replays the same refund object) hits the unique key on
 	// its local INSERT.
 	GetRefundByProviderId(ctx context.Context, in *GetRefundByProviderIdReq, opts ...grpc.CallOption) (*GetRefundByProviderIdResp, error)
+	// SumRefundsForPayment — what has been refunded of a payment so far.
+	SumRefundsForPayment(ctx context.Context, in *SumRefundsForPaymentReq, opts ...grpc.CallOption) (*SumRefundsForPaymentResp, error)
 	// GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
 	// already produced, looked up before the provider is asked again.
 	GetRefundByIdempotencyKey(ctx context.Context, in *GetRefundByIdempotencyKeyReq, opts ...grpc.CallOption) (*GetRefundByIdempotencyKeyResp, error)
@@ -154,6 +157,16 @@ func (c *paymentQueryClient) GetRefundByProviderId(ctx context.Context, in *GetR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetRefundByProviderIdResp)
 	err := c.cc.Invoke(ctx, PaymentQuery_GetRefundByProviderId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) SumRefundsForPayment(ctx context.Context, in *SumRefundsForPaymentReq, opts ...grpc.CallOption) (*SumRefundsForPaymentResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SumRefundsForPaymentResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_SumRefundsForPayment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -278,6 +291,8 @@ type PaymentQueryServer interface {
 	// the provider replays the same refund object) hits the unique key on
 	// its local INSERT.
 	GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error)
+	// SumRefundsForPayment — what has been refunded of a payment so far.
+	SumRefundsForPayment(context.Context, *SumRefundsForPaymentReq) (*SumRefundsForPaymentResp, error)
 	// GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
 	// already produced, looked up before the provider is asked again.
 	GetRefundByIdempotencyKey(context.Context, *GetRefundByIdempotencyKeyReq) (*GetRefundByIdempotencyKeyResp, error)
@@ -338,6 +353,9 @@ func (UnimplementedPaymentQueryServer) GetPaymentByProviderId(context.Context, *
 }
 func (UnimplementedPaymentQueryServer) GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRefundByProviderId not implemented")
+}
+func (UnimplementedPaymentQueryServer) SumRefundsForPayment(context.Context, *SumRefundsForPaymentReq) (*SumRefundsForPaymentResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method SumRefundsForPayment not implemented")
 }
 func (UnimplementedPaymentQueryServer) GetRefundByIdempotencyKey(context.Context, *GetRefundByIdempotencyKeyReq) (*GetRefundByIdempotencyKeyResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRefundByIdempotencyKey not implemented")
@@ -454,6 +472,24 @@ func _PaymentQuery_GetRefundByProviderId_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentQueryServer).GetRefundByProviderId(ctx, req.(*GetRefundByProviderIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_SumRefundsForPayment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SumRefundsForPaymentReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).SumRefundsForPayment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_SumRefundsForPayment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).SumRefundsForPayment(ctx, req.(*SumRefundsForPaymentReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -642,6 +678,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRefundByProviderId",
 			Handler:    _PaymentQuery_GetRefundByProviderId_Handler,
+		},
+		{
+			MethodName: "SumRefundsForPayment",
+			Handler:    _PaymentQuery_SumRefundsForPayment_Handler,
 		},
 		{
 			MethodName: "GetRefundByIdempotencyKey",

@@ -36,6 +36,9 @@ message GetRefundByProviderIdResp { Refund refund = 1; }
 message GetRefundByIdempotencyKeyReq  { string idempotency_key = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
 message GetRefundByIdempotencyKeyResp { Refund refund = 1; }
 
+message SumRefundsForPaymentReq  { string payment_id = 1 [(w17.field) = { type: UUID }]; }
+message SumRefundsForPaymentResp { string total = 1 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }]; }
+
 message GetCreditBalanceReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -199,6 +202,15 @@ service PaymentQuery {
           "       r.currency AS refund.currency, "
           "       r.created_at AS refund.created_at "
           "FROM @module.Refund r WHERE r.provider_refund_id = :provider_refund_id"
+      }
+    };
+  }
+  // SumRefundsForPayment — what has been refunded of a payment so far.
+  rpc SumRefundsForPayment(SumRefundsForPaymentReq) returns (SumRefundsForPaymentResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT COALESCE(SUM(r.amount), 0) AS total FROM @module.Refund r WHERE r.payment_id = :payment_id"
       }
     };
   }
