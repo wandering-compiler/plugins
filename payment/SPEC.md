@@ -21,7 +21,7 @@ It covers plugin version 0.1.0-rc.5.
   invariant. The handler tests run against two stateful fakes: `memStore`, an
   in-memory stand-in for the generated storage clients that honours every
   unique column, every transition-guarded `UPDATE`, the `CreditBalance`
-  `balance >= 0` check, the two-statement transactions and the
+  `balance >= 0` check, the multi-statement transactions and the
   emit-on-success contract; and a stateful provider fake (`stripefake_test.go`)
   that replays idempotency keys, forgets them on demand and refuses
   over-refunds. They prove sequencing and wire shape, not what only the
@@ -493,7 +493,7 @@ a fake store proves the handler's sequencing only.
 
 | ID | MUST hold | Proof |
 |---|---|---|
-| `payment/secrets-typed` | `provider_api_key` and `webhook_signing_secret` are `secret.String` (redacted in logs and traces, never a baked default) and revealed only into the driver and the verifier. The plugin itself logs nothing. | `TestRegisterPlugin_WiresConfigIntoTheHandler` |
+| `payment/secrets-typed` | `provider_api_key` and `webhook_signing_secret` are `secret.String` (redacted in logs and traces, never a baked default) and revealed only into the driver and the verifier. The plugin logs only a failed provider call (`providerFailure`: the class and the driver's error, server-side), which carries no secret's value. | `TestRegisterPlugin_WiresConfigIntoTheHandler` |
 | `payment/live-key-only-to-provider` | With `provider_api_base` set, a live key (`sk_live_`, `rk_live_`) fails boot, so a live key is never sent to a mock or test root. | `TestResolveBackend_ProviderAPIBaseRefusesLiveKey` |
 | `payment/api-base-is-a-root` | `provider_api_base` must be an http(s) URL with a host and no credentials, query or fragment; the boot error never echoes credentials from it. | `TestResolveBackend_ProviderAPIBaseMustBeAURL`, `TestResolveBackend_AnUnparsableBaseIsNotEchoed`, `TestResolveBackend_ProviderAPIBase` |
 | `payment/provider-errors-not-echoed` | The caller sees the failure class and a generic message; the provider's error text, request URL and anything about the key stay server-side. | `TestProviderFailure_DoesNotEchoTheProvider`, `TestProviderFailure_PassesTheReasonCode`, `TestProviderFailure_MapsByClass` (finding 8 fixed in `providerFailure`). **Not guaranteed** on one path: a refused top-up refund whose credit could not be given back answers with the provider's error text (finding 8, still open). |
