@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v2/option"
 	"github.com/openai/openai-go/v2/responses"
@@ -152,4 +154,93 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// The caller hanging up, or its own deadline passing, while the call is in
+// flight comes back as the caller's own code — not as the model failing — and
+// is still billed.
+func TestComplete_CallerEndingIsNotAModelFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		want codes.Code
+	}{
+		{"cancelled", func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(20*time.Millisecond, cancel)
+			return ctx, cancel
+		}, codes.Canceled},
+		{"deadline", func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), 20*time.Millisecond)
+		}, codes.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			logs := captureLog(t)
+			sink := &capturingSink{}
+			h := &AgentServiceHandler{
+				Client:       blockingCompleter{},
+				Usage:        sink,
+				DefaultModel: "gpt-4o", DefaultMaxTokens: 10,
+			}
+			_, err := h.Complete(ctx, &pb.CompleteReq{})
+			if strings.Contains(logs.String(), "model call failed") {
+				t.Errorf("the caller's own ending was logged as a model failure: %q", logs.String())
+			}
+			if got := status.Code(err); got != tc.want {
+				t.Fatalf("code = %v, want %v (err %v)", got, tc.want, err)
+			}
+			if contains(status.Convert(err).Message(), "model call failed") {
+				t.Errorf("the caller's own ending is blamed on the model: %v", err)
+			}
+			if len(sink.events) != 1 || sink.events[0].Status != OutcomeFailed {
+				t.Errorf("usage rows = %+v, want one failed row", sink.events)
+			}
+		})
+	}
+}
+
+// A caller whose context had already ended before the call sent nothing: the
+// caller's own code, the provider never asked, and no usage row — as RunAgent
+// does for a run that sent nothing. It was a FAILED, unmeasured row: "cost
+// unknown" for a call whose cost is known to be zero.
+func TestComplete_ACallerAlreadyGoneSendsNothingAndWritesNoRow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		want codes.Code
+	}{
+		{"cancelled", func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, codes.Canceled},
+		{"deadline", func() (context.Context, context.CancelFunc) {
+			return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		}, codes.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := tc.ctx()
+			cancel()
+			sink := &capturingSink{}
+			f := &fakeCompleter{err: errors.New("the provider was asked")}
+			h := &AgentServiceHandler{Client: f, Usage: sink, DefaultModel: "gpt-4o", DefaultMaxTokens: 10}
+			_, err := h.Complete(ctx, &pb.CompleteReq{})
+			if got := status.Code(err); got != tc.want {
+				t.Fatalf("code = %v, want %v (err %v)", got, tc.want, err)
+			}
+			if f.got.Model != "" {
+				t.Errorf("the provider was asked for %q after the caller had gone", f.got.Model)
+			}
+			if len(sink.events) != 0 {
+				t.Errorf("usage rows = %+v, want none: nothing was sent", sink.events)
+			}
+		})
+	}
+}
+
+// blockingCompleter answers only when the request's context ends, with the
+// context's error — a provider still working when the caller leaves.
+type blockingCompleter struct{}
+
+func (blockingCompleter) New(ctx context.Context, _ responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }

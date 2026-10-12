@@ -265,6 +265,15 @@ type ModelSpec struct {
 	// variable — fifty records in one reply — would otherwise have to guess a
 	// number, and a guess that is too low truncates. Reach for it when you cannot
 	// measure; `status` still says whether the provider cut you off.
+	//
+	// The streaming paths (CompleteStream, and each turn of RunAgent) also stop
+	// a call whose text — or whose tool-call arguments — outgrows a byte
+	// ceiling, and fail it ResourceExhausted rather than keep paying for output
+	// nothing asked for: 8 bytes per budgeted token (the reasoning headroom
+	// counted, on a reasoning model), never less than 20 000 bytes. A call with
+	// NO CAP gets the 20 000 bytes, since nothing else bounds it; to stream a
+	// longer answer, give it a budget. Complete has no ceiling of its own — the
+	// budget is its only bound.
 	MaxTokens int32 `protobuf:"varint,2,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
 	// Reasoning budget. Honoured by reasoning families, refused by sampling ones.
 	Effort Effort `protobuf:"varint,3,opt,name=effort,proto3,enum=w17.contrib.agent.Effort" json:"effort,omitempty"`

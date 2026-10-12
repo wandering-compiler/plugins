@@ -42,6 +42,27 @@ type RunEvent struct {
 	// watching. Never required for correctness.
 	ToolStarted  *ToolEvent
 	ToolFinished *ToolEvent
+
+	// TurnSpent reports one model call the run SENT, as soon as it ends: what
+	// it cost and how it ended. One per turn, so a recorder can write a row
+	// per call priced when that call ran. A turn refused before the request,
+	// or never attempted because the context had already ended, sent nothing
+	// and gets none. The sink's error is ignored for it: accounting never
+	// ends a run.
+	TurnSpent *TurnSpend
+}
+
+// TurnSpend is one sent turn's cost.
+type TurnSpend struct {
+	// Usage is what the provider reported; unmeasured when it reported
+	// nothing (a dropped stream, a runaway cut off).
+	Usage Usage
+	// Status is the provider's terminal status, empty when the turn reached
+	// none — the stuck-model guard cut it short.
+	Status string
+	// Failed is set when the turn ended in an error.
+	Failed    bool
+	StartedAt time.Time
 }
 
 // ToolEvent describes one tool call in flight.
@@ -178,11 +199,13 @@ func Run(
 			return nil, withSpent(err, spent.usage())
 		}
 
+		turnStartedAt := time.Now()
 		res, calls, err := completeTurn(ctx, client, m, instructions, history, input, offer, sink)
 		if err != nil {
 			switch u, ok := SpentBy(err); {
 			case ok:
 				spent.add(u)
+				_ = sink(RunEvent{TurnSpent: &TurnSpend{Usage: u, Failed: true, StartedAt: turnStartedAt}})
 			case IsPreflight(err):
 				// Refused before the request: no turn was sent.
 			default:
@@ -190,10 +213,12 @@ func Run(
 				// dropped stream, a runaway cut off, a transport error. The
 				// run's total is then a floor, and says so.
 				spent.add(Usage{})
+				_ = sink(RunEvent{TurnSpent: &TurnSpend{Failed: true, StartedAt: turnStartedAt}})
 			}
 			return nil, withSpent(err, spent.usage())
 		}
 		spent.add(res.Usage)
+		_ = sink(RunEvent{TurnSpent: &TurnSpend{Usage: res.Usage, Status: res.Status, StartedAt: turnStartedAt}})
 
 		if len(calls) == 0 {
 			answer := *res

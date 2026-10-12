@@ -10,10 +10,38 @@ import (
 	"github.com/openai/openai-go/v2/responses"
 )
 
-// maxStreamOutput caps accumulated streamed text. A model that loops produces
-// tokens until something stops it, and the deadline is a poor stop: it arrives
-// after the tokens are paid for.
+// maxStreamOutput is the floor of the cap on accumulated streamed text, and the
+// whole cap for a call with no token budget. A model that loops produces tokens
+// until something stops it, and the deadline is a poor stop: it arrives after
+// the tokens are paid for.
 const maxStreamOutput = 20000
+
+// bytesPerBudgetToken scales the cap with a call's token budget. A token is a
+// few bytes on average and rarely more than a dozen, so eight per token leaves
+// a budgeted answer room to finish while still stopping output no budget
+// accounts for.
+const bytesPerBudgetToken = 8
+
+// outputCeiling is the cap for one streamed call, in bytes of text (and,
+// separately, of tool-call arguments). It used to be a flat 20 000 bytes
+// whatever the budget said, so an answer the provider was allowed to write in
+// full — and that Complete returned in full — failed half way on the streaming
+// paths, which no contract mentioned. A budgeted call now gets room in
+// proportion to its budget; a call with no budget keeps the floor, because
+// nothing else bounds it.
+func outputCeiling(params responses.ResponseNewParams) int {
+	if !params.MaxOutputTokens.Valid() {
+		return maxStreamOutput
+	}
+	const most = int64(^uint(0) >> 2) // far past any budget, and an int on every platform
+	switch n := params.MaxOutputTokens.Value; {
+	case n > most/bytesPerBudgetToken:
+		return int(most)
+	case n*bytesPerBudgetToken > maxStreamOutput:
+		return int(n * bytesPerBudgetToken)
+	}
+	return maxStreamOutput
+}
 
 // The stream events this layer reads. Everything else the Responses API emits —
 // the item and content-part lifecycle, refusal deltas, reasoning summaries — is
@@ -29,7 +57,7 @@ const (
 	eventFailed            = "response.failed"
 )
 
-// ErrRunawayOutput is returned when a stream exceeds maxStreamOutput. Distinct
+// ErrRunawayOutput is returned when a stream exceeds its outputCeiling. Distinct
 // from a truncated answer: the caller may want to keep a truncated one and must
 // not keep this.
 var ErrRunawayOutput = errors.New("agent: runaway model output")
@@ -89,6 +117,7 @@ func streamTurn(
 	var content strings.Builder
 	var final *responses.Response
 	argsBytes := 0
+	ceiling := outputCeiling(params)
 	// How much of the content the stuck-model guard has already seen, so the
 	// check runs on new output rather than on every fragment.
 	checkedAt := 0
@@ -101,8 +130,8 @@ func streamTurn(
 				continue
 			}
 			content.WriteString(ev.Delta)
-			if content.Len() > maxStreamOutput {
-				return nil, nil, fmt.Errorf("%w: %d bytes of content", ErrRunawayOutput, maxStreamOutput)
+			if content.Len() > ceiling {
+				return nil, nil, fmt.Errorf("%w: %d bytes of content", ErrRunawayOutput, ceiling)
 			}
 			if onDelta != nil {
 				if err := onDelta(ev.Delta); err != nil {
@@ -135,8 +164,8 @@ func streamTurn(
 			// calls themselves are read off the finished response rather than
 			// reassembled here — the Responses API hands them over whole.
 			argsBytes += len(ev.Delta)
-			if argsBytes > maxStreamOutput {
-				return nil, nil, fmt.Errorf("%w: %d bytes of tool-call arguments", ErrRunawayOutput, maxStreamOutput)
+			if argsBytes > ceiling {
+				return nil, nil, fmt.Errorf("%w: %d bytes of tool-call arguments", ErrRunawayOutput, ceiling)
 			}
 		case eventCompleted, eventIncomplete, eventFailed:
 			// One of these ends every response. ev.Response is the whole object

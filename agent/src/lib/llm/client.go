@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -67,6 +69,9 @@ func NewClient(cfg Config) (Client, error) {
 	if endpoint == "" {
 		return nil, errors.New("agent: no endpoint configured — the provider base URL is required before the first request")
 	}
+	if err := checkEndpoint(endpoint); err != nil {
+		return nil, err
+	}
 	key := strings.TrimSpace(cfg.APIKey)
 	if key == "" {
 		return nil, errors.New("agent: no api key configured — the provider rejects unauthenticated calls")
@@ -85,6 +90,36 @@ func NewClient(cfg Config) (Client, error) {
 		option.WithRequestTimeout(timeout),
 	)
 	return &deadlineClient{svc: &svc, timeout: timeout}, nil
+}
+
+// checkEndpoint refuses an endpoint the API key cannot safely travel to: every
+// request carries the key in a header, so a plain-http endpoint sends it in
+// clear text to anyone on the path. https is required; plain http is allowed
+// only to a loopback host, where the key never leaves the machine (a local
+// proxy, a test double).
+func checkEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return errors.New("agent: the endpoint is not an absolute URL — set it to the provider base URL, starting with https://")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if isLoopback(u.Hostname()) {
+			return nil
+		}
+		return errors.New("agent: the endpoint is plain http — the api key would travel in clear text; use https (plain http is accepted only for a loopback host)")
+	}
+	return fmt.Errorf("agent: the endpoint scheme %q is not https", u.Scheme)
+}
+
+func isLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // deadlineClient makes the configured timeout a deadline for the whole CALL.

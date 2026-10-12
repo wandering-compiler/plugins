@@ -10,9 +10,10 @@
 //
 // A model occasionally gets stuck and emits the same short fragment until
 // something stops it. Two other things already stop it, and neither is this:
-// maxStreamOutput catches 20 000 bytes of it, and the token budget catches the
-// rest by FAILING the turn — so without this a loop costs the reader their
-// whole answer and costs a full budget of output tokens to produce nothing.
+// the stream's output ceiling (outputCeiling, 20 000 bytes at least) catches
+// it, and the token budget catches the rest by FAILING the turn — so without
+// this a loop costs the reader their whole answer and costs a full budget of
+// output tokens to produce nothing.
 // This notices within about 150 bytes instead.
 //
 // # It becomes load-bearing the day the provider stops buffering

@@ -78,7 +78,7 @@ message GetLabelSpendReq {
 // ScopeSpendLine, for the same reason.
 //
 // These lines do NOT partition the scope's spend, and the difference is not
-// rounding. A call carries as many labels as the caller sent, so a call
+// only rounding (each line is rounded once, on its own). A call carries as many labels as the caller sent, so a call
 // labelled with two values of the same key is counted under BOTH — summing
 // the lines then exceeds the scope total. Attributing a shared call to every
 // subject that used it is the intended reading ("aggregating later is always
@@ -213,6 +213,12 @@ service UsageQuery {
   // with NULL — neither true nor false, so the ELSE arm runs and both columns
   // come back absent, which is correct for it.
   //
+  // Each row is priced EXACTLY and the group's sum is rounded once. It used to
+  // round every row to whole minor units before summing, so a row worth less
+  // than half a minor unit counted as nothing — toward the cap as well as in
+  // the report — and a run recorded as one row per turn, many of them small,
+  // could price at zero.
+  //
   // ⚠️ What was tried first and REVERTED: putting currency in the GROUP BY. An
   // unpriced call has a NULL currency, so grouping on it splits every rollup that
   // mixes priced and unpriced calls — the ordinary case, the one `priced_calls`
@@ -231,17 +237,15 @@ service UsageQuery {
           "       SUM(u.cached_input_tokens) AS cached_input_tokens, "
           "       SUM(u.reasoning_tokens) AS reasoning_tokens, "
           "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
-          "             ELSE SUM(p.line_minor) END) AS cost_minor, "
+          "             ELSE ROUND(SUM(p.line_minor)) END) AS cost_minor, "
           "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
           "             ELSE MAX(p.currency) END) AS currency "
           "FROM @module.Usage u "
           "JOIN @module.Model m ON m.id = u.model_id "
           "LEFT JOIN LATERAL ("
-          "  SELECT ROUND("
-          "           ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
-          "            + u.cached_input_tokens * pr.cached_input_per_million_minor "
-          "            + u.output_tokens * pr.output_per_million_minor) / 1000000.0"
-          "         ) AS line_minor, "
+          "  SELECT ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
+          "          + u.cached_input_tokens * pr.cached_input_per_million_minor "
+          "          + u.output_tokens * pr.output_per_million_minor) / 1000000.0 AS line_minor, "
           "         pr.currency AS currency "
           "  FROM @module.ModelPrice pr "
           "  WHERE pr.model_id = u.model_id AND pr.valid_from <= u.started_at "
@@ -284,18 +288,16 @@ service UsageQuery {
           "       SUM(u.cached_input_tokens) AS cached_input_tokens, "
           "       SUM(u.reasoning_tokens) AS reasoning_tokens, "
           "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
-          "             ELSE SUM(p.line_minor) END) AS cost_minor, "
+          "             ELSE ROUND(SUM(p.line_minor)) END) AS cost_minor, "
           "       (CASE WHEN MIN(p.currency) <> MAX(p.currency) THEN NULL "
           "             ELSE MAX(p.currency) END) AS currency "
           "FROM @module.Usage u "
           "JOIN @module.UsageLabel ul ON ul.usage_id = u.id "
           "JOIN @module.Label lb ON lb.id = ul.label_id "
           "LEFT JOIN LATERAL ("
-          "  SELECT ROUND("
-          "           ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
-          "            + u.cached_input_tokens * pr.cached_input_per_million_minor "
-          "            + u.output_tokens * pr.output_per_million_minor) / 1000000.0"
-          "         ) AS line_minor, "
+          "  SELECT ((u.input_tokens - u.cached_input_tokens) * pr.input_per_million_minor "
+          "          + u.cached_input_tokens * pr.cached_input_per_million_minor "
+          "          + u.output_tokens * pr.output_per_million_minor) / 1000000.0 AS line_minor, "
           "         pr.currency AS currency "
           "  FROM @module.ModelPrice pr "
           "  WHERE pr.model_id = u.model_id AND pr.valid_from <= u.started_at "

@@ -36,6 +36,9 @@ type AgentServiceClient interface {
 	// surface that is: this stream goes to YOUR service, which decides what
 	// reaches a browser. Yours is where the transcript is written, and it is the
 	// one that has to survive a client disconnecting mid-answer.
+	//
+	// Unlike Complete, a stream is cut off at a byte ceiling that follows the
+	// token budget — see ModelSpec.max_tokens.
 	CompleteStream(ctx context.Context, in *CompleteReq, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompleteEvent], error)
 	// RunAgent runs the tool-calling loop. See the phase 3 block below: the
 	// engine drives, you run the tools.
@@ -104,6 +107,9 @@ type AgentServiceServer interface {
 	// surface that is: this stream goes to YOUR service, which decides what
 	// reaches a browser. Yours is where the transcript is written, and it is the
 	// one that has to survive a client disconnecting mid-answer.
+	//
+	// Unlike Complete, a stream is cut off at a byte ceiling that follows the
+	// token budget — see ModelSpec.max_tokens.
 	CompleteStream(*CompleteReq, grpc.ServerStreamingServer[CompleteEvent]) error
 	// RunAgent runs the tool-calling loop. See the phase 3 block below: the
 	// engine drives, you run the tools.

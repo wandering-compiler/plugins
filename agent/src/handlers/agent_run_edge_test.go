@@ -61,11 +61,13 @@ func spendTurn(calls [][3]string, in, out int) map[string]any {
 	}}
 }
 
-// A run is ONE usage row carrying the spend of EVERY turn, attributed to the
-// scope and labels on its Start message.
+// A run is one usage row PER TURN, each attributed to the scope and labels on
+// its Start message.
 //
-// It carried the last turn's alone: the tool-calling turns — which re-send the
-// whole conversation and are the expensive ones — were never billed.
+// It once carried the last turn's alone: the tool-calling turns — which
+// re-send the whole conversation and are the expensive ones — were never
+// billed. Then one row carried the sum, against a contract promising a row per
+// call.
 func TestRunAgent_RecordsTheSpendOfEveryTurn(t *testing.T) {
 	sink := &syncSink{}
 	h := &AgentServiceHandler{StreamClient: &multiTurn{turns: [][]map[string]any{
@@ -87,15 +89,17 @@ func TestRunAgent_RecordsTheSpendOfEveryTurn(t *testing.T) {
 		t.Fatalf("RunAgent: %v", err)
 	}
 	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("recorded %d rows for one run, want 1", len(evs))
+	if len(evs) != 3 {
+		t.Fatalf("recorded %d rows for a three-turn run, want 3", len(evs))
 	}
-	ev := evs[0]
-	if ev.InputTokens != 600 || ev.OutputTokens != 60 || !ev.Measured || ev.Status != OutcomeOK {
-		t.Errorf("row = %+v, want 600 in / 60 out over three turns", ev)
-	}
-	if ev.Scope != "tenant-a" || ev.Labels["conversation"] != "c-1" || ev.Model != "gpt-4o-2024-08-06" {
-		t.Errorf("attribution = %q %v %q", ev.Scope, ev.Labels, ev.Model)
+	for i, ev := range evs {
+		in := int64(100 * (i + 1))
+		if ev.InputTokens != in || ev.OutputTokens != in/10 || !ev.Measured || ev.Status != OutcomeOK {
+			t.Errorf("row %d = %+v, want %d in / %d out", i, ev, in, in/10)
+		}
+		if ev.Scope != "tenant-a" || ev.Labels["conversation"] != "c-1" || ev.Model != "gpt-4o-2024-08-06" {
+			t.Errorf("row %d attribution = %q %v %q", i, ev.Scope, ev.Labels, ev.Model)
+		}
 	}
 	var finished *pb.Finished
 	for _, e := range b.events() {
@@ -108,10 +112,9 @@ func TestRunAgent_RecordsTheSpendOfEveryTurn(t *testing.T) {
 	}
 }
 
-// A run that fails mid-way is recorded as FAILED with what its finished turns
-// spent — and each failure has its own code. The row is MEASURED only when
-// every turn sent reported its usage: a turn cut off before its terminal event
-// leaves the tokens as a floor with measured=false.
+// A run that fails mid-way still bills what its turns spent — and each failure
+// has its own code. A turn that finished is an OK row; a turn cut off before
+// its terminal event is a FAILED, unmeasured row.
 func TestRunAgent_FailuresAreCodedAndStillBilled(t *testing.T) {
 	var runaway []map[string]any
 	for i := 0; i < 3000; i++ {
@@ -122,17 +125,16 @@ func TestRunAgent_FailuresAreCodedAndStillBilled(t *testing.T) {
 		turns    [][]map[string]any
 		limits   *pb.Limits
 		code     codes.Code
-		tokens   int64
-		measured bool
+		outcomes []CallOutcome
 	}{
 		{"out of turns", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}},
-			&pb.Limits{MaxTurns: 2}, codes.DeadlineExceeded, 22, true},
+			&pb.Limits{MaxTurns: 2}, codes.DeadlineExceeded, []CallOutcome{OutcomeOK, OutcomeOK}},
 		{"over the tool budget", [][]map[string]any{{spendTurn([][3]string{{"a", "search", `{}`}, {"b", "search", `{}`}}, 10, 1)}},
-			&pb.Limits{MaxToolCalls: 1}, codes.ResourceExhausted, 11, true},
+			&pb.Limits{MaxToolCalls: 1}, codes.ResourceExhausted, []CallOutcome{OutcomeOK}},
 		{"runaway output on turn two", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}, runaway},
-			nil, codes.ResourceExhausted, 11, false},
+			nil, codes.ResourceExhausted, []CallOutcome{OutcomeOK, OutcomeFailed}},
 		{"the provider failing on turn two", [][]map[string]any{{spendTurn([][3]string{{"x", "search", `{}`}}, 10, 1)}, {delta("half")}},
-			nil, codes.Unavailable, 11, false},
+			nil, codes.Unavailable, []CallOutcome{OutcomeOK, OutcomeFailed}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &syncSink{}
@@ -150,13 +152,13 @@ func TestRunAgent_FailuresAreCodedAndStillBilled(t *testing.T) {
 			if status.Code(err) != tc.code {
 				t.Fatalf("err = %v, want %v", err, tc.code)
 			}
-			evs := sink.all()
-			if len(evs) != 1 || evs[0].Status != OutcomeFailed {
-				t.Fatalf("recorded %+v, want one FAILED row", evs)
-			}
-			if got := evs[0].InputTokens + evs[0].OutputTokens; got != tc.tokens || evs[0].Measured != tc.measured {
-				t.Errorf("billed %d tokens (measured %v), want %d (measured %v) — the turns that finished were paid for, "+
-					"and a turn that never reported makes the total a floor", got, evs[0].Measured, tc.tokens, tc.measured)
+			evs := wantTurnRows(t, sink.all(), tc.outcomes...)
+			for i, ev := range evs {
+				// A finished turn was paid for and says what it cost; one that
+				// never reported is unmeasured, never free.
+				if finished := ev.Status == OutcomeOK; ev.Measured != finished || (finished && ev.InputTokens+ev.OutputTokens != 11) {
+					t.Errorf("row %d = %+v", i, ev)
+				}
 			}
 			for _, e := range b.events() {
 				if e.GetFinished() != nil {
@@ -275,9 +277,8 @@ func TestRunAgent_ACallerThatCannotBeAskedEndsTheRun(t *testing.T) {
 	if turns != 1 {
 		t.Errorf("the model was called %d times — it was asked again for a tool that could not be run", turns)
 	}
-	if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed {
-		t.Errorf("recorded %+v, want one failed row", evs)
-	}
+	// The one turn sent finished; the run failed after it.
+	wantTurnRows(t, sink.all(), OutcomeOK)
 }
 
 // The caller cancelling while a tool is outstanding ends the run promptly.
@@ -553,15 +554,12 @@ func TestRunAgent_ACallerWhoLeftIsNotAModelFailure(t *testing.T) {
 			if strings.Contains(logs.String(), "model run failed") {
 				t.Errorf("a caller leaving was logged as a model failure: %q", logs.String())
 			}
-			evs := sink.all()
-			if len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens+evs[0].OutputTokens != 11 {
-				t.Fatalf("recorded %+v, want one FAILED row billing the 11 tokens spent before the caller left", evs)
-			}
-			// Measured: the one turn sent reported its usage, and the caller
-			// leaving afterwards sent nothing more — so the 11 tokens are the
-			// whole bill, not a floor.
-			if !evs[0].Measured {
-				t.Errorf("recorded %+v as unmeasured — every turn sent reported its usage", evs[0])
+			// The turn sent before the caller left finished and reported its
+			// usage: an OK, measured row billing its 11 tokens. The caller
+			// leaving afterwards sent nothing more.
+			evs := wantTurnRows(t, sink.all(), OutcomeOK)
+			if evs[0].InputTokens+evs[0].OutputTokens != 11 || !evs[0].Measured {
+				t.Fatalf("recorded %+v, want the 11 tokens spent before the caller left, measured", evs[0])
 			}
 		})
 	}
@@ -603,8 +601,11 @@ func TestRunAgent_AFailedResponseNamesTheProvidersCode(t *testing.T) {
 	if !strings.Contains(logs.String(), "model run failed") {
 		t.Errorf("log = %q, want the model failure logged", logs.String())
 	}
-	if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens != 17 || !evs[0].Measured {
-		t.Errorf("recorded %+v, want one FAILED measured row of 17 input tokens", evs)
+	// Turn one finished (10 in); turn two the provider marked failed, and it
+	// still reported its 7.
+	evs := wantTurnRows(t, sink.all(), OutcomeOK, OutcomeFailed)
+	if evs[0].InputTokens != 10 || evs[1].InputTokens != 7 || !evs[1].Measured {
+		t.Errorf("recorded %+v, want 10 then a measured failed 7", evs)
 	}
 }
 
@@ -686,8 +687,8 @@ func TestRunAgent_AHalfCloseWhileAResultIsOwed(t *testing.T) {
 	if strings.Contains(logs.String(), "model run failed") {
 		t.Errorf("a caller's half-close was logged as a model failure: %q", logs.String())
 	}
-	if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed || !evs[0].Measured {
-		t.Errorf("recorded %+v, want one FAILED measured row for the turn that was paid for", evs)
+	if evs := wantTurnRows(t, sink.all(), OutcomeOK); !evs[0].Measured {
+		t.Errorf("recorded %+v, want a measured row for the turn that was paid for", evs)
 	}
 }
 
@@ -729,8 +730,8 @@ func TestRunAgent_AServerSideSendFailureIsNotTheCallerLeaving(t *testing.T) {
 			if !strings.Contains(logs.String(), "sending to the caller failed") || !strings.Contains(logs.String(), tc.sendErr.Error()) {
 				t.Errorf("log = %q, want the send failure logged with its cause", logs.String())
 			}
-			if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens+evs[0].OutputTokens != 11 {
-				t.Errorf("recorded %+v, want one FAILED row billing the 11 tokens", evs)
+			if evs := wantTurnRows(t, sink.all(), OutcomeOK); evs[0].InputTokens+evs[0].OutputTokens != 11 {
+				t.Errorf("recorded %+v, want the 11 tokens of the turn that finished", evs)
 			}
 		})
 	}
@@ -776,17 +777,18 @@ func TestRunAgent_AServerSideRecvFailureIsNotTheCallerLeaving(t *testing.T) {
 			if !strings.Contains(logs.String(), "receiving from the caller failed") || !strings.Contains(logs.String(), tc.recvErr.Error()) {
 				t.Errorf("log = %q, want the recv failure logged with its cause", logs.String())
 			}
-			if evs := sink.all(); len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].InputTokens+evs[0].OutputTokens != 11 {
-				t.Errorf("recorded %+v, want one FAILED row billing the 11 tokens", evs)
+			if evs := wantTurnRows(t, sink.all(), OutcomeOK); evs[0].InputTokens+evs[0].OutputTokens != 11 {
+				t.Errorf("recorded %+v, want the 11 tokens of the turn that finished", evs)
 			}
 		})
 	}
 }
 
 // A run whose caller's context had already ended before the first turn sent
-// nothing: one FAILED row, MEASURED at zero tokens. It was recorded
-// measured=false — "unknown cost" for a run whose cost is known to be zero.
-func TestRunAgent_ARunThatSentNothingIsMeasuredAtZero(t *testing.T) {
+// nothing, and writes no row: there was no call. (It was once a FAILED row
+// with measured=false — "unknown cost" for a run whose cost is known to be
+// zero.)
+func TestRunAgent_ARunThatSentNothingWritesNoRow(t *testing.T) {
 	sink := &syncSink{}
 	mt := &multiTurn{turns: [][]map[string]any{{spendTurn(nil, 10, 1)}}}
 	h := &AgentServiceHandler{StreamClient: mt, Usage: sink}
@@ -802,14 +804,25 @@ func TestRunAgent_ARunThatSentNothingIsMeasuredAtZero(t *testing.T) {
 	if mt.i != 0 {
 		t.Fatalf("the provider was asked %d times, want 0", mt.i)
 	}
-	evs := sink.all()
-	if len(evs) != 1 {
-		t.Fatalf("recorded %d rows, want 1", len(evs))
+	// Nothing was sent, so there is no call to bill.
+	if evs := sink.all(); len(evs) != 0 {
+		t.Errorf("recorded %+v for a run that sent nothing", evs)
 	}
-	ev := evs[0]
-	if !ev.Measured || ev.InputTokens != 0 || ev.OutputTokens != 0 || ev.Status != OutcomeFailed || ev.Model != "gpt-4o" {
-		t.Errorf("row = %+v, want FAILED, measured=true, zero tokens, the requested model", ev)
+}
+
+// wantTurnRows checks a run wrote one row per sent turn, with these outcomes,
+// and returns them.
+func wantTurnRows(t *testing.T, evs []UsageEvent, outcomes ...CallOutcome) []UsageEvent {
+	t.Helper()
+	if len(evs) != len(outcomes) {
+		t.Fatalf("recorded %d rows %+v, want one per sent turn: %v", len(evs), evs, outcomes)
 	}
+	for i, ev := range evs {
+		if ev.Status != outcomes[i] {
+			t.Fatalf("row %d status = %v, want %v (%+v)", i, ev.Status, outcomes[i], evs)
+		}
+	}
+	return evs
 }
 
 // callerGone: which Send and Recv failures are the caller leaving.

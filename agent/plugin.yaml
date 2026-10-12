@@ -22,7 +22,7 @@ env:
 
   - name: endpoint
     type: string
-    description: "Provider base URL, e.g. https://<resource>.openai.azure.com. Required — there is no default, because a wrong default is a call to somebody else's deployment."
+    description: "Provider base URL, e.g. https://<resource>.openai.azure.com. Required — there is no default, because a wrong default is a call to somebody else's deployment. Must be https: every request carries the api key, so a plain-http endpoint is refused at boot unless its host is loopback."
 
   - name: api_key
     type: string

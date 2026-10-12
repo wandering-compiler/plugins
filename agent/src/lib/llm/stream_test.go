@@ -206,3 +206,25 @@ func randomish(i int) string {
 	}
 	return string(out)
 }
+
+// The ceiling grows with the budget: a budgeted answer longer than the floor
+// streams in full, as Complete would return it, and a call with no budget keeps
+// the floor.
+func TestStreamCeilingFollowsTheBudget(t *testing.T) {
+	var events []map[string]any
+	for i := 0; i < 2500; i++ { // 30 000 bytes of non-repeating text
+		events = append(events, delta(randomish(i)))
+	}
+	events = append(events, completed(StatusCompleted, "", 30))
+
+	big := Model{ID: "gpt-4o", MaxTokens: 8000}
+	out, err := CompleteStream(context.Background(), &fakeStreamer{events: events}, big, "", nil, func(string) error { return nil })
+	if err != nil || out.Status != StatusCompleted {
+		t.Fatalf("a budgeted answer past the floor was refused: %v", err)
+	}
+
+	uncapped := Model{ID: "gpt-4o", MaxTokens: -1}
+	if _, err := CompleteStream(context.Background(), &fakeStreamer{events: events}, uncapped, "", nil, func(string) error { return nil }); !errors.Is(err, ErrRunawayOutput) {
+		t.Errorf("an uncapped stream past the floor: err = %v, want ErrRunawayOutput", err)
+	}
+}

@@ -160,17 +160,17 @@ func TestEveryEntryPointRecords(t *testing.T) {
 	}
 }
 
-func TestRunOutcome(t *testing.T) {
-	if got := runOutcome(errors.New("boom"), nil); got != OutcomeFailed {
-		t.Errorf("errored run = %v, want OutcomeFailed", got)
+func TestTurnOutcome(t *testing.T) {
+	if got := turnOutcome(&llm.TurnSpend{Failed: true, Status: "completed"}); got != OutcomeFailed {
+		t.Errorf("errored turn = %v, want OutcomeFailed", got)
 	}
 	// No terminal status means nobody can say what it cost — which is a
 	// different answer from "it went fine".
-	if got := runOutcome(nil, &llm.Completion{}); got != OutcomeUnknown {
-		t.Errorf("run cut short = %v, want OutcomeUnknown", got)
+	if got := turnOutcome(&llm.TurnSpend{}); got != OutcomeUnknown {
+		t.Errorf("turn cut short = %v, want OutcomeUnknown", got)
 	}
-	if got := runOutcome(nil, &llm.Completion{Status: "completed"}); got != OutcomeOK {
-		t.Errorf("completed run = %v, want OutcomeOK", got)
+	if got := turnOutcome(&llm.TurnSpend{Status: "completed"}); got != OutcomeOK {
+		t.Errorf("completed turn = %v, want OutcomeOK", got)
 	}
 }
 

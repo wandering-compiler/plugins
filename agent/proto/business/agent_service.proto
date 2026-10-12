@@ -155,6 +155,9 @@ service AgentService {
   // surface that is: this stream goes to YOUR service, which decides what
   // reaches a browser. Yours is where the transcript is written, and it is the
   // one that has to survive a client disconnecting mid-answer.
+  //
+  // Unlike Complete, a stream is cut off at a byte ceiling that follows the
+  // token budget — see ModelSpec.max_tokens.
   rpc CompleteStream(CompleteReq) returns (stream CompleteEvent);
 
   // RunAgent runs the tool-calling loop. See the phase 3 block below: the
@@ -251,7 +254,8 @@ message RunAgentReq {
     // recorded as its own row carrying these labels. That is deliberate: "one
     // call" is ambiguous in a multi-turn run, and a row per turn is the shape
     // that can be summed by label into "what did this run cost" without ever
-    // having to be split back apart.
+    // having to be split back apart. Each row is priced at the time its own
+    // turn ran; a turn that never reached the provider writes none.
     string usage_scope = 6;
     map<string, string> usage_labels = 7;
   }

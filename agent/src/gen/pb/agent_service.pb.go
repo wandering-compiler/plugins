@@ -1026,7 +1026,8 @@ type RunAgentReq_Start struct {
 	// recorded as its own row carrying these labels. That is deliberate: "one
 	// call" is ambiguous in a multi-turn run, and a row per turn is the shape
 	// that can be summed by label into "what did this run cost" without ever
-	// having to be split back apart.
+	// having to be split back apart. Each row is priced at the time its own
+	// turn ran; a turn that never reached the provider writes none.
 	UsageScope    string            `protobuf:"bytes,6,opt,name=usage_scope,json=usageScope,proto3" json:"usage_scope,omitempty"`
 	UsageLabels   map[string]string `protobuf:"bytes,7,rep,name=usage_labels,json=usageLabels,proto3" json:"usage_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields

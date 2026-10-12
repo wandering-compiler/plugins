@@ -62,6 +62,15 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 
 	m := h.modelFor(req)
 
+	// A caller whose context has already ended gets its own code back and no
+	// usage row: no request can leave, so there is no call to bill. Asking the
+	// SDK and reading its failure recorded a FAILED, unmeasured row — "this
+	// happened and its cost is unknown" — for a call whose cost is known to be
+	// zero, where RunAgent writes no row for the same ending.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, status.FromContextError(ctxErr).Err()
+	}
+
 	startedAt := time.Now()
 	out, err := llm.Complete(ctx, h.Client, m, req.GetInstructions(), messagesFrom(req.GetMessages()))
 	if err != nil {
@@ -78,6 +87,16 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
+		// The caller hanging up, or its own deadline passing, is not the
+		// model failing: answered with the caller's own Canceled or
+		// DeadlineExceeded and not logged, as CompleteStream and RunAgent do
+		// (callerLeft). This path alone said Unavailable and blamed the
+		// provider in the log, so a caller retrying on Unavailable retried
+		// its own timeout. Still recorded above: what the provider produced
+		// before the hang-up was paid for.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, status.FromContextError(ctxErr).Err()
+		}
 		// The provider's own text is NOT forwarded whole: it renders the
 		// deployment URL and, on some failures, fragments of the prompt, and
 		// neither belongs in an answer travelling back to whoever asked.
