@@ -1441,15 +1441,23 @@ func (x *ConfirmTotpSecretResp) GetUserId() string {
 	return ""
 }
 
-// MoveOAuthProviderSecretReq moves a provider's legacy plaintext
-// client_secret into the encrypted `secret` — only while the legacy column
-// still holds `legacy`, so a value an operator wrote in between is not lost.
 // UpsertOAuthProviderReq creates or rewrites one OAuth provider, found by
 // name: what the project's own code calls to configure a provider from its
 // deployment's environment (a client id and secret kept with the other
 // secrets), so changing a secret is a deploy and needs no admin. The secret
 // is stored encrypted with the project's field key; the plaintext legacy
 // column is cleared.
+//
+// A rewrite replaces every field below with the request's value: a blank
+// optional field is written blank (the handler's defaults apply again), and
+// `enabled` left unset writes false, which turns the provider off. A change
+// made on the admin page is overwritten by the next call. A new secret takes
+// effect on the next sign-in; one already at the provider fails its callback
+// and starts again. The row keeps the tenant it was created with, and names
+// are unique across tenants, so a call naming another tenant's provider
+// rewrites that provider: the name is the caller's to own, and this is a
+// storage method for the project's own trusted code, not for a tenant's
+// input.
 type UpsertOAuthProviderReq struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -1628,6 +1636,9 @@ func (x *UpsertOAuthProviderResp) GetId() string {
 	return ""
 }
 
+// MoveOAuthProviderSecretReq moves a provider's legacy plaintext
+// client_secret into the encrypted `secret` — only while the legacy column
+// still holds `legacy`, so a value an operator wrote in between is not lost.
 type MoveOAuthProviderSecretReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
