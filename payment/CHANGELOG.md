@@ -22,7 +22,7 @@ What changes:
 
 - **The key is scoped by user and by kind of charge** before it is stored and sent: `v2:` and a hash, as the credit and usage keys already were. The same key from another user, or for the other kind of charge, is a separate charge.
 - **`Payment.idempotency_key` holds the scoped key**, so the value a read returns is no longer the one the caller sent.
-- **Payments stored by earlier versions keep their key.** A retry of one is still that payment.
+- **Payments stored by earlier versions keep their key.** A retry of one by the same user, for the same kind of charge, is still that payment.
 - **New query `GetPaymentByIdempotencyKey`.**
 
 ### Webhook configuration is checked at boot
