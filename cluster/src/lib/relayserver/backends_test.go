@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -420,5 +421,24 @@ func TestBackends_ConcurrentChangesPublishTheCurrentTotal(t *testing.T) {
 		if want := b.Capacity(); got != want {
 			t.Fatalf("round %d: the pool was last told %d, the fleet carries %d", round, got, want)
 		}
+	}
+}
+
+// A ban drops the worker's tunnel and closes it, which ends the calls still
+// running there; other workers keep theirs.
+func TestBackends_DropWhereClosesTheSelectedTunnels(t *testing.T) {
+	b := NewBackends()
+	banned, kept := conn(t), conn(t)
+	b.Add("bad", banned)
+	b.Add("good", kept)
+	b.DropWhere(func(fp string) bool { return fp == "bad" })
+	if n := b.Count(); n != 1 {
+		t.Fatalf("Count = %d, want 1 (only the banned tunnel leaves)", n)
+	}
+	if st := banned.GetState(); st != connectivity.Shutdown {
+		t.Errorf("banned tunnel state = %v, want Shutdown (its running calls end)", st)
+	}
+	if st := kept.GetState(); st == connectivity.Shutdown {
+		t.Error("the other worker's tunnel was closed")
 	}
 }

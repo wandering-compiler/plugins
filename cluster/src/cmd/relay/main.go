@@ -322,6 +322,11 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	// out its full complement of tickets and every caller found out at the
 	// proxy.
 	backends.OnCapacityChange(pool.SetCapacity)
+	// A ban cuts the banned worker's open tunnel at once, and with it any
+	// call still running there; the attach stream notices on its next poll.
+	workers.OnBansChanged(func() {
+		backends.DropWhere(func(fp string) bool { return !workers.Admitted(fp) })
+	})
 	// MANAGEMENT ONLY. This server's TLS pins the control plane, so nothing a
 	// worker holds can complete its handshake — registering the worker-facing
 	// service here would have published it on a port no worker can reach,

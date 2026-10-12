@@ -75,3 +75,14 @@ func TestMet_LatestClaimsWin(t *testing.T) {
 		t.Errorf("known = %+v, want aa (named new) and bb", got)
 	}
 }
+
+// The ban hook runs after the set is replaced, and sees the new set.
+func TestOnBansChanged_RunsWithTheNewSet(t *testing.T) {
+	r := New()
+	var sawBanned bool
+	r.OnBansChanged(func() { sawBanned = !r.Admitted("w1") })
+	r.SetBanned([]string{"W1"})
+	if !sawBanned {
+		t.Error("the hook did not run, or ran before the ban took effect")
+	}
+}

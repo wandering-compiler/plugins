@@ -289,6 +289,31 @@ func (b *Backends) watch(fingerprint string, conn *grpc.ClientConn, gen uint64) 
 	publish()
 }
 
+// DropWhere closes and forgets the tunnel of every worker drop selects —
+// used when a worker is banned. Closing the connection ends the calls still
+// running on it too: a ban stops the work, not only the next piece of it.
+func (b *Backends) DropWhere(drop func(fingerprint string) bool) {
+	b.mu.Lock()
+	var closing []*grpc.ClientConn
+	for fp, be := range b.conns {
+		if drop(fp) {
+			closing = append(closing, be.conn)
+			b.removeLocked(fp)
+			delete(b.profiles, fp)
+		}
+	}
+	if len(closing) == 0 {
+		b.mu.Unlock()
+		return
+	}
+	publish := b.publishLocked()
+	b.mu.Unlock()
+	for _, c := range closing {
+		_ = c.Close() // outside b.mu — see Add
+	}
+	publish()
+}
+
 // RemoveConn drops a worker's tunnel when THAT connection ends — it hung up,
 // or was denied while attached. Called from the tunnel's own close hook, which
 // is the only signal that is both prompt and true for a single-use connection.
