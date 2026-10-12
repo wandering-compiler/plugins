@@ -189,7 +189,7 @@ service UsageQuery {
   // change would otherwise bill all of it at one rate, and which rate would
   // depend on where the join happened to land.
   //
-  // ⚠️ A MIXED-CURRENCY ROLLUP REPORTS NO COST (reported by a consumer).
+  // ⚠️ A MIXED-CURRENCY ROLLUP REPORTS NO COST.
   //
   // `MAX(p.currency)` beside `SUM(p.line_minor)` used to sum minor units across
   // currencies and stamp whichever one sorted highest — a number that looks like

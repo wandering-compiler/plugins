@@ -160,13 +160,13 @@ service AgentService {
   // token budget — see ModelSpec.max_tokens.
   rpc CompleteStream(CompleteReq) returns (stream CompleteEvent);
 
-  // RunAgent runs the tool-calling loop. See the phase 3 block below: the
+  // RunAgent runs the tool-calling loop. See the tool-calling block below: the
   // engine drives, you run the tools.
   rpc RunAgent(stream RunAgentReq) returns (stream RunAgentEvent);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 3 — tool calling
+// Tool calling
 //
 // The engine runs the loop; YOUR project runs the tools. That split is forced
 // and it is also right: a tool is one of your own gRPC methods, and the plugin

@@ -40,12 +40,12 @@ func (failingCompleter) New(context.Context, responses.ResponseNewParams, ...opt
 func TestAFailedCallIsStillRecorded(t *testing.T) {
 	sink := &capturingSink{}
 	// DefaultMaxTokens is load-bearing and was MISSING. Without it the model
-	// has no token budget, paramsFor refuses BEFORE the provider is reached, and
-	// failingCompleter is never called — so this test asserted that "a failed
-	// call is recorded" while exercising a path where no call happened. It
-	// passed because every error was treated as a failed call, which is the
-	// defect a consumer reported: a refusal before the provider recorded as a
-	// failed call. The budget makes it reach the fake.
+	// has no token budget, paramsFor refuses BEFORE the provider is reached,
+	// and failingCompleter is never called — so this test asserted that "a
+	// failed call is recorded" while exercising a path where no call happened.
+	// It passed because every error was treated as a failed call, which is the
+	// defect itself: a refusal before the provider recorded as a failed call.
+	// The budget makes it reach the fake.
 	h := &AgentServiceHandler{Client: failingCompleter{}, Usage: sink, DefaultModel: "gpt-x", DefaultMaxTokens: 100}
 
 	_, err := h.Complete(context.Background(), &pb.CompleteReq{
@@ -217,8 +217,7 @@ func TestUsageManifestNamesEveryTable(t *testing.T) {
 // An empty scope used to be queued as-is, fail the `external_id <> ”` check
 // at insert and take its whole batch with it — so the one field a caller was
 // allowed to leave out produced the silent nothing this layer exists to
-// remove. A consumer found it with zero rows after hundreds of calls and no
-// error anywhere.
+// remove: zero rows after hundreds of calls and no error anywhere.
 func TestRecordUsage_AnEmptyScopeIsStillRecorded(t *testing.T) {
 	sink := &capturingSink{}
 	h := &AgentServiceHandler{Usage: sink}

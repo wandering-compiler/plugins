@@ -457,14 +457,13 @@ func assistantToolCalls(calls []toolCall) []responses.ResponseInputItemUnionPara
 }
 
 // paramsForInput is paramsFor with the input already built, for the loop, which
-// accumulates rather than converting a history each turn.
-// ⚠️ This is paramsFor's twin for the tool-calling loop, and the two have to
-// validate ALIKE. They did not: the JSON-object precondition and the preflight
-// marker were added to paramsFor only, so RunAgent went on answering a request
-// the provider is documented to refuse with a plain `Unavailable` and a usage
-// row for a call that never happened (a consumer reported it, on the path they
-// did not test). `history` is the caller's own turns, which is what the guard
-// reads.
+// accumulates rather than converting a history each turn. ⚠️ This is
+// paramsFor's twin for the tool-calling loop, and the two have to validate
+// ALIKE. They did not: the JSON-object precondition and the preflight marker
+// were added to paramsFor only, so RunAgent went on answering a request the
+// provider is documented to refuse with a plain `Unavailable` and a usage row
+// for a call that never happened. `history` is the caller's own turns, which is
+// what the guard reads.
 func paramsForInput(m Model, instructions string, history []Message, input []responses.ResponseInputItemUnionParam) (*responses.ResponseNewParams, error) {
 	if strings.TrimSpace(m.ID) == "" {
 		return nil, preflight("no model id")

@@ -17,9 +17,8 @@
 // Because Chat Completions does not stream. Measured on their side, four runs,
 // same prompt and deployment with only the URL changing: `chat/completions`
 // delivers the whole answer in 0.06–0.10 s after several seconds of silence,
-// while `responses` delivers it over 2.6–4.7 s, as it is written. Phase 1 does
-// not stream, but the phase after it does, and choosing the other API now
-// would have to be undone then.
+// while `responses` delivers it over 2.6–4.7 s, as it is written. CompleteStream
+// streams, and Chat Completions could not serve it.
 package llm
 
 import (
@@ -318,7 +317,7 @@ func usageFrom(res *responses.Response) Usage {
 // acceptable" was true about the URL and wrong about the rest. The full text
 // also carries the RESPONSE BODY, which this very file records as sometimes
 // quoting the prompt — so `%v` on a provider error put user input into the
-// bundle's log, on a line whose comment justified only the URL (reported by a consumer).
+// bundle's log, on a line whose comment justified only the URL.
 //
 // A log is not a safe place for a prompt: it is shipped, aggregated and kept
 // far longer than the request, and nobody reading it asked for the content.

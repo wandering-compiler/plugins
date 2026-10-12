@@ -223,7 +223,7 @@ func toolCallsOf(res *responses.Response) []toolCall {
 // `Unavailable`. For a provider failure that is right. For a request that never
 // left the process it is wrong twice over — it invents spend for a call that did
 // not happen, and it reports an outage for what is an invalid argument, so the
-// caller goes looking at the provider's status page (reported by a consumer).
+// caller goes looking at the provider's status page.
 //
 // Wrap, don't replace: the messages already say what is wrong, and callers use
 // errors.Is to decide how to answer.
@@ -292,10 +292,10 @@ func checkJSONObjectPrecondition(m Model, instructions string, history []Message
 		// The ASSISTANT's own words do not count, and that is the provider's
 		// rule, not ours: "the model will not generate JSON without a SYSTEM OR
 		// USER message instructing it to do so". Accepting an assistant turn
-		// made this guard pass on a request the provider still refuses — so the
-		// check that exists to replace a bare 400 handed back the bare 400
-		// (reported by a consumer). A model that mentioned JSON in a previous reply is
-		// exactly the conversation where that happens.
+		// would make this guard pass on a request the provider still refuses —
+		// so the check that exists to replace a bare 400 would hand back the
+		// bare 400. A model that mentioned JSON in a previous reply is exactly
+		// the conversation where that happens.
 		if msg.Assistant {
 			continue
 		}

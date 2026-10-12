@@ -72,8 +72,8 @@ type HandlerRegistry interface {
 	// RegisterShutdown hands the bundle's drain loop a hook to run at
 	// teardown. The usage writer is asynchronous, so without one a process
 	// that exits — a CLI, an eval, a batch job — takes its queue with it:
-	// a consumer measured a short run writing ZERO rows and a longer one
-	// keeping only the batches that happened to tick before it ended.
+	// a short run writes ZERO rows and a longer one keeps only the batches
+	// that happened to tick before it ended.
 	RegisterShutdown(fn func(ctx context.Context) error)
 }
 
