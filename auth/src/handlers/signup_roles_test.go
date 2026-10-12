@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/sdk/go/lib/typere"
 )
 
 // signupRolesQueryMock stubs the three rbac queries resolveSignupRoleIDs
@@ -187,7 +188,8 @@ func TestBootstrapSlot_FitsItsColumn(t *testing.T) {
 		t.Fatalf("BootstrapClaim.slot is %s; this test checks the SLUG rule only", decl[1])
 	}
 	maxLen, _ := strconv.Atoi(string(decl[2]))
-	if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(bootstrapSlot) || len(bootstrapSlot) > maxLen {
+	// typere.Slug is the pattern the generated storage validation applies.
+	if !typere.Slug.MatchString(bootstrapSlot) || len(bootstrapSlot) > maxLen {
 		t.Fatalf("bootstrapSlot %q is not a SLUG of at most %d characters", bootstrapSlot, maxLen)
 	}
 }
