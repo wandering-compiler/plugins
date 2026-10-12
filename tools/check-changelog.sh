@@ -70,6 +70,8 @@ for m in */plugin.yaml; do
 	fi
 	while IFS= read -r f; do
 		head -1 "$f" | grep -q '^### ' || { echo "!! $f must start with a '### ' heading"; bad=1; }
+		# A `## ` or `# ` line would end the release section it is collected into.
+		if grep -Eq '^#{1,2}[[:space:]]' "$f"; then echo "!! $f has a '#' or '## ' heading: only '### ' and below belong in a fragment"; bad=1; fi
 	done <<<"$added"
 done
 exit $bad

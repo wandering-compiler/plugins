@@ -61,7 +61,7 @@ git switch --quiet -c "$branch"
 
 sed -i "s/^version:.*/version: $version/" "$PLUGIN/plugin.yaml"
 
-# The fragments, newest name last, each separated by a blank line.
+# The fragments in file-name order, each separated by a blank line.
 body=""
 for f in "${fragments[@]}"; do
 	body+="$(cat "$f")"$'\n\n'
