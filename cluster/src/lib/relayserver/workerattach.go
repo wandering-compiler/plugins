@@ -41,6 +41,22 @@ type WorkerServer struct {
 	// expiry are re-checked. A field so a test does not have to wait at
 	// production speed.
 	PollInterval time.Duration
+
+	// MaxSlots caps the slots one worker may announce; 0 means
+	// DefaultMaxWorkerSlots. A worker's count is its own claim, and
+	// unchecked it decided how much of the relay's queue one key drained —
+	// and a count past the int32 range turned the reported capacity negative.
+	MaxSlots uint32
+}
+
+// DefaultMaxWorkerSlots is the slot cap when WorkerServer.MaxSlots is unset.
+const DefaultMaxWorkerSlots = 64
+
+func (s *WorkerServer) maxSlots() uint32 {
+	if s.MaxSlots == 0 {
+		return DefaultMaxWorkerSlots
+	}
+	return s.MaxSlots
 }
 
 // Attach admits or refuses a connecting worker, and holds the stream open for
@@ -102,7 +118,15 @@ func (s *WorkerServer) Attach(
 
 	// One attachment, one generation. Every profile write below carries it, so
 	// a reconnect that overtakes this stream's unwind is not erased by it.
-	att := s.newAttachment(id, req.GetSlots())
+	// A count above the cap is held to it, and the admission tells the
+	// worker what it got, so a worker that over-announces runs at the cap
+	// instead of being refused outright.
+	slots := req.GetSlots()
+	if limit := s.maxSlots(); slots > limit {
+		log.Printf("relay: worker %s announced %d slots; held to %d (--max-worker-slots)", id, slots, limit)
+		slots = limit
+	}
+	att := s.newAttachment(id, slots)
 	defer att.close()
 	// The worker's OWN answer, as of the announcement. Taken from the
 	// announcement rather than waiting for a first status, so a machine that
@@ -115,7 +139,7 @@ func (s *WorkerServer) Attach(
 
 	att.setAdmitted(true)
 	if err := srv.Send(&workerpb.AttachEvent{
-		Event: &workerpb.AttachEvent_Admitted{Admitted: &workerpb.Admitted{Slots: req.GetSlots()}},
+		Event: &workerpb.AttachEvent_Admitted{Admitted: &workerpb.Admitted{Slots: slots}},
 	}); err != nil {
 		return err
 	}

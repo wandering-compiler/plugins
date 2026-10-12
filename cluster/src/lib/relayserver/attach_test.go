@@ -435,3 +435,24 @@ func TestAttach_HangingUpBeforeAnnouncingLeavesNoTrace(t *testing.T) {
 		t.Error("a worker that never announced was recorded or credited")
 	}
 }
+
+// A worker's slot count is its own claim: one above the cap is held to it,
+// and the admission says so.
+func TestAttach_SlotsAboveTheCapAreHeldToIt(t *testing.T) {
+	r := serveWorkers(t)
+	w := r.issue(t, time.Hour)
+	stream, err := r.dial(t, &w).Attach(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(announce(1<<31, workerpb.WorkerStatus_READY)); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ev.GetAdmitted().GetSlots(); got != DefaultMaxWorkerSlots {
+		t.Errorf("admitted slots = %d, want the cap %d", got, DefaultMaxWorkerSlots)
+	}
+}

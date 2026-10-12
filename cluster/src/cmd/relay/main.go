@@ -55,24 +55,25 @@ import (
 )
 
 type config struct {
-	listen       string
-	tunnelListen string
-	attachListen string
-	proxyListen  string
-	proxyAddress string
-	certPath     string
-	keyPath      string
-	identityDir  string
-	controlPin   string
-	capacity     int
-	ticketTTL    time.Duration
-	drainTimeout time.Duration
-	pollInterval time.Duration
-	pollTimeout  time.Duration
-	caCertPath   string
-	caKeyPath    string
-	certLifetime time.Duration
-	codeTTL      time.Duration
+	listen         string
+	tunnelListen   string
+	attachListen   string
+	proxyListen    string
+	proxyAddress   string
+	certPath       string
+	keyPath        string
+	identityDir    string
+	controlPin     string
+	capacity       int
+	maxWorkerSlots int
+	ticketTTL      time.Duration
+	drainTimeout   time.Duration
+	pollInterval   time.Duration
+	pollTimeout    time.Duration
+	caCertPath     string
+	caKeyPath      string
+	certLifetime   time.Duration
+	codeTTL        time.Duration
 
 	// netListen opens every listener; nil is net.Listen. A test seam, never
 	// set from flags: it lets a test make one bind fail deterministically
@@ -155,6 +156,8 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 		"how long a one-time registration code stays usable")
 	fs.StringVar(&cfg.controlPin, "control-plane-fingerprint", os.Getenv("RELAY_CONTROL_PLANE_FINGERPRINT"),
 		"lowercase hex SHA-256 of the control plane's client certificate; nothing else may manage this relay")
+	fs.IntVar(&cfg.maxWorkerSlots, "max-worker-slots", envInt("max-worker-slots", "RELAY_MAX_WORKER_SLOTS", relayserver.DefaultMaxWorkerSlots),
+		"the most slots one worker may announce; a higher count is held to this")
 	fs.IntVar(&cfg.capacity, "capacity", envInt("capacity", "RELAY_CAPACITY", 0),
 		"OPTIONAL ceiling on concurrent tasks; 0 means whatever the attached workers add up to")
 	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("ticket-ttl", "RELAY_TICKET_TTL", 30*time.Second),
@@ -185,6 +188,9 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 		if !set[e.flag] {
 			errs = append(errs, e.err)
 		}
+	}
+	if cfg.maxWorkerSlots < 1 || cfg.maxWorkerSlots > 1<<16 {
+		errs = append(errs, fmt.Errorf("--max-worker-slots must be between 1 and %d, got %d", 1<<16, cfg.maxWorkerSlots))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return config{}, err
@@ -383,6 +389,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	workerpb.RegisterWorkerAttachServer(attachSrv, &relayserver.WorkerServer{
 		Workers:  workers,
 		Backends: backends,
+		MaxSlots: uint32(cfg.maxWorkerSlots),
 	})
 	// Enrolment and renewal share the attach listener: a worker already
 	// reaches it, and it is the one that lets a certificate-less handshake in.

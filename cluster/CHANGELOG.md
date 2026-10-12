@@ -21,6 +21,13 @@ A ban stopped new work at the next check, but the tunnel a worker had already op
 - **A tunnel that was opening when the ban arrived** is closed too: admission is checked again once the tunnel is registered.
 - **A worker banned and unbanned before its attach stream noticed** keeps its announced capacity when it reconnects its tunnel.
 
+### A worker's announced slot count is capped
+
+A worker's slot count is its own claim, and nothing checked it. One key could announce enough slots to drain a relay's whole queue, and a count above the int32 range made `RelayStats` report a negative capacity.
+
+- **New relay flag `--max-worker-slots`** (env `RELAY_MAX_WORKER_SLOTS`, default 64, allowed 1–65536; any other value fails at start).
+- **A higher announced count is held to the cap**, and the attach admission reports the slots the worker actually got.
+
 ## 0.1.0-rc.12
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update cluster`.
