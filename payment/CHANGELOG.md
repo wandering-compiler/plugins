@@ -2,6 +2,8 @@
 
 ## 0.1.0-rc.5
 
+Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on the webhook endpoint.
+
 ### Every REST endpoint acts on the signed-in caller's own billing (breaking)
 
 The `/billing` endpoints took whatever `user_id` the request named, and the reads took any id. A signed-in person could charge, subscribe or create a customer for another user, and read anyone's payment, subscription, balance or usage.
@@ -13,8 +15,6 @@ What changes:
 - **The caller is read from field 2 of the gateway's `x-w17-user` envelope.** w17 requires `string user_id = 2` on every auth method's response, and the auth plugin has it. An envelope that is present but empty, repeated or without a readable caller is refused (`UNAUTHENTICATED`), never treated as an internal call.
 - **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
-
-Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on the webhook endpoint.
 
 ### Webhook configuration is checked at boot
 
