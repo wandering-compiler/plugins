@@ -8,12 +8,13 @@ and its Go handlers under `src/`. A project never imports a plugin as a Go modul
 `w17ctl plugin install` places a release into the project, and the project's own
 codegen stages the sources into its service bundles.
 
-## Two branches
+## One branch, tagged releases
 
-| branch | holds | who writes it |
-|---|---|---|
-| `main` | the **author tree**: live Go, a real `go.mod`, the tests, the generated pb | pull requests only |
-| `releases` | the **installable form**: one commit per release, tagged `<plugin>/v<version>` | `make release` |
+`main` holds the **author tree**: live Go, a real `go.mod`, the tests, the
+generated pb. It changes through pull requests only. A release is a tag on a
+commit of `main`, `<plugin>/v<version>`, signed (RELEASING.md). `w17ctl` renders
+the plugin into its installable form when it installs it. Releases cut before
+this live on the `releases` branch, rendered, and stay installable.
 
 A consumer installs a tag:
 
@@ -32,4 +33,4 @@ are dropped), so upgrade w17ctl before installing a commit.
 See [CONTRIBUTING.md](CONTRIBUTING.md). In short: `make check PLUGIN=<name>` runs
 every check CI runs. Every pull request is tested, and `main` merges only green.
 
-Releases are cut by hand, through [RELEASING.md](RELEASING.md).
+A merged release pull request is released by CI: [RELEASING.md](RELEASING.md).

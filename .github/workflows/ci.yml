@@ -11,9 +11,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run. A push to main never
+# does: the release workflow runs after CI on each commit of main, and a
+# cancelled run there would skip the release that commit carries.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # `shell: bash` runs with -eo pipefail. The runner's implicit default does not,
 # and `go test … | tee` then reports tee's exit status — a failing test turned
