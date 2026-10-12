@@ -12,6 +12,15 @@ The admin preset authenticated through `Authenticate`, which selects an organiza
 - **An admin page over an `org_id`-scoped model now refuses** with `missing required scope: org_id`, for every caller. No organization means no `org_id` scope on the admin's storage calls. Such a page used to serve whichever single organization the caller belonged to, which was never the whole console.
 - **`tenant_scope` is unchanged.** The admin still stamps the caller's `tenant_id`, so it stays inside the caller's tenant.
 
+### Registering through a provider can carry an invitation
+
+Under `invite_only`, an OPEN invitation (one that names no address, for example sent by SMS) could not be used to register through a provider. The callback created the account and had no way to receive the token. Only a bound invitation whose address matched the provider's worked.
+
+- **The callback no longer creates an account.** For an identity that has none, the login code keeps the provider-verified identity (subject, address, whether the provider verified it). `OAuthLoginCode` gains `provider_id`, `external_id`, `email` and `email_verified`, and `user_id` is now nullable.
+- **`OAuthExchange` creates it, with the new `invite_token`.** The rules are the same as `SignUp`: the allowlist, `invite_only`, a bound invitation's address, and an open link spent by its first registration. Without a valid invitation the exchange refuses with the gate's coded refusal. The token travels only in the page's own exchange request, never in a URL or through the provider.
+- **The user, its roles, the verified address, the spent invitation and the identity link commit together.** Before, the identity link was written after the user's transaction.
+- **An identity that already has an account ignores the token.**
+
 
 ### One bootstrap administrator, even under concurrent first sign-ups
 

@@ -61,7 +61,7 @@ func TestOAuthAutoLink_RefusesAnUnverifiedLocalAccount(t *testing.T) {
 	// The IdP verified its side. The local account has no
 	// `email_verified_at`, so nobody ever proved that address belongs to
 	// whoever created it.
-	_, err := h.resolveOrCreateUserByEmail(context.Background(), "victim@example.com", true)
+	_, err := h.findOAuthAccount(context.Background(), "p1", "sub-1", "victim@example.com", true)
 	if err == nil {
 		t.Fatal("auto-linked a verified identity into a local account whose own address " +
 			"was never verified — the account may have been created by whoever wanted " +
@@ -79,13 +79,22 @@ func TestOAuthAutoLink_LinksIntoAVerifiedLocalAccount(t *testing.T) {
 			EmailVerifiedAt: timestamppb.Now(),
 		}},
 	}
-	id, err := h.resolveOrCreateUserByEmail(context.Background(), "owner@example.com", true)
+	h.Mutation = &autolinkMock{}
+	id, err := h.findOAuthAccount(context.Background(), "p1", "sub-1", "owner@example.com", true)
 	if err != nil {
 		t.Fatalf("a verified local account was refused: %v", err)
 	}
 	if id != "real-owner" {
 		t.Errorf("linked to %q, want real-owner", id)
 	}
+}
+
+func (m *autolinkMock) GetOAuthIdentity(context.Context, *pb.GetOAuthIdentityReq, ...grpc.CallOption) (*pb.GetOAuthIdentityResp, error) {
+	return &pb.GetOAuthIdentityResp{}, nil
+}
+
+func (m *autolinkMock) CreateOAuthIdentity(_ context.Context, in *pb.CreateOAuthIdentityReq, _ ...grpc.CallOption) (*pb.CreateOAuthIdentityResp, error) {
+	return &pb.CreateOAuthIdentityResp{Identity: &pb.OAuthIdentity{UserId: in.GetUserId()}}, nil
 }
 
 func (m *autolinkMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {

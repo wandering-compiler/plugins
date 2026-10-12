@@ -612,7 +612,7 @@ var errSignUpNotInvited = status.Error(codes.PermissionDenied,
 //     sign_up_turnkey the seam would vanish from an activation that has
 //     invitations and no turnkey registration, and the installing init()
 //     would not compile.
-//   - SignUp is not the only door. OAuth's resolveOrCreateUserByEmail
+//   - SignUp is not the only door. OAuth's createOAuthAccount
 //     creates an account for any address the provider asserts, so a gate
 //     reachable only from SignUp leaves invite-only registration open to
 //     anyone with an account at the identity provider.

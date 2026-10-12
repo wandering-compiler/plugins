@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/base64"
+	"google.golang.org/protobuf/proto"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -186,7 +187,7 @@ func TestOAuth_TheRawChallengeIsAcceptedNowhere(t *testing.T) {
 
 	h, m, _ := exchangeHandler(t)
 	if _, err := m.CreateOAuthLoginCode(context.Background(), &pb.CreateOAuthLoginCodeReq{
-		UserId: "u-1", CodeHash: sha256Hex("raw-code"), CodeChallenge: ch,
+		UserId: proto.String("u-1"), CodeHash: sha256Hex("raw-code"), CodeChallenge: ch,
 		ExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 	}); err != nil {
 		t.Fatal(err)

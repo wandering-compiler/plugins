@@ -1911,9 +1911,16 @@ func (x *OAuthCallbackResp) GetRedirectAfter() string {
 }
 
 type OAuthExchangeReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
-	CodeVerifier  string                 `protobuf:"bytes,2,opt,name=code_verifier,json=codeVerifier,proto3" json:"code_verifier,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Code         string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
+	CodeVerifier string                 `protobuf:"bytes,2,opt,name=code_verifier,json=codeVerifier,proto3" json:"code_verifier,omitempty"`
+	// invite_token is the invitation a NEW account registers with — the same
+	// token SignUp takes, checked by the same rules (invite_only, a bound
+	// invitation's address, an open link spent by its first registration).
+	// Ignored when the identity already belongs to an account. It travels
+	// only here, in the page's own request, never through a URL or the
+	// provider.
+	InviteToken   string `protobuf:"bytes,3,opt,name=invite_token,json=inviteToken,proto3" json:"invite_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1958,6 +1965,13 @@ func (x *OAuthExchangeReq) GetCode() string {
 func (x *OAuthExchangeReq) GetCodeVerifier() string {
 	if x != nil {
 		return x.CodeVerifier
+	}
+	return ""
+}
+
+func (x *OAuthExchangeReq) GetInviteToken() string {
+	if x != nil {
+		return x.InviteToken
 	}
 	return ""
 }
@@ -5519,10 +5533,11 @@ const file_business_auth_service_proto_rawDesc = "" +
 	"\x05state\x18\x03 \x01(\tR\x05state:\t\xfa\xf4\x18\x05oauth\"\x8f\x01\n" +
 	"\x11OAuthCallbackResp\x12\x12\n" +
 	"\x04code\x18\x05 \x01(\tR\x04code\x12%\n" +
-	"\x0eredirect_after\x18\x03 \x01(\tR\rredirectAfter:\t\xfa\xf4\x18\x05oauthJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x04\x10\x05R\auser_idR\x05tokenR\x12device_trust_token\"V\n" +
+	"\x0eredirect_after\x18\x03 \x01(\tR\rredirectAfter:\t\xfa\xf4\x18\x05oauthJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x04\x10\x05R\auser_idR\x05tokenR\x12device_trust_token\"y\n" +
 	"\x10OAuthExchangeReq\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12#\n" +
-	"\rcode_verifier\x18\x02 \x01(\tR\fcodeVerifier:\t\xfa\xf4\x18\x05oauth\"\x90\x01\n" +
+	"\rcode_verifier\x18\x02 \x01(\tR\fcodeVerifier\x12!\n" +
+	"\finvite_token\x18\x03 \x01(\tR\vinviteToken:\t\xfa\xf4\x18\x05oauth\"\x90\x01\n" +
 	"\x11OAuthExchangeResp\x12\x1f\n" +
 	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\x129\n" +

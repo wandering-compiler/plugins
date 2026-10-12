@@ -2403,14 +2403,24 @@ func (x *BootstrapClaim) GetCreatedAt() *timestamppb.Timestamp {
 // within minutes, and only with the PKCE verifier whose challenge the
 // browser that STARTED the flow sent to OAuthAuthorizeURL.
 type OAuthLoginCode struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// user_id is the account the code signs in to. NULL when the identity
+	// belongs to no account yet: the callback then keeps the verified
+	// identity below, and OAuthExchange creates the account — with the
+	// invitation the page passes there, never through a URL.
+	UserId        *string                `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
 	CodeHash      string                 `protobuf:"bytes,3,opt,name=code_hash,json=codeHash,proto3" json:"code_hash,omitempty"`                // sha256 hex of the code
 	CodeChallenge string                 `protobuf:"bytes,4,opt,name=code_challenge,json=codeChallenge,proto3" json:"code_challenge,omitempty"` // challengeDigest (sha256 hex) of the authorize step's PKCE challenge
 	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	ConsumedAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=consumed_at,json=consumedAt,proto3" json:"consumed_at,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// The provider-verified identity, kept for a code whose account does not
+	// exist yet (user_id NULL).
+	ProviderId    *string `protobuf:"bytes,8,opt,name=provider_id,json=providerId,proto3,oneof" json:"provider_id,omitempty"`
+	ExternalId    string  `protobuf:"bytes,9,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
+	Email         string  `protobuf:"bytes,10,opt,name=email,proto3" json:"email,omitempty"`
+	EmailVerified bool    `protobuf:"varint,11,opt,name=email_verified,json=emailVerified,proto3" json:"email_verified,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2453,8 +2463,8 @@ func (x *OAuthLoginCode) GetId() string {
 }
 
 func (x *OAuthLoginCode) GetUserId() string {
-	if x != nil {
-		return x.UserId
+	if x != nil && x.UserId != nil {
+		return *x.UserId
 	}
 	return ""
 }
@@ -2492,6 +2502,34 @@ func (x *OAuthLoginCode) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *OAuthLoginCode) GetProviderId() string {
+	if x != nil && x.ProviderId != nil {
+		return *x.ProviderId
+	}
+	return ""
+}
+
+func (x *OAuthLoginCode) GetExternalId() string {
+	if x != nil {
+		return x.ExternalId
+	}
+	return ""
+}
+
+func (x *OAuthLoginCode) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *OAuthLoginCode) GetEmailVerified() bool {
+	if x != nil {
+		return x.EmailVerified
+	}
+	return false
 }
 
 // CliAuthCode is a single-use PKCE authorization code minted by
@@ -3293,10 +3331,10 @@ const file_types_models_proto_rawDesc = "" +
 	"\xca\xf3\x18\x06\b\x06\x10\x01@ R\x04slot\x12\x1f\n" +
 	"\auser_id\x18\x02 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12F\n" +
 	"\n" +
-	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\f\xc2\xf3\x18\x00\xfa\xf4\x18\x04rbac\"\x8f\x03\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\f\xc2\xf3\x18\x00\xfa\xf4\x18\x04rbac\"\xe3\x04\n" +
 	"\x0eOAuthLoginCode\x12\x1b\n" +
-	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
-	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12'\n" +
+	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12,\n" +
+	"\auser_id\x18\x02 \x01(\tB\x0e\xca\xf3\x18\x04\b\x03(\x01\xd2\xf3\x18\x02\b\x01H\x00R\x06userId\x88\x01\x01\x12'\n" +
 	"\tcode_hash\x18\x03 \x01(\tB\n" +
 	"\xca\xf3\x18\x06\b\x018\x01@@R\bcodeHash\x12/\n" +
 	"\x0ecode_challenge\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\rcodeChallenge\x12A\n" +
@@ -3305,7 +3343,17 @@ const file_types_models_proto_rawDesc = "" +
 	"\vconsumed_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\n" +
 	"consumedAt\x12F\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\r\xc2\xf3\x18\x00\xfa\xf4\x18\x05oauth\"\xeb\x03\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12.\n" +
+	"\vprovider_id\x18\b \x01(\tB\b\xca\xf3\x18\x04\b\x03(\x01H\x01R\n" +
+	"providerId\x88\x01\x01\x12,\n" +
+	"\vexternal_id\x18\t \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xff\x01R\n" +
+	"externalId\x12!\n" +
+	"\x05email\x18\n" +
+	" \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\xc0\x02R\x05email\x12.\n" +
+	"\x0eemail_verified\x18\v \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1fR\remailVerified:\r\xc2\xf3\x18\x00\xfa\xf4\x18\x05oauthB\n" +
+	"\n" +
+	"\b_user_idB\x0e\n" +
+	"\f_provider_id\"\xeb\x03\n" +
 	"\vCliAuthCode\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12(\n" +
@@ -3482,6 +3530,7 @@ func file_types_models_proto_init() {
 	if File_types_models_proto != nil {
 		return
 	}
+	file_types_models_proto_msgTypes[18].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

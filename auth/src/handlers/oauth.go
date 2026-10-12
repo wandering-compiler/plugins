@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -165,24 +166,37 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 		return nil, Unauthenticated(err)
 	}
 
-	userID, err := h.findOrCreateOAuthUser(ctx, p.GetId(), subject, email, emailVerified)
+	userID, err := h.findOAuthAccount(ctx, p.GetId(), subject, email, emailVerified)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
-		return nil, err
+	if userID != "" {
+		if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+			return nil, err
+		}
 	}
 
 	code, err := randomURLToken()
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if _, err := h.Mutation.CreateOAuthLoginCode(ctx, &pb.CreateOAuthLoginCodeReq{
-		UserId:        userID,
+	// A known account is named by id. An identity with no account yet is
+	// kept as verified by the provider, and OAuthExchange creates the account
+	// with the invitation the page passes there.
+	codeReq := &pb.CreateOAuthLoginCodeReq{
 		CodeHash:      sha256Hex(code),
 		CodeChallenge: st.Challenge, // the digest, never the challenge itself
 		ExpiresAt:     timestamppb.New(time.Now().Add(oauthLoginCodeTTL)),
-	}); err != nil {
+	}
+	if userID != "" {
+		codeReq.UserId = proto.String(userID)
+	} else {
+		codeReq.ProviderId = proto.String(p.GetId())
+		codeReq.ExternalId = subject
+		codeReq.Email = normalizeEmail(email)
+		codeReq.EmailVerified = emailVerified
+	}
+	if _, err := h.Mutation.CreateOAuthLoginCode(ctx, codeReq); err != nil {
 		return nil, Unauthenticated(err)
 	}
 	return &pb.OAuthCallbackResp{Code: code, RedirectAfter: redirectAfter}, nil
@@ -200,12 +214,25 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	userID := consumed.GetUserId()
-	if userID == "" {
+	// Every live code carries its challenge digest; none back means no
+	// unconsumed, unexpired code matched.
+	if consumed.GetCodeChallenge() == "" {
 		return nil, Unauthenticated(errOAuthCodeInvalid)
 	}
 	if !verifyChallengeDigest(req.GetCodeVerifier(), consumed.GetCodeChallenge()) {
 		return nil, Unauthenticated(errOAuthVerifierInvalid)
+	}
+	userID := consumed.GetUserId()
+	if userID == "" {
+		// The identity has no account yet: this is the sign-up, and the
+		// invitation (if any) comes with this request.
+		userID, err = h.createOAuthAccount(ctx, consumed.GetProviderId(), consumed.GetExternalId(),
+			consumed.GetEmail(), consumed.GetEmailVerified(), req.GetInviteToken())
+		if err != nil {
+			// As SignUp answers it: the invitation and allowlist gates refuse
+			// with a code and a sentence the page can show.
+			return nil, err
+		}
 	}
 	// The account may have changed since the callback; and the device is the
 	// one making THIS request — the page, not the provider's redirect.
@@ -484,20 +511,37 @@ func orDefault(s, def string) string {
 	return s
 }
 
-// findOrCreateOAuthUser maps the external (provider, subject) to a local
-// user: an existing identity reuses its user; otherwise an existing local
-// account with the same email is linked (auto-link policy), else a fresh
-// user is created with a random unusable password. The identity row is
-// then created.
-func (h *AuthServiceHandler) findOrCreateOAuthUser(ctx context.Context, providerID, subject, email string, emailVerified bool) (string, error) {
+// findOAuthAccount resolves the account an identity signs in to: the one
+// already linked to (provider, subject), or an existing account for the
+// address, which it links when both sides verified the address. "" with no
+// error means no account exists: OAuthExchange creates one, with the
+// invitation the page passes there.
+func (h *AuthServiceHandler) findOAuthAccount(ctx context.Context, providerID, subject, email string, emailVerified bool) (string, error) {
 	if ident, err := h.Query.GetOAuthIdentity(ctx, &pb.GetOAuthIdentityReq{ProviderId: providerID, ExternalId: subject}); err == nil && ident.GetIdentity() != nil {
 		return ident.GetIdentity().GetUserId(), nil
 	}
-
-	userID, err := h.resolveOrCreateUserByEmail(ctx, email, emailVerified)
-	if err != nil {
-		return "", err
+	// Canonicalise so the IdP-asserted email matches a password-signup
+	// account (and a later password signin) regardless of case.
+	email = normalizeEmail(email)
+	u, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: email})
+	if err != nil || u.GetUser() == nil || u.GetUser().GetId() == "" {
+		return "", nil
 	}
+	// Auto-link to a PRE-EXISTING account only when the IdP asserts the
+	// email is verified. Without that, a caller who set their IdP profile
+	// email to a victim's would get a session for the victim's account.
+	if !emailVerified {
+		return "", errOAuthEmailUnverified
+	}
+	// BOTH SIDES. The local account may itself have been created from a
+	// claim nobody verified (an earlier unverified OAuth sign-up, or a
+	// password sign-up). Binding a verified assertion to it would hand the
+	// victim a session inside an account someone else squatted. The field is
+	// gated on `email_verification`, which is why `oauth` requires it.
+	if !u.GetUser().GetEmailVerifiedAt().IsValid() {
+		return "", errOAuthLocalUnverified
+	}
+	userID := u.GetUser().GetId()
 	if _, err := h.Mutation.CreateOAuthIdentity(ctx, &pb.CreateOAuthIdentityReq{
 		UserId:     userID,
 		ProviderId: providerID,
@@ -509,75 +553,21 @@ func (h *AuthServiceHandler) findOrCreateOAuthUser(ctx context.Context, provider
 	return userID, nil
 }
 
-// resolveOrCreateUserByEmail returns the id of the existing account with
-// this email, or creates one (random unusable password — OAuth users sign
-// in through the IdP).
-func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, email string, emailVerified bool) (string, error) {
-	// Canonicalise so the IdP-asserted email matches a password-signup account
-	// (and a later password signin) regardless of case (covers both the lookup
-	// and the CreateUser below).
+// createOAuthAccount creates the account for a provider-verified identity
+// that has none, as OAuthExchange's half of a sign-up. Creation is what
+// `invite_only` and the allowlist govern, through the same gates as SignUp;
+// the invitation token comes from the exchange request, so an OPEN
+// invitation (which names no address) works too, and its link is spent by
+// this registration. The user, its roles, the verified address, the spent
+// invitation and the identity link commit together.
+func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID, subject, email string, emailVerified bool, inviteToken string) (string, error) {
 	email = normalizeEmail(email)
-	if u, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: email}); err == nil && u.GetUser() != nil && u.GetUser().GetId() != "" {
-		// Q36-auth-1 — auto-link to a PRE-EXISTING account only when the
-		// IdP asserts the email is verified. Without that, a caller who
-		// set their IdP profile email to a victim's would get a session
-		// for the victim's account (account takeover / CWE-287). Refuse
-		// fail-closed; the operator/user must link explicitly instead.
-		if !emailVerified {
-			return "", errOAuthEmailUnverified
-		}
-		// BOTH SIDES, and the second one took a verifier to see. The check
-		// above interrogates the IdP; the LOCAL account may itself have been
-		// created from a claim nobody verified — by this file's own create
-		// branch, or by password sign-up. Binding a verified assertion to an
-		// unverified claim is the takeover with the roles reversed:
-		//
-		//  1. the attacker signs in through a provider that does NOT assert
-		//     verification, with the victim's address in its profile. No
-		//     account exists, so the branch below makes one — for the
-		//     victim's address, owned by the attacker.
-		//  2. the victim signs in later through a provider that DOES verify.
-		//     The lookup finds that account, this check passes, and the
-		//     victim is handed a session inside the attacker's account.
-		//
-		// Requiring verification in the CREATE branch would not have closed
-		// it: password sign-up is a second door to the same squat, and
-		// gating one leaves the other. The property that has to hold is
-		// about the account being linked INTO (T3-7 pass #14, B14-2).
-		//
-		// `email_verification` is what makes this expressible — the field is
-		// gated on it — which is why `oauth` now requires that feature.
-		if !u.GetUser().GetEmailVerifiedAt().IsValid() {
-			return "", errOAuthLocalUnverified
-		}
-		return u.GetUser().GetId(), nil
-	}
-	// The SECOND door. Everything above this line resolves an account that
-	// already exists; below it we CREATE one, and creation is what
-	// `invite_only` governs. A gate wired only into SignUp would leave
-	// invite-only registration open to anyone holding an account at the
-	// identity provider — the same hole by a different route.
-	//
-	// After the auto-link branch on purpose: an invited person who has
-	// already registered must keep being able to sign in through the IdP
-	// once their invitation has been accepted and is no longer pending.
-	// ⚠️ NO invitation token here, and that is a real limitation rather than an
-	// omission: this path has nowhere to carry one. An OPEN invitation names no
-	// address, so under `invite_only` (default ON) a person holding an open link
-	// CANNOT register through the identity provider — only through the password
-	// signup, which takes `invite_token`.
-	//
-	// A BOUND invitation still works here, because the address lookup finds it.
-	// Carrying the token through an IdP round trip means putting it in the OAuth
-	// `state`, which is a bigger change than this one and is not smuggled in;
-	// it stays a known gap.
 	if err := signUpAllowlistGate(h, email); err != nil {
 		return "", err
 	}
-	if err := signupInviteGate(ctx, h, email, ""); err != nil {
+	if err := signupInviteGate(ctx, h, email, inviteToken); err != nil {
 		return "", err
 	}
-
 	randomPw, err := randomToken(32)
 	if err != nil {
 		return "", err
@@ -586,25 +576,6 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 	if err != nil {
 		return "", err
 	}
-	// The BASELINE create, and the reason `oauth` and `tenant_scope` are
-	// declared incompatible in plugin.yaml. `tenant_scope` adds a NOT NULL
-	// User.tenant_id that this INSERT does not write and gates CreateUser
-	// out for exactly that reason; OAuth has no request-borne tenant to
-	// resolve (no slug, no signup Host — the caller arrives from the
-	// provider's redirect), so it cannot simply switch to
-	// a resolved tenant the way SignUp does. With both features on this
-	// file no longer compiles, which is the honest outcome: before the
-	// gate it compiled and every OAuth-created user failed the NOT NULL
-	// constraint at runtime. Making OAuth tenant-aware needs a tenant
-	// source of its own (per-provider binding, or the callback URL) and is
-	// its own change.
-	// The account an OAuth sign-up creates is a full account: the same turnkey
-	// roles SignUp links (`default` / `first_user`), and the address marked
-	// confirmed when the provider asserted email_verified — in ONE transaction,
-	// so it never exists without them. It used to be a bare CreateUser: the
-	// account held no role, so every endpoint answered 403 MISSING_PERMISSION,
-	// and the provider's verification was thrown away, so the address-proof
-	// floor on invitations refused it (found live by examples/auth-proof).
 	roles, err := signupResolveRoleIDs(ctx, h)
 	if err != nil {
 		return "", err
@@ -617,6 +588,17 @@ func (h *AuthServiceHandler) resolveOrCreateUserByEmail(ctx context.Context, ema
 		}
 	}
 	userID, err := h.createOAuthUserTx(txCtx, email, hash, roles, emailVerified)
+	if err == nil {
+		err = signupClaimInvite(txCtx, h, email, inviteToken)
+	}
+	if err == nil {
+		_, err = h.Mutation.CreateOAuthIdentity(txCtx, &pb.CreateOAuthIdentityReq{
+			UserId:     userID,
+			ProviderId: providerID,
+			ExternalId: subject,
+			Email:      email,
+		})
+	}
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
