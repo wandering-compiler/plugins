@@ -469,7 +469,7 @@ suspected defect until a build of that feature combination confirms it.
 - Table `OAuthLoginCode` (`code_hash` unique SHA-256, `code_challenge` = SHA-256 hex of the browser's challenge, `expires_at` = now + 2 min, `consumed_at`).
 - Business RPCs: `OAuthAuthorizeURL` (requires `code_challenge`), `OAuthCallback`, `OAuthExchange`.
 - REST (`/auth/oauth`): `GET /{provider}/authorize` (**public**, browser 302 to the provider), `GET /{provider}/callback` (**public, failed_only**, browser 302 to the site-relative `redirect_after` with a single-use login code in the fragment) and `POST /exchange` (**public, failed_only**: code + verifier → session).
-- Storage RPCs: `GetProviderByName`, `GetOAuthIdentity`; `CreateOAuthIdentity`, `MoveOAuthProviderSecret`, `ClearOAuthProviderLegacySecret`, `CreateOAuthLoginCode`, `ConsumeOAuthLoginCode`.
+- Storage RPCs: `GetProviderByName`, `GetOAuthIdentity`; `CreateOAuthIdentity`, `UpsertOAuthProvider`, `MoveOAuthProviderSecret`, `ClearOAuthProviderLegacySecret`, `CreateOAuthLoginCode`, `ConsumeOAuthLoginCode`.
 - Sandbox: a deterministic fake OIDC provider (`sandboxes/fakeidp`).
 - Events: none of its own; account creation emits the base `UserCreated`. Env knob: `oauth_redirect_base`.
 

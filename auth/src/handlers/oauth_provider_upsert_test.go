@@ -35,10 +35,10 @@ func TestUpsertOAuthProvider_WritesTheSecretEncryptedOnBothBranches(t *testing.T
 		t.Fatalf("UpsertOAuthProvider is not an upsert on name:\n%s", dql)
 	}
 	for branch, part := range map[string]string{"insert": insert, "update": update} {
-		if !strings.Contains(part, "secret = :secret") {
+		if !regexp.MustCompile(`(^|[ ,"])secret = :secret\b`).MatchString(part) {
 			t.Errorf("the %s branch does not write the secret:\n%s", branch, part)
 		}
-		if !strings.Contains(part, "client_secret = NULL") {
+		if !regexp.MustCompile(`(^|[ ,"])client_secret = NULL\b`).MatchString(part) || strings.Contains(part, "client_secret = :") {
 			t.Errorf("the %s branch keeps the plaintext legacy secret:\n%s", branch, part)
 		}
 	}

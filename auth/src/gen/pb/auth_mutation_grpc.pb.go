@@ -215,13 +215,13 @@ type AuthMutationClient interface {
 	// ConfirmTotpSecret — mark the user's TOTP confirmed (the first code
 	// verified). Now the user "has an authenticator". Emits TotpConfirmed.
 	ConfirmTotpSecret(ctx context.Context, in *ConfirmTotpSecretReq, opts ...grpc.CallOption) (*ConfirmTotpSecretResp, error)
-	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
-	// `secret` and clear it. No event: the provider's configuration is the same.
 	// UpsertOAuthProvider — create or rewrite the provider named `name`,
 	// with its secret encrypted (see UpsertOAuthProviderReq). Idempotent: the
 	// same request twice leaves one row with the same settings. No event:
 	// provider configuration is an operator's, not a user's, change.
 	UpsertOAuthProvider(ctx context.Context, in *UpsertOAuthProviderReq, opts ...grpc.CallOption) (*UpsertOAuthProviderResp, error)
+	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
+	// `secret` and clear it. No event: the provider's configuration is the same.
 	MoveOAuthProviderSecret(ctx context.Context, in *MoveOAuthProviderSecretReq, opts ...grpc.CallOption) (*MoveOAuthProviderSecretResp, error)
 	// ClearOAuthProviderLegacySecret — drop the plaintext copy of a provider
 	// whose encrypted `secret` is set (a fixture re-seeds the legacy column).
@@ -1518,13 +1518,13 @@ type AuthMutationServer interface {
 	// ConfirmTotpSecret — mark the user's TOTP confirmed (the first code
 	// verified). Now the user "has an authenticator". Emits TotpConfirmed.
 	ConfirmTotpSecret(context.Context, *ConfirmTotpSecretReq) (*ConfirmTotpSecretResp, error)
-	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
-	// `secret` and clear it. No event: the provider's configuration is the same.
 	// UpsertOAuthProvider — create or rewrite the provider named `name`,
 	// with its secret encrypted (see UpsertOAuthProviderReq). Idempotent: the
 	// same request twice leaves one row with the same settings. No event:
 	// provider configuration is an operator's, not a user's, change.
 	UpsertOAuthProvider(context.Context, *UpsertOAuthProviderReq) (*UpsertOAuthProviderResp, error)
+	// MoveOAuthProviderSecret — store a legacy plaintext client_secret in
+	// `secret` and clear it. No event: the provider's configuration is the same.
 	MoveOAuthProviderSecret(context.Context, *MoveOAuthProviderSecretReq) (*MoveOAuthProviderSecretResp, error)
 	// ClearOAuthProviderLegacySecret — drop the plaintext copy of a provider
 	// whose encrypted `secret` is set (a fixture re-seeds the legacy column).

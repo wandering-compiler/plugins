@@ -8,6 +8,7 @@
 
 - **New mutation `AuthMutation.UpsertOAuthProvider`** (`oauth`) creates or rewrites a provider by `name`, writes `secret` encrypted with the project's field key and clears `client_secret`. Call it from the project's own code, for example at start with values from the deployment's secrets.
 - **The provider's `name` is unique across tenants**; under `tenant_scope` the tenant is set when the provider is created.
+- **A rewrite replaces every field.** A blank field clears it, and `enabled` left out turns the provider off, so send the whole configuration each time. It is meant for the project's own code, never for a name a tenant chose.
 
 ### The admin counts only realm-wide roles
 
