@@ -196,8 +196,8 @@ func turnOutcome(t *llm.TurnSpend) CallOutcome {
 // the caller cannot forget to record spend. An empty scope used to be queued
 // as-is, fail the `external_id <> ”` check at insert, and take its whole
 // batch down — so the one thing the caller was allowed to omit produced
-// exactly the silent nothing this layer exists to remove. A consumer found it
-// with 0 rows after hundreds of calls and no error anywhere.
+// exactly the silent nothing this layer exists to remove: 0 rows after
+// hundreds of calls and no error anywhere.
 //
 // Written under a sentinel rather than refused, because spend that cannot be
 // attributed is still spend, and because aggregating rows later is possible

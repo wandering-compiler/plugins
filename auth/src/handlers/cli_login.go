@@ -117,11 +117,11 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 		// Through the opaque constructor, not raw.
 		//
 		// The statement carries RETURNING, so "no live row" arrives as
-		// NotFound — an ERROR, not an empty response. Returned raw it told a
-		// caller apart "this token is unknown/used/expired" from every other
-		// outcome, which is the enumeration the opaque refusal exists to
-		// prevent, and it made the `== ""` branch below unreachable: the code
-		// was written for a shape this mutation never produces (a consumer).
+		// NotFound — an ERROR, not an empty response. Returned raw it would
+		// tell a caller apart "this token is unknown/used/expired" from every
+		// other outcome, which is the enumeration the opaque refusal exists to
+		// prevent, and the `== ""` branch below is unreachable for it: that
+		// branch handles a shape this mutation never produces.
 		//
 		// Unauthenticated() classifies: a refusal stays opaque, an outage
 		// comes back as Unavailable rather than being dressed as a bad token.
@@ -165,8 +165,8 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	// alone is the right answer (RFC 8252). Taking it past loopback to browser
 	// and server apps carried the public-client shape onto clients that CAN
 	// keep one — and then the only thing between "anybody may register a
-	// callback" and "a code is delivered there" was the registry's write path
-	// (a consumer). A confidential client closes it from the other end: the
+	// callback" and "a code is delivered there" was the registry's write path.
+	// A confidential client closes it from the other end: the
 	// registration is worthless without the secret.
 	//
 	// Loopback keeps its public-client shape deliberately. There is no

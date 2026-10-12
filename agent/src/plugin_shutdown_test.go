@@ -25,11 +25,11 @@ func (r *recordingRegistry) RegisterShutdown(fn func(ctx context.Context) error)
 // teardown is the one moment that queue can still be written.
 //
 // Without this hook the queue dies with the process, and the shorter the
-// process the more of the bill it takes: a consumer measured a run of hundreds
-// of model calls that ended before the first flush interval and left ZERO
-// rows, then a longer one that kept only the batches which happened to tick in
-// time. A long-lived server hides it; a CLI, an eval or a batch job is
-// entirely this case — and those are the shapes where spend gets accounted.
+// process the more of the bill it takes: a run of hundreds of model calls that
+// ends before the first flush interval leaves ZERO rows, and a longer one keeps
+// only the batches which happened to tick in time. A long-lived server hides
+// it; a CLI, an eval or a batch job is entirely this case — and those are the
+// shapes where spend gets accounted.
 //
 // Asserting the REGISTRATION rather than the flush is deliberate: the writer's
 // own drain is tested in lib/usage, and what was missing here was nobody

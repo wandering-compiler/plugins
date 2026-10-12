@@ -125,10 +125,10 @@ type AuthQueryClient interface {
 	//   - GROUP BY pins the row to the User's primary identity
 	//     so the aggregate folds the join cross-product into one
 	//     row per user.
-	//   - ROWS_TO_ARRAY (Phase E1) maps per-dialect to PG
+	//   - ROWS_TO_ARRAY maps per-dialect to PG
 	//     `array_agg + FILTER + COALESCE`, MySQL `JSON_ARRAYAGG`,
 	//     SQLite `json_group_array` — always returns a list,
-	//     never NULL. The repeated-scalar scan path (Phase E2)
+	//     never NULL. The repeated-scalar scan path
 	//     decodes the column into `[]int32` regardless of which
 	//     wire shape the dialect chose.
 	//   - DISTINCT-equivalent dedup: the M2M topology guarantees
@@ -225,18 +225,18 @@ type AuthQueryClient interface {
 	// ListRoles — the role catalogue for the admin role-management page.
 	// ⚠️ Both role reads project every UNGATED column the model declares.
 	//
-	// Until 2026-09-04 they projected 7 of 11. `preset_key` and
-	// `display_name` were added to the model after these queries were
-	// written and nothing widened them, so both were declared, stored,
-	// seeded — and unreadable through any path in either realm.
+	// A column added to the model after these queries were written is
+	// not widened into them by anything — `preset_key` and `display_name`
+	// were declared, stored, seeded, and unreadable through any path in
+	// either realm.
 	// `preset_key`'s own comment calls it PROVENANCE, i.e. a thing a reader
 	// consults; no reader could.
 	//
-	// a consumer hit it on the one operation the field exists for: granting a
+	// That breaks the one operation the field exists for: granting a
 	// founder `org-admin` in CreateOrg by matching the role the SEED owns
-	// rather than by name, which is a label a customer may rename. Their
-	// guard fired `role preset "org-admin" is not seeded` against a
-	// database where it demonstrably was.
+	// rather than by name, which is a label a customer may rename. A guard
+	// on it fires `role preset "org-admin" is not seeded` against a
+	// database where it demonstrably is.
 	//
 	// Add an ungated column to Role and add it here too. A projection is
 	// not a convenience list — it is the only way the field leaves the
@@ -436,12 +436,11 @@ type AuthQueryClient interface {
 	//     roles that are — but `(w17.acl_roles).scope: ORG` says this role's
 	//     grants live in the organization they were assigned in, and those
 	//     two readings collide on exactly the row the declaration exists to
-	//     prevent. Nothing enforced it: `org_scoped` was written by the seed
-	//     and read by NOBODY (T2-5 pass #11, D11-3), so an org-scoped role
-	//     assigned without an organization granted itself in every one of
-	//     them. Enforced HERE rather than on the write side, because the
-	//     read decides what an existing row MEANS — whatever wrote it, and
-	//     whenever.
+	//     prevent. Unless a read enforces it, `org_scoped` is written by the
+	//     seed and read by nobody, and an org-scoped role assigned without an
+	//     organization grants itself in every one of them. Enforced HERE
+	//     rather than on the write side, because the read decides what an
+	//     existing row MEANS — whatever wrote it, and whenever.
 	GetUserOrgPermissions(ctx context.Context, in *GetUserOrgPermissionsReq, opts ...grpc.CallOption) (*GetUserOrgPermissionsResp, error)
 	// GetUserOwnsOrg — the ownership probe, kept apart from the grants above
 	// because ownership is not a grant. A correlated EXISTS; see
@@ -454,7 +453,7 @@ type AuthQueryClient interface {
 	// inferring it from a NULL `org_id`. A role declared `scope: ORG` and
 	// assigned with no organization wrote exactly that NULL, so the
 	// inference answered "realm-wide" for the one role that must never be
-	// (T2-5 pass #11, D11-3; the sibling query carries the reasoning). Without this the request would
+	// (GetUserOrgPermissions carries the reasoning). Without this the request would
 	// fall back to the unfiltered set, which is the union across every org
 	// the user belongs to — the leak this whole feature exists to close.
 	GetUserRealmWidePermissions(ctx context.Context, in *GetUserRealmWidePermissionsReq, opts ...grpc.CallOption) (*GetUserRealmWidePermissionsResp, error)
@@ -1159,10 +1158,10 @@ type AuthQueryServer interface {
 	//   - GROUP BY pins the row to the User's primary identity
 	//     so the aggregate folds the join cross-product into one
 	//     row per user.
-	//   - ROWS_TO_ARRAY (Phase E1) maps per-dialect to PG
+	//   - ROWS_TO_ARRAY maps per-dialect to PG
 	//     `array_agg + FILTER + COALESCE`, MySQL `JSON_ARRAYAGG`,
 	//     SQLite `json_group_array` — always returns a list,
-	//     never NULL. The repeated-scalar scan path (Phase E2)
+	//     never NULL. The repeated-scalar scan path
 	//     decodes the column into `[]int32` regardless of which
 	//     wire shape the dialect chose.
 	//   - DISTINCT-equivalent dedup: the M2M topology guarantees
@@ -1259,18 +1258,18 @@ type AuthQueryServer interface {
 	// ListRoles — the role catalogue for the admin role-management page.
 	// ⚠️ Both role reads project every UNGATED column the model declares.
 	//
-	// Until 2026-09-04 they projected 7 of 11. `preset_key` and
-	// `display_name` were added to the model after these queries were
-	// written and nothing widened them, so both were declared, stored,
-	// seeded — and unreadable through any path in either realm.
+	// A column added to the model after these queries were written is
+	// not widened into them by anything — `preset_key` and `display_name`
+	// were declared, stored, seeded, and unreadable through any path in
+	// either realm.
 	// `preset_key`'s own comment calls it PROVENANCE, i.e. a thing a reader
 	// consults; no reader could.
 	//
-	// a consumer hit it on the one operation the field exists for: granting a
+	// That breaks the one operation the field exists for: granting a
 	// founder `org-admin` in CreateOrg by matching the role the SEED owns
-	// rather than by name, which is a label a customer may rename. Their
-	// guard fired `role preset "org-admin" is not seeded` against a
-	// database where it demonstrably was.
+	// rather than by name, which is a label a customer may rename. A guard
+	// on it fires `role preset "org-admin" is not seeded` against a
+	// database where it demonstrably is.
 	//
 	// Add an ungated column to Role and add it here too. A projection is
 	// not a convenience list — it is the only way the field leaves the
@@ -1470,12 +1469,11 @@ type AuthQueryServer interface {
 	//     roles that are — but `(w17.acl_roles).scope: ORG` says this role's
 	//     grants live in the organization they were assigned in, and those
 	//     two readings collide on exactly the row the declaration exists to
-	//     prevent. Nothing enforced it: `org_scoped` was written by the seed
-	//     and read by NOBODY (T2-5 pass #11, D11-3), so an org-scoped role
-	//     assigned without an organization granted itself in every one of
-	//     them. Enforced HERE rather than on the write side, because the
-	//     read decides what an existing row MEANS — whatever wrote it, and
-	//     whenever.
+	//     prevent. Unless a read enforces it, `org_scoped` is written by the
+	//     seed and read by nobody, and an org-scoped role assigned without an
+	//     organization grants itself in every one of them. Enforced HERE
+	//     rather than on the write side, because the read decides what an
+	//     existing row MEANS — whatever wrote it, and whenever.
 	GetUserOrgPermissions(context.Context, *GetUserOrgPermissionsReq) (*GetUserOrgPermissionsResp, error)
 	// GetUserOwnsOrg — the ownership probe, kept apart from the grants above
 	// because ownership is not a grant. A correlated EXISTS; see
@@ -1488,7 +1486,7 @@ type AuthQueryServer interface {
 	// inferring it from a NULL `org_id`. A role declared `scope: ORG` and
 	// assigned with no organization wrote exactly that NULL, so the
 	// inference answered "realm-wide" for the one role that must never be
-	// (T2-5 pass #11, D11-3; the sibling query carries the reasoning). Without this the request would
+	// (GetUserOrgPermissions carries the reasoning). Without this the request would
 	// fall back to the unfiltered set, which is the union across every org
 	// the user belongs to — the leak this whole feature exists to close.
 	GetUserRealmWidePermissions(context.Context, *GetUserRealmWidePermissionsReq) (*GetUserRealmWidePermissionsResp, error)

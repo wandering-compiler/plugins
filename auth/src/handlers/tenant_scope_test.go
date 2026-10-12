@@ -90,8 +90,8 @@ func (m *tenantScopeMock) GetTenantByDomain(_ context.Context, in *pb.GetTenantB
 
 // The REST gateway forwards the request's Host as x-forwarded-host; a port on
 // it does not change the tenant, and an address that names no tenant is a
-// clear refusal — it reached a REST caller as 500 "Something went wrong on our
-// side" (found live by examples/auth-proof).
+// clear refusal, not a 500 "Something went wrong on our side" to a REST
+// caller.
 func TestResolveSignupTenant_ByForwardedHost(t *testing.T) {
 	h := &AuthServiceHandler{Query: &tenantScopeMock{tenantByUser: map[string]string{"domain:alpha.example": "t-alpha"}}}
 	at := func(md ...string) context.Context {

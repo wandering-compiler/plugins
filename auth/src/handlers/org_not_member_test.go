@@ -96,8 +96,7 @@ func TestRefuseOtherOrg(t *testing.T) {
 
 // A request that names an org in the field but resolved NONE (a gRPC or MCP
 // caller sending `org` alone) named one org, not two: no ORG_MISMATCH. The
-// handler's activeOrgID then answers it with "send the W17-Org header"
-// (review of #212).
+// handler's activeOrgID then answers it with "send the W17-Org header".
 func TestRefuseOtherOrgDefersWhenNoOrgWasResolved(t *testing.T) {
 	if err := refuseOtherOrg(context.Background(), "acme"); err != nil {
 		t.Fatalf("no resolved org, one named: %v — want it left to activeOrgID", err)

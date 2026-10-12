@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: events/payment_events.proto
 
-// Payment plugin — lifecycle event catalogue (Slice 1).
+// Payment plugin — lifecycle event catalogue.
 //
 // Provider-neutral notifications a consuming project subscribes to in
 // order to integrate billing: PaymentSucceeded unlocks an entitlement

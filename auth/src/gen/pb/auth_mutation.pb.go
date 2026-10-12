@@ -40,8 +40,8 @@ const (
 //
 // A bot has no password, and the column stores the UNUSABLE sentinel `!`
 // rather than an empty string. Empty is not available: `password_hash` carries
-// a blank CHECK, so an empty write is refused outright (found live, 2026-09-20
-// — CreateBot returned "password_hash value violates constraint").
+// a blank CHECK, so an empty write is refused outright (CreateBot would
+// return "password_hash value violates constraint").
 //
 // `!` is the Django convention and it is unusable by CONSTRUCTION, not by
 // policy: the verifier reads the leading PHC prefix to pick an algorithm, and
@@ -618,7 +618,7 @@ func (x *DeleteTokenResp) GetUserId() string {
 // handler reads it from the auth envelope; an API-token bearer no-ops),
 // so an API token can't be hit. Idempotent — an absent token deletes zero
 // rows and returns an empty token_id. (token_type is NOT in the DQL — see
-// the rpc comment: that column is api_token-gated; Q64-auth-1.)
+// the rpc comment: that column is api_token-gated.)
 type DeleteSessionTokenReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TokenId       string                 `protobuf:"bytes,1,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
@@ -2804,7 +2804,7 @@ func (x *ConsumeMfaChallengeResp) GetUserId() string {
 }
 
 // RecordMfaAttemptReq/Resp — atomically bump a challenge's failed-attempt
-// counter (Q43-auth-mfa). Resp.attempts is the NEW count so the handler
+// counter (brute-force lockout). Resp.attempts is the NEW count so the handler
 // can log/observe it; the lockout itself is enforced by VerifyMfa's
 // pre-check on the loaded challenge.attempts.
 type RecordMfaAttemptReq struct {
@@ -3405,7 +3405,7 @@ func (*PurgeExpiredPendingSignUpsResp) Descriptor() ([]byte, []int) {
 	return file_mutations_auth_mutation_proto_rawDescGZIP(), []int{65}
 }
 
-// ── password_reset request/response messages (E1) ───────────
+// ── password_reset request/response messages ────────────────
 //
 // CreatePasswordResetToken stores ONLY the token hash + expiry; the
 // plaintext token + email are event-only (no w17.field) so they ride the
@@ -4098,7 +4098,7 @@ func (x *DeleteUserSessionsForResetResp) GetUserId() string {
 	return ""
 }
 
-// ── email_verification request/response messages (E1) ───────
+// ── email_verification request/response messages ────────────
 type CreateEmailVerificationTokenReq struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	UserId    string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -4605,7 +4605,7 @@ type TrustDeviceReq struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	UserId   string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	DeviceId string                 `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	// C2 — SHA-256 hex of the freshly-minted device-trust token stored on
+	// SHA-256 hex of the freshly-minted device-trust token stored on
 	// the row; the client must present the matching plaintext to be trusted.
 	TrustTokenHash string `protobuf:"bytes,3,opt,name=trust_token_hash,json=trustTokenHash,proto3" json:"trust_token_hash,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -5675,7 +5675,7 @@ func (x *DeleteUserResp) GetUserId() string {
 // owns that write, gated `password_reset`, so credential material never
 // rides an admin form), and disabled_at belongs to the Disable/Enable
 // bulk actions. Refuses on a duplicate email — the unique violation
-// surfaces as AlreadyExists via REV-026 DB-error classification, same
+// surfaces as AlreadyExists via the storage DB-error classification, same
 // as CreateUser. Gated user_admin.
 type UpdateUserReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`

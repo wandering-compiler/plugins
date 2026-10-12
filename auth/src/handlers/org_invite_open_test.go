@@ -14,9 +14,8 @@ import (
 // `(w17.field).blank` — so without it, the empty address is refused as
 // REQUIRED_VIOLATION before the handler runs, and the open path cannot be
 // reached at all. The handler tests below call the handler directly and never
-// see that validation, which is how it went unnoticed (found live by
-// scripts/console-auth-proof.sh). This pins the declaration the validation is
-// generated from.
+// see that validation, so they cannot notice. This pins the declaration the
+// validation is generated from.
 func TestInviteToOrg_TheAddressMayBeEmptyForAnOpenInvitation(t *testing.T) {
 	fd := (&pb.InviteToOrgReq{}).ProtoReflect().Descriptor().Fields().ByName("email")
 	if fd == nil {

@@ -19,8 +19,8 @@ import (
 // `/console.codegen.ClusterService/…`, a service no relay has. The messages are
 // unaffected (protobuf encodes field numbers, not names); only the method path
 // carries the package. Every call to a relay goes through relayClient, which
-// names the relay's path. (Found live: the first activated control plane
-// answered every reservation "0 placeable" — unknown service.)
+// names the relay's path. (Without it, an activated control plane answers every
+// reservation "0 placeable" — unknown service.)
 const relayService = "/w17.contrib.cluster.ClusterService/"
 
 var scheduleTaskStream = grpc.StreamDesc{StreamName: "ScheduleTask", ServerStreams: true}

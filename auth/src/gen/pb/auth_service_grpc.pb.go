@@ -17,8 +17,7 @@
 // The plugin author's contract:
 //   - AuthReq mirrors the gateway's required shape:
 //     `map<string, string> headers = 1` (validated by the
-//     gateway parser; see srcgo/domains/gateway/parser/parser.go
-//     §validateAuthRequestShape).
+//     gateway parser when it reads the auth method).
 //   - AuthResp carries the two fields the gateway router
 //     consumes: `repeated int32 permission_ids` (the deduped
 //     numeric IDs of granted permissions from the activating
@@ -219,7 +218,7 @@ type AuthServiceClient interface {
 	RevokeDevice(ctx context.Context, in *RevokeDeviceReq, opts ...grpc.CallOption) (*RevokeDeviceResp, error)
 	RevokeOtherDevices(ctx context.Context, in *RevokeOtherDevicesReq, opts ...grpc.CallOption) (*RevokeOtherDevicesResp, error)
 	RevokeAllDevices(ctx context.Context, in *RevokeAllDevicesReq, opts ...grpc.CallOption) (*RevokeAllDevicesResp, error)
-	// ── password_reset — request + apply (E1) ───────────────────
+	// ── password_reset — request + apply ────────────────────────
 	// RequestPasswordReset (unauthenticated) mints + e-mails a reset token;
 	// it ALWAYS returns success regardless of whether the email exists
 	// (anti-enumeration). ResetPassword (unauthenticated) consumes the token,
@@ -227,7 +226,7 @@ type AuthServiceClient interface {
 	// `password_reset`.
 	RequestPasswordReset(ctx context.Context, in *RequestPasswordResetReq, opts ...grpc.CallOption) (*RequestPasswordResetResp, error)
 	ResetPassword(ctx context.Context, in *ResetPasswordReq, opts ...grpc.CallOption) (*ResetPasswordResp, error)
-	// ── email_verification — request + confirm (E1) ─────────────
+	// ── email_verification — request + confirm ──────────────────
 	// RequestEmailVerification (bearer-authenticated — you verify your own
 	// address) mints + e-mails a verification token. VerifyEmail
 	// (unauthenticated — the link click carries no session) consumes the
@@ -270,8 +269,8 @@ type AuthServiceClient interface {
 	// invitation is validated against the catalogue (roleIDByName), so a typo is
 	// refused — but only after the invitation is submitted, and the refusal
 	// cannot say what the valid answers were, because nothing on this surface
-	// could enumerate them. A console UI had a free-text field for this and no
-	// way to populate a picker (2026-09-11).
+	// could enumerate them. A UI could offer only a free-text field for this,
+	// with no way to populate a picker.
 	//
 	// Returns ORG-SCOPED roles only. A realm role is not something one member
 	// hands another inside an organization — it is platform-wide, and offering
@@ -883,7 +882,7 @@ type AuthServiceServer interface {
 	RevokeDevice(context.Context, *RevokeDeviceReq) (*RevokeDeviceResp, error)
 	RevokeOtherDevices(context.Context, *RevokeOtherDevicesReq) (*RevokeOtherDevicesResp, error)
 	RevokeAllDevices(context.Context, *RevokeAllDevicesReq) (*RevokeAllDevicesResp, error)
-	// ── password_reset — request + apply (E1) ───────────────────
+	// ── password_reset — request + apply ────────────────────────
 	// RequestPasswordReset (unauthenticated) mints + e-mails a reset token;
 	// it ALWAYS returns success regardless of whether the email exists
 	// (anti-enumeration). ResetPassword (unauthenticated) consumes the token,
@@ -891,7 +890,7 @@ type AuthServiceServer interface {
 	// `password_reset`.
 	RequestPasswordReset(context.Context, *RequestPasswordResetReq) (*RequestPasswordResetResp, error)
 	ResetPassword(context.Context, *ResetPasswordReq) (*ResetPasswordResp, error)
-	// ── email_verification — request + confirm (E1) ─────────────
+	// ── email_verification — request + confirm ──────────────────
 	// RequestEmailVerification (bearer-authenticated — you verify your own
 	// address) mints + e-mails a verification token. VerifyEmail
 	// (unauthenticated — the link click carries no session) consumes the
@@ -934,8 +933,8 @@ type AuthServiceServer interface {
 	// invitation is validated against the catalogue (roleIDByName), so a typo is
 	// refused — but only after the invitation is submitted, and the refusal
 	// cannot say what the valid answers were, because nothing on this surface
-	// could enumerate them. A console UI had a free-text field for this and no
-	// way to populate a picker (2026-09-11).
+	// could enumerate them. A UI could offer only a free-text field for this,
+	// with no way to populate a picker.
 	//
 	// Returns ORG-SCOPED roles only. A realm role is not something one member
 	// hands another inside an organization — it is platform-wide, and offering

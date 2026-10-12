@@ -42,8 +42,8 @@ message ScopeSpendLine {
   // That is the one shape an absent cost cannot warn about: absent means
   // "nothing here was priced", and this is "some of it was".
   //
-  // The consumer's metering carries a bool on the whole bill for this, under
-  // the rule "tokens nobody priced are not free". A count is
+  // A bool on the whole bill could carry this, under the rule "tokens nobody
+  // priced are not free". A count is
   // what this compiler can express (see the service comment) and it is
   // strictly more: it says how short, and which line is short.
   int64  priced_calls = 9;
@@ -169,8 +169,7 @@ message ListModelPricesResp {
 service UsageQuery {
   option (w17.contrib.plugin_feature_svc) = "usage_persistence";
 
-  // On `priced_calls`, and why it is not the whole-bill bool the consumer
-  // described: a response of `{ repeated Line lines; bool priced; }` is not a
+  // On `priced_calls`, and why it is not a whole-bill bool: a response of `{ repeated Line lines; bool priced; }` is not a
   // shape this compiler can plan. A list-shaped response carries the repeated
   // field and nothing else (`generate.detectListItem` refuses any other), and
   // `BOOL_AND` is not in the function whitelist, so the per-line bool has no
@@ -189,7 +188,7 @@ service UsageQuery {
   // change would otherwise bill all of it at one rate, and which rate would
   // depend on where the join happened to land.
   //
-  // ⚠️ A MIXED-CURRENCY ROLLUP REPORTS NO COST (reported by a consumer).
+  // ⚠️ A MIXED-CURRENCY ROLLUP REPORTS NO COST.
   //
   // `MAX(p.currency)` beside `SUM(p.line_minor)` used to sum minor units across
   // currencies and stamp whichever one sorted highest — a number that looks like
@@ -348,9 +347,6 @@ service UsageQuery {
   // The limit in force at an instant. Newest `valid_from` not after it —
   // the same rule as a price, because a limit changed today must not
   // retroactively make yesterday an overspend.
-  //
-  // (This paragraph spent a while stranded above ListModelPrices, where it
-  // described the wrong RPC and left this one undocumented — a consumer.)
   rpc GetScopeLimit(GetScopeLimitReq) returns (GetScopeLimitResp) {
     option (w17.db.method) = {
       ops: {

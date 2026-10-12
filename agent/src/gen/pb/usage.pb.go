@@ -634,10 +634,10 @@ func (x *ScopeLimit) GetRecordedAt() *timestamppb.Timestamp {
 
 // Label — one interned attribution key/value pair.
 //
-// The decisive requirement from the first consumer: without a way to pin a
-// caller's own attribution to a call, the plugin answers "what did this tenant
-// spend" while their question is "what did THIS RUN cost and who is it charged
-// to" — and they keep a second set of books. Two sets of books drift, and
+// The decisive requirement: without a way to pin a caller's own attribution to
+// a call, the plugin answers "what did this tenant spend" while the caller's
+// question is "what did THIS RUN cost and who is it charged to" — and the
+// caller keeps a second set of books. Two sets of books drift, and
 // nobody notices for months.
 //
 // Interned, so the fact side stays integers. A call carries as many labels as

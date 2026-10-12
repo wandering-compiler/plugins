@@ -58,9 +58,8 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 		// BEFORE the usage row, not after it. A preflight refusal never reached
 		// the provider, so there is nothing to have paid for — recording one
 		// invents spend, and `Unavailable` sends the caller to a status page for
-		// what is an invalid argument (reported by a consumer). The unary path got this and
-		// the stream path did not: the branch sat below recordUsage, so the
-		// event was already written by the time it ran.
+		// what is an invalid argument. Placed below recordUsage, the branch
+		// would run after the event was already written.
 		if llm.IsPreflight(err) {
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
@@ -96,7 +95,7 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 		// and can quote the prompt, so it stops here — and it stops before the
 		// LOG too, which is the half this comment used to get wrong. "The whole
 		// error to the log" covered the URL and carried the response body with
-		// it (reported by a consumer). ProviderLogLine keeps the classification and the URL
+		// it. ProviderLogLine keeps the classification and the URL
 		// and drops the body.
 		//
 		// The caller still gets the provider's classification. A stream that

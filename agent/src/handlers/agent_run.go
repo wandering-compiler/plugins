@@ -81,10 +81,9 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	}()
 
 	// Asked BEFORE the run, the same way `Complete` and `CompleteStream` ask
-	// before their call. This was MISSING, and a review of a consumer's PR
-	// found it: three entry points take `usage_scope`, two consulted the
-	// limit, and the third — the one that makes the MOST model calls per
-	// invocation, because it loops with tool calls — did not.
+	// before their call. Three entry points take `usage_scope`, and all three
+	// have to consult the limit — this one most of all, because it makes the
+	// MOST model calls per invocation: it loops with tool calls.
 	//
 	// A reader of the contract could not have seen it: `agent_scopelimit` is
 	// one table, `usage_scope` is one field, and nothing said the cap applied

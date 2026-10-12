@@ -43,15 +43,13 @@ const defaultOrgInviteTTLHours = 24 * 7 // 7 days
 // when the activation enables `org_invite`, so the enforcing version
 // exists exactly when there are invitations to enforce.
 //
-// ⚠️ NOTHING REFERENCES THIS FUNCTION, which is exactly how it was lost
-// once. A refactor that moved `ListOrgMembers` out of this file took the
-// init() with it. The three helpers in the same span came back because the
-// compiler demanded them; nothing demands an init, and removing one is
-// always valid Go. So it compiled, the plugin's tests passed, `make ci`
-// passed, codegen staged it, the image built, the deploy succeeded — and
-// the deployed console accepted an UNINVITED registration on the public
-// internet: HTTP 200, account created, `invite_only` at its default and
-// then pinned explicitly in the stack env, twice (2026-09-08).
+// ⚠️ NOTHING REFERENCES THIS FUNCTION. A refactor that moves code out of
+// this file can take the init() with it: helpers come back because the
+// compiler demands them, but nothing demands an init, and removing one is
+// always valid Go. Without it everything compiles, codegen stages it, the
+// image builds, the deploy succeeds — and the deployment accepts an
+// UNINVITED registration: HTTP 200, account created, with `invite_only` at
+// its default or pinned explicitly in the env.
 //
 // The compiler cannot miss what nobody calls. If you move things out of
 // this file, check that this survived — and note that the behavioural test
@@ -226,7 +224,7 @@ func (h *AuthServiceHandler) callerEmail(ctx context.Context, userID string) (st
 //
 // ORG-SCOPED ONLY. A realm role reaches every organization, so it is not an
 // org admin's to hand out; filtering here rather than in the caller means a
-// second consumer cannot forget to.
+// second caller cannot forget to.
 func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.ListAssignableRolesReq) (*pb.ListAssignableRolesResp, error) {
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
@@ -269,7 +267,7 @@ func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.Li
 //
 // As a JSON DOCUMENT, not as bytes: Postgres keeps the column as jsonb, so what
 // comes back (list, acceptance) is the same value re-serialised — key order and
-// whitespace are the database's (measured by examples/auth-proof). A consumer
+// whitespace are the database's. A consumer
 // that compares or signs it must parse it, not compare strings.
 func metadataOrEmptyObject(m string) string {
 	if strings.TrimSpace(m) == "" {
@@ -330,14 +328,14 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	// cannot get past.
 	//
 	// NOT_FOUND here is the ORDINARY answer: nothing had lapsed. Treating it
-	// as a failure would refuse every first invitation to an address, which is
-	// the same unreachable-branch mistake D13-7 shipped one function away.
+	// as a failure would refuse every first invitation to an address — a
+	// RETURNING statement reports "no row" as an error, not as an empty
+	// response.
 	//
 	// Only for a BOUND invitation. An open one stores NULL, which the unique
 	// index never compares, so nothing can block it — and the clear's own
-	// request requires the address, so calling it with "" refused every open
-	// invitation with REQUIRED_VIOLATION before it was written (found live by
-	// examples/auth-proof, after the request field itself had been fixed).
+	// request requires the address, so calling it with "" would refuse every
+	// open invitation with REQUIRED_VIOLATION before it was written.
 	if email != "" {
 		if _, cerr := h.Mutation.ClearExpiredOrgInvite(ctx, &pb.ClearExpiredOrgInviteReq{
 			OrgId: orgID,

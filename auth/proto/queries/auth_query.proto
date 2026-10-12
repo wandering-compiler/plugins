@@ -13,7 +13,7 @@ syntax = "proto3";
 
 package w17.contrib.auth;
 
-// Plugin-internal cross-file import; C2 placeholder expansion
+// Plugin-internal cross-file import; placeholder expansion
 // rewrites `@self` at staging time to the activation's staged
 // directory.
 import "google/protobuf/timestamp.proto";
@@ -61,7 +61,7 @@ message GetUserByTokenWithPermissionsReq {
 }
 // UserWithPermissions packs identity + the deduped permission
 // IDs the user holds across every assigned role. One SQL
-// round-trip via ROWS_TO_ARRAY (Phase E1) — no separate
+// round-trip via ROWS_TO_ARRAY — no separate
 // permission lookup. `permission_ids` is always populated
 // (never nil); an empty list means the user has no role
 // assignments or none of their roles carry any permissions.
@@ -184,9 +184,8 @@ message ListOrgMemberAccountsReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   // The ACTIVE organization. Not optional: User is not an org-scoped model —
   // a person belongs to several — so without this the list would be every
-  // account on the console. The machine-account directory once was exactly
-  // that, and one company's operator saw another's bots (reported on
-  // production 2026-09-21).
+  // account on the deployment, and one company's operator would see another's
+  // bots in the machine-account directory.
   string org_id = 1 [(w17.field) = { type: UUID }];
 }
 
@@ -514,10 +513,10 @@ message GetMfaChallengeResp {
 // LockUserForIssuance takes a row lock on the user for the duration of the
 // caller's transaction, so MFA challenge issuance for ONE user serialises.
 //
-// The cap read the count and then decided, which is only a cap when nothing
-// runs beside it. a consumer measured twenty concurrent sign-ins producing twenty
-// challenges past a limit of ten (#65): every one of them read zero before any
-// of them committed. An attacker who already holds the password — the whole
+// The cap reads the count and then decides, which is only a cap when nothing
+// runs beside it. Twenty concurrent sign-ins against a limit of ten would each
+// read zero before any of them committed, and all twenty would issue a
+// challenge. An attacker who already holds the password — the whole
 // threat the second factor is for — sends twenty at once as easily as twenty
 // in a row.
 //
@@ -539,7 +538,7 @@ message LockUserForIssuanceResp {
 // MfaChallenge bounds guesses against ONE challenge; a new challenge starts
 // a fresh budget, so without a second cap the total number of guesses an
 // attacker who already has the password can buy is unbounded — they just
-// sign in again (a consumer).
+// sign in again.
 message CountRecentMfaChallengesReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
@@ -632,8 +631,7 @@ message UserOrg {
   // (Organization.owner_id). Distinct from `role`, which is a GRANT somebody
   // was given and can be changed by an admin; ownership is a property of the
   // organization. Without this the person who created an org is
-  // indistinguishable from anyone they promoted, which is what a console
-  // showed on 2026-09-11.
+  // indistinguishable from anyone they promoted.
   bool   owner  = 6;
 }
 
@@ -710,10 +708,9 @@ message GetUserOwnsOrgResp {
   // Split out of `all_permissions`, which used to mean "a wildcard role OR
   // ownership". Conflating them made ownership INERT: it arrived in the
   // narrowing step, narrowing can only subtract, and an owner holding no
-  // role intersected "everything" with "nothing" and got nothing. Verified
-  // on a live console 2026-09-10 — owner_id set, auth_userrole empty ⇒
-  // PermissionDenied. Owners needed seeded grants like anybody else, which
-  // is what the bootstrap script was quietly doing.
+  // role intersected "everything" with "nothing" and got nothing — owner_id
+  // set, auth_userrole empty ⇒ PermissionDenied — so owners needed seeded
+  // grants like anybody else.
   //
   // ⚠️ This is the ONE flag in the plugin that WIDENS rather than narrows,
   // and the exception is deliberate, argued here rather than slipped in:
@@ -1002,13 +999,12 @@ service AuthQuery {
         // target is what makes one statement serve both activations.
         //
         // disabled_at (`user_admin`): without it every soft-disabled
-        // account still signed in (T2-6 pass #9, D9-4).
+        // account still signs in.
         //
         // kind (`service_account`): without it signInBotGate read an
         // unset AccountKind, and HUMAN is 0 — so a machine account that
-        // set itself a password through `password_change` signed in as
-        // a person, for a month, with the correction for the identical
-        // defect written three lines above it (reported by a consumer).
+        // set itself a password through `password_change` would sign in
+        // as a person.
         dql:
           "SELECT u.id AS user.id, "
           "       u.email AS user.email, "
@@ -1021,7 +1017,7 @@ service AuthQuery {
           // an existing password account unless that address is verified.
           // Missing from the projection it inverted the gate — the field was
           // never valid, so EVERY local account was refused, and unlike the
-          // invite gate this one is not behind an opt-in knob (reported by a consumer).
+          // invite gate this one is not behind an opt-in knob.
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at "
           "FROM @module.User u WHERE u.email = :email"
       }
@@ -1087,10 +1083,10 @@ service AuthQuery {
   //   - GROUP BY pins the row to the User's primary identity
   //     so the aggregate folds the join cross-product into one
   //     row per user.
-  //   - ROWS_TO_ARRAY (Phase E1) maps per-dialect to PG
+  //   - ROWS_TO_ARRAY maps per-dialect to PG
   //     `array_agg + FILTER + COALESCE`, MySQL `JSON_ARRAYAGG`,
   //     SQLite `json_group_array` — always returns a list,
-  //     never NULL. The repeated-scalar scan path (Phase E2)
+  //     never NULL. The repeated-scalar scan path
   //     decodes the column into `[]int32` regardless of which
   //     wire shape the dialect chose.
   //   - DISTINCT-equivalent dedup: the M2M topology guarantees
@@ -1335,8 +1331,7 @@ service AuthQuery {
         // THIS lookup to stamp the machine-account ACL label. An unset
         // AccountKind is HUMAN, so the label was never stamped and
         // every rule written against it matched nothing — a gate that
-        // fails OPEN and reports no error while doing it. Found by
-        // sweeping the readers after a consumer, not reported.
+        // fails OPEN and reports no error while doing it.
         dql:
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
@@ -1376,18 +1371,18 @@ service AuthQuery {
   // ListRoles — the role catalogue for the admin role-management page.
   // ⚠️ Both role reads project every UNGATED column the model declares.
   //
-  // Until 2026-09-04 they projected 7 of 11. `preset_key` and
-  // `display_name` were added to the model after these queries were
-  // written and nothing widened them, so both were declared, stored,
-  // seeded — and unreadable through any path in either realm.
+  // A column added to the model after these queries were written is
+  // not widened into them by anything — `preset_key` and `display_name`
+  // were declared, stored, seeded, and unreadable through any path in
+  // either realm.
   // `preset_key`'s own comment calls it PROVENANCE, i.e. a thing a reader
   // consults; no reader could.
   //
-  // a consumer hit it on the one operation the field exists for: granting a
+  // That breaks the one operation the field exists for: granting a
   // founder `org-admin` in CreateOrg by matching the role the SEED owns
-  // rather than by name, which is a label a customer may rename. Their
-  // guard fired `role preset "org-admin" is not seeded` against a
-  // database where it demonstrably was.
+  // rather than by name, which is a label a customer may rename. A guard
+  // on it fires `role preset "org-admin" is not seeded` against a
+  // database where it demonstrably is.
   //
   // Add an ungated column to Role and add it here too. A projection is
   // not a convenience list — it is the only way the field leaves the
@@ -1784,14 +1779,14 @@ service AuthQuery {
           // email_verified_at (`email_verification`): without it
           // inviteVerifiedEmailGate read a field nobody filled, so with
           // AUTH_INVITE_REQUIRES_VERIFIED_EMAIL on it refused EVERY invite —
-          // including verified accounts (reported by a consumer). Third instance of the
+          // including verified accounts. Third instance of the
           // shape GetUserByEmail's comment already names.
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           // disabled_at (`user_admin`): every path that issues a session for
           // an EXISTING account re-checks it through this read
           // (refuseUnsignableAccount). Left out, the second sign-in step,
           // the OAuth callback and the CLI exchange issued sessions to an
-          // account disabled after its password step (examples/auth-proof).
+          // account disabled after its password step.
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           // tenant_id (`tenant_scope`): IssueBotToken holds the target to the
           // operator's tenant (service_account_tenant.go) through this read.
@@ -2013,12 +2008,11 @@ service AuthQuery {
   //     roles that are — but `(w17.acl_roles).scope: ORG` says this role's
   //     grants live in the organization they were assigned in, and those
   //     two readings collide on exactly the row the declaration exists to
-  //     prevent. Nothing enforced it: `org_scoped` was written by the seed
-  //     and read by NOBODY (T2-5 pass #11, D11-3), so an org-scoped role
-  //     assigned without an organization granted itself in every one of
-  //     them. Enforced HERE rather than on the write side, because the
-  //     read decides what an existing row MEANS — whatever wrote it, and
-  //     whenever.
+  //     prevent. Unless a read enforces it, `org_scoped` is written by the
+  //     seed and read by nobody, and an org-scoped role assigned without an
+  //     organization grants itself in every one of them. Enforced HERE
+  //     rather than on the write side, because the read decides what an
+  //     existing row MEANS — whatever wrote it, and whenever.
   rpc GetUserOrgPermissions(GetUserOrgPermissionsReq) returns (GetUserOrgPermissionsResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
@@ -2063,7 +2057,7 @@ service AuthQuery {
   // inferring it from a NULL `org_id`. A role declared `scope: ORG` and
   // assigned with no organization wrote exactly that NULL, so the
   // inference answered "realm-wide" for the one role that must never be
-  // (T2-5 pass #11, D11-3; the sibling query carries the reasoning). Without this the request would
+  // (GetUserOrgPermissions carries the reasoning). Without this the request would
   // fall back to the unfiltered set, which is the union across every org
   // the user belongs to — the leak this whole feature exists to close.
   rpc GetUserRealmWidePermissions(GetUserRealmWidePermissionsReq) returns (GetUserRealmWidePermissionsResp) {

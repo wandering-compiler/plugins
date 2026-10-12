@@ -122,7 +122,7 @@ type AuthMutationClient interface {
 	// AuthService.SignUp handler computes it via
 	// passwordhash.Settings.Hash() before calling. Refuses on
 	// duplicate email (unique violation surfaces as
-	// AlreadyExists via REV-026 DB-error classification).
+	// AlreadyExists via the storage DB-error classification).
 	//
 	// ONE create for every activation. `tenant_scope` adds a NOT NULL
 	// `User.tenant_id`, and the gated SET assignment below writes it, so
@@ -140,7 +140,7 @@ type AuthMutationClient interface {
 	CreateBotUser(ctx context.Context, in *CreateBotUserReq, opts ...grpc.CallOption) (*CreateBotUserResp, error)
 	CreateUser(ctx context.Context, in *CreateUserReq, opts ...grpc.CallOption) (*CreateUserResp, error)
 	// IssueToken — INSERT UserToken. The `token` column fills
-	// app-side via the CRYPTO_RANDOM default (Phase N) — request
+	// app-side via the CRYPTO_RANDOM default — request
 	// doesn't carry the token value; codegen preamble generates
 	// it before SQL emit.
 	IssueToken(ctx context.Context, in *IssueTokenReq, opts ...grpc.CallOption) (*IssueTokenResp, error)
@@ -176,7 +176,7 @@ type AuthMutationClient interface {
 	// TokenRevoked emit site (the live logout path) so cache-invalidation
 	// subscribers react on logout; DeleteToken no longer emits. Idempotent.
 	//
-	// Q64-auth-1: the DQL deliberately does NOT filter on token_type — that
+	// The DQL deliberately does NOT filter on token_type — that
 	// column is gated by the `api_token` feature, so referencing it here (a
 	// base-tier authenticate_turnkey mutation) breaks typecheck on the
 	// default config where api_token is off and the column doesn't exist.
@@ -269,14 +269,14 @@ type AuthMutationClient interface {
 	// consume (empty → already used / not found). Emits MfaVerified.
 	ConsumeMfaChallenge(ctx context.Context, in *ConsumeMfaChallengeReq, opts ...grpc.CallOption) (*ConsumeMfaChallengeResp, error)
 	// RecordMfaAttempt — atomically increment the challenge's failed-attempt
-	// counter (Q43-auth-mfa). Guarded `consumed_at IS NULL` so a consumed
+	// counter (brute-force lockout). Guarded `consumed_at IS NULL` so a consumed
 	// challenge isn't bumped; RETURNING the new count. No event (internal
 	// brute-force guard, not a user-visible lifecycle step).
 	RecordMfaAttempt(ctx context.Context, in *RecordMfaAttemptReq, opts ...grpc.CallOption) (*RecordMfaAttemptResp, error)
 	// SupersedePendingMfaChallenges — retire every still-pending challenge
 	// of a user, so issuing a new one leaves exactly one live code. Without
 	// it, N sign-ins leave N codes alive, each with its own attempt budget,
-	// and the budget on any one of them bounds nothing (a consumer).
+	// and the budget on any one of them bounds nothing.
 	//
 	// NO RETURNING, deliberately. Zero rows is the ORDINARY case — a first
 	// sign-in has nothing to supersede — and a mutation carrying RETURNING
@@ -302,16 +302,14 @@ type AuthMutationClient interface {
 	// when a new-device sign-in raises a 2FA challenge: the device is
 	// seen but not yet trusted (trust waits for VerifyMfa). Idempotent.
 	TouchDevice(ctx context.Context, in *TouchDeviceReq, opts ...grpc.CallOption) (*TouchDeviceResp, error)
-	// DeleteDeviceTokens — DELETE every session token a device owns
-	// (the "log out this device" primitive). Ownership-guarded by
-	// user_id so a caller can't drop another user's sessions.
-	// Idempotent.
-	// DeleteUndevicedSessions — DELETE the user's session tokens that carry no
-	// device. Not every session is device-bound: SignUp, ConfirmSignUp, the
-	// OAuth callback and CliToken issue a session with no device, so "log out
-	// everywhere" swept device by device and left those standing (found live by
-	// examples/auth-proof). API tokens are spared — they are not sessions, and
-	// are removed only through RevokeApiToken.
+	// DeleteDeviceTokens — DELETE every session token a device owns (the "log out
+	// this device" primitive). Ownership-guarded by user_id so a caller can't
+	// drop another user's sessions. Idempotent. DeleteUndevicedSessions — DELETE
+	// the user's session tokens that carry no device. Not every session is
+	// device-bound: SignUp, ConfirmSignUp, the OAuth callback and CliToken issue
+	// a session with no device, so "log out everywhere" swept device by device
+	// would leave those standing. API tokens are spared — they are not sessions,
+	// and are removed only through RevokeApiToken.
 	DeleteUndevicedSessions(ctx context.Context, in *DeleteUndevicedSessionsReq, opts ...grpc.CallOption) (*DeleteUndevicedSessionsResp, error)
 	DeleteDeviceTokens(ctx context.Context, in *DeleteDeviceTokensReq, opts ...grpc.CallOption) (*DeleteDeviceTokensResp, error)
 	// DeleteDevice — DELETE the Device row itself (after its tokens).
@@ -324,7 +322,7 @@ type AuthMutationClient interface {
 	// (revoke-all cleanup, after DeleteAllUserTokens). Idempotent.
 	DeleteAllUserDevices(ctx context.Context, in *DeleteAllUserDevicesReq, opts ...grpc.CallOption) (*DeleteAllUserDevicesResp, error)
 	// CreateRole — INSERT Role. Refuses duplicate name (unique
-	// violation → AlreadyExists via REV-026 DB-error classification).
+	// violation → AlreadyExists via the storage DB-error classification).
 	CreateRole(ctx context.Context, in *CreateRoleReq, opts ...grpc.CallOption) (*CreateRoleResp, error)
 	// DeleteRole — DELETE matching role. Idempotent. Caller
 	// is responsible for cleaning up dependent UserRole /
@@ -357,7 +355,7 @@ type AuthMutationClient interface {
 	// 1.9). Gated user_admin.
 	DisableUsers(ctx context.Context, in *DisableUsersReq, opts ...grpc.CallOption) (*DisableUsersResp, error)
 	// EnableUsers — bulk re-enable (clear disabled_at); returns the ids it
-	// re-enabled. Single-op for the same F-A2 reason as DisableUsers.
+	// re-enabled. Single-op, so its `IN (:ids)` binds on the final leg.
 	// Gated user_admin.
 	EnableUsers(ctx context.Context, in *EnableUsersReq, opts ...grpc.CallOption) (*EnableUsersResp, error)
 	// AssignRoleToUser — INSERT UserRole linking a user to a
@@ -461,7 +459,7 @@ type AuthMutationClient interface {
 	// TOCTOU between validate + consume.
 	ConsumeCliAuthCode(ctx context.Context, in *ConsumeCliAuthCodeReq, opts ...grpc.CallOption) (*ConsumeCliAuthCodeResp, error)
 	// CreateOrganization — INSERT Organization. Refuses a duplicate slug
-	// (unique violation → AlreadyExists via REV-026 DB-error
+	// (unique violation → AlreadyExists via the storage DB-error
 	// classification). Emits OrganizationCreated — the keystone
 	// provisioning hook (a subscriber seeds the org's default data off
 	// org_id) so a project never has to INSERT into this plugin's tables
@@ -477,7 +475,7 @@ type AuthMutationClient interface {
 	// org's memberships first (link table, app-enforced — no DB FK, same
 	// caveat as the rest of the plugin), then the org, atomically. The
 	// membership purge is a NON-final leg (scalar :id bind — no array
-	// expansion, so the F-A2 final-leg rule doesn't apply). Emits
+	// expansion, so the final-leg rule for `IN (:ids)` doesn't apply). Emits
 	// OrganizationDeleted for downstream per-org cleanup. Gated
 	// org_membership.
 	// UpdateOrganization — the admin Organizations page detail `update`.
@@ -493,20 +491,20 @@ type AuthMutationClient interface {
 	// (user_id, org_id) index makes an in-place move a constraint trap).
 	// Gated org_membership.
 	// The membership's role label and the org-scoped grant behind it change
-	// TOGETHER. The label alone used to change, so a demotion revoked nothing:
-	// the member kept every permission of the role they were demoted from,
-	// because permissions are read from UserRole and never from this label
-	// (D13-3). One method, one transaction: read whose membership it is, check
+	// TOGETHER. Changing the label alone would revoke nothing on a demotion:
+	// the member would keep every permission of the role they were demoted
+	// from, because permissions are read from UserRole and never from this
+	// label. One method, one transaction: read whose membership it is, check
 	// the new role is still an org role, drop every grant the member holds IN
 	// THIS ORGANIZATION, and grant the new one. Realm-wide grants are not
 	// touched. Called by AuthService.UpdateOrgMembershipRole, which holds the
 	// change to the role ceiling; it checks nothing about the caller itself.
 	UpdateOrgMembership(ctx context.Context, in *UpdateOrgMembershipReq, opts ...grpc.CallOption) (*UpdateOrgMembershipResp, error)
 	// A membership leaves WITH its org-scoped grants. Removed alone, the grants
-	// stayed and kept counting — permissions read UserRole by (user, org) and
-	// join no membership — so a member re-invited at a LESSER role came back with
-	// their old one, and one re-invited at the same role hit the unique grant and
-	// could never accept (D13-3). The request names only the membership, so the
+	// would stay and keep counting — permissions read UserRole by (user, org) and
+	// join no membership — so a member re-invited at a LESSER role would come back
+	// with their old one, and one re-invited at the same role would hit the unique
+	// grant and could never accept. The request names only the membership, so the
 	// first op reads whose it is. An owner without a membership is unaffected:
 	// ownership is read off the organization.
 	DeleteOrgMembership(ctx context.Context, in *DeleteOrgMembershipReq, opts ...grpc.CallOption) (*DeleteOrgMembershipResp, error)
@@ -1412,7 +1410,7 @@ type AuthMutationServer interface {
 	// AuthService.SignUp handler computes it via
 	// passwordhash.Settings.Hash() before calling. Refuses on
 	// duplicate email (unique violation surfaces as
-	// AlreadyExists via REV-026 DB-error classification).
+	// AlreadyExists via the storage DB-error classification).
 	//
 	// ONE create for every activation. `tenant_scope` adds a NOT NULL
 	// `User.tenant_id`, and the gated SET assignment below writes it, so
@@ -1430,7 +1428,7 @@ type AuthMutationServer interface {
 	CreateBotUser(context.Context, *CreateBotUserReq) (*CreateBotUserResp, error)
 	CreateUser(context.Context, *CreateUserReq) (*CreateUserResp, error)
 	// IssueToken — INSERT UserToken. The `token` column fills
-	// app-side via the CRYPTO_RANDOM default (Phase N) — request
+	// app-side via the CRYPTO_RANDOM default — request
 	// doesn't carry the token value; codegen preamble generates
 	// it before SQL emit.
 	IssueToken(context.Context, *IssueTokenReq) (*IssueTokenResp, error)
@@ -1466,7 +1464,7 @@ type AuthMutationServer interface {
 	// TokenRevoked emit site (the live logout path) so cache-invalidation
 	// subscribers react on logout; DeleteToken no longer emits. Idempotent.
 	//
-	// Q64-auth-1: the DQL deliberately does NOT filter on token_type — that
+	// The DQL deliberately does NOT filter on token_type — that
 	// column is gated by the `api_token` feature, so referencing it here (a
 	// base-tier authenticate_turnkey mutation) breaks typecheck on the
 	// default config where api_token is off and the column doesn't exist.
@@ -1559,14 +1557,14 @@ type AuthMutationServer interface {
 	// consume (empty → already used / not found). Emits MfaVerified.
 	ConsumeMfaChallenge(context.Context, *ConsumeMfaChallengeReq) (*ConsumeMfaChallengeResp, error)
 	// RecordMfaAttempt — atomically increment the challenge's failed-attempt
-	// counter (Q43-auth-mfa). Guarded `consumed_at IS NULL` so a consumed
+	// counter (brute-force lockout). Guarded `consumed_at IS NULL` so a consumed
 	// challenge isn't bumped; RETURNING the new count. No event (internal
 	// brute-force guard, not a user-visible lifecycle step).
 	RecordMfaAttempt(context.Context, *RecordMfaAttemptReq) (*RecordMfaAttemptResp, error)
 	// SupersedePendingMfaChallenges — retire every still-pending challenge
 	// of a user, so issuing a new one leaves exactly one live code. Without
 	// it, N sign-ins leave N codes alive, each with its own attempt budget,
-	// and the budget on any one of them bounds nothing (a consumer).
+	// and the budget on any one of them bounds nothing.
 	//
 	// NO RETURNING, deliberately. Zero rows is the ORDINARY case — a first
 	// sign-in has nothing to supersede — and a mutation carrying RETURNING
@@ -1592,16 +1590,14 @@ type AuthMutationServer interface {
 	// when a new-device sign-in raises a 2FA challenge: the device is
 	// seen but not yet trusted (trust waits for VerifyMfa). Idempotent.
 	TouchDevice(context.Context, *TouchDeviceReq) (*TouchDeviceResp, error)
-	// DeleteDeviceTokens — DELETE every session token a device owns
-	// (the "log out this device" primitive). Ownership-guarded by
-	// user_id so a caller can't drop another user's sessions.
-	// Idempotent.
-	// DeleteUndevicedSessions — DELETE the user's session tokens that carry no
-	// device. Not every session is device-bound: SignUp, ConfirmSignUp, the
-	// OAuth callback and CliToken issue a session with no device, so "log out
-	// everywhere" swept device by device and left those standing (found live by
-	// examples/auth-proof). API tokens are spared — they are not sessions, and
-	// are removed only through RevokeApiToken.
+	// DeleteDeviceTokens — DELETE every session token a device owns (the "log out
+	// this device" primitive). Ownership-guarded by user_id so a caller can't
+	// drop another user's sessions. Idempotent. DeleteUndevicedSessions — DELETE
+	// the user's session tokens that carry no device. Not every session is
+	// device-bound: SignUp, ConfirmSignUp, the OAuth callback and CliToken issue
+	// a session with no device, so "log out everywhere" swept device by device
+	// would leave those standing. API tokens are spared — they are not sessions,
+	// and are removed only through RevokeApiToken.
 	DeleteUndevicedSessions(context.Context, *DeleteUndevicedSessionsReq) (*DeleteUndevicedSessionsResp, error)
 	DeleteDeviceTokens(context.Context, *DeleteDeviceTokensReq) (*DeleteDeviceTokensResp, error)
 	// DeleteDevice — DELETE the Device row itself (after its tokens).
@@ -1614,7 +1610,7 @@ type AuthMutationServer interface {
 	// (revoke-all cleanup, after DeleteAllUserTokens). Idempotent.
 	DeleteAllUserDevices(context.Context, *DeleteAllUserDevicesReq) (*DeleteAllUserDevicesResp, error)
 	// CreateRole — INSERT Role. Refuses duplicate name (unique
-	// violation → AlreadyExists via REV-026 DB-error classification).
+	// violation → AlreadyExists via the storage DB-error classification).
 	CreateRole(context.Context, *CreateRoleReq) (*CreateRoleResp, error)
 	// DeleteRole — DELETE matching role. Idempotent. Caller
 	// is responsible for cleaning up dependent UserRole /
@@ -1647,7 +1643,7 @@ type AuthMutationServer interface {
 	// 1.9). Gated user_admin.
 	DisableUsers(context.Context, *DisableUsersReq) (*DisableUsersResp, error)
 	// EnableUsers — bulk re-enable (clear disabled_at); returns the ids it
-	// re-enabled. Single-op for the same F-A2 reason as DisableUsers.
+	// re-enabled. Single-op, so its `IN (:ids)` binds on the final leg.
 	// Gated user_admin.
 	EnableUsers(context.Context, *EnableUsersReq) (*EnableUsersResp, error)
 	// AssignRoleToUser — INSERT UserRole linking a user to a
@@ -1751,7 +1747,7 @@ type AuthMutationServer interface {
 	// TOCTOU between validate + consume.
 	ConsumeCliAuthCode(context.Context, *ConsumeCliAuthCodeReq) (*ConsumeCliAuthCodeResp, error)
 	// CreateOrganization — INSERT Organization. Refuses a duplicate slug
-	// (unique violation → AlreadyExists via REV-026 DB-error
+	// (unique violation → AlreadyExists via the storage DB-error
 	// classification). Emits OrganizationCreated — the keystone
 	// provisioning hook (a subscriber seeds the org's default data off
 	// org_id) so a project never has to INSERT into this plugin's tables
@@ -1767,7 +1763,7 @@ type AuthMutationServer interface {
 	// org's memberships first (link table, app-enforced — no DB FK, same
 	// caveat as the rest of the plugin), then the org, atomically. The
 	// membership purge is a NON-final leg (scalar :id bind — no array
-	// expansion, so the F-A2 final-leg rule doesn't apply). Emits
+	// expansion, so the final-leg rule for `IN (:ids)` doesn't apply). Emits
 	// OrganizationDeleted for downstream per-org cleanup. Gated
 	// org_membership.
 	// UpdateOrganization — the admin Organizations page detail `update`.
@@ -1783,20 +1779,20 @@ type AuthMutationServer interface {
 	// (user_id, org_id) index makes an in-place move a constraint trap).
 	// Gated org_membership.
 	// The membership's role label and the org-scoped grant behind it change
-	// TOGETHER. The label alone used to change, so a demotion revoked nothing:
-	// the member kept every permission of the role they were demoted from,
-	// because permissions are read from UserRole and never from this label
-	// (D13-3). One method, one transaction: read whose membership it is, check
+	// TOGETHER. Changing the label alone would revoke nothing on a demotion:
+	// the member would keep every permission of the role they were demoted
+	// from, because permissions are read from UserRole and never from this
+	// label. One method, one transaction: read whose membership it is, check
 	// the new role is still an org role, drop every grant the member holds IN
 	// THIS ORGANIZATION, and grant the new one. Realm-wide grants are not
 	// touched. Called by AuthService.UpdateOrgMembershipRole, which holds the
 	// change to the role ceiling; it checks nothing about the caller itself.
 	UpdateOrgMembership(context.Context, *UpdateOrgMembershipReq) (*UpdateOrgMembershipResp, error)
 	// A membership leaves WITH its org-scoped grants. Removed alone, the grants
-	// stayed and kept counting — permissions read UserRole by (user, org) and
-	// join no membership — so a member re-invited at a LESSER role came back with
-	// their old one, and one re-invited at the same role hit the unique grant and
-	// could never accept (D13-3). The request names only the membership, so the
+	// would stay and keep counting — permissions read UserRole by (user, org) and
+	// join no membership — so a member re-invited at a LESSER role would come back
+	// with their old one, and one re-invited at the same role would hit the unique
+	// grant and could never accept. The request names only the membership, so the
 	// first op reads whose it is. An owner without a membership is unaffected:
 	// ownership is read off the organization.
 	DeleteOrgMembership(context.Context, *DeleteOrgMembershipReq) (*DeleteOrgMembershipResp, error)

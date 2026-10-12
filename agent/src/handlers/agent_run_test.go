@@ -329,8 +329,7 @@ func TestBudgetExhaustionIsItsOwnCode(t *testing.T) {
 // It is the one that makes the MOST model calls per invocation, because it
 // loops with tool calls, so the cap held on the two cheap paths and not on the
 // expensive one. Nothing in the contract said so: one limit table, one scope
-// field, and the gap visible only as a missing call. A review of a consumer's
-// PR found it; they had never run RunAgent.
+// field, and the gap visible only as a missing call.
 func TestRunAgent_AsksTheLimitLikeTheOtherTwoEntryPoints(t *testing.T) {
 	denied := &stubLimiter{decision: LimitDecision{Allowed: false, Reason: "scope over its monthly cap"}}
 	// A stream client it will never reach: the point is that the limit answers

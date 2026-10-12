@@ -1,5 +1,5 @@
-// Package stripe is the Stripe implementation of backend.Backend
-// (Slice 1). It speaks the Stripe REST API directly over net/http — no
+// Package stripe is the Stripe implementation of backend.Backend.
+// It speaks the Stripe REST API directly over net/http — no
 // vendored SDK — keeping the plugin dependency-light and the surface
 // easy to fake in tests (mirrors the auth plugin's OAuth client).
 //

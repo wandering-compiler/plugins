@@ -146,7 +146,7 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	// `all_permissions` (applyTokenSubset only narrows when the subset is
 	// non-empty). So a caller who asked for a narrow credential, and got an
 	// error back, could be leaving behind a WIDER one than they asked for,
-	// believing nothing happened (a consumer).
+	// believing nothing happened.
 	//
 	// Rolled back together, the failure means what the caller was told.
 	var tx *distx.TxHandle
@@ -193,7 +193,7 @@ var botUserFillers []func(ctx context.Context, req *pb.CreateBotUserReq) error
 // they do not exist without org_membership.
 //
 // Nil in a realm WITHOUT organizations — one organization, the owner of the
-// software (Jiri, 2026-10-06: the platform's own backoffice). There a machine
+// software (a platform's own backoffice). There a machine
 // account is the realm's: created with a realm-wide grant, listed with every
 // other machine account, and minted for by any operator who may mint at all.
 var botOrgs *botOrgScope
@@ -376,7 +376,7 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 	// membership, so no organization to infer and an empty permission set —
 	// and the address is now TAKEN by the unique index, so the operator's
 	// retry fails on a conflict with an account they were told was never
-	// created (a consumer). The comment below already explains why the order
+	// created. The comment below already explains why the order
 	// matters; a transaction is what makes the order survive a failure.
 	var tx *distx.TxHandle
 	txCtx := ctx
@@ -415,12 +415,11 @@ func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*
 		return nil, Unauthenticated(err)
 	}
 	// ⚠️ Where the realm has organizations, the caller's is REQUIRED, and the
-	// reason is a leak that shipped: `User` is not an org-scoped model — a
-	// person belongs to several — so scope does not narrow this list on its
-	// own. Without the filter the answer was every machine account on the
-	// console, and one company's operator saw another's (reported on
-	// production 2026-09-21). A realm without organizations is one, and the
-	// list is all of its machine accounts.
+	// reason is a leak: `User` is not an org-scoped model — a person belongs to
+	// several — so scope does not narrow this list on its own. Without the
+	// filter the answer is every machine account on the deployment, and one
+	// company's operator sees another's. A realm without organizations is one,
+	// and the list is all of its machine accounts.
 	orgs, err := botOrgScopeOrNil()
 	if err != nil {
 		return nil, err

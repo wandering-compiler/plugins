@@ -12,8 +12,8 @@ import (
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// e1Mock backs the password_reset + email_verification handlers (E1).
-type e1Mock struct {
+// tokenFlowMock backs the password_reset + email_verification handlers.
+type tokenFlowMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
@@ -40,21 +40,21 @@ type e1Mock struct {
 	markedVerified     string
 }
 
-func (m *e1Mock) GetUserByEmail(ctx context.Context, in *pb.GetUserByEmailReq, _ ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
+func (m *tokenFlowMock) GetUserByEmail(ctx context.Context, in *pb.GetUserByEmailReq, _ ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
 	return &pb.GetUserByEmailResp{User: m.userByEmail[in.GetEmail()]}, nil
 }
-func (m *e1Mock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+func (m *tokenFlowMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
 	return &pb.GetUserByIdResp{User: m.userByID[in.GetUserId()]}, nil
 }
-func (m *e1Mock) CreatePasswordResetToken(ctx context.Context, in *pb.CreatePasswordResetTokenReq, _ ...grpc.CallOption) (*pb.CreatePasswordResetTokenResp, error) {
+func (m *tokenFlowMock) CreatePasswordResetToken(ctx context.Context, in *pb.CreatePasswordResetTokenReq, _ ...grpc.CallOption) (*pb.CreatePasswordResetTokenResp, error) {
 	m.createdReset = in
 	return &pb.CreatePasswordResetTokenResp{Token: &pb.PasswordResetToken{Id: "prt-1", UserId: in.GetUserId(), TokenHash: in.GetTokenHash()}}, nil
 }
-func (m *e1Mock) ConsumePasswordResetToken(ctx context.Context, in *pb.ConsumePasswordResetTokenReq, _ ...grpc.CallOption) (*pb.ConsumePasswordResetTokenResp, error) {
+func (m *tokenFlowMock) ConsumePasswordResetToken(ctx context.Context, in *pb.ConsumePasswordResetTokenReq, _ ...grpc.CallOption) (*pb.ConsumePasswordResetTokenResp, error) {
 	m.consumedResetHash = in.GetTokenHash()
 	return &pb.ConsumePasswordResetTokenResp{UserId: m.consumeResetUser}, nil
 }
-func (m *e1Mock) UpdateUserPassword(ctx context.Context, in *pb.UpdateUserPasswordReq, _ ...grpc.CallOption) (*pb.UpdateUserPasswordResp, error) {
+func (m *tokenFlowMock) UpdateUserPassword(ctx context.Context, in *pb.UpdateUserPasswordReq, _ ...grpc.CallOption) (*pb.UpdateUserPasswordResp, error) {
 	if m.updatePasswordErr != nil {
 		// Recorded even on the failure arm: a test has to be able to tell
 		// "the write was attempted and refused" from "the write never ran".
@@ -64,42 +64,42 @@ func (m *e1Mock) UpdateUserPassword(ctx context.Context, in *pb.UpdateUserPasswo
 	m.updatedPassword = in
 	return &pb.UpdateUserPasswordResp{UserId: in.GetUserId()}, nil
 }
-func (m *e1Mock) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
+func (m *tokenFlowMock) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
 	m.spentLinksFor = in.GetUserId()
 	if m.spendErr != nil {
 		return nil, m.spendErr
 	}
 	return &pb.SpendPasswordResetTokensResp{}, nil
 }
-func (m *e1Mock) DeleteUserSessionsForReset(ctx context.Context, in *pb.DeleteUserSessionsForResetReq, _ ...grpc.CallOption) (*pb.DeleteUserSessionsForResetResp, error) {
+func (m *tokenFlowMock) DeleteUserSessionsForReset(ctx context.Context, in *pb.DeleteUserSessionsForResetReq, _ ...grpc.CallOption) (*pb.DeleteUserSessionsForResetResp, error) {
 	m.revokedFor = in.GetUserId()
 	return &pb.DeleteUserSessionsForResetResp{UserId: in.GetUserId()}, nil
 }
-func (m *e1Mock) CreateEmailVerificationToken(ctx context.Context, in *pb.CreateEmailVerificationTokenReq, _ ...grpc.CallOption) (*pb.CreateEmailVerificationTokenResp, error) {
+func (m *tokenFlowMock) CreateEmailVerificationToken(ctx context.Context, in *pb.CreateEmailVerificationTokenReq, _ ...grpc.CallOption) (*pb.CreateEmailVerificationTokenResp, error) {
 	m.createdVerify = in
 	return &pb.CreateEmailVerificationTokenResp{Token: &pb.EmailVerificationToken{Id: "evt-1", UserId: in.GetUserId(), TokenHash: in.GetTokenHash()}}, nil
 }
-func (m *e1Mock) ConsumeEmailVerificationToken(ctx context.Context, in *pb.ConsumeEmailVerificationTokenReq, _ ...grpc.CallOption) (*pb.ConsumeEmailVerificationTokenResp, error) {
+func (m *tokenFlowMock) ConsumeEmailVerificationToken(ctx context.Context, in *pb.ConsumeEmailVerificationTokenReq, _ ...grpc.CallOption) (*pb.ConsumeEmailVerificationTokenResp, error) {
 	m.consumedVerifyHash = in.GetTokenHash()
 	return &pb.ConsumeEmailVerificationTokenResp{UserId: m.consumeVerifyUser}, nil
 }
-func (m *e1Mock) MarkEmailVerified(ctx context.Context, in *pb.MarkEmailVerifiedReq, _ ...grpc.CallOption) (*pb.MarkEmailVerifiedResp, error) {
+func (m *tokenFlowMock) MarkEmailVerified(ctx context.Context, in *pb.MarkEmailVerifiedReq, _ ...grpc.CallOption) (*pb.MarkEmailVerifiedResp, error) {
 	m.markedVerified = in.GetUserId()
 	return &pb.MarkEmailVerifiedResp{UserId: in.GetUserId()}, nil
 }
 
-func newE1Handler(m *e1Mock) *AuthServiceHandler {
+func newTokenFlowHandler(m *tokenFlowMock) *AuthServiceHandler {
 	return &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
 }
 
 // ── password_reset ──────────────────────────────────────────
 
-// E1 — an unknown email yields a uniform empty success with NO token
+// An unknown email yields a uniform empty success with NO token
 // minted (anti-enumeration: the caller can't tell a registered email from
 // an unregistered one).
 func TestRequestPasswordReset_UnknownEmail_NoOp(t *testing.T) {
-	m := &e1Mock{userByEmail: map[string]*pb.User{}}
-	h := newE1Handler(m)
+	m := &tokenFlowMock{userByEmail: map[string]*pb.User{}}
+	h := newTokenFlowHandler(m)
 	if _, err := h.RequestPasswordReset(context.Background(), &pb.RequestPasswordResetReq{Email: "ghost@x.com"}); err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -108,11 +108,11 @@ func TestRequestPasswordReset_UnknownEmail_NoOp(t *testing.T) {
 	}
 }
 
-// E1 — a known email mints a token, storing only its hash; the plaintext
+// A known email mints a token, storing only its hash; the plaintext
 // rides the event and is never the stored value.
 func TestRequestPasswordReset_KnownEmail_StoresHashEmitsPlaintext(t *testing.T) {
-	m := &e1Mock{userByEmail: map[string]*pb.User{"u@x.com": {Id: "u1", Email: "u@x.com"}}}
-	h := newE1Handler(m)
+	m := &tokenFlowMock{userByEmail: map[string]*pb.User{"u@x.com": {Id: "u1", Email: "u@x.com"}}}
+	h := newTokenFlowHandler(m)
 	if _, err := h.RequestPasswordReset(context.Background(), &pb.RequestPasswordResetReq{Email: "U@x.com"}); err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -137,11 +137,11 @@ func TestRequestPasswordReset_KnownEmail_StoresHashEmitsPlaintext(t *testing.T) 
 	}
 }
 
-// E1 — a valid reset token updates the password (hashed) and revokes
+// A valid reset token updates the password (hashed) and revokes
 // existing sessions. The consume lookup is by HASH, never the plaintext.
 func TestResetPassword_ValidToken_UpdatesAndRevokes(t *testing.T) {
-	m := &e1Mock{consumeResetUser: "u1"}
-	h := newE1Handler(m)
+	m := &tokenFlowMock{consumeResetUser: "u1"}
+	h := newTokenFlowHandler(m)
 	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
@@ -159,11 +159,11 @@ func TestResetPassword_ValidToken_UpdatesAndRevokes(t *testing.T) {
 	}
 }
 
-// E1 — an invalid/expired/used token (empty consume result) is an opaque
+// An invalid/expired/used token (empty consume result) is an opaque
 // failure that does NOT change the password.
 func TestResetPassword_InvalidToken_Rejected(t *testing.T) {
-	m := &e1Mock{consumeResetUser: ""} // no live token matched
-	h := newE1Handler(m)
+	m := &tokenFlowMock{consumeResetUser: ""} // no live token matched
+	h := newTokenFlowHandler(m)
 	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "bad", NewPassword: "whatever-123"}); err == nil {
 		t.Error("an invalid reset token must fail")
 	}
@@ -177,11 +177,11 @@ func TestResetPassword_InvalidToken_Rejected(t *testing.T) {
 
 // ── email_verification ──────────────────────────────────────
 
-// E1 — RequestEmailVerification mints a token for the caller, storing only
+// RequestEmailVerification mints a token for the caller, storing only
 // its hash.
 func TestRequestEmailVerification_StoresHash(t *testing.T) {
-	m := &e1Mock{userByID: map[string]*pb.User{"u1": {Id: "u1", Email: "u@x.com"}}}
-	h := newE1Handler(m)
+	m := &tokenFlowMock{userByID: map[string]*pb.User{"u1": {Id: "u1", Email: "u@x.com"}}}
+	h := newTokenFlowHandler(m)
 	if _, err := h.RequestEmailVerification(ctxWithCaller("u1"), &pb.RequestEmailVerificationReq{}); err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -193,11 +193,11 @@ func TestRequestEmailVerification_StoresHash(t *testing.T) {
 	}
 }
 
-// E1 — a valid verification token stamps email_verified_at; the consume is
+// A valid verification token stamps email_verified_at; the consume is
 // by hash.
 func TestVerifyEmail_ValidToken_MarksVerified(t *testing.T) {
-	m := &e1Mock{consumeVerifyUser: "u1"}
-	h := newE1Handler(m)
+	m := &tokenFlowMock{consumeVerifyUser: "u1"}
+	h := newTokenFlowHandler(m)
 	if _, err := h.VerifyEmail(context.Background(), &pb.VerifyEmailReq{Token: "plain-v"}); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -209,10 +209,10 @@ func TestVerifyEmail_ValidToken_MarksVerified(t *testing.T) {
 	}
 }
 
-// E1 — an invalid verification token does NOT mark the email verified.
+// An invalid verification token does NOT mark the email verified.
 func TestVerifyEmail_InvalidToken_Rejected(t *testing.T) {
-	m := &e1Mock{consumeVerifyUser: ""}
-	h := newE1Handler(m)
+	m := &tokenFlowMock{consumeVerifyUser: ""}
+	h := newTokenFlowHandler(m)
 	if _, err := h.VerifyEmail(context.Background(), &pb.VerifyEmailReq{Token: "bad"}); err == nil {
 		t.Error("an invalid verification token must fail")
 	}
@@ -221,7 +221,7 @@ func TestVerifyEmail_InvalidToken_Rejected(t *testing.T) {
 	}
 }
 
-// --- a consumer: the sweep that nobody was told had failed --------------------
+// --- the sweep that nobody was told had failed ------------------------------
 //
 // ResetPassword revokes every existing session and API token, because a reset
 // is what somebody does when they think a credential is compromised. That
@@ -234,7 +234,7 @@ func TestVerifyEmail_InvalidToken_Rejected(t *testing.T) {
 // So the one case the sweep exists for could leave the thief's session alive,
 // report success, and end there. The outcome is reported now.
 type resetSweepMock struct {
-	*e1Mock
+	*tokenFlowMock
 	sweepErr error
 	swept    bool
 }
@@ -244,13 +244,13 @@ func (m *resetSweepMock) DeleteUserSessionsForReset(ctx context.Context, in *pb.
 	if m.sweepErr != nil {
 		return nil, m.sweepErr
 	}
-	return m.e1Mock.DeleteUserSessionsForReset(ctx, in, o...)
+	return m.tokenFlowMock.DeleteUserSessionsForReset(ctx, in, o...)
 }
 
 func TestResetPassword_ReportsWhenTheSessionSweepDidNotRun(t *testing.T) {
-	base := &e1Mock{consumeResetUser: "u1"}
-	m := &resetSweepMock{e1Mock: base, sweepErr: status.Error(codes.Unavailable, "store down")}
-	h := newE1Handler(base)
+	base := &tokenFlowMock{consumeResetUser: "u1"}
+	m := &resetSweepMock{tokenFlowMock: base, sweepErr: status.Error(codes.Unavailable, "store down")}
+	h := newTokenFlowHandler(base)
 	h.Mutation = m
 
 	resp, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "tok", NewPassword: "n3wPassw0rd!"})
@@ -270,9 +270,9 @@ func TestResetPassword_ReportsWhenTheSessionSweepDidNotRun(t *testing.T) {
 // always says false — which would tell every user to sign out everywhere
 // after every reset, and get ignored within a week.
 func TestResetPassword_ReportsASweepThatSucceeded(t *testing.T) {
-	base := &e1Mock{consumeResetUser: "u1"}
-	m := &resetSweepMock{e1Mock: base}
-	h := newE1Handler(base)
+	base := &tokenFlowMock{consumeResetUser: "u1"}
+	m := &resetSweepMock{tokenFlowMock: base}
+	h := newTokenFlowHandler(base)
 	h.Mutation = m
 
 	resp, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "tok", NewPassword: "n3wPassw0rd!"})
@@ -286,11 +286,11 @@ func TestResetPassword_ReportsASweepThatSucceeded(t *testing.T) {
 
 // ── the reset transaction, driven rather than read ──────────────────────
 
-// newE1HandlerTx is newE1Handler with the transaction coordinator the
-// GENERATED bundle always supplies. Kept separate so the existing arms keep
+// newTokenFlowHandlerTx is newTokenFlowHandler with the transaction coordinator
+// the GENERATED bundle always supplies. Kept separate so the existing arms keep
 // proving what they proved, and the transaction gets arms of its own.
-func newE1HandlerTx(m *e1Mock, tx *recordingDistTx) *AuthServiceHandler {
-	h := newE1Handler(m)
+func newTokenFlowHandlerTx(m *tokenFlowMock, tx *recordingDistTx) *AuthServiceHandler {
+	h := newTokenFlowHandler(m)
 	h.DistTx = tx
 	h.Connection = "app-postgres"
 	return h
@@ -302,8 +302,8 @@ func newE1HandlerTx(m *e1Mock, tx *recordingDistTx) *AuthServiceHandler {
 // outside it and the rollback path would undo nothing.
 func TestResetPassword_Success_CommitsOnTheHandlersConnection(t *testing.T) {
 	tx := &recordingDistTx{}
-	m := &e1Mock{consumeResetUser: "u1"}
-	h := newE1HandlerTx(m, tx)
+	m := &tokenFlowMock{consumeResetUser: "u1"}
+	h := newTokenFlowHandlerTx(m, tx)
 	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
@@ -327,8 +327,8 @@ func TestResetPassword_Success_CommitsOnTheHandlersConnection(t *testing.T) {
 // green: every other reset arm builds a handler with no coordinator at all.
 func TestResetPassword_FailureAfterConsume_RollsBack(t *testing.T) {
 	tx := &recordingDistTx{}
-	m := &e1Mock{consumeResetUser: "u1", updatePasswordErr: errTestUpdateFailed}
-	h := newE1HandlerTx(m, tx)
+	m := &tokenFlowMock{consumeResetUser: "u1", updatePasswordErr: errTestUpdateFailed}
+	h := newTokenFlowHandlerTx(m, tx)
 	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); err == nil {
 		t.Fatal("a failed password write must fail the reset")
 	}
@@ -345,8 +345,8 @@ func TestResetPassword_FailureAfterConsume_RollsBack(t *testing.T) {
 // the pre-fix behaviour on exactly the day the coordinator is unhealthy.
 func TestResetPassword_BeginRefused_SpendsNothing(t *testing.T) {
 	tx := &recordingDistTx{beginErr: errTestBeginRefused}
-	m := &e1Mock{consumeResetUser: "u1"}
-	h := newE1HandlerTx(m, tx)
+	m := &tokenFlowMock{consumeResetUser: "u1"}
+	h := newTokenFlowHandlerTx(m, tx)
 	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); err == nil {
 		t.Fatal("a refused Begin must fail the reset")
 	}
@@ -369,8 +369,8 @@ var (
 // Every other live reset link of the account is spent with the one used: a
 // second link would set the password again.
 func TestResetPassword_SpendsEveryOtherResetLink(t *testing.T) {
-	m := &e1Mock{consumeResetUser: "u1"}
-	h := newE1Handler(m)
+	m := &tokenFlowMock{consumeResetUser: "u1"}
+	h := newTokenFlowHandler(m)
 	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
@@ -384,8 +384,8 @@ func TestResetPassword_SpendsEveryOtherResetLink(t *testing.T) {
 // password changed while older links still work.
 func TestResetPassword_AFailedSpendRollsBackTheReset(t *testing.T) {
 	tx := &recordingDistTx{}
-	m := &e1Mock{consumeResetUser: "u1", spendErr: errTestSpendFailed}
-	h := newE1HandlerTx(m, tx)
+	m := &tokenFlowMock{consumeResetUser: "u1", spendErr: errTestSpendFailed}
+	h := newTokenFlowHandlerTx(m, tx)
 	if _, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"}); !errors.Is(err, errTestSpendFailed) {
 		t.Fatalf("want the spend's failure, got %v", err)
 	}

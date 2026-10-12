@@ -17,8 +17,7 @@
 // The plugin author's contract:
 //   - AuthReq mirrors the gateway's required shape:
 //     `map<string, string> headers = 1` (validated by the
-//     gateway parser; see srcgo/domains/gateway/parser/parser.go
-//     §validateAuthRequestShape).
+//     gateway parser when it reads the auth method).
 //   - AuthResp carries the two fields the gateway router
 //     consumes: `repeated int32 permission_ids` (the deduped
 //     numeric IDs of granted permissions from the activating
@@ -145,7 +144,7 @@ func (x *AuthReq) GetHeaders() map[string]string {
 // `(w17.field).type = UUID` annotation drives validation on
 // the wire shape end-to-end.
 //
-// `scopes` carries REV-147 data-scope values the gateway threads
+// `scopes` carries data-scope values the gateway threads
 // into outgoing gRPC metadata as `x-w17-scope-<name>`, for the
 // storage codegen's per-model `(w17.db.scope)` auto-stamp (INSERT)
 // + auto-WHERE (SELECT). The plugin publishes the canonical
@@ -325,7 +324,7 @@ type SignInResp struct {
 	// login that didn't challenge).
 	MfaRequired bool   `protobuf:"varint,3,opt,name=mfa_required,json=mfaRequired,proto3" json:"mfa_required,omitempty"`
 	ChallengeId string `protobuf:"bytes,4,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
-	// C2 — the server-minted device-trust token for this login (devices
+	// The server-minted device-trust token for this login (devices
 	// feature). The client stores it and replays it as `X-Device-Trust` on
 	// the next sign-in so a trusted device skips new-device 2FA without
 	// relying on a client-chosen X-Device-Id. Rotated every login; the
@@ -2246,7 +2245,7 @@ func (x *ConfirmTotpResp) GetRecoveryCodes() []string {
 
 type DisableTotpReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// B1 — a current TOTP code, re-verified before a CONFIRMED
+	// A current TOTP code, re-verified before a CONFIRMED
 	// authenticator is removed so a hijacked session can't permanently
 	// disable the victim's 2FA (a transient compromise then can't
 	// weaken the account). Ignored when no confirmed authenticator
@@ -2569,7 +2568,7 @@ type VerifyMfaResp struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	UserId string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Token  string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
-	// C2 — server-minted device-trust token (see SignInResp). Issued here
+	// Server-minted device-trust token (see SignInResp). Issued here
 	// because passing VerifyMfa is exactly the new-device 2FA pass that
 	// should let the device skip the challenge next time.
 	DeviceTrustToken string `protobuf:"bytes,3,opt,name=device_trust_token,json=deviceTrustToken,proto3" json:"device_trust_token,omitempty"`
@@ -3556,8 +3555,8 @@ type InviteToOrgReq struct {
 	// grant instead of a label with nothing behind it.
 	Role string `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
 	// Opaque, consumer-owned, and the reason this field exists: the caller pins
-	// whatever their own system needs paired with this invitation — the reported case
-	// is a tenant plus one object in their engine — and gets it back at acceptance out
+	// whatever their own system needs paired with this invitation — for example a
+	// tenant plus one object in their engine — and gets it back at acceptance out
 	// of the same statement that spends the invitation. See OrgInvite.metadata.
 	Metadata string `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// org — the organization's slug, as the REST path names it
@@ -4472,7 +4471,7 @@ type ResetPasswordResp struct {
 	// call site under a comment claiming "logged by the caller's interceptor",
 	// and the plugin has no logging at all: grep handlers/ for slog, log or
 	// logger and there is nothing. So a reset after a theft could leave the
-	// thief's session alive, report success, and end there (a consumer).
+	// thief's session alive, report success, and end there.
 	//
 	// `false` means: your password IS changed, and the old sessions may still
 	// be live — sign out everywhere, or reset again. A caller that ignores this

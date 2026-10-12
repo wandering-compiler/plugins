@@ -76,13 +76,13 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	// Drain the usage queue at teardown.
 	//
 	// The writer is asynchronous on purpose — a model call must not wait on a
-	// database write — which means everything not yet flushed lives only in
-	// its queue. Without this hook that queue dies with the process, and the
-	// shorter the process the more of the bill it takes: a consumer measured a
-	// run of hundreds of calls that ended before the first flush tick and left
-	// ZERO rows, and a longer one that kept only the batches which happened to
-	// tick in time. A server hides it; a CLI, an eval or a batch job is mostly
-	// this case, and those are exactly the shapes where spend gets accounted.
+	// database write — which means everything not yet flushed lives only in its
+	// queue. Without this hook that queue dies with the process, and the
+	// shorter the process the more of the bill it takes: a run of hundreds of
+	// calls that ends before the first flush tick leaves ZERO rows, and a
+	// longer one keeps only the batches which happened to tick in time. A
+	// server hides it; a CLI, an eval or a batch job is mostly this case, and
+	// those are exactly the shapes where spend gets accounted.
 
 	registry.RegisterShutdown(func(ctx context.Context) error {
 		sink.Close(ctx)

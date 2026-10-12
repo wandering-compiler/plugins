@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: types/models.proto
 
-// Payment plugin — core models (Slice 1).
+// Payment plugin — core models.
 //
 // Provider-agnostic billing primitives: Customer links the project's
 // principal to the payment provider's customer object; Payment is one

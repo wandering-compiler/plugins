@@ -106,7 +106,7 @@ func withRealSeams(t *testing.T) {
 // THE CORRECTION, as a test. A BOUND invitation derives the address; an OPEN one
 // derives nothing, and the middle floor must tell them apart.
 //
-// Jiri's requirement asked for both paths to be pre-verified. Open signup cannot
+// Marking both paths pre-verified is tempting. Open signup cannot
 // be: the registrant picks the address and the link may have travelled by a
 // channel that has no address at all, so what was proved is that they were
 // AUTHORISED. Marking that derived would be a claim with no evidence — and worse
@@ -418,8 +418,7 @@ func (m *signupTokenMock) ConsumeOrgInviteByToken(_ context.Context, _ *pb.Consu
 //
 // `invite_only` asks "was THIS ADDRESS invited?" and an OPEN invitation names no
 // address, so the address lookup can never find it — which refused every holder of
-// an open link, in the DEFAULT configuration (`invite_only` defaults on). Found by
-// review rather than by a consumer, which is the only reason it is not a report.
+// an open link, in the DEFAULT configuration (`invite_only` defaults on).
 func TestSignupInviteGate_AnOpenLinkAdmitsAnyAddress(t *testing.T) {
 	m := &signupTokenMock{pendingEmail: ""} // open invitation, nobody invited by address
 	h := &AuthServiceHandler{Query: m, Mutation: m, InviteOnly: true}
@@ -497,11 +496,11 @@ func (m *dupeMock) CreateOrgInvite(_ context.Context, _ *pb.CreateOrgInviteReq, 
 
 // The detail has to survive the hop.
 //
-// A consumer reported that a second invitation to the same address is
-// indistinguishable from a malformed request, because both arrive as
-// InvalidArgument. The top-level code IS uniform, deliberately — grpcerr
-// collapses every validation-class violation so a client treats the class one
-// way — and the discrimination lives in the detail's `code`.
+// Without it, a second invitation to the same address is indistinguishable from
+// a malformed request, because both arrive as InvalidArgument. The top-level
+// code IS uniform, deliberately — grpcerr collapses every validation-class
+// violation so a client treats the class one way — and the discrimination lives
+// in the detail's `code`.
 //
 // That argument only holds if the detail reaches the caller. The storage tier
 // emits it (proved live by the e2e case on a composite index) and the gateway

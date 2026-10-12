@@ -20,9 +20,8 @@ import (
 // and not one that registers an account and then logs into it with the
 // password it registered with.
 //
-// That gap is why a colleague being onboarded could not be told, from here,
-// whether the login was broken or their password was wrong: nothing in the
-// suite asserted the two halves agree (2026-09-23).
+// Without it, nothing here can tell whether a login is broken or a password
+// is wrong: nothing in the suite asserts the two halves agree.
 //
 // The store is a map rather than a canned response on purpose. A mock that
 // answers GetUserByEmail with a hash of its own choosing proves the two halves
@@ -190,7 +189,7 @@ func TestSignUpThenSignIn_AWrongPasswordIsStillRefused(t *testing.T) {
 	}
 }
 
-// --- a consumer: a bad token must not be distinguishable -------------------
+// --- a bad token must not be distinguishable -------------------------------
 //
 // The consume statements carry RETURNING, so "no live row" arrives as an
 // ERROR (NotFound), not as an empty response. All three handlers returned it

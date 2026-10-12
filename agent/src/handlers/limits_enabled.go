@@ -253,10 +253,10 @@ func (l *dbLimiter) scopeID(ctx context.Context, scope string) (int64, error) {
 //
 // Minor units are only comparable within a currency, and a cap is one integer
 // with no currency of its own. The loop this replaced added them flat — dollars
-// to euros — which is the defect a consumer fixed INSIDE a rollup, still present
-// across the rollups being summed here.
+// to euros — the defect fixed INSIDE a rollup, still present across the
+// rollups being summed here.
 //
-// Three kinds of line, and the middle one is what a consumer reported:
+// Three kinds of line, and the middle one is the easy one to miss:
 //
 //	cost present            counted, under its own currency
 //	cost absent, priced > 0 UNTOTALLABLE. The usage rollup gave absence a

@@ -105,7 +105,7 @@ message TokenIssued {
 // logout path; the eventbus allows one emit site per event and the
 // uncalled DeleteToken primitive no longer emits). Idempotent upstream
 // → the event fires only when an actual row DELETE occurred; a
-// no-such-token logout doesn't emit (Phase D gates emit on
+// no-such-token logout doesn't emit (emit is gated on
 // RowsAffected > 0 via the storage codegen's per-mutation conditional
 // emit path).
 message TokenRevoked {
@@ -160,7 +160,7 @@ message RoleUpdated {
 // AclPermission proto enum (w17.lock.acl.proto) is now the
 // catalog. PermissionCreated / PermissionDeleted events were
 // retired together with the CreatePermission /
-// DeletePermission mutations (Phase 4 plugin track).
+// DeletePermission mutations.
 
 message UserRoleAssigned {
   option (w17.event) = { channel: "events", topic: "auth.user_role.assigned" };
@@ -281,7 +281,7 @@ message RecoveryCodeUsed {
 // only its hash is stored) + email for a hand-written delivery channel
 // (e-mail with a reset link). The handler emits only on a known email and
 // silently no-ops an unknown one (anti-enumeration), so a subscriber only
-// ever sees a request for a real account. E1.
+// ever sees a request for a real account.
 message PasswordResetRequested {
   option (w17.event) = {
     channel: "events"
@@ -316,7 +316,7 @@ message SignUpConfirmationRequested {
 
 // email_verification lifecycle — emitted by CreateEmailVerificationToken
 // when a verification is requested (e.g. just after sign-up). Same shape
-// + single-plaintext-delivery contract as PasswordResetRequested. E1.
+// + single-plaintext-delivery contract as PasswordResetRequested.
 message EmailVerificationRequested {
   option (w17.event) = {
     channel: "events"

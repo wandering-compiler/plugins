@@ -56,12 +56,11 @@ func (e *authnError) Error() string {
 //
 // This used to be fixed "regardless of cause", and the comment listed what it
 // collapsed: "no such email", "wrong password", "DB transient failure". The
-// first two belong together; the third is not a refusal at all. A consumer
-// built a facade that wanted to tell an outage from a rejection and could not,
-// because the information was destroyed here — so their running service, with
-// its database down, told people their password was wrong. That is a lie they
-// cannot check, and it sends them to reset a password that was fine (a consumer,
-// 2026-09-23).
+// first two belong together; the third is not a refusal at all. A facade that
+// wants to tell an outage from a rejection cannot, if the information is
+// destroyed here — so a running service, with its database down, tells people
+// their password is wrong. That is a lie they cannot check, and it sends them
+// to reset a password that was fine.
 //
 // Nothing leaks: the operational answer is the same for every caller and every
 // address, so "the service is degraded" says nothing about whether an account
@@ -114,7 +113,7 @@ const (
 	// folded into the opaque answer, because it is not a credential refusal:
 	// it used to render "You are not signed in." to a caller who was, and
 	// whose real mistake — usually an org ID where the slug goes — that
-	// sentence hides (2026-10-04). It reveals nothing: an org that does not
+	// sentence hides. It reveals nothing: an org that does not
 	// exist and one the caller is not in answer the same.
 	CodeOrgNotMember = "ORG_NOT_MEMBER"
 
@@ -277,13 +276,12 @@ const (
 // unique index.
 //
 // Storage reports a unique violation as InvalidArgument carrying an
-// ErrorDetail{code: UNIQUE_VIOLATION} (grpcerr C-3 folded every
-// validation-class violation into InvalidArgument), never as AlreadyExists.
-// A check for AlreadyExists alone therefore never fired against a real store:
-// the handler tests passed because their fake store answered AlreadyExists,
-// and live the caller read "The request could not be accepted as sent." (found
-// by examples/auth-proof). AlreadyExists is still accepted, for a store that
-// answers that way.
+// ErrorDetail{code: UNIQUE_VIOLATION} (grpcerr folds every validation-class
+// violation into InvalidArgument), never as AlreadyExists. A check for
+// AlreadyExists alone therefore never fires against a real store: handler tests
+// pass because their fake store answers AlreadyExists, and live the caller
+// reads "The request could not be accepted as sent.". AlreadyExists is still
+// accepted, for a store that answers that way.
 //
 // The field is the address — or, under tenant_scope, the composite that
 // includes it; a unique violation on some other column is not this refusal.

@@ -2,24 +2,18 @@
 //
 // # Provenance
 //
-// Ported from a sibling project of ours, which has run this
-// in production. The parameter shaping, the reasoning-family table and the
-// status handling are theirs, and the comments explaining WHY each one is the
-// way it is were kept — a threshold whose reason is lost is a number nobody
-// can safely change.
-//
-// Their copy carries a note beside the family table saying it is "a deliberate
-// fork … the fix when a second domain needs it is a shared package". This is
-// that package.
+// The parameter shaping, the reasoning-family table and the status handling
+// come from code that has run in production, and the comments explaining WHY
+// each one is the way it is were kept — a threshold whose reason is lost is a
+// number nobody can safely change.
 //
 // # Why the Responses API and not Chat Completions
 //
-// Because Chat Completions does not stream. Measured on their side, four runs,
-// same prompt and deployment with only the URL changing: `chat/completions`
+// Because Chat Completions does not stream. Measured over four runs, same
+// prompt and deployment with only the URL changing: `chat/completions`
 // delivers the whole answer in 0.06–0.10 s after several seconds of silence,
-// while `responses` delivers it over 2.6–4.7 s, as it is written. Phase 1 does
-// not stream, but the phase after it does, and choosing the other API now
-// would have to be undone then.
+// while `responses` delivers it over 2.6–4.7 s, as it is written. CompleteStream
+// streams, and Chat Completions could not serve it.
 package llm
 
 import (
@@ -117,10 +111,10 @@ type Model struct {
 	//
 	// Not the same thing as saying so in the prompt. An instruction is a
 	// request the model may decline, and the decline surfaces as a parse error
-	// at the far end of whatever the answer was feeding — a consumer who lost
-	// this had to add a markdown-fence stripper to get it back, and said so:
-	// anything more than that is repairing model output, which is where a wrong
-	// answer stops looking wrong.
+	// at the far end of whatever the answer was feeding. Without this a caller
+	// ends up adding a markdown-fence stripper, and anything more than that is
+	// repairing model output, which is where a wrong answer stops looking
+	// wrong.
 	JSONObject bool
 }
 
@@ -307,10 +301,10 @@ func usageFrom(res *responses.Response) Usage {
 //
 // Returning nothing but "the model call failed" was the previous behaviour,
 // and the comment justifying it claimed the detail was in the bundle's logs.
-// Nothing logged it. A consumer bisected a one-field regression with two PAID
-// runs against a live model because the failure named neither the field nor
-// the status — so the summary is now built here, where the provider's type is
-// known, and the full error is logged by the caller.
+// Nothing logged it, and a one-field regression cost PAID runs against a live
+// model to bisect because the failure named neither the field nor the status —
+// so the summary is now built here, where the provider's type is known, and
+// the full error is logged by the caller.
 // ProviderLogLine is what the CALLER may log: everything ProviderFault gives a
 // caller, plus the request URL — and nothing else.
 //
@@ -318,7 +312,7 @@ func usageFrom(res *responses.Response) Usage {
 // acceptable" was true about the URL and wrong about the rest. The full text
 // also carries the RESPONSE BODY, which this very file records as sometimes
 // quoting the prompt — so `%v` on a provider error put user input into the
-// bundle's log, on a line whose comment justified only the URL (reported by a consumer).
+// bundle's log, on a line whose comment justified only the URL.
 //
 // A log is not a safe place for a prompt: it is shipped, aggregated and kept
 // far longer than the request, and nobody reading it asked for the content.

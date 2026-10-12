@@ -18,7 +18,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// a consumer — the five-attempt lockout is PER CHALLENGE, and a challenge is
+// The five-attempt lockout is PER CHALLENGE, and a challenge is
 // minted on every password sign-in. An attacker who already holds the
 // password (the exact threat a second factor exists for) buys five more
 // guesses per sign-in, forever: the bound on one challenge bounds nothing
@@ -79,8 +79,7 @@ func TestMfaIssuance_CapRefusesOnceTheWindowIsSpent(t *testing.T) {
 
 // The refusal is reachable ONLY after the password verified, so it may say
 // what happened. Folding it into the opaque answer would tell a user whose
-// password is fine that their password is wrong — a consumer's complaint,
-// one flow over.
+// password is fine that their password is wrong.
 func TestMfaIssuance_CapRefusalIsNotInvalidCredentials(t *testing.T) {
 	st, ok := status.FromError(Unauthenticated(errMfaChallengeBudget))
 	if !ok {
@@ -221,7 +220,7 @@ func TestMfaIssuance_AFailedSupersedeMintsNothing(t *testing.T) {
 // The per-challenge budget and the issuance cap are two halves and the
 // comment on maxMfaAttempts used to name the escape ("the user restarts the
 // sign-in flow for a fresh challenge") as if it were fine. Keep them read as
-// a pair: a reader who takes either for the whole bound draws a consumer again.
+// a pair: a reader who takes either for the whole bound reopens the escape.
 func TestMfaIssuance_AttemptCeilingDoesNotClaimToBoundGuessing(t *testing.T) {
 	src, err := os.ReadFile("mfa.go")
 	if err != nil {
@@ -239,14 +238,14 @@ func TestMfaIssuance_AttemptCeilingDoesNotClaimToBoundGuessing(t *testing.T) {
 
 var _ = timestamppb.Now
 
-// a consumer — the cap counted outside any transaction and then decided, which
-// bounds nothing against anything concurrent. They measured it: twenty
-// sign-ins at once produced twenty challenges past a limit of ten, because
-// all twenty read zero before any of them committed. An attacker who already
-// holds the password sends twenty at once as easily as twenty in a row.
+// A cap that counts outside any transaction and then decides bounds nothing
+// against anything concurrent: twenty sign-ins at once against a limit of ten
+// all read zero before any of them commits, and all twenty get a challenge. An
+// attacker who already holds the password sends twenty at once as easily as
+// twenty in a row.
 //
-// My own tests missed it because every one of them was SERIAL. A serial test
-// of a read-then-decide cap passes by construction.
+// A SERIAL test cannot see this: a serial test of a read-then-decide cap
+// passes by construction.
 //
 // The mock stands in for the database's serialisation the way mfaMock's mutex
 // stands in for RecordMfaAttempt's atomic UPDATE: LockUserForIssuance holds a

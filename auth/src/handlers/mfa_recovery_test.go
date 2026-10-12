@@ -213,7 +213,7 @@ func TestEnrollTotp_ReturnsTheQrCodeAsSvg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(e.GetQrSvg(), "<svg ") || !strings.Contains(e.GetQrSvg(), `<path fill="#000" d="M`) {
+	if !strings.HasPrefix(e.GetQrSvg(), "<svg ") || !strings.Contains(e.GetQrSvg(), `<path fill="#000000" d="M`) {
 		t.Errorf("qr_svg = %.80q…", e.GetQrSvg())
 	}
 }

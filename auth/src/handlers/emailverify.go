@@ -15,7 +15,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// This file implements the `email_verification` feature (E1). Staged only
+// This file implements the `email_verification` feature. Staged only
 // when the activation enables `email_verification` (plugin.yaml go_files).
 
 const defaultEmailVerificationTTLSeconds = 24 * 60 * 60 // 24 hours
@@ -72,8 +72,7 @@ func (h *AuthServiceHandler) VerifyEmail(ctx context.Context, req *pb.VerifyEmai
 	// Same pairing as ResetPassword: the consume spends the token and the
 	// write is what it authorised. Apart, a failure between them burns a
 	// valid link and leaves the address unverified, so the person has to ask
-	// for another one to reach a state the first one already paid for
-	// (a consumer).
+	// for another one to reach a state the first one already paid for.
 	var tx *distx.TxHandle
 	txCtx := ctx
 	var err error

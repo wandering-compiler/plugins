@@ -326,7 +326,7 @@ func TestVerifyPKCES256(t *testing.T) {
 	}
 }
 
-// --- a consumer: the flow can serve a browser app, and only a registered one --
+// --- the flow can serve a browser app, and only a registered one ------------
 //
 // CliAuthorize refused every non-loopback redirect, which is right for a CLI
 // and made the flow unusable for web SSO: a sign-in app on its own origin
@@ -562,7 +562,7 @@ func TestCliAuthorize_RefusesARowThatIsNotTheOneItAskedFor(t *testing.T) {
 	}
 }
 
-// --- a consumer addendum: state, and https on the authorize path ------------
+// --- state, and https on the authorize path --------------------------------
 
 // state is the client's anti-CSRF value and the server's only job is to hand
 // it back. PKCE does not cover what it covers: an attacker who walks a victim

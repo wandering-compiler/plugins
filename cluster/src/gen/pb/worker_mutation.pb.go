@@ -35,10 +35,10 @@ const (
 // returned to ENROLLED on the next sweep, and a ban would mean nothing.
 //
 // The DECISION is idempotent; the LOCATION is not. `relay_id` is refreshed on
-// every report, because it records where the worker is attached RIGHT NOW. (It
-// used to be DO NOTHING, which froze the location along with the decision: a
-// consumer, 2026-09-25, found a worker moved to another relay that the
-// registry kept placing at the first one, with no admin action to clear it.)
+// every report, because it records where the worker is attached RIGHT NOW. (DO
+// NOTHING would freeze the location along with the decision: a worker moved to
+// another relay would keep being placed at the first one, with no admin action
+// to clear it.)
 //
 // Nothing else is refreshed: `state`, `decided_at` and `decided_by` are the
 // decision, and `name` / `device_id` are claims a banned machine must not be

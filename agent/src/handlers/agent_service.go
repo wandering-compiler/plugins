@@ -82,7 +82,7 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		// A request the LLM layer refused BEFORE calling the provider is not a
 		// failed call: no tokens were spent and nothing was unavailable.
 		// Recording one invents spend, and `Unavailable` sends the caller to the
-		// provider's status page for what is an invalid argument (reported by a consumer).
+		// provider's status page for what is an invalid argument.
 		if llm.IsPreflight(err) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
@@ -102,21 +102,19 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		// neither belongs in an answer travelling back to whoever asked.
 		//
 		// But this used to forward NOTHING, while the comment here claimed the
-		// detail was in the bundle's logs. Nothing logged it. A consumer
-		// bisected a one-field regression with two PAID runs against a live
-		// model, because `the model call failed` named neither the field nor
-		// the status — the same shape as the `<DOMAIN>` placeholder they
-		// reported earlier: the first line an operator sees, saying nothing.
+		// detail was in the bundle's logs. Nothing logged it. A one-field
+		// regression then costs PAID runs against a live model to bisect,
+		// because `the model call failed` names neither the field nor the
+		// status: the first line an operator sees, saying nothing.
 		//
 		// So: the provider's own CLASSIFICATION goes to the caller, and the
 		// classification PLUS the URL goes to the log.
 		//
-		// Not the whole error, which is what this said and did for a day. The
-		// full text also carries the response BODY, and llm.go records that it
-		// sometimes quotes the prompt — so `%v` put user input into a log that
-		// is shipped, aggregated and kept far longer than the request (a
-		// consumer reported it). The justification covered the URL and the
-		// body rode along.
+		// Not the whole error. The full text also carries the response BODY,
+		// and llm.go records that it sometimes quotes the prompt — so `%v`
+		// would put user input into a log that is shipped, aggregated and kept
+		// far longer than the request. A justification that covers the URL
+		// lets the body ride along.
 		log.Printf("agent: model call failed (model %q): %s", m.ID, llm.ProviderLogLine(err))
 		return nil, status.Error(codes.Unavailable, modelCallFailure(err))
 	}

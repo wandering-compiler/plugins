@@ -40,7 +40,7 @@ type AgentServiceClient interface {
 	// Unlike Complete, a stream is cut off at a byte ceiling that follows the
 	// token budget — see ModelSpec.max_tokens.
 	CompleteStream(ctx context.Context, in *CompleteReq, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompleteEvent], error)
-	// RunAgent runs the tool-calling loop. See the phase 3 block below: the
+	// RunAgent runs the tool-calling loop. See the tool-calling block below: the
 	// engine drives, you run the tools.
 	RunAgent(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RunAgentReq, RunAgentEvent], error)
 }
@@ -111,7 +111,7 @@ type AgentServiceServer interface {
 	// Unlike Complete, a stream is cut off at a byte ceiling that follows the
 	// token budget — see ModelSpec.max_tokens.
 	CompleteStream(*CompleteReq, grpc.ServerStreamingServer[CompleteEvent]) error
-	// RunAgent runs the tool-calling loop. See the phase 3 block below: the
+	// RunAgent runs the tool-calling loop. See the tool-calling block below: the
 	// engine drives, you run the tools.
 	RunAgent(grpc.BidiStreamingServer[RunAgentReq, RunAgentEvent]) error
 }

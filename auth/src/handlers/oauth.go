@@ -48,7 +48,7 @@ var (
 	errOAuthState            = errors.New("oauth state invalid")
 	errOAuthNoSubject        = errors.New("oauth userinfo missing subject")
 	errOAuthNoEmail          = errors.New("oauth userinfo missing email")
-	// Q36-auth-1 — the IdP did not assert email_verified, so we refuse to
+	// The IdP did not assert email_verified, so we refuse to
 	// auto-link this external identity to a pre-existing local account
 	// (an attacker could otherwise set their IdP profile email to a
 	// victim's and inherit the victim's account — CWE-287).
@@ -59,13 +59,13 @@ var (
 	// first" — and collapsing them would tell the wrong half of the story
 	// to whichever caller hit the other one.
 	errOAuthLocalUnverified = errors.New("the existing account for this address has not verified it; verify the address before linking an identity provider to it")
-	// Q36-auth-2 — the state CSRF token is HMAC'd with the provider's
+	// The state CSRF token is HMAC'd with the provider's
 	// client_secret; an empty secret = an empty (public) HMAC key, so an
 	// attacker can forge any state. A confidential server-side client
 	// always has a secret (the token exchange needs it too), so reject
 	// the misconfiguration rather than sign with a forgeable key.
 	errOAuthProviderMisconfigured = errors.New("oauth provider misconfigured: client_secret is required")
-	// Q45-auth-1 — redirect_after is caller-supplied and echoed back to the
+	// redirect_after is caller-supplied and echoed back to the
 	// client after a successful login. An absolute / protocol-relative URL
 	// is an open redirect (CWE-601): an attacker mints an authorize URL with
 	// redirect_after=https://evil and phishes a victim, who lands on evil
@@ -307,7 +307,7 @@ func (h *AuthServiceHandler) loadEnabledProvider(ctx context.Context, name strin
 			_, _ = h.Mutation.ClearOAuthProviderLegacySecret(ctx, &pb.ClearOAuthProviderLegacySecretReq{Id: p.GetId()})
 		}
 	}
-	// Q36-auth-2 — refuse a provider with no client secret: it would sign
+	// Refuse a provider with no client secret: it would sign
 	// the state CSRF token with an empty HMAC key (forgeable), and the
 	// token exchange (which also needs the secret) would fail anyway.
 	if p.GetSecret() == "" {
@@ -408,7 +408,7 @@ func (h *AuthServiceHandler) fetchIdentity(ctx context.Context, p *pb.OAuthProvi
 	}
 	subject = claimString(claims, orDefault(p.GetSubjectPath(), defaultSubjectPath))
 	email = claimString(claims, orDefault(p.GetEmailPath(), defaultEmailPath))
-	// Q36-auth-1 — the OIDC-standard `email_verified` claim. Absent /
+	// The OIDC-standard `email_verified` claim. Absent /
 	// false means the IdP does NOT vouch that this principal owns the
 	// email, so it must not auto-link to a pre-existing local account.
 	emailVerified = claimBool(claims, "email_verified")
@@ -659,7 +659,7 @@ func (h *AuthServiceHandler) createOAuthUserTx(txCtx context.Context, email, has
 }
 
 // isSafeRelativeRedirect reports whether a caller-supplied redirect_after
-// is a safe post-login destination (Q45-auth-1). Empty = no redirect
+// is a safe post-login destination. Empty = no redirect
 // requested (allowed). Otherwise it must be a site-relative path: a single
 // leading slash, no scheme, no host — so it can never send the user to an
 // attacker-controlled origin. Rejects absolute URLs ("https://evil"),

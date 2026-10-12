@@ -53,8 +53,8 @@ func init() {
 	// none of them could say which organization an answer belonged to: the
 	// active org travels in a HEADER, so a response carries no trace of it.
 	// The UI therefore answered "which org is this" from its own memory — the
-	// module-level state whose staleness produced a reported data-leak scare
-	// and a 401-on-every-screen bug in one day.
+	// module-level state that, once stale, can show one organization's data
+	// under another's name and fail every screen with a 401.
 	//
 	// Installed here rather than written into the base handler because both
 	// the fields and the queries behind them exist only under org_membership.
@@ -120,7 +120,7 @@ func init() {
 // Before this, ownership was folded into the same `all_permissions` bool as a
 // wildcard ROLE and therefore arrived inside the narrowing — where it could
 // only subtract. An owner holding no role intersected "everything" with
-// "nothing" and got nothing (verified live 2026-09-10), so owners needed seeded
+// "nothing" and got nothing, so owners needed seeded
 // grants like anyone else.
 func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
 	orgID := scopes["org_id"]
@@ -215,8 +215,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	// reports no row as NotFound. Returned as an error it skipped both the
 	// owner fallback below — so an owner whose membership row was gone could
 	// not reach their own org — and the ORG_NOT_MEMBER answer, so a caller who
-	// named the wrong org read "You are not signed in." (found live by
-	// examples/auth-proof).
+	// named the wrong org read "You are not signed in.".
 	resp, err := h.Query.GetUserOrgBySlug(ctx, &pb.GetUserOrgBySlugReq{UserId: userID, Slug: slug})
 	if notFoundOK(err) != nil {
 		return err

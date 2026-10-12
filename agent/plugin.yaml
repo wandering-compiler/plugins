@@ -7,7 +7,7 @@ requires_w17: ">=1.5"
 # per-activation pb path.
 go_module: github.com/wandering-compiler/plugins/agent
 
-description: "LLM calls for a w17 project: one model call in, text + token usage out. An ENGINE — no conversation, no history, no user; your own service holds those and calls this. Phase 1 is a single non-streaming completion; streaming, tool-calling and agent delegation follow."
+description: "LLM calls for a w17 project: one model call in, text + token usage out. An ENGINE — no conversation, no history, no user; your own service holds those and calls this. Complete returns the whole answer, CompleteStream sends it as it is written, and RunAgent runs a tool-calling loop whose tools your project serves."
 license: "Apache-2.0"
 
 # Plugin-author env-var contract. Each entry becomes one PascalCase

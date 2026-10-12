@@ -50,8 +50,8 @@ func TestRoleWithinCeiling(t *testing.T) {
 		{"a wildcard with no lock to expand", &pb.RoleGrant{AllPermissions: true}, nil, false},
 		// A domain with no endpoint catalogue: its lock exists and allocates
 		// nothing, so "everything" is nothing — known, and within anyone's
-		// ceiling. It used to read as unexpandable, and an invitation to such a
-		// role could never be accepted (reported by a consumer, 2026-10-06).
+		// ceiling. Read as unexpandable, an invitation to such a role could
+		// never be accepted.
 		{"a wildcard over an empty catalogue", &pb.RoleGrant{AllPermissions: true}, &acllock.Lock{Version: 1}, true},
 	}
 	for _, c := range cases {
@@ -62,7 +62,7 @@ func TestRoleWithinCeiling(t *testing.T) {
 	}
 }
 
-// The reported hole: anyone who may invite could invite at org-admin. Refused
+// The hole this closes: anyone who may invite could invite at org-admin. Refused
 // BEFORE anything is written — the catalogue mock has no mutation client, so a
 // write would panic rather than pass.
 func TestInviteToOrg_RefusesARoleAboveTheInviter(t *testing.T) {

@@ -223,7 +223,7 @@ func toolCallsOf(res *responses.Response) []toolCall {
 // `Unavailable`. For a provider failure that is right. For a request that never
 // left the process it is wrong twice over — it invents spend for a call that did
 // not happen, and it reports an outage for what is an invalid argument, so the
-// caller goes looking at the provider's status page (reported by a consumer).
+// caller goes looking at the provider's status page.
 //
 // Wrap, don't replace: the messages already say what is wrong, and callers use
 // errors.Is to decide how to answer.
@@ -274,8 +274,8 @@ func paramsFor(m Model, instructions string, history []Message) (*responses.Resp
 // the system prompt travels in `instructions`, a field of its own, so a caller
 // who put "reply with JSON" there has said it — and a caller who said it
 // nowhere has a request that cannot succeed. Catching it here costs nothing
-// and names the cause; the alternative is what a consumer actually got, which
-// was an unexplained `Unavailable` bisected over two paid runs.
+// and names the cause; the alternative is an unexplained `Unavailable`,
+// bisected over paid runs.
 //
 // Deliberately NARROW: it fires only when the word is absent everywhere. It is
 // not a claim about what else may make this format fail on a given model or
@@ -292,10 +292,10 @@ func checkJSONObjectPrecondition(m Model, instructions string, history []Message
 		// The ASSISTANT's own words do not count, and that is the provider's
 		// rule, not ours: "the model will not generate JSON without a SYSTEM OR
 		// USER message instructing it to do so". Accepting an assistant turn
-		// made this guard pass on a request the provider still refuses — so the
-		// check that exists to replace a bare 400 handed back the bare 400
-		// (reported by a consumer). A model that mentioned JSON in a previous reply is
-		// exactly the conversation where that happens.
+		// would make this guard pass on a request the provider still refuses —
+		// so the check that exists to replace a bare 400 would hand back the
+		// bare 400. A model that mentioned JSON in a previous reply is exactly
+		// the conversation where that happens.
 		if msg.Assistant {
 			continue
 		}

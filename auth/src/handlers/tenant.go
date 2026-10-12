@@ -106,7 +106,7 @@ func resolveSignupTenant(ctx context.Context, h *AuthServiceHandler, req *pb.Sig
 // tenantUnknown refuses a registration that names no tenant this activation
 // has. It used to be a bare fmt.Errorf, which reaches a REST caller as 500
 // "Something went wrong on our side." — for a request that simply came in on
-// the wrong address (found live by examples/auth-proof).
+// the wrong address.
 func tenantUnknown(ctx context.Context, dev string) error {
 	return refusal(ctx, codes.InvalidArgument, dev, CodeTenantUnknown, "", MsgTenantUnknown, nil)
 }

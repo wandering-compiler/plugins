@@ -10,7 +10,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 )
 
-// a consumer — the third path.
+// The third path.
 //
 // The rule, established on the unary path: a request the LLM layer refuses
 // BEFORE the provider is not a failed call. Recording one invents spend, and `Unavailable` sends the
@@ -18,8 +18,7 @@ import (
 // fixed on `Complete` and on the streaming path and missed on `RunAgent` — which
 // is the one that makes the MOST model calls per invocation, because it loops.
 //
-// The same shape as TestRunAgent_AsksTheLimitLikeTheOtherTwoEntryPoints above,
-// and found the same way: a consumer reading our source, not a test of ours.
+// The same shape as TestRunAgent_AsksTheLimitLikeTheOtherTwoEntryPoints above.
 func TestRunAgent_APreflightRefusalIsNotRecordedAsACall(t *testing.T) {
 	sink := &capturingSink{}
 	// No DefaultMaxTokens: the LLM layer refuses before the provider. The stream

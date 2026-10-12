@@ -45,7 +45,7 @@ type mfaMock struct {
 	stepUps       int64           // UserTotpSecret.stepup_attempts
 	stepUpLocked  time.Time       // UserTotpSecret.stepup_locked_until
 	totpConfirmed bool
-	totpReadErr   error // enrolment store refuses to answer (a consumer, #58/3)
+	totpReadErr   error // enrolment store refuses to answer
 
 	// Concurrency seam. The real RecordMfaAttempt is one atomic UPDATE …
 	// RETURNING; here a mutex stands in for that serialisation so the test
@@ -62,11 +62,11 @@ type mfaMock struct {
 	chCodeHash  string
 	chCreatedAt *timestamppb.Timestamp
 	chConsumed  bool
-	chAttempts  int64 // failed-attempt counter (Q43-auth-mfa)
+	chAttempts  int64 // failed-attempt counter
 
 	userEmail string
 
-	// issuance cap + supersede state (a consumer)
+	// issuance cap + supersede state
 	challengeCount int64                  // what CountRecentMfaChallenges reports
 	countErr       error                  // the counter refuses to answer
 	countedSince   *timestamppb.Timestamp // what the handler asked about
@@ -406,7 +406,7 @@ func TestVerifyMfa_WrongCode_Unauthenticated(t *testing.T) {
 	}
 }
 
-// Q43-auth-mfa: a 6-digit second factor must not be brute-forceable within
+// A 6-digit second factor must not be brute-forceable within
 // the TTL. After maxMfaAttempts wrong codes the challenge is locked — even
 // the CORRECT code is then refused (the attacker can't outrun the counter).
 func TestVerifyMfa_LocksOutAfterMaxAttempts(t *testing.T) {
@@ -548,7 +548,7 @@ func enrollAndConfirm(t *testing.T, h *AuthServiceHandler, m *mfaMock, ctx conte
 	return enroll.GetSecret()
 }
 
-// B1 — DisableTotp must re-verify a live TOTP code before removing a
+// DisableTotp must re-verify a live TOTP code before removing a
 // CONFIRMED authenticator, so a hijacked session can't permanently
 // disable the victim's 2FA. A valid code deletes.
 func TestDisableTotp_ValidCode_Deletes(t *testing.T) {
@@ -565,7 +565,7 @@ func TestDisableTotp_ValidCode_Deletes(t *testing.T) {
 	}
 }
 
-// B1 — a wrong code must NOT disable 2FA (opaque Unauthenticated,
+// A wrong code must NOT disable 2FA (opaque Unauthenticated,
 // secret left intact).
 func TestDisableTotp_WrongCode_Rejected(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
@@ -581,7 +581,7 @@ func TestDisableTotp_WrongCode_Rejected(t *testing.T) {
 	}
 }
 
-// B1 — an empty code is rejected too (no bypass via the zero value).
+// An empty code is rejected too (no bypass via the zero value).
 func TestDisableTotp_EmptyCode_Rejected(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
@@ -596,7 +596,7 @@ func TestDisableTotp_EmptyCode_Rejected(t *testing.T) {
 	}
 }
 
-// B1 — a pending (unconfirmed) enrollment provides no active
+// A pending (unconfirmed) enrollment provides no active
 // protection, so cancelling it needs no code (a user who lost the
 // device mid-setup must still be able to back out).
 func TestDisableTotp_Unconfirmed_NoCodeNeeded(t *testing.T) {
@@ -635,7 +635,7 @@ func TestValidateConfig_NewDevicesRequiresDevices(t *testing.T) {
 	}
 }
 
-// --- a consumer and #58/3: an unreadable enrolment must not weaken a factor --
+// --- an unreadable enrolment must not weaken a factor ---------------------
 //
 // totpEnrolled folded a query error into `false`, so "the store did not
 // answer" and "this user has no authenticator" were the same answer. Every
@@ -643,9 +643,9 @@ func TestValidateConfig_NewDevicesRequiresDevices(t *testing.T) {
 // The four tests below are the four directions; they are written separately
 // because a single one passing says nothing about the other three.
 
-// The one a consumer verified: the check was guarded by `err == nil && …`, so a
-// read failure made the whole condition false and the delete ran with no code
-// presented at all.
+// The direction that disables a factor: with the check guarded by
+// `err == nil && …`, a read failure made the whole condition false and the
+// delete ran with no code presented at all.
 func TestDisableTotp_ReadFailure_DoesNotDisableWithoutACode(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
@@ -714,7 +714,7 @@ func TestVerifyMfa_ReadFailure_DoesNotFallToTheWeakerPath(t *testing.T) {
 	}
 }
 
-// --- a consumer: the cap was per-request, not per-challenge ------------------
+// --- the cap was per-request, not per-challenge -----------------------------
 //
 // VerifyMfa read the attempt count loaded at the top of the call and
 // incremented afterwards, in a separate rpc, only on a miss. Sequentially the
@@ -769,7 +769,7 @@ func TestVerifyMfa_ConcurrentGuessesShareOneBudget(t *testing.T) {
 	}
 }
 
-// --- a consumer: re-enrolment must not destroy the factor it replaces -------
+// --- re-enrolment must not destroy the factor it replaces -------------------
 //
 // EnrollTotp deletes the existing secret and then creates the new one, so the
 // unique user_id index does not reject the second write. Run apart, a failure
@@ -852,8 +852,7 @@ func TestEnrollTotp_BothWritesGoThroughOneSeam(t *testing.T) {
 }
 
 // A challenge opened before the account was disabled does not finish into a
-// session: the second step re-runs SignIn's account gates. It used to issue
-// one (found live by examples/auth-proof).
+// session: the second step re-runs SignIn's account gates.
 func TestVerifyMfa_ADisabledAccountGetsNoSession(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
@@ -870,8 +869,8 @@ func TestVerifyMfa_ADisabledAccountGetsNoSession(t *testing.T) {
 }
 
 // With the built-in authenticator off, or no seed key, enrolment is a clear
-// refusal: it used to store an authenticator VerifyMfa would never consult
-// (TOTP off), or answer 500 (no key) — found live by examples/auth-proof.
+// refusal, not an authenticator VerifyMfa would never consult (TOTP off), or a
+// 500 (no key).
 func TestEnrollTotp_RefusedWhenTheAuthenticatorIsOff(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)

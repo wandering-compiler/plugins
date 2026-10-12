@@ -80,8 +80,8 @@ func TestInviteToOrg_ClearsALapsedInviteFirst(t *testing.T) {
 
 // Nothing lapsed is the ORDINARY case and arrives as NOT_FOUND because of the
 // RETURNING. Treating it as a failure would refuse every FIRST invitation to
-// an address — the same unreachable-branch shape D13-7 shipped one function
-// away.
+// an address — the unreachable-branch shape a RETURNING statement invites,
+// where "no row" is an error rather than an empty response.
 func TestInviteToOrg_NothingExpiredIsNotAFailure(t *testing.T) {
 	m := &inviteMock{clearErr: status.Error(codes.NotFound, "no rows")}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
@@ -115,8 +115,7 @@ func TestInviteToOrg_ClearFailureStopsTheWrite(t *testing.T) {
 
 // An OPEN invitation (no address) is written without the lapsed-invite clear:
 // a NULL address never collides in the unique index, and the clear's request
-// requires an address, so calling it refused every open invitation (found
-// live by examples/auth-proof after the request field itself was fixed).
+// requires an address, so calling it would refuse every open invitation.
 func TestInviteToOrg_AnOpenInvitationSkipsTheClear(t *testing.T) {
 	m := &inviteMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}

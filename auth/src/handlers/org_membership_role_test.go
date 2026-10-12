@@ -75,7 +75,7 @@ func detailOf(t *testing.T, err error) *w17pb.ErrorDetail {
 	return nil
 }
 
-// The reported hole: whoever could edit a membership could make anyone —
+// The hole this closes: whoever could edit a membership could make anyone —
 // themselves included — org-admin, holding none of what it grants. Refused,
 // and nothing is written.
 func TestUpdateOrgMembershipRole_RefusesARoleAboveTheCaller(t *testing.T) {

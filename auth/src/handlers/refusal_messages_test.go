@@ -13,7 +13,7 @@ import (
 // Plain SignUp of an address that has an account answers "sign in instead",
 // not the generic AlreadyExists sentence ("Another change reached this first.
 // Please try again."), which sent a person who already has an account round
-// the registration form. Found live by scripts/console-auth-proof.sh.
+// the registration form.
 func TestSignUp_ATakenAddressSaysSignInInstead(t *testing.T) {
 	pinConsoleActivation(t)
 	s := newConfirmStore()
@@ -46,8 +46,7 @@ func TestConfirmSignUp_ATakenAddressSaysSignInInstead(t *testing.T) {
 
 // A role above the inviter is refused WITH the rule. Without the detail the
 // gateway renders PermissionDenied as "You do not have access to this." — about
-// an endpoint the caller does have access to. Found live by
-// scripts/console-auth-proof.sh (an org admin inviting a worker).
+// an endpoint the caller does have access to (an org admin inviting a worker).
 func TestInviteToOrg_ARoleAboveTheInviterNamesTheRule(t *testing.T) {
 	m := newRoleCatalogue()
 	m.rolePerms = map[string][]int32{"r-admin": {1, 2, 3}}

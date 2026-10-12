@@ -43,7 +43,7 @@ import (
 )
 
 // randomURLToken returns a fresh 256-bit URL-safe random token — the
-// plaintext password-reset / email-verification token (E1) handed to the
+// plaintext password-reset / email-verification token handed to the
 // user once (via the emitted event). Lives here (always-compiled) so both
 // feature-gated handler files can share it without a cross-file dependency.
 func randomURLToken() (string, error) {
@@ -72,8 +72,9 @@ func verifyPKCES256(verifier, challenge string) bool {
 	return hmac.Equal([]byte(s256Challenge(verifier)), []byte(challenge))
 }
 
-// sha256Hex is the one-way function applied to an E1 token for storage +
-// lookup — only the hash is persisted, so a DB read can't redeem a token.
+// sha256Hex is the one-way function applied to a reset / verification token for
+// storage + lookup — only the hash is persisted, so a DB read can't redeem a
+// token.
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
@@ -100,8 +101,8 @@ const (
 
 // Authn-flow gate sentinels — cause values handler passes to
 // Unauthenticated when failure is shape-level (not an
-// underlying error). They never reach the wire; the auditor
-// (G3-G) walks errors.Unwrap to verify all failure paths
+// underlying error). They never reach the wire; the SDK auditor
+// walks errors.Unwrap to verify all failure paths
 // converge on Unauthenticated.
 var (
 	errAuthnHeaderMissing    = errors.New("auth header missing")
@@ -169,7 +170,7 @@ type AuthServiceHandler struct {
 	TwoFactorTOTP     bool   // built-in TOTP verify path enabled (two_factor_totp)
 	TwoFactorScope    string // all_logins | new_devices (two_factor_scope)
 	MfaCodeTTLSeconds int    // event-flow challenge code lifetime (mfa_code_ttl_seconds)
-	// Issuance cap (a consumer): at most MaxMfaChallengesPerWindow challenges
+	// Issuance cap: at most MaxMfaChallengesPerWindow challenges
 	// per user per MfaChallengeWindowSeconds. The per-challenge attempt
 	// budget bounds guesses against one challenge; this bounds how many
 	// challenges — and so how many budgets — a caller can buy. <= 0 → the
@@ -189,8 +190,9 @@ type AuthServiceHandler struct {
 	// empty → derived from the request Host.
 	OAuthRedirectBase string // oauth_redirect_base
 
-	// E1 token lifetimes (set from env in RegisterPlugin; read only by
-	// handlers/reset.go / emailverify.go). <= 0 → the file's default.
+	// Reset / verification token lifetimes (set from env in RegisterPlugin;
+	// read only by handlers/reset.go / emailverify.go). <= 0 → the file's
+	// default.
 	PasswordResetTTLSeconds     int // password_reset_ttl_seconds
 	EmailVerificationTTLSeconds int // email_verification_ttl_seconds
 
@@ -540,8 +542,7 @@ var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userI
 // so declaring it in the gated `org_invite.go` meant an activation with
 // verification and no invitations staged the assignment without the
 // declaration and failed the bundle build on an undefined identifier —
-// breaking a combination that has nothing to do with invitations (caught in
-// review on w17 platform PR #11).
+// breaking a combination that has nothing to do with invitations.
 //
 // The fix is not to make `email_verification` require `org_invite`: that would
 // force invitations on every project that only wants to confirm addresses.
@@ -555,9 +556,7 @@ var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userI
 // OrgInvite model and the invite_only knob said that window "closes when
 // email_verification is enabled". It did not: the feature adds a column and
 // two RPCs and blocks nothing, so a project could enable it, verify nobody,
-// and still be told by its own documentation that it was covered. A consumer
-// measured 19 accounts out of 19 with the column NULL and asked which of us
-// was supposed to enforce it (a consumer).
+// and still be told by its own documentation that it was covered.
 //
 // The answer is: this, and only if asked. See `email_proof_required` in
 // plugin.yaml for why it is opt-in rather than automatic.
@@ -629,14 +628,12 @@ var errInviteOtherAddress = withUserDetail(status.New(codes.PermissionDenied,
 // deciding at install time: staging the feature must not close a surface
 // the operator left open.
 //
-// ⚠️ This seam shipped for a fortnight with no init() installing it, while
-// its own comment claimed one existed and the console activation's comment
-// claimed registration was closed. `invite_only` defaulted to true and was
-// read by nobody. What made it invisible is that nothing FAILED — the
-// permissive default is a valid state, so every test, every build and
-// every deployment was green. The only artefact was an unused variable:
-// staticcheck's U1000 named errSignUpNotInvited, in a directory `make
-// audit-go` did not scan. It scans it now (T3-7 pass #13).
+// ⚠️ Without an init() installing the enforcing implementation, nothing
+// FAILS: the permissive default is a valid state, so every test, every
+// build and every deployment stays green while `invite_only` — true by
+// default — is read by nobody. The only artefact is an unused variable
+// (staticcheck's U1000 on errSignUpNotInvited), which is why the lint has
+// to cover this directory.
 var signupInviteGate = func(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) error {
 	return nil
 }
@@ -662,7 +659,7 @@ var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.Us
 }
 
 // issueSession mints the bearer token for an authenticated principal and
-// returns the opaque session token plus (C2, devices only) a server-issued
+// returns the opaque session token plus (devices only) a server-issued
 // device-trust token the client replays as X-Device-Trust. Default (no
 // `devices`): IssueToken (no device column), empty trust token.
 // handlers/devices.go overrides via init() to stamp device_id + mint
@@ -796,7 +793,7 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	}
 	userID := prin.userID
 
-	// REV-147 — publish the authenticated principal as the
+	// Publish the authenticated principal as the
 	// canonical `user_id` data scope. The gateway threads this into
 	// `x-w17-scope-user_id` metadata; a consuming project that
 	// scopes its owned rows by `name: "user_id"` then gets owner
@@ -980,14 +977,14 @@ var errAuthnUserDisabled = errors.New("account disabled")
 // must not learn that an address belongs to a bot.
 var signInBotGate = func(user *pb.User) error { return nil }
 
-// refuseUnsignableAccount runs SignIn's account gates — disabled, machine —
-// for a path that issues a session to an EXISTING account without passing
-// through SignIn's lookup: the second sign-in step, the OAuth callback, the CLI
+// refuseUnsignableAccount runs SignIn's account gates — disabled, machine — for
+// a path that issues a session to an EXISTING account without passing through
+// SignIn's lookup: the second sign-in step, the OAuth callback, the CLI
 // exchange. Each of those is reached with a user id decided earlier (a
 // challenge, a linked identity, a code minted from a session), and the account
 // may have changed since: SignIn refused a disabled account, but a challenge
-// opened before the disable still issued a session (found live by
-// examples/auth-proof). Refused with the opaque Unauthenticated, as SignIn is.
+// opened before the disable would still issue a session. Refused with the
+// opaque Unauthenticated, as SignIn is.
 func refuseUnsignableAccount(ctx context.Context, h *AuthServiceHandler, userID string) error {
 	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
 	if err != nil {
@@ -1085,17 +1082,15 @@ var whoAmIEnrich = func(ctx context.Context, h *AuthServiceHandler, userID strin
 // SESSION token via DeleteSessionToken (ownership guarded in the mutation:
 // id AND user_id). The raw bearer never reaches here — only the resolved
 // session token id does, so it's always a session token (the DQL drops the
-// token_type filter — that column is api_token-gated; Q64-auth-1).
+// token_type filter — that column is api_token-gated).
 //
 // Idempotent about the SESSION, not about the caller: a token that was already
 // revoked still gets a clean success, because "this session is already gone" is
 // nothing left to do.
 //
 // ⛔ A caller with NO resolvable session token — an API-token bearer, or a
-// direct gRPC call — is REFUSED (FailedPrecondition), not waved through. That
-// changed in auth v0.1.0-rc.4 and this comment promised the old behaviour for a
-// day afterwards (reported by a consumer): whoever read the contract was told a false
-// success was the contract. The reasoning for the refusal is at the branch
+// direct gRPC call — is REFUSED (FailedPrecondition), not waved through (since
+// auth v0.1.0-rc.4). The reasoning for the refusal is at the branch
 // itself; the short version is that "I was not told which session" is not
 // idempotence.
 //
@@ -1108,7 +1103,7 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 	}
 	tokenID := callerSessionTokenID(ctx)
 	if tokenID == "" {
-		// ⛔ REFUSED, and it used to succeed (a consumer).
+		// ⛔ REFUSED.
 		//
 		// An empty id means Logout does not know WHICH session to end. That is
 		// not idempotence — idempotence is "this session is already gone, so
@@ -1116,14 +1111,14 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 		// zero-row delete as success. This is "I was not told which one", and
 		// answering OK to that is a claim that is not true.
 		//
-		// What it cost: a consumer wrapped Logout in their own facade whose
-		// VerifyRes carried fields 1-3 (the trio our docs name as the shared
-		// contract) and not field 4. Every sign-out returned 200, the UI said
-		// "signed out", the app dropped the cookie — and the token kept working
-		// until it expired. They caught it only because their check took the
-		// token BEFORE signing out and tried it after; a check on the status
-		// code passes. On a shared or stolen machine that is the difference
-		// between logged out and logged in without it showing.
+		// What an OK would cost: a facade wrapping Logout whose VerifyRes
+		// carries fields 1-3 (the trio documented as the shared contract) and
+		// not field 4 answers every sign-out 200, the UI says "signed out", the
+		// app drops the cookie — and the token keeps working until it expires.
+		// Only a check that takes the token BEFORE signing out and tries it
+		// after sees that; a check on the status code passes. On a shared or
+		// stolen machine that is the difference between logged out and logged
+		// in without it showing.
 		//
 		// The envelope cannot tell the two blank cases apart — AuthResp carries
 		// no token type — so the refusal names both. An API-token bearer has no
@@ -1189,11 +1184,9 @@ func callerUserID(ctx context.Context) (string, error) {
 // bearer resolved to, from the gateway's x-w17-user envelope (Authenticate
 // stamps AuthResp.session_token_id). Returns "" on any miss.
 //
-// ⚠️ Logout used to NO-OP on that empty string, "rather than erroring for a
-// caller with no resolvable session". The intent was to spare an API-token
-// bearer an error; the cost was that a real session's logout could answer OK
-// having revoked nothing, and nothing anywhere said so (a consumer). Logout
-// refuses now — see the note at its call site.
+// ⚠️ Logout refuses on that empty string rather than NO-OP: a no-op would
+// spare an API-token bearer an error, at the cost of a real session's logout
+// answering OK having revoked nothing — see the note at its call site.
 // Reads the envelope, never the raw bearer (which never reaches handlers).
 func callerSessionTokenID(ctx context.Context) string {
 	var ar pb.AuthResp

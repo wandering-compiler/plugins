@@ -60,7 +60,7 @@ func (m *verifiedMock) ConsumeOrgInviteByToken(_ context.Context, _ *pb.ConsumeO
 // that mailbox only if somebody checked the address belongs to the account.
 // Nothing did, and both the model and the invite_only knob claimed enabling
 // `email_verification` closed the window — it adds a column and two RPCs and
-// blocks nothing (a consumer measured 19 unverified accounts of 19 with it on).
+// blocks nothing: accounts stay unverified with it on.
 func TestEmailProofGate_FullRefusesAnUnprovenAccount(t *testing.T) {
 	m := &verifiedMock{verified: false}
 	h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofFull}

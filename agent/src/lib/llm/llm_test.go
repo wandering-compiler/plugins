@@ -225,10 +225,9 @@ func TestTruncationIsVisibleToTheCaller(t *testing.T) {
 //
 // Omitting is the only way to say it. Every number is still a cap, including a
 // very large one, and a caller whose answer size is variable — fifty records in
-// one reply — cannot pick one honestly. A consumer hit exactly that: their old
-// code passed zero to mean "provider default", the plugin read zero as its own
-// 4096, and they had to compute an estimate they described in their own code as
-// a guess.
+// one reply — cannot pick one honestly. Passing zero to mean "provider
+// default" does not work either: the plugin reads zero as its own 4096, and
+// the caller is left computing an estimate that is only a guess.
 func TestANegativeBudgetOmitsTheCapEntirely(t *testing.T) {
 	for _, id := range []string{"gpt-4o", "gpt-5.6-luna"} {
 		t.Run(id, func(t *testing.T) {
@@ -272,8 +271,8 @@ func TestNoFormatIsSentUnlessAsked(t *testing.T) {
 
 // TestJSONObject_RefusedLocallyWhenThePromptNeverAsksForJSON — the provider
 // refuses this format unless the prompt says the word, and refuses with a bare
-// 400 that names nothing. A consumer paid for two runs to find out which field
-// was at fault.
+// 400 that names nothing, so finding out which field was at fault costs paid
+// runs.
 //
 // The check is narrow on purpose: absent everywhere → refuse here, for free,
 // naming the cause; present anywhere → send it, and whatever the provider

@@ -22,8 +22,8 @@ import (
 
 // RegisterPlugin wires the PaymentService handler:
 //
-//  1. Resolve the backend driver from `payment_provider` (Slice 1:
-//     stripe only) with its API key from the secret env.
+//  1. Resolve the backend driver from `payment_provider` (stripe
+//     only) with its API key from the secret env.
 //  2. Construct PaymentServiceHandler with the in-process storage
 //     clients + the backend + the webhook signing secret.
 //  3. Register the handler + its drain hook with the bundle.

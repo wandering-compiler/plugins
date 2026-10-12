@@ -55,10 +55,9 @@ message ModelSpec {
 
   // NO `seed`, and deliberately — see below. Field 5 is left free for it.
   //
-  // A consumer porting a deterministic classifier looked for one here, found
-  // nothing, and had to drop half of what their determinism rested on
-  // (`temperature: 0` + seed + de-duplication upstream). They were right to
-  // look: this is where it would live.
+  // A caller porting a deterministic classifier looks for one here and finds
+  // nothing, losing half of what its determinism rested on (`temperature: 0`
+  // + seed + de-duplication upstream). This is where it would live.
   //
   // It is absent because this plugin speaks the provider's RESPONSES API,
   // whose request carries `temperature` and `top_p` and no seed at all — seed

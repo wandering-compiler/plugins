@@ -85,9 +85,9 @@ func TestRoleIDByName_RefusesARealmRole(t *testing.T) {
 	// filtered ListRoles in Go and would reintroduce the original bug.
 	//
 	// It reads that catalogue now, and the reason the guard can be narrowed is
-	// that reading it and RESOLVING from it are different acts. a consumer got the
-	// same message for "no such role" and "exists but realm-wide", and went
-	// hunting for a row that was there; telling those apart needs the full
+	// that reading it and RESOLVING from it are different acts. One message for
+	// "no such role" and "exists but realm-wide" sends the reader hunting for a
+	// row that is there; telling those apart needs the full
 	// catalogue, and the answer is only ever WHICH ERROR — never an id.
 	//
 	// So the invariant is stated as what it always was: no id comes out of the
@@ -107,8 +107,8 @@ func TestRoleIDByName_RefusesARealmRole(t *testing.T) {
 // The other half of the pair: a name in NEITHER catalogue is a typo, and must
 // not be described as a scoping problem.
 //
-// Both directions, because one message for two causes is what sent a consumer
-// looking for a row that was there — and a single test would pass for an
+// Both directions, because one message for two causes sends a reader looking
+// for a row that is there — and a single test would pass for an
 // implementation that answered "realm-wide" to everything.
 func TestRoleIDByName_AnUnknownNameIsATypoNotAScopingProblem(t *testing.T) {
 	m := newRoleCatalogue()
