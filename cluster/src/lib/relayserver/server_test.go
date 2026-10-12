@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"testing"
@@ -384,6 +385,19 @@ func TestServer_RelayStatsReportsThePoolAndTheFleet(t *testing.T) {
 	}
 	if st.GetWorkers() != 1 || !st.GetDraining() {
 		t.Errorf("stats = %+v, want one attached worker and draining", st)
+	}
+}
+
+// The slot cap bounds one worker, not the fleet: a total past the int32 range
+// is reported at the maximum, never wrapped to a negative capacity.
+func TestServer_RelayStatsCapacityDoesNotWrap(t *testing.T) {
+	c := serveManagement(t, configured(t, poolWith(t, math.MaxInt32+MaxWorkerSlotsLimit)))
+	st, err := c.RelayStats(t.Context(), &pb.RelayStatsReq{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.GetCapacity() != math.MaxInt32 {
+		t.Errorf("capacity = %d, want it held at %d", st.GetCapacity(), int32(math.MaxInt32))
 	}
 }
 

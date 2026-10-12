@@ -27,6 +27,7 @@ A worker's slot count is its own claim, and nothing checked it. One key could an
 
 - **New relay flag `--max-worker-slots`** (env `RELAY_MAX_WORKER_SLOTS`, default 64, allowed 1–65536; any other value fails at start).
 - **A higher announced count is held to the cap**, and the attach admission reports the slots the worker actually got.
+- **`RelayStats` holds every count at the int32 maximum** instead of wrapping, so a large fleet can no longer report a negative capacity either.
 
 ## 0.1.0-rc.12
 

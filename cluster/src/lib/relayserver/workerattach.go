@@ -52,6 +52,9 @@ type WorkerServer struct {
 // DefaultMaxWorkerSlots is the slot cap when WorkerServer.MaxSlots is unset.
 const DefaultMaxWorkerSlots = 64
 
+// MaxWorkerSlotsLimit is the highest cap a relay may be configured with.
+const MaxWorkerSlotsLimit = 1 << 16
+
 func (s *WorkerServer) maxSlots() uint32 {
 	if s.MaxSlots == 0 {
 		return DefaultMaxWorkerSlots

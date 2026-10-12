@@ -9,6 +9,7 @@ package relayserver
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"google.golang.org/grpc"
@@ -175,13 +176,25 @@ func (s *Server) RelayStats(context.Context, *pb.RelayStatsReq) (*pb.RelayStatsR
 		workers = s.Backends.Count()
 	}
 	return &pb.RelayStatsResp{
-		InUse:    int32(st.InUse),
-		Reserved: int32(st.Reserved),
-		Queued:   int32(st.Queued),
-		Capacity: int32(st.Capacity),
+		InUse:    saturateInt32(st.InUse),
+		Reserved: saturateInt32(st.Reserved),
+		Queued:   saturateInt32(st.Queued),
+		Capacity: saturateInt32(st.Capacity),
 		Draining: st.Draining,
-		Workers:  int32(workers),
+		Workers:  saturateInt32(workers),
 	}, nil
+}
+
+// saturateInt32 narrows a count to the wire's int32, holding it at the
+// maximum rather than wrapping. The per-worker slot cap bounds one worker, not
+// the fleet: 32768 workers at the highest cap already sum past 2^31-1, and a
+// wrapped capacity reads as negative — a relay the control plane ranks as full
+// while it keeps granting.
+func saturateInt32(n int) int32 {
+	if n > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(n)
 }
 
 // DrainRelay drains THIS relay. `ids` is the control plane's to read — a

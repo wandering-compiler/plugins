@@ -189,8 +189,15 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 			errs = append(errs, e.err)
 		}
 	}
-	if cfg.maxWorkerSlots < 1 || cfg.maxWorkerSlots > 1<<16 {
-		errs = append(errs, fmt.Errorf("--max-worker-slots must be between 1 and %d, got %d", 1<<16, cfg.maxWorkerSlots))
+	if cfg.maxWorkerSlots < 1 || cfg.maxWorkerSlots > relayserver.MaxWorkerSlotsLimit {
+		// Named by where the value came from, so an operator who set the
+		// variable is not sent looking for a flag they never passed.
+		source := "--max-worker-slots"
+		if !set["max-worker-slots"] {
+			source = "RELAY_MAX_WORKER_SLOTS"
+		}
+		errs = append(errs, fmt.Errorf("%s must be between 1 and %d, got %d",
+			source, relayserver.MaxWorkerSlotsLimit, cfg.maxWorkerSlots))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return config{}, err
