@@ -13,6 +13,7 @@ import (
 	_ "github.com/wandering-compiler/sdk/go/pb/w17/db"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -213,6 +214,87 @@ func (x *FingerprintsByStateResp) GetFingerprints() []string {
 	return nil
 }
 
+type BanSetVersionReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BanSetVersionReq) Reset() {
+	*x = BanSetVersionReq{}
+	mi := &file_queries_worker_query_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BanSetVersionReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BanSetVersionReq) ProtoMessage() {}
+
+func (x *BanSetVersionReq) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_worker_query_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BanSetVersionReq.ProtoReflect.Descriptor instead.
+func (*BanSetVersionReq) Descriptor() ([]byte, []int) {
+	return file_queries_worker_query_proto_rawDescGZIP(), []int{4}
+}
+
+type BanSetVersionResp struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The newest ban or unban decision; absent when nothing was ever decided.
+	Version       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=version,proto3,oneof" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BanSetVersionResp) Reset() {
+	*x = BanSetVersionResp{}
+	mi := &file_queries_worker_query_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BanSetVersionResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BanSetVersionResp) ProtoMessage() {}
+
+func (x *BanSetVersionResp) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_worker_query_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BanSetVersionResp.ProtoReflect.Descriptor instead.
+func (*BanSetVersionResp) Descriptor() ([]byte, []int) {
+	return file_queries_worker_query_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *BanSetVersionResp) GetVersion() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Version
+	}
+	return nil
+}
+
 type GetWorkerReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -222,7 +304,7 @@ type GetWorkerReq struct {
 
 func (x *GetWorkerReq) Reset() {
 	*x = GetWorkerReq{}
-	mi := &file_queries_worker_query_proto_msgTypes[4]
+	mi := &file_queries_worker_query_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -234,7 +316,7 @@ func (x *GetWorkerReq) String() string {
 func (*GetWorkerReq) ProtoMessage() {}
 
 func (x *GetWorkerReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_worker_query_proto_msgTypes[4]
+	mi := &file_queries_worker_query_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -247,7 +329,7 @@ func (x *GetWorkerReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkerReq.ProtoReflect.Descriptor instead.
 func (*GetWorkerReq) Descriptor() ([]byte, []int) {
-	return file_queries_worker_query_proto_rawDescGZIP(), []int{4}
+	return file_queries_worker_query_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetWorkerReq) GetId() string {
@@ -266,7 +348,7 @@ type CountWorkersByStateReq struct {
 
 func (x *CountWorkersByStateReq) Reset() {
 	*x = CountWorkersByStateReq{}
-	mi := &file_queries_worker_query_proto_msgTypes[5]
+	mi := &file_queries_worker_query_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +360,7 @@ func (x *CountWorkersByStateReq) String() string {
 func (*CountWorkersByStateReq) ProtoMessage() {}
 
 func (x *CountWorkersByStateReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_worker_query_proto_msgTypes[5]
+	mi := &file_queries_worker_query_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +373,7 @@ func (x *CountWorkersByStateReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CountWorkersByStateReq.ProtoReflect.Descriptor instead.
 func (*CountWorkersByStateReq) Descriptor() ([]byte, []int) {
-	return file_queries_worker_query_proto_rawDescGZIP(), []int{5}
+	return file_queries_worker_query_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CountWorkersByStateReq) GetState() WorkerState {
@@ -310,7 +392,7 @@ type CountWorkersByStateResp struct {
 
 func (x *CountWorkersByStateResp) Reset() {
 	*x = CountWorkersByStateResp{}
-	mi := &file_queries_worker_query_proto_msgTypes[6]
+	mi := &file_queries_worker_query_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -322,7 +404,7 @@ func (x *CountWorkersByStateResp) String() string {
 func (*CountWorkersByStateResp) ProtoMessage() {}
 
 func (x *CountWorkersByStateResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_worker_query_proto_msgTypes[6]
+	mi := &file_queries_worker_query_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -335,7 +417,7 @@ func (x *CountWorkersByStateResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CountWorkersByStateResp.ProtoReflect.Descriptor instead.
 func (*CountWorkersByStateResp) Descriptor() ([]byte, []int) {
-	return file_queries_worker_query_proto_rawDescGZIP(), []int{6}
+	return file_queries_worker_query_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CountWorkersByStateResp) GetTotal() int64 {
@@ -349,7 +431,7 @@ var File_queries_worker_query_proto protoreflect.FileDescriptor
 
 const file_queries_worker_query_proto_rawDesc = "" +
 	"\n" +
-	"\x1aqueries/worker_query.proto\x12\x13w17.contrib.cluster\x1a\x12types/models.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"W\n" +
+	"\x1aqueries/worker_query.proto\x12\x13w17.contrib.cluster\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12types/models.proto\x1a\x11w17/contrib.proto\x1a\fw17/db.proto\x1a\x0fw17/field.proto\"W\n" +
 	"\x0eListWorkersReq\x12;\n" +
 	"\x05state\x18\x01 \x01(\x0e2 .w17.contrib.cluster.WorkerStateH\x00R\x05state\x88\x01\x01B\b\n" +
 	"\x06_state\"H\n" +
@@ -358,19 +440,25 @@ const file_queries_worker_query_proto_rawDesc = "" +
 	"\x16FingerprintsByStateReq\x126\n" +
 	"\x05state\x18\x02 \x01(\x0e2 .w17.contrib.cluster.WorkerStateR\x05stateJ\x04\b\x01\x10\x02R\brelay_id\"=\n" +
 	"\x17FingerprintsByStateResp\x12\"\n" +
-	"\ffingerprints\x18\x01 \x03(\tR\ffingerprints\"&\n" +
+	"\ffingerprints\x18\x01 \x03(\tR\ffingerprints\"\x12\n" +
+	"\x10BanSetVersionReq\"b\n" +
+	"\x11BanSetVersionResp\x12A\n" +
+	"\aversion\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16H\x00R\aversion\x88\x01\x01B\n" +
+	"\n" +
+	"\b_version\"&\n" +
 	"\fGetWorkerReq\x12\x16\n" +
 	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id\"P\n" +
 	"\x16CountWorkersByStateReq\x126\n" +
 	"\x05state\x18\x01 \x01(\x0e2 .w17.contrib.cluster.WorkerStateR\x05state\"/\n" +
 	"\x17CountWorkersByStateResp\x12\x14\n" +
-	"\x05total\x18\x01 \x01(\x03R\x05total2\xc2\n" +
-	"\n" +
+	"\x05total\x18\x01 \x01(\x03R\x05total2\xec\v\n" +
 	"\vWorkerQuery\x12\xd7\x03\n" +
 	"\vListWorkers\x12#.w17.contrib.cluster.ListWorkersReq\x1a$.w17.contrib.cluster.ListWorkersResp\"\xfc\x02\xf2\xf3\x18\xf7\x02B\xf4\x02\n" +
 	"\x04main\x12\xeb\x02SELECT w.id AS id,        w.cert_fingerprint AS cert_fingerprint,        w.name AS name,        w.device_id AS device_id,        w.state AS state,        w.relay_id AS relay_id,        w.first_seen_at AS first_seen_at,        w.decided_at AS decided_at,        w.decided_by AS decided_by FROM @module.Worker w WHERE ?w.state = :state ORDER BY w.first_seen_at DESC\x12\xa5\x03\n" +
 	"\tGetWorker\x12!.w17.contrib.cluster.GetWorkerReq\x1a\x1b.w17.contrib.cluster.Worker\"\xd7\x02\xf2\xf3\x18\xd2\x02B\xcf\x02\n" +
-	"\x04main\x12\xc6\x02SELECT w.id AS id,        w.cert_fingerprint AS cert_fingerprint,        w.name AS name,        w.device_id AS device_id,        w.state AS state,        w.relay_id AS relay_id,        w.first_seen_at AS first_seen_at,        w.decided_at AS decided_at,        w.decided_by AS decided_by FROM @module.Worker w WHERE w.id = :id\x12\xe5\x01\n" +
+	"\x04main\x12\xc6\x02SELECT w.id AS id,        w.cert_fingerprint AS cert_fingerprint,        w.name AS name,        w.device_id AS device_id,        w.state AS state,        w.relay_id AS relay_id,        w.first_seen_at AS first_seen_at,        w.decided_at AS decided_at,        w.decided_by AS decided_by FROM @module.Worker w WHERE w.id = :id\x12\xa7\x01\n" +
+	"\rBanSetVersion\x12%.w17.contrib.cluster.BanSetVersionReq\x1a&.w17.contrib.cluster.BanSetVersionResp\"G\xf2\xf3\x18CBA\n" +
+	"\x04main\x129SELECT MAX(w.decided_at) AS version FROM @module.Worker w\x12\xe5\x01\n" +
 	"\x13FingerprintsByState\x12+.w17.contrib.cluster.FingerprintsByStateReq\x1a,.w17.contrib.cluster.FingerprintsByStateResp\"s\xf2\xf3\x18oBm\n" +
 	"\x04main\x12eSELECT ROWS_TO_ARRAY(w.cert_fingerprint) AS fingerprints FROM @module.Worker w WHERE w.state = :state\x12\xc8\x01\n" +
 	"\x13CountWorkersByState\x12+.w17.contrib.cluster.CountWorkersByStateReq\x1a,.w17.contrib.cluster.CountWorkersByStateResp\"V\xf2\xf3\x18RBP\n" +
@@ -389,36 +477,42 @@ func file_queries_worker_query_proto_rawDescGZIP() []byte {
 	return file_queries_worker_query_proto_rawDescData
 }
 
-var file_queries_worker_query_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_queries_worker_query_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_queries_worker_query_proto_goTypes = []any{
 	(*ListWorkersReq)(nil),          // 0: w17.contrib.cluster.ListWorkersReq
 	(*ListWorkersResp)(nil),         // 1: w17.contrib.cluster.ListWorkersResp
 	(*FingerprintsByStateReq)(nil),  // 2: w17.contrib.cluster.FingerprintsByStateReq
 	(*FingerprintsByStateResp)(nil), // 3: w17.contrib.cluster.FingerprintsByStateResp
-	(*GetWorkerReq)(nil),            // 4: w17.contrib.cluster.GetWorkerReq
-	(*CountWorkersByStateReq)(nil),  // 5: w17.contrib.cluster.CountWorkersByStateReq
-	(*CountWorkersByStateResp)(nil), // 6: w17.contrib.cluster.CountWorkersByStateResp
-	(WorkerState)(0),                // 7: w17.contrib.cluster.WorkerState
-	(*Worker)(nil),                  // 8: w17.contrib.cluster.Worker
+	(*BanSetVersionReq)(nil),        // 4: w17.contrib.cluster.BanSetVersionReq
+	(*BanSetVersionResp)(nil),       // 5: w17.contrib.cluster.BanSetVersionResp
+	(*GetWorkerReq)(nil),            // 6: w17.contrib.cluster.GetWorkerReq
+	(*CountWorkersByStateReq)(nil),  // 7: w17.contrib.cluster.CountWorkersByStateReq
+	(*CountWorkersByStateResp)(nil), // 8: w17.contrib.cluster.CountWorkersByStateResp
+	(WorkerState)(0),                // 9: w17.contrib.cluster.WorkerState
+	(*Worker)(nil),                  // 10: w17.contrib.cluster.Worker
+	(*timestamppb.Timestamp)(nil),   // 11: google.protobuf.Timestamp
 }
 var file_queries_worker_query_proto_depIdxs = []int32{
-	7, // 0: w17.contrib.cluster.ListWorkersReq.state:type_name -> w17.contrib.cluster.WorkerState
-	8, // 1: w17.contrib.cluster.ListWorkersResp.workers:type_name -> w17.contrib.cluster.Worker
-	7, // 2: w17.contrib.cluster.FingerprintsByStateReq.state:type_name -> w17.contrib.cluster.WorkerState
-	7, // 3: w17.contrib.cluster.CountWorkersByStateReq.state:type_name -> w17.contrib.cluster.WorkerState
-	0, // 4: w17.contrib.cluster.WorkerQuery.ListWorkers:input_type -> w17.contrib.cluster.ListWorkersReq
-	4, // 5: w17.contrib.cluster.WorkerQuery.GetWorker:input_type -> w17.contrib.cluster.GetWorkerReq
-	2, // 6: w17.contrib.cluster.WorkerQuery.FingerprintsByState:input_type -> w17.contrib.cluster.FingerprintsByStateReq
-	5, // 7: w17.contrib.cluster.WorkerQuery.CountWorkersByState:input_type -> w17.contrib.cluster.CountWorkersByStateReq
-	1, // 8: w17.contrib.cluster.WorkerQuery.ListWorkers:output_type -> w17.contrib.cluster.ListWorkersResp
-	8, // 9: w17.contrib.cluster.WorkerQuery.GetWorker:output_type -> w17.contrib.cluster.Worker
-	3, // 10: w17.contrib.cluster.WorkerQuery.FingerprintsByState:output_type -> w17.contrib.cluster.FingerprintsByStateResp
-	6, // 11: w17.contrib.cluster.WorkerQuery.CountWorkersByState:output_type -> w17.contrib.cluster.CountWorkersByStateResp
-	8, // [8:12] is the sub-list for method output_type
-	4, // [4:8] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	9,  // 0: w17.contrib.cluster.ListWorkersReq.state:type_name -> w17.contrib.cluster.WorkerState
+	10, // 1: w17.contrib.cluster.ListWorkersResp.workers:type_name -> w17.contrib.cluster.Worker
+	9,  // 2: w17.contrib.cluster.FingerprintsByStateReq.state:type_name -> w17.contrib.cluster.WorkerState
+	11, // 3: w17.contrib.cluster.BanSetVersionResp.version:type_name -> google.protobuf.Timestamp
+	9,  // 4: w17.contrib.cluster.CountWorkersByStateReq.state:type_name -> w17.contrib.cluster.WorkerState
+	0,  // 5: w17.contrib.cluster.WorkerQuery.ListWorkers:input_type -> w17.contrib.cluster.ListWorkersReq
+	6,  // 6: w17.contrib.cluster.WorkerQuery.GetWorker:input_type -> w17.contrib.cluster.GetWorkerReq
+	4,  // 7: w17.contrib.cluster.WorkerQuery.BanSetVersion:input_type -> w17.contrib.cluster.BanSetVersionReq
+	2,  // 8: w17.contrib.cluster.WorkerQuery.FingerprintsByState:input_type -> w17.contrib.cluster.FingerprintsByStateReq
+	7,  // 9: w17.contrib.cluster.WorkerQuery.CountWorkersByState:input_type -> w17.contrib.cluster.CountWorkersByStateReq
+	1,  // 10: w17.contrib.cluster.WorkerQuery.ListWorkers:output_type -> w17.contrib.cluster.ListWorkersResp
+	10, // 11: w17.contrib.cluster.WorkerQuery.GetWorker:output_type -> w17.contrib.cluster.Worker
+	5,  // 12: w17.contrib.cluster.WorkerQuery.BanSetVersion:output_type -> w17.contrib.cluster.BanSetVersionResp
+	3,  // 13: w17.contrib.cluster.WorkerQuery.FingerprintsByState:output_type -> w17.contrib.cluster.FingerprintsByStateResp
+	8,  // 14: w17.contrib.cluster.WorkerQuery.CountWorkersByState:output_type -> w17.contrib.cluster.CountWorkersByStateResp
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_queries_worker_query_proto_init() }
@@ -428,13 +522,14 @@ func file_queries_worker_query_proto_init() {
 	}
 	file_types_models_proto_init()
 	file_queries_worker_query_proto_msgTypes[0].OneofWrappers = []any{}
+	file_queries_worker_query_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_queries_worker_query_proto_rawDesc), len(file_queries_worker_query_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

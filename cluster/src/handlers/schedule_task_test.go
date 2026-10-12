@@ -84,7 +84,8 @@ func serve(t *testing.T, f *fakeRelay) func() (*grpc.ClientConn, error) {
 // store is guarded: relays are polled for their load concurrently, and each
 // poll records its outcome.
 type store struct {
-	relays []Relay
+	relays   []Relay
+	disabled []Relay // listed by ListAll only
 
 	mu      sync.Mutex
 	reached []string
@@ -92,6 +93,9 @@ type store struct {
 }
 
 func (s *store) ListEnabled(context.Context) ([]Relay, error) { return s.relays, nil }
+func (s *store) ListAll(context.Context) ([]Relay, error) {
+	return append(append([]Relay(nil), s.relays...), s.disabled...), nil
+}
 func (s *store) Get(_ context.Context, id string) (Relay, error) {
 	for _, r := range s.relays {
 		if r.ID == id {

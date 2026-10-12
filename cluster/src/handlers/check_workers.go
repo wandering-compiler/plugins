@@ -21,7 +21,9 @@ import (
 type WorkerStore interface {
 	// Banned returns every banned worker id (SPKI fingerprint), across every
 	// relay — the set that rides on each call to a relay.
-	Banned(ctx context.Context) ([]string, error)
+	// Banned is the complete ban set and its version (see
+	// workeradmit.BannedVersionHeader).
+	Banned(ctx context.Context) ([]string, int64, error)
 	// Record is idempotent by fingerprint and must NOT reset a decision: a
 	// banned worker keeps being reported by its relay, and returning it to
 	// enrolled on every sweep would make a ban mean nothing.
@@ -51,11 +53,11 @@ func (h *ClusterServiceHandler) withBans(ctx context.Context) (context.Context, 
 		return nil, status.Error(codes.FailedPrecondition,
 			"cluster: no worker registry is wired — the ban set cannot be sent to a relay")
 	}
-	bans, err := h.Workers.Banned(ctx)
+	bans, version, err := h.Workers.Banned(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err)
 	}
-	return workeradmit.WithBans(ctx, bans), nil
+	return workeradmit.WithBansAt(ctx, bans, version), nil
 }
 
 // CheckWorkers contacts every enabled relay and records every worker it has

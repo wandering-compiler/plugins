@@ -224,8 +224,9 @@ which.
    read and one TLS handshake every `poll_after_ms` each.
 2. **A disabled relay still serves its reservations.** `resolveHandle` uses
    `Get`, which ignores `enabled`. That is reasonable (the place exists), but
-   it is not stated, and a disabled relay receives bans only through these
-   polls.
+   it is not stated. A disabled relay receives bans when a decision is
+   taken (delivered to every registered relay) and through these polls; one
+   unreachable at the decision has no other path.
 
 #### Relay queue, capacity and tickets (`relaycore`)
 
@@ -285,7 +286,7 @@ which.
 | `base/enrol-checks-before-spending` | A malformed request, a banned key and an unrecordable claim MUST be refused **before** the code is spent, in that order (ban before claims). | Consistency & concurrency | `TestEnroll_AMalformedRequestDoesNotSpendTheCode`, `TestEnroll_ABannedKeyIsRefused`, `TestEnroll_ABannedKeyHearsTheBanBeforeItsClaims`, `TestEnroll_AClaimTheRegistryCannotRecordIsRefused` |
 | `base/cert-short-lived` | A worker certificate MUST expire (default 30 days) and MUST NOT outlive the CA. | Security | `TestIssueClientCert_LifetimeIsPositiveAndBoundedByTheCA` |
 | `base/renew-same-key-same-ca` | Renewal MUST require a presented, unexpired certificate from this relay's CA and a CSR for the same key. It MUST keep the worker id (the SPKI hash) stable. | Security | `TestRenew_KeepsTheIdentity`, `TestRenew_Refusals`, `TestRenew_AMalformedRequestIsInvalidArgument`, `TestRun_RenewsBeforeExpiryKeepingTheIdentity`, `TestWorkerID_IsStableAcrossRenewal`, `TestCA_VerifyRefusesAnotherCAAndExpiry` |
-| `base/banned-key-cannot-renew` | A banned key MUST NOT renew, at any relay, at any time after the ban was taken. | Security | `TestRun_ABannedWorkerCannotRenew`, `TestKeepRenewed_ABanStopsTheLoop` (once the relay holds the ban). The windows of finding 5: none. |
+| `base/banned-key-cannot-renew` | A banned key MUST NOT renew, at any relay, at any time after the ban was taken. | Security | `TestRun_ABannedWorkerCannotRenew`, `TestKeepRenewed_ABanStopsTheLoop` (once the relay holds the ban); the windows of finding 5: `TestKeepIn_SurvivesARestart`, `TestBanWorkers_DeliversTheSetToEveryRelayAtOnce`. **Residual:** a relay without `--identity-dir` keeps no ban set across a restart; a disabled relay unreachable when the decision is taken learns it only from its next call (a reservation poll). |
 | `base/identity-files-protected` | Relay keys, the CA key and worker keys MUST be written owner-only and atomically. A corrupt key MUST be reported, never silently replaced. | Security | `TestLoadOrCreateIdentity_KeyIsNotWorldReadable`, `TestLoadOrCreateWorkerKey_ACorruptKeyIsReportedNotReplaced`, `TestSaveWorkerCertificate_RefusesAndReplacesAtomically`, `TestLoadOrCreateCA_RefusesAHalfWrittenCA`, `TestLoadOrCreateIdentity_RefusesAHalfWrittenIdentity` |
 | `base/issue-worker-needs-existing-ca` | The `issue-worker` subcommand MUST issue from an existing CA and MUST NOT mint one. | Failure & configuration | `TestIssueWorker_RefusesToMintACA`, `TestIssueWorker_FromAMountedCA`, `TestIssueWorker_Refusals` |
 
@@ -339,7 +340,7 @@ which.
 | `base/ban-set-on-every-call` | Every control-plane call to a relay MUST carry the complete ban set in `w17-cluster-banned`; an empty set MUST travel as an empty value. | Security | `TestEveryRelayCallCarriesTheBanSet`, `TestCheckWorkers_BansReachTheRelay`, `TestWithBans_RoundTrips` |
 | `base/ban-set-fails-closed` | A ban set that cannot be read MUST refuse the call. It MUST NOT be sent as empty. | Security | `TestWithBans_AnUnreadableBanSetRefusesTheCall`, `TestHandlers_AnUnreadableBanSetRefusesEveryCall`, `TestWorkerStore_AnUnreadableBanSetIsAnError`, `TestCheckWorkers_RefusesWithNoRegistry` |
 | `base/absent-header-changes-nothing` | A relay MUST replace its ban set with a received set, and MUST leave it unchanged when the header is absent. Only the pinned control plane can reach the interceptor that applies it. | Security | `TestBansFrom_EmptyIsAnAnswerAbsentIsNot`, `TestSetBanned_ReplacesRatherThanMerges`, `TestBanInterceptors_ApplyOnlyWhatWasSent`, `TestBanServerOptions_ApplyTheBanSetOnUnaryAndStreamingCalls` |
-| `base/ban-reaches-every-relay` | A ban MUST take effect at every relay that could admit or renew that key, and a newer ban set MUST NOT be overwritten by an older one. | Consistency & concurrency | none (finding 5) |
+| `base/ban-reaches-every-relay` | A ban MUST take effect at every relay that could admit or renew that key, and a newer ban set MUST NOT be overwritten by an older one. | Consistency & concurrency | `TestSetBannedAt_AnOlderSetIsIgnored`, `TestKeepIn_KeepsANewVersionOfAnUnchangedSet`, `TestWorkerStore_DecideNeverLowersTheVersion`, `TestWorkerStore_BannedAndEnrolledAskForTheirState`, `TestBanWorkers_DeliversTheSetToEveryRelayAtOnce`. **Unit (mock) only;** a control plane sending no version (`w17-cluster-banned-version` absent) is applied unordered, as before. |
 | `base/ban-is-global` | A key banned through any relay's row MUST be refused at every relay. | Security | `TestWorkerStore_BannedAndEnrolledAskForTheirState` (no relay filter in the request) |
 | `base/sweep-isolates-failures` | `CheckWorkers` MUST report an unreachable relay and continue; MUST skip and count a worker refused for its own data; MUST blame the relay for a refusal of a relay-supplied field; and MUST abort, without blaming any relay, when the registry cannot write. | Failure & configuration | `TestCheckWorkers_AnUnreachableRelayIsReportedNotFatal`, `TestCheckWorkers_AWorkerTheRegistryRefusesDoesNotHideTheFleet`, `TestCheckWorkers_ARelayTheRegistryRefusesIsTheRelaysFailure`, `TestCheckWorkers_ARefusedFingerprintIsTheRelaysFailure`, `TestCheckWorkers_ARegistryOutageKeepsWhatTheSweepFound`, `TestCheckWorkers_ARegistryWriteFailureIsNotTheRelays`, `TestCheckWorkers_AnAbortStillLogsTheWorkersAlreadyRefused`, `TestCheckWorkers_EveryWorkerOfARelayRefusedIsSaidAboutTheRelay`, `TestClassifyRecordError` |
 | `base/sweep-sanitizes` | The control plane MUST sanitize every reported claim before recording it, whatever the relay version, and MUST skip a worker without a fingerprint. | Failure & configuration | `TestCheckWorkers_ClaimsTheRelayDidNotSanitizeAreSanitizedHere`, `TestCheckWorkers_SkipsAWorkerWithoutAFingerprint` |
@@ -413,7 +414,7 @@ other plugins it meets.
 | `interaction/schedule-reserve-one-queue` | ScheduleTask × Reservations | A streaming wait and a polled reservation on one relay share one FIFO queue and one capacity. Neither may overtake the other, and a slot freed by one goes to the head of the queue whichever kind it is. | `TestServer_ReservationsQueueGrantAndCancel`, `TestWait_AFreedSlotGoesToExactlyOneWaiter` (no test mixes the two kinds) |
 | `interaction/bans-every-relay-call` | Ban registry × every relay-bound RPC | ScheduleTask, ReserveTask, GetReservation, CancelReservation, CheckWorkers, IssueRegistrationCode and DrainRelay each read the ban set first and refuse when it cannot be read. | `TestEveryRelayCallCarriesTheBanSet`, `TestHandlers_AnUnreadableBanSetRefusesEveryCall` |
 | `interaction/drain-reservations-place-again` | Drain × Reservations | A queued reservation on a draining relay reads `expired` with `RELAY_DRAINING` once, then is forgotten. A granted one keeps its grant. A new reservation falls through to another relay. | `TestDrain_AQueuedReservationIsToldToPlaceAgain`, `TestDrain_AGrantedReservationKeepsItsGrant`, `TestReserveTask_DrainingRelaysAreSkippedAndTheirQueueExpires` |
-| `interaction/registry-disable-bans` | Relay registry × Ban registry | A disabled relay keeps running and keeps renewing certificates, but receives no ban set. Disabling a relay MUST NOT leave a banned key able to renew there. | none (finding 5c) |
+| `interaction/registry-disable-bans` | Relay registry × Ban registry | A disabled relay keeps running and keeps renewing certificates. Disabling a relay MUST NOT leave a banned key able to renew there. | `TestBanWorkers_DeliversTheSetToEveryRelayAtOnce` (every ban or unban is delivered to every registered relay, enabled or not, at once; best effort) |
 | `interaction/registry-delete-reservations` | Relay registry × Reservations | Deleting a relay row turns its outstanding handles into `expired` on the next poll, while the relay itself keeps the places until abandonment. | `TestGetReservation_GoneIsExpired`, `TestCancelReservation_GoneAndMalformed` |
 | `interaction/activation-activation-isolation` | Two activations of the plugin | Two pools in one project (for example `codegen` and `browser`) have separate tables, separate registries and separate ban sets. A relay registered in one pool is never dialled by the other, and a worker banned in one is not banned in the other. | none. A live test would activate the plugin twice, register one relay per pool, and assert placement, bans and admin pages stay within their pool. |
 | `interaction/auth-cluster-decided-by` | auth × Ban registry | `BanWorkers`/`UnbanWorkers` read the user id from the gateway's verified principal envelope (field 2). Without a principal (no auth plugin, or an unauthenticated route) every decision is refused. | `TestDecideWorkers_RecordsTheSignedInCaller`, `TestDecideWorkers_RefusesWithoutACaller` |
@@ -549,9 +550,9 @@ real gateway, the real relay binary and a real worker.
 4. **Bans:** after a ban in the admin, the next placement stops work reaching
    the worker, its attach stream ends with `WORKER_BANNED`, it cannot renew,
    and a new tunnel from it is refused. Expected red until finding 4 is fixed:
-   its existing tunnel is closed. Expected red until finding 5 is fixed: a
-   relay restarted with no placement since does not let the banned key renew;
-   a disabled relay does not either.
+   its existing tunnel is closed. A relay restarted (with
+   `--identity-dir`) with no placement since does not let the banned key
+   renew; a disabled relay does not either.
 5. **Failure matrix:** kill a worker mid-call (the caller gets an error, the
    slot and the worker's capacity return); restart a relay (outstanding
    tickets and reservations are refused or `expired`, workers reattach, the

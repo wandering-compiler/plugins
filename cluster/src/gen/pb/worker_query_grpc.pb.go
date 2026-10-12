@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	WorkerQuery_ListWorkers_FullMethodName         = "/w17.contrib.cluster.WorkerQuery/ListWorkers"
 	WorkerQuery_GetWorker_FullMethodName           = "/w17.contrib.cluster.WorkerQuery/GetWorker"
+	WorkerQuery_BanSetVersion_FullMethodName       = "/w17.contrib.cluster.WorkerQuery/BanSetVersion"
 	WorkerQuery_FingerprintsByState_FullMethodName = "/w17.contrib.cluster.WorkerQuery/FingerprintsByState"
 	WorkerQuery_CountWorkersByState_FullMethodName = "/w17.contrib.cluster.WorkerQuery/CountWorkersByState"
 )
@@ -33,6 +34,9 @@ const (
 type WorkerQueryClient interface {
 	ListWorkers(ctx context.Context, in *ListWorkersReq, opts ...grpc.CallOption) (*ListWorkersResp, error)
 	GetWorker(ctx context.Context, in *GetWorkerReq, opts ...grpc.CallOption) (*Worker, error)
+	// BanSetVersion is the version sent with the ban set: the time of the
+	// newest decision, ban or unban, since either changes the set.
+	BanSetVersion(ctx context.Context, in *BanSetVersionReq, opts ...grpc.CallOption) (*BanSetVersionResp, error)
 	FingerprintsByState(ctx context.Context, in *FingerprintsByStateReq, opts ...grpc.CallOption) (*FingerprintsByStateResp, error)
 	// Counted in the database rather than by listing and measuring: the sweep
 	// calls this twice around itself, and a list would grow with the registry
@@ -68,6 +72,16 @@ func (c *workerQueryClient) GetWorker(ctx context.Context, in *GetWorkerReq, opt
 	return out, nil
 }
 
+func (c *workerQueryClient) BanSetVersion(ctx context.Context, in *BanSetVersionReq, opts ...grpc.CallOption) (*BanSetVersionResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BanSetVersionResp)
+	err := c.cc.Invoke(ctx, WorkerQuery_BanSetVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerQueryClient) FingerprintsByState(ctx context.Context, in *FingerprintsByStateReq, opts ...grpc.CallOption) (*FingerprintsByStateResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FingerprintsByStateResp)
@@ -94,6 +108,9 @@ func (c *workerQueryClient) CountWorkersByState(ctx context.Context, in *CountWo
 type WorkerQueryServer interface {
 	ListWorkers(context.Context, *ListWorkersReq) (*ListWorkersResp, error)
 	GetWorker(context.Context, *GetWorkerReq) (*Worker, error)
+	// BanSetVersion is the version sent with the ban set: the time of the
+	// newest decision, ban or unban, since either changes the set.
+	BanSetVersion(context.Context, *BanSetVersionReq) (*BanSetVersionResp, error)
 	FingerprintsByState(context.Context, *FingerprintsByStateReq) (*FingerprintsByStateResp, error)
 	// Counted in the database rather than by listing and measuring: the sweep
 	// calls this twice around itself, and a list would grow with the registry
@@ -113,6 +130,9 @@ func (UnimplementedWorkerQueryServer) ListWorkers(context.Context, *ListWorkersR
 }
 func (UnimplementedWorkerQueryServer) GetWorker(context.Context, *GetWorkerReq) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWorker not implemented")
+}
+func (UnimplementedWorkerQueryServer) BanSetVersion(context.Context, *BanSetVersionReq) (*BanSetVersionResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method BanSetVersion not implemented")
 }
 func (UnimplementedWorkerQueryServer) FingerprintsByState(context.Context, *FingerprintsByStateReq) (*FingerprintsByStateResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method FingerprintsByState not implemented")
@@ -176,6 +196,24 @@ func _WorkerQuery_GetWorker_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerQuery_BanSetVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BanSetVersionReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerQueryServer).BanSetVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerQuery_BanSetVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerQueryServer).BanSetVersion(ctx, req.(*BanSetVersionReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerQuery_FingerprintsByState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(FingerprintsByStateReq)
 	if err := dec(in); err != nil {
@@ -226,6 +264,10 @@ var WorkerQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWorker",
 			Handler:    _WorkerQuery_GetWorker_Handler,
+		},
+		{
+			MethodName: "BanSetVersion",
+			Handler:    _WorkerQuery_BanSetVersion_Handler,
 		},
 		{
 			MethodName: "FingerprintsByState",

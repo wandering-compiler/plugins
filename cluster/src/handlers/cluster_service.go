@@ -32,6 +32,10 @@ var ErrRelayNotFound = errors.New("cluster: no relay with that id")
 type RelayStore interface {
 	// ListEnabled returns the relays scheduling may consider, in any order.
 	ListEnabled(ctx context.Context) ([]Relay, error)
+	// ListAll returns every registered relay, enabled or not. A ban is sent
+	// to all of them: a disabled relay takes no placements, but its workers
+	// still renew their certificates there.
+	ListAll(ctx context.Context) ([]Relay, error)
 	// Get returns one relay by registry id, enabled or not, or
 	// ErrRelayNotFound. Used where an id arrives from outside — an operator's
 	// selection, a reservation handle — rather than from a listing.

@@ -35,6 +35,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -281,6 +282,14 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		return err
 	}
 	workers := workeradmit.New()
+	// With an identity directory the ban set is kept there, so a restarted
+	// relay refuses banned workers (and their renewals) from the start
+	// instead of only after the control plane next calls it.
+	if dir := strings.TrimSpace(cfg.identityDir); dir != "" {
+		if err := workers.KeepIn(filepath.Join(dir, "bans.json")); err != nil {
+			return err
+		}
+	}
 
 	controlPin := strings.ToLower(strings.TrimSpace(cfg.controlPin))
 	// A refused control plane is LOGGED, with the fingerprint it presented.

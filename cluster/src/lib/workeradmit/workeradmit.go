@@ -15,7 +15,14 @@ package workeradmit
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -28,9 +35,41 @@ import (
 // header being absent, which changes nothing.
 const BannedHeader = "w17-cluster-banned"
 
+// BannedVersionHeader carries the ban set's version beside it: the time of
+// the newest ban or unban decision, in Unix nanoseconds. A relay ignores a
+// set older than one it has applied (see Registry.SetBannedAt).
+const BannedVersionHeader = "w17-cluster-banned-version"
+
 // WithBans returns ctx carrying the complete ban set to a relay.
 func WithBans(ctx context.Context, ids []string) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, BannedHeader, strings.Join(ids, ","))
+	return WithBansAt(ctx, ids, 0)
+}
+
+// WithBansAt returns ctx carrying the complete ban set and its version.
+func WithBansAt(ctx context.Context, ids []string, version int64) context.Context {
+	ctx = metadata.AppendToOutgoingContext(ctx, BannedHeader, strings.Join(ids, ","))
+	if version != 0 {
+		ctx = metadata.AppendToOutgoingContext(ctx, BannedVersionHeader, strconv.FormatInt(version, 10))
+	}
+	return ctx
+}
+
+// BanVersionFrom reads the version sent with the ban set; 0 when absent or
+// malformed.
+func BanVersionFrom(ctx context.Context) int64 {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return 0
+	}
+	vals := md.Get(BannedVersionHeader)
+	if len(vals) == 0 {
+		return 0
+	}
+	v, err := strconv.ParseInt(vals[0], 10, 64)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
 }
 
 // BansFrom reads the ban set a control plane sent, and whether it sent one.
@@ -70,6 +109,15 @@ type Registry struct {
 	mu     sync.Mutex
 	banned map[string]struct{}
 	known  map[string]Worker
+
+	// version is the newest ban set's version seen (see BannedVersionHeader);
+	// a set older than it is ignored. 0 = none seen yet.
+	version int64
+	// path, when set, is where the ban set is kept across restarts.
+	path string
+	// persistMu serialises writes of path, so the last write is always of
+	// the newest state (see persist).
+	persistMu sync.Mutex
 }
 
 func New() *Registry {
@@ -81,7 +129,25 @@ func New() *Registry {
 // WHOLESALE, not merged. Removing an id from the set is how a ban is lifted,
 // and a merge would make that impossible to express.
 func (r *Registry) SetBanned(ids []string) {
+	r.SetBannedAt(ids, 0)
+}
+
+// SetBannedAt replaces the ban set with one of the given version, unless a
+// newer one has already been applied. Control-plane replicas read the set at
+// different moments, so the one that read it earlier can arrive later; its
+// set would undo a ban the other already delivered.
+//
+// Version 0 (a control plane that sends none) is always applied, as before.
+func (r *Registry) SetBannedAt(ids []string, version int64) {
 	r.mu.Lock()
+	if version != 0 && version < r.version {
+		r.mu.Unlock()
+		return
+	}
+	versionChanged := version > r.version
+	if versionChanged {
+		r.version = version
+	}
 	old := r.banned
 	r.banned = make(map[string]struct{}, len(ids))
 	added := false
@@ -93,7 +159,13 @@ func (r *Registry) SetBanned(ids []string) {
 		}
 	}
 	notify := r.onBans
+	// A new version is kept even when the set is unchanged: a restart that
+	// forgot it would accept a set older than the one already applied.
+	changed := added || len(old) != len(r.banned) || versionChanged
 	r.mu.Unlock()
+	if changed {
+		r.persist()
+	}
 	// Only when someone is NEWLY banned. The set arrives on every management
 	// call, almost always unchanged, and the hook scans every tunnel.
 	if added && notify != nil {
@@ -141,4 +213,103 @@ func (r *Registry) Known() []Worker {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// savedBans is the on-disk form of the ban set.
+type savedBans struct {
+	Version int64    `json:"version"`
+	Banned  []string `json:"banned"`
+}
+
+func (r *Registry) snapshotLocked() savedBans {
+	out := savedBans{Version: r.version, Banned: make([]string, 0, len(r.banned))}
+	for id := range r.banned {
+		out.Banned = append(out.Banned, id)
+	}
+	sort.Strings(out.Banned)
+	return out
+}
+
+// KeepIn makes the registry keep its ban set in path across restarts, and
+// loads what is there. Without it a restarted relay knew no bans until the
+// control plane next called it, and a banned worker could renew its
+// certificate in that window. A missing file is an empty start; an
+// unreadable one is an error, because starting with no bans is the failure
+// this exists to prevent.
+func (r *Registry) KeepIn(path string) error {
+	raw, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return fmt.Errorf("workeradmit: reading the saved ban set: %w", err)
+	default:
+		var saved savedBans
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			return fmt.Errorf("workeradmit: the saved ban set %s is not readable: %w", path, err)
+		}
+		r.mu.Lock()
+		r.banned = make(map[string]struct{}, len(saved.Banned))
+		for _, id := range saved.Banned {
+			r.banned[strings.ToLower(id)] = struct{}{}
+		}
+		r.version = saved.Version
+		r.mu.Unlock()
+	}
+	r.mu.Lock()
+	r.path = path
+	r.mu.Unlock()
+	return nil
+}
+
+// persist writes the current set atomically (temp file, fsync, rename, fsync
+// of the directory), so a crash leaves either the old file or the new one,
+// never a torn one that would refuse the next start. Writes are serialised and
+// each takes its snapshot under the write lock, so two concurrent changes
+// cannot land in the wrong order or share the temp file. A failure is logged
+// and not fatal: the set in memory is current, and the next change writes it
+// again.
+func (r *Registry) persist() {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+	r.mu.Lock()
+	path := r.path
+	s := r.snapshotLocked()
+	r.mu.Unlock()
+	if path == "" {
+		return
+	}
+	if err := writeAtomic(path, s); err != nil {
+		log.Printf("workeradmit: keeping the ban set in %s: %v", path, err)
+	}
+}
+
+func writeAtomic(path string, s savedBans) error {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(raw); err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
