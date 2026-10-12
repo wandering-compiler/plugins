@@ -171,7 +171,9 @@ message Worker {
   // No column default. Proto3 pins 0 to UNSPECIFIED, and a row that defaulted
   // to "unspecified" would be a worker in no state at all; ENROLLED is what
   // the code that inserts the row says, explicitly.
-  WorkerState state = 5;
+  // Indexed: the ban set is read by state on every relay-bound call (cached
+  // briefly), and a fleet that never deletes rows makes a scan grow forever.
+  WorkerState state = 5 [(w17.db.column) = { index: true }];
 
   // Which relay reported it. A worker's certificate is valid at exactly one
   // relay (that relay's CA issued it), and an operator chasing "why is this
@@ -186,6 +188,9 @@ message Worker {
   // `decided_by` is free text rather than a foreign key on purpose: this
   // plugin has no user table and must not require one. The consumer writes
   // whatever identifies an operator in their own system.
-  optional google.protobuf.Timestamp decided_at = 8 [(w17.field) = { type: DATETIME }];
+  //
+  // Indexed: the ban set's version is MAX(decided_at), read with the set on
+  // every cache miss (see BanSetVersion), and rows are never deleted.
+  optional google.protobuf.Timestamp decided_at = 8 [(w17.field) = { type: DATETIME }, (w17.db.column) = { index: true }];
   string decided_by = 9 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
 }

@@ -37,6 +37,7 @@ func (h *ClusterServiceHandler) decide(ctx context.Context, req *pb.DecideWorker
 	if err := h.Workers.Decide(ctx, req.GetIds(), ban, who.GetUserId()); err != nil {
 		return nil, err
 	}
+	h.forgetBans() // the next set sent reads the decision just made
 	h.pushBans(ctx)
 	return &pb.DecideWorkersActionResp{}, nil
 }
@@ -51,7 +52,7 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context) {
 	if h.Relays == nil || h.Dial == nil {
 		return
 	}
-	ctx, err := h.withBans(context.WithoutCancel(ctx))
+	ctx, err := h.withFreshBans(context.WithoutCancel(ctx))
 	if err != nil {
 		return
 	}

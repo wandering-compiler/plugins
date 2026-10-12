@@ -160,6 +160,13 @@ func (h *ClusterServiceHandler) placeable(ctx context.Context) (candidates, erro
 			conn, st, err := h.poll(ctx, r)
 			polled[i] = candidate{Relay: r, conn: conn, stats: st}
 			errs[i] = err
+			// Recorded here, in parallel, so a slow registry delays the
+			// placement by one write timeout at most, not one per relay.
+			if err != nil {
+				h.note(ctx, r, err)
+			} else {
+				h.noteReached(ctx, r)
+			}
 		}()
 	}
 	wg.Wait()
@@ -167,10 +174,8 @@ func (h *ClusterServiceHandler) placeable(ctx context.Context) (candidates, erro
 	out := candidates{enabled: len(relays)}
 	for i, c := range polled {
 		if errs[i] != nil {
-			h.note(ctx, c.Relay, errs[i])
 			continue
 		}
-		h.noteOK(ctx, c.Relay)
 		if c.stats.GetDraining() {
 			_ = c.conn.Close()
 			continue
@@ -271,6 +276,9 @@ func (h *ClusterServiceHandler) proxyOne(
 // errors on purpose: this is bookkeeping for an operator reading a list, and a
 // scheduling decision must not fail because a cache write did.
 func (h *ClusterServiceHandler) note(ctx context.Context, r Relay, cause error) {
+	h.reachedMu.Lock()
+	delete(h.reached, r.ID) // the next success is recorded at once
+	h.reachedMu.Unlock()
 	// A fresh context: `ctx` is usually already cancelled by the time a
 	// failure is being recorded, and a write on a dead context records
 	// nothing — which is exactly the case an operator most needs to see.
@@ -279,10 +287,39 @@ func (h *ClusterServiceHandler) note(ctx context.Context, r Relay, cause error) 
 	_ = h.Relays.RecordFailed(c, r.ID, cause.Error())
 }
 
+// noteOK records that the relay was reached, every time. Operator actions
+// (CheckWorkers, IssueRegistrationCode, DrainRelay) use it: an operator who
+// just pressed a button reads the row next and expects it to say so.
 func (h *ClusterServiceHandler) noteOK(ctx context.Context, r Relay) {
+	h.reachedMu.Lock()
+	if h.reached == nil {
+		h.reached = map[string]time.Time{}
+	}
+	h.reached[r.ID] = time.Now()
+	h.reachedMu.Unlock()
 	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = h.Relays.RecordReached(c, r.ID)
+	if err := h.Relays.RecordReached(c, r.ID); err != nil {
+		// Not written, so not throttled: the next success tries again.
+		h.reachedMu.Lock()
+		delete(h.reached, r.ID)
+		h.reachedMu.Unlock()
+	}
+}
+
+// noteReached is noteOK at most once per reachedEvery per relay. A healthy
+// relay is reached on every placement; its row only needs to say so every
+// reachedEvery, not once per call, so placements stop paying a registry write
+// per relay. A failure (note) or a write that did not land makes the next
+// success write at once.
+func (h *ClusterServiceHandler) noteReached(ctx context.Context, r Relay) {
+	h.reachedMu.Lock()
+	last, ok := h.reached[r.ID]
+	h.reachedMu.Unlock()
+	if ok && time.Since(last) < reachedEvery {
+		return
+	}
+	h.noteOK(ctx, r)
 }
 
 // dialReady opens a management connection AND waits for it to be usable.

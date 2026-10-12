@@ -284,6 +284,8 @@ type Worker struct {
 	// No column default. Proto3 pins 0 to UNSPECIFIED, and a row that defaulted
 	// to "unspecified" would be a worker in no state at all; ENROLLED is what
 	// the code that inserts the row says, explicitly.
+	// Indexed: the ban set is read by state on every relay-bound call (cached
+	// briefly), and a fleet that never deletes rows makes a scan grow forever.
 	State WorkerState `protobuf:"varint,5,opt,name=state,proto3,enum=w17.contrib.cluster.WorkerState" json:"state,omitempty"`
 	// Which relay reported it. A worker's certificate is valid at exactly one
 	// relay (that relay's CA issued it), and an operator chasing "why is this
@@ -295,6 +297,9 @@ type Worker struct {
 	// `decided_by` is free text rather than a foreign key on purpose: this
 	// plugin has no user table and must not require one. The consumer writes
 	// whatever identifies an operator in their own system.
+	//
+	// Indexed: the ban set's version is MAX(decided_at), read with the set on
+	// every cache miss (see BanSetVersion), and rows are never deleted.
 	DecidedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=decided_at,json=decidedAt,proto3,oneof" json:"decided_at,omitempty"`
 	DecidedBy     string                 `protobuf:"bytes,9,opt,name=decided_by,json=decidedBy,proto3" json:"decided_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -412,18 +417,18 @@ const file_types_models_proto_rawDesc = "" +
 	"lastSeenAt\x88\x01\x01\x12'\n" +
 	"\n" +
 	"last_error\x18\b \x01(\tB\b\xca\xf3\x18\x04\b\x020\x01R\tlastError:\x04\xc2\xf3\x18\x00B\x0f\n" +
-	"\r_last_seen_at\"\xde\x03\n" +
+	"\r_last_seen_at\"\xec\x03\n" +
 	"\x06Worker\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x125\n" +
 	"\x10cert_fingerprint\x18\x02 \x01(\tB\n" +
 	"\xca\xf3\x18\x06\b\x018\x01@@R\x0fcertFingerprint\x12\x1f\n" +
 	"\x04name\x18\x03 \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\x80\x01R\x04name\x12(\n" +
-	"\tdevice_id\x18\x04 \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\x80\x01R\bdeviceId\x126\n" +
-	"\x05state\x18\x05 \x01(\x0e2 .w17.contrib.cluster.WorkerStateR\x05state\x12'\n" +
+	"\tdevice_id\x18\x04 \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\x80\x01R\bdeviceId\x12>\n" +
+	"\x05state\x18\x05 \x01(\x0e2 .w17.contrib.cluster.WorkerStateB\x06\xd2\xf3\x18\x02\b\x01R\x05state\x12'\n" +
 	"\brelay_id\x18\x06 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\arelayId\x12K\n" +
-	"\rfirst_seen_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\vfirstSeenAt\x12F\n" +
+	"\rfirst_seen_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\vfirstSeenAt\x12L\n" +
 	"\n" +
-	"decided_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16H\x00R\tdecidedAt\x88\x01\x01\x12*\n" +
+	"decided_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\f\xca\xf3\x18\x02\b\x16\xd2\xf3\x18\x02\b\x01H\x00R\tdecidedAt\x88\x01\x01\x12*\n" +
 	"\n" +
 	"decided_by\x18\t \x01(\tB\v\xca\xf3\x18\a\b\x010\x01@\x80\x01R\tdecidedBy:\x04\xc2\xf3\x18\x00B\r\n" +
 	"\v_decided_at*_\n" +
