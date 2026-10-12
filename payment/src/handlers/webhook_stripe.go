@@ -150,10 +150,7 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 			ProviderPaymentId: ev.ChargePaymentIntent,
 		})
 		if guardRefused(err) {
-			// Already REFUNDED (redelivery), not SUCCEEDED locally yet, or
-			// not a payment this installation made: nothing to settle. A
-			// refund comes long after the payment, so no wait-and-retry.
-			return nil
+			return h.refundNotSettled(ctx, ev.ChargePaymentIntent)
 		}
 		return err
 	case strings.HasPrefix(ev.Type, "customer.subscription."):
@@ -186,6 +183,31 @@ func (h *PaymentServiceHandler) requirePayment(ctx context.Context, ev stripe.Ev
 		return nil
 	}
 	return errNoLocalRecord
+}
+
+// refundNotSettled resolves a refused MarkPaymentRefunded on a fully refunded
+// charge. Already REFUNDED (a redelivery), CANCELED, or absent (not a payment
+// this installation made): acknowledged. Still before SUCCEEDED locally — the
+// payment_intent.succeeded delivery is late or being retried, which Stripe
+// does not order against charge.refunded: an error, so the event is NOT
+// recorded and its redelivery settles the status once SUCCEEDED has landed.
+// Acknowledged, the REFUNDED was lost for good, and the late success then
+// read SUCCEEDED (and granted a top-up's credit) on a refunded payment.
+func (h *PaymentServiceHandler) refundNotSettled(ctx context.Context, providerPaymentID string) error {
+	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: providerPaymentID})
+	if err != nil && !absent(err) {
+		return err
+	}
+	p := got.GetPayment()
+	if p == nil {
+		return nil
+	}
+	switch p.GetStatus() {
+	case pb.Payment_REFUNDED, pb.Payment_CANCELED:
+		return nil
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"charge.refunded for %q before its success landed locally; redeliver", providerPaymentID)
 }
 
 // metadataValue reads the first value for a lowercase metadata key from

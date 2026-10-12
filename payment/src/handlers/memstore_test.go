@@ -503,13 +503,13 @@ func (s *memStore) MarkPaymentRefunded(_ context.Context, in *pb.MarkPaymentRefu
 	return &pb.MarkPaymentRefundedResp{Payment: p}, s.leave("MarkPaymentRefunded", nil)
 }
 
-// MarkPaymentCanceled: not from SUCCEEDED, FAILED, CANCELED or REFUNDED.
+// MarkPaymentCanceled: not from SUCCEEDED, CANCELED or REFUNDED.
 func (s *memStore) MarkPaymentCanceled(_ context.Context, in *pb.MarkPaymentCanceledReq, _ ...grpc.CallOption) (*pb.MarkPaymentCanceledResp, error) {
 	if err := s.enter("MarkPaymentCanceled"); err != nil {
 		return nil, s.leave("", err)
 	}
 	p, err := s.setPaymentStatus("MarkPaymentCanceled", in.GetProviderPaymentId(), pb.Payment_CANCELED,
-		pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
+		pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
 	if err != nil {
 		return nil, s.leave("MarkPaymentCanceled", err)
 	}

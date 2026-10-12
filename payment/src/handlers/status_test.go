@@ -88,3 +88,71 @@ func TestWebhook_PaymentIntentCanceled(t *testing.T) {
 		t.Errorf("a succeeded payment was canceled: %v", st)
 	}
 }
+
+// A failed attempt leaves the provider's PaymentIntent open, so the cancel
+// that ends an abandoned payment moves FAILED to CANCELED.
+func TestWebhook_PaymentIntentCanceledAfterAFailure(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "5", "k-failed")
+	if _, err := r.deliver(eventJSON("evt_f", "payment_intent.payment_failed", p.GetProviderPaymentId(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.deliver(eventJSON("evt_c", "payment_intent.canceled", p.GetProviderPaymentId(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_CANCELED {
+		t.Errorf("failed then canceled: %v, want CANCELED", st)
+	}
+	if r.store.events("PaymentCanceled") != 1 {
+		t.Errorf("PaymentCanceled emitted %d times, want 1", r.store.events("PaymentCanceled"))
+	}
+}
+
+// Stripe does not order charge.refunded against payment_intent.succeeded: a
+// refund seen while the payment is not SUCCEEDED locally is not recorded,
+// and its redelivery settles REFUNDED once the success has landed.
+func TestWebhook_ChargeRefundedBeforeTheSuccess(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "10", "k-early")
+	refunded := eventJSON("evt_early_refund", "charge.refunded", "ch_e",
+		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": true})
+	if _, err := r.deliver(refunded); err == nil {
+		t.Fatal("charge.refunded before the success was acknowledged; the REFUNDED would be lost")
+	}
+	if r.store.isProcessed("evt_early_refund") {
+		t.Fatal("early charge.refunded recorded in the ledger")
+	}
+	if _, err := r.deliver(eventJSON("evt_s", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.deliver(refunded); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_REFUNDED {
+		t.Errorf("after the redelivery: %v, want REFUNDED", st)
+	}
+}
+
+// A top-up whose grant failed and which was then refunded in full gets no
+// credit from the redelivered success.
+func TestFlow_RefundedTopUpIsNotGrantedOnRedelivery(t *testing.T) {
+	r := newRig(t)
+	p := r.topUp("user-a", "20.00", "top-refunded")
+	body := eventJSON("evt_top", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)
+	r.store.injectBefore("ApplyCredit", errTransient)
+	if _, err := r.deliver(body); err == nil {
+		t.Fatal("want the grant failure to surface")
+	}
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "rf"}); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_REFUNDED {
+		t.Fatalf("after the full refund: %v, want REFUNDED", st)
+	}
+	if _, err := r.deliver(body); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+	if got := r.store.balance(t, "user-a"); got != "0.0000" {
+		t.Errorf("balance = %s for a refunded top-up, want 0.0000", got)
+	}
+}

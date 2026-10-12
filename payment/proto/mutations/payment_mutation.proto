@@ -287,23 +287,6 @@ service PaymentMutation {
     };
   }
 
-  // MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
-  // PaymentFailed.
-  //
-  // TRANSITION-GUARDED (`status <> 3, 4, 5, 6`). One
-  // PaymentIntent whose first charge attempt fails and whose second
-  // succeeds produces `payment_intent.payment_failed` and
-  // `payment_intent.succeeded` as two DISTINCT event ids, so the dedup
-  // ledger cannot relate them, and Stripe guarantees neither ordering
-  // nor serialisation. Unconditional, the late failure overwrote a
-  // charge that had actually succeeded and emitted PaymentFailed after
-  // PaymentSucceeded.
-  //
-  // `status <> 3` makes SUCCEEDED absorbing (correct for a provider
-  // whose succeeded PaymentIntent is terminal — a reversal is a Refund,
-  // a separate object); `status <> 4` makes a redelivered failure a
-  // no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
-  // SUCCEEDED stays open: a retried attempt must still be able to succeed.
   // MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
   // only a captured payment can be refunded, and REFUNDED is terminal. Set
   // by RefundPayment when its refund completes the amount, and by the
@@ -342,7 +325,10 @@ service PaymentMutation {
   }
 
   // MarkPaymentCanceled — the provider canceled a payment that never
-  // completed. Not from SUCCEEDED, FAILED, CANCELED or REFUNDED.
+  // completed. Not from SUCCEEDED, CANCELED or REFUNDED. From FAILED it is
+  // allowed: a failed attempt leaves the provider's PaymentIntent open
+  // (requires_payment_method — the reason FAILED → SUCCEEDED stays open),
+  // and canceling it is how an abandoned payment ends.
   rpc MarkPaymentCanceled(MarkPaymentCanceledReq) returns (MarkPaymentCanceledResp) {
     option (w17.db.method) = {
       ops: {
@@ -351,7 +337,7 @@ service PaymentMutation {
           "UPDATE @module.Payment SET "
           "status = 5, "
           "updated_at = NOW() "
-          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 4 AND status <> 5 AND status <> 6 "
+          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 5 AND status <> 6 "
           "RETURNING id AS payment.id, "
           "          customer_id AS payment.customer_id, "
           "          provider_payment_id AS payment.provider_payment_id, "
@@ -371,6 +357,23 @@ service PaymentMutation {
     };
   }
 
+  // MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
+  // PaymentFailed.
+  //
+  // TRANSITION-GUARDED (`status <> 3, 4, 5, 6`). One
+  // PaymentIntent whose first charge attempt fails and whose second
+  // succeeds produces `payment_intent.payment_failed` and
+  // `payment_intent.succeeded` as two DISTINCT event ids, so the dedup
+  // ledger cannot relate them, and Stripe guarantees neither ordering
+  // nor serialisation. Unconditional, the late failure overwrote a
+  // charge that had actually succeeded and emitted PaymentFailed after
+  // PaymentSucceeded.
+  //
+  // `status <> 3` makes SUCCEEDED absorbing (correct for a provider
+  // whose succeeded PaymentIntent is terminal — a reversal is a Refund,
+  // a separate object); `status <> 4` makes a redelivered failure a
+  // no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
+  // SUCCEEDED stays open: a retried attempt must still be able to succeed.
   rpc MarkPaymentFailed(MarkPaymentFailedReq) returns (MarkPaymentFailedResp) {
     option (w17.db.method) = {
       ops: {

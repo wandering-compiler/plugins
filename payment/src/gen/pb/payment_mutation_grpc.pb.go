@@ -87,6 +87,18 @@ type PaymentMutationClient interface {
 	// webhook handler discriminates with PaymentQuery.GetPaymentByProviderId;
 	// see IngestStripe.
 	MarkPaymentSucceeded(ctx context.Context, in *MarkPaymentSucceededReq, opts ...grpc.CallOption) (*MarkPaymentSucceededResp, error)
+	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
+	// only a captured payment can be refunded, and REFUNDED is terminal. Set
+	// by RefundPayment when its refund completes the amount, and by the
+	// provider's charge.refunded webhook, which also covers partial refunds
+	// that completed it concurrently.
+	MarkPaymentRefunded(ctx context.Context, in *MarkPaymentRefundedReq, opts ...grpc.CallOption) (*MarkPaymentRefundedResp, error)
+	// MarkPaymentCanceled — the provider canceled a payment that never
+	// completed. Not from SUCCEEDED, CANCELED or REFUNDED. From FAILED it is
+	// allowed: a failed attempt leaves the provider's PaymentIntent open
+	// (requires_payment_method — the reason FAILED → SUCCEEDED stays open),
+	// and canceling it is how an abandoned payment ends.
+	MarkPaymentCanceled(ctx context.Context, in *MarkPaymentCanceledReq, opts ...grpc.CallOption) (*MarkPaymentCanceledResp, error)
 	// MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
 	// PaymentFailed.
 	//
@@ -104,15 +116,6 @@ type PaymentMutationClient interface {
 	// a separate object); `status <> 4` makes a redelivered failure a
 	// no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
 	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
-	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
-	// only a captured payment can be refunded, and REFUNDED is terminal. Set
-	// by RefundPayment when its refund completes the amount, and by the
-	// provider's charge.refunded webhook, which also covers partial refunds
-	// that completed it concurrently.
-	MarkPaymentRefunded(ctx context.Context, in *MarkPaymentRefundedReq, opts ...grpc.CallOption) (*MarkPaymentRefundedResp, error)
-	// MarkPaymentCanceled — the provider canceled a payment that never
-	// completed. Not from SUCCEEDED, FAILED, CANCELED or REFUNDED.
-	MarkPaymentCanceled(ctx context.Context, in *MarkPaymentCanceledReq, opts ...grpc.CallOption) (*MarkPaymentCanceledResp, error)
 	MarkPaymentFailed(ctx context.Context, in *MarkPaymentFailedReq, opts ...grpc.CallOption) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.
@@ -410,6 +413,18 @@ type PaymentMutationServer interface {
 	// webhook handler discriminates with PaymentQuery.GetPaymentByProviderId;
 	// see IngestStripe.
 	MarkPaymentSucceeded(context.Context, *MarkPaymentSucceededReq) (*MarkPaymentSucceededResp, error)
+	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
+	// only a captured payment can be refunded, and REFUNDED is terminal. Set
+	// by RefundPayment when its refund completes the amount, and by the
+	// provider's charge.refunded webhook, which also covers partial refunds
+	// that completed it concurrently.
+	MarkPaymentRefunded(context.Context, *MarkPaymentRefundedReq) (*MarkPaymentRefundedResp, error)
+	// MarkPaymentCanceled — the provider canceled a payment that never
+	// completed. Not from SUCCEEDED, CANCELED or REFUNDED. From FAILED it is
+	// allowed: a failed attempt leaves the provider's PaymentIntent open
+	// (requires_payment_method — the reason FAILED → SUCCEEDED stays open),
+	// and canceling it is how an abandoned payment ends.
+	MarkPaymentCanceled(context.Context, *MarkPaymentCanceledReq) (*MarkPaymentCanceledResp, error)
 	// MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
 	// PaymentFailed.
 	//
@@ -427,15 +442,6 @@ type PaymentMutationServer interface {
 	// a separate object); `status <> 4` makes a redelivered failure a
 	// no-op, so it emits once; CANCELED and REFUNDED are terminal. FAILED →
 	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
-	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
-	// only a captured payment can be refunded, and REFUNDED is terminal. Set
-	// by RefundPayment when its refund completes the amount, and by the
-	// provider's charge.refunded webhook, which also covers partial refunds
-	// that completed it concurrently.
-	MarkPaymentRefunded(context.Context, *MarkPaymentRefundedReq) (*MarkPaymentRefundedResp, error)
-	// MarkPaymentCanceled — the provider canceled a payment that never
-	// completed. Not from SUCCEEDED, FAILED, CANCELED or REFUNDED.
-	MarkPaymentCanceled(context.Context, *MarkPaymentCanceledReq) (*MarkPaymentCanceledResp, error)
 	MarkPaymentFailed(context.Context, *MarkPaymentFailedReq) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
 	// provider refund. Duplicate provider_refund_id → AlreadyExists.

@@ -265,6 +265,16 @@ func grantTopupOnPaymentSuccess(ctx context.Context, h *PaymentServiceHandler, e
 	if topup.GetGrantedAt() != nil {
 		return nil // already granted
 	}
+	// A top-up refunded before its grant ever completed (the first attempt
+	// failed, the payment was refunded, the success is redelivered) gets no
+	// credit: the hook also runs on a refused MarkPaymentSucceeded.
+	pay, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: pid})
+	if err != nil && !absent(err) {
+		return err
+	}
+	if pay.GetPayment().GetStatus() == pb.Payment_REFUNDED {
+		return nil
+	}
 	// The ledger key stays "topup:<provider payment id>", the key every
 	// earlier version wrote. A grant whose first attempt committed under it
 	// and then failed to stamp is retried by redelivery; under any other key

@@ -48,11 +48,10 @@ The provider remembers an idempotency key for about a day. After that a retried 
 
 Nothing ever wrote `REFUNDED`, and `CANCELED` came only from the create response. A fully refunded payment read `SUCCEEDED` forever.
 
-- **`REFUNDED` once the refunds reach the amount.** `RefundPayment` sets it when its refund completes the amount (new query `SumRefundsForPayment`, new mutation `MarkPaymentRefunded`, only from `SUCCEEDED`). The provider's `charge.refunded` webhook, for a charge that is fully refunded, settles it too. That covers partial refunds completing the amount concurrently, and refunds made outside the plugin.
-- **`CANCELED` from the provider's `payment_intent.canceled`** (`MarkPaymentCanceled`, never from `SUCCEEDED`, `FAILED` or `REFUNDED`).
+- **`REFUNDED` once the refunds reach the amount.** `RefundPayment` sets it when its refund completes the amount (new query `SumRefundsForPayment`, new mutation `MarkPaymentRefunded`, only from `SUCCEEDED`). The provider's `charge.refunded` webhook, for a charge that is fully refunded, settles it too. That covers partial refunds completing the amount concurrently, and refunds made outside the plugin. A `charge.refunded` that arrives before the payment's success has landed locally is not recorded, so its redelivery settles the status once it has; and a top-up refunded before its credit was granted is not granted by a redelivered success.
+- **`CANCELED` from the provider's `payment_intent.canceled`** (`MarkPaymentCanceled`, never from `SUCCEEDED` or `REFUNDED`; from `FAILED` it is allowed, since a failed attempt leaves the PaymentIntent open and canceling it is how an abandoned payment ends).
 - **New events `PaymentRefunded` and `PaymentCanceled`.**
-- **Still open:** a refund the provider fails later (`refund.failed`) is not reflected locally yet.
-
+- **Still open:** a refund the provider fails later (`refund.failed`) is not reflected locally yet, and refunding a top-up whose credit was already granted does not take the credit back.
 
 ### Run a project against Stripe's API mock
 

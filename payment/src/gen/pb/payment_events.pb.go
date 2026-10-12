@@ -8,10 +8,12 @@
 //
 // Provider-neutral notifications a consuming project subscribes to in
 // order to integrate billing: PaymentSucceeded unlocks an entitlement
-// / sends a receipt; PaymentFailed triggers a dunning flow. Both fire
-// from the webhook-reconciliation mutations (MarkPaymentSucceeded /
-// MarkPaymentFailed) AFTER the provider confirms the charge — never
-// speculatively at intent time.
+// / sends a receipt; PaymentFailed triggers a dunning flow; PaymentCanceled
+// and PaymentRefunded close it. They fire from the reconciliation
+// mutations (MarkPaymentSucceeded / MarkPaymentFailed / MarkPaymentCanceled
+// / MarkPaymentRefunded) AFTER the provider confirms — never speculatively
+// at intent time. PaymentRefunded also fires from RefundPayment once its
+// refund completes the amount.
 //
 // Channel reference uses the plugin-internal alias `events`; the
 // activation maps it to a real project channel (NATS / Redis /

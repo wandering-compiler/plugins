@@ -215,7 +215,6 @@ service PaymentQuery {
     };
   }
 
-
   // GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
   // already produced, looked up before the provider is asked again.
   rpc GetRefundByIdempotencyKey(GetRefundByIdempotencyKeyReq) returns (GetRefundByIdempotencyKeyResp) {

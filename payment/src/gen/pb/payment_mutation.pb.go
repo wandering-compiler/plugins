@@ -1919,7 +1919,7 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x12current_period_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10currentPeriodEnd\x12F\n" +
 	"\x11provider_event_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0fproviderEventAt:\x11\xfa\xf4\x18\rsubscriptions\"v\n" +
 	"\x1aMarkSubscriptionStatusResp\x12E\n" +
-	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\x8bQ\n" +
+	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\xfbP\n" +
 	"\x0fPaymentMutation\x12\xba\x03\n" +
 	"\x0eCreateCustomer\x12&.w17.contrib.payment.CreateCustomerReq\x1a'.w17.contrib.payment.CreateCustomerResp\"\xd6\x02\xf2\xf3\x18\xd1\x02B\xce\x02\n" +
 	"\x04main\x12\xc5\x02INSERT INTO @module.Customer SET user_id = :user_id, provider_customer_id = :provider_customer_id, email = :email RETURNING id AS customer.id,           user_id AS customer.user_id,           provider_customer_id AS customer.provider_customer_id,           email AS customer.email,           created_at AS customer.created_at\x12\x85\x06\n" +
@@ -1956,8 +1956,8 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\bcurrency\x12\x1a$response.payment.currency\n" +
 	"+\n" +
 	"\vrefunded_at\x12\x1c$response.payment.updated_at\xf2\xf3\x18\x84\x03B\x81\x03\n" +
-	"\x04main\x12\xf8\x02UPDATE @module.Payment SET status = 6, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status = 3 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           amount AS payment.amount,           currency AS payment.currency,           updated_at AS payment.updated_at\x12\xb7\x05\n" +
-	"\x13MarkPaymentCanceled\x12+.w17.contrib.payment.MarkPaymentCanceledReq\x1a,.w17.contrib.payment.MarkPaymentCanceledResp\"\xc4\x04\x9a\xbd\x18\xd1\x01\n" +
+	"\x04main\x12\xf8\x02UPDATE @module.Payment SET status = 6, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status = 3 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           amount AS payment.amount,           currency AS payment.currency,           updated_at AS payment.updated_at\x12\xa7\x05\n" +
+	"\x13MarkPaymentCanceled\x12+.w17.contrib.payment.MarkPaymentCanceledReq\x1a,.w17.contrib.payment.MarkPaymentCanceledResp\"\xb4\x04\x9a\xbd\x18\xd1\x01\n" +
 	"\x0fPaymentCanceled\x12\xbd\x01\n" +
 	"\"\n" +
 	"\n" +
@@ -1967,8 +1967,8 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"<\n" +
 	"\x13provider_payment_id\x12%$response.payment.provider_payment_id\n" +
 	"+\n" +
-	"\vcanceled_at\x12\x1c$response.payment.updated_at\xf2\xf3\x18\xe9\x02B\xe6\x02\n" +
-	"\x04main\x12\xdd\x02UPDATE @module.Payment SET status = 5, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 4 AND status <> 5 AND status <> 6 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           updated_at AS payment.updated_at\x12\xad\x05\n" +
+	"\vcanceled_at\x12\x1c$response.payment.updated_at\xf2\xf3\x18\xd9\x02B\xd6\x02\n" +
+	"\x04main\x12\xcd\x02UPDATE @module.Payment SET status = 5, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 5 AND status <> 6 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           updated_at AS payment.updated_at\x12\xad\x05\n" +
 	"\x11MarkPaymentFailed\x12).w17.contrib.payment.MarkPaymentFailedReq\x1a*.w17.contrib.payment.MarkPaymentFailedResp\"\xc0\x04\x9a\xbd\x18\xcd\x01\n" +
 	"\rPaymentFailed\x12\xbb\x01\n" +
 	"\"\n" +
