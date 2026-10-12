@@ -1,12 +1,31 @@
 # Releasing a plugin
 
-A release is cut by hand from `main` as merged:
+## Changelog fragments
 
-1. **Bump the version** in `<plugin>/plugin.yaml`, in a pull request, and merge it.
-   Every plugin is on one version line, `v0.1.0-rc.N`: only the rc counter moves —
-   a break is a new rc, not a new minor. `make check` and `tools/release.sh` refuse
-   anything else.
-2. **Cut the release** from an up-to-date, clean `main`:
+A pull request that changes a plugin says what changed for the plugin's users
+in a **fragment**: `<plugin>/changes/<name>.md`, starting with a `### ` heading,
+a few lines under it. Pull requests never edit `CHANGELOG.md` itself, so they
+never conflict over it. CI (`tools/check-changelog.sh`) refuses a pull request
+that changes a plugin without a fragment, unless it carries the `no-changelog`
+label (tests, comments: nothing a user of the plugin can notice).
+
+## Cutting a release
+
+1. **Open the release pull request** from an up-to-date, clean `main`:
+
+   ```sh
+   git switch main && git pull
+   make release-pr PLUGIN=auth
+   ```
+
+   `tools/release-pr.sh` picks the version: the manifest's when no tag carries
+   it yet, otherwise the next rc after the newest tag. Every plugin is on one
+   version line, `v0.1.0-rc.N`: only the rc counter moves; a break is a new rc,
+   not a new minor. The pull request sets the version in `plugin.yaml`,
+   collects the fragments into `CHANGELOG.md` under `## <version>` (an
+   `## Unreleased` section becomes it), and deletes the fragments. Merging it
+   is the release decision.
+2. **Cut the release** from `main` with that merge:
 
    ```sh
    git switch main && git pull
