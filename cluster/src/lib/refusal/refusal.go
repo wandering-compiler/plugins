@@ -48,8 +48,9 @@ const (
 	RelayDraining = "RELAY_DRAINING"
 
 	// QueueFull — the relay's queue of waiting callers is at its limit
-	// (--max-queue). A control plane falls through to another relay; a caller
-	// told this directly retries later.
+	// (--max-queue). A control plane falls through to another relay, and
+	// answers NO_RELAY when every one is full, so a caller of the control
+	// plane never sees this reason; a caller told it directly retries later.
 	QueueFull = "QUEUE_FULL"
 
 	// RelayMisconfigured — the relay is running without something it needs to
@@ -99,7 +100,8 @@ const (
 // Reasons emitted by the CONTROL PLANE (the project's handlers).
 const (
 	// NoRelay — no registered relay could take the placement: none is
-	// enabled, none answered, or every one refused it. Retryable after a
+	// enabled, none answered, or every one refused it (draining,
+	// misconfigured, or its queue full). Retryable after a
 	// pause — a relay restarting comes back — and what an operator fixes when
 	// it persists. It used to be a bare Unavailable, which a client could only
 	// read as its CONSOLE being unreachable.

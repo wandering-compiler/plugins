@@ -203,11 +203,9 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 			source, relayserver.MaxWorkerSlotsLimit, cfg.maxWorkerSlots))
 	}
 	if cfg.maxQueue < 1 {
-		source := "--max-queue"
-		if !set["max-queue"] {
-			source = "RELAY_MAX_QUEUE"
-		}
-		errs = append(errs, fmt.Errorf("%s must be at least 1, got %d", source, cfg.maxQueue))
+		// Named by both spellings: the value may have come from either, and
+		// every other refusal here names the variable an operator would grep.
+		errs = append(errs, fmt.Errorf("--max-queue (RELAY_MAX_QUEUE) must be at least 1, got %d", cfg.maxQueue))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return config{}, err

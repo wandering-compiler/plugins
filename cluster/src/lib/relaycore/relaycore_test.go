@@ -367,11 +367,9 @@ func TestReserve_TheQueueIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.SetCapacity(1)
-	granted, err := p.Reserve() // takes the slot, never queues
-	if err != nil {
+	if _, err := p.Reserve(); err != nil { // takes the slot, never queues
 		t.Fatal(err)
 	}
-	_ = granted
 	var waiting []Reservation
 	for i := 0; i < 2; i++ {
 		r, err := p.Reserve()
@@ -392,5 +390,44 @@ func TestReserve_TheQueueIsBounded(t *testing.T) {
 func TestNew_RefusesANegativeQueueLimit(t *testing.T) {
 	if _, err := New(Options{TicketTTL: time.Minute, MaxQueue: -1}); err == nil {
 		t.Error("a negative queue limit was accepted")
+	}
+}
+
+// The bound counts WAITERS only, whichever kind: a streaming Wait is refused
+// by a queue full of polled reservations, and a waiter promoted to a grant
+// leaves the queue and frees its place — otherwise every grant would eat a
+// place for good and the limit would wedge the relay shut.
+func TestWait_TheQueueIsBoundedAndAGrantFreesAPlace(t *testing.T) {
+	p, err := New(Options{TicketTTL: time.Minute, PollTimeout: time.Minute, MaxQueue: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.Reserve() // capacity 0: queued
+	if err != nil || r.Position != 1 {
+		t.Fatalf("reserve = %+v, %v; want queued at 1", r, err)
+	}
+	if _, err := p.Wait(t.Context(), nil); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("Wait on a full queue: err = %v, want ErrQueueFull", err)
+	}
+	p.SetCapacity(1) // promotes the reservation
+	if st, err := p.Poll(r.ID); err != nil || st.Grant == nil {
+		t.Fatalf("poll = %+v, %v; want the grant", st, err)
+	}
+	if got := p.Stats().Queued; got != 0 {
+		t.Fatalf("Queued = %d after the promotion, want 0", got)
+	}
+	if _, err := p.Reserve(); err != nil {
+		t.Errorf("after the only waiter was granted: %v, want a place", err)
+	}
+}
+
+// MaxQueue 0 is the default, not "no queue".
+func TestNew_ZeroQueueLimitIsTheDefault(t *testing.T) {
+	p, err := New(Options{TicketTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.maxQueue != DefaultMaxQueue {
+		t.Errorf("maxQueue = %d, want %d", p.maxQueue, DefaultMaxQueue)
 	}
 }

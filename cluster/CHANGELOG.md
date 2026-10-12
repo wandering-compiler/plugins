@@ -38,7 +38,7 @@ The manifest described it as how long a granted ticket stays claimable, but noth
 The relay queued every caller that asked for a slot, without limit and in strict order, and it scanned the whole queue for each position report. A flood of reservations grew memory and timers without end.
 
 - **New relay flag `--max-queue`** (env `RELAY_MAX_QUEUE`, default 1000, at least 1). Past it, a new waiter is refused with `RESOURCE_EXHAUSTED` and the reason `QUEUE_FULL`. A caller that gets a slot at once never counts against the queue.
-- **The control plane falls through to the next relay on `QUEUE_FULL`**, as on a draining one.
+- **The control plane falls through to the next relay on `QUEUE_FULL`**, as on a draining one. When every relay's queue is full, its caller is told `NO_RELAY` (retryable), as for any pool with nothing placeable.
 
 ## 0.1.0-rc.12
 

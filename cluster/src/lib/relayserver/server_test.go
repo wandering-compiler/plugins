@@ -492,3 +492,25 @@ func TestBanServerOptions_ApplyTheBanSetOnUnaryAndStreamingCalls(t *testing.T) {
 		t.Error("a call without the header lifted the bans")
 	}
 }
+
+// A full queue is refused with the reason a control plane falls through on,
+// on both entrances: the stream and the polled reservation.
+func TestServer_AFullQueueIsQueueFull(t *testing.T) {
+	pool, err := relaycore.New(relaycore.Options{TicketTTL: time.Minute, MaxQueue: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := serveManagement(t, configured(t, pool))
+	if r, err := c.ReserveTask(t.Context(), &pb.ReserveTaskReq{}); err != nil || r.GetQueued() == nil {
+		t.Fatalf("reserve = %v, %v; want queued", r, err)
+	}
+
+	_, err = c.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	wantRefusal(t, err, codes.ResourceExhausted, refusal.QueueFull)
+
+	stream, err := c.ScheduleTask(t.Context(), &pb.ScheduleTaskReq{})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	wantRefusal(t, err, codes.ResourceExhausted, refusal.QueueFull)
+}

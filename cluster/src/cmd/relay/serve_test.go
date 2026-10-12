@@ -26,6 +26,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/identity"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
 	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
 	"github.com/wandering-compiler/plugins/cluster/lib/relayserver"
 	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
@@ -753,6 +754,7 @@ func TestParseConfig_ReadsTheEnvironment(t *testing.T) {
 	t.Setenv("RELAY_CAPACITY", "3")
 	t.Setenv("RELAY_TICKET_TTL", "45s")
 	t.Setenv("RELAY_DRAIN_TIMEOUT", " 2m ")
+	t.Setenv("RELAY_MAX_QUEUE", "7")
 	cfg, err := parseConfig(nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -763,13 +765,19 @@ func TestParseConfig_ReadsTheEnvironment(t *testing.T) {
 	if cfg.capacity != 3 || cfg.ticketTTL != 45*time.Second || cfg.drainTimeout != 2*time.Minute {
 		t.Errorf("capacity %d, ttl %s, drain %s — want 3, 45s, 2m from the environment", cfg.capacity, cfg.ticketTTL, cfg.drainTimeout)
 	}
+	if cfg.maxQueue != 7 {
+		t.Errorf("max queue %d, want 7 from the environment", cfg.maxQueue)
+	}
 	// A flag beats its variable.
-	cfg, err = parseConfig([]string{"--capacity", "5"}, io.Discard)
+	cfg, err = parseConfig([]string{"--capacity", "5", "--max-queue", "9"}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.capacity != 5 {
 		t.Errorf("--capacity 5 with RELAY_CAPACITY=3 gave %d", cfg.capacity)
+	}
+	if cfg.maxQueue != 9 {
+		t.Errorf("--max-queue 9 with RELAY_MAX_QUEUE=7 gave %d", cfg.maxQueue)
 	}
 }
 
@@ -778,11 +786,13 @@ func TestParseConfig_Defaults(t *testing.T) {
 	quiet(t)
 	t.Setenv("RELAY_CAPACITY", "0")
 	t.Setenv("RELAY_TICKET_TTL", "")
+	t.Setenv("RELAY_MAX_QUEUE", "")
 	cfg, err := parseConfig(nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.capacity != 0 || cfg.ticketTTL != 30*time.Second || cfg.listen != ":13444" || cfg.drainTimeout != 15*time.Minute {
+	if cfg.capacity != 0 || cfg.ticketTTL != 30*time.Second || cfg.listen != ":13444" || cfg.drainTimeout != 15*time.Minute ||
+		cfg.maxQueue != relaycore.DefaultMaxQueue {
 		t.Errorf("defaults: %+v", cfg)
 	}
 }
@@ -823,6 +833,11 @@ var malformedVariables = []struct{ key, val, flag, good string }{
 	{"RELAY_CAPACITY", "8x", "--capacity", "5"},
 	{"RELAY_CAPACITY", "-2", "--capacity", "5"},
 	{"RELAY_MAX_WORKER_SLOTS", "8x", "--max-worker-slots", "5"},
+	{"RELAY_MAX_QUEUE", "lots", "--max-queue", "10"},
+	{"RELAY_MAX_QUEUE", "-1", "--max-queue", "10"},
+	// Parses, and is still refused: a queue of zero would refuse every caller
+	// a slot is not free for — a relay that cannot queue at all.
+	{"RELAY_MAX_QUEUE", "0", "--max-queue", "10"},
 	{"RELAY_TICKET_TTL", "60", "--ticket-ttl", "1m"},
 	{"RELAY_TICKET_TTL", "0s", "--ticket-ttl", "1m"},
 	{"RELAY_DRAIN_TIMEOUT", "-1m", "--drain-timeout", "1m"},
@@ -853,6 +868,19 @@ func TestParseConfig_RefusesAMalformedVariable(t *testing.T) {
 				t.Errorf("the refusal does not name %s: %v", tc.key, err)
 			}
 		})
+	}
+}
+
+// --max-queue below 1 is refused however it was given: a relay that cannot
+// queue anybody refuses every caller a slot is not free for, and 0 is not
+// "the default" here the way it is in relaycore.Options.
+func TestParseConfig_RefusesAQueueBelowOne(t *testing.T) {
+	quiet(t)
+	for _, v := range []string{"0", "-3"} {
+		_, err := parseConfig([]string{"--max-queue", v}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "--max-queue") {
+			t.Errorf("--max-queue %s: %v, want a refusal naming the flag", v, err)
+		}
 	}
 }
 
