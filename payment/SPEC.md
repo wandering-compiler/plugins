@@ -93,8 +93,9 @@ hold it. **Partly fixed** says what is still open.
 - **Adds.** Tables `Customer` (`user_id` unique, `provider_customer_id`
   unique), `Payment` (`provider_payment_id` unique, `idempotency_key` unique,
   `amount` `DECIMAL(20,4)`, `currency` `CHAR(3)`, provider-owned `status`
-  enum), `Refund` (`provider_refund_id` unique, nullable `idempotency_key`
-  unique, stored as `"v2:" + sha256` of the caller's key). Queries
+  enum), `Refund` (`payment_id` indexed, `provider_refund_id` unique,
+  nullable `idempotency_key` unique, stored as `"v2:" + sha256` of the
+  caller's key). Queries
   `GetCustomerByUserId`, `GetPayment`, `GetPaymentByProviderId`,
   `GetPaymentByIdempotencyKey`, `GetRefundByProviderId`,
   `GetRefundByIdempotencyKey`, `SumRefundsForPayment`. Mutations
@@ -493,10 +494,10 @@ a fake store proves the handler's sequencing only.
 
 | ID | MUST hold | Proof |
 |---|---|---|
-| `payment/secrets-typed` | `provider_api_key` and `webhook_signing_secret` are `secret.String` (redacted in logs and traces, never a baked default) and revealed only into the driver and the verifier. The plugin logs only a failed provider call (`providerFailure`: the class and the driver's error, server-side), which carries no secret's value. | `TestRegisterPlugin_WiresConfigIntoTheHandler` |
+| `payment/secrets-typed` | `provider_api_key` and `webhook_signing_secret` are `secret.String` (redacted in logs and traces, never a baked default) and revealed only into the driver and the verifier. The plugin logs only a failed provider call (`providerFailure`, and `RefundPayment` when a refused top-up refund's credit could not be given back: the driver's error, and the store's, server-side), which carries no secret's value. | `TestRegisterPlugin_WiresConfigIntoTheHandler` |
 | `payment/live-key-only-to-provider` | With `provider_api_base` set, a live key (`sk_live_`, `rk_live_`) fails boot, so a live key is never sent to a mock or test root. | `TestResolveBackend_ProviderAPIBaseRefusesLiveKey` |
 | `payment/api-base-is-a-root` | `provider_api_base` must be an http(s) URL with a host and no credentials, query or fragment; the boot error never echoes credentials from it. | `TestResolveBackend_ProviderAPIBaseMustBeAURL`, `TestResolveBackend_AnUnparsableBaseIsNotEchoed`, `TestResolveBackend_ProviderAPIBase` |
-| `payment/provider-errors-not-echoed` | The caller sees the failure class and a generic message; the provider's error text, request URL and anything about the key stay server-side. | `TestProviderFailure_DoesNotEchoTheProvider`, `TestProviderFailure_PassesTheReasonCode`, `TestProviderFailure_MapsByClass` (finding 8 fixed in `providerFailure`). **Not guaranteed** on one path: a refused top-up refund whose credit could not be given back answers with the provider's error text (finding 8, still open). |
+| `payment/provider-errors-not-echoed` | The caller sees the failure class and a generic message; the provider's error text, request URL and anything about the key stay server-side. | `TestProviderFailure_DoesNotEchoTheProvider`, `TestProviderFailure_PassesTheReasonCode`, `TestProviderFailure_MapsByClass`, `TestFlow_RefusedTopUpRefundWithAFailedUndo_KeepsTheProviderTextInside` (finding 8 fixed). |
 | `payment/client-secret-not-persisted` | The provider client secret is returned only to the create call (and its same-customer replay); it is in no column and no event. | none (schema and event catalogue) |
 
 #### Configuration that must fail at boot
@@ -595,8 +596,6 @@ need a provider test-mode account or a stateful fake served at
 10. **Events on the bus**: every payment event arrives only for committed
     transitions; scan every payload for the client secret, the API key and the
     idempotency keys used in the run — none may appear.
-11. **Error surface** (finding 8): configure a rejected key and an
+11. **Error surface** (finding 8, fixed): configure a rejected key and an
     unreachable `provider_api_base`; the REST answer must not contain the
-    provider's message, the URL or any part of the key. Expected red on one
-    internal path: a top-up refund the provider refuses whose credit cannot
-    be given back.
+    provider's message, the URL or any part of the key.
