@@ -53,8 +53,10 @@ func resolveSignupRoleIDs(ctx context.Context, h *AuthServiceHandler) (signupRol
 	return signupRoles{ids: first.GetRoleIds(), bootstrap: true, fallback: def.GetRoleIds()}, nil
 }
 
-// bootstrapSlot is the constant key of the one BootstrapClaim row.
-const bootstrapSlot = "first_user"
+// bootstrapSlot is the constant key of the one BootstrapClaim row. The column
+// is a SLUG (lowercase letters, digits and hyphens), and storage validates it
+// before the write.
+const bootstrapSlot = "first-user"
 
 // assignSignupRoleIDs links the resolved roles to the freshly created user.
 // Called INSIDE the sign-up transaction (ctx carries the distx w17-tx-id), so

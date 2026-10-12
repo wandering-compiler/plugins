@@ -3,6 +3,9 @@ package handlers
 import (
 	"context"
 	"errors"
+	"os"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -163,5 +166,28 @@ func TestAssignSignupRoles_AFailedClaimAssignsNothing(t *testing.T) {
 	}
 	if len(mut.assigned) != 0 {
 		t.Errorf("assigned = %v, want none", mut.assigned)
+	}
+}
+
+// The claim key is written to BootstrapClaim.slot, and storage validates the
+// value against the column's declared type before the write. The fakes in this
+// package validate nothing, so a key the column refuses passed every test here
+// while the first sign-up of every rbac project failed. Hold the constant to
+// the declaration itself.
+func TestBootstrapSlot_FitsItsColumn(t *testing.T) {
+	src, err := os.ReadFile("../../proto/types/models.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl := regexp.MustCompile(`(?s)message BootstrapClaim \{.*?string slot\s*=\s*\d+\s*\[\(w17\.field\) = \{ type: (\w+), max_len: (\d+)`).FindSubmatch(src)
+	if decl == nil {
+		t.Fatal("BootstrapClaim.slot declaration not found in models.proto")
+	}
+	if string(decl[1]) != "SLUG" {
+		t.Fatalf("BootstrapClaim.slot is %s; this test checks the SLUG rule only", decl[1])
+	}
+	maxLen, _ := strconv.Atoi(string(decl[2]))
+	if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(bootstrapSlot) || len(bootstrapSlot) > maxLen {
+		t.Fatalf("bootstrapSlot %q is not a SLUG of at most %d characters", bootstrapSlot, maxLen)
 	}
 }
