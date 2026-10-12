@@ -57,8 +57,12 @@ by the `payment_provider` env. **The core ships with one driver, Stripe.**
 `FailedPrecondition`; a request the provider (or the driver) refuses as
 invalid — an amount the currency cannot carry, a refund above what is
 left, an idempotency key reused with other parameters → `InvalidArgument`;
-anything else (network, 5xx, rate limit) → `Unavailable`, retryable.
-Amounts are validated against the `NUMERIC(20,4)` columns (≤ 16 integer,
+anything else (network, 5xx, rate limit) → `Unavailable`, retryable; a
+call the caller cancelled → `Canceled`. The caller gets the class and a fixed
+sentence; the provider's own text (endpoint, diagnostics, a masked key) is
+logged, not returned. The provider's reason code (`INSUFFICIENT_FUNDS`,
+`CHARGE_ALREADY_REFUNDED`, …) reaches the caller as the `w17.ErrorDetail`
+code. Amounts are validated against the `NUMERIC(20,4)` columns (≤ 16 integer,
 ≤ 4 fractional digits) and currencies must be 3-letter codes (ISK and UGX
 are whole units only; the three-decimal BHD/JOD/KWD/OMR/TND are refused) —
 before any provider call.
@@ -74,8 +78,9 @@ takes any id and is for the project's own code only.
   refunds reach its amount: `RefundPayment` sets it when its refund completes
   the amount, and the provider's `charge.refunded` settles it otherwise.
 - **Stripe driver** (`src/lib/backend/stripe`) — `EnsureCustomer`,
-  `CreatePayment`, `RefundPayment` over the Stripe REST API (no vendored
-  SDK), plus webhook signature verification. Exact money handling
+  `CreatePayment`, `RefundPayment`, `FindRefund` (and the subscription
+  calls below) over the Stripe REST API (no vendored SDK), plus webhook
+  signature verification. Exact money handling
   (decimal string → integer minor units, no float64).
 
 ## Upgrading from 0.1.0-rc.2 or earlier
@@ -165,14 +170,15 @@ must be exact. Amounts cross the API as decimal strings (`"19.99"`).
 ## Prepaid credit wallet (feature `prepaid`)
 
 An append-only credit ledger keyed by the project principal — independent
-of the provider (credits are local; a Stripe top-up that funds them is a
-follow-up). Off by default.
+of the provider (credits are local; `TopUpCredit` funds them with a provider
+charge). Off by default.
 
 - **Models** — `CreditLedger` (append-only signed deltas, unique
   idempotency key) + `CreditBalance` (materialized balance, non-negative
   CHECK).
 - **`ApplyCredit` mutation** — appends the ledger row AND updates the
-  materialized balance in ONE transaction (UPSERT increment). The CHECK
+  materialized balance in ONE transaction (the balance row is made at zero
+  when missing, then the delta is applied with an `UPDATE`). The CHECK
   rejects an overdraw → the whole transaction rolls back (concurrency-safe
   guard, not a racy read-then-write).
 - **PaymentService** (gated `prepaid`):
@@ -184,9 +190,18 @@ follow-up). Off by default.
     stored the raw key) and retried after the upgrade is recognised — same
     principal, direction and amount under the raw key — and not applied
     again; this costs one extra ledger read per apply.
+  - `TopUpCredit` — charge the user in `default_currency` and grant the
+    same amount of credit when the provider confirms the payment (see
+    "Cross-feature webhook wiring"). Refused without `stripe_webhooks`.
   - read the caller's balance via `GET /credit/balance` →
-    `PaymentService.GetMyCreditBalance`; grant/spend are privileged
-    business ops.
+    `PaymentService.GetMyCreditBalance` (zero before the first credit);
+    grant/spend/top-up are privileged business ops, not REST-exposed.
+- **Refunding a top-up** — `RefundPayment` on a top-up payment spends the
+  refunded amount from the owner's credit before the provider is asked.
+  Credit already spent, or not granted yet, makes the refund
+  `FailedPrecondition`; a refusal the provider will repeat gives the credit
+  back. A refund made at the provider directly, or a dispute, leaves the
+  credit.
 - **Event** — `CreditApplied` (signed delta + new balance).
 
 ## Metered / pay-as-you-go (feature `usage`)
@@ -210,7 +225,7 @@ quantity carrying `item_ref`/`metadata`) are the SAME operation — one
     server-to-server (NOT REST-exposed — the service measuring usage
     reports it).
   - read the caller's total via `GET /usage/{meter}/{period}` →
-    `PaymentService.GetMyUsageMeter`.
+    `PaymentService.GetMyUsageMeter` (zero before the first report).
 - **Event** — `UsageRecorded` (quantity + new total).
 
 ## Subscriptions (feature `subscriptions`)
@@ -244,8 +259,9 @@ webhooks). Off by default. This is the one feature that extends
   - read one of the caller's via `GET /subscriptions/{id}` →
     `PaymentService.GetMySubscription` (another customer's reads as not
     found).
-- **`MarkSubscriptionStatus` mutation** — reconcile lifecycle from a
-  provider webhook (ready; the webhook dispatch wiring is a follow-up).
+- **`MarkSubscriptionStatus` mutation** — reconcile lifecycle from the
+  provider's `customer.subscription.*` webhooks (CANCELED is terminal, and an
+  older event never overwrites a newer one).
 - **Events** — `SubscriptionStarted` (carries the `status` the subscription
   was created in) and `SubscriptionStatusChanged`. A new subscription is
   often NOT paid up: the provider's default creates it `INCOMPLETE` until

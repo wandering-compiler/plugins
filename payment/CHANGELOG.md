@@ -16,6 +16,13 @@ What changes:
 - **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
 
+### Spending credit works on a real database
+
+`SpendCredit`, and taking back a refunded top-up's credit, were refused as "insufficient credit balance" whatever the balance. `ApplyCredit` wrote the balance with an upsert that inserted the delta, and the database checks `balance >= 0` on the row an INSERT proposes before it notices the conflict that would turn the insert into an update. For a debit, the proposed balance is negative. The in-memory store the tests used did not behave like that.
+
+- **`ApplyCredit` makes the balance row at zero if it is missing, then applies the delta with an `UPDATE`**, all in one transaction. An overdraw, including a spend by someone who never had credit, still rolls everything back.
+- **`GetMyCreditBalance` and `GetMyUsageMeter` answer zero** before the first grant or report, instead of `NOT_FOUND`.
+
 ### A payment's key belongs to the caller
 
 `CreatePayment` and `TopUpCredit` stored the caller's idempotency key as it came and sent it to the provider the same way. Keys were one space for every user and both kinds of charge. When a second user chose a key someone had already used (`order-1` is an obvious choice), the provider refused the charge as a reuse with different parameters. A top-up under the key of an earlier payment was refused the same way.
@@ -70,7 +77,7 @@ Nothing ever wrote `REFUNDED`, and `CANCELED` came only from the create response
 - **`REFUNDED` once the refunds reach the amount.** `RefundPayment` sets it when its refund completes the amount (new query `SumRefundsForPayment`, new mutation `MarkPaymentRefunded`, only from `SUCCEEDED`). The provider's `charge.refunded` webhook, for a charge that is fully refunded, settles it too. That covers partial refunds completing the amount concurrently, and refunds made outside the plugin. A `charge.refunded` that arrives before the payment's success has landed locally is not recorded, so its redelivery settles the status once it has; and a top-up refunded before its credit was granted is not granted by a redelivered success.
 - **`CANCELED` from the provider's `payment_intent.canceled`** (`MarkPaymentCanceled`, never from `SUCCEEDED` or `REFUNDED`; from `FAILED` it is allowed, since a failed attempt leaves the PaymentIntent open and canceling it is how an abandoned payment ends).
 - **New events `PaymentRefunded` and `PaymentCanceled`.**
-- **Still open:** a refund the provider fails later (`refund.failed`) is not reflected locally yet, and refunding a top-up whose credit was already granted does not take the credit back.
+- **Still open:** a refund the provider fails later (`refund.failed`) is not reflected locally yet. (Refunding a top-up through `RefundPayment` takes its credit back: see "A refunded top-up takes its credit back".)
 
 ### Run a project against Stripe's API mock
 

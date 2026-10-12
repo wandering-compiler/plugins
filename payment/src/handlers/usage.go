@@ -121,5 +121,10 @@ func (h *PaymentServiceHandler) GetMyUsageMeter(ctx context.Context, req *pb.Get
 	if err != nil {
 		return nil, err
 	}
-	return h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: caller, Meter: req.GetMeter(), Period: req.GetPeriod()})
+	got, err := h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: caller, Meter: req.GetMeter(), Period: req.GetPeriod()})
+	if absent(err) {
+		// Nothing reported yet: the meter row appears with the first report.
+		return &pb.GetUsageMeterResp{Meter: &pb.UsageMeter{UserId: caller, Meter: req.GetMeter(), Period: req.GetPeriod()}}, nil
+	}
+	return got, err
 }

@@ -1919,7 +1919,7 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x12current_period_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10currentPeriodEnd\x12F\n" +
 	"\x11provider_event_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0fproviderEventAt:\x11\xfa\xf4\x18\rsubscriptions\"v\n" +
 	"\x1aMarkSubscriptionStatusResp\x12E\n" +
-	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\xfbP\n" +
+	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\xa4Q\n" +
 	"\x0fPaymentMutation\x12\xba\x03\n" +
 	"\x0eCreateCustomer\x12&.w17.contrib.payment.CreateCustomerReq\x1a'.w17.contrib.payment.CreateCustomerResp\"\xd6\x02\xf2\xf3\x18\xd1\x02B\xce\x02\n" +
 	"\x04main\x12\xc5\x02INSERT INTO @module.Customer SET user_id = :user_id, provider_customer_id = :provider_customer_id, email = :email RETURNING id AS customer.id,           user_id AS customer.user_id,           provider_customer_id AS customer.provider_customer_id,           email AS customer.email,           created_at AS customer.created_at\x12\x85\x06\n" +
@@ -1986,8 +1986,8 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x17SetRefundIdempotencyKey\x12/.w17.contrib.payment.SetRefundIdempotencyKeyReq\x1a0.w17.contrib.payment.SetRefundIdempotencyKeyResp\"\x82\x01\xf2\xf3\x18~B|\n" +
 	"\x04main\x12tUPDATE @module.Refund SET idempotency_key = :idempotency_key WHERE id = :id AND idempotency_key IS NULL RETURNING id\x12\xa4\x02\n" +
 	"\x14MarkWebhookProcessed\x12,.w17.contrib.payment.MarkWebhookProcessedReq\x1a-.w17.contrib.payment.MarkWebhookProcessedResp\"\xae\x01\xf2\xf3\x18\x96\x01B\x93\x01\n" +
-	"\x04main\x12\x8a\x01INSERT INTO @module.ProcessedWebhookEvent SET provider_event_id = :provider_event_id, event_type = :event_type RETURNING provider_event_id\x8a\xf5\x18\x0fstripe_webhooks\x12\x98\x05\n" +
-	"\vApplyCredit\x12#.w17.contrib.payment.ApplyCreditReq\x1a$.w17.contrib.payment.ApplyCreditResp\"\xbd\x04\x9a\xbd\x18\xaa\x01\n" +
+	"\x04main\x12\x8a\x01INSERT INTO @module.ProcessedWebhookEvent SET provider_event_id = :provider_event_id, event_type = :event_type RETURNING provider_event_id\x8a\xf5\x18\x0fstripe_webhooks\x12\xc1\x05\n" +
+	"\vApplyCredit\x12#.w17.contrib.payment.ApplyCreditReq\x1a$.w17.contrib.payment.ApplyCreditResp\"\xe6\x04\x9a\xbd\x18\xaa\x01\n" +
 	"\rCreditApplied\x12\x98\x01\n" +
 	"\x1c\n" +
 	"\auser_id\x12\x11$response.user_id\n" +
@@ -1999,9 +1999,10 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\vnew_balance\x12\x11$response.balance\n" +
 	"\"\n" +
 	"\n" +
-	"applied_at\x12\x14$response.updated_at\xf2\xf3\x18\xfe\x02B\x94\x01\n" +
-	"\x06ledger\x12\x89\x01INSERT INTO @module.CreditLedger SET user_id = :user_id, delta = :delta, reason = :reason, ref = :ref, idempotency_key = :idempotency_keyB\xe4\x01\n" +
-	"\abalance\x12\xd8\x01UPSERT INTO @module.CreditBalance SET user_id = :user_id, balance = :delta, updated_at = NOW() ON CONFLICT (user_id) DO UPDATE SET balance = balance + :delta, updated_at = NOW() RETURNING user_id, balance, updated_at\x8a\xf5\x18\aprepaid\x12\xec\x03\n" +
+	"applied_at\x12\x14$response.updated_at\xf2\xf3\x18\xa7\x03B\x94\x01\n" +
+	"\x06ledger\x12\x89\x01INSERT INTO @module.CreditLedger SET user_id = :user_id, delta = :delta, reason = :reason, ref = :ref, idempotency_key = :idempotency_keyBp\n" +
+	"\x06wallet\x12fUPSERT INTO @module.CreditBalance SET user_id = :user_id, balance = 0 ON CONFLICT (user_id) DO NOTHINGB\x9b\x01\n" +
+	"\abalance\x12\x8f\x01UPDATE @module.CreditBalance SET balance = balance + :delta, updated_at = NOW() WHERE user_id = :user_id RETURNING user_id, balance, updated_at\x8a\xf5\x18\aprepaid\x12\xec\x03\n" +
 	"\x11CreateCreditTopup\x12).w17.contrib.payment.CreateCreditTopupReq\x1a*.w17.contrib.payment.CreateCreditTopupResp\"\xff\x02\xf2\xf3\x18\xef\x02B\xec\x02\n" +
 	"\x04main\x12\xe3\x02INSERT INTO @module.CreditTopup SET provider_payment_id = :provider_payment_id, user_id = :user_id, amount = :amount RETURNING id AS topup.id,           provider_payment_id AS topup.provider_payment_id,           user_id AS topup.user_id,           amount AS topup.amount,           granted_at AS topup.granted_at,           created_at AS topup.created_at\x8a\xf5\x18\aprepaid\x12\x9d\x02\n" +
 	"\x10MarkTopupGranted\x12(.w17.contrib.payment.MarkTopupGrantedReq\x1a).w17.contrib.payment.MarkTopupGrantedResp\"\xb3\x01\xf2\xf3\x18\xa3\x01B\xa0\x01\n" +

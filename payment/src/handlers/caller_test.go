@@ -158,6 +158,20 @@ func TestGetMyBalanceAndMeter_TheCallersOwn(t *testing.T) {
 	}
 }
 
+// Before the first grant or report there is no balance or meter row. The
+// caller's own wallet and meter then read as zero, not as missing.
+func TestGetMyBalanceAndMeter_ZeroBeforeTheFirstApply(t *testing.T) {
+	r := newRig(t)
+	bal, err := r.h.GetMyCreditBalance(asCaller("user-new"), &pb.GetMyCreditBalanceReq{})
+	if err != nil || bal.GetBalance().GetUserId() != "user-new" || bal.GetBalance().GetBalance() != "0" {
+		t.Fatalf("balance before any credit: %v, %+v", err, bal)
+	}
+	meter, err := r.h.GetMyUsageMeter(asCaller("user-new"), &pb.GetMyUsageMeterReq{Meter: "api", Period: "2026-10"})
+	if err != nil || meter.GetMeter().GetUserId() != "user-new" || meter.GetMeter().GetMeter() != "api" || meter.GetMeter().GetTotal() != 0 {
+		t.Fatalf("meter before any report: %v, %+v", err, meter)
+	}
+}
+
 // A caller reads their own subscription; another customer's reads as not
 // found.
 func TestGetMySubscription_OnlyTheOwnersSubscription(t *testing.T) {

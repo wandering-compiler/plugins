@@ -153,14 +153,21 @@ type PaymentMutationClient interface {
 	// no ledger row when the object has no local row yet.
 	MarkWebhookProcessed(ctx context.Context, in *MarkWebhookProcessedReq, opts ...grpc.CallOption) (*MarkWebhookProcessedResp, error)
 	// ApplyCredit — append a signed ledger entry AND update the
-	// materialized balance, atomically in one transaction (two ops). The
-	// balance upsert increments the existing row (or inserts on first
-	// credit); the CreditBalance non-negative CHECK rejects an overdraw,
-	// rolling the whole transaction back so the ledger never records a
-	// spend that wasn't applied. The unique idempotency_key makes a
-	// retried apply fail the ledger insert → also a clean rollback (the
-	// handler treats UNIQUE_VIOLATION as an idempotent no-op). Gated
-	// prepaid. Emits CreditApplied.
+	// materialized balance, atomically in one transaction. The
+	// CreditBalance non-negative CHECK rejects an overdraw, rolling the
+	// whole transaction back so the ledger never records a spend that
+	// wasn't applied. The unique idempotency_key makes a retried apply fail
+	// the ledger insert → also a clean rollback (the handler treats
+	// UNIQUE_VIOLATION as an idempotent no-op). Gated prepaid. Emits
+	// CreditApplied.
+	//
+	// The balance is first made to exist (at zero), then changed by an
+	// UPDATE. One upsert carrying the delta cannot take a debit: the
+	// database checks `balance >= 0` on the row an INSERT proposes (the
+	// balance would be the negative delta) before it resolves the conflict
+	// into an update, so every spend was refused whatever the balance. A
+	// debit with no balance makes the zero row, the UPDATE takes it below
+	// zero, and the CHECK rolls all three back.
 	ApplyCredit(ctx context.Context, in *ApplyCreditReq, opts ...grpc.CallOption) (*ApplyCreditResp, error)
 	// CreateCreditTopup — record a pending credit top-up linked to a
 	// charge. The payment-succeeded webhook grants it later. Duplicate
@@ -479,14 +486,21 @@ type PaymentMutationServer interface {
 	// no ledger row when the object has no local row yet.
 	MarkWebhookProcessed(context.Context, *MarkWebhookProcessedReq) (*MarkWebhookProcessedResp, error)
 	// ApplyCredit — append a signed ledger entry AND update the
-	// materialized balance, atomically in one transaction (two ops). The
-	// balance upsert increments the existing row (or inserts on first
-	// credit); the CreditBalance non-negative CHECK rejects an overdraw,
-	// rolling the whole transaction back so the ledger never records a
-	// spend that wasn't applied. The unique idempotency_key makes a
-	// retried apply fail the ledger insert → also a clean rollback (the
-	// handler treats UNIQUE_VIOLATION as an idempotent no-op). Gated
-	// prepaid. Emits CreditApplied.
+	// materialized balance, atomically in one transaction. The
+	// CreditBalance non-negative CHECK rejects an overdraw, rolling the
+	// whole transaction back so the ledger never records a spend that
+	// wasn't applied. The unique idempotency_key makes a retried apply fail
+	// the ledger insert → also a clean rollback (the handler treats
+	// UNIQUE_VIOLATION as an idempotent no-op). Gated prepaid. Emits
+	// CreditApplied.
+	//
+	// The balance is first made to exist (at zero), then changed by an
+	// UPDATE. One upsert carrying the delta cannot take a debit: the
+	// database checks `balance >= 0` on the row an INSERT proposes (the
+	// balance would be the negative delta) before it resolves the conflict
+	// into an update, so every spend was refused whatever the balance. A
+	// debit with no balance makes the zero row, the UPDATE takes it below
+	// zero, and the CHECK rolls all three back.
 	ApplyCredit(context.Context, *ApplyCreditReq) (*ApplyCreditResp, error)
 	// CreateCreditTopup — record a pending credit top-up linked to a
 	// charge. The payment-succeeded webhook grants it later. Duplicate

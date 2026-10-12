@@ -556,7 +556,7 @@ type CreditLedger struct {
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Delta          string                 `protobuf:"bytes,3,opt,name=delta,proto3" json:"delta,omitempty"`
-	Reason         string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // topup|spend|adjustment|refund
+	Reason         string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused
 	Ref            string                 `protobuf:"bytes,5,opt,name=ref,proto3" json:"ref,omitempty"`       // payment id / order id / …
 	IdempotencyKey string                 `protobuf:"bytes,6,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
