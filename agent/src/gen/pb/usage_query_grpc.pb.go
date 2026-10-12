@@ -68,6 +68,12 @@ type UsageQueryClient interface {
 	// with NULL — neither true nor false, so the ELSE arm runs and both columns
 	// come back absent, which is correct for it.
 	//
+	// Each row is priced EXACTLY and the group's sum is rounded once. It used to
+	// round every row to whole minor units before summing, so a row worth less
+	// than half a minor unit counted as nothing — toward the cap as well as in
+	// the report — and a run recorded as one row per turn, many of them small,
+	// could price at zero.
+	//
 	// ⚠️ What was tried first and REVERTED: putting currency in the GROUP BY. An
 	// unpriced call has a NULL currency, so grouping on it splits every rollup that
 	// mixes priced and unpriced calls — the ordinary case, the one `priced_calls`
@@ -201,6 +207,12 @@ type UsageQueryServer interface {
 	// single-currency rollup look mixed, and an all-unpriced rollup compares NULL
 	// with NULL — neither true nor false, so the ELSE arm runs and both columns
 	// come back absent, which is correct for it.
+	//
+	// Each row is priced EXACTLY and the group's sum is rounded once. It used to
+	// round every row to whole minor units before summing, so a row worth less
+	// than half a minor unit counted as nothing — toward the cap as well as in
+	// the report — and a run recorded as one row per turn, many of them small,
+	// could price at zero.
 	//
 	// ⚠️ What was tried first and REVERTED: putting currency in the GROUP BY. An
 	// unpriced call has a NULL currency, so grouping on it splits every rollup that

@@ -76,7 +76,7 @@ which.
 | 11 | **Fixed.** Spend on a model with no price row contributes nothing to the cap (`totalSpend`: cost absent with `priced_calls = 0`). A capped scope that uses only unpriced models is never refused, however many tokens it spends. | `usage_persistence/cap-not-bypassable` | `src/handlers/limits_enabled.go` (`totalSpend`) |
 | 12 | **Fixed.** The limiter has no boot guard. With `usage_persistence` on and either `UsageQuery` or `UsageMutation` missing from the client set, `newLimiter` silently installs the allow-all limiter. The usage sink has `VerifyUsageWiring` for exactly this drift; the limiter has nothing, so every cap is off with no error. | `usage_persistence/limiter-wiring-verified` | `src/handlers/limits_enabled.go` (`init`), `src/plugin.go` (`RegisterPlugin`) |
 | 13 | **Fixed.** `endpoint` is checked only for being non-empty. An `http://` endpoint is accepted, and every request then sends the provider API key in clear text. | `agent/api-key-only-over-tls` | `src/lib/llm/client.go` (`NewClient`) |
-| 14 | Spend is rounded to whole minor units **per usage row** (`ROUND(...)` inside the per-row `LATERAL` of `GetScopeSpend` and `GetLabelSpend`) and only then summed. A row worth less than half a minor unit counts as zero toward the cap and the reports. Since `RunAgent` writes one row per turn rather than one per run, a run made of many small turns can price at zero where its summed tokens would not: ten turns of 1 500 input and 100 output tokens at 250 and 1 000 minor units per million price at 0 each, against 5 for the run. Repeated small `Complete` calls have the same shape. | `usage_persistence/cap-not-bypassable` | `proto/queries/usage_query.proto` (`GetScopeSpend`, `GetLabelSpend`) |
+| 14 | **Fixed** (each row is priced exactly and the group's sum is rounded once). Spend is rounded to whole minor units **per usage row** (`ROUND(...)` inside the per-row `LATERAL` of `GetScopeSpend` and `GetLabelSpend`) and only then summed. A row worth less than half a minor unit counts as zero toward the cap and the reports. Since `RunAgent` writes one row per turn rather than one per run, a run made of many small turns can price at zero where its summed tokens would not: ten turns of 1 500 input and 100 output tokens at 250 and 1 000 minor units per million price at 0 each, against 5 for the run. Repeated small `Complete` calls have the same shape. | `usage_persistence/cap-not-bypassable` | `proto/queries/usage_query.proto` (`GetScopeSpend`, `GetLabelSpend`) |
 
 ## Per feature
 
@@ -408,7 +408,7 @@ With such a sandbox, the suite should cover:
    (`usage_persistence/interning-idempotent`).
 3. **Pricing SQL**: a price change inside a period prices each call at its own
    `started_at`; a price starting after a call does not reach it; a backdated
-   price does; cached-input arithmetic and rounding; `priced_calls`; absent
+   price does; cached-input arithmetic, and rounding once per group so many sub-unit rows still add up (finding 14); `priced_calls`; absent
    cost for unpriced lines; absent cost and currency for a mixed-currency
    rollup; half-open boundaries; a call labelled with two values of one key
    counted under both (`usage_persistence/cost-computed-not-stored`,
