@@ -1247,6 +1247,10 @@ func TestFlow_StoreReadFailuresSurface(t *testing.T) {
 			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
 			return err
 		}},
+		{"GetPaymentByIdempotencyKey", func(r *rig) error {
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
+			return err
+		}},
 		{"GetCreditBalance", func(r *rig) error {
 			if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"}); err != nil {
 				return err
@@ -1263,6 +1267,22 @@ func TestFlow_StoreReadFailuresSurface(t *testing.T) {
 				t.Fatalf("want the store's Unavailable surfaced, got %v", err)
 			}
 		})
+	}
+}
+
+// A store failure while telling the kind of an earlier raw-key payment is
+// surfaced. Read as "no top-up", the payment would take the top-up's raw
+// key and the provider would refuse it.
+func TestFlow_RawKeyKindLookupFailureSurfaces(t *testing.T) {
+	r := newRig(t)
+	r.rawKeyCharge("user-a", "5.00", "k-raw", backend.OriginTopup)
+	r.store.injectBefore("GetCreditTopupByProviderId", errTransient)
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "k-raw"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("want the store's Unavailable surfaced, got %v", err)
+	}
+	if n := r.stripe.count("/v1/payment_intents"); n != 1 {
+		t.Errorf("provider intents = %d, want only the earlier one", n)
 	}
 }
 
