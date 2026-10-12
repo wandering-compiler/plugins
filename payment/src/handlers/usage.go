@@ -114,3 +114,12 @@ func (h *PaymentServiceHandler) currentMeter(ctx context.Context, userID, meter,
 	}
 	return view, nil
 }
+
+// GetMyUsageMeter returns the signed-in caller's meter for (meter, period).
+func (h *PaymentServiceHandler) GetMyUsageMeter(ctx context.Context, req *pb.GetMyUsageMeterReq) (*pb.GetUsageMeterResp, error) {
+	caller, err := signedInCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: caller, Meter: req.GetMeter(), Period: req.GetPeriod()})
+}

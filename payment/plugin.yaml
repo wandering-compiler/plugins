@@ -72,33 +72,26 @@ presets:
     forward_headers:
       - { name: Stripe-Signature, feature: stripe_webhooks }
     groups:
-      # Customer + payment management. Authenticated (the caller acts on
-      # their own billing); the project's gateway stamps the principal.
+      # Customer + payment management. Authenticated, and every endpoint
+      # acts on the signed-in caller's own billing only: the writes refuse
+      # another user_id, and the reads are PaymentService.GetMy* wrappers
+      # that answer with the caller's rows and nothing else.
       - prefix: /billing
         description: "Billing surface served turnkey by the payment plugin — customer setup + charges."
         endpoints:
           - { ref: PaymentService.CreateCustomer, method: POST, path: /customers }
           - { ref: PaymentService.CreatePayment,  method: POST, path: /payments }
-          # Pure reads go straight to the storage Query tier — no business
-          # logic to add, so no hand-written wrapper (the gateway fronts
-          # any service RPC; see matrix-admin-acl-rest for the same
-          # NoteQuery.GetNote pattern). Mutations / provider-touching ops
-          # keep their business handler (PaymentService.*).
-          - { ref: PaymentQuery.GetPayment, method: GET, path: "/payments/{id}" }
-          # Read own prepaid balance (gated prepaid). user_id is the
-          # authenticated principal — the project binds it from the
-          # session, not a path param. Grant/Spend stay business
-          # (privileged + signed-amount + insufficient-balance contract).
-          - { ref: PaymentQuery.GetCreditBalance, method: GET, path: /credit/balance, feature: prepaid }
+          - { ref: PaymentService.GetMyPayment, method: GET, path: "/payments/{id}" }
+          # Read own prepaid balance (gated prepaid). Grant/Spend stay
+          # internal (privileged + signed-amount + insufficient-balance).
+          - { ref: PaymentService.GetMyCreditBalance, method: GET, path: /credit/balance, feature: prepaid }
           # Read own metered usage for a (meter, period). ReportUsage
-          # stays business (validation + idempotency); reading the meter
-          # is a pure storage query.
-          - { ref: PaymentQuery.GetUsageMeter, method: GET, path: "/usage/{meter}/{period}", feature: usage }
-          # Subscribe stays business (provider call + customer resolve);
-          # CreatePlan is NOT exposed (privileged/admin). Reading a
-          # subscription is a pure storage query.
+          # stays internal (validation + idempotency).
+          - { ref: PaymentService.GetMyUsageMeter, method: GET, path: "/usage/{meter}/{period}", feature: usage }
+          # Subscribe acts for the caller; CreatePlan is NOT exposed
+          # (privileged/admin).
           - { ref: PaymentService.Subscribe,    method: POST, path: /subscriptions,        feature: subscriptions }
-          - { ref: PaymentQuery.GetSubscription, method: GET, path: "/subscriptions/{id}", feature: subscriptions }
+          - { ref: PaymentService.GetMySubscription, method: GET, path: "/subscriptions/{id}", feature: subscriptions }
       # Inbound provider webhooks. Unauthenticated (the provider has no
       # bearer); authenticity is the HMAC signature, not a token. The
       # verbatim body lands in IngestStripeReq.raw_payload via

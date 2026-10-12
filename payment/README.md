@@ -56,13 +56,11 @@ Amounts are validated against the `NUMERIC(20,4)` columns (≤ 16 integer,
 are whole units only; the three-decimal BHD/JOD/KWD/OMR/TND are refused) —
 before any provider call.
 
-**Reads have no business handler.** Pure reads (`GET /payments/{id}`,
-`/credit/balance`, `/usage/{meter}/{period}`, `/subscriptions/{id}`) are
-REST presets pointing straight at the storage `PaymentQuery` tier — the
-gateway fronts any service RPC, so a hand-written passthrough would add
-nothing. Only operations with real logic (provider calls, signed-amount
-credit, idempotency / error-contract mapping, webhook verify) keep a
-`PaymentService` business handler.
+**Reads.** The REST reads (`GET /payments/{id}`, `/credit/balance`,
+`/usage/{meter}/{period}`, `/subscriptions/{id}`) are served by
+`PaymentService.GetMy*`, which answer only with the signed-in caller's
+rows (see "Who a request acts for"). The storage `PaymentQuery` tier
+takes any id and is for the project's own code only.
 - **Events** — `PaymentSucceeded`, `PaymentFailed` (provider-neutral),
   emitted from the reconciliation mutations after the provider confirms.
 - **Stripe driver** (`src/lib/backend/stripe`) — `EnsureCustomer`,
@@ -120,6 +118,24 @@ credit, idempotency / error-contract mapping, webhook verify) keep a
   is still recognised under its raw key (see the prepaid and usage
   sections).
 
+## Who a request acts for
+
+Every `/billing` endpoint acts on the signed-in caller's own billing:
+
+- `CreateCustomer`, `CreatePayment`, `Subscribe` and `TopUpCredit` take the caller as the user. An empty `user_id` means the caller, and any other id is refused (`PERMISSION_DENIED`).
+- `GET /payments/{id}`, `/subscriptions/{id}`, `/credit/balance` and `/usage/{meter}/{period}` are served by `PaymentService.GetMy*`. They answer only with the caller's rows; another person's id reads as not found.
+
+The caller comes from the gateway's `x-w17-user` envelope, field 2 (`string user_id = 2`, which w17 requires of every auth method's response). An envelope that is present but empty, repeated or without a readable caller is refused (`UNAUTHENTICATED`). The project's own code calls the same business methods without an envelope and names the user itself. For reads it uses `PaymentQuery`. Don't expose `PaymentQuery`, `PaymentMutation`, `RefundPayment`, `GrantCredit`, `SpendCredit`, `ReportUsage` or `CreatePlan` on a client-facing surface: they trust the caller (`RefundPayment` refunds any payment by id).
+
+**The envelope follows the request.** A project handler serving a signed-in person that calls `PaymentService` (in process, or over a dialled conn) carries that person's `x-w17-user`, so the call acts for that person: an empty `user_id` means them, and another user's id is `PERMISSION_DENIED`. Jobs, webhooks and event subscribers carry no envelope. Code that deliberately acts for someone else while serving a request (an admin action, an owner paying for a member) authorises that itself and removes the envelope before the call:
+
+```go
+md, _ := metadata.FromIncomingContext(ctx)
+md = md.Copy()
+md.Delete("x-w17-user")
+ctx = metadata.NewIncomingContext(ctx, md)
+```
+
 ## Money
 
 Every monetary column is `type: DECIMAL` (string carrier,
@@ -158,8 +174,9 @@ follow-up). Off by default.
     stored the raw key) and retried after the upgrade is recognised — same
     principal, direction and amount under the raw key — and not applied
     again; this costs one extra ledger read per apply.
-  - read balance via `GET /credit/balance` → `PaymentQuery.GetCreditBalance`
-    (storage-direct); grant/spend are privileged business ops.
+  - read the caller's balance via `GET /credit/balance` →
+    `PaymentService.GetMyCreditBalance`; grant/spend are privileged
+    business ops.
 - **Event** — `CreditApplied` (signed delta + new balance).
 
 ## Metered / pay-as-you-go (feature `usage`, Slice 3)
@@ -182,8 +199,8 @@ quantity carrying `item_ref`/`metadata`) are the SAME operation — one
     counted again; this costs one extra record read per report. Internal /
     server-to-server (NOT REST-exposed — the service measuring usage
     reports it).
-  - read the total via `GET /usage/{meter}/{period}` →
-    `PaymentQuery.GetUsageMeter` (storage-direct).
+  - read the caller's total via `GET /usage/{meter}/{period}` →
+    `PaymentService.GetMyUsageMeter`.
 - **Event** — `UsageRecorded` (quantity + new total).
 
 ## Subscriptions (feature `subscriptions`, Slice 4)
@@ -209,8 +226,9 @@ webhooks). Off by default. This is the one feature that extends
     Privileged / admin — NOT REST-exposed.
   - `Subscribe` — ensure the customer, start the provider subscription,
     persist the local record (`POST /subscriptions`).
-  - read one via `GET /subscriptions/{id}` → `PaymentQuery.GetSubscription`
-    (storage-direct).
+  - read one of the caller's via `GET /subscriptions/{id}` →
+    `PaymentService.GetMySubscription` (another customer's reads as not
+    found).
 - **`MarkSubscriptionStatus` mutation** — reconcile lifecycle from a
   provider webhook (ready; the webhook dispatch wiring is a follow-up).
 - **Events** — `SubscriptionStarted` (carries the `status` the subscription

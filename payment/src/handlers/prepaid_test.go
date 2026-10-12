@@ -97,10 +97,8 @@ func TestApplyCredit_RequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
-// Note: reading the balance is now a direct storage query
-// (PaymentQuery.GetCreditBalance via REST preset) — no business handler
-// to test. The currentBalance helper is still covered via the
-// idempotent-grant path (TestApplyCredit_IdempotentOnDuplicate).
+// Note: the REST balance read is GetMyCreditBalance (caller_test.go). The
+// currentBalance helper is still covered via the idempotent-grant path (TestApplyCredit_IdempotentOnDuplicate).
 
 // rc.2 and earlier stored the caller's RAW key in the ledger. A grant or
 // spend made by one of them and retried after the upgrade is not found under

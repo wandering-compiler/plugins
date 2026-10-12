@@ -66,8 +66,8 @@ func TestReportUsage_IdempotentOnDuplicate(t *testing.T) {
 	}
 }
 
-// Note: reading the meter is now a direct storage query
-// (PaymentQuery.GetUsageMeter via REST preset). The currentMeter helper
+// Note: the REST meter read is GetMyUsageMeter (caller_test.go). The
+// currentMeter helper
 // is still covered via the idempotent-report path
 // (TestReportUsage_IdempotentOnDuplicate).
 
