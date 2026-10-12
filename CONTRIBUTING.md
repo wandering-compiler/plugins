@@ -34,6 +34,13 @@ green. Run them locally with Go and docker:
 
 `make check` runs them all, and `PLUGIN=<name>` narrows any of them to one plugin.
 
+CI runs one more check that has no local target: **adoption**. Every public
+example (the `examples` repository) is generated, built and tested with the
+plugins of the pull request in place of the ones it vendors, so a change that
+breaks a project using a plugin fails here, not after a release. It needs the
+`W17_TOKEN` secret, so it fails for a fork's pull request the same way
+`check-names` does.
+
 **Generated pb** comes from plain buf (`tools/gen-pb.sh`). Imports resolve against
 the w17 proto vocabulary of the SDK version the plugin's own `src/go.mod`
 requires. An SDK too old to ship the vocabulary falls back to the version in
