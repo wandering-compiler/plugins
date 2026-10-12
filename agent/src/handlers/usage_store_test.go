@@ -34,7 +34,7 @@ type usageStore struct {
 	order  []int64
 	attach map[int64][]int64 // usage id → label ids
 
-	limits map[int64]*pb.GetScopeLimitResp
+	limits map[limitKey]*pb.GetScopeLimitResp
 	spend  map[int64][]*pb.ScopeSpendLine
 
 	calls map[string]int
@@ -51,7 +51,7 @@ func newUsageStore() *usageStore {
 	return &usageStore{
 		scopes: map[string]int64{}, models: map[string]int64{}, labels: map[[2]string]int64{},
 		rows: map[int64]*pb.RecordUsageReq{}, attach: map[int64][]int64{},
-		limits: map[int64]*pb.GetScopeLimitResp{}, spend: map[int64][]*pb.ScopeSpendLine{},
+		limits: map[limitKey]*pb.GetScopeLimitResp{}, spend: map[int64][]*pb.ScopeSpendLine{},
 		calls: map[string]int{}, fail: map[string]error{}, failN: map[string]int{},
 	}
 }
@@ -108,7 +108,21 @@ func (s *usageStore) setLimit(scope string, minor int64, currency string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := s.intern(s.scopes, scope)
-	s.limits[id] = &pb.GetScopeLimitResp{LimitMinor: minor, Currency: currency}
+	s.limits[limitKey{id, pb.LimitWindow_LIMIT_WINDOW_MONTH}] = &pb.GetScopeLimitResp{LimitMinor: minor, Currency: currency}
+}
+
+// limitKey is a limit's row identity: one per scope and window.
+type limitKey struct {
+	scope  int64
+	window pb.LimitWindow
+}
+
+// setLimitIn sets a limit in a window other than the month.
+func (s *usageStore) setLimitIn(scope string, w pb.LimitWindow, minor int64, currency string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.intern(s.scopes, scope)
+	s.limits[limitKey{id, w}] = &pb.GetScopeLimitResp{LimitMinor: minor, Currency: currency}
 }
 
 func (s *usageStore) setSpend(scope string, lines ...*pb.ScopeSpendLine) {
@@ -229,7 +243,7 @@ func (q queryServer) GetScopeLimit(_ context.Context, r *pb.GetScopeLimitReq) (*
 	if err := q.s.enter("GetScopeLimit"); err != nil {
 		return nil, err
 	}
-	l, ok := q.s.limits[r.GetScopeId()]
+	l, ok := q.s.limits[limitKey{r.GetScopeId(), r.GetWindow()}]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "GetScopeLimit: not found")
 	}

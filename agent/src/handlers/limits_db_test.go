@@ -35,7 +35,7 @@ func TestDBLimiter_TheCapItself(t *testing.T) {
 		{"exactly at", 1000, []*pb.ScopeSpendLine{usd(400), usd(600)}, false},
 		{"over", 1000, []*pb.ScopeSpendLine{usd(5000)}, false},
 		{"zero cap, nothing spent", 0, nil, false},
-		{"nothing priced yet", 1000, []*pb.ScopeSpendLine{line(nil, "", 0)}, true},
+		{"nothing spent yet", 1000, []*pb.ScopeSpendLine{line(nil, "", 0)}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, l := newTestLimiter(t)
@@ -111,8 +111,8 @@ func TestDBLimiter_TheSteadyStateAsksTheDatabaseNothing(t *testing.T) {
 	if n := store.count("InternScope"); n != 2 {
 		t.Errorf("InternScope ran %d times for 2 scopes over 40 calls — a write in front of every completion", n)
 	}
-	if n := store.count("GetScopeLimit"); n != 2 {
-		t.Errorf("GetScopeLimit ran %d times — the limit, and the ABSENCE of one, are cached", n)
+	if n := store.count("GetScopeLimit"); n != 2*len(limitWindows) {
+		t.Errorf("GetScopeLimit ran %d times — the limit, and the ABSENCE of one, are cached (once per window)", n)
 	}
 	if n := store.count("GetScopeSpend"); n != 1 {
 		t.Errorf("GetScopeSpend ran %d times — only the capped scope needs its spend, and once per TTL", n)
@@ -128,7 +128,7 @@ func TestDBLimiter_ATransientLimitErrorDoesNotSwitchTheCapOff(t *testing.T) {
 	store.setLimit("tenant-a", 100, "USD")
 	store.setSpend("tenant-a", usd(500))
 
-	store.failWith("GetScopeLimit", status.Error(codes.Unavailable, "db restarting"), 1)
+	store.failWith("GetScopeLimit", status.Error(codes.Unavailable, "db restarting"), len(limitWindows)) // every window, once
 	if !l.Allow(context.Background(), "tenant-a").Allowed {
 		t.Error("an unreachable limit table refused the call — the guard rail became an outage")
 	}
@@ -145,8 +145,8 @@ func TestDBLimiter_NoLimitIsCachedAsAnAnswer(t *testing.T) {
 			t.Fatal("a scope with no cap was refused")
 		}
 	}
-	if n := store.count("GetScopeLimit"); n != 1 {
-		t.Errorf("asked for a missing limit %d times", n)
+	if n := store.count("GetScopeLimit"); n != len(limitWindows) {
+		t.Errorf("asked for a missing limit %d times, want once per window", n)
 	}
 	if n := store.count("GetScopeSpend"); n != 0 {
 		t.Errorf("read spend %d times for a scope with no cap", n)
@@ -216,8 +216,8 @@ func TestDBLimiter_ALimitInAnotherCurrencyIsNotComparedBlindly(t *testing.T) {
 	}
 }
 
-// The cap is MONTHLY: the limit is asked for the month window as of now, and
-// spend is summed from the first instant of the current UTC month to now.
+// A month limit is asked for the month window as of now, and its spend is
+// summed from the first instant of the current UTC month to now.
 func TestDBLimiter_AsksForThisMonth(t *testing.T) {
 	store, l := newTestLimiter(t)
 	store.setLimit("tenant-a", 100, "USD")
@@ -227,10 +227,19 @@ func TestDBLimiter_AsksForThisMonth(t *testing.T) {
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if len(store.limitReqs) != 1 || len(store.spendReqs) != 1 {
+	if len(store.limitReqs) != len(limitWindows) || len(store.spendReqs) != 1 {
 		t.Fatalf("limit asked %d times, spend %d times", len(store.limitReqs), len(store.spendReqs))
 	}
-	lr, sr := store.limitReqs[0], store.spendReqs[0]
+	var lr *pb.GetScopeLimitReq
+	for _, r := range store.limitReqs {
+		if r.GetWindow() == pb.LimitWindow_LIMIT_WINDOW_MONTH {
+			lr = r
+		}
+	}
+	if lr == nil {
+		t.Fatal("the month window was never asked")
+	}
+	sr := store.spendReqs[0]
 	id := store.scopes["tenant-a"]
 	if lr.GetScopeId() != id || sr.GetScopeId() != id {
 		t.Errorf("asked about scope %d / %d, want %d", lr.GetScopeId(), sr.GetScopeId(), id)
@@ -247,6 +256,50 @@ func TestDBLimiter_AsksForThisMonth(t *testing.T) {
 	}
 	if to := sr.GetTo().AsTime(); !to.After(before) {
 		t.Errorf("spend summed to %v — the call that just happened is excluded", to)
+	}
+}
+
+// A DAY and a TOTAL limit are enforced too, each over its own window. Only
+// the month used to be asked, so these were accepted and enforced nothing.
+func TestDBLimiter_EveryWindowIsEnforced(t *testing.T) {
+	for _, w := range []pb.LimitWindow{pb.LimitWindow_LIMIT_WINDOW_DAY, pb.LimitWindow_LIMIT_WINDOW_TOTAL} {
+		t.Run(w.String(), func(t *testing.T) {
+			store, l := newTestLimiter(t)
+			store.setLimitIn("tenant-a", w, 100, "USD")
+			store.setSpend("tenant-a", usd(100))
+			if d := l.Allow(context.Background(), "tenant-a"); d.Allowed || d.Reason != reasonOverLimit {
+				t.Fatalf("decision = %+v, want the %v limit to refuse", d, w)
+			}
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			from := store.spendReqs[0].GetFrom().AsTime()
+			now := time.Now().UTC()
+			want := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+			if w == pb.LimitWindow_LIMIT_WINDOW_TOTAL {
+				want = time.Unix(0, 0).UTC()
+			}
+			if !from.Equal(want) {
+				t.Errorf("spend summed from %v, want %v", from, want)
+			}
+		})
+	}
+}
+
+// Under a cap, calls on a model with no price refuse: tokens nobody priced
+// are not free.
+func TestDBLimiter_UnpricedSpendUnderACapFailsClosed(t *testing.T) {
+	store, l := newTestLimiter(t)
+	store.setLimit("tenant-a", 1_000_000, "USD")
+	store.setSpend("tenant-a", &pb.ScopeSpendLine{Model: "m", Calls: 4, OutputTokens: 900})
+	for i := 0; i < 5; i++ {
+		if d := l.Allow(context.Background(), "tenant-a"); d.Allowed || d.Reason != reasonUnpriced {
+			t.Fatalf("decision = %+v, want the unpriced refusal", d)
+		}
+	}
+	// The refusal is cached like a figure: a refused scope retrying must not
+	// cost a spend read per call.
+	if n := store.count("GetScopeSpend"); n != 1 {
+		t.Errorf("GetScopeSpend ran %d times for 5 refused calls, want once per TTL", n)
 	}
 }
 

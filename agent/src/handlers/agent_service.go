@@ -56,13 +56,8 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 		return nil, status.Error(codes.InvalidArgument, "agent: empty request")
 	}
 
-	// Asked BEFORE the call, which is the entire difference between a limit
-	// and a report: out of credit has to fail the first request, not show up
-	// on the next invoice.
-	if h.Limits != nil {
-		if d := h.Limits.Allow(ctx, req.GetUsageScope()); !d.Allowed {
-			return nil, status.Error(codes.ResourceExhausted, d.Reason)
-		}
+	if err := h.admitSpend(ctx, req.GetUsageScope(), req.GetUsageLabels()); err != nil {
+		return nil, err
 	}
 
 	m := h.modelFor(req)

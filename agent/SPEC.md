@@ -71,10 +71,10 @@ which.
 | 6 | The last permitted turn offers no tools, but if the provider still returns function calls on it, `Run` dispatches them, including mutating ones, and then ends with `ErrTurnsExhausted`. The writes are applied and the model never reads their results, which is exactly what offering no tools was meant to prevent. | `base/run-last-turn-applies-nothing` | `src/lib/llm/loop.go` (`Run`) |
 | 7 | Both streaming paths refuse any answer longer than 20 000 bytes of text (or of tool arguments) with `ResourceExhausted`, whatever `ModelSpec.max_tokens` says, including `< 0` ("no cap"). Unary `Complete` has no such limit. The same request therefore succeeds on `Complete` and fails on `CompleteStream`, and the wire contract mentions neither the limit nor the difference. | `base/stream-output-ceiling-stated` | `src/lib/llm/stream.go` (`maxStreamOutput`, `streamTurn`) |
 | 8 | A `ToolSpec.params_schema` that is not valid JSON (or not a JSON object) is silently replaced by `{"type":"object"}`. The tool is offered with no argument contract, so the model may send anything. Tool names are refused up front as preflight; schemas are not. | `base/run-tool-list-validated` | `src/handlers/agent_run.go` (`remoteTool.Params`), `src/lib/llm/loop.go` (`toolParams`) |
-| 9 | A `usage_scope` longer than the 128-character `Scope.external_id` column is accepted, served and never billed. No `Scope` row can hold it, so no limit can be set on it; the limiter's `InternScope` fails and the limiter fails open; at flush, the row cannot be written and the spend is lost (counted, and logged once per batch). Nothing validates the scope length at request time. A caller that derives scopes from long principal ids therefore runs unrecorded and uncappable. | `usage_persistence/scope-validated-at-request` | `src/handlers/limits_enabled.go` (`Allow`, `scopeID`), `src/handlers/usage_enabled.go` (`flushOne`) |
-| 10 | Only the `MONTH` window is enforced. `SetScopeLimit` accepts `DAY` and `TOTAL` limits, `GetScopeLimit` reads them, and `Allow` never asks for them: a daily or lifetime cap enforces nothing and nothing says so. | `usage_persistence/limit-windows-enforced-or-refused` | `src/handlers/limits_enabled.go` (`Allow`) |
-| 11 | Spend on a model with no price row contributes nothing to the cap (`totalSpend`: cost absent with `priced_calls = 0`). A capped scope that uses only unpriced models is never refused, however many tokens it spends. | `usage_persistence/cap-not-bypassable` | `src/handlers/limits_enabled.go` (`totalSpend`) |
-| 12 | The limiter has no boot guard. With `usage_persistence` on and either `UsageQuery` or `UsageMutation` missing from the client set, `newLimiter` silently installs the allow-all limiter. The usage sink has `VerifyUsageWiring` for exactly this drift; the limiter has nothing, so every cap is off with no error. | `usage_persistence/limiter-wiring-verified` | `src/handlers/limits_enabled.go` (`init`), `src/plugin.go` (`RegisterPlugin`) |
+| 9 | **Fixed.** A `usage_scope` longer than the 128-character `Scope.external_id` column is accepted, served and never billed. No `Scope` row can hold it, so no limit can be set on it; the limiter's `InternScope` fails and the limiter fails open; at flush, the row cannot be written and the spend is lost (counted, and logged once per batch). Nothing validates the scope length at request time. A caller that derives scopes from long principal ids therefore runs unrecorded and uncappable. | `usage_persistence/scope-validated-at-request` | `src/handlers/limits_enabled.go` (`Allow`, `scopeID`), `src/handlers/usage_enabled.go` (`flushOne`) |
+| 10 | **Fixed.** Only the `MONTH` window is enforced. `SetScopeLimit` accepts `DAY` and `TOTAL` limits, `GetScopeLimit` reads them, and `Allow` never asks for them: a daily or lifetime cap enforces nothing and nothing says so. | `usage_persistence/limit-windows-enforced-or-refused` | `src/handlers/limits_enabled.go` (`Allow`) |
+| 11 | **Fixed.** Spend on a model with no price row contributes nothing to the cap (`totalSpend`: cost absent with `priced_calls = 0`). A capped scope that uses only unpriced models is never refused, however many tokens it spends. | `usage_persistence/cap-not-bypassable` | `src/handlers/limits_enabled.go` (`totalSpend`) |
+| 12 | **Fixed.** The limiter has no boot guard. With `usage_persistence` on and either `UsageQuery` or `UsageMutation` missing from the client set, `newLimiter` silently installs the allow-all limiter. The usage sink has `VerifyUsageWiring` for exactly this drift; the limiter has nothing, so every cap is off with no error. | `usage_persistence/limiter-wiring-verified` | `src/handlers/limits_enabled.go` (`init`), `src/plugin.go` (`RegisterPlugin`) |
 | 13 | `endpoint` is checked only for being non-empty. An `http://` endpoint is accepted, and every request then sends the provider API key in clear text. | `agent/api-key-only-over-tls` | `src/lib/llm/client.go` (`NewClient`) |
 
 ## Per feature
@@ -194,8 +194,9 @@ which.
 - **Mechanics.** An asynchronous writer (`lib/usage`): queue 4096, batch 64,
   flush every 5 s or at 64 events, 30 s per flush, drained by a shutdown hook.
   Interning runs in the flush, cached in bounded two-generation caches. The
-  limiter enforces a monthly cap per scope from a spend figure cached 30 s and
-  a limit cached 5 minutes, per process.
+  limiter enforces a cap per scope in each window a limit is set in (UTC day,
+  UTC month, all time), from a spend figure cached 30 s and a limit cached
+  5 minutes, per scope and window, per process.
 - **Requires / conflicts / combined files.** None.
 
 | id | invariant | category | proof |
@@ -206,7 +207,7 @@ which.
 | `usage_persistence/billed-model-is-what-answered` | The recorded model MUST be the one the provider says answered (a dated id or alias) when it named one, else the one requested. | Consistency & concurrency | `TestComplete_OverTheWire_RecordsWhatTheProviderBilled`, `TestRunAgent_RecordsTheSpendOfEveryTurn` |
 | `usage_persistence/outcome-honest` | The row's status MUST be OK for an answer, FAILED for any error after the provider was reached, UNKNOWN when the guard stopped a stream. A failed call's reported tokens MUST be kept. | Consistency & concurrency | `TestRunOutcome`, `TestComplete_OverTheWire_ProviderFailures`, `TestCompleteStream_GuardAndRunawayAreRecorded` |
 | `usage_persistence/blank-scope-attributed` | An empty or blank `usage_scope` MUST be recorded under the scope `unattributed`, never dropped and never allowed to fail its batch. An unkeyed label MUST be dropped and the rest of the event kept. | Consistency & concurrency | `TestRecordUsage_AnEmptyScopeIsStillRecorded`, `TestRecordUsage_AnUnkeyedLabelIsDroppedNotFatal` |
-| `usage_persistence/scope-validated-at-request` | A `usage_scope` or label that cannot be stored (over its column length) MUST be refused with `InvalidArgument` before the provider is called. It MUST NOT be accepted and then lost at flush. | Failure & configuration | none (finding 9) |
+| `usage_persistence/scope-validated-at-request` | A `usage_scope` or label that cannot be stored (over its column length) MUST be refused with `InvalidArgument` before the provider is called. It MUST NOT be accepted and then lost at flush. | Failure & configuration | TestAdmitSpend_RefusesAScopeOrLabelLongerThanItsColumn (finding 9 fixed) |
 | `usage_persistence/scope-isolation` | Every row MUST be filed under the scope its call named, and every spend and limit read MUST be filtered to exactly one scope. One scope's figures MUST NOT appear in another's answer. | Security | `TestUsageSink_RecordsEachTenantsCallsAgainstItsOwnScope`, `TestDBLimiter_TenantsAreIsolated`. **Unit (mock) only:** a live test would write rows for two scopes and assert `GetScopeSpend` / `GetLabelSpend` for one never includes the other's calls. |
 | `usage_persistence/record-never-blocks` | Recording MUST NOT make a model call wait or fail. A full queue MUST drop and count the event. | Performance | `TestAFullQueueDropsRatherThanBlocks` |
 | `usage_persistence/at-most-once-and-counted` | Each event MUST be written at most once: a failed flush MUST NOT be retried into a duplicate. Every event that is not written (queue full, closed writer, failed flush) MUST be counted and reported in a log line; a row written without all its labels MUST be counted as written, not lost. One bad event MUST NOT drop the rest of its batch. | Consistency & concurrency | `TestAFailedFlushIsCounted`, `TestRecordAfterCloseIsCountedNotLost`, `TestRecordRacingCloseLosesNothingUncounted`, `TestAPartialFlushCountsOnlyWhatFailed`, `TestAnImpossiblePartialCountFallsBackToTheWholeBatch`, `TestAnUnlabelledEventCountsAsWritten`, `TestFlush_OneBadEventDoesNotSinkTheBatch`, `TestFlush_TheWriterCountsAPartialBatchExactly`, `TestFlush_ABadLabelKeepsTheRowAndTheOtherLabels`, `TestFlush_TheWriterCountsABadLabelAsWrittenNotLost`, `TestCloseReportsLossInOneLine`, `TestCloseIsQuietWhenNothingWasLost` |
@@ -223,19 +224,19 @@ which.
 | `usage_persistence/limit-currency-safe` | A spend that cannot be totalled in one currency, or a limit in a different currency from the spend, MUST refuse (fail closed) with a reason that names the misconfiguration. | Consistency & concurrency | `TestTotalSpend`, `TestDBLimiter_MixedCurrencySpendFailsClosed`, `TestDBLimiter_ALimitInAnotherCurrencyIsNotComparedBlindly` |
 | `usage_persistence/limit-fails-open-on-outage` | A database error while reading the limit or the spend MUST allow the call and MUST NOT be cached. Only the absence of a limit (`NotFound`) MAY be cached. | Failure & configuration | `TestDBLimiter_FailsOpenWhenTheDatabaseIsDown`, `TestDBLimiter_ATransientLimitErrorDoesNotSwitchTheCapOff`, `TestDBLimiter_NoLimitIsCachedAsAnAnswer` |
 | `usage_persistence/limit-slack-bounded` | Overspend past a cap MUST be bounded and stated: at most what the scope can buy within (flush interval + spend TTL) per replica, plus what calls already admitted spend. A limit change MUST take effect within the limit TTL. | Consistency & concurrency | `TestDBLimiter_SpendIsReReadAfterItsTTL`, `TestSpendCacheExpires`, `TestDBLimiter_ConcurrentCallers` (correct answers under concurrency, not overspend). **Live only** for the bound itself. |
-| `usage_persistence/limit-windows-enforced-or-refused` | Every limit window the schema accepts MUST be enforced, or `SetScopeLimit` MUST refuse it. | Security | none (finding 10) |
-| `usage_persistence/cap-not-bypassable` | Nothing a caller chooses (the model, whether the model is priced) MUST let a capped scope spend without bound. | Security | none (finding 11) |
+| `usage_persistence/limit-windows-enforced-or-refused` | Every limit window the schema accepts MUST be enforced, or `SetScopeLimit` MUST refuse it. | Security | TestDBLimiter_EveryWindowIsEnforced, TestDBLimiter_AsksForThisMonth (finding 10 fixed: every window is enforced) |
+| `usage_persistence/cap-not-bypassable` | Nothing a caller chooses (the model, whether the model is priced) MUST let a capped scope spend without bound. | Security | TestDBLimiter_UnpricedSpendUnderACapFailsClosed, TestTotalSpend (finding 11 fixed: unpriced calls under a cap refuse) |
 | `usage_persistence/blank-scope-uncapped` | A blank scope MUST be allowed without a database round trip and without interning a scope row. | Performance | `TestDBLimiter_ABlankScopeIsNotCapped` |
 | `usage_persistence/limiter-steady-state-free` | In steady state, a call for a known scope MUST cost the limiter no database round trip. | Performance | `TestDBLimiter_TheSteadyStateAsksTheDatabaseNothing` |
 | `usage_persistence/wiring-verified-at-boot` | With the feature on, a bundle in which the database sink was not installed MUST fail `RegisterPlugin`. | Failure & configuration | `TestVerifyUsageWiringAgreesWithTheActivation`, `TestUsageSink_WithoutTheClientStaysTheNoop`, `TestTheNoopSinkSwallowsEverything` |
-| `usage_persistence/limiter-wiring-verified` | With the feature on, a bundle in which the database limiter was not installed MUST fail `RegisterPlugin`. | Failure & configuration | none (finding 12; `TestNewLimiter_NeedsBothClients` pins the silent allow-all) |
+| `usage_persistence/limiter-wiring-verified` | With the feature on, a bundle in which the database limiter was not installed MUST fail `RegisterPlugin`. | Failure & configuration | TestVerifyLimiterWiring, TestNewLimiter_NeedsBothClients (finding 12 fixed) |
 | `usage_persistence/tables-declared` | The manifest's description MUST name every table the feature adds, so the migration it schedules is visible before activation. | Failure & configuration | `TestUsageManifestNamesEveryTable` |
 
 **Gaps / suspected defects**
 
 1. **Admission, not reservation.** The cap is read before a call and never reserves the call's cost. One admitted `RunAgent` (asked once at its start) or one call with `max_tokens < 0` can spend any amount past the cap. The slack also multiplies by the number of replicas, and a crash loses whatever is queued (up to 4096 events), which the cap then never sees.
 2. **The first call for a new scope writes in front of the provider.** `scopeID` interns the scope (an UPSERT) on the request path when the id is not cached. The cache is bounded, so a caller cycling through many scopes makes this a write per call.
-3. **No composite index for spend reads.** `GetScopeSpend` and `GetLabelSpend` filter `scope_id` and a `started_at` range, but `Usage` has only single-column indexes. The limiter re-reads month-to-date spend every 30 s per scope per replica, so the cost of that read grows with the scope's history inside the month and, without a `(scope_id, started_at)` index, with all of it.
+3. **No composite index for spend reads.** `GetScopeSpend` and `GetLabelSpend` filter `scope_id` and a `started_at` range, but `Usage` has only single-column indexes. The limiter re-reads each capped window's spend every 30 s per scope per replica, so the cost of that read grows with the scope's history inside the window — for a `TOTAL` limit, all of it — and, without a `(scope_id, started_at)` index, with all of it for every window.
 4. **`ScopeLimit` has no uniqueness.** Two limits for one scope and window with the same `valid_from` are both accepted, and `GetScopeLimit` picks one of them arbitrarily.
 5. **A row and its labels are not one unit of work.** `RecordUsage` and each `AttachUsageLabel` are separate statements; a failure or crash between them leaves a row with part of its attribution. It is counted, not prevented.
 6. **The flush log line quotes the database error,** which can carry a scope or label value. Labels are the caller's free text.
@@ -411,13 +412,15 @@ With such a sandbox, the suite should cover:
    rollup; half-open boundaries; a call labelled with two values of one key
    counted under both (`usage_persistence/cost-computed-not-stored`,
    `unpriced-is-absent`, `half-open-periods`).
-4. **Limits**: a monthly cap refuses the next call once the spend is flushed
-   and the cache expires; the measured overspend stays within the stated
-   bound (`usage_persistence/limit-slack-bounded`); currency mismatch fails
-   closed; the database down fails open; the UTC month boundary. Expected red
-   until fixed: a `DAY` or `TOTAL` cap (finding 10), a scope over 128
-   characters (finding 9), a capped scope on an unpriced model (finding 11),
-   a bundle missing a usage client (finding 12).
+4. **Limits**: a `DAY`, `MONTH` and `TOTAL` cap each refuses the next call
+   once the spend is flushed and the cache expires; the measured overspend
+   stays within the stated bound (`usage_persistence/limit-slack-bounded`);
+   currency mismatch fails closed; the database down fails open; the UTC day
+   and month boundaries; a scope over 128 characters is refused (finding 9);
+   a capped scope with unpriced calls that spent tokens is refused, and stays
+   refused after a price that starts later, until the window ends or the
+   price is backdated (finding 11); a bundle missing a usage client does not
+   boot (finding 12).
 5. **Streams over the real gateway**: SSE framing of `CompleteStream`; a client
    disconnect mid-answer closes the sandbox's stream and records one failed,
    unmeasured row (`base/stream-cancel-stops-spend`); the caller's deadline
