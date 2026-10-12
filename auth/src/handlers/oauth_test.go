@@ -37,6 +37,8 @@ type oauthMock struct {
 
 	// loginCodes mirrors OAuthLoginCode: code_hash -> row. Consume is the
 	// conditional UPDATE's semantics: one unconsumed match, then none.
+	trustedDevice bool
+
 	loginCodes map[string]*pb.CreateOAuthLoginCodeReq
 	consumed   map[string]bool
 }
@@ -151,6 +153,7 @@ func (m *oauthMock) CreateDevice(ctx context.Context, in *pb.CreateDeviceReq, _ 
 	return &pb.CreateDeviceResp{Device: &pb.Device{Id: "dev-1"}}, nil
 }
 func (m *oauthMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...grpc.CallOption) (*pb.TrustDeviceResp, error) {
+	m.trustedDevice = true
 	return &pb.TrustDeviceResp{}, nil
 }
 func (m *oauthMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {

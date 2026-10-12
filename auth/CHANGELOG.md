@@ -28,6 +28,13 @@ Each reset request inserts a new link, and a successful reset consumed only the 
 
 `GetUserRolePermissionsByRealm` reads `UserRole`, `Role` and `RolePermission`, the tables `rbac` adds. An activation with `api_token` and without `rbac` failed code generation; it is now refused by the manifest instead. `rbac` is on by default, so only an activation that turned it off is affected.
 
+### An OAuth sign-in no longer makes the device trusted
+
+An OAuth sign-in skips the plugin's second factor, and with `devices` it still marked the device trusted. Under `two_factor_scope=new_devices` a trusted device skips the second factor, so after one OAuth sign-in, password sign-ins from that device skipped it too.
+
+- **`OAuthExchange` binds the session to the device and does not trust it.** It returns no `device_trust_token`.
+- **A device becomes trusted only by passing the second factor (`VerifyMfa`).** A password sign-in that met no second factor renews the trust of a device that already has it and grants none. Before, with `devices` on and `two_factor` off, every password sign-in trusted its device, so switching on `two_factor_scope=new_devices` later let every device that had ever signed in skip the new factor. Such a deployment should clear existing trust (`trusted_at`, `trust_token_hash` on `Device`) when it turns `two_factor` on.
+
 ### OAuth: the callback hands out a single-use code, not a session (breaking)
 
 The OAuth callback used to redirect the browser with the session token in the URL fragment, and its `state` was valid forever, reusable, and tied to no browser. Anyone could start a sign-in with their own provider account and send the callback link to someone else. Whoever opened it was signed in to the sender's account and kept working there (login CSRF).

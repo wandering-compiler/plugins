@@ -204,3 +204,18 @@ func mustSignState(t *testing.T, challenge string) string {
 	}
 	return state
 }
+
+// An OAuth sign-in skips the plugin's second factor, so it must not make the
+// device trusted — or a later password sign-in from it would skip the factor
+// too (two_factor_scope=new_devices).
+func TestOAuthExchange_DoesNotTrustTheDevice(t *testing.T) {
+	h, m, state := exchangeHandler(t)
+	resp, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "google", Code: "c", State: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := redeem(t, h, resp)
+	if m.trustedDevice || ex.GetDeviceTrustToken() != "" {
+		t.Errorf("the OAuth exchange trusted the device (trust token %q)", ex.GetDeviceTrustToken())
+	}
+}

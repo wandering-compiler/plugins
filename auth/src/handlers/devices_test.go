@@ -209,7 +209,7 @@ func TestResolveSignInDevice_WrongTrustToken_NotTrusted(t *testing.T) {
 func TestIssueSessionWithDevice_IssuesMintsAndTrusts(t *testing.T) {
 	m := &deviceMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	tok, trustToken, err := issueSessionWithDevice(context.Background(), h, "u1", "dev-7")
+	tok, trustToken, err := issueSessionWithDevice(context.Background(), h, "u1", "dev-7", true)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestSignIn_DevicesSeams_WiredViaInit(t *testing.T) {
 		t.Fatalf("resolveSignInDevice seam not wired: id=%q err=%v", id, err)
 	}
 	_ = trusted
-	if _, _, err := issueSession(context.Background(), h, "u1", "d1"); err != nil {
+	if _, _, err := issueSession(context.Background(), h, "u1", "d1", true); err != nil {
 		t.Fatalf("issueSession seam not wired: %v", err)
 	}
 	if len(m.issuedWith) == 0 {
@@ -414,5 +414,75 @@ func TestResolveDeviceIdentity_PrefersTheForwardedUserAgent(t *testing.T) {
 	fallback := resolveDeviceIdentity(metadata.NewIncomingContext(context.Background(), metadata.Pairs("user-agent", "curl/8")))
 	if fallback.label != "curl/8" {
 		t.Fatalf("fallback label = %q", fallback.label)
+	}
+}
+
+// A sign-in that may not earn trust (OAuth, which skipped the second factor)
+// binds its session to the device but neither trusts it nor hands out a
+// trust token: under two_factor_scope=new_devices a trusted device skips the
+// second factor for password sign-ins too.
+func TestIssueSessionWithDevice_BindsWithoutTrustingWhenNotAllowed(t *testing.T) {
+	m := &deviceMock{}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	tok, trustToken, err := issueSessionWithDevice(context.Background(), h, "u1", "dev-7", false)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if tok == "" || len(m.issuedWith) != 1 || m.issuedWith[0].GetDeviceId() != "dev-7" {
+		t.Errorf("the session was not bound to the device: %+v", m.issuedWith)
+	}
+	if trustToken != "" || len(m.trusted) != 0 {
+		t.Errorf("an untrusting sign-in trusted the device (trust token %q, TrustDevice %+v)", trustToken, m.trusted)
+	}
+}
+
+// signInDeviceMock adds the account lookup SignIn needs to deviceMock.
+type signInDeviceMock struct {
+	*deviceMock
+	user *pb.User
+}
+
+func (m signInDeviceMock) GetUserByEmail(context.Context, *pb.GetUserByEmailReq, ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
+	return &pb.GetUserByEmailResp{User: m.user}, nil
+}
+
+// A password sign-in that met no second factor renews the trust of a device
+// that already has it, and grants none to a device that does not. Granted on
+// the password alone, every device that ever signed in would skip the factor
+// once two_factor_scope=new_devices is switched on.
+func TestSignIn_RenewsDeviceTrustButNeverGrantsIt(t *testing.T) {
+	saved := signInMfaGate
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+		return nil, false, nil // two_factor off: no factor asked for
+	}
+	t.Cleanup(func() { signInMfaGate = saved })
+
+	hashed, err := testPasswordSettings().Hash("pw-long-enough")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustPlain, trustHash, err := newDeviceTrustToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name    string
+		device  *pb.Device
+		ctx     context.Context
+		trusted bool
+	}{
+		{"untrusted device", &pb.Device{Id: "dev-1", Identifier: "d1"}, ctxWithDeviceTrust("", "d1", ""), false},
+		{"trusted device", &pb.Device{Id: "dev-1", Identifier: "d1", TrustedAt: timestamppb.Now(), TrustTokenHash: trustHash}, ctxWithDeviceTrust("", "d1", trustPlain), true},
+	} {
+		dm := &deviceMock{getByIdent: map[string]*pb.Device{devKey("u1", "d1"): c.device}}
+		m := signInDeviceMock{deviceMock: dm, user: &pb.User{Id: "u1", Email: "a@b.c", PasswordHash: hashed}}
+		h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
+		resp, err := h.SignIn(c.ctx, &pb.SignInReq{Email: "a@b.c", Password: "pw-long-enough"})
+		if err != nil {
+			t.Fatalf("%s: sign-in: %v", c.name, err)
+		}
+		if got := len(dm.trusted) == 1 && resp.GetDeviceTrustToken() != ""; got != c.trusted {
+			t.Errorf("%s: trusted = %v (TrustDevice %+v), want %v", c.name, got, dm.trusted, c.trusted)
+		}
 	}
 }

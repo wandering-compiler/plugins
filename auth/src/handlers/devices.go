@@ -233,7 +233,7 @@ func getDevice(ctx context.Context, h *AuthServiceHandler, userID, identifier st
 // invalidate the freshly issued session, so the error is swallowed and the
 // returned trust token is empty (the device simply re-challenges next
 // new-device sign-in — fail-safe). The token is rotated every login.
-func issueSessionWithDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID string) (string, string, error) {
+func issueSessionWithDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID string, trustDevice bool) (string, string, error) {
 	token, hash, err := newBearerToken()
 	if err != nil {
 		return "", "", err
@@ -247,7 +247,7 @@ func issueSessionWithDevice(ctx context.Context, h *AuthServiceHandler, userID, 
 		return "", "", err
 	}
 	var trustToken string
-	if deviceID != "" {
+	if deviceID != "" && trustDevice {
 		if plain, hash, gErr := newDeviceTrustToken(); gErr == nil {
 			if _, tErr := h.Mutation.TrustDevice(ctx, &pb.TrustDeviceReq{
 				UserId:         userID,
