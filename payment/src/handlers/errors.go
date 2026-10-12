@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -68,15 +70,43 @@ func notFound(msg string) error {
 // retry UNAVAILABLE automatically, so a declined card or an over-precise
 // amount was resubmitted on a loop that could never succeed, and the
 // caller was told "try again later" instead of why.
+//
+// The caller gets the class and a fixed sentence, never the provider's text:
+// that carries the endpoint path, the provider's own diagnostics and, for a
+// rejected key, a masked form of the key. The full cause goes to the log.
+//
+// What the caller does get, besides the class, is the provider's machine code
+// when the driver found one (backend.CodedError: "insufficient_funds",
+// "charge_already_refunded"), as a w17.ErrorDetail code. Without it a decline
+// could not be told apart from an expired card, nor a refund of an
+// already-refunded payment from a reused idempotency key, and the caller had
+// nothing to show or act on. The code is an identifier the driver vetted,
+// never the provider's prose.
+//
+// A call the caller itself cancelled is Canceled, and not logged: nothing
+// failed at the provider, and "try again later" would be wrong.
 func providerFailure(cause error) error {
-	code := codes.Unavailable
+	code, msg := codes.Unavailable, "the payment provider is unavailable; try again later"
+	var input *backend.InputError
 	switch {
+	case errors.As(cause, &input):
+		return status.Error(codes.InvalidArgument, input.Msg) // the caller's own input, nothing of the provider's
+	case errors.Is(cause, context.Canceled):
+		return status.Error(codes.Canceled, "the request was canceled")
 	case errors.Is(cause, backend.ErrDeclined):
-		code = codes.FailedPrecondition
+		code, msg = codes.FailedPrecondition, "the payment was declined"
 	case errors.Is(cause, backend.ErrInvalidRequest):
-		code = codes.InvalidArgument
+		code, msg = codes.InvalidArgument, "the payment provider refused the request"
 	}
-	return status.Errorf(code, "payment provider error: %v", cause)
+	slog.Warn("payment: provider call failed", "code", code.String(), "err", cause)
+	st := status.New(code, msg)
+	var coded *backend.CodedError
+	if errors.As(cause, &coded) && coded.Code != "" {
+		if withCode, err := st.WithDetails(&w17pb.ErrorDetail{Message: msg, Code: strings.ToUpper(coded.Code)}); err == nil {
+			st = withCode
+		}
+	}
+	return st.Err()
 }
 
 // absent reports a single-row read that found nothing. Generated storage

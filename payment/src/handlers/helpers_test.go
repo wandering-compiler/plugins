@@ -130,9 +130,18 @@ func TestProviderFailure_MapsByClass(t *testing.T) {
 		if status.Code(err) != c.want {
 			t.Errorf("providerFailure(%v) = %v, want %v", c.cause, status.Code(err), c.want)
 		}
-		if !strings.Contains(status.Convert(err).Message(), c.cause.Error()) {
-			t.Errorf("cause lost from %q", status.Convert(err).Message())
+		// The class reaches the caller; the provider's text does not (see
+		// TestProviderFailure_DoesNotEchoTheProvider).
+		if strings.Contains(status.Convert(err).Message(), c.cause.Error()) {
+			t.Errorf("the cause reached the caller: %q", status.Convert(err).Message())
 		}
+	}
+	// The caller's own input is the exception: its message names only that
+	// input, and the caller needs it to correct the request.
+	in := &backend.InputError{Msg: `amount "1.5" has more fractional digits than jpy allows (scale 0)`}
+	err := providerFailure(fmt.Errorf("charge: %w", in))
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != in.Msg {
+		t.Errorf("input error = %v, want InvalidArgument with %q", err, in.Msg)
 	}
 }
 
@@ -324,5 +333,45 @@ func TestTopUpCredit_RefusesWithoutWebhooks(t *testing.T) {
 	_, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: "5.00", Currency: "usd"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("err = %v, want FailedPrecondition", err)
+	}
+}
+
+// The provider's text stays in the log: the caller sees the class and a fixed
+// sentence, never the endpoint, the provider's diagnostics or a masked key.
+func TestProviderFailure_DoesNotEchoTheProvider(t *testing.T) {
+	for _, cause := range []error{
+		errors.New("stripe: /v1/payment_intents: Invalid API Key provided: sk_test_****abcd (invalid_request_error)"),
+		fmt.Errorf("stripe: /v1/refunds: No such charge (invalid_request_error): %w", backend.ErrInvalidRequest),
+		fmt.Errorf("stripe: /v1/payment_intents: Your card was declined (card_error): %w", backend.ErrDeclined),
+	} {
+		msg := status.Convert(providerFailure(cause)).Message()
+		for _, leak := range []string{"sk_", "/v1/", "stripe", "API Key"} {
+			if strings.Contains(msg, leak) {
+				t.Errorf("caller-facing message %q leaks %q", msg, leak)
+			}
+		}
+	}
+}
+
+// A provider reason code reaches the caller as a w17.ErrorDetail code; the
+// message stays the fixed sentence. A cancelled call is Canceled, not
+// "try again later".
+func TestProviderFailure_PassesTheReasonCode(t *testing.T) {
+	cause := &backend.CodedError{Code: "insufficient_funds", Err: fmt.Errorf("stripe: /v1/payment_intents: Your card has insufficient funds. (card_error): %w", backend.ErrDeclined)}
+	err := providerFailure(fmt.Errorf("charge: %w", cause))
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("code = %v, want FailedPrecondition", status.Code(err))
+	}
+	if got := constraintCode(err); got != "INSUFFICIENT_FUNDS" {
+		t.Errorf("detail code = %q, want INSUFFICIENT_FUNDS", got)
+	}
+	if msg := status.Convert(err).Message(); msg != "the payment was declined" {
+		t.Errorf("message = %q", msg)
+	}
+	if got := constraintCode(providerFailure(fmt.Errorf("x: %w", backend.ErrDeclined))); got != "" {
+		t.Errorf("no code named, detail %q attached", got)
+	}
+	if got := status.Code(providerFailure(fmt.Errorf("stripe: /v1/refunds: %w", context.Canceled))); got != codes.Canceled {
+		t.Errorf("cancelled call = %v, want Canceled", got)
 	}
 }

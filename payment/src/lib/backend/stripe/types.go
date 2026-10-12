@@ -44,8 +44,10 @@ type subscriptionResp struct {
 // apiError ← any non-2xx Stripe response body.
 type apiError struct {
 	Error struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
+		Message     string `json:"message"`
+		Type        string `json:"type"`
+		Code        string `json:"code"`
+		DeclineCode string `json:"decline_code"`
 	} `json:"error"`
 }
 
