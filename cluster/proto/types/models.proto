@@ -171,7 +171,9 @@ message Worker {
   // No column default. Proto3 pins 0 to UNSPECIFIED, and a row that defaulted
   // to "unspecified" would be a worker in no state at all; ENROLLED is what
   // the code that inserts the row says, explicitly.
-  WorkerState state = 5;
+  // Indexed: the ban set is read by state on every relay-bound call (cached
+  // briefly), and a fleet that never deletes rows makes a scan grow forever.
+  WorkerState state = 5 [(w17.db.column) = { index: true }];
 
   // Which relay reported it. A worker's certificate is valid at exactly one
   // relay (that relay's CA issued it), and an operator chasing "why is this

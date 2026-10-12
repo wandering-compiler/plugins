@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -102,6 +103,57 @@ type ClusterServiceHandler struct {
 	// several machines and addresses, that turned the feature off during
 	// exactly the conditions it is normally in.
 	rotate atomic.Uint64
+
+	// bans caches the ban set for banCacheTTL. Every call to a relay carries
+	// the set, and reading it from the registry each time put two queries on
+	// the hot path of every placement and poll. A decision made through this
+	// replica drops the cache at once (forgetBans); one made through another
+	// replica reaches it within the TTL, and the deciding replica has already
+	// pushed the new set to every relay.
+	bansMu   sync.Mutex
+	bans     []string
+	bansVer  int64
+	bansAt   time.Time
+	bansFull bool
+
+	// reached remembers when each relay was last recorded as reached, so a
+	// healthy relay's row is written at most once per reachedEvery instead of
+	// on every placement.
+	reachedMu sync.Mutex
+	reached   map[string]time.Time
+}
+
+// banCacheTTL bounds how stale the ban set this replica sends may be when
+// another replica made the decision.
+const banCacheTTL = 2 * time.Second
+
+// reachedEvery is how often a reachable relay's last_seen_at is refreshed.
+const reachedEvery = 30 * time.Second
+
+// cachedBans returns the ban set and its version, from the cache while fresh.
+func (h *ClusterServiceHandler) cachedBans(ctx context.Context) ([]string, int64, error) {
+	h.bansMu.Lock()
+	if h.bansFull && time.Since(h.bansAt) < banCacheTTL {
+		bans, v := h.bans, h.bansVer
+		h.bansMu.Unlock()
+		return bans, v, nil
+	}
+	h.bansMu.Unlock()
+	bans, v, err := h.Workers.Banned(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	h.bansMu.Lock()
+	h.bans, h.bansVer, h.bansAt, h.bansFull = bans, v, time.Now(), true
+	h.bansMu.Unlock()
+	return bans, v, nil
+}
+
+// forgetBans drops the cached ban set, after a decision through this replica.
+func (h *ClusterServiceHandler) forgetBans() {
+	h.bansMu.Lock()
+	h.bansFull = false
+	h.bansMu.Unlock()
 }
 
 func (h *ClusterServiceHandler) dialTimeout() time.Duration {

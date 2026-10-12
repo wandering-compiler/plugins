@@ -11,6 +11,13 @@ A reservation handle was an unguessable credential, but anyone holding it, for e
 - **Another caller's handle answers like a reservation the relay forgot.** A poll reads it as expired (`RESERVATION_UNKNOWN`), and a cancel succeeds without touching the place, so the answer does not confirm the handle was real.
 - **Handles minted by an earlier version** (two parts) are refused as malformed. Reservations are short-lived, so one in flight across the upgrade has to be made again.
 
+### Placement and polling cost less
+
+- **The ban set is cached for two seconds** instead of being read from the registry on every relay-bound call. A decision through a replica drops that replica's cache at once, and the replica pushes the new set to every relay.
+- **`Worker.state` is indexed.** The ban set is read by state, and worker rows are never deleted. Generate a migration as usual.
+- **A reachable relay's `last_seen_at` is written at most every 30 seconds,** not once per relay on every placement. A failure is still recorded every time, and the next success after it is recorded at once.
+
+
 ### Bans reach every relay, in order, and survive a relay restart
 
 Three gaps let a banned worker keep working or renewing:

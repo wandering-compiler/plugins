@@ -53,7 +53,7 @@ func (h *ClusterServiceHandler) withBans(ctx context.Context) (context.Context, 
 		return nil, status.Error(codes.FailedPrecondition,
 			"cluster: no worker registry is wired — the ban set cannot be sent to a relay")
 	}
-	bans, version, err := h.Workers.Banned(ctx)
+	bans, version, err := h.cachedBans(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err)
 	}

@@ -18,13 +18,14 @@ import (
 
 // workerStore is a registry in memory. Guarded: relays are polled in parallel.
 type workerStore struct {
-	mu         sync.Mutex
-	banned     []string
-	recorded   []string // "<relayID>:<fingerprint>"
-	enrolled   int
-	bannedErr  error
-	banVersion int64
-	decisions  []decision
+	mu          sync.Mutex
+	banned      []string
+	recorded    []string // "<relayID>:<fingerprint>"
+	enrolled    int
+	bannedErr   error
+	banVersion  int64
+	bannedCalls int
+	decisions   []decision
 }
 
 type decision struct {
@@ -36,6 +37,7 @@ type decision struct {
 func (w *workerStore) Banned(context.Context) ([]string, int64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.bannedCalls++
 	return w.banned, w.banVersion, w.bannedErr
 }
 func (w *workerStore) Record(_ context.Context, relayID string, k *pb.KnownWorker) error {

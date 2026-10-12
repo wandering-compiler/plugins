@@ -271,15 +271,28 @@ func (h *ClusterServiceHandler) proxyOne(
 // errors on purpose: this is bookkeeping for an operator reading a list, and a
 // scheduling decision must not fail because a cache write did.
 func (h *ClusterServiceHandler) note(ctx context.Context, r Relay, cause error) {
-	// A fresh context: `ctx` is usually already cancelled by the time a
-	// failure is being recorded, and a write on a dead context records
-	// nothing — which is exactly the case an operator most needs to see.
+	h.reachedMu.Lock()
+	delete(h.reached, r.ID) // the next success is recorded at once
+	h.reachedMu.Unlock()
 	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = h.Relays.RecordFailed(c, r.ID, cause.Error())
 }
 
 func (h *ClusterServiceHandler) noteOK(ctx context.Context, r Relay) {
+	// A healthy relay is reached on every placement; its row only needs to
+	// say so every reachedEvery, not once per call, so placements stop
+	// paying a registry write per relay.
+	h.reachedMu.Lock()
+	if last, ok := h.reached[r.ID]; ok && time.Since(last) < reachedEvery {
+		h.reachedMu.Unlock()
+		return
+	}
+	if h.reached == nil {
+		h.reached = map[string]time.Time{}
+	}
+	h.reached[r.ID] = time.Now()
+	h.reachedMu.Unlock()
 	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = h.Relays.RecordReached(c, r.ID)
