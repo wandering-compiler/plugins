@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -87,22 +88,46 @@ type workerRegistry struct {
 }
 
 func (s workerRegistry) Banned(ctx context.Context) ([]string, int64, error) {
-	// The version FIRST: a decision landing between the two reads then makes
-	// the set newer than its version, never older, and a relay keeps the
-	// newest version it saw.
+	// The version is read before AND after the set, and the pair is used only
+	// when the two agree. Read once before, a decision landing between the
+	// reads labelled the NEWER set with the OLD version; a relay accepts an
+	// equal version, so another replica's old set at that version could then
+	// replace it and lift a ban.
+	for attempt := 0; attempt < banReadAttempts; attempt++ {
+		before, err := s.banVersion(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		resp, err := s.q.FingerprintsByState(ctx, &pb.FingerprintsByStateReq{State: pb.WorkerState_WORKER_STATE_BANNED})
+		if err != nil {
+			return nil, 0, err
+		}
+		after, err := s.banVersion(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		if before == after {
+			return resp.GetFingerprints(), after, nil
+		}
+	}
+	return nil, 0, errBanSetUnsettled
+}
+
+// banReadAttempts bounds how many times Banned retries while decisions keep
+// landing between its reads.
+const banReadAttempts = 3
+
+var errBanSetUnsettled = errors.New("the ban set changed during every read; try again")
+
+func (s workerRegistry) banVersion(ctx context.Context) (int64, error) {
 	v, err := s.q.BanSetVersion(ctx, &pb.BanSetVersionReq{})
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
-	resp, err := s.q.FingerprintsByState(ctx, &pb.FingerprintsByStateReq{State: pb.WorkerState_WORKER_STATE_BANNED})
-	if err != nil {
-		return nil, 0, err
-	}
-	var version int64
 	if t := v.GetVersion(); t != nil {
-		version = t.AsTime().UnixNano()
+		return t.AsTime().UnixNano(), nil
 	}
-	return resp.GetFingerprints(), version, nil
+	return 0, nil
 }
 
 func (s workerRegistry) Record(ctx context.Context, relayID string, w *pb.KnownWorker) error {

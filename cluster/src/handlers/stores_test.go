@@ -42,6 +42,9 @@ type tablesServer struct {
 	unbans     []*pb.DecideWorkersReq
 	banned     []string
 	enrolled   int64
+	// duringSet runs inside FingerprintsByState: a decision landing between
+	// Banned's reads.
+	duringSet func(s *tablesServer)
 }
 
 func (s *tablesServer) ListRelays(_ context.Context, in *pb.ListRelaysReq) (*pb.ListRelaysResp, error) {
@@ -100,6 +103,9 @@ func (s *tablesServer) FingerprintsByState(_ context.Context, in *pb.Fingerprint
 	s.stateReqs = append(s.stateReqs, in.GetState())
 	if s.fail != nil {
 		return nil, s.fail
+	}
+	if s.duringSet != nil {
+		s.duringSet(s)
 	}
 	return &pb.FingerprintsByStateResp{Fingerprints: s.banned}, nil
 }
@@ -329,5 +335,37 @@ func TestWorkerStore_DecideRoutesBanAndUnban(t *testing.T) {
 	tb.fail = status.Error(codes.Internal, "constraint")
 	if err := workers.Decide(t.Context(), []string{"w-1"}, true, "op-7"); err == nil {
 		t.Error("a failed ban was reported as done")
+	}
+}
+
+// A decision landing between the reads must not label the newer set with the
+// older version: Banned reads again and returns the pair that agrees.
+func TestWorkerStore_BannedNeverPairsANewSetWithAnOldVersion(t *testing.T) {
+	v5, v6 := time.Unix(5, 0), time.Unix(6, 0)
+	tb := &tablesServer{banVersion: timestamppb.New(v5), banned: []string{"old"}}
+	tb.duringSet = func(s *tablesServer) {
+		s.banned, s.banVersion, s.duringSet = []string{"old", "new"}, timestamppb.New(v6), nil
+	}
+	_, workers := serveTables(t, tb)
+	set, version, err := workers.Banned(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != v6.UnixNano() || len(set) != 2 {
+		t.Errorf("Banned = %v @ %d, want both fingerprints at the newer version %d", set, version, v6.UnixNano())
+	}
+}
+
+// Decisions landing during every read end in an error, never a mislabelled pair.
+func TestWorkerStore_BannedGivesUpWhenTheSetNeverSettles(t *testing.T) {
+	n := int64(0)
+	tb := &tablesServer{banVersion: timestamppb.New(time.Unix(1, 0))}
+	tb.duringSet = func(s *tablesServer) {
+		n++
+		s.banVersion = timestamppb.New(time.Unix(1+n, 0))
+	}
+	_, workers := serveTables(t, tb)
+	if _, _, err := workers.Banned(t.Context()); err == nil {
+		t.Fatal("an unsettled ban set was returned")
 	}
 }
