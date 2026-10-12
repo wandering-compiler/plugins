@@ -503,6 +503,7 @@ suspected defect until a build of that feature combination confirms it.
 | `oauth/outbound-bounded` | Token and userinfo calls MUST time out (15 s) and MUST read at most 1 MiB. | Performance | none |
 | `oauth/indexed-lookups` | `OAuthProvider.name` (unique), `OAuthIdentity(provider_id, external_id)` (unique) and `OAuthIdentity.user_id` MUST be indexed. | Performance | none (schema) |
 | `oauth/redirect-base-configured` | The callback URL sent to the provider MUST come from configuration, not from a request header. | Failure & configuration | TestOAuthAuthorizeURL_BuildsRedirect (configured path only); not enforced when `oauth_redirect_base` is empty |
+| `oauth/provider-secret-encrypted` | A provider configured through `UpsertOAuthProvider` MUST store its secret only in the encrypted `secret` column, on creation and on every rewrite, and MUST leave no plaintext `client_secret`. The same request twice MUST leave one row. | Security | `TestUpsertOAuthProvider_WritesTheSecretEncryptedOnBothBranches` (the declaration). **Unit (mock) only:** a live test would upsert twice and read the row back: one row, ciphertext in `secret`, `client_secret` NULL, the secret decrypting to the second value. |
 
 **Gaps / suspected defects**
 
