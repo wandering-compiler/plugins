@@ -35,11 +35,6 @@ env:
     default: 5
     description: "Deadline for opening the management connection to one relay. Short on purpose: an unreachable relay must be skipped quickly enough that scheduling falls through to a healthy one rather than making the caller wait."
 
-  - name: ticket_ttl_seconds
-    type: int
-    default: 30
-    description: "How long a granted ticket stays claimable. This is TIME-TO-CLAIM, not time-to-run: it bounds the gap between 'the slot is yours' and the worker connection appearing, after which the relay takes the slot back. A job that has started is held by its connection and is not affected by this value."
-
 # No features yet.
 #
 # A `task_ledger` feature was declared here and REMOVED before it shipped: its
