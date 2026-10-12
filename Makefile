@@ -4,6 +4,7 @@
 #   make check PLUGIN=auth     everything, one plugin
 #   make test  PLUGIN=auth     just the Go tests
 #   make gen-pb PLUGIN=auth    regenerate a plugin's committed pb
+#   make release-pr PLUGIN=auth               open a plugin's release pull request (RELEASING.md)
 #   make release RELEASE=auth@v0.1.0-rc.17   cut a signed release (RELEASING.md)
 
 ALL_PLUGINS := $(patsubst %/plugin.yaml,%,$(wildcard */plugin.yaml))
@@ -17,7 +18,7 @@ RENDER_W17CTL = $$(tools/w17ctl.sh)
 # repository's config. `go run` builds it once into the Go build cache.
 GOLANGCI = $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(shell tr -d ' \n' < $(CURDIR)/tools/golangci-version) run --config $(CURDIR)/tools/golangci.yml
 
-.PHONY: check plugins-exist test vet fmt gen-pb check-gen-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release
+.PHONY: check plugins-exist test vet fmt gen-pb check-gen-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release release-pr
 
 check: fmt vet lint test check-modules check-stage check-plugin-msgids check-gen-pb check-render check-published-tests check-refs check-names check-tools check-versions
 
@@ -160,3 +161,8 @@ check-versions:
 
 release:
 	@tools/release.sh $(RELEASE)
+
+# Open the pull request that releases one plugin: its version, and its
+# changelog collected from <plugin>/changes/ (tools/release-pr.sh).
+release-pr:
+	@tools/release-pr.sh $(PLUGIN)

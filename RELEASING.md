@@ -1,12 +1,38 @@
 # Releasing a plugin
 
-A release is cut by hand from `main` as merged:
+## Changelog fragments
 
-1. **Bump the version** in `<plugin>/plugin.yaml`, in a pull request, and merge it.
-   Every plugin is on one version line, `v0.1.0-rc.N`: only the rc counter moves —
-   a break is a new rc, not a new minor. `make check` and `tools/release.sh` refuse
-   anything else.
-2. **Cut the release** from an up-to-date, clean `main`:
+A pull request that changes a plugin says what changed for the plugin's users
+in a **fragment**: `<plugin>/changes/<name>.md`, starting with a `### ` heading,
+a few lines under it. Pull requests never edit `CHANGELOG.md` itself, so they
+never conflict over it. CI (`tools/check-changelog.sh`) refuses a pull request
+that changes a plugin without a fragment, unless it carries the `no-changelog`
+label (tests, comments: nothing a user of the plugin can notice). A fragment
+sits directly in `changes/`, ends in `.md` and does not start with a dot;
+anything else is never collected.
+A release pull request (branch `release/<plugin>-v0.1.0-rc.N`) is exempt only
+in the shape `tools/release-pr.sh` gives it: the manifest says that version, and
+it changes the version in `plugin.yaml`, `CHANGELOG.md`, and deletes fragments,
+nothing else.
+
+## Cutting a release
+
+1. **Open the release pull request** from an up-to-date, clean `main`:
+
+   ```sh
+   git switch main && git pull
+   make release-pr PLUGIN=auth
+   ```
+
+   `tools/release-pr.sh` picks the version: the manifest's when no tag carries
+   it yet, otherwise the next rc after the newest tag. Every plugin is on one
+   version line, `v0.1.0-rc.N`: only the rc counter moves; a break is a new rc,
+   not a new minor. The pull request sets the version in `plugin.yaml`,
+   collects the fragments into `CHANGELOG.md` under `## <version>` (an
+   `## Unreleased` section becomes it), and deletes the fragments. Merging it
+   is the release decision. `DRY_RUN=1` prepares the commit on the local
+   branch and pushes nothing; delete the branch afterwards.
+2. **Cut the release** from `main` with that merge:
 
    ```sh
    git switch main && git pull
@@ -16,6 +42,9 @@ A release is cut by hand from `main` as merged:
 `tools/release.sh` refuses unless:
 - the version is `v0.1.0-rc.N`;
 - the manifest says that version;
+- `CHANGELOG.md` starts with that version's section and `<plugin>/changes/`
+  holds no fragment (one merged after the release pull request would ship
+  unlisted: open the release pull request again);
 - `HEAD` is `origin/main`;
 - the tag does not exist yet.
 

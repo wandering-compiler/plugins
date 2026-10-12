@@ -45,6 +45,14 @@ requires. An SDK too old to ship the vocabulary falls back to the version in
 releases and the checks never use whatever `w17ctl` is on your PATH. Bump the
 pin in a pull request.
 
+## Changelog
+
+A pull request that changes a plugin adds `<plugin>/changes/<name>.md`: a
+`### ` heading naming the change and a few lines on what a user of the plugin
+has to know. Do not edit `CHANGELOG.md`; the release collects the fragments
+(RELEASING.md). A change nobody using the plugin can notice (tests, comments)
+takes the `no-changelog` label instead.
+
 ## Tests
 
 A plugin is the part of w17 other people's projects run, so its tests are the
