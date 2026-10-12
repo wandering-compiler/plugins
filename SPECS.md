@@ -7,9 +7,9 @@ they are measured against it. A plugin without one is not finished.
 | plugin | specification |
 |---|---|
 | auth | [auth/SPEC.md](auth/SPEC.md) |
-| payment | not yet |
-| agent | not yet |
-| cluster | not yet |
+| payment | [payment/SPEC.md](payment/SPEC.md) |
+| agent | [agent/SPEC.md](agent/SPEC.md) |
+| cluster | [cluster/SPEC.md](cluster/SPEC.md) |
 
 ## What a specification contains
 
