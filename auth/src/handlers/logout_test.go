@@ -148,12 +148,11 @@ func TestResolvePrincipalRealmAware_ReturnsTokenID(t *testing.T) {
 }
 
 // An API-token bearer must resolve with an EMPTY session_token_id, so Logout
-// (which deletes the session_token_id) NO-OPs for them. Otherwise it deletes
-// the API TOKEN itself — DeleteSessionToken's DQL drops the token_type filter
-// (the column is api_token-gated), so an id+user_id match revokes the API token
-// by mistake, a credential that should only be removed via RevokeApiToken. The
-// Logout docstring already promises an API-token bearer "still gets a clean
-// success".
+// (which deletes the session_token_id) refuses them with FailedPrecondition and
+// deletes nothing. Otherwise it deletes the API TOKEN itself —
+// DeleteSessionToken's DQL drops the token_type filter (the column is
+// api_token-gated), so an id+user_id match revokes the API token by mistake, a
+// credential that should only be removed via RevokeApiToken.
 func TestResolvePrincipalRealmAware_ApiTokenHasNoSessionID(t *testing.T) {
 	m := &apiTokenQueryMock{
 		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "api-7", TokenType: pb.TokenType_TOKEN_TYPE_API},
@@ -170,6 +169,6 @@ func TestResolvePrincipalRealmAware_ApiTokenHasNoSessionID(t *testing.T) {
 		t.Errorf("user = %q, want u1", uid)
 	}
 	if tokID != "" {
-		t.Errorf("API-token session_token_id = %q, want \"\" (Logout must no-op for API tokens, not revoke them)", tokID)
+		t.Errorf("API-token session_token_id = %q, want \"\" (Logout must refuse API tokens, not revoke them)", tokID)
 	}
 }

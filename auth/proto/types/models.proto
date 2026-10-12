@@ -1163,9 +1163,8 @@ message OrgInvite {
   google.protobuf.Timestamp created_at  = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   // sha256 hex of the single-use token that IS the invitation link.
   //
-  // The same shape `PasswordResetToken` and `EmailVerificationToken` carry, and a
-  // consumer put the reason best: that shape existed twice in this plugin and not
-  // where it was needed. Only the hash is stored; the plaintext is returned to the
+  // The same shape `PasswordResetToken` and `EmailVerificationToken` carry: it
+  // existed twice in this plugin and not where it was needed. Only the hash is stored; the plaintext is returned to the
   // INVITER once, because here the sender is the delivery channel — unlike a
   // password reset, where the token goes to the mailbox and never to a caller.
   //
@@ -1174,7 +1173,7 @@ message OrgInvite {
   // meaning the same thing is two names for one state, and they drift.
   string token_hash = 9 [(w17.field) = { type: CHAR, max_len: 128, unique: true }];
   // Consumer-owned, OPAQUE. Whatever the caller needs paired with this invitation —
-  // the reported case is "a tenant and one object in our own engine", so that
+  // for example a tenant and one object in the caller's own system, so that
   // accepting an invitation pairs both at once instead of joining a side table on
   // the e-mail address, which is the weak key this whole change is about.
   //

@@ -500,8 +500,8 @@ func (q signInBotQuery) GetUserByEmail(_ context.Context, in *pb.GetUserByEmailR
 func TestSignIn_RefusesAMachineAccountThatHasAPassword(t *testing.T) {
 	// A REAL, verifiable hash: the whole point is that the refusal does not
 	// depend on a bot's password being unusable. A bot that went through
-	// `password_change` has a working one, and that is the case the claim we
-	// made to a consumer is about.
+	// `password_change` has a working one, and that is the case the documented
+	// refusal is about.
 	s := passwordhash.DefaultSettings()
 	hash, err := s.Hash("correct-horse")
 	if err != nil {
@@ -563,7 +563,7 @@ func TestSignIn_RefusesAMachineAccountThatHasAPassword(t *testing.T) {
 // subset the resolver reads `all_permissions` (applyTokenSubset only narrows a
 // non-empty one), so the credential left behind is WIDER than the one the
 // caller asked for — and the caller got an error and believes nothing
-// happened. That is a consumer's sharpest case.
+// happened. That is the sharpest case for a caller.
 type narrowingMint struct {
 	pb.AuthMutationClient
 	issued    bool

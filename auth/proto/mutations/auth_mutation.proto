@@ -2208,7 +2208,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.User SET "
           "email = :email, "
-          // ⚠️ a consumer. `email_verified_at` records only THAT something was
+          // ⚠️ `email_verified_at` records only THAT something was
           // verified, never WHICH address — so a verified account whose email
           // was changed stayed "verified" for an address it had never proved.
           // That walks straight through the invite gate the flag exists for:

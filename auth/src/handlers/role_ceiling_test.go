@@ -62,7 +62,7 @@ func TestRoleWithinCeiling(t *testing.T) {
 	}
 }
 
-// The reported hole: anyone who may invite could invite at org-admin. Refused
+// The hole this closes: anyone who may invite could invite at org-admin. Refused
 // BEFORE anything is written — the catalogue mock has no mutation client, so a
 // write would panic rather than pass.
 func TestInviteToOrg_RefusesARoleAboveTheInviter(t *testing.T) {

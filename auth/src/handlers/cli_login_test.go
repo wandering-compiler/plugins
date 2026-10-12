@@ -562,7 +562,7 @@ func TestCliAuthorize_RefusesARowThatIsNotTheOneItAskedFor(t *testing.T) {
 	}
 }
 
-// --- a consumer addendum: state, and https on the authorize path ------------
+// --- state, and https on the authorize path --------------------------------
 
 // state is the client's anti-CSRF value and the server's only job is to hand
 // it back. PKCE does not cover what it covers: an attacker who walks a victim

@@ -66,8 +66,8 @@ var errMfaChallengeInvalid = errors.New("mfa challenge invalid/expired/consumed"
 // spent. It is a wireError — a DELIBERATE, non-opaque answer — because it is
 // only reachable AFTER the password verified, so saying what happened tells
 // an attacker nothing the credential did not already buy. The opaque
-// "invalid credentials" here would be a lie of the same shape a consumer
-// objected to: it sends a user whose password is fine to go reset it.
+// "invalid credentials" here would be a lie: it sends a user whose password
+// is fine to go reset it.
 var errMfaChallengeBudget = &wireError{
 	code: codes.ResourceExhausted,
 	msg:  "too many verification codes requested for this account — wait a few minutes and sign in again",

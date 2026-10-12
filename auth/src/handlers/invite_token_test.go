@@ -418,8 +418,7 @@ func (m *signupTokenMock) ConsumeOrgInviteByToken(_ context.Context, _ *pb.Consu
 //
 // `invite_only` asks "was THIS ADDRESS invited?" and an OPEN invitation names no
 // address, so the address lookup can never find it — which refused every holder of
-// an open link, in the DEFAULT configuration (`invite_only` defaults on). Found by
-// review rather than by a consumer, which is the only reason it is not a report.
+// an open link, in the DEFAULT configuration (`invite_only` defaults on).
 func TestSignupInviteGate_AnOpenLinkAdmitsAnyAddress(t *testing.T) {
 	m := &signupTokenMock{pendingEmail: ""} // open invitation, nobody invited by address
 	h := &AuthServiceHandler{Query: m, Mutation: m, InviteOnly: true}

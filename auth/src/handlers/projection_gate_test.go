@@ -60,8 +60,7 @@ func TestEveryUserProjectionFillsTheFieldsItsGatesRead(t *testing.T) {
 	}
 }
 
-// The same rule for `email_verified_at`, which is a consumer and the THIRD
-// instance of this shape.
+// The same rule for `email_verified_at`, the THIRD instance of this shape.
 //
 // Named lookups rather than every User-filling query, because unlike `kind` this
 // field has exactly two readers and demanding it everywhere would be a rule

@@ -2922,9 +2922,8 @@ type OrgInvite struct {
 	CreatedAt  *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// sha256 hex of the single-use token that IS the invitation link.
 	//
-	// The same shape `PasswordResetToken` and `EmailVerificationToken` carry, and a
-	// consumer put the reason best: that shape existed twice in this plugin and not
-	// where it was needed. Only the hash is stored; the plaintext is returned to the
+	// The same shape `PasswordResetToken` and `EmailVerificationToken` carry: it
+	// existed twice in this plugin and not where it was needed. Only the hash is stored; the plaintext is returned to the
 	// INVITER once, because here the sender is the delivery channel — unlike a
 	// password reset, where the token goes to the mailbox and never to a caller.
 	//
@@ -2933,7 +2932,7 @@ type OrgInvite struct {
 	// meaning the same thing is two names for one state, and they drift.
 	TokenHash string `protobuf:"bytes,9,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"`
 	// Consumer-owned, OPAQUE. Whatever the caller needs paired with this invitation —
-	// the reported case is "a tenant and one object in our own engine", so that
+	// for example a tenant and one object in the caller's own system, so that
 	// accepting an invitation pairs both at once instead of joining a side table on
 	// the e-mail address, which is the weak key this whole change is about.
 	//

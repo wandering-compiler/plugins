@@ -53,8 +53,8 @@ func init() {
 	// none of them could say which organization an answer belonged to: the
 	// active org travels in a HEADER, so a response carries no trace of it.
 	// The UI therefore answered "which org is this" from its own memory — the
-	// module-level state whose staleness produced a reported data-leak scare
-	// and a 401-on-every-screen bug in one day.
+	// module-level state that, once stale, can show one organization's data
+	// under another's name and fail every screen with a 401.
 	//
 	// Installed here rather than written into the base handler because both
 	// the fields and the queries behind them exist only under org_membership.

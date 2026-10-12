@@ -1111,14 +1111,14 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 		// zero-row delete as success. This is "I was not told which one", and
 		// answering OK to that is a claim that is not true.
 		//
-		// What it cost: a consumer wrapped Logout in their own facade whose
-		// VerifyRes carried fields 1-3 (the trio our docs name as the shared
-		// contract) and not field 4. Every sign-out returned 200, the UI said
-		// "signed out", the app dropped the cookie — and the token kept working
-		// until it expired. They caught it only because their check took the
-		// token BEFORE signing out and tried it after; a check on the status
-		// code passes. On a shared or stolen machine that is the difference
-		// between logged out and logged in without it showing.
+		// What an OK would cost: a facade wrapping Logout whose VerifyRes
+		// carries fields 1-3 (the trio documented as the shared contract) and
+		// not field 4 answers every sign-out 200, the UI says "signed out", the
+		// app drops the cookie — and the token keeps working until it expires.
+		// Only a check that takes the token BEFORE signing out and tries it
+		// after sees that; a check on the status code passes. On a shared or
+		// stolen machine that is the difference between logged out and logged
+		// in without it showing.
 		//
 		// The envelope cannot tell the two blank cases apart — AuthResp carries
 		// no token type — so the refusal names both. An API-token bearer has no

@@ -224,7 +224,7 @@ func (h *AuthServiceHandler) callerEmail(ctx context.Context, userID string) (st
 //
 // ORG-SCOPED ONLY. A realm role reaches every organization, so it is not an
 // org admin's to hand out; filtering here rather than in the caller means a
-// second consumer cannot forget to.
+// second caller cannot forget to.
 func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.ListAssignableRolesReq) (*pb.ListAssignableRolesResp, error) {
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err

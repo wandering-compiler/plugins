@@ -745,8 +745,8 @@ message InviteToOrgReq {
   // grant instead of a label with nothing behind it.
   string role  = 2 [(w17.field) = { type: SLUG, max_len: 100 }];
   // Opaque, consumer-owned, and the reason this field exists: the caller pins
-  // whatever their own system needs paired with this invitation — the reported case
-  // is a tenant plus one object in their engine — and gets it back at acceptance out
+  // whatever their own system needs paired with this invitation — for example a
+  // tenant plus one object in their engine — and gets it back at acceptance out
   // of the same statement that spends the invitation. See OrgInvite.metadata.
   string metadata = 3 [(w17.field) = { type: JSON, blank: true }];
   // org — the organization's slug, as the REST path names it

@@ -3555,8 +3555,8 @@ type InviteToOrgReq struct {
 	// grant instead of a label with nothing behind it.
 	Role string `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
 	// Opaque, consumer-owned, and the reason this field exists: the caller pins
-	// whatever their own system needs paired with this invitation — the reported case
-	// is a tenant plus one object in their engine — and gets it back at acceptance out
+	// whatever their own system needs paired with this invitation — for example a
+	// tenant plus one object in their engine — and gets it back at acceptance out
 	// of the same statement that spends the invitation. See OrgInvite.metadata.
 	Metadata string `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// org — the organization's slug, as the REST path names it
