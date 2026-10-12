@@ -2,20 +2,15 @@
 //
 // # Provenance
 //
-// Ported from a sibling project of ours, which has run this
-// in production. The parameter shaping, the reasoning-family table and the
-// status handling are theirs, and the comments explaining WHY each one is the
-// way it is were kept — a threshold whose reason is lost is a number nobody
-// can safely change.
-//
-// Their copy carries a note beside the family table saying it is "a deliberate
-// fork … the fix when a second domain needs it is a shared package". This is
-// that package.
+// The parameter shaping, the reasoning-family table and the status handling
+// come from code that has run in production, and the comments explaining WHY
+// each one is the way it is were kept — a threshold whose reason is lost is a
+// number nobody can safely change.
 //
 // # Why the Responses API and not Chat Completions
 //
-// Because Chat Completions does not stream. Measured on their side, four runs,
-// same prompt and deployment with only the URL changing: `chat/completions`
+// Because Chat Completions does not stream. Measured over four runs, same
+// prompt and deployment with only the URL changing: `chat/completions`
 // delivers the whole answer in 0.06–0.10 s after several seconds of silence,
 // while `responses` delivers it over 2.6–4.7 s, as it is written. CompleteStream
 // streams, and Chat Completions could not serve it.

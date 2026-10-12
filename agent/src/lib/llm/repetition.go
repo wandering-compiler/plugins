@@ -1,10 +1,8 @@
 // The stuck-model guard: a stream whose tail has gone periodic is cut off.
 //
-// Ported from a sibling project of ours, which in turn
-// ported it from a predecessor that had run it in production since before that
-// package existed. The constants are its constants, and their test feeds real
-// answers rather than invented ones — a threshold nobody has watched fire is a
-// guess, and this one is not.
+// It has run in production in this form. The constants are the ones it ran
+// with, and its test feeds real answers rather than invented ones — a
+// threshold nobody has watched fire is a guess, and this one is not.
 //
 // # What it is for
 //
