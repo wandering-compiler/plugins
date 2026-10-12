@@ -78,6 +78,16 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		h.recordUsage(req, m.ID, spentOn(out, err), OutcomeFailed, startedAt)
+		// The caller hanging up, or its own deadline passing, is not the
+		// model failing: answered with the caller's own Canceled or
+		// DeadlineExceeded and not logged, as CompleteStream and RunAgent do
+		// (callerLeft). This path alone said Unavailable and blamed the
+		// provider in the log, so a caller retrying on Unavailable retried
+		// its own timeout. Still recorded above: what the provider produced
+		// before the hang-up was paid for.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, status.FromContextError(ctxErr).Err()
+		}
 		// The provider's own text is NOT forwarded whole: it renders the
 		// deployment URL and, on some failures, fragments of the prompt, and
 		// neither belongs in an answer travelling back to whoever asked.

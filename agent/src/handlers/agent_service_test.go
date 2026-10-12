@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v2/option"
 	"github.com/openai/openai-go/v2/responses"
@@ -152,4 +153,41 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// The caller hanging up, or its own deadline passing, comes back as the
+// caller's own code — not as the model failing — and is still billed.
+func TestComplete_CallerEndingIsNotAModelFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ctx    func() (context.Context, context.CancelFunc)
+		want   codes.Code
+		ctxErr error
+	}{
+		{"cancelled", func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, codes.Canceled, context.Canceled},
+		{"deadline", func() (context.Context, context.CancelFunc) {
+			return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		}, codes.DeadlineExceeded, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := tc.ctx()
+			cancel()
+			sink := &capturingSink{}
+			h := &AgentServiceHandler{
+				Client:       &fakeCompleter{err: tc.ctxErr},
+				Usage:        sink,
+				DefaultModel: "gpt-4o", DefaultMaxTokens: 10,
+			}
+			_, err := h.Complete(ctx, &pb.CompleteReq{})
+			if got := status.Code(err); got != tc.want {
+				t.Fatalf("code = %v, want %v (err %v)", got, tc.want, err)
+			}
+			if contains(status.Convert(err).Message(), "model call failed") {
+				t.Errorf("the caller's own ending is blamed on the model: %v", err)
+			}
+			if len(sink.events) != 1 || sink.events[0].Status != OutcomeFailed {
+				t.Errorf("usage rows = %+v, want one failed row", sink.events)
+			}
+		})
+	}
 }

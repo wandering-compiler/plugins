@@ -131,6 +131,10 @@ func TestNewClient_RefusesAnIncompleteConfig(t *testing.T) {
 		{"blank endpoint", func(c *Config) { c.Endpoint = "   " }, "no endpoint"},
 		{"blank key", func(c *Config) { c.APIKey = " \t" }, "no api key"},
 		{"blank api version", func(c *Config) { c.APIVersion = "" }, "no api version"},
+		{"plain http endpoint", func(c *Config) { c.Endpoint = "http://acme.example.com" }, "clear text"},
+		{"plain http to a private address", func(c *Config) { c.Endpoint = "http://10.0.0.7:8080" }, "clear text"},
+		{"another scheme", func(c *Config) { c.Endpoint = "ftp://acme.example.com" }, "not https"},
+		{"no host", func(c *Config) { c.Endpoint = "acme.example.com" }, "not an absolute URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := ok
@@ -148,6 +152,15 @@ func TestNewClient_RefusesAnIncompleteConfig(t *testing.T) {
 				t.Errorf("the refusal carries a placeholder: %q", err)
 			}
 		})
+	}
+
+	// Plain http is fine when the key never leaves the machine.
+	for _, endpoint := range []string{"http://localhost:8080", "http://127.0.0.1:9", "http://[::1]:9", "HTTPS://acme.example.com"} {
+		cfg := ok
+		cfg.Endpoint = endpoint
+		if _, err := NewClient(cfg); err != nil {
+			t.Errorf("endpoint %q refused: %v", endpoint, err)
+		}
 	}
 
 	// The default provider and a differently-cased one are the same provider.

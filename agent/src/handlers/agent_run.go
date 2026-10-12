@@ -103,36 +103,36 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		tools = append(tools, &remoteTool{spec: spec, send: send, pending: pending})
 	}
 
-	runStartedAt := time.Now()
 	model := h.modelForSpec(start.GetModel())
 	out, runErr := llm.Run(srv.Context(), h.StreamClient,
 		model, start.GetInstructions(),
 		messagesFrom(start.GetMessages()), tools, limitsFrom(start.GetLimits()),
-		func(e llm.RunEvent) error { return sendRunEvent(send, e) })
+		func(e llm.RunEvent) error {
+			if t := e.TurnSpent; t != nil {
+				// One row per model call, written as the call ends — the
+				// contract on RunAgentReq.Start. This used to be ONE row per
+				// run carrying the sum of every turn: a consumer counting rows
+				// as calls under-counted, and the whole run was priced at the
+				// price in force when it started.
+				//
+				// Every sent turn gets its row, the caller hanging up
+				// included: what was spent before the hang-up was paid for
+				// whether or not anyone is left to hear about it.
+				h.recordUsageFor(start.GetUsageScope(), start.GetUsageLabels(),
+					model.ID, &llm.Completion{Usage: t.Usage, Status: t.Status}, turnOutcome(t), t.StartedAt)
+				return nil
+			}
+			return sendRunEvent(send, e)
+		})
 
 	// ⚠️ A request the LLM layer refused BEFORE calling the provider is not a
-	// failed call: no tokens were spent and nothing was unavailable, so
-	// recording a usage row invents spend and the error sends the caller to the
-	// provider's status page for what is an invalid argument. A consumer
-	// reported exactly that, and the fix landed on the two unary paths
-	// (agent_service.go, agent_stream.go) and missed here — the tool-calling
-	// path, which is the one that reaches the provider most often.
-	//
-	// Before recordUsageFor, not after: the point is that no row is written.
+	// failed call: no tokens were spent and nothing was unavailable, so the
+	// error must not send the caller to the provider's status page for what is
+	// an invalid argument. No usage row was written for it: the loop reports
+	// only turns it sent.
 	if llm.IsPreflight(runErr) {
 		return status.Error(codes.InvalidArgument, runErr.Error())
 	}
-
-	// One row for the run's model spend. The loop's own turns are not
-	// separately visible here — `out.Usage` is what the run reports in total —
-	// so this records what the plugin can actually observe rather than
-	// inventing per-turn numbers it does not have.
-	//
-	// Recorded on EVERY ending, the caller hanging up included: what the turns
-	// before the hang-up spent was paid for whether or not anyone is left to
-	// hear about it.
-	h.recordUsageFor(start.GetUsageScope(), start.GetUsageLabels(),
-		model.ID, spentOn(out, runErr), runOutcome(runErr, out), runStartedAt)
 
 	// Read BEFORE the belt-and-braces failAll below, which would otherwise be
 	// the first error the pending set holds.

@@ -18,6 +18,13 @@
 - **The last turn applies nothing.** It offers no tools. Calls a provider returns on it anyway are no longer run, and the run ends with the turn limit as before.
 - **A `params_schema` that is not a JSON object is refused before the first turn.** It used to be replaced by `{"type":"object"}`, offering the tool with no argument contract.
 
+### Usage, streams and the endpoint
+
+- **`RunAgent` writes one usage row per turn it sent,** as the contract on `RunAgentReq.Start` always said. It wrote one row per run carrying the sum, so counting rows under-counted calls and the whole run was priced at the price in force when it started. Each row now carries its own turn's tokens, outcome and start time: a turn that finished is OK even if the run failed later. A run that sent nothing writes no row. `Finished.usage` is still the run's total.
+- **`Complete` answers a caller that left with the caller's own code.** When the caller cancels or its deadline passes, the call ends `Canceled` or `DeadlineExceeded`, as `CompleteStream` and `RunAgent` already did. It used to answer `Unavailable` and log a model failure. What was spent is still recorded.
+- **The stream output ceiling follows the token budget.** The streaming paths stopped any answer, or tool-call arguments, past 20 000 bytes, whatever `max_tokens` said, so an answer `Complete` returned in full failed half way on `CompleteStream`. The ceiling is now 8 bytes per budgeted token, never below 20 000 bytes. A call with no budget (`max_tokens < 0`) keeps 20 000 bytes. `ModelSpec.max_tokens` states it.
+- **A plain-`http` endpoint is refused at boot** unless its host is loopback. Every request carries the API key, which plain http sends in clear text. An endpoint that is not an absolute URL is refused too.
+
 ## 0.1.0-rc.5
 
 Dependencies only: `golang.org/x/net` v0.60.0, which fixes GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603, together with `golang.org/x/sync`, `x/crypto`, `x/sys` and `x/text`. Nothing in the plugin's behaviour changes. Take it with `w17ctl plugin update agent`.

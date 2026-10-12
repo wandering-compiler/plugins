@@ -174,16 +174,16 @@ func spentOn(out *llm.Completion, err error) *llm.Completion {
 	return nil
 }
 
-// runOutcome maps a run's ending onto the recorded status.
+// turnOutcome maps one sent turn's ending onto the recorded status.
 //
-// A run that errored is FAILED; one that ended without a terminal status — the
+// A turn that errored is FAILED; one that ended without a terminal status — the
 // repetition guard cut it short — is UNKNOWN rather than OK, because what it
 // spent is exactly what nobody can state.
-func runOutcome(runErr error, out *llm.Completion) CallOutcome {
+func turnOutcome(t *llm.TurnSpend) CallOutcome {
 	switch {
-	case runErr != nil:
+	case t.Failed:
 		return OutcomeFailed
-	case out == nil || out.Status == "":
+	case t.Status == "":
 		return OutcomeUnknown
 	default:
 		return OutcomeOK

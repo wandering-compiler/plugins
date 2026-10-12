@@ -63,19 +63,19 @@ which.
 
 | # | finding | invariants | where |
 |---|---|---|---|
-| 1 | The unary `Complete` path has no "caller left" branch. When the caller cancels or its own deadline passes, the error is recorded as a failed call, logged as `model call failed`, and answered `Unavailable` with "the model call failed". `CompleteStream` and `RunAgent` return the caller's own `Canceled` / `DeadlineExceeded` instead. An operator reading the log blames the provider, and a caller that retries on `Unavailable` retries its own timeout. | `base/caller-ending-is-not-a-model-failure` | `src/handlers/agent_service.go` (`Complete`) |
+| 1 | **Fixed.** The unary `Complete` path has no "caller left" branch. When the caller cancels or its own deadline passes, the error is recorded as a failed call, logged as `model call failed`, and answered `Unavailable` with "the model call failed". `CompleteStream` and `RunAgent` return the caller's own `Canceled` / `DeadlineExceeded` instead. An operator reading the log blames the provider, and a caller that retries on `Unavailable` retries its own timeout. | `base/caller-ending-is-not-a-model-failure` | `src/handlers/agent_service.go` (`Complete`) |
 | 2 | **Fixed.** `Limits.tool_timeout_seconds` is ignored. `limitsFrom` copies only turns, tool calls and parallelism, `llm.Limits` has no timeout field, and `remoteTool.Call` waits for the result on the run's context alone. A caller that never answers a `ToolCall` holds the run open (and its turns already paid for) until the caller's own context ends. The wire contract promises that a slow tool "fails ALONE". | `base/run-tool-timeout` | `src/handlers/agent_run.go` (`limitsFrom`, `remoteTool.Call`), `src/lib/llm/tool.go` (`Limits`) |
 | 3 | **Fixed.** `ToolSpec.activity` is never read. `Activity.text` is the tool **name** the model emitted, which for an undeclared tool is a model-invented string, although the contract says it is the declared, display-ready `activity`. `Activity.activity_id` is the provider's call id while `ToolCall.call_id` is a fresh UUID, so a watcher cannot correlate an activity with the tool call it brackets. A test pins the name behaviour. | `base/run-activity-display-safe` | `src/handlers/agent_run.go` (`sendRunEvent`) |
-| 4 | `RunAgent` writes **one** usage row per run, carrying the sum of every turn. The published contract on `RunAgentReq.Start` says each turn "is recorded as its own row". Code and tests agree on one row; the contract text is wrong, or the code is. A consumer that counts rows as model calls under-counts, and a run is priced at the price in force when it **started**. | `interaction/base-usage_persistence-run-one-row` | `src/handlers/agent_run.go` (`RunAgent`, `recordUsageFor`), `proto/business/agent_service.proto` (`RunAgentReq.Start`) |
+| 4 | **Fixed** (the code now matches the contract: one row per sent turn). `RunAgent` writes **one** usage row per run, carrying the sum of every turn. The published contract on `RunAgentReq.Start` says each turn "is recorded as its own row". Code and tests agree on one row; the contract text is wrong, or the code is. A consumer that counts rows as model calls under-counts, and a run is priced at the price in force when it **started**. | `interaction/base-usage_persistence-run-row-per-turn` | `src/handlers/agent_run.go` (`RunAgent`, `recordUsageFor`), `proto/business/agent_service.proto` (`RunAgentReq.Start`) |
 | 5 | **Fixed.** `RunAgent`'s `Finished.text` is the **last turn's** text only (`answer := *res`). Text the model streamed in an earlier turn, alongside its tool calls, reached the reader as deltas but is missing from `Finished.text`, which the contract defines as "every delta concatenated, and what the reader was actually shown". A consumer that persists only `Finished.text` stores less than the end user saw. | `base/run-finished-text-is-what-was-shown` | `src/lib/llm/loop.go` (`Run`) |
 | 6 | **Fixed.** The last permitted turn offers no tools, but if the provider still returns function calls on it, `Run` dispatches them, including mutating ones, and then ends with `ErrTurnsExhausted`. The writes are applied and the model never reads their results, which is exactly what offering no tools was meant to prevent. | `base/run-last-turn-applies-nothing` | `src/lib/llm/loop.go` (`Run`) |
-| 7 | Both streaming paths refuse any answer longer than 20 000 bytes of text (or of tool arguments) with `ResourceExhausted`, whatever `ModelSpec.max_tokens` says, including `< 0` ("no cap"). Unary `Complete` has no such limit. The same request therefore succeeds on `Complete` and fails on `CompleteStream`, and the wire contract mentions neither the limit nor the difference. | `base/stream-output-ceiling-stated` | `src/lib/llm/stream.go` (`maxStreamOutput`, `streamTurn`) |
+| 7 | **Fixed** (the ceiling now follows the budget, and the contract states it). Both streaming paths refuse any answer longer than 20 000 bytes of text (or of tool arguments) with `ResourceExhausted`, whatever `ModelSpec.max_tokens` says, including `< 0` ("no cap"). Unary `Complete` has no such limit. The same request therefore succeeds on `Complete` and fails on `CompleteStream`, and the wire contract mentions neither the limit nor the difference. | `base/stream-output-ceiling-stated` | `src/lib/llm/stream.go` (`maxStreamOutput`, `streamTurn`) |
 | 8 | **Fixed.** A `ToolSpec.params_schema` that is not valid JSON (or not a JSON object) is silently replaced by `{"type":"object"}`. The tool is offered with no argument contract, so the model may send anything. Tool names are refused up front as preflight; schemas are not. | `base/run-tool-list-validated` | `src/handlers/agent_run.go` (`remoteTool.Params`), `src/lib/llm/loop.go` (`toolParams`) |
 | 9 | **Fixed.** A `usage_scope` longer than the 128-character `Scope.external_id` column is accepted, served and never billed. No `Scope` row can hold it, so no limit can be set on it; the limiter's `InternScope` fails and the limiter fails open; at flush, the row cannot be written and the spend is lost (counted, and logged once per batch). Nothing validates the scope length at request time. A caller that derives scopes from long principal ids therefore runs unrecorded and uncappable. | `usage_persistence/scope-validated-at-request` | `src/handlers/limits_enabled.go` (`Allow`, `scopeID`), `src/handlers/usage_enabled.go` (`flushOne`) |
 | 10 | **Fixed.** Only the `MONTH` window is enforced. `SetScopeLimit` accepts `DAY` and `TOTAL` limits, `GetScopeLimit` reads them, and `Allow` never asks for them: a daily or lifetime cap enforces nothing and nothing says so. | `usage_persistence/limit-windows-enforced-or-refused` | `src/handlers/limits_enabled.go` (`Allow`) |
 | 11 | **Fixed.** Spend on a model with no price row contributes nothing to the cap (`totalSpend`: cost absent with `priced_calls = 0`). A capped scope that uses only unpriced models is never refused, however many tokens it spends. | `usage_persistence/cap-not-bypassable` | `src/handlers/limits_enabled.go` (`totalSpend`) |
 | 12 | **Fixed.** The limiter has no boot guard. With `usage_persistence` on and either `UsageQuery` or `UsageMutation` missing from the client set, `newLimiter` silently installs the allow-all limiter. The usage sink has `VerifyUsageWiring` for exactly this drift; the limiter has nothing, so every cap is off with no error. | `usage_persistence/limiter-wiring-verified` | `src/handlers/limits_enabled.go` (`init`), `src/plugin.go` (`RegisterPlugin`) |
-| 13 | `endpoint` is checked only for being non-empty. An `http://` endpoint is accepted, and every request then sends the provider API key in clear text. | `agent/api-key-only-over-tls` | `src/lib/llm/client.go` (`NewClient`) |
+| 13 | **Fixed.** `endpoint` is checked only for being non-empty. An `http://` endpoint is accepted, and every request then sends the provider API key in clear text. | `agent/api-key-only-over-tls` | `src/lib/llm/client.go` (`NewClient`) |
 
 ## Per feature
 
@@ -118,7 +118,7 @@ which.
 | `base/empty-is-not-an-answer` | A nil response, a malformed body, and a stream that ends without a terminal event MUST be failures. They MUST NOT become an empty completed answer. | Failure & configuration | `TestNilResponseIsNotAnEmptyAnswer`, `TestWire_AMalformedBodyIsNotAnEmptyAnswer`, `TestAStreamWithoutATerminalEventIsNotAnAnswer`, `TestWire_AStreamThatBreaksIsNotAnAnswer`, `TestStream_ADecoderErrorIsReturned` |
 | `base/unmeasured-is-not-free` | `ModelUsage.measured` MUST be false whenever a call that reached the provider reported no usage. A free call and an unreported one MUST NOT produce the same value. Token counts beside `measured = false` are a floor. | Consistency & concurrency | `TestUnreportedUsageIsNotMeasuredZero`, `TestWire_AnEmptyResponseIsUnmeasured`, `TestCompleteStream_OverTheWire_ADroppedStreamIsRecordedUnmeasured` |
 | `base/provider-error-opaque` | A provider failure MUST reach the caller as `Unavailable` carrying only the provider's classification (HTTP status, error type, code, offending parameter). It MUST NOT carry the provider's message or body, the deployment URL, or the prompt. | Security | `TestProviderErrorTextDoesNotCrossTheWire`, `TestComplete_OverTheWire_ProviderFailures`, `TestWire_ProviderErrorKeepsTheClassificationAndDropsTheBody`, `TestModelCallFailure_NamesTheProvidersObjection`, `TestProviderFaultWithNothingToSay` |
-| `base/caller-ending-is-not-a-model-failure` | When the caller hangs up or its own deadline passes, the call MUST end with the caller's `Canceled` / `DeadlineExceeded`, MUST NOT be logged as a model failure, and MUST still record what was spent. | Failure & configuration | `TestCompleteStream_AClientHangingUpIsNotAModelFailure`, `TestCompleteStream_TheCallersDeadlineIsNotAModelFailure`, `TestRunAgent_ACallerWhoLeftIsNotAModelFailure`. **Not met on `Complete`** (finding 1). |
+| `base/caller-ending-is-not-a-model-failure` | When the caller hangs up or its own deadline passes, the call MUST end with the caller's `Canceled` / `DeadlineExceeded`, MUST NOT be logged as a model failure, and MUST still record what was spent. | Failure & configuration | `TestCompleteStream_AClientHangingUpIsNotAModelFailure`, `TestCompleteStream_TheCallersDeadlineIsNotAModelFailure`, `TestRunAgent_ACallerWhoLeftIsNotAModelFailure`, `TestComplete_CallerEndingIsNotAModelFailure` (finding 1 fixed). |
 | `base/request-timeout-whole-call` | `request_timeout_seconds` MUST bound one provider call end to end, including the SDK's automatic retries and, for a stream, the whole read of the stream. The caller's shorter deadline MUST win. | Failure & configuration | `TestWire_AHungProviderIsCutOffByTheTimeout`, `TestWire_TheTimeoutBoundsTheWholeCallNotEachRetry`, `TestWire_AStalledStreamIsCutOffByTheTimeout`, `TestWire_AStreamOutlivesItsOpeningUntilClosed`, `TestWire_TheCallersCancellationStopsTheCall` |
 
 #### CompleteStream
@@ -130,7 +130,7 @@ which.
 | `base/stream-own-side-failure` | A send that fails on the server's side (an oversized or unmarshalable event) MUST keep its own status (`ResourceExhausted` stays so, otherwise `Internal`), MUST be logged as a send failure and not as a model failure, and MUST be recorded once. | Failure & configuration | `TestCompleteStream_AServerSideSendFailureIsNotTheClientLeaving` |
 | `base/stream-repetition-guard` | A stream whose tail turns periodic (more than 90 % self-match over the last 100 bytes, for a period of 4 to 33 bytes: a period is tried from 4 up to 50 only while it fits three times in the window) MUST be stopped. The text before the loop MUST be delivered in `Finished` with `stopped_repeating = true`, `status = UNSPECIFIED`, `measured = false`, and recorded as outcome UNKNOWN, never as a completed free call. A repeated price or short list MUST NOT trip it. | Consistency & concurrency | `TestRepeating`, `TestRepeatingToleratesDrift`, `TestTheGuardStopsTheStreamAndKeepsTheGoodPart`, `TestStoppedRepeatingIsReportedToTheConsumer`, `TestCompleteStream_GuardAndRunawayAreRecorded` |
 | `base/stream-runaway-refused` | Accumulated text or tool-argument output over the runaway ceiling MUST end the call with `ResourceExhausted` and record the spend as failed. | Failure & configuration | `TestRunawayOutputIsRefused`, `TestRunawayOutputIsItsOwnCode`, `TestRun_RunawayToolArgumentsAreRefused` |
-| `base/stream-output-ceiling-stated` | Any limit on answer size that differs from `max_tokens` MUST be part of the wire contract and MUST apply alike to unary and streaming calls. | Failure & configuration | none (finding 7) |
+| `base/stream-output-ceiling-stated` | Any limit on answer size beyond `max_tokens` MUST be part of the wire contract. A budgeted streamed call MUST have room for its whole budget: the ceiling is 8 bytes per budgeted token, never below 20 000 bytes; an uncapped one stops at 20 000 bytes. `Complete` has no ceiling of its own. | Failure & configuration | `TestStreamCeilingFollowsTheBudget`, `TestRunawayOutputIsRefused`, `TestRun_RunawayToolArgumentsAreRefused` (finding 7 fixed) |
 | `base/stream-no-client-is-unimplemented` | A deployment without a streaming client MUST answer `Unimplemented`, never panic. | Failure & configuration | `TestNoStreamClientIsUnimplementedNotAPanic`, `TestRunAgent_PlumbingRefusals` |
 
 #### RunAgent (tool calling)
@@ -155,7 +155,7 @@ which.
 | `base/run-provider-transport-error` | A provider transport error during a run (including an `EOF` on a reused connection) MUST be `Unavailable` with the classification only, and MUST be logged. | Failure & configuration | `TestRunAgent_AProviderTransportErrorIsAModelFailure` |
 | `base/run-activity-display-safe` | `Activity.text` MUST be the declared `ToolSpec.activity`. `Activity.error` MUST be a fixed display-safe string and MUST NOT quote the caller's tool error or any model output. | Security | `TestRunAgent_AFailedToolsActivityDoesNotQuoteIt`, `TestRun_TheEventAndTheToolShareAnID`, `TestRun_AnInventedToolIsToldSoUnderItsCallID` (finding 3 fixed: the declared `activity`, nothing for an invented name, and `activity_id` = `call_id`). |
 | `base/run-finished-text-is-what-was-shown` | `Finished.text` of a run MUST equal every delta sent during the run, across turns. | Consistency & concurrency | `TestRun_TheAnswerIsEverythingShown` (finding 5 fixed) |
-| `base/run-spend-every-turn` | A run's usage MUST be the sum of every turn sent to the provider, on success and on every failure path. It MUST be measured only if every sent turn reported usage. A run that sent nothing MUST be measured at zero. | Consistency & concurrency | `TestRun_UsageIsTheSumOfEveryTurn`, `TestRun_AFailedRunStillCarriesWhatItSpent`, `TestRun_AContextEndedBeforeATurnIsNotAnUnreportedTurn`, `TestRun_AContextEndedBeforeTheFirstTurnIsMeasuredAtZero`, `TestWire_RunSendsToolResultsBackAndBillsEveryTurn`, `TestRunAgent_ARunThatSentNothingIsMeasuredAtZero` |
+| `base/run-spend-every-turn` | A run's usage MUST be the sum of every turn sent to the provider, on success and on every failure path. It MUST be measured only if every sent turn reported usage. A run that sent nothing MUST be measured at zero (in `Finished.usage` and on the error; it writes no usage row). | Consistency & concurrency | `TestRun_UsageIsTheSumOfEveryTurn`, `TestRun_AFailedRunStillCarriesWhatItSpent`, `TestRun_AContextEndedBeforeATurnIsNotAnUnreportedTurn`, `TestRun_AContextEndedBeforeTheFirstTurnIsMeasuredAtZero`, `TestWire_RunSendsToolResultsBackAndBillsEveryTurn`, `TestRunAgent_ARunThatSentNothingWritesNoRow` |
 | `base/run-repetition-guard` | The repetition and runaway guards MUST apply to every turn of a run, with the same reporting as `CompleteStream`. | Consistency & concurrency | `TestRun_TheGuardStopsALoopingAnswer`, `TestRunAgent_TheGuardIsReported` |
 | `base/run-bounded-by-time` | A run MUST have an overall bound on wall time. Today each provider call is bounded, and each tool wait only when `tool_timeout_seconds` is set; the number of turns the caller sets is not. | Failure & configuration | none (gap 3) |
 
@@ -274,7 +274,7 @@ interaction.
 |---|---|---|---|---|
 | `interaction/base-usage_persistence-wire-unchanged` | b up | Ungated fields | The business request and response shapes MUST be identical with the feature on or off. With it off, `usage_scope` and `usage_labels` MUST be accepted and ignored, no table MUST exist, and no write MUST be attempted. | `TestTheNoopSinkSwallowsEverything`, `TestTheAllowAllLimiterLetsEverythingThrough` (build of an activation without the feature: example-level only) |
 | `interaction/base-usage_persistence-limit-then-preflight-then-record` | b up | O | On every entry point the order MUST be: limit check, then preflight, then the provider call, then exactly one usage event. A refusal at any step before the provider MUST leave no event. | `TestRefusalsNeverReachTheProvider`, `TestAnOverBudgetScopeNeverReachesTheProvider`, `TestAPreflightRefusalIsNotRecordedAsACall`, `TestRunAgent_APreflightRefusalIsNotRecordedAsACall`, `TestRunAgent_AsksTheLimitLikeTheOtherTwoEntryPoints` |
-| `interaction/base-usage_persistence-run-one-row` | b up | Q: `recordUsageFor` | A run MUST be recorded as one row with the sum of every sent turn and the run's start time, and the contract MUST say so. **The published contract says one row per turn** (finding 4). | `TestRunAgent_RecordsTheSpendOfEveryTurn`, `TestRunAgent_FailuresAreCodedAndStillBilled` |
+| `interaction/base-usage_persistence-run-row-per-turn` | b up | Q: `recordUsageFor` | A run MUST be recorded as one row per turn it sent, each with that turn's spend, outcome and start time, as the contract on `RunAgentReq.Start` says. A turn never sent (refused before the request, or after the context ended) MUST write no row | `TestRunAgent_RecordsTheSpendOfEveryTurn`, `TestRunAgent_FailuresAreCodedAndStillBilled`, `TestRunAgent_ARunThatSentNothingWritesNoRow`, `TestTurnOutcome` |
 | `interaction/base-usage_persistence-caller-left-still-billed` | b up | O | A call or run that ends because the caller left MUST still record what its turns spent, exactly once, before the error is shaped. | `TestCompleteStream_AClientHangingUpIsNotAModelFailure`, `TestCompleteStream_TheCallersDeadlineIsNotAModelFailure`, `TestRunAgent_ACallerWhoLeftIsNotAModelFailure`, `TestCompleteStream_AServerSideSendFailureIsNotTheClientLeaving` |
 | `interaction/base-usage_persistence-guard-is-unknown` | b up | Q | A stream or run stopped by the repetition guard MUST be recorded as UNKNOWN and unmeasured; a runaway MUST be recorded as FAILED. | `TestCompleteStream_GuardAndRunawayAreRecorded`, `TestRunAgent_TheGuardIsReported` |
 | `interaction/base-usage_persistence-scope-mapping-agrees` | b up | Q: `attributableScope`, `Allow` | The limiter and the recorder MUST map a scope string to the same `Scope` row. Today they agree for every non-blank scope; a blank scope is recorded under `unattributed` and never capped (usage_persistence gap 7). | `TestDBLimiter_ABlankScopeIsNotCapped`, `TestRecordUsage_AnEmptyScopeIsStillRecorded` |
@@ -303,7 +303,7 @@ whatever they are asked by whoever can reach them.
 | ID | MUST hold | Proof |
 |---|---|---|
 | `agent/api-key-never-emitted` | The provider API key MUST arrive as a secret value revealed once at wiring, MUST be sent only as the provider's authentication header, and MUST NOT appear in any log line, error, response, usage row or model input. Boot errors MUST name the setting, never its value. | `TestRegisterPlugin_TheRegisteredServiceCallsTheConfiguredProvider` (key reaches the header). No test scans logs or errors for the key. |
-| `agent/api-key-only-over-tls` | A non-`https` endpoint MUST be refused at boot. | none (finding 13) |
+| `agent/api-key-only-over-tls` | A non-`https` endpoint MUST be refused at boot, unless it is plain http to a loopback host, where the key never leaves the machine. | `TestNewClient_RefusesAnIncompleteConfig` (finding 13 fixed) |
 | `agent/prompt-never-logged` | No log line MUST carry a prompt, instruction, history entry, answer, tool argument or tool result. A provider error MUST be logged only as its classification and request URL, never its body. | `TestNoHandlerLogsARawProviderError` (static gate), `TestProviderLogLineKeepsANonProviderError`, `TestComplete_OverTheWire_ProviderFailures` (canary prompt absent from the log) |
 | `agent/error-messages-carry-no-content` | No error returned to the caller MUST carry the provider's body, the deployment URL, a tool's error text or any other scope's data. | `TestProviderErrorTextDoesNotCrossTheWire`, `TestComplete_OverTheWire_ProviderFailures`, `TestRunAgent_AFailedToolsActivityDoesNotQuoteIt`, `TestDBLimiter_TheRefusalCarriesNoAmounts` |
 
@@ -329,18 +329,18 @@ whatever they are asked by whoever can reach them.
 
 | ID | MUST hold | Proof |
 |---|---|---|
-| `agent/error-codes` | Each ending MUST map to the code in the table, on every entry point that can reach it. | `TestRunErrorMapping`, `TestRunAgent_PlumbingRefusals`, `TestEmptyRequestIsRefused`, `TestStreamRefusesAnEmptyRequest`, `TestBudgetExhaustionIsItsOwnCode`, `TestRunawayOutputIsItsOwnCode` (unary caller-cancel row: not met, finding 1) |
+| `agent/error-codes` | Each ending MUST map to the code in the table, on every entry point that can reach it. | `TestRunErrorMapping`, `TestRunAgent_PlumbingRefusals`, `TestEmptyRequestIsRefused`, `TestStreamRefusesAnEmptyRequest`, `TestBudgetExhaustionIsItsOwnCode`, `TestRunawayOutputIsItsOwnCode`, `TestComplete_CallerEndingIsNotAModelFailure` |
 
 #### Configuration that must fail at boot
 
 | ID | Condition | Enforced | Proof |
 |---|---|---|---|
 | `agent/boot-provider` | `provider` not `azure_openai` (case-insensitive; blank means the default) | `RegisterPlugin` → `NewClient` | `TestRegisterPlugin_RefusesABadConfigAndServesNothing`, `TestNewClient_RefusesAnIncompleteConfig` |
-| `agent/boot-endpoint-key-version` | blank `endpoint`, `api_key` or `api_version` | `NewClient` | `TestRegisterPlugin_RefusesABadConfigAndServesNothing`, `TestNewClient_RefusesAnIncompleteConfig` |
+| `agent/boot-endpoint-key-version` | blank `endpoint`, `api_key` or `api_version`; an endpoint that is not an absolute URL, or not `https` (plain http only to a loopback host) | `NewClient` | `TestRegisterPlugin_RefusesABadConfigAndServesNothing`, `TestNewClient_RefusesAnIncompleteConfig` |
 | `agent/boot-serves-nothing-on-error` | any refused config registers neither the service nor the shutdown hook | `RegisterPlugin` | `TestRegisterPlugin_RefusesABadConfigAndServesNothing` |
 | `agent/boot-defaults` | `max_output_tokens <= 0` → 4096; `request_timeout_seconds <= 0` → 120; `default_model` trimmed | `RegisterPlugin`, `NewClient` | `TestRegisterPlugin_AppliesTheDocumentedDefaults` |
 | `agent/boot-usage-wiring` | feature on, no database sink | `VerifyUsageWiring` | `TestVerifyUsageWiringAgreesWithTheActivation` |
-| **Not** boot-checked (gaps) | an `http://` or malformed `endpoint` (finding 13); feature on, no database limiter (finding 12); a negative `max_output_tokens` or `request_timeout_seconds` silently replaced by the default rather than refused; an `api_version` the provider does not know (fails per call) | — | none |
+| **Not** boot-checked (gaps) | feature on, no database limiter (finding 12); a negative `max_output_tokens` or `request_timeout_seconds` silently replaced by the default rather than refused; an `api_version` the provider does not know (fails per call) | — | none |
 
 #### Transactions (one unit of work)
 
@@ -386,7 +386,7 @@ provider for an example project would have to:
   500 (to exercise the SDK's retries), a body that echoes a canary prompt, a
   malformed body, a hang before headers, a stall mid-stream, a connection
   dropped before the terminal event, a periodic answer (repetition guard),
-  and more than 20 000 bytes of text or tool arguments;
+  and text or tool arguments past the stream ceiling;
 - record every request: count them (refusals must reach it zero times), keep
   the parsed body (`store`, `instructions`, `max_output_tokens`, `temperature`,
   `reasoning`, `text.format`, offered tools per turn, tool outputs fed back),
@@ -399,7 +399,7 @@ With such a sandbox, the suite should cover:
 
 1. **Usage rows on a real database**: each entry point writes exactly one row
    with the right status, `measured`, tokens and provider-named model; a run
-   writes one row summing its turns (`interaction/base-usage_persistence-run-one-row`);
+   writes one row per turn it sent (`interaction/base-usage_persistence-run-row-per-turn`);
    limit and preflight refusals write none; rows queued at shutdown are written
    by the drain hook (`usage_persistence/drained-at-shutdown`).
 2. **Interning under concurrency**: two replicas, or parallel flushes, first
@@ -424,9 +424,8 @@ With such a sandbox, the suite should cover:
 5. **Streams over the real gateway**: SSE framing of `CompleteStream`; a client
    disconnect mid-answer closes the sandbox's stream and records one failed,
    unmeasured row (`base/stream-cancel-stops-spend`); the caller's deadline
-   comes back as `DeadlineExceeded`. Expected red: the same on unary
-   `Complete` (finding 1); a long answer on `CompleteStream` versus `Complete`
-   (finding 7).
+   comes back as `DeadlineExceeded`, on unary `Complete` as well; a budgeted
+   answer past 20 000 bytes streams in full (`base/stream-output-ceiling-stated`).
 6. **Tool loop over the real transport**: a round trip of tool calls;
    read-only calls overlap and mutating ones do not; an over-budget round
    applies nothing; a half-close while a result is owed; an oversized
@@ -444,8 +443,9 @@ With such a sandbox, the suite should cover:
 8. **Secrets and content**: across every failure script, the bundle's logs and
    every error the caller receives contain neither the API key nor the canary
    prompt (`agent/api-key-never-emitted`, `agent/prompt-never-logged`);
-   every request the sandbox received has `store = false`. Expected red: an
-   `http://` endpoint accepted at boot (finding 13).
+   every request the sandbox received has `store = false`; an `http://`
+   endpoint to a non-loopback host is refused at boot
+   (`agent/api-key-only-over-tls`).
 9. **Feature-off build**: an activation without `usage_persistence` builds,
    has no usage tables, and accepts `usage_scope` and `usage_labels`
    (`interaction/base-usage_persistence-wire-unchanged`).

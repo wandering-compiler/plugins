@@ -268,16 +268,12 @@ type Usage struct {
 	Id      int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
 	ScopeId int64                  `protobuf:"varint,2,opt,name=scope_id,json=scopeId,proto3" json:"scope_id,omitempty"`
 	ModelId int64                  `protobuf:"varint,3,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
-	// measured=false means the PROVIDER did not report the usage — for a run,
-	// that at least one turn it SENT went unreported — and that is not the same
-	// as a call that cost nothing. A turn never sent (refused before the
-	// request, or not attempted because the run had already ended) is not a
-	// turn and does not make a run unmeasured; a run that sent NO turn is
-	// measured at zero tokens — its cost is known. Both used to be "no row", which
-	// is how a run can report a complete bill for tokens it actually spent. The
-	// row exists either way; this field is what separates them. Tokens on an
-	// unmeasured row are what WAS reported (the run's other turns): a floor,
-	// never the full measure.
+	// measured=false means the PROVIDER did not report this call's usage — a
+	// stream dropped before its terminal event, a runaway cut off — and that is
+	// not the same as a call that cost nothing. The row exists either way; this
+	// field is what separates them. Each row is ONE model call: a RunAgent run
+	// writes one per turn it sent, and a turn never sent (refused before the
+	// request, or not attempted because the run had already ended) writes none.
 	Measured bool `protobuf:"varint,4,opt,name=measured,proto3" json:"measured,omitempty"`
 	// The four kinds are separate columns rather than separate rows because
 	// two of them are SUBSETS: cached input is part of input, reasoning is part
