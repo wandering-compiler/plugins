@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,5 +36,39 @@ func (h *ClusterServiceHandler) decide(ctx context.Context, req *pb.DecideWorker
 	if err := h.Workers.Decide(ctx, req.GetIds(), ban, who.GetUserId()); err != nil {
 		return nil, err
 	}
+	h.pushBans(ctx)
 	return &pb.DecideWorkersActionResp{}, nil
+}
+
+// pushBans delivers the new ban set to every registered relay now, rather
+// than with the next call that happens to reach each one. An enabled relay
+// would have it before its next placement anyway; a disabled one would
+// otherwise never hear of it and go on renewing the banned worker's
+// certificate. Best effort: the decision is recorded, and a relay that
+// cannot be reached gets the set with its next call.
+func (h *ClusterServiceHandler) pushBans(ctx context.Context) {
+	if h.Relays == nil || h.Dial == nil {
+		return
+	}
+	ctx, err := h.withBans(context.WithoutCancel(ctx))
+	if err != nil {
+		return
+	}
+	relays, err := h.Relays.ListAll(ctx)
+	if err != nil {
+		log.Printf("cluster: cannot list relays to deliver the ban set: %v", err)
+		return
+	}
+	for _, r := range relays {
+		pctx, cancel := context.WithTimeout(ctx, h.dialTimeout())
+		conn, err := h.dialReady(pctx, r)
+		if err == nil {
+			_, err = newRelayClient(conn).RelayStats(pctx, &pb.RelayStatsReq{})
+			_ = conn.Close()
+		}
+		cancel()
+		if err != nil {
+			log.Printf("cluster: relay %q did not take the new ban set now (it gets it with its next call): %v", r.Name, err)
+		}
+	}
 }

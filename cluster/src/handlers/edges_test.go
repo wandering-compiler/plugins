@@ -234,6 +234,7 @@ func TestReserveTask_TheCallerLeavingStopsTheSearch(t *testing.T) {
 type failingStore struct{ err error }
 
 func (f failingStore) ListEnabled(context.Context) ([]Relay, error)       { return nil, f.err }
+func (f failingStore) ListAll(context.Context) ([]Relay, error)           { return nil, f.err }
 func (f failingStore) Get(context.Context, string) (Relay, error)         { return Relay{}, f.err }
 func (f failingStore) RecordReached(context.Context, string) error        { return nil }
 func (f failingStore) RecordFailed(context.Context, string, string) error { return nil }

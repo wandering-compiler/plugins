@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"net"
 	"sync"
 	"testing"
@@ -27,19 +28,20 @@ type tablesServer struct {
 	pb.UnimplementedWorkerQueryServer
 	pb.UnimplementedWorkerMutationServer
 
-	mu        sync.Mutex
-	relays    []*pb.Relay
-	emptyRow  bool  // GetRelay answers an empty row instead of NotFound
-	fail      error // every call fails with this, when set
-	listReqs  []*pb.ListRelaysReq
-	reached   []*pb.RecordRelayReachedReq
-	failed    []*pb.RecordRelayFailedReq
-	stateReqs []pb.WorkerState
-	recorded  []*pb.RecordWorkerReq
-	bans      []*pb.DecideWorkersReq
-	unbans    []*pb.DecideWorkersReq
-	banned    []string
-	enrolled  int64
+	mu         sync.Mutex
+	banVersion *timestamppb.Timestamp
+	relays     []*pb.Relay
+	emptyRow   bool  // GetRelay answers an empty row instead of NotFound
+	fail       error // every call fails with this, when set
+	listReqs   []*pb.ListRelaysReq
+	reached    []*pb.RecordRelayReachedReq
+	failed     []*pb.RecordRelayFailedReq
+	stateReqs  []pb.WorkerState
+	recorded   []*pb.RecordWorkerReq
+	bans       []*pb.DecideWorkersReq
+	unbans     []*pb.DecideWorkersReq
+	banned     []string
+	enrolled   int64
 }
 
 func (s *tablesServer) ListRelays(_ context.Context, in *pb.ListRelaysReq) (*pb.ListRelaysResp, error) {
@@ -81,6 +83,15 @@ func (s *tablesServer) RecordRelayFailed(_ context.Context, in *pb.RecordRelayFa
 	defer s.mu.Unlock()
 	s.failed = append(s.failed, in)
 	return &pb.RecordRelayFailedResp{}, s.fail
+}
+
+func (s *tablesServer) BanSetVersion(context.Context, *pb.BanSetVersionReq) (*pb.BanSetVersionResp, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	return &pb.BanSetVersionResp{Version: s.banVersion}, nil
 }
 
 func (s *tablesServer) FingerprintsByState(_ context.Context, in *pb.FingerprintsByStateReq) (*pb.FingerprintsByStateResp, error) {
@@ -233,11 +244,14 @@ func TestRelayStore_RecordsReachedAndFailed(t *testing.T) {
 // The ban set is the BANNED state, nothing else; enrolled counts the ENROLLED
 // state. Asking for the wrong state would ship the wrong set to every relay.
 func TestWorkerStore_BannedAndEnrolledAskForTheirState(t *testing.T) {
-	tb := &tablesServer{banned: []string{"aa", "bb"}, enrolled: 7}
+	tb := &tablesServer{banned: []string{"aa", "bb"}, enrolled: 7, banVersion: timestamppb.New(time.Unix(1700000000, 5))}
 	_, workers := serveTables(t, tb)
-	bans, err := workers.Banned(t.Context())
+	bans, version, err := workers.Banned(t.Context())
 	if err != nil || len(bans) != 2 || bans[0] != "aa" || bans[1] != "bb" {
 		t.Fatalf("Banned = %v, %v", bans, err)
+	}
+	if version != tb.banVersion.AsTime().UnixNano() {
+		t.Errorf("version = %d, want the newest decision %d", version, tb.banVersion.AsTime().UnixNano())
 	}
 	n, err := workers.EnrolledCount(t.Context())
 	if err != nil || n != 7 {
@@ -253,7 +267,7 @@ func TestWorkerStore_BannedAndEnrolledAskForTheirState(t *testing.T) {
 func TestWorkerStore_AnUnreadableBanSetIsAnError(t *testing.T) {
 	tb := &tablesServer{fail: status.Error(codes.Unavailable, "database restarting")}
 	_, workers := serveTables(t, tb)
-	if bans, err := workers.Banned(t.Context()); err == nil {
+	if bans, _, err := workers.Banned(t.Context()); err == nil {
 		t.Fatalf("a failing registry answered the ban set %v", bans)
 	}
 	if _, err := workers.EnrolledCount(t.Context()); err == nil {

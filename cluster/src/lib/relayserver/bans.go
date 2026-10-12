@@ -23,7 +23,7 @@ import (
 func BanInterceptors(reg *workeradmit.Registry) (grpc.UnaryServerInterceptor, grpc.StreamServerInterceptor) {
 	apply := func(ctx context.Context) {
 		if bans, ok := workeradmit.BansFrom(ctx); ok {
-			reg.SetBanned(bans)
+			reg.SetBannedAt(bans, workeradmit.BanVersionFrom(ctx))
 		}
 	}
 	unary := func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {

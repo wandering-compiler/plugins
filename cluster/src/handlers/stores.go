@@ -24,7 +24,15 @@ type relayStore struct {
 }
 
 func (s relayStore) ListEnabled(ctx context.Context) ([]Relay, error) {
-	resp, err := s.q.ListRelays(ctx, &pb.ListRelaysReq{EnabledOnly: true})
+	return s.list(ctx, true)
+}
+
+func (s relayStore) ListAll(ctx context.Context) ([]Relay, error) {
+	return s.list(ctx, false)
+}
+
+func (s relayStore) list(ctx context.Context, enabledOnly bool) ([]Relay, error) {
+	resp, err := s.q.ListRelays(ctx, &pb.ListRelaysReq{EnabledOnly: enabledOnly})
 	if err != nil {
 		return nil, err
 	}
@@ -77,12 +85,23 @@ type workerRegistry struct {
 	m pb.WorkerMutationClient
 }
 
-func (s workerRegistry) Banned(ctx context.Context) ([]string, error) {
+func (s workerRegistry) Banned(ctx context.Context) ([]string, int64, error) {
+	// The version FIRST: a decision landing between the two reads then makes
+	// the set newer than its version, never older, and a relay keeps the
+	// newest version it saw.
+	v, err := s.q.BanSetVersion(ctx, &pb.BanSetVersionReq{})
+	if err != nil {
+		return nil, 0, err
+	}
 	resp, err := s.q.FingerprintsByState(ctx, &pb.FingerprintsByStateReq{State: pb.WorkerState_WORKER_STATE_BANNED})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return resp.GetFingerprints(), nil
+	var version int64
+	if t := v.GetVersion(); t != nil {
+		version = t.AsTime().UnixNano()
+	}
+	return resp.GetFingerprints(), version, nil
 }
 
 func (s workerRegistry) Record(ctx context.Context, relayID string, w *pb.KnownWorker) error {

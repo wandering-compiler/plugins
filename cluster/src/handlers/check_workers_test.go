@@ -18,12 +18,13 @@ import (
 
 // workerStore is a registry in memory. Guarded: relays are polled in parallel.
 type workerStore struct {
-	mu        sync.Mutex
-	banned    []string
-	recorded  []string // "<relayID>:<fingerprint>"
-	enrolled  int
-	bannedErr error
-	decisions []decision
+	mu         sync.Mutex
+	banned     []string
+	recorded   []string // "<relayID>:<fingerprint>"
+	enrolled   int
+	bannedErr  error
+	banVersion int64
+	decisions  []decision
 }
 
 type decision struct {
@@ -32,10 +33,10 @@ type decision struct {
 	by  string
 }
 
-func (w *workerStore) Banned(context.Context) ([]string, error) {
+func (w *workerStore) Banned(context.Context) ([]string, int64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.banned, w.bannedErr
+	return w.banned, w.banVersion, w.bannedErr
 }
 func (w *workerStore) Record(_ context.Context, relayID string, k *pb.KnownWorker) error {
 	w.mu.Lock()
@@ -205,5 +206,23 @@ func TestEveryRelayCallCarriesTheBanSet(t *testing.T) {
 		if reg.Admitted("bb") {
 			t.Errorf("%s reached the relay without the ban set — a restarted relay would admit a banned worker", name)
 		}
+	}
+}
+
+// A ban decision is delivered to every relay at once — a disabled one too,
+// which no placement would otherwise reach.
+func TestBanWorkers_DeliversTheSetToEveryRelayAtOnce(t *testing.T) {
+	reg, dial := serveRelayWithWorkers(t, workeradmit.Worker{ID: "bb"})
+	ws := &workerStore{banned: []string{"bb"}}
+	h := &ClusterServiceHandler{
+		Relays:  &store{relays: []Relay{{ID: "1", Name: "disabled-one", URL: "live"}}},
+		Workers: ws,
+		Dial:    dial,
+	}
+	if _, err := h.BanWorkers(signedIn("op-1"), &pb.DecideWorkersActionReq{Ids: []string{"w-bb"}}); err != nil {
+		t.Fatalf("BanWorkers: %v", err)
+	}
+	if reg.Admitted("bb") {
+		t.Error("the relay did not get the new ban set with the decision")
 	}
 }

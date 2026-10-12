@@ -4,6 +4,7 @@ syntax = "proto3";
 
 package w17.contrib.cluster;
 
+import "google/protobuf/timestamp.proto";
 import "@self/types/models.proto";
 import "w17/contrib.proto";
 import "w17/db.proto";
@@ -39,6 +40,12 @@ message FingerprintsByStateReq {
 
 message FingerprintsByStateResp {
   repeated string fingerprints = 1;
+}
+
+message BanSetVersionReq {}
+message BanSetVersionResp {
+  // The newest ban or unban decision; absent when nothing was ever decided.
+  optional google.protobuf.Timestamp version = 1 [(w17.field) = { type: DATETIME }];
 }
 
 message GetWorkerReq {
@@ -91,6 +98,17 @@ service WorkerQuery {
           "       w.decided_by AS decided_by "
           "FROM @module.Worker w "
           "WHERE w.id = :id"
+      }
+    };
+  }
+
+  // BanSetVersion is the version sent with the ban set: the time of the
+  // newest decision, ban or unban, since either changes the set.
+  rpc BanSetVersion(BanSetVersionReq) returns (BanSetVersionResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT MAX(w.decided_at) AS version FROM @module.Worker w"
       }
     };
   }

@@ -88,6 +88,10 @@ type workerQuery struct {
 	t *tables
 }
 
+func (q workerQuery) BanSetVersion(context.Context, *pb.BanSetVersionReq, ...grpc.CallOption) (*pb.BanSetVersionResp, error) {
+	return &pb.BanSetVersionResp{}, nil
+}
+
 func (q workerQuery) FingerprintsByState(_ context.Context, in *pb.FingerprintsByStateReq, _ ...grpc.CallOption) (*pb.FingerprintsByStateResp, error) {
 	if in.GetState() != pb.WorkerState_WORKER_STATE_BANNED {
 		return &pb.FingerprintsByStateResp{}, nil

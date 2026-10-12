@@ -92,6 +92,7 @@ type store struct {
 }
 
 func (s *store) ListEnabled(context.Context) ([]Relay, error) { return s.relays, nil }
+func (s *store) ListAll(context.Context) ([]Relay, error)     { return s.relays, nil }
 func (s *store) Get(_ context.Context, id string) (Relay, error) {
 	for _, r := range s.relays {
 		if r.ID == id {

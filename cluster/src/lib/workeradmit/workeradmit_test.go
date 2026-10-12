@@ -1,6 +1,8 @@
 package workeradmit
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"google.golang.org/grpc/metadata"
@@ -102,5 +104,52 @@ func TestOnBansChanged_RunsOnlyForANewBan(t *testing.T) {
 	r.SetBanned([]string{"w1"})
 	if runs != 2 {
 		t.Errorf("hook ran %d times, want 2 — banning again after a lift is a new ban", runs)
+	}
+}
+
+// A set read earlier by another control-plane replica can arrive later; it
+// must not undo the newer one.
+func TestSetBannedAt_AnOlderSetIsIgnored(t *testing.T) {
+	r := New()
+	r.SetBannedAt([]string{"w1"}, 20)
+	r.SetBannedAt(nil, 10) // older: would lift the ban
+	if r.Admitted("w1") {
+		t.Error("an older ban set lifted a newer ban")
+	}
+	r.SetBannedAt(nil, 30)
+	if !r.Admitted("w1") {
+		t.Error("a newer set did not apply")
+	}
+}
+
+// The ban set is kept across a restart: a new registry loads it.
+func TestKeepIn_SurvivesARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bans.json")
+	r := New()
+	if err := r.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	r.SetBannedAt([]string{"W1"}, 42)
+	again := New()
+	if err := again.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	if again.Admitted("w1") {
+		t.Error("the restarted registry forgot the ban")
+	}
+	again.SetBannedAt(nil, 41) // older than what was saved
+	if again.Admitted("w1") {
+		t.Error("the saved version was not restored: an older set applied")
+	}
+}
+
+// An unreadable saved set refuses to start rather than starting with no bans.
+func TestKeepIn_AnUnreadableFileIsAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bans.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := New().KeepIn(path); err == nil {
+		t.Error("an unreadable saved ban set was accepted")
 	}
 }
