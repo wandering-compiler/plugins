@@ -327,7 +327,7 @@ func TestGetReservation_StampsTheRelaysAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if st.GetReservation() != handleFor("id-a", "r7") || st.GetQueued().GetRelay() != "relay-a" || st.GetQueued().GetPosition() != 3 {
-		t.Errorf("poll = %v, want handle id-a.r7, relay-a, position 3", st)
+		t.Errorf("poll = %v, want the handle for id-a.r7, relay-a, position 3", st)
 	}
 	r.get = func(string) (*pb.ReservationState, error) {
 		return nil, status.Error(codes.Internal, "relay: polling: boom")

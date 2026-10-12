@@ -10,27 +10,34 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
+
+	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 )
 
-// handleSep joins a relay's registry id and its own reservation id into the
-// handle the project hands out. A dot, because neither half can contain one:
-// registry ids are UUIDs and relay reservation ids are hex.
+// handleSep joins a relay's registry id, its own reservation id and the
+// holder tag into the handle the project hands out. A dot, because no part can
+// contain one: registry ids are UUIDs, and the other two are hex.
 const handleSep = "."
 
 // ReserveTask places a reservation on the least-loaded relay, exactly as
 // ScheduleTask chooses — and falls through the same failures — but answers at
 // once with a handle to poll instead of holding a stream.
 //
-// The handle is `<relay_id>.<relay_reservation_id>.<holder tag>`. Naming the relay in it is
-// what keeps the control plane stateless: any replica can route the poll, and
-// none has to remember where anything was placed.
+// The handle is `<relay_id>.<relay_reservation_id>.<holder_tag>`. Naming the
+// relay in it is what keeps the control plane stateless: any replica can route
+// the poll, and none has to remember where anything was placed. The tag binds
+// it to the caller reserving now (see holderTag).
 func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.ReserveTaskReq) (*pb.ReservationState, error) {
 	ctx, err := h.withBans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	holder, err := holderOf(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +51,7 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 	for _, c := range cands.list {
 		st, err := newRelayClient(c.conn).ReserveTask(ctx, req)
 		if err == nil {
-			return stampReservation(ctx, st, c.Relay), nil
+			return stampReservation(st, c.Relay, holder), nil
 		}
 		if ctx.Err() != nil {
 			return nil, status.FromContextError(ctx.Err()).Err()
@@ -77,7 +84,11 @@ func (h *ClusterServiceHandler) GetReservation(ctx context.Context, req *pb.GetR
 	if err != nil {
 		return nil, err
 	}
-	relay, local, gone, err := h.resolveHandle(ctx, req.GetReservation())
+	holder, err := holderOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	relay, local, gone, err := h.resolveHandle(ctx, req.GetReservation(), holder)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +110,7 @@ func (h *ClusterServiceHandler) GetReservation(ctx context.Context, req *pb.GetR
 	if err != nil {
 		return nil, err
 	}
-	return stampReservation(ctx, st, relay), nil
+	return stampReservation(st, relay, holder), nil
 }
 
 // CancelReservation forwards a cancellation. Idempotent like the relay's: a
@@ -109,7 +120,11 @@ func (h *ClusterServiceHandler) CancelReservation(ctx context.Context, req *pb.C
 	if err != nil {
 		return nil, err
 	}
-	relay, local, gone, err := h.resolveHandle(ctx, req.GetReservation())
+	holder, err := holderOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	relay, local, gone, err := h.resolveHandle(ctx, req.GetReservation(), holder)
 	if err != nil {
 		return nil, err
 	}
@@ -126,8 +141,9 @@ func (h *ClusterServiceHandler) CancelReservation(ctx context.Context, req *pb.C
 }
 
 // resolveHandle splits a handle and finds its relay. `gone` is a well-formed
-// handle whose relay the registry no longer holds.
-func (h *ClusterServiceHandler) resolveHandle(ctx context.Context, handle string) (Relay, string, bool, error) {
+// handle whose relay the registry no longer holds, or one minted for a caller
+// other than `holder`.
+func (h *ClusterServiceHandler) resolveHandle(ctx context.Context, handle, holder string) (Relay, string, bool, error) {
 	parts := strings.Split(handle, handleSep)
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return Relay{}, "", false, status.Error(codes.InvalidArgument,
@@ -136,7 +152,7 @@ func (h *ClusterServiceHandler) resolveHandle(ctx context.Context, handle string
 	relayID, local, tag := parts[0], parts[1], parts[2]
 	// Another caller's handle answers like a reservation the relay forgot:
 	// expired, nothing to cancel. No answer tells it the handle was real.
-	if subtle.ConstantTimeCompare([]byte(tag), []byte(holderTag(ctx, local))) != 1 {
+	if subtle.ConstantTimeCompare([]byte(tag), []byte(holderTag(holder, relayID, local))) != 1 {
 		return Relay{}, "", true, nil
 	}
 	relay, err := h.Relays.Get(ctx, relayID)
@@ -149,25 +165,47 @@ func (h *ClusterServiceHandler) resolveHandle(ctx context.Context, handle string
 	return relay, local, false, nil
 }
 
-// holderTag binds a reservation to the caller that made it: a hash of the
-// signed-in caller's id (empty for the project's own code, which carries
-// none) and the relay's reservation id. The handle is already an
-// unguessable credential; the tag keeps a handle that leaked to someone else
-// from collecting or canceling the place, without the control plane storing
-// anything — the caller is read again on every call.
-func holderTag(ctx context.Context, local string) string {
+// envelopeKey is the metadata key the gateway threads the verified principal
+// under (principal's own constant is unexported).
+const envelopeKey = "x-w17-user"
+
+// holderOf is the caller a reservation is bound to: the signed-in user's id
+// (pb.Caller, envelope field 2), or "" for a call that carries no principal —
+// the project's own code, or an unauthenticated surface. An envelope that is
+// present but cannot be read is refused rather than read as "no principal":
+// that would hand every such caller the one identity they all share, and a
+// leaked handle would work for all of them.
+func holderOf(ctx context.Context) (string, error) {
 	var who pb.Caller
-	_ = principal.Envelope(ctx, &who)
-	sum := sha256.Sum256([]byte("cluster-reservation\x00" + who.GetUserId() + "\x00" + local))
+	err := principal.Envelope(ctx, &who)
+	if err == nil {
+		return who.GetUserId(), nil
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	if v := md.Get(envelopeKey); len(v) == 0 || v[0] == "" {
+		return "", nil
+	}
+	return "", status.Error(codes.Unauthenticated,
+		"cluster: the caller's principal cannot be read, so a reservation cannot be bound to it")
+}
+
+// holderTag binds a reservation to the caller that made it: a hash of the
+// holder (holderOf), the relay's registry id and its reservation id — the
+// whole handle, so no part of it can be swapped under a valid tag. The handle
+// is already an unguessable credential; the tag keeps a handle that leaked to
+// someone else from collecting or cancelling the place, without the control
+// plane storing anything — the caller is read again on every call.
+func holderTag(holder, relayID, local string) string {
+	sum := sha256.Sum256([]byte("cluster-reservation\x00" + holder + "\x00" + relayID + "\x00" + local))
 	return hex.EncodeToString(sum[:16])
 }
 
 // stampReservation turns a relay's answer into the project's: the handle gains
 // the relay's registry id, and the relay's name goes where a relay cannot put
 // it itself.
-func stampReservation(ctx context.Context, st *pb.ReservationState, r Relay) *pb.ReservationState {
+func stampReservation(st *pb.ReservationState, r Relay, holder string) *pb.ReservationState {
 	local := st.GetReservation()
-	st.Reservation = r.ID + handleSep + local + handleSep + holderTag(ctx, local)
+	st.Reservation = r.ID + handleSep + local + handleSep + holderTag(holder, r.ID, local)
 	switch s := st.GetState().(type) {
 	case *pb.ReservationState_Queued:
 		s.Queued.Relay = r.Name

@@ -6,7 +6,8 @@
 
 A reservation handle was an unguessable credential, but anyone holding it, for example one that leaked through a log or a client, could poll the reservation, collect its grant or cancel the place.
 
-- **The handle gains a third part:** a hash of the signed-in caller (read from the gateway envelope, field 2) and the relay's reservation id. The control plane still stores nothing. It recomputes the hash on every call.
+- **The handle gains a third part:** a hash of the signed-in caller (read from the gateway envelope, field 2) and the rest of the handle. The control plane still stores nothing. It recomputes the hash on every call. A call whose envelope is present but unreadable is refused (`Unauthenticated`) instead of being treated as a call with no principal.
+- **Poll from the identity you reserved under.** Project code that reserves while serving a user's request carries that user's principal, so a job that later polls without it sees the place as gone. Reserve from a context without the user's principal when something else will poll.
 - **Another caller's handle answers like a reservation the relay forgot.** A poll reads it as expired (`RESERVATION_UNKNOWN`), and a cancel succeeds without touching the place, so the answer does not confirm the handle was real.
 - **Handles minted by an earlier version** (two parts) are refused as malformed. Reservations are short-lived, so one in flight across the upgrade has to be made again.
 

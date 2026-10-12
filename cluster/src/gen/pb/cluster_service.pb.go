@@ -70,9 +70,17 @@ func (x *ReserveTaskReq) GetLabel() string {
 
 type GetReservationReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The handle ReserveTask returned. A BEARER credential — whoever holds it
-	// can collect the grant — so it is bound to whoever created it by the
-	// caller of this service, not by this service.
+	// The handle ReserveTask returned. A credential, and bound to the caller
+	// that reserved: the project accepts it only from the same signed-in user
+	// (`x-w17-user`, user id at field 2), or — for a handle reserved with no
+	// principal, as the project's own code — only from a call with none.
+	// Anyone else reads it as expired (RESERVATION_UNKNOWN), and cancelling it
+	// succeeds without touching the place.
+	//
+	// So poll from the identity you reserved under. Project code that reserves
+	// while serving a user's request carries that user's principal, and a job
+	// that later polls without it sees the place as gone; reserve from a
+	// context without the user's principal if something else will poll.
 	Reservation   string `protobuf:"bytes,1,opt,name=reservation,proto3" json:"reservation,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -200,10 +208,12 @@ type ReservationState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The handle to poll with.
 	//
-	// From the PROJECT it is `<relay_id>.<relay_reservation_id>`: it names the
-	// relay holding the place, so a poll reaching any console replica is routed
-	// without that replica remembering anything. From a RELAY it is the bare
-	// reservation id — a relay has never been told its registry id.
+	// From the PROJECT it is `<relay_id>.<relay_reservation_id>.<holder_tag>`:
+	// it names the relay holding the place, so a poll reaching any console
+	// replica is routed without that replica remembering anything, and the tag
+	// binds it to the caller that reserved (see GetReservationReq). From a RELAY
+	// it is the bare reservation id — a relay has never been told its registry
+	// id.
 	Reservation string `protobuf:"bytes,1,opt,name=reservation,proto3" json:"reservation,omitempty"`
 	// Types that are valid to be assigned to State:
 	//
