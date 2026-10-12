@@ -3,6 +3,9 @@ package handlers
 import (
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
@@ -134,7 +137,9 @@ func TestWebhook_ChargeRefundedBeforeTheSuccess(t *testing.T) {
 }
 
 // A top-up whose grant failed and which was then refunded in full gets no
-// credit from the redelivered success.
+// credit from the redelivered success. RefundPayment refuses an ungranted
+// top-up (the grant would land after the money left), so the refund here is
+// one made at the provider, arriving as charge.refunded.
 func TestFlow_RefundedTopUpIsNotGrantedOnRedelivery(t *testing.T) {
 	r := newRig(t)
 	p := r.topUp("user-a", "20.00", "top-refunded")
@@ -143,8 +148,13 @@ func TestFlow_RefundedTopUpIsNotGrantedOnRedelivery(t *testing.T) {
 	if _, err := r.deliver(body); err == nil {
 		t.Fatal("want the grant failure to surface")
 	}
-	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "rf"}); err != nil {
-		t.Fatal(err)
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "rf"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RefundPayment of an ungranted top-up: %v, want FailedPrecondition", err)
+	}
+	refunded := eventJSON("evt_top_refund", "charge.refunded", "ch_top",
+		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": true})
+	if _, err := r.deliver(refunded); err != nil {
+		t.Fatalf("charge.refunded: %v", err)
 	}
 	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_REFUNDED {
 		t.Fatalf("after the full refund: %v, want REFUNDED", st)
