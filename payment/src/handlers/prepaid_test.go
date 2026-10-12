@@ -1,7 +1,11 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -194,5 +198,40 @@ func TestFlow_Credit_CallerKeyShapedLikeAScopedKey_IsNotAMatch(t *testing.T) {
 	}
 	if v.GetBalance() != "6.0000" {
 		t.Errorf("balance = %s, want 6.0000 — a grant under a key equal to another's stored scoped key was taken for a retry", v.GetBalance())
+	}
+}
+
+// The database checks `balance >= 0` on the row an INSERT proposes, before an
+// upsert's conflict turns it into an update. A balance write that inserts the
+// delta therefore refuses every debit whatever the balance, and no in-memory
+// store shows it: every spend test here passed while no spend could succeed
+// on a real database. Hold ApplyCredit's DQL to the shape that works: the row
+// is made at zero, and the delta is applied by an UPDATE.
+func TestApplyCredit_ADebitNeverProposesANegativeRow(t *testing.T) {
+	src, err := os.ReadFile("../../proto/mutations/payment_mutation.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := bytes.Index(src, []byte("rpc ApplyCredit("))
+	end := bytes.Index(src[start:], []byte("option (w17.event_emit)"))
+	if start < 0 || end < 0 {
+		t.Fatal("ApplyCredit not found in payment_mutation.proto")
+	}
+	block := string(src[start : start+end])
+	var updates int
+	for _, op := range regexp.MustCompile(`(?s)dql:((?:\s*"[^"]*")+)`).FindAllStringSubmatch(block, -1) {
+		dql := strings.Join(regexp.MustCompile(`"([^"]*)"`).FindAllString(op[1], -1), "")
+		if !strings.Contains(dql, "@module.CreditBalance") {
+			continue
+		}
+		if regexp.MustCompile(`^"(INSERT|UPSERT)`).MatchString(dql) && strings.Contains(dql, ":delta") {
+			t.Errorf("an insert into CreditBalance carries the delta, so it refuses every debit:\n%s", dql)
+		}
+		if strings.HasPrefix(dql, `"UPDATE`) && strings.Contains(dql, "balance + :delta") {
+			updates++
+		}
+	}
+	if updates != 1 {
+		t.Errorf("ApplyCredit applies the delta with %d UPDATEs of CreditBalance, want 1", updates)
 	}
 }

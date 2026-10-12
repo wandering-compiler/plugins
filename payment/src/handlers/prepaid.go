@@ -322,7 +322,13 @@ func (h *PaymentServiceHandler) GetMyCreditBalance(ctx context.Context, _ *pb.Ge
 	if err != nil {
 		return nil, err
 	}
-	return h.Query.GetCreditBalance(ctx, &pb.GetCreditBalanceReq{UserId: caller})
+	got, err := h.Query.GetCreditBalance(ctx, &pb.GetCreditBalanceReq{UserId: caller})
+	if absent(err) {
+		// No credit yet: the balance row appears with the first apply. A
+		// wallet that holds nothing is zero, not missing.
+		return &pb.GetCreditBalanceResp{Balance: &pb.CreditBalance{UserId: caller, Balance: "0"}}, nil
+	}
+	return got, err
 }
 
 func init() { takeBackRefundedCredit = takeBackTopupCredit }

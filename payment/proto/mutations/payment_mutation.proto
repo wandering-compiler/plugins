@@ -483,14 +483,21 @@ service PaymentMutation {
   }
 
   // ApplyCredit — append a signed ledger entry AND update the
-  // materialized balance, atomically in one transaction (two ops). The
-  // balance upsert increments the existing row (or inserts on first
-  // credit); the CreditBalance non-negative CHECK rejects an overdraw,
-  // rolling the whole transaction back so the ledger never records a
-  // spend that wasn't applied. The unique idempotency_key makes a
-  // retried apply fail the ledger insert → also a clean rollback (the
-  // handler treats UNIQUE_VIOLATION as an idempotent no-op). Gated
-  // prepaid. Emits CreditApplied.
+  // materialized balance, atomically in one transaction. The
+  // CreditBalance non-negative CHECK rejects an overdraw, rolling the
+  // whole transaction back so the ledger never records a spend that
+  // wasn't applied. The unique idempotency_key makes a retried apply fail
+  // the ledger insert → also a clean rollback (the handler treats
+  // UNIQUE_VIOLATION as an idempotent no-op). Gated prepaid. Emits
+  // CreditApplied.
+  //
+  // The balance is first made to exist (at zero), then changed by an
+  // UPDATE. One upsert carrying the delta cannot take a debit: the
+  // database checks `balance >= 0` on the row an INSERT proposes (the
+  // balance would be the negative delta) before it resolves the conflict
+  // into an update, so every spend was refused whatever the balance. A
+  // debit with no balance makes the zero row, the UPDATE takes it below
+  // zero, and the CHECK rolls all three back.
   rpc ApplyCredit(ApplyCreditReq) returns (ApplyCreditResp) {
     option (w17.contrib.plugin_feature_rpc) = "prepaid";
     option (w17.db.method) = {
@@ -505,12 +512,18 @@ service PaymentMutation {
           "idempotency_key = :idempotency_key"
       }
       ops: {
-        name: "balance"
+        name: "wallet"
         dql:
           "UPSERT INTO @module.CreditBalance SET "
-          "user_id = :user_id, balance = :delta, updated_at = NOW() "
-          "ON CONFLICT (user_id) DO UPDATE SET "
+          "user_id = :user_id, balance = 0 "
+          "ON CONFLICT (user_id) DO NOTHING"
+      }
+      ops: {
+        name: "balance"
+        dql:
+          "UPDATE @module.CreditBalance SET "
           "balance = balance + :delta, updated_at = NOW() "
+          "WHERE user_id = :user_id "
           "RETURNING user_id, balance, updated_at"
       }
     };

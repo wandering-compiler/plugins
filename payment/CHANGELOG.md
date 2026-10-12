@@ -16,6 +16,13 @@ What changes:
 - **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
 
+### Spending credit works on a real database
+
+`SpendCredit`, and taking back a refunded top-up's credit, were refused as "insufficient credit balance" whatever the balance. `ApplyCredit` wrote the balance with an upsert that inserted the delta, and the database checks `balance >= 0` on the row an INSERT proposes before it notices the conflict that would turn the insert into an update. For a debit, the proposed balance is negative. The in-memory store the tests used did not behave like that.
+
+- **`ApplyCredit` makes the balance row at zero if it is missing, then applies the delta with an `UPDATE`**, all in one transaction. An overdraw, including a spend by someone who never had credit, still rolls everything back.
+- **`GetMyCreditBalance` and `GetMyUsageMeter` answer zero** before the first grant or report, instead of `NOT_FOUND`.
+
 ### A payment's key belongs to the caller
 
 `CreatePayment` and `TopUpCredit` stored the caller's idempotency key as it came and sent it to the provider the same way. Keys were one space for every user and both kinds of charge. When a second user chose a key someone had already used (`order-1` is an obvious choice), the provider refused the charge as a reuse with different parameters. A top-up under the key of an earlier payment was refused the same way.

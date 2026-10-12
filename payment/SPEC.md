@@ -233,8 +233,9 @@ which.
   `user_id` indexed), `CreditBalance` (`user_id` primary key, raw check
   `balance >= 0`), `CreditTopup` (`provider_payment_id` unique, nullable
   `granted_at`). Queries `GetCreditBalance`, `GetCreditLedgerByKey`,
-  `GetCreditTopupByProviderId`. Mutations `ApplyCredit` (ledger insert and
-  balance upsert in one transaction; emits `CreditApplied`),
+  `GetCreditTopupByProviderId`. Mutations `ApplyCredit` (ledger insert, the
+  balance row made at zero if absent, and the balance update, in one
+  transaction; emits `CreditApplied`),
   `CreateCreditTopup`, `MarkTopupGranted` (guarded `granted_at IS NULL`).
   Service methods `GrantCredit`, `SpendCredit`, `TopUpCredit`. REST endpoint
   `GET /billing/credit/balance` (storage query direct, bearer). The
@@ -243,7 +244,7 @@ which.
 
 | id | invariant | category | proof |
 |---|---|---|---|
-| `prepaid/no-overdraw` | A balance MUST NOT go below zero, also under concurrent spends. The guarantee MUST come from the `balance >= 0` check rolling back the whole apply, not from a read before the write. An overdraw MUST answer `FailedPrecondition`. | Consistency & concurrency | `TestSpendCredit_Insufficient`, `TestFlow_Credit_SpendGrantInvariants`, `TestFlow_Credit_ConcurrentSpendsNeverOverdraw`. **Unit (mock) only:** a live test would fire N concurrent spends against a balance for N−k and assert exactly N−k succeed and the balance ends at zero. |
+| `prepaid/no-overdraw` | A balance MUST NOT go below zero, also under concurrent spends. The guarantee MUST come from the `balance >= 0` check rolling back the whole apply, not from a read before the write. An overdraw, including a spend by a principal who never had credit, MUST answer `FailedPrecondition`. The delta MUST be applied by an `UPDATE` of a row made at zero, never inserted: the database checks the row an INSERT proposes (balance = the negative delta) before an upsert resolves the conflict, so an inserted delta refuses every debit whatever the balance. | Consistency & concurrency | `TestSpendCredit_Insufficient`, `TestFlow_Credit_SpendGrantInvariants`, `TestFlow_Credit_ConcurrentSpendsNeverOverdraw`, `TestApplyCredit_ADebitNeverProposesANegativeRow` (holds the DQL to that shape, which no in-memory store can show). **Unit (mock) only:** a live test would fire N concurrent spends against a balance for N−k and assert exactly N−k succeed and the balance ends at zero. |
 | `prepaid/ledger-and-balance-atomic` | The ledger row and the balance change MUST commit together or not at all. The balance MUST always equal the sum of the ledger's deltas for the principal. | Consistency & concurrency | `TestFlow_Credit_SpendGrantInvariants`. **Unit (mock) only:** a live test would compare `SUM(delta)` with `balance` after a mix of grants, refused spends and duplicate keys. |
 | `prepaid/apply-idempotent` | A grant or spend retried with its key MUST apply once and answer the current balance. | Consistency & concurrency | `TestApplyCredit_IdempotentOnDuplicate`, `TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce` |
 | `prepaid/key-scoped` | A key MUST be scoped by operation and principal, so the same key on another principal, or a spend reusing a grant's key, is a separate apply and never a silent no-op reported as done. A caller key shaped like a stored scoped or top-up key MUST NOT match one. | Consistency & concurrency | `TestFlow_Credit_KeyReuseAcrossPrincipalsAndKinds_IsNotASilentNoOp`, `TestFlow_Credit_CallerKeyShapedLikeAScopedKey_IsNotAMatch`, `TestScopedKey`, `TestScopedKey_PartsCannotShiftAcrossEachOther` |
@@ -498,7 +499,7 @@ No handler opens a transaction. Each local write is one generated mutation:
 
 | Flow | Writes held together | Proof |
 |---|---|---|
-| ApplyCredit | CreditLedger insert · CreditBalance upsert (check) | `TestFlow_Credit_SpendGrantInvariants` (mock) |
+| ApplyCredit | CreditLedger insert · CreditBalance row at zero (`DO NOTHING`) · CreditBalance update (check) | `TestFlow_Credit_SpendGrantInvariants` (mock) |
 | RecordUsage | UsageRecord insert · UsageMeter upsert | `TestReportUsage` (mock) |
 | TopUpCredit | **Not together:** Payment insert, then CreditTopup insert. A success arriving between them is retried by the origin mark. | `TestFlow_TopUpSuccessBeforeItsTopupRow_IsRetriedNotLost` |
 | Top-up grant | **Not together:** ApplyCredit, then MarkTopupGranted. A lost stamp is safe because the ledger key is the dedup. | `TestFlow_TopUpStampFailure_DoesNotDoubleGrant` |
