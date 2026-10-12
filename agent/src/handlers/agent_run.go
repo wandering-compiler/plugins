@@ -217,7 +217,10 @@ func (t *remoteTool) Call(ctx context.Context, args string) (string, error) {
 	// The loop's id for this call, so the ToolCall and the Activity that
 	// brackets it carry the same one.
 	callID := llm.CallID(ctx)
-	if callID == "" {
+	if callID == "" || t.pending.has(callID) {
+		// No loop id, or one already waiting: a tool called from inside
+		// another inherits its context, and reusing the id would overwrite
+		// the outer call's waiter.
 		callID = llm.NewCallID()
 	}
 	wait := t.pending.add(callID)
@@ -290,6 +293,13 @@ func (p *pendingCalls) add(id string) <-chan toolReply {
 	}
 	p.ch[id] = c
 	return c
+}
+
+func (p *pendingCalls) has(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.ch[id]
+	return ok
 }
 
 func (p *pendingCalls) drop(id string) {
