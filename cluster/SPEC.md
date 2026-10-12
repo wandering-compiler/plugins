@@ -75,8 +75,8 @@ comments still refer to it (see `base` registry gap 3). No `go_files_combined`.
 
 **Env knobs (control plane).** `client_cert_path`, `client_key_path`
 (required; loaded and parsed as a pair at boot), `dial_timeout_seconds`
-(default 5; `<= 0` uses 5), `ticket_ttl_seconds` (default 30; **read by
-nothing**, see finding 6).
+(default 5; `<= 0` uses 5). The claim window of a ticket is the relay's
+`--ticket-ttl`, not a control-plane knob (finding 6).
 
 **Relay configuration** (flags, each defaulted from a `RELAY_*` variable):
 listeners `--listen` (management, 13444), `--attach-listen` (13446),
@@ -114,7 +114,7 @@ which.
 | 2 | Nothing bounds the queue. `Pool.Reserve` and `Pool.Wait` append to an unbounded slice and map, with no limit per relay and none per caller. A caller allowed `ReserveTask` can add reservations as fast as it can call (each lives 10 s unpolled, indefinitely when polled), which grows relay memory and pushes every later caller back in a strict FIFO. Queue position and change notification are linear scans, so the cost per mutation and per poll grows with the queue. | `base/queue-bounded`, `cluster/fairness` | `src/lib/relaycore/relaycore.go` (`Reserve`, `enqueueLocked`, `positionLocked`, `notifyLocked`); `src/handlers/reservation.go` (`ReserveTask`) |
 | 4 | A ban ends the worker's attach stream and stops new work reaching it, but neither its tunnel nor the work already running on it. The tunnel is checked against bans and certificate validity only when it is accepted, so a tunnel opened before a ban (or before the certificate expired) stays a connected backend until the worker hangs up. The admin's ban confirmation says relays "drop their connections". | `base/ban-ends-running-work`, `base/tunnel-revalidated` | `src/lib/relayserver/tunnellistener.go` (`acceptTunnel`), `workerattach.go` (`holdAdmitted`) |
 | 5 | Bans reach a relay only as the complete set on the next control-plane call, and the relay replaces its set wholesale with whatever arrives, with no version. (a) Two console replicas can deliver an older set after a newer one, lifting a fresh ban until the next call. (b) A restarted relay holds no bans until its first contact, and in that window a banned key can attach and **renew its certificate** (`Renew` checks only the in-memory set). (c) A disabled relay is never contacted (`ListEnabled`), so it never learns bans taken after it was disabled and keeps renewing those workers' certificates. | `base/ban-reaches-every-relay`, `base/banned-key-cannot-renew` | `src/lib/workeradmit/workeradmit.go` (`SetBanned`), `src/lib/relayserver/enroll.go` (`Renew`), `src/handlers/schedule_task.go` (`placeable`), `check_workers.go` (`CheckWorkers`) |
-| 6 | `ticket_ttl_seconds` is inert. The manifest describes it as "how long a granted ticket stays claimable"; `RegisterPlugin` never reads it and the generated config calls it advisory. The claim window is the relay's `--ticket-ttl`. An operator who sets the knob changes nothing. | `cluster/boot-no-inert-knob` | `src/plugin.go` (`RegisterPlugin`), `src/gen/interfaces.go` (`EnvConfig.TicketTtlSeconds`) |
+| 6 | **Fixed (removed).** `ticket_ttl_seconds` was inert. The manifest described it as "how long a granted ticket stays claimable", but `RegisterPlugin` never read it and the generated config called it advisory, so an operator who set it changed nothing. The knob is gone from `plugin.yaml` and `EnvConfig`; the claim window is the relay's `--ticket-ttl`. | `cluster/boot-no-inert-knob` | `plugin.yaml` (`env`), `src/gen/interfaces.go` (`EnvConfig`) |
 | 7 | Every `ScheduleTask` and `ReserveTask` opens a new TLS connection (full handshake: a fresh `tls.Config` and no session cache per dial) to **every** enabled relay and writes one `UPDATE` per enabled relay row (`RecordRelayReached` or `RecordRelayFailed`). Those writes run one after another, before the placement proceeds, each with its own 5 s timeout, so a slow database delays every placement by up to 5 s per relay even though a failed write is ignored. Every `GetReservation` poll (default every 3 s per waiting client) reads the full ban set and opens a new TLS connection. The cost of one placement is linear in the number of relays, in handshakes and in database writes. | `base/placement-cost-bounded`, `base/observed-state-off-hot-path` | `src/handlers/schedule_task.go` (`placeable`, `poll`, `noteOK`, `dialReady`), `reservation.go` (`GetReservation`), `src/lib/relaydial/relaydial.go` (`Dial`) |
 | 8 | The ban-set read behind every relay-bound call (`FingerprintsByState`) filters `Worker.state`, which has no index, and returns the whole set. The set is sent in one `w17-cluster-banned` header. Bans never expire and Worker rows are never deleted, so both the scan and the header grow without bound for the life of the pool. | `cluster/lookups-indexed`, `cluster/ban-set-bounded` | `proto/queries/worker_query.proto` (`FingerprintsByState`), `proto/types/models.proto` (`Worker.state`), `src/lib/workeradmit/workeradmit.go` (`WithBans`) |
 
@@ -384,7 +384,7 @@ which.
 2. `--control-plane-fingerprint` is not checked for shape at boot; a mistyped
    value fails closed (nothing can manage the relay) but only shows up as
    refused handshakes in the log.
-3. `ticket_ttl_seconds` is accepted and ignored (finding 6).
+3. Fixed: `ticket_ttl_seconds`, which was accepted and ignored, is removed (finding 6).
 
 ---
 
@@ -492,8 +492,8 @@ id IN (…)`.
 |---|---|---|---|
 | `cluster/boot-identity` | Missing or unusable `client_cert_path`/`client_key_path` | `RegisterPlugin` | `TestRegisterPlugin_RefusesAnUnusableConfiguration` |
 | `cluster/boot-relay` | Relay without proxy address, control-plane pin, identity or CA; conflicting identity sources; malformed `RELAY_*`; poll timeout under twice the interval | relay `serve`, `parseConfig` | `TestServe_RefusesToStartMisconfigured`, `TestParseConfig_RefusesAMalformedVariable` |
-| `cluster/boot-no-inert-knob` | A knob the manifest documents MUST have the documented effect, or refuse | — | none (finding 6: `ticket_ttl_seconds` is ignored) |
-| **Not** boot-checked (gaps) | `dial_timeout_seconds <= 0` (becomes 5 s); a malformed `--control-plane-fingerprint` (fails closed at every handshake); `ticket_ttl_seconds` (ignored) | — | none |
+| `cluster/boot-no-inert-knob` | A knob the manifest documents MUST have the documented effect, or refuse | — | none (the inert `ticket_ttl_seconds` was removed; the claim window is the relay's `--ticket-ttl`) |
+| **Not** boot-checked (gaps) | `dial_timeout_seconds <= 0` (becomes 5 s); a malformed `--control-plane-fingerprint` (fails closed at every handshake) | — | none |
 
 ---
 

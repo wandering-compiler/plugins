@@ -47,17 +47,6 @@ type EnvConfig struct {
 	// purpose: an unreachable relay must be skipped fast enough that
 	// scheduling falls through to a healthy one.
 	DialTimeoutSeconds int
-
-	// TicketTtlSeconds is advisory here — the RELAY mints tickets and decides
-	// how long they stay claimable. Carried so a deployment can state its
-	// intent in one place; a relay that disagrees wins, because it is the one
-	// holding the slot.
-	//
-	// `Ttl` and not `TTL`: the codegen upper-cases a SMALL set of initialisms
-	// whole (`api`, `url`, `id`, `http`, …) when it turns a manifest name into
-	// a Go field, and `ttl` is not in it. The bundle references the name IT
-	// produces, so this one is not a style choice.
-	TicketTtlSeconds int
 }
 
 // HandlerRegistry is how the plugin hands its server implementation to the
