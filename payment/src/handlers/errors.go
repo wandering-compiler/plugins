@@ -143,8 +143,8 @@ var errNoLocalRecord = errors.New("no local record for the provider object")
 // functions and its bundle build failed on an undefined identifier — while
 // everything compiled in this module, which has every file at once.
 //
-// Found by `make check-plugin-stage` on its first run; nobody had reported it,
-// because it only breaks the combination nobody happened to try.
+// `make check-stage` catches this class: it only breaks a feature combination
+// that the module's own build, which has every file at once, never sees.
 
 // Every monetary column is DECIMAL(20, 4) (models.proto): 16 integer
 // digits, 4 fractional.
