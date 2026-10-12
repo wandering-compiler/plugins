@@ -93,6 +93,14 @@ func Handler(pick Picker) grpc.StreamHandler {
 				if errors.Is(err, io.EOF) {
 					return nil
 				}
+				// The TUNNEL closed under the call (the worker was banned and
+				// the relay cut it, or it hung up) while the caller was still
+				// there. gRPC reports that as Canceled, which reads as the
+				// caller's own doing; say what happened instead.
+				if status.Code(err) == codes.Canceled && ss.Context().Err() == nil {
+					return refusal.New(codes.Unavailable, refusal.WorkerLost,
+						"relay: the worker's tunnel closed during the call: "+status.Convert(err).Message())
+				}
 				return err
 			}
 		}

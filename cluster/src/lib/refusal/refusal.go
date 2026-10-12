@@ -53,7 +53,8 @@ const (
 	RelayMisconfigured = "RELAY_MISCONFIGURED"
 
 	// WorkerLost — a worker was picked and the call could not be opened on its
-	// tunnel. Retryable through a new placement.
+	// tunnel, or the tunnel closed while the call ran (the worker hung up, or
+	// was banned and cut off). Retryable through a new placement.
 	WorkerLost = "WORKER_LOST"
 
 	// ReservationUnknown — a poll named a reservation the relay does not

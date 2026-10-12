@@ -442,3 +442,43 @@ func TestBackends_DropWhereClosesTheSelectedTunnels(t *testing.T) {
 		t.Error("the other worker's tunnel was closed")
 	}
 }
+
+// A ban cuts a REAL tunnel with a redeemed ticket running on it: the tunnel
+// leaves, its own close hook finding it gone changes nothing, and the call's
+// release still gives the pool its slot back.
+func TestBackends_DropWhereUnderARunningCallReleasesItsSlot(t *testing.T) {
+	b := NewBackends()
+	pool := poolWith(t, 1)
+	srv := tunnelTo(t, b, "w")
+	defer srv.Stop()
+	pick := TicketPicker(pool, b, nil)
+	be, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.DropWhere(func(fp string) bool { return fp == "w" })
+	if n, c := b.Count(), b.Capacity(); n != 0 || c != 0 {
+		t.Fatalf("Count = %d, Capacity = %d after the ban, want 0 and 0", n, c)
+	}
+	eventually(t, "the cut tunnel shuts down", func() bool { return be.Conn.GetState() == connectivity.Shutdown })
+	be.Release()
+	if st := pool.Stats(); st.Held() != 0 {
+		t.Errorf("pool = %+v after the cut call released, want its slot back", st)
+	}
+}
+
+// A worker banned and unbanned before its attach stream noticed keeps its
+// announcement: the tunnel it reopens carries capacity again at once, with
+// no new status from the worker.
+func TestBackends_AnUnbannedWorkersNewTunnelCarriesItsAnnouncement(t *testing.T) {
+	b := NewBackends()
+	attach(t, b, "w", 2, true)
+	b.DropWhere(func(string) bool { return true })
+	if c := b.Capacity(); c != 0 {
+		t.Fatalf("Capacity = %d with the tunnel cut, want 0", c)
+	}
+	b.Add("w", conn(t))
+	if c := b.Capacity(); c != 2 {
+		t.Errorf("Capacity = %d after the worker reconnected, want its announced 2", c)
+	}
+}

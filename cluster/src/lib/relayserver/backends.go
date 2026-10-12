@@ -292,6 +292,15 @@ func (b *Backends) watch(fingerprint string, conn *grpc.ClientConn, gen uint64) 
 // DropWhere closes and forgets the tunnel of every worker drop selects —
 // used when a worker is banned. Closing the connection ends the calls still
 // running on it too: a ban stops the work, not only the next piece of it.
+//
+// drop runs under b.mu, so it must not call back into Backends.
+//
+// The PROFILE stays. It belongs to the attach stream, which ends on its own
+// at its next poll and clears it under its own generation. Deleting it here
+// left a worker banned and unbanned within one poll permanently out of the
+// capacity sum: its attach stream never ended, so it never announced again,
+// and the tunnel it reopened carried nothing. Without a tunnel the profile
+// counts for nothing anyway (capacityLocked, take).
 func (b *Backends) DropWhere(drop func(fingerprint string) bool) {
 	b.mu.Lock()
 	var closing []*grpc.ClientConn
@@ -299,7 +308,6 @@ func (b *Backends) DropWhere(drop func(fingerprint string) bool) {
 		if drop(fp) {
 			closing = append(closing, be.conn)
 			b.removeLocked(fp)
-			delete(b.profiles, fp)
 		}
 	}
 	if len(closing) == 0 {

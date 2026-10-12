@@ -82,5 +82,13 @@ func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends,
 		return fmt.Errorf("relay: turning the tunnel around: %w", err)
 	}
 	backends.Add(fp, conn)
+	// And again AFTER Add. A ban landing between the check above and Add
+	// found nothing to drop (Backends.DropWhere runs once, when the set
+	// arrives), and the tunnel would have stayed open for the banned worker.
+	// Either the ban's drop sees this tunnel, or this re-check sees the ban.
+	if !workers.Admitted(fp) {
+		backends.RemoveConn(fp, conn)
+		return fmt.Errorf("relay: worker %s was banned while its tunnel opened", fp)
+	}
 	return nil
 }

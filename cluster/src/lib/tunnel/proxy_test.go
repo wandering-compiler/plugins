@@ -433,3 +433,36 @@ func TestHandler_ADeadBackendIsWorkerLostAndReleased(t *testing.T) {
 	}
 	rel.await(t)
 }
+
+// A tunnel closed UNDER a running call — the relay cutting a banned worker
+// off — ends the worker's call, tells the caller WORKER_LOST rather than a
+// Canceled that reads as its own doing, and releases the slot exactly once.
+func TestHandler_ATunnelClosedMidCallEndsTheWorkAndIsWorkerLost(t *testing.T) {
+	w := newWorker()
+	backend, _ := reversed(t, w, nil)
+	rel := newReleases()
+	cc := proxy(t, func(context.Context, string) (Backend, error) {
+		return Backend{Conn: backend, Release: rel.release}, nil
+	})
+	errc := make(chan error, 1)
+	go func() {
+		_, err := pb.NewClusterServiceClient(cc).RelayStats(bounded(t), &pb.RelayStatsReq{})
+		errc <- err
+	}()
+	select {
+	case <-w.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call never reached the worker")
+	}
+	_ = backend.Close()
+	select {
+	case <-w.cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tunnel closed and the worker's call is still running")
+	}
+	err := <-errc
+	if status.Code(err) != codes.Unavailable || refusal.ReasonOf(err) != refusal.WorkerLost {
+		t.Errorf("the caller saw %v (reason %q), want Unavailable / %s", err, refusal.ReasonOf(err), refusal.WorkerLost)
+	}
+	rel.await(t)
+}

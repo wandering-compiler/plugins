@@ -86,3 +86,21 @@ func TestOnBansChanged_RunsWithTheNewSet(t *testing.T) {
 		t.Error("the hook did not run, or ran before the ban took effect")
 	}
 }
+
+// The set arrives on every management call; the hook, which scans every
+// tunnel, runs only when someone is newly banned.
+func TestOnBansChanged_RunsOnlyForANewBan(t *testing.T) {
+	r := New()
+	runs := 0
+	r.OnBansChanged(func() { runs++ })
+	r.SetBanned([]string{"w1"})
+	r.SetBanned([]string{"W1"})
+	r.SetBanned(nil)
+	if runs != 1 {
+		t.Fatalf("hook ran %d times for one new ban, a repeat and a lift, want 1", runs)
+	}
+	r.SetBanned([]string{"w1"})
+	if runs != 2 {
+		t.Errorf("hook ran %d times, want 2 — banning again after a lift is a new ban", runs)
+	}
+}

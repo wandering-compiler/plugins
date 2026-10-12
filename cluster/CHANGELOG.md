@@ -17,6 +17,9 @@ A ban stopped new work at the next check, but the tunnel a worker had already op
 
 - **The relay closes a banned worker's tunnel as soon as the ban set reaches it** (`workeradmit.Registry.OnBansChanged` → `Backends.DropWhere`). Closing the connection ends the calls still running on it.
 - **The attach stream** still ends at its next poll, as before.
+- **A call cut that way ends with `WORKER_LOST`** (Unavailable) at the caller, not a `Canceled` that read as the caller's own doing, and its ticket's slot is returned.
+- **A tunnel that was opening when the ban arrived** is closed too: admission is checked again once the tunnel is registered.
+- **A worker banned and unbanned before its attach stream noticed** keeps its announced capacity when it reconnects its tunnel.
 
 ## 0.1.0-rc.12
 
