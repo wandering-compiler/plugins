@@ -33,8 +33,12 @@ func outputCeiling(params responses.ResponseNewParams) int {
 	if !params.MaxOutputTokens.Valid() {
 		return maxStreamOutput
 	}
-	if n := params.MaxOutputTokens.Value * bytesPerBudgetToken; n > maxStreamOutput {
-		return int(n)
+	const most = int64(^uint(0) >> 2) // far past any budget, and an int on every platform
+	switch n := params.MaxOutputTokens.Value; {
+	case n > most/bytesPerBudgetToken:
+		return int(most)
+	case n*bytesPerBudgetToken > maxStreamOutput:
+		return int(n * bytesPerBudgetToken)
 	}
 	return maxStreamOutput
 }

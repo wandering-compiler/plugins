@@ -335,7 +335,7 @@ func (x *GetLabelSpendReq) GetTo() *timestamppb.Timestamp {
 // ScopeSpendLine, for the same reason.
 //
 // These lines do NOT partition the scope's spend, and the difference is not
-// rounding. A call carries as many labels as the caller sent, so a call
+// only rounding (each line is rounded once, on its own). A call carries as many labels as the caller sent, so a call
 // labelled with two values of the same key is counted under BOTH — summing
 // the lines then exceeds the scope total. Attributing a shared call to every
 // subject that used it is the intended reading ("aggregating later is always
