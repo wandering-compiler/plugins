@@ -130,18 +130,30 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           NO_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') && '1' || '0' }}
 
+  # The adoption test: every public example generated, built and tested with
+  # the plugins of this commit in place of the ones it vendors. It needs the
+  # W17_TOKEN secret, which a fork's pull request does not receive; there it
+  # fails like check-names does, and a maintainer brings the branch in.
+  adoption:
+    uses: wandering-compiler/examples/.github/workflows/adoption.yml@main
+    with:
+      plugins_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    secrets:
+      W17_TOKEN: ${{ secrets.W17_TOKEN }}
+
   # The one check branch protection requires: green only when every job above
   # is, whatever the plugin list grows to.
   ci-ok:
     if: always()
-    needs: [plugin, repo, changelog]
+    needs: [plugin, repo, changelog, adoption]
     runs-on: ubuntu-latest
     steps:
       - run: |
           # changelog runs on pull requests only; skipped on a push to main.
-          plugin="${{ needs.plugin.result }}" repo="${{ needs.repo.result }}" changelog="${{ needs.changelog.result }}"
-          if [ "$plugin" = success ] && [ "$repo" = success ] && { [ "$changelog" = success ] || [ "$changelog" = skipped ]; }; then
+          plugin="${{ needs.plugin.result }}" repo="${{ needs.repo.result }}" changelog="${{ needs.changelog.result }}" adoption="${{ needs.adoption.result }}"
+          if [ "$plugin" = success ] && [ "$repo" = success ] && [ "$adoption" = success ] \
+            && { [ "$changelog" = success ] || [ "$changelog" = skipped ]; }; then
             exit 0
           fi
-          echo "plugin=$plugin repo=$repo changelog=$changelog"
+          echo "plugin=$plugin repo=$repo changelog=$changelog adoption=$adoption"
           exit 1
