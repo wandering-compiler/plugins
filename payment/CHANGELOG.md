@@ -25,6 +25,14 @@ What changes:
 
 **Upgrading.** An activation that lists `features:` explicitly replaces the defaults, so one that lists `subscriptions` without `stripe_webhooks` is now refused at codegen (`feature "subscriptions" requires "stripe_webhooks"`). Add `stripe_webhooks` to the list, and set `webhook_signing_secret`: with the webhooks on, the bundle no longer boots without it. Point the provider's webhook at `POST /webhooks/stripe`.
 
+### Provider error text stays in the log
+
+A failed provider call used to reach the caller as `payment provider error: <the provider's text>`. That text carries the endpoint path, the provider's own diagnostics and, for a rejected key, a masked form of the key.
+
+- **The caller gets the class** (`FAILED_PRECONDITION` for a decline, `INVALID_ARGUMENT` for a refused request, `UNAVAILABLE` otherwise) **and a fixed sentence.** The full cause is logged at WARN.
+- **The exception is the caller's own input.** An amount the currency cannot represent is still explained, because that message names only the input (`backend.InputError`, which matches `backend.ErrInvalidRequest`).
+
+
 ### Run a project against Stripe's API mock
 
 - **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL root (or carries credentials, a query or a fragment) is refused at startup, and so is a live key (`sk_live_…`, `rk_live_…`) together with it.

@@ -34,7 +34,7 @@ var unsupportedCurrencies = map[string]bool{"bhd": true, "jod": true, "kwd": tru
 // invalidAmount is the error every amount refusal carries: the request
 // cannot succeed as written, so it wraps backend.ErrInvalidRequest.
 func invalidAmount(format string, args ...any) error {
-	return fmt.Errorf("%w: "+format, append([]any{backend.ErrInvalidRequest}, args...)...)
+	return &backend.InputError{Msg: fmt.Sprintf(format, args...)}
 }
 
 // toMinorUnits converts a decimal-string amount ("19.99") to the
@@ -51,7 +51,7 @@ func invalidAmount(format string, args ...any) error {
 func toMinorUnits(amount, currency string) (int64, error) {
 	cur := strings.ToLower(strings.TrimSpace(currency))
 	if unsupportedCurrencies[cur] {
-		return 0, invalidAmount("stripe: %s is a three-decimal currency, which this driver does not charge", cur)
+		return 0, invalidAmount("%s is a three-decimal currency, which this driver does not charge", cur)
 	}
 	scale, wire := 2, int64(1)
 	switch {
@@ -62,7 +62,7 @@ func toMinorUnits(amount, currency string) (int64, error) {
 	}
 	s := strings.TrimSpace(amount)
 	if s == "" {
-		return 0, invalidAmount("stripe: empty amount")
+		return 0, invalidAmount("empty amount")
 	}
 	neg := false
 	switch s[0] {
@@ -73,7 +73,7 @@ func toMinorUnits(amount, currency string) (int64, error) {
 		s = s[1:]
 	}
 	if s == "" {
-		return 0, invalidAmount("stripe: invalid amount %q", amount)
+		return 0, invalidAmount("invalid amount %q", amount)
 	}
 	intPart, fracPart := s, ""
 	if dot := strings.IndexByte(s, '.'); dot >= 0 {
@@ -91,7 +91,7 @@ func toMinorUnits(amount, currency string) (int64, error) {
 		fracPart = fracPart[:len(fracPart)-1]
 	}
 	if len(fracPart) > scale {
-		return 0, invalidAmount("stripe: amount %q has more fractional digits than %s allows (scale %d)", amount, currency, scale)
+		return 0, invalidAmount("amount %q has more fractional digits than %s allows (scale %d)", amount, currency, scale)
 	}
 	for len(fracPart) < scale {
 		fracPart += "0"
@@ -101,16 +101,16 @@ func toMinorUnits(amount, currency string) (int64, error) {
 	for i := 0; i < len(digits); i++ {
 		c := digits[i]
 		if c < '0' || c > '9' {
-			return 0, invalidAmount("stripe: invalid amount %q", amount)
+			return 0, invalidAmount("invalid amount %q", amount)
 		}
 		d := int64(c - '0')
 		if n > (math.MaxInt64-d)/10 {
-			return 0, invalidAmount("stripe: amount %q overflows the provider's integer minor units", amount)
+			return 0, invalidAmount("amount %q overflows the provider's integer minor units", amount)
 		}
 		n = n*10 + d
 	}
 	if n > math.MaxInt64/wire {
-		return 0, invalidAmount("stripe: amount %q overflows the provider's integer minor units", amount)
+		return 0, invalidAmount("amount %q overflows the provider's integer minor units", amount)
 	}
 	n *= wire
 	if neg {
@@ -130,7 +130,7 @@ func positiveMinorUnits(amount, currency string) (int64, error) {
 		return 0, err
 	}
 	if n <= 0 {
-		return 0, invalidAmount("stripe: amount %q must be positive", amount)
+		return 0, invalidAmount("amount %q must be positive", amount)
 	}
 	return n, nil
 }

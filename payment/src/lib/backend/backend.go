@@ -40,6 +40,17 @@ var (
 	ErrDeclined = errors.New("payment declined by the provider")
 )
 
+// InputError is an invalid request the driver found in the caller's own input
+// before calling the provider (an amount the currency cannot represent). Its
+// message describes only that input, so it may be shown to the caller; a
+// provider's own error text never is. It matches [ErrInvalidRequest].
+type InputError struct{ Msg string }
+
+func (e *InputError) Error() string { return e.Msg }
+
+// Is makes an InputError an [ErrInvalidRequest].
+func (e *InputError) Is(target error) bool { return target == ErrInvalidRequest }
+
 // Money is a currency amount as a decimal string (e.g. "19.99") plus a
 // lowercase ISO-4217 currency code. String carrier = exact, lossless —
 // the same representation the DECIMAL columns use.

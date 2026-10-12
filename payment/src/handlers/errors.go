@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -68,15 +69,23 @@ func notFound(msg string) error {
 // retry UNAVAILABLE automatically, so a declined card or an over-precise
 // amount was resubmitted on a loop that could never succeed, and the
 // caller was told "try again later" instead of why.
+//
+// The caller gets the class and a fixed sentence, never the provider's text:
+// that carries the endpoint path, the provider's own diagnostics and, for a
+// rejected key, a masked form of the key. The full cause goes to the log.
 func providerFailure(cause error) error {
-	code := codes.Unavailable
+	code, msg := codes.Unavailable, "the payment provider is unavailable; try again later"
+	var input *backend.InputError
 	switch {
+	case errors.As(cause, &input):
+		return status.Error(codes.InvalidArgument, input.Msg) // the caller's own input, nothing of the provider's
 	case errors.Is(cause, backend.ErrDeclined):
-		code = codes.FailedPrecondition
+		code, msg = codes.FailedPrecondition, "the payment was declined"
 	case errors.Is(cause, backend.ErrInvalidRequest):
-		code = codes.InvalidArgument
+		code, msg = codes.InvalidArgument, "the payment provider refused the request"
 	}
-	return status.Errorf(code, "payment provider error: %v", cause)
+	slog.Warn("payment: provider call failed", "code", code.String(), "err", cause)
+	return status.Error(code, msg)
 }
 
 // absent reports a single-row read that found nothing. Generated storage
