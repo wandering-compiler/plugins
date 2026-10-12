@@ -269,11 +269,10 @@ func TestWait_PositionUpdatesAsTheQueueShortens(t *testing.T) {
 
 // An empty relay grants NOTHING.
 //
-// This is the defect a consumer reported: capacity was a static RELAY_CAPACITY with
-// no relationship to the attached fleet, so a relay with zero workers handed
-// out its full complement of tickets. Each caller was told TaskGranted —
-// success, by the contract — and discovered at the proxy that there was nobody
-// to run it. A grant is supposed to BE a slot.
+// A static RELAY_CAPACITY with no relationship to the attached fleet would let a
+// relay with zero workers hand out its full complement of tickets. Each caller
+// would be told TaskGranted — success, by the contract — and discover at the
+// proxy that there was nobody to run it. A grant is supposed to BE a slot.
 func TestWait_AnEmptyRelayGrantsNothing(t *testing.T) {
 	p, err := New(Options{TicketTTL: time.Minute})
 	if err != nil {

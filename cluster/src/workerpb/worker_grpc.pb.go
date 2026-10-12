@@ -60,13 +60,12 @@ type WorkerAttachClient interface {
 	// cluster.w17 reason WORKER_BANNED. Every other worker is admitted at once:
 	// the certificate IS the admission, and a ban is the exception.
 	//
-	// BIDIRECTIONAL since 2026-09-25, and the reason is the difference between
+	// BIDIRECTIONAL, and the reason is the difference between
 	// "connected" and "able to work". A one-shot announcement could only be
 	// contradicted by hanging up, so the sole way to stop receiving work was to
 	// drop the tunnel — which kills the sessions still running on it. A browser
 	// pool cannot be deployed that way, and a hung engine on a healthy socket
-	// kept being handed work with nothing able to say otherwise (a consumer,
-	// 2026-09-25).
+	// kept being handed work with nothing able to say otherwise.
 	Attach(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WorkerMessage, AttachEvent], error)
 }
 
@@ -115,13 +114,12 @@ type WorkerAttachServer interface {
 	// cluster.w17 reason WORKER_BANNED. Every other worker is admitted at once:
 	// the certificate IS the admission, and a ban is the exception.
 	//
-	// BIDIRECTIONAL since 2026-09-25, and the reason is the difference between
+	// BIDIRECTIONAL, and the reason is the difference between
 	// "connected" and "able to work". A one-shot announcement could only be
 	// contradicted by hanging up, so the sole way to stop receiving work was to
 	// drop the tunnel — which kills the sessions still running on it. A browser
 	// pool cannot be deployed that way, and a hung engine on a healthy socket
-	// kept being handed work with nothing able to say otherwise (a consumer,
-	// 2026-09-25).
+	// kept being handed work with nothing able to say otherwise.
 	Attach(grpc.BidiStreamingServer[WorkerMessage, AttachEvent]) error
 	mustEmbedUnimplementedWorkerAttachServer()
 }

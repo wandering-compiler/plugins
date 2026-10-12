@@ -81,7 +81,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // the watcher closed the dead connection while holding the backends lock,
 // closing ran the tunnel's close hook, and the hook took the same lock — after
 // which every tunnel, attach and RelayStats call queued behind it forever
-// (found live: "0 placeable", RelayStats DeadlineExceeded, after one run).
+// ("0 placeable", RelayStats DeadlineExceeded, after one run).
 func TestBackends_AWorkerHangingUpDoesNotDeadlockTheRelay(t *testing.T) {
 	b := NewBackends()
 	worker := tunnelTo(t, b, "w")
