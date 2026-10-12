@@ -1,2 +1,5 @@
 cover.out
 test.out
+# A release's signature travels in its tag; a plugin.sig left by a local
+# `w17ctl plugin sign` must never be committed (tools/release.sh refuses it).
+/*/plugin.sig

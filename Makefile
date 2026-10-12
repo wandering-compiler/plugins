@@ -11,7 +11,7 @@ ALL_PLUGINS := $(patsubst %/plugin.yaml,%,$(wildcard */plugin.yaml))
 PLUGINS     := $(if $(PLUGIN),$(PLUGIN),$(ALL_PLUGINS))
 BUF_IMAGE   ?= w17-plugins-buf:local
 GO          ?= go
-# The render a release uses is w17ctl's own, at the version pinned in
+# The render the checks use is w17ctl's own, at the version pinned in
 # tools/w17ctl-version (tools/w17ctl.sh installs it); never whatever is on PATH.
 RENDER_W17CTL = $$(tools/w17ctl.sh)
 # golangci-lint at the version pinned in tools/golangci-version, with this
@@ -102,8 +102,8 @@ check-gen-pb: plugins-exist buf-image
 		rm -rf "$$work"; echo ">> gen-pb $$p: committed pb matches"; \
 	done
 
-# The installable form a release carries, rendered by the pinned w17ctl: inert
-# Go (.src), tests carried, no pb.
+# The installable form a consumer's w17ctl renders a release into, rendered by
+# the pinned w17ctl: inert Go (.src), tests carried, no pb.
 check-render: plugins-exist
 	@for p in $(PLUGINS); do \
 		work="$$(mktemp -d)"; trap 'rm -rf "$$work"' EXIT; $(RENDER_W17CTL) plugin render "$$p" --out "$$work/$$p" || exit 1; \

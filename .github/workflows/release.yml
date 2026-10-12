@@ -1,0 +1,121 @@
+name: Release
+
+# A plugin is released when a release pull request (make release-pr) merges:
+# after CI passes on that commit of main, every plugin it releases (the "Which
+# plugins" step) is signed and tagged by tools/release.sh, as a maintainer
+# would run it by hand. The tag sits on the commit itself; the
+# signature travels in the tag's message.
+#
+# Secrets live in the `release` environment, which only main may use, so a
+# workflow edited on any other branch never sees them:
+#   W17_SIGN_TOKEN     a console token whose account may sign plugin releases
+#   RELEASE_TAG_TOKEN  a token allowed to create */v* tags (the ruleset lets
+#                      only repository admins create them)
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Releases one plugin at its manifest's version from main as it is: a retry
+  # after a failed run, or a release whose CI run was not a push.
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: The plugin to release, at the version its plugin.yaml names
+        required: true
+
+permissions:
+  contents: read
+  checks: read
+
+# One run per commit, never cancelled: a cancelled run could leave a tag
+# pushed and the next one refusing it. Keyed by the commit, not one group for
+# the workflow: a group holds ONE pending run and cancels the one pending before
+# it, so three merges in a row would have lost the middle release. Runs for
+# different commits need no ordering; two that race for one tag are settled by
+# the push, which the loser fails.
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          # Pushes the tag; the default token cannot create */v* tags.
+          token: ${{ secrets.RELEASE_TAG_TOKEN }}
+
+      - name: Which plugins
+        id: which
+        env:
+          INPUT_PLUGIN: ${{ inputs.plugin }}
+        run: |
+          if [ -n "$INPUT_PLUGIN" ]; then
+            list="$INPUT_PLUGIN"
+          else
+            # The plugins a release pull request merged: this commit changed
+            # their plugin.yaml or CHANGELOG.md, and the changelog now opens
+            # with the manifest's version. A merge commit is compared with the
+            # main it merged into (its first parent), so the whole pull request
+            # counts. Not "the version changed": a release pull request for a
+            # version that landed earlier (a new plugin's first release) leaves
+            # it as it is, and a new plugin's own pull request changes it
+            # without releasing anything. A version already tagged is skipped
+            # below, so touching a released plugin's manifest releases nothing.
+            list=""
+            for d in $(git diff --name-only HEAD^1 HEAD -- '*/plugin.yaml' '*/CHANGELOG.md' | cut -d/ -f1 | sort -u); do
+              [ -f "$d/plugin.yaml" ] || continue
+              v="$(sed -n 's/^version:[[:space:]]*//p' "$d/plugin.yaml" | head -1 | tr -d "\"' ")"
+              if [ "$(grep -m1 '^## ' "$d/CHANGELOG.md" 2>/dev/null)" = "## $v" ]; then
+                list="$list $d"
+              fi
+            done
+          fi
+          echo "list=${list# }" >> "$GITHUB_OUTPUT"
+          echo "to release: ${list:-none}"
+
+      - uses: actions/setup-go@v5
+        if: steps.which.outputs.list != ''
+        with:
+          go-version: '1.26.x'
+
+      - name: Sign and tag
+        if: steps.which.outputs.list != ''
+        env:
+          LIST: ${{ steps.which.outputs.list }}
+          W17_TOKEN: ${{ secrets.W17_SIGN_TOKEN }}
+          W17_CONSOLE_ADDR: grpcs://api.w17.app:50051
+          GH_TOKEN: ${{ github.token }}
+          # CI passed on this commit (that is what started this run, and the
+          # script checks ci-ok again through the API); it is not re-run.
+          SKIP_CHECK: "1"
+        run: |
+          # The pinned w17ctl signs too: one binary for every release.
+          W17CTL="$(tools/w17ctl.sh)"
+          export W17CTL
+          # Every plugin is tried, and the run fails if any did not release.
+          # A version whose tag exists is skipped, not refused: a re-run after
+          # one of two plugins released, or a revert to a released version,
+          # has nothing left to do for it.
+          failed=""
+          for p in $LIST; do
+            v="$(sed -n 's/^version:[[:space:]]*//p' "$p/plugin.yaml" | head -1 | tr -d "\"' ")"
+            if git ls-remote --exit-code --tags origin "refs/tags/$p/v$v" >/dev/null; then
+              echo ">> $p/v$v is already released — nothing to do"
+              continue
+            fi
+            tools/release.sh "$p@v$v" || failed="$failed $p"
+          done
+          [ -z "$failed" ] || { echo "::error::not released:$failed"; exit 1; }

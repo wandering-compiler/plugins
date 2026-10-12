@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# release.sh — cut ONE plugin release: render, sign, commit to `releases`, tag.
+# release.sh — cut ONE plugin release: sign the plugin as committed on main and
+# tag that commit, with the signature in the tag's message.
 #
 #   usage: tools/release.sh <plugin>@<version>      e.g. auth@v0.1.0-rc.17
-#   env:   W17CTL            the w17ctl that SIGNS (default: w17ctl) — logged in to
-#                            the console that holds the key. The RENDER always uses
-#                            the pinned version (tools/w17ctl.sh), never this one.
+#   env:   W17CTL            the w17ctl that SIGNS (default: w17ctl) — signed in
+#                            to the console that holds the key, or given a token
+#                            in W17_TOKEN (the release workflow does that)
 #          W17_CONSOLE_ADDR  the console holding the signing key (w17ctl's env)
-#          DRY_RUN=1         render and commit locally, no signature, no push; the
-#                            commit is kept in a worktree for inspection
+#          DRY_RUN=1         sign nothing, push nothing; print the tag message
 #          SKIP_CHECK=1      skip `make check` when CI's `ci-ok` passed on this
-#                            exact commit of main (verified through gh)
+#                            exact commit (verified through gh)
 #
-# Two lines of history live here, on purpose:
+# A release is a commit of main: the tag `<plugin>/v<version>` sits on it, and a
+# consumer's w17ctl fetches that tag and renders the plugin itself. Nothing is
+# committed anywhere, so main stays the one line of history.
 #
-#   main      the AUTHOR tree — what people work on, through pull requests.
-#   releases  the INSTALLABLE form — one commit per release, each tagged
-#             `<plugin>/v<version>`. A consumer's w17ctl fetches the tag.
+# The signature is over the plugin's AUTHOR tree as committed (git archive, so
+# nothing untracked can reach it): the render depends on the consumer's w17ctl,
+# the committed tree does not. The key never passes through here: `w17ctl plugin
+# sign` digests the tree locally and asks the console to sign the digest. The
+# signature travels in the annotated tag's message, between the BEGIN/END lines
+# w17ctl reads (docs/decisions in the platform: a release tag carries the
+# signature of the author tree).
 #
-# The installable form is `w17ctl plugin render`'s output, at the version pinned
-# in tools/w17ctl-version, over the plugin AS COMMITTED (git archive), so nothing
-# in the working directory that git does not track can reach a release.
-# A release is cut FROM main and never commits to it.
-#
-# The signature is over the rendered tree, because that is what a consumer
-# fetches. The key never passes through here: `w17ctl plugin sign` digests the
-# tree locally and asks the console to sign the digest.
+# The `releases` branch held the rendered form of every earlier release. Its
+# tags stay installable; nothing is added to it any more.
 set -euo pipefail
 
 SPEC="${1:?usage: $0 <plugin>@<version>   (e.g. auth@v0.1.0-rc.17)}"
@@ -53,11 +53,13 @@ echo "$VERSION" | grep -Eq '^v0\.1\.0-rc\.[0-9]+$' || {
 	exit 1
 }
 
-# Released from main as merged, never from a local edit.
-git fetch --quiet origin main releases --tags
+# Released from main as merged, never from a local edit. HEAD may be behind
+# origin/main (the release workflow tags the commit CI passed on, and main can
+# move on meanwhile), but it has to be ON main.
+git fetch --quiet origin main --tags
 [ -z "$(git status --porcelain)" ] || { echo "!! the working tree is not clean" >&2; exit 1; }
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || {
-	echo "!! HEAD is not origin/main — check out main as merged and pull first" >&2
+git merge-base --is-ancestor HEAD origin/main || {
+	echo "!! HEAD is not on origin/main — check out main as merged and pull first" >&2
 	exit 1
 }
 # What ships is what the changelog says: the release pull request
@@ -75,6 +77,15 @@ fragments="$(git ls-tree -z --name-only HEAD "$PLUGIN/changes/" | tr '\0' '\n' |
 	echo "!! $PLUGIN/CHANGELOG.md does not start with a ## ${VERSION#v} section — release through make release-pr" >&2
 	exit 1
 }
+# The signature travels in the tag, and w17ctl refuses a tag that carries one
+# while the tree it tags carries a plugin.sig too (two claims about one
+# release). A committed plugin.sig would make a tag that installs nowhere, and
+# a published tag is never moved: refused here, before anything is signed.
+if [ -n "$(git ls-tree --name-only HEAD "$PLUGIN/plugin.sig")" ]; then
+	echo "!! $PLUGIN/plugin.sig is committed — a release carries its signature in the tag." >&2
+	echo "   Remove it from main in a pull request first." >&2
+	exit 1
+fi
 # The REMOTE decides whether a tag exists; a local leftover from a failed run
 # is not a release.
 if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
@@ -82,14 +93,15 @@ if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; the
 	exit 1
 fi
 git tag -d "$TAG" >/dev/null 2>&1 || true
-RENDER="$(tools/w17ctl.sh)"
 if [ "${DRY_RUN:-0}" != 1 ]; then
 	command -v "$W17CTL" >/dev/null || { echo "!! no w17ctl ($W17CTL) to sign with" >&2; exit 1; }
 fi
 
 if [ "${SKIP_CHECK:-0}" = 1 ]; then
 	# Allowed only when CI already passed on this exact commit of main.
-	state="$(gh api "repos/{owner}/{repo}/commits/$(git rev-parse HEAD)/check-runs" \
+	# check_name: the list is paged (30 a page), and every plugin and example
+	# adds a check run; filtered, ci-ok cannot fall off the first page.
+	state="$(gh api "repos/{owner}/{repo}/commits/$(git rev-parse HEAD)/check-runs?check_name=ci-ok" \
 		-q '[.check_runs[] | select(.name == "ci-ok")][0].conclusion' 2>/dev/null || true)"
 	[ "$state" = "success" ] || {
 		echo "!! SKIP_CHECK=1 needs a green \`ci-ok\` on $(git rev-parse --short HEAD) (got: ${state:-none})" >&2
@@ -103,64 +115,66 @@ fi
 
 WORK="$(mktemp -d -t w17-plugin-release.XXXXXX)"
 PUSHED=0
-KEEP=0
 cleanup() {
 	# A tag that did not reach the remote is not a release; leaving it would
 	# only confuse the next run.
 	[ "$PUSHED" = 1 ] || git tag -d "$TAG" >/dev/null 2>&1 || true
-	[ "$KEEP" = 1 ] && return
-	git worktree remove --force "$WORK/releases" >/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
 trap cleanup EXIT
 
-mkdir -p "$WORK/committed"
-git archive HEAD "$PLUGIN" | tar -x -C "$WORK/committed"
-git worktree add --quiet "$WORK/releases" origin/releases
-"$RENDER" plugin render "$WORK/committed/$PLUGIN" --out "$WORK/rendered/$PLUGIN" >/dev/null
-rm -rf "${WORK:?}/releases/$PLUGIN"
-cp -R "$WORK/rendered/$PLUGIN" "$WORK/releases/$PLUGIN"
+SHA="$(git rev-parse HEAD)"
+git archive "$SHA" "$PLUGIN" | tar -x -C "$WORK"
+
+# The tag message: a title, where it came from, and the signature block. The
+# block is the plugin.sig `w17ctl plugin sign` writes into the extracted tree,
+# verbatim. Not `--print`: that also writes the console's verdict line
+# ("signature ok …") to stdout ahead of the signature, and its confirmation is
+# over the digest as taken, where the writing mode re-digests the tree the
+# signature landed in and confirms the console verifies that.
+{
+	printf '%s %s\n\nFrom main %s.\n\n' "$PLUGIN" "$VERSION" "$SHA"
+	echo "-----BEGIN W17 PLUGIN SIGNATURE-----"
+	if [ "${DRY_RUN:-0}" = 1 ]; then
+		echo "(DRY RUN: not signed — that asks the console)"
+	else
+		echo ">> signing $PLUGIN ..." >&2
+		"$W17CTL" plugin sign "$WORK/$PLUGIN" >&2 || {
+			echo "!! signing failed — not tagging an unsigned release. Check W17_CONSOLE_ADDR and" >&2
+			echo "   that you are signed in (or W17_TOKEN is set) with a role that may sign." >&2
+			exit 1
+		}
+		[ "$(head -1 "$WORK/$PLUGIN/plugin.sig" 2>/dev/null)" = "w17-plugin-sig-file/1" ] || {
+			echo "!! plugin sign left no signature file in $WORK/$PLUGIN/plugin.sig" >&2
+			exit 1
+		}
+		# Its own lines, as written; the block ends on a line of its own.
+		cat "$WORK/$PLUGIN/plugin.sig"
+		[ -z "$(tail -c1 "$WORK/$PLUGIN/plugin.sig")" ] || echo
+	fi
+	echo "-----END W17 PLUGIN SIGNATURE-----"
+} > "$WORK/message"
 
 if [ "${DRY_RUN:-0}" = 1 ]; then
-	echo ">> DRY RUN — not signing (that asks the console)"
-else
-	echo ">> signing $PLUGIN ..."
-	( cd "$WORK/releases" && "$W17CTL" plugin sign "$PLUGIN" ) || {
-		echo "!! signing failed — not tagging an unsigned release. Check W17_CONSOLE_ADDR and" >&2
-		echo "   that you are signed in with a role that may sign." >&2
-		exit 1
-	}
-fi
-
-MAIN_SHA="$(git rev-parse HEAD)"
-# Who releases is whoever runs this; a box with no git identity falls back to
-# the author of the main commit being released.
-NAME="$(git config user.name || git log -1 --format=%an)"
-EMAIL="$(git config user.email || git log -1 --format=%ae)"
-(
-	cd "$WORK/releases"
-	# -f: what was signed is the whole rendered directory, so every file in it
-	# is committed, whatever the releaser's own gitignore rules say. A file left
-	# out would make the signature INVALID for every consumer of an immutable tag.
-	git add -A -f "$PLUGIN"
-	# Only what is still untracked (??) or ignored (!!) after the add; staged
-	# entries (A, M, D) are the release itself.
-	left="$(git status --porcelain --ignored -- "$PLUGIN" | grep -E '^(\?\?|!!) ' || true)"
-	[ -z "$left" ] || { echo "!! files under $PLUGIN would not be committed:" >&2; echo "$left" >&2; exit 1; }
-	git -c user.name="$NAME" -c user.email="$EMAIL" commit --quiet \
-		-m "$PLUGIN $VERSION" -m "Rendered from main $MAIN_SHA."
-	git -c user.name="$NAME" -c user.email="$EMAIL" tag -a "$TAG" -m "$PLUGIN $VERSION"
-)
-if [ "${DRY_RUN:-0}" = 1 ]; then
-	KEEP=1
-	echo ">> DRY RUN — would push releases → $(git -C "$WORK/releases" rev-parse --short HEAD) and tag $TAG"
-	echo "   the release commit is kept for inspection in $WORK/releases"
-	echo "   (remove it with: git worktree remove --force $WORK/releases && rm -rf $WORK)"
+	echo ">> DRY RUN — would tag $TAG on $(git rev-parse --short "$SHA") with:"
+	sed 's/^/   /' "$WORK/message"
 	exit 0
 fi
-# ATOMIC: the branch and the tag land together or not at all — a tag pointing at
-# a commit that never reached `releases` is a release nobody can trace. A plain
-# push, never --force: a rejection means someone else released in the meantime.
-git -C "$WORK/releases" push --quiet --atomic origin "HEAD:refs/heads/releases" "refs/tags/$TAG"
+
+# Who releases is whoever runs this; a box with no git identity falls back to
+# the author of the commit being released.
+NAME="$(git config user.name || git log -1 --format=%an "$SHA")"
+EMAIL="$(git config user.email || git log -1 --format=%ae "$SHA")"
+# verbatim: git's default cleanup would rewrite the message (comment lines,
+# blank runs), and the signature block has to arrive as signed.
+git -c user.name="$NAME" -c user.email="$EMAIL" tag -a --cleanup=verbatim -F "$WORK/message" "$TAG" "$SHA"
+# A plain push, never --force: a rejection means someone else released this
+# version in the meantime, and a published tag is never moved.
+git push --quiet origin "refs/tags/$TAG" || {
+	if other="$(git ls-remote --tags origin "refs/tags/$TAG^{}" 2>/dev/null | cut -f1)" && [ -n "$other" ]; then
+		echo "!! $TAG was published meanwhile by another run, on commit $other; a published tag stays as it is" >&2
+	fi
+	exit 1
+}
 PUSHED=1
-echo ">> released $TAG → $(git -C "$WORK/releases" rev-parse --short HEAD) (from main $(git rev-parse --short "$MAIN_SHA"))"
+echo ">> released $TAG → main $(git rev-parse --short "$SHA")"
