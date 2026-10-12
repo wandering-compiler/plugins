@@ -579,7 +579,12 @@ message DeleteOtherSessionTokensReq {
   // The caller's own session, kept. The nil UUID keeps none (a caller on an
   // API token has no session to keep).
   string    keep_token_id = 2 [(w17.field) = { type: UUID }];
-  TokenType token_type    = 3;
+
+  // token_type was a parameter; the statement names the session realm
+  // itself, behind ?feature(api_token), because the column exists only
+  // with that feature.
+  reserved 3;
+  reserved "token_type";
 }
 message DeleteOtherSessionTokensResp {
   option (w17.contrib.plugin_feature) = "password_change";
@@ -2539,7 +2544,8 @@ service AuthMutation {
         name: "main"
         dql:
           "DELETE FROM @module.UserToken "
-          "WHERE user_id = :user_id AND token_type = :token_type AND id <> :keep_token_id"
+          "WHERE user_id = :user_id AND id <> :keep_token_id "
+          "AND ?feature(api_token) token_type = 1"
       }
     };
   }

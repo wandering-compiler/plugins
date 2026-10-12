@@ -147,6 +147,12 @@ features:
       - handlers/tenant.go
   - name: api_token
     description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. This used to `conflicts_with: org_membership`, because two narrowings over bare permission-id SETS cannot compose. Lifted 2026-09-20: both axes now resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (a consumer asked 2026-09-06; the anonymous case with NO permissions is a custom auth method, as in a public-link view)."
+    requires:
+      # GetUserRolePermissionsByRealm resolves an API token's permissions
+      # from UserRole, Role and RolePermission — rbac's tables. Without rbac
+      # the statement names tables the activation does not have, and code
+      # generation fails (check-stage reports it).
+      - rbac
     default: false
     go_files:
       - handlers/apitoken.go

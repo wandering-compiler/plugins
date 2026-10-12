@@ -38,10 +38,13 @@
 // Proto FIELDS that a feature adds, which vanish from a consumer's generated
 // pb the same way. Those need the pb to be regenerated per activation, which
 // this cannot do from source. A consumer build is still the only full proof;
-// this closes the half that is checkable from here.
+// this closes the half that is checkable from here — including the DQL half:
+// a statement naming a table, column or request field another feature adds
+// (dqlgate.go).
 package main
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -167,9 +170,11 @@ func check(dir string) error {
 		return true
 	}
 
+	dqlErr := checkDQLColumns(dir, requires)
+
 	declIn, refs, err := scan(filepath.Join(dir, "src"))
 	if err != nil {
-		return err
+		return errors.Join(err, dqlErr)
 	}
 
 	var problems []string
@@ -190,10 +195,10 @@ func check(dir string) error {
 		}
 	}
 	if len(problems) == 0 {
-		return nil
+		return dqlErr
 	}
 	sort.Strings(problems)
-	return fmt.Errorf("a reference crosses a feature boundary and will not exist in every build:\n%s\n\n"+
+	return errors.Join(fmt.Errorf("a reference crosses a feature boundary and will not exist in every build:\n%s\n\n"+
 		"  An activation that enables the first feature without the second stages the\n"+
 		"  file on the left without the one on the right, and its bundle build fails on\n"+
 		"  an undefined identifier. Everything compiles HERE because the author tree has\n"+
@@ -201,7 +206,7 @@ func check(dir string) error {
 		"  fix: move the shared declaration to a file no feature gates. Adding a\n"+
 		"  `requires` edge also silences this, and is usually wrong — it forces an\n"+
 		"  unrelated feature on every project that wanted only the other one.",
-		strings.Join(problems, "\n"))
+		strings.Join(problems, "\n")), dqlErr)
 }
 
 // stagedWhen is a file's staging rule; nil means always staged.

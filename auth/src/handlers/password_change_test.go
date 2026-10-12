@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -183,7 +185,7 @@ func TestChangePassword_EndsEveryOtherSession(t *testing.T) {
 		t.Fatalf("other sessions swept %d times, want once", len(m.sweeps))
 	}
 	sw := m.sweeps[0]
-	if sw.GetUserId() != "u1" || sw.GetKeepTokenId() != "11111111-1111-4111-8111-111111111111" || sw.GetTokenType() != pb.TokenType_TOKEN_TYPE_SESSION {
+	if sw.GetUserId() != "u1" || sw.GetKeepTokenId() != "11111111-1111-4111-8111-111111111111" {
 		t.Errorf("sweep = %+v, want u1's sessions but the caller's own", sw)
 	}
 
@@ -240,5 +242,29 @@ func TestChangePassword_AFailedSpendFailsTheChange(t *testing.T) {
 	})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("want the spend's failure, got %v", err)
+	}
+}
+
+// The sweep spares API tokens by naming the session realm in the statement,
+// behind ?feature(api_token): the token_type column exists only with that
+// feature, so an ungated filter would break every activation of
+// password_change without it, and no filter at all would delete API tokens.
+func TestChangePassword_TheSweepSparesAPITokensOnlyWhereTheyExist(t *testing.T) {
+	raw, err := os.ReadFile("../../proto/mutations/auth_mutation.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	i := strings.Index(src, "rpc DeleteOtherSessionTokens(")
+	if i < 0 {
+		t.Fatal("DeleteOtherSessionTokens not found")
+	}
+	end := strings.Index(src[i:], "\n  }\n")
+	if end < 0 {
+		t.Fatal("DeleteOtherSessionTokens has no closing brace")
+	}
+	body := src[i : i+end]
+	if !strings.Contains(body, `"AND ?feature(api_token) token_type = 1"`) {
+		t.Errorf("DeleteOtherSessionTokens does not filter the session realm behind ?feature(api_token):\n%s", body)
 	}
 }
