@@ -42,8 +42,19 @@ func ValidateConfig(h *PaymentServiceHandler) error {
 	if h.Query == nil || h.Mutation == nil {
 		return fmt.Errorf("payment plugin: storage clients not wired")
 	}
+	// With webhooks on, a bundle without the signing secret boots and then
+	// refuses every delivery: payments stay pending forever and nothing says
+	// why until someone reads the provider's dashboard. A blank value (a
+	// secret file holding only a newline) fails every delivery the same way.
+	if webhooksStaged && strings.TrimSpace(h.WebhookSecret) == "" {
+		return fmt.Errorf("payment plugin: webhook_signing_secret is required while stripe_webhooks is on")
+	}
 	return nil
 }
+
+// webhooksStaged is set by handlers/webhook_stripe.go, which is staged only
+// with the stripe_webhooks feature.
+var webhooksStaged bool
 
 // Shutdown is the bundle drain hook. No background work in Slice 1.
 func (h *PaymentServiceHandler) Shutdown(context.Context) error { return nil }

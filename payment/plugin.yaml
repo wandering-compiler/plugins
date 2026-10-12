@@ -1,6 +1,6 @@
 name: payment
 version: 0.1.0-rc.5
-requires_w17: ">=1.5"
+requires_w17: ">=1.11"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in
 # src/handlers/ + src/lib/ + plugin.go to the per-activation pb path.
@@ -47,6 +47,10 @@ features:
       - handlers/webhook_stripe.go
   - name: prepaid
     default: false
+    # No `requires`: the wallet itself (GrantCredit / SpendCredit / the
+    # balance) is local. Only TopUpCredit needs the webhook, which grants the
+    # credit when the provider confirms the payment, so it refuses to charge
+    # when stripe_webhooks is off.
     description: "Prepaid credit wallet: append-only CreditLedger + materialized CreditBalance (non-negative CHECK), the atomic ApplyCredit mutation (ledger insert + balance increment in one tx), and PaymentService.GrantCredit/SpendCredit/GetBalance + the CreditApplied event. Off by default — opt in for credit/wallet billing."
     go_files:
       - handlers/prepaid.go
@@ -57,6 +61,9 @@ features:
       - handlers/usage.go
   - name: subscriptions
     default: false
+    # A subscription's status is reconciled only from the provider's
+    # webhook; without the webhook surface it never leaves its first state.
+    requires: [stripe_webhooks]
     description: "Recurring plans: locally-authoritative Plan catalogue (pushed to the provider) + Subscription records (provider-authoritative lifecycle). PaymentService.CreatePlan/Subscribe/GetSubscription, MarkSubscriptionStatus (webhook reconciliation), SubscriptionStarted/SubscriptionStatusChanged events. Off by default — opt in for subscription billing."
     go_files:
       - handlers/subscriptions.go
@@ -99,7 +106,12 @@ presets:
       - prefix: /webhooks
         description: "Inbound payment-provider webhooks (signature-verified, unauthenticated)."
         endpoints:
-          - { ref: PaymentService.IngestStripe, method: POST, path: /stripe, exclude_auth: true, raw_body_field: raw_payload, feature: stripe_webhooks }
+          # failed_only: a delivery answered 2xx (handled, duplicate, or an
+          # event type that needs nothing) spends no per-address budget, so a
+          # burst of them from the provider is not answered 429. Any failed
+          # answer does spend it: a bad signature, but also a genuine delivery
+          # whose processing failed (no local row yet, a storage error).
+          - { ref: PaymentService.IngestStripe, method: POST, path: /stripe, exclude_auth: true, public_limit: failed_only, raw_body_field: raw_payload, feature: stripe_webhooks }
 
 sandboxes:
   # Stripe's own API mock, for running a project against the payment plugin

@@ -35,9 +35,10 @@ func (r *fakeRegistry) RegisterShutdown(fn func(context.Context) error)         
 func TestRegisterPlugin_Stripe(t *testing.T) {
 	reg := &fakeRegistry{}
 	cfg := &gen.EnvConfig{
-		PaymentProvider: "stripe",
-		ProviderAPIKey:  secret.New("sk_test_123"),
-		DefaultCurrency: "eur",
+		PaymentProvider:      "stripe",
+		ProviderAPIKey:       secret.New("sk_test_123"),
+		WebhookSigningSecret: secret.New("whsec_test"),
+		DefaultCurrency:      "eur",
 	}
 	if err := RegisterPlugin(cfg, reg, fakeClients{}); err != nil {
 		t.Fatalf("RegisterPlugin: %v", err)
@@ -53,7 +54,7 @@ func TestRegisterPlugin_Stripe(t *testing.T) {
 func TestRegisterPlugin_DefaultsToStripe(t *testing.T) {
 	reg := &fakeRegistry{}
 	// no PaymentProvider → defaults to stripe; api key still required.
-	cfg := &gen.EnvConfig{ProviderAPIKey: secret.New("sk_test")}
+	cfg := &gen.EnvConfig{ProviderAPIKey: secret.New("sk_test"), WebhookSigningSecret: secret.New("whsec_test")}
 	if err := RegisterPlugin(cfg, reg, fakeClients{}); err != nil {
 		t.Fatalf("RegisterPlugin: %v", err)
 	}

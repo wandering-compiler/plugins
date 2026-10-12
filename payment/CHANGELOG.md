@@ -2,6 +2,8 @@
 
 ## 0.1.0-rc.5
 
+Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on the webhook endpoint.
+
 ### Every REST endpoint acts on the signed-in caller's own billing (breaking)
 
 The `/billing` endpoints took whatever `user_id` the request named, and the reads took any id. A signed-in person could charge, subscribe or create a customer for another user, and read anyone's payment, subscription, balance or usage.
@@ -14,6 +16,14 @@ What changes:
 - **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
 
+### Webhook configuration is checked at boot
+
+- **`webhook_signing_secret` is required while `stripe_webhooks` is on** (the default). A bundle without it used to boot and then refuse every delivery, leaving payments pending forever. It now fails `RegisterPlugin`.
+- **`subscriptions` requires `stripe_webhooks`.** A subscription settles only when the provider's webhook confirms it.
+- **`TopUpCredit` refuses to charge without `stripe_webhooks`** (`FAILED_PRECONDITION`). The credit is granted by the webhook, so before this change the charge went through and the credit never landed. The rest of the `prepaid` wallet (`GrantCredit`, `SpendCredit`, the balance) is local and needs no webhooks.
+- **`POST /webhooks/stripe` is `public_limit: failed_only`.** A delivery answered 2xx (handled, a duplicate, or an event type that needs nothing) spends no per-address budget, so a burst of them from the provider is not answered 429. Every failed answer does spend it: a bad signature, and also a genuine delivery whose processing failed (its local row has not landed yet, a storage error). A storage outage longer than the burst can therefore have the provider's address answered 429 for a short while after it ends; the provider retries those too.
+
+**Upgrading.** An activation that lists `features:` explicitly replaces the defaults, so one that lists `subscriptions` without `stripe_webhooks` is now refused at codegen (`feature "subscriptions" requires "stripe_webhooks"`). Add `stripe_webhooks` to the list, and set `webhook_signing_secret`: with the webhooks on, the bundle no longer boots without it. Point the provider's webhook at `POST /webhooks/stripe`.
 
 ### Run a project against Stripe's API mock
 

@@ -148,7 +148,7 @@ must be exact. Amounts cross the API as decimal strings (`"19.99"`).
 |---|---|---|
 | `payment_provider` | no | driver; v1: `stripe` (default) |
 | `provider_api_key` | **yes** | Stripe secret key (`sk_…`) |
-| `webhook_signing_secret` | **yes** | webhook HMAC secret (`whsec_…`) |
+| `webhook_signing_secret` | **yes** while `stripe_webhooks` is on (the default); the bundle refuses to boot without it | webhook HMAC secret (`whsec_…`) |
 | `provider_api_base` | no | root of a Stripe-compatible API instead of `https://api.stripe.com` (e.g. the `stripemock` sandbox, `http://stripemock:12111`); empty = the real API; test keys only |
 | `default_currency` | no | ISO-4217 applied when a charge omits one |
 
@@ -243,9 +243,16 @@ webhooks). Off by default. This is the one feature that extends
 
 - `stripe_webhooks` (default on) — the webhook ingestion surface
   (`IngestStripe` + `ProcessedWebhookEvent` + `MarkWebhookProcessed`).
-- `prepaid` (default off) — the credit wallet.
+- `prepaid` (default off) — the credit wallet. The wallet is local;
+  `TopUpCredit` needs `stripe_webhooks` too (a top-up's credit is granted
+  from the webhook) and refuses to charge without it.
 - `usage` (default off) — metered / pay-as-you-go.
-- `subscriptions` (default off) — recurring plans.
+- `subscriptions` (default off) — recurring plans. Requires
+  `stripe_webhooks` (the provider's webhook settles a subscription).
+
+An activation that lists `features:` replaces the defaults, so a list
+naming `subscriptions` must name `stripe_webhooks` too, and so must one
+that uses `TopUpCredit`.
 
 The baseline (customers / payments / refunds) carries no feature tag —
 always present.

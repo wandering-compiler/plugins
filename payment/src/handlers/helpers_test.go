@@ -198,7 +198,7 @@ func TestMetadataValue(t *testing.T) {
 }
 
 func TestValidateConfigAndShutdown(t *testing.T) {
-	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, WebhookSecret: "whsec_test"}
 	if err := ValidateConfig(h); err != nil {
 		t.Errorf("fully wired handler refused: %v", err)
 	}
@@ -278,5 +278,51 @@ func TestRequiredFieldRefusals(t *testing.T) {
 	}
 	if n := r.stripe.count("/v1/payment_intents") + r.stripe.count("/v1/customers") + r.stripe.count("/v1/subscriptions"); n != 0 {
 		t.Errorf("provider reached %d time(s)", n)
+	}
+}
+
+// With stripe_webhooks staged, a bundle without the signing secret must not
+// boot: it would refuse every delivery and leave payments pending forever.
+func TestValidateConfig_RequiresTheWebhookSecretWhileWebhooksAreOn(t *testing.T) {
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	if err := ValidateConfig(h); err == nil || !strings.Contains(err.Error(), "webhook_signing_secret") {
+		t.Fatalf("err = %v, want the missing webhook secret refused", err)
+	}
+	h.WebhookSecret = "whsec_test"
+	if err := ValidateConfig(h); err != nil {
+		t.Fatalf("with the secret: %v", err)
+	}
+}
+
+// A blank secret refuses every delivery exactly like a missing one.
+func TestValidateConfig_RefusesABlankWebhookSecret(t *testing.T) {
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, WebhookSecret: " \n"}
+	if err := ValidateConfig(h); err == nil || !strings.Contains(err.Error(), "webhook_signing_secret") {
+		t.Fatalf("err = %v, want the blank webhook secret refused", err)
+	}
+}
+
+// With stripe_webhooks off, webhook_stripe.go is not staged and nothing sets
+// webhooksStaged: the secret is not needed and its absence must not stop the
+// bundle. This package always compiles that file, so the flag is cleared here.
+func TestValidateConfig_NoWebhookSecretNeededWhileWebhooksAreOff(t *testing.T) {
+	t.Cleanup(func() { webhooksStaged = true })
+	webhooksStaged = false
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	if err := ValidateConfig(h); err != nil {
+		t.Fatalf("webhooks off, no secret: %v", err)
+	}
+}
+
+// Without the webhook surface a top-up would charge and never grant the
+// credit, so it is refused before anything reaches the provider.
+func TestTopUpCredit_RefusesWithoutWebhooks(t *testing.T) {
+	saved := webhooksStaged
+	webhooksStaged = false
+	t.Cleanup(func() { webhooksStaged = saved })
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	_, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: "5.00", Currency: "usd"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("err = %v, want FailedPrecondition", err)
 	}
 }
