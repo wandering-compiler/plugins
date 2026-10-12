@@ -135,6 +135,13 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 // then persists the local Subscription. The provider customer is
 // ensured first (reusing the core resolveCustomer path).
 func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.SubscribeReq) (*pb.SubscriptionView, error) {
+	// Through the gateway this acts for the signed-in caller only; see
+	// actingFor.
+	uid, err := actingFor(ctx, req.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	req.UserId = uid
 	if req.GetUserId() == "" {
 		return nil, invalidArg("user_id is required")
 	}
@@ -258,4 +265,31 @@ func eventTime(unix int64) *timestamppb.Timestamp {
 		return timestamppb.Now()
 	}
 	return timestamppb.New(time.Unix(unix, 0))
+}
+
+// GetMySubscription returns one of the caller's subscriptions. Another
+// customer's subscription answers NotFound.
+func (h *PaymentServiceHandler) GetMySubscription(ctx context.Context, req *pb.GetMySubscriptionReq) (*pb.GetSubscriptionResp, error) {
+	caller, err := signedInCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	customer, err := h.callerCustomerID(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	if customer == "" {
+		return nil, notFound(errNotYours) // not a customer: nothing is theirs
+	}
+	got, err := h.Query.GetSubscription(ctx, &pb.GetSubscriptionReq{Id: req.GetId()})
+	if err != nil {
+		if absent(err) {
+			return nil, notFound(errNotYours)
+		}
+		return nil, err
+	}
+	if got.GetSubscription().GetCustomerId() != customer {
+		return nil, notFound(errNotYours)
+	}
+	return got, nil
 }

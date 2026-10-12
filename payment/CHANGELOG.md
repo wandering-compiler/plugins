@@ -2,6 +2,18 @@
 
 ## 0.1.0-rc.5
 
+### Every REST endpoint acts on the signed-in caller's own billing (breaking)
+
+The `/billing` endpoints took whatever `user_id` the request named, and the reads took any id. A signed-in person could charge, subscribe or create a customer for another user, and read anyone's payment, subscription, balance or usage.
+
+What changes:
+
+- **`CreateCustomer`, `CreatePayment`, `Subscribe` and `TopUpCredit` act for the signed-in caller.** Through the gateway an empty `user_id` means the caller, and another id is refused with `PERMISSION_DENIED`. A call from the project's own code, which carries no signed-in caller, names the user as before.
+- **New `GetMyPayment`, `GetMySubscription`, `GetMyCreditBalance` and `GetMyUsageMeter`** answer only with the caller's rows. Another person's payment or subscription reads as not found. The REST preset serves `GET /payments/{id}`, `/subscriptions/{id}`, `/credit/balance` and `/usage/{meter}/{period}` from them instead of from the storage reads. The project's own code still reads through `PaymentQuery`.
+- **The caller is read from field 2 of the gateway's `x-w17-user` envelope.** w17 requires `string user_id = 2` on every auth method's response, and the auth plugin has it. An envelope that is present but carries no readable caller is refused (`UNAUTHENTICATED`), never treated as an internal call.
+- **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
+
+
 ### Run a project against Stripe's API mock
 
 - **`provider_api_base`** (env): the root of a Stripe-compatible API to call instead of `https://api.stripe.com`. Empty means the real API. A value that is not an http(s) URL root (or carries credentials, a query or a fragment) is refused at startup, and so is a live key (`sk_live_…`, `rk_live_…`) together with it.

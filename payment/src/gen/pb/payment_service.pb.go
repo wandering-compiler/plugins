@@ -1242,11 +1242,187 @@ func (x *SubscriptionView) GetSubscription() *Subscription {
 	return nil
 }
 
+type GetMyPaymentReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMyPaymentReq) Reset() {
+	*x = GetMyPaymentReq{}
+	mi := &file_business_payment_service_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMyPaymentReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMyPaymentReq) ProtoMessage() {}
+
+func (x *GetMyPaymentReq) ProtoReflect() protoreflect.Message {
+	mi := &file_business_payment_service_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMyPaymentReq.ProtoReflect.Descriptor instead.
+func (*GetMyPaymentReq) Descriptor() ([]byte, []int) {
+	return file_business_payment_service_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *GetMyPaymentReq) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type GetMyCreditBalanceReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMyCreditBalanceReq) Reset() {
+	*x = GetMyCreditBalanceReq{}
+	mi := &file_business_payment_service_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMyCreditBalanceReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMyCreditBalanceReq) ProtoMessage() {}
+
+func (x *GetMyCreditBalanceReq) ProtoReflect() protoreflect.Message {
+	mi := &file_business_payment_service_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMyCreditBalanceReq.ProtoReflect.Descriptor instead.
+func (*GetMyCreditBalanceReq) Descriptor() ([]byte, []int) {
+	return file_business_payment_service_proto_rawDescGZIP(), []int{20}
+}
+
+type GetMyUsageMeterReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Meter         string                 `protobuf:"bytes,1,opt,name=meter,proto3" json:"meter,omitempty"`
+	Period        string                 `protobuf:"bytes,2,opt,name=period,proto3" json:"period,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMyUsageMeterReq) Reset() {
+	*x = GetMyUsageMeterReq{}
+	mi := &file_business_payment_service_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMyUsageMeterReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMyUsageMeterReq) ProtoMessage() {}
+
+func (x *GetMyUsageMeterReq) ProtoReflect() protoreflect.Message {
+	mi := &file_business_payment_service_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMyUsageMeterReq.ProtoReflect.Descriptor instead.
+func (*GetMyUsageMeterReq) Descriptor() ([]byte, []int) {
+	return file_business_payment_service_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *GetMyUsageMeterReq) GetMeter() string {
+	if x != nil {
+		return x.Meter
+	}
+	return ""
+}
+
+func (x *GetMyUsageMeterReq) GetPeriod() string {
+	if x != nil {
+		return x.Period
+	}
+	return ""
+}
+
+type GetMySubscriptionReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMySubscriptionReq) Reset() {
+	*x = GetMySubscriptionReq{}
+	mi := &file_business_payment_service_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMySubscriptionReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMySubscriptionReq) ProtoMessage() {}
+
+func (x *GetMySubscriptionReq) ProtoReflect() protoreflect.Message {
+	mi := &file_business_payment_service_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMySubscriptionReq.ProtoReflect.Descriptor instead.
+func (*GetMySubscriptionReq) Descriptor() ([]byte, []int) {
+	return file_business_payment_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GetMySubscriptionReq) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
 var File_business_payment_service_proto protoreflect.FileDescriptor
 
 const file_business_payment_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1ebusiness/payment_service.proto\x12\x13w17.contrib.payment\x1a\x12types/models.proto\x1a\x11w17/contrib.proto\"?\n" +
+	"\x1ebusiness/payment_service.proto\x12\x13w17.contrib.payment\x1a\x1bqueries/payment_query.proto\x1a\x12types/models.proto\x1a\x11w17/contrib.proto\x1a\x0fw17/field.proto\"?\n" +
 	"\x0eNewCustomerReq\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\"L\n" +
@@ -1327,19 +1503,31 @@ const file_business_payment_service_proto_rawDesc = "" +
 	"\tplan_slug\x18\x02 \x01(\tR\bplanSlug\x12'\n" +
 	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey:\x11\xfa\xf4\x18\rsubscriptions\"l\n" +
 	"\x10SubscriptionView\x12E\n" +
-	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\xe9\a\n" +
+	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions\")\n" +
+	"\x0fGetMyPaymentReq\x12\x16\n" +
+	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id\"$\n" +
+	"\x15GetMyCreditBalanceReq:\v\xfa\xf4\x18\aprepaid\"a\n" +
+	"\x12GetMyUsageMeterReq\x12\x1e\n" +
+	"\x05meter\x18\x01 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\x05meter\x12 \n" +
+	"\x06period\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x01@ R\x06period:\t\xfa\xf4\x18\x05usage\"A\n" +
+	"\x14GetMySubscriptionReq\x12\x16\n" +
+	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id:\x11\xfa\xf4\x18\rsubscriptions2\xaa\v\n" +
 	"\x0ePaymentService\x12[\n" +
 	"\x0eCreateCustomer\x12#.w17.contrib.payment.NewCustomerReq\x1a$.w17.contrib.payment.NewCustomerResp\x12P\n" +
 	"\rCreatePayment\x12\x1e.w17.contrib.payment.ChargeReq\x1a\x1f.w17.contrib.payment.ChargeResp\x12^\n" +
-	"\rRefundPayment\x12%.w17.contrib.payment.RefundPaymentReq\x1a&.w17.contrib.payment.RefundPaymentResp\x12p\n" +
+	"\rRefundPayment\x12%.w17.contrib.payment.RefundPaymentReq\x1a&.w17.contrib.payment.RefundPaymentResp\x12Y\n" +
+	"\fGetMyPayment\x12$.w17.contrib.payment.GetMyPaymentReq\x1a#.w17.contrib.payment.GetPaymentResp\x12p\n" +
 	"\fIngestStripe\x12$.w17.contrib.payment.IngestStripeReq\x1a%.w17.contrib.payment.IngestStripeResp\"\x13\x8a\xf5\x18\x0fstripe_webhooks\x12`\n" +
 	"\vGrantCredit\x12#.w17.contrib.payment.GrantCreditReq\x1a\x1f.w17.contrib.payment.CreditView\"\v\x8a\xf5\x18\aprepaid\x12`\n" +
 	"\vSpendCredit\x12#.w17.contrib.payment.SpendCreditReq\x1a\x1f.w17.contrib.payment.CreditView\"\v\x8a\xf5\x18\aprepaid\x12e\n" +
-	"\vTopUpCredit\x12#.w17.contrib.payment.TopUpCreditReq\x1a$.w17.contrib.payment.TopUpCreditResp\"\v\x8a\xf5\x18\aprepaid\x12]\n" +
-	"\vReportUsage\x12#.w17.contrib.payment.ReportUsageReq\x1a\x1e.w17.contrib.payment.UsageView\"\t\x8a\xf5\x18\x05usage\x12b\n" +
+	"\vTopUpCredit\x12#.w17.contrib.payment.TopUpCreditReq\x1a$.w17.contrib.payment.TopUpCreditResp\"\v\x8a\xf5\x18\aprepaid\x12x\n" +
+	"\x12GetMyCreditBalance\x12*.w17.contrib.payment.GetMyCreditBalanceReq\x1a).w17.contrib.payment.GetCreditBalanceResp\"\v\x8a\xf5\x18\aprepaid\x12]\n" +
+	"\vReportUsage\x12#.w17.contrib.payment.ReportUsageReq\x1a\x1e.w17.contrib.payment.UsageView\"\t\x8a\xf5\x18\x05usage\x12m\n" +
+	"\x0fGetMyUsageMeter\x12'.w17.contrib.payment.GetMyUsageMeterReq\x1a&.w17.contrib.payment.GetUsageMeterResp\"\t\x8a\xf5\x18\x05usage\x12b\n" +
 	"\n" +
 	"CreatePlan\x12\".w17.contrib.payment.DefinePlanReq\x1a\x1d.w17.contrib.payment.PlanView\"\x11\x8a\xf5\x18\rsubscriptions\x12h\n" +
-	"\tSubscribe\x12!.w17.contrib.payment.SubscribeReq\x1a%.w17.contrib.payment.SubscriptionView\"\x11\x8a\xf5\x18\rsubscriptionsB\xd2\x01\n" +
+	"\tSubscribe\x12!.w17.contrib.payment.SubscribeReq\x1a%.w17.contrib.payment.SubscriptionView\"\x11\x8a\xf5\x18\rsubscriptions\x12{\n" +
+	"\x11GetMySubscription\x12).w17.contrib.payment.GetMySubscriptionReq\x1a(.w17.contrib.payment.GetSubscriptionResp\"\x11\x8a\xf5\x18\rsubscriptionsB\xd2\x01\n" +
 	"\x17com.w17.contrib.paymentB\x13PaymentServiceProtoP\x01Z4github.com/wandering-compiler/plugins/payment/gen/pb\xa2\x02\x03WCP\xaa\x02\x13W17.Contrib.Payment\xca\x02\x13W17\\Contrib\\Payment\xe2\x02\x1fW17\\Contrib\\Payment\\GPBMetadata\xea\x02\x15W17::Contrib::Paymentb\x06proto3"
 
 var (
@@ -1354,62 +1542,78 @@ func file_business_payment_service_proto_rawDescGZIP() []byte {
 	return file_business_payment_service_proto_rawDescData
 }
 
-var file_business_payment_service_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_business_payment_service_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_business_payment_service_proto_goTypes = []any{
-	(*NewCustomerReq)(nil),    // 0: w17.contrib.payment.NewCustomerReq
-	(*NewCustomerResp)(nil),   // 1: w17.contrib.payment.NewCustomerResp
-	(*ChargeReq)(nil),         // 2: w17.contrib.payment.ChargeReq
-	(*ChargeResp)(nil),        // 3: w17.contrib.payment.ChargeResp
-	(*RefundPaymentReq)(nil),  // 4: w17.contrib.payment.RefundPaymentReq
-	(*RefundPaymentResp)(nil), // 5: w17.contrib.payment.RefundPaymentResp
-	(*IngestStripeReq)(nil),   // 6: w17.contrib.payment.IngestStripeReq
-	(*IngestStripeResp)(nil),  // 7: w17.contrib.payment.IngestStripeResp
-	(*CreditView)(nil),        // 8: w17.contrib.payment.CreditView
-	(*GrantCreditReq)(nil),    // 9: w17.contrib.payment.GrantCreditReq
-	(*SpendCreditReq)(nil),    // 10: w17.contrib.payment.SpendCreditReq
-	(*TopUpCreditReq)(nil),    // 11: w17.contrib.payment.TopUpCreditReq
-	(*TopUpCreditResp)(nil),   // 12: w17.contrib.payment.TopUpCreditResp
-	(*UsageView)(nil),         // 13: w17.contrib.payment.UsageView
-	(*ReportUsageReq)(nil),    // 14: w17.contrib.payment.ReportUsageReq
-	(*DefinePlanReq)(nil),     // 15: w17.contrib.payment.DefinePlanReq
-	(*PlanView)(nil),          // 16: w17.contrib.payment.PlanView
-	(*SubscribeReq)(nil),      // 17: w17.contrib.payment.SubscribeReq
-	(*SubscriptionView)(nil),  // 18: w17.contrib.payment.SubscriptionView
-	(*Customer)(nil),          // 19: w17.contrib.payment.Customer
-	(*Payment)(nil),           // 20: w17.contrib.payment.Payment
-	(*Refund)(nil),            // 21: w17.contrib.payment.Refund
-	(*Plan)(nil),              // 22: w17.contrib.payment.Plan
-	(*Subscription)(nil),      // 23: w17.contrib.payment.Subscription
+	(*NewCustomerReq)(nil),        // 0: w17.contrib.payment.NewCustomerReq
+	(*NewCustomerResp)(nil),       // 1: w17.contrib.payment.NewCustomerResp
+	(*ChargeReq)(nil),             // 2: w17.contrib.payment.ChargeReq
+	(*ChargeResp)(nil),            // 3: w17.contrib.payment.ChargeResp
+	(*RefundPaymentReq)(nil),      // 4: w17.contrib.payment.RefundPaymentReq
+	(*RefundPaymentResp)(nil),     // 5: w17.contrib.payment.RefundPaymentResp
+	(*IngestStripeReq)(nil),       // 6: w17.contrib.payment.IngestStripeReq
+	(*IngestStripeResp)(nil),      // 7: w17.contrib.payment.IngestStripeResp
+	(*CreditView)(nil),            // 8: w17.contrib.payment.CreditView
+	(*GrantCreditReq)(nil),        // 9: w17.contrib.payment.GrantCreditReq
+	(*SpendCreditReq)(nil),        // 10: w17.contrib.payment.SpendCreditReq
+	(*TopUpCreditReq)(nil),        // 11: w17.contrib.payment.TopUpCreditReq
+	(*TopUpCreditResp)(nil),       // 12: w17.contrib.payment.TopUpCreditResp
+	(*UsageView)(nil),             // 13: w17.contrib.payment.UsageView
+	(*ReportUsageReq)(nil),        // 14: w17.contrib.payment.ReportUsageReq
+	(*DefinePlanReq)(nil),         // 15: w17.contrib.payment.DefinePlanReq
+	(*PlanView)(nil),              // 16: w17.contrib.payment.PlanView
+	(*SubscribeReq)(nil),          // 17: w17.contrib.payment.SubscribeReq
+	(*SubscriptionView)(nil),      // 18: w17.contrib.payment.SubscriptionView
+	(*GetMyPaymentReq)(nil),       // 19: w17.contrib.payment.GetMyPaymentReq
+	(*GetMyCreditBalanceReq)(nil), // 20: w17.contrib.payment.GetMyCreditBalanceReq
+	(*GetMyUsageMeterReq)(nil),    // 21: w17.contrib.payment.GetMyUsageMeterReq
+	(*GetMySubscriptionReq)(nil),  // 22: w17.contrib.payment.GetMySubscriptionReq
+	(*Customer)(nil),              // 23: w17.contrib.payment.Customer
+	(*Payment)(nil),               // 24: w17.contrib.payment.Payment
+	(*Refund)(nil),                // 25: w17.contrib.payment.Refund
+	(*Plan)(nil),                  // 26: w17.contrib.payment.Plan
+	(*Subscription)(nil),          // 27: w17.contrib.payment.Subscription
+	(*GetPaymentResp)(nil),        // 28: w17.contrib.payment.GetPaymentResp
+	(*GetCreditBalanceResp)(nil),  // 29: w17.contrib.payment.GetCreditBalanceResp
+	(*GetUsageMeterResp)(nil),     // 30: w17.contrib.payment.GetUsageMeterResp
+	(*GetSubscriptionResp)(nil),   // 31: w17.contrib.payment.GetSubscriptionResp
 }
 var file_business_payment_service_proto_depIdxs = []int32{
-	19, // 0: w17.contrib.payment.NewCustomerResp.customer:type_name -> w17.contrib.payment.Customer
-	20, // 1: w17.contrib.payment.ChargeResp.payment:type_name -> w17.contrib.payment.Payment
-	21, // 2: w17.contrib.payment.RefundPaymentResp.refund:type_name -> w17.contrib.payment.Refund
-	20, // 3: w17.contrib.payment.TopUpCreditResp.payment:type_name -> w17.contrib.payment.Payment
-	22, // 4: w17.contrib.payment.PlanView.plan:type_name -> w17.contrib.payment.Plan
-	23, // 5: w17.contrib.payment.SubscriptionView.subscription:type_name -> w17.contrib.payment.Subscription
+	23, // 0: w17.contrib.payment.NewCustomerResp.customer:type_name -> w17.contrib.payment.Customer
+	24, // 1: w17.contrib.payment.ChargeResp.payment:type_name -> w17.contrib.payment.Payment
+	25, // 2: w17.contrib.payment.RefundPaymentResp.refund:type_name -> w17.contrib.payment.Refund
+	24, // 3: w17.contrib.payment.TopUpCreditResp.payment:type_name -> w17.contrib.payment.Payment
+	26, // 4: w17.contrib.payment.PlanView.plan:type_name -> w17.contrib.payment.Plan
+	27, // 5: w17.contrib.payment.SubscriptionView.subscription:type_name -> w17.contrib.payment.Subscription
 	0,  // 6: w17.contrib.payment.PaymentService.CreateCustomer:input_type -> w17.contrib.payment.NewCustomerReq
 	2,  // 7: w17.contrib.payment.PaymentService.CreatePayment:input_type -> w17.contrib.payment.ChargeReq
 	4,  // 8: w17.contrib.payment.PaymentService.RefundPayment:input_type -> w17.contrib.payment.RefundPaymentReq
-	6,  // 9: w17.contrib.payment.PaymentService.IngestStripe:input_type -> w17.contrib.payment.IngestStripeReq
-	9,  // 10: w17.contrib.payment.PaymentService.GrantCredit:input_type -> w17.contrib.payment.GrantCreditReq
-	10, // 11: w17.contrib.payment.PaymentService.SpendCredit:input_type -> w17.contrib.payment.SpendCreditReq
-	11, // 12: w17.contrib.payment.PaymentService.TopUpCredit:input_type -> w17.contrib.payment.TopUpCreditReq
-	14, // 13: w17.contrib.payment.PaymentService.ReportUsage:input_type -> w17.contrib.payment.ReportUsageReq
-	15, // 14: w17.contrib.payment.PaymentService.CreatePlan:input_type -> w17.contrib.payment.DefinePlanReq
-	17, // 15: w17.contrib.payment.PaymentService.Subscribe:input_type -> w17.contrib.payment.SubscribeReq
-	1,  // 16: w17.contrib.payment.PaymentService.CreateCustomer:output_type -> w17.contrib.payment.NewCustomerResp
-	3,  // 17: w17.contrib.payment.PaymentService.CreatePayment:output_type -> w17.contrib.payment.ChargeResp
-	5,  // 18: w17.contrib.payment.PaymentService.RefundPayment:output_type -> w17.contrib.payment.RefundPaymentResp
-	7,  // 19: w17.contrib.payment.PaymentService.IngestStripe:output_type -> w17.contrib.payment.IngestStripeResp
-	8,  // 20: w17.contrib.payment.PaymentService.GrantCredit:output_type -> w17.contrib.payment.CreditView
-	8,  // 21: w17.contrib.payment.PaymentService.SpendCredit:output_type -> w17.contrib.payment.CreditView
-	12, // 22: w17.contrib.payment.PaymentService.TopUpCredit:output_type -> w17.contrib.payment.TopUpCreditResp
-	13, // 23: w17.contrib.payment.PaymentService.ReportUsage:output_type -> w17.contrib.payment.UsageView
-	16, // 24: w17.contrib.payment.PaymentService.CreatePlan:output_type -> w17.contrib.payment.PlanView
-	18, // 25: w17.contrib.payment.PaymentService.Subscribe:output_type -> w17.contrib.payment.SubscriptionView
-	16, // [16:26] is the sub-list for method output_type
-	6,  // [6:16] is the sub-list for method input_type
+	19, // 9: w17.contrib.payment.PaymentService.GetMyPayment:input_type -> w17.contrib.payment.GetMyPaymentReq
+	6,  // 10: w17.contrib.payment.PaymentService.IngestStripe:input_type -> w17.contrib.payment.IngestStripeReq
+	9,  // 11: w17.contrib.payment.PaymentService.GrantCredit:input_type -> w17.contrib.payment.GrantCreditReq
+	10, // 12: w17.contrib.payment.PaymentService.SpendCredit:input_type -> w17.contrib.payment.SpendCreditReq
+	11, // 13: w17.contrib.payment.PaymentService.TopUpCredit:input_type -> w17.contrib.payment.TopUpCreditReq
+	20, // 14: w17.contrib.payment.PaymentService.GetMyCreditBalance:input_type -> w17.contrib.payment.GetMyCreditBalanceReq
+	14, // 15: w17.contrib.payment.PaymentService.ReportUsage:input_type -> w17.contrib.payment.ReportUsageReq
+	21, // 16: w17.contrib.payment.PaymentService.GetMyUsageMeter:input_type -> w17.contrib.payment.GetMyUsageMeterReq
+	15, // 17: w17.contrib.payment.PaymentService.CreatePlan:input_type -> w17.contrib.payment.DefinePlanReq
+	17, // 18: w17.contrib.payment.PaymentService.Subscribe:input_type -> w17.contrib.payment.SubscribeReq
+	22, // 19: w17.contrib.payment.PaymentService.GetMySubscription:input_type -> w17.contrib.payment.GetMySubscriptionReq
+	1,  // 20: w17.contrib.payment.PaymentService.CreateCustomer:output_type -> w17.contrib.payment.NewCustomerResp
+	3,  // 21: w17.contrib.payment.PaymentService.CreatePayment:output_type -> w17.contrib.payment.ChargeResp
+	5,  // 22: w17.contrib.payment.PaymentService.RefundPayment:output_type -> w17.contrib.payment.RefundPaymentResp
+	28, // 23: w17.contrib.payment.PaymentService.GetMyPayment:output_type -> w17.contrib.payment.GetPaymentResp
+	7,  // 24: w17.contrib.payment.PaymentService.IngestStripe:output_type -> w17.contrib.payment.IngestStripeResp
+	8,  // 25: w17.contrib.payment.PaymentService.GrantCredit:output_type -> w17.contrib.payment.CreditView
+	8,  // 26: w17.contrib.payment.PaymentService.SpendCredit:output_type -> w17.contrib.payment.CreditView
+	12, // 27: w17.contrib.payment.PaymentService.TopUpCredit:output_type -> w17.contrib.payment.TopUpCreditResp
+	29, // 28: w17.contrib.payment.PaymentService.GetMyCreditBalance:output_type -> w17.contrib.payment.GetCreditBalanceResp
+	13, // 29: w17.contrib.payment.PaymentService.ReportUsage:output_type -> w17.contrib.payment.UsageView
+	30, // 30: w17.contrib.payment.PaymentService.GetMyUsageMeter:output_type -> w17.contrib.payment.GetUsageMeterResp
+	16, // 31: w17.contrib.payment.PaymentService.CreatePlan:output_type -> w17.contrib.payment.PlanView
+	18, // 32: w17.contrib.payment.PaymentService.Subscribe:output_type -> w17.contrib.payment.SubscriptionView
+	31, // 33: w17.contrib.payment.PaymentService.GetMySubscription:output_type -> w17.contrib.payment.GetSubscriptionResp
+	20, // [20:34] is the sub-list for method output_type
+	6,  // [6:20] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name
 	6,  // [6:6] is the sub-list for extension extendee
 	0,  // [0:6] is the sub-list for field type_name
@@ -1420,6 +1624,7 @@ func file_business_payment_service_proto_init() {
 	if File_business_payment_service_proto != nil {
 		return
 	}
+	file_queries_payment_query_proto_init()
 	file_types_models_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1427,7 +1632,7 @@ func file_business_payment_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_business_payment_service_proto_rawDesc), len(file_business_payment_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

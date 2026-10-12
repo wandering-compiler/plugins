@@ -120,6 +120,15 @@ credit, idempotency / error-contract mapping, webhook verify) keep a
   is still recognised under its raw key (see the prepaid and usage
   sections).
 
+## Who a request acts for
+
+Every `/billing` endpoint acts on the signed-in caller's own billing:
+
+- `CreateCustomer`, `CreatePayment`, `Subscribe` and `TopUpCredit` take the caller as the user. An empty `user_id` means the caller, and any other id is refused (`PERMISSION_DENIED`).
+- `GET /payments/{id}`, `/subscriptions/{id}`, `/credit/balance` and `/usage/{meter}/{period}` are served by `PaymentService.GetMy*`. They answer only with the caller's rows; another person's id reads as not found.
+
+The caller comes from the gateway's `x-w17-user` envelope, field 2 (`string user_id = 2`, which w17 requires of every auth method's response). The project's own code calls the same business methods without an envelope and names the user itself. For reads it uses `PaymentQuery`. Don't expose `PaymentQuery`, `GrantCredit`, `SpendCredit`, `ReportUsage` or `CreatePlan` on a client-facing surface: they trust the caller.
+
 ## Money
 
 Every monetary column is `type: DECIMAL` (string carrier,

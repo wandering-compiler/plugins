@@ -185,6 +185,13 @@ func (h *PaymentServiceHandler) currentBalance(ctx context.Context, userID strin
 // currency used to be accepted and granted 1:1, so 1000 of the weakest
 // currency bought the same 1000 credits as 1000 of the default.
 func (h *PaymentServiceHandler) TopUpCredit(ctx context.Context, req *pb.TopUpCreditReq) (*pb.TopUpCreditResp, error) {
+	// Through the gateway this acts for the signed-in caller only; see
+	// actingFor.
+	uid, err := actingFor(ctx, req.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	req.UserId = uid
 	if req.GetUserId() == "" {
 		return nil, invalidArg("user_id is required")
 	}
@@ -269,4 +276,13 @@ func grantTopupOnPaymentSuccess(ctx context.Context, h *PaymentServiceHandler, e
 		return err
 	}
 	return nil
+}
+
+// GetMyCreditBalance returns the signed-in caller's balance.
+func (h *PaymentServiceHandler) GetMyCreditBalance(ctx context.Context, _ *pb.GetMyCreditBalanceReq) (*pb.GetCreditBalanceResp, error) {
+	caller, err := signedInCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return h.Query.GetCreditBalance(ctx, &pb.GetCreditBalanceReq{UserId: caller})
 }

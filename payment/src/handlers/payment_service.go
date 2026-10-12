@@ -56,6 +56,13 @@ func (h *PaymentServiceHandler) Shutdown(context.Context) error { return nil }
 // local INSERT on the unique user_id — an orphan provider object per
 // repeated call, and an error for a principal that was set up fine.
 func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewCustomerReq) (*pb.NewCustomerResp, error) {
+	// Through the gateway this acts for the signed-in caller only; see
+	// actingFor.
+	uid, err := actingFor(ctx, req.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	req.UserId = uid
 	if req.GetUserId() == "" {
 		return nil, invalidArg("user_id is required")
 	}
@@ -103,6 +110,13 @@ func (h *PaymentServiceHandler) createCustomer(ctx context.Context, userID, emai
 // backend to create the provider payment (idempotency-keyed), then
 // persist the local Payment at its initial status.
 func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.ChargeReq) (*pb.ChargeResp, error) {
+	// Through the gateway this acts for the signed-in caller only; see
+	// actingFor.
+	uid, err := actingFor(ctx, req.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	req.UserId = uid
 	if req.GetUserId() == "" {
 		return nil, invalidArg("user_id is required")
 	}

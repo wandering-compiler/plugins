@@ -40,16 +40,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PaymentService_CreateCustomer_FullMethodName = "/w17.contrib.payment.PaymentService/CreateCustomer"
-	PaymentService_CreatePayment_FullMethodName  = "/w17.contrib.payment.PaymentService/CreatePayment"
-	PaymentService_RefundPayment_FullMethodName  = "/w17.contrib.payment.PaymentService/RefundPayment"
-	PaymentService_IngestStripe_FullMethodName   = "/w17.contrib.payment.PaymentService/IngestStripe"
-	PaymentService_GrantCredit_FullMethodName    = "/w17.contrib.payment.PaymentService/GrantCredit"
-	PaymentService_SpendCredit_FullMethodName    = "/w17.contrib.payment.PaymentService/SpendCredit"
-	PaymentService_TopUpCredit_FullMethodName    = "/w17.contrib.payment.PaymentService/TopUpCredit"
-	PaymentService_ReportUsage_FullMethodName    = "/w17.contrib.payment.PaymentService/ReportUsage"
-	PaymentService_CreatePlan_FullMethodName     = "/w17.contrib.payment.PaymentService/CreatePlan"
-	PaymentService_Subscribe_FullMethodName      = "/w17.contrib.payment.PaymentService/Subscribe"
+	PaymentService_CreateCustomer_FullMethodName     = "/w17.contrib.payment.PaymentService/CreateCustomer"
+	PaymentService_CreatePayment_FullMethodName      = "/w17.contrib.payment.PaymentService/CreatePayment"
+	PaymentService_RefundPayment_FullMethodName      = "/w17.contrib.payment.PaymentService/RefundPayment"
+	PaymentService_GetMyPayment_FullMethodName       = "/w17.contrib.payment.PaymentService/GetMyPayment"
+	PaymentService_IngestStripe_FullMethodName       = "/w17.contrib.payment.PaymentService/IngestStripe"
+	PaymentService_GrantCredit_FullMethodName        = "/w17.contrib.payment.PaymentService/GrantCredit"
+	PaymentService_SpendCredit_FullMethodName        = "/w17.contrib.payment.PaymentService/SpendCredit"
+	PaymentService_TopUpCredit_FullMethodName        = "/w17.contrib.payment.PaymentService/TopUpCredit"
+	PaymentService_GetMyCreditBalance_FullMethodName = "/w17.contrib.payment.PaymentService/GetMyCreditBalance"
+	PaymentService_ReportUsage_FullMethodName        = "/w17.contrib.payment.PaymentService/ReportUsage"
+	PaymentService_GetMyUsageMeter_FullMethodName    = "/w17.contrib.payment.PaymentService/GetMyUsageMeter"
+	PaymentService_CreatePlan_FullMethodName         = "/w17.contrib.payment.PaymentService/CreatePlan"
+	PaymentService_Subscribe_FullMethodName          = "/w17.contrib.payment.PaymentService/Subscribe"
+	PaymentService_GetMySubscription_FullMethodName  = "/w17.contrib.payment.PaymentService/GetMySubscription"
 )
 
 // PaymentServiceClient is the client API for PaymentService service.
@@ -59,6 +63,8 @@ type PaymentServiceClient interface {
 	CreateCustomer(ctx context.Context, in *NewCustomerReq, opts ...grpc.CallOption) (*NewCustomerResp, error)
 	CreatePayment(ctx context.Context, in *ChargeReq, opts ...grpc.CallOption) (*ChargeResp, error)
 	RefundPayment(ctx context.Context, in *RefundPaymentReq, opts ...grpc.CallOption) (*RefundPaymentResp, error)
+	// GetMyPayment — one of the caller's payments.
+	GetMyPayment(ctx context.Context, in *GetMyPaymentReq, opts ...grpc.CallOption) (*GetPaymentResp, error)
 	// IngestStripe — Stripe webhook ingestion. Gated stripe_webhooks; the
 	// handler body is in the feature-staged handlers/webhook_stripe.go.
 	IngestStripe(ctx context.Context, in *IngestStripeReq, opts ...grpc.CallOption) (*IngestStripeResp, error)
@@ -71,10 +77,13 @@ type PaymentServiceClient interface {
 	// TopUpCredit — charge the principal and (on payment success, via the
 	// webhook) grant matching credit. Gated prepaid.
 	TopUpCredit(ctx context.Context, in *TopUpCreditReq, opts ...grpc.CallOption) (*TopUpCreditResp, error)
+	// GetMyCreditBalance — the caller's balance.
+	GetMyCreditBalance(ctx context.Context, in *GetMyCreditBalanceReq, opts ...grpc.CallOption) (*GetCreditBalanceResp, error)
 	// Metered usage (gated usage; body in handlers/usage.go). ReportUsage
-	// appends a usage record + increments the meter atomically. Reading the
-	// meter is a direct storage query (PaymentQuery.GetUsageMeter).
+	// appends a usage record + increments the meter atomically.
 	ReportUsage(ctx context.Context, in *ReportUsageReq, opts ...grpc.CallOption) (*UsageView, error)
+	// GetMyUsageMeter — the caller's meter for (meter, period).
+	GetMyUsageMeter(ctx context.Context, in *GetMyUsageMeterReq, opts ...grpc.CallOption) (*GetUsageMeterResp, error)
 	// Subscriptions (gated subscriptions; bodies in
 	// handlers/subscriptions.go). CreatePlan defines a plan locally + pushes
 	// the price to the provider; Subscribe enrolls a principal's customer
@@ -82,6 +91,8 @@ type PaymentServiceClient interface {
 	// query (PaymentQuery.GetSubscription).
 	CreatePlan(ctx context.Context, in *DefinePlanReq, opts ...grpc.CallOption) (*PlanView, error)
 	Subscribe(ctx context.Context, in *SubscribeReq, opts ...grpc.CallOption) (*SubscriptionView, error)
+	// GetMySubscription — one of the caller's subscriptions.
+	GetMySubscription(ctx context.Context, in *GetMySubscriptionReq, opts ...grpc.CallOption) (*GetSubscriptionResp, error)
 }
 
 type paymentServiceClient struct {
@@ -116,6 +127,16 @@ func (c *paymentServiceClient) RefundPayment(ctx context.Context, in *RefundPaym
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RefundPaymentResp)
 	err := c.cc.Invoke(ctx, PaymentService_RefundPayment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentServiceClient) GetMyPayment(ctx context.Context, in *GetMyPaymentReq, opts ...grpc.CallOption) (*GetPaymentResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPaymentResp)
+	err := c.cc.Invoke(ctx, PaymentService_GetMyPayment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -162,10 +183,30 @@ func (c *paymentServiceClient) TopUpCredit(ctx context.Context, in *TopUpCreditR
 	return out, nil
 }
 
+func (c *paymentServiceClient) GetMyCreditBalance(ctx context.Context, in *GetMyCreditBalanceReq, opts ...grpc.CallOption) (*GetCreditBalanceResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCreditBalanceResp)
+	err := c.cc.Invoke(ctx, PaymentService_GetMyCreditBalance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *paymentServiceClient) ReportUsage(ctx context.Context, in *ReportUsageReq, opts ...grpc.CallOption) (*UsageView, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UsageView)
 	err := c.cc.Invoke(ctx, PaymentService_ReportUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentServiceClient) GetMyUsageMeter(ctx context.Context, in *GetMyUsageMeterReq, opts ...grpc.CallOption) (*GetUsageMeterResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUsageMeterResp)
+	err := c.cc.Invoke(ctx, PaymentService_GetMyUsageMeter_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +233,16 @@ func (c *paymentServiceClient) Subscribe(ctx context.Context, in *SubscribeReq, 
 	return out, nil
 }
 
+func (c *paymentServiceClient) GetMySubscription(ctx context.Context, in *GetMySubscriptionReq, opts ...grpc.CallOption) (*GetSubscriptionResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSubscriptionResp)
+	err := c.cc.Invoke(ctx, PaymentService_GetMySubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PaymentServiceServer is the server API for PaymentService service.
 // All implementations should embed UnimplementedPaymentServiceServer
 // for forward compatibility.
@@ -199,6 +250,8 @@ type PaymentServiceServer interface {
 	CreateCustomer(context.Context, *NewCustomerReq) (*NewCustomerResp, error)
 	CreatePayment(context.Context, *ChargeReq) (*ChargeResp, error)
 	RefundPayment(context.Context, *RefundPaymentReq) (*RefundPaymentResp, error)
+	// GetMyPayment — one of the caller's payments.
+	GetMyPayment(context.Context, *GetMyPaymentReq) (*GetPaymentResp, error)
 	// IngestStripe — Stripe webhook ingestion. Gated stripe_webhooks; the
 	// handler body is in the feature-staged handlers/webhook_stripe.go.
 	IngestStripe(context.Context, *IngestStripeReq) (*IngestStripeResp, error)
@@ -211,10 +264,13 @@ type PaymentServiceServer interface {
 	// TopUpCredit — charge the principal and (on payment success, via the
 	// webhook) grant matching credit. Gated prepaid.
 	TopUpCredit(context.Context, *TopUpCreditReq) (*TopUpCreditResp, error)
+	// GetMyCreditBalance — the caller's balance.
+	GetMyCreditBalance(context.Context, *GetMyCreditBalanceReq) (*GetCreditBalanceResp, error)
 	// Metered usage (gated usage; body in handlers/usage.go). ReportUsage
-	// appends a usage record + increments the meter atomically. Reading the
-	// meter is a direct storage query (PaymentQuery.GetUsageMeter).
+	// appends a usage record + increments the meter atomically.
 	ReportUsage(context.Context, *ReportUsageReq) (*UsageView, error)
+	// GetMyUsageMeter — the caller's meter for (meter, period).
+	GetMyUsageMeter(context.Context, *GetMyUsageMeterReq) (*GetUsageMeterResp, error)
 	// Subscriptions (gated subscriptions; bodies in
 	// handlers/subscriptions.go). CreatePlan defines a plan locally + pushes
 	// the price to the provider; Subscribe enrolls a principal's customer
@@ -222,6 +278,8 @@ type PaymentServiceServer interface {
 	// query (PaymentQuery.GetSubscription).
 	CreatePlan(context.Context, *DefinePlanReq) (*PlanView, error)
 	Subscribe(context.Context, *SubscribeReq) (*SubscriptionView, error)
+	// GetMySubscription — one of the caller's subscriptions.
+	GetMySubscription(context.Context, *GetMySubscriptionReq) (*GetSubscriptionResp, error)
 }
 
 // UnimplementedPaymentServiceServer should be embedded to have
@@ -240,6 +298,9 @@ func (UnimplementedPaymentServiceServer) CreatePayment(context.Context, *ChargeR
 func (UnimplementedPaymentServiceServer) RefundPayment(context.Context, *RefundPaymentReq) (*RefundPaymentResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method RefundPayment not implemented")
 }
+func (UnimplementedPaymentServiceServer) GetMyPayment(context.Context, *GetMyPaymentReq) (*GetPaymentResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMyPayment not implemented")
+}
 func (UnimplementedPaymentServiceServer) IngestStripe(context.Context, *IngestStripeReq) (*IngestStripeResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method IngestStripe not implemented")
 }
@@ -252,14 +313,23 @@ func (UnimplementedPaymentServiceServer) SpendCredit(context.Context, *SpendCred
 func (UnimplementedPaymentServiceServer) TopUpCredit(context.Context, *TopUpCreditReq) (*TopUpCreditResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method TopUpCredit not implemented")
 }
+func (UnimplementedPaymentServiceServer) GetMyCreditBalance(context.Context, *GetMyCreditBalanceReq) (*GetCreditBalanceResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMyCreditBalance not implemented")
+}
 func (UnimplementedPaymentServiceServer) ReportUsage(context.Context, *ReportUsageReq) (*UsageView, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportUsage not implemented")
+}
+func (UnimplementedPaymentServiceServer) GetMyUsageMeter(context.Context, *GetMyUsageMeterReq) (*GetUsageMeterResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMyUsageMeter not implemented")
 }
 func (UnimplementedPaymentServiceServer) CreatePlan(context.Context, *DefinePlanReq) (*PlanView, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreatePlan not implemented")
 }
 func (UnimplementedPaymentServiceServer) Subscribe(context.Context, *SubscribeReq) (*SubscriptionView, error) {
 	return nil, status.Error(codes.Unimplemented, "method Subscribe not implemented")
+}
+func (UnimplementedPaymentServiceServer) GetMySubscription(context.Context, *GetMySubscriptionReq) (*GetSubscriptionResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMySubscription not implemented")
 }
 func (UnimplementedPaymentServiceServer) testEmbeddedByValue() {}
 
@@ -331,6 +401,24 @@ func _PaymentService_RefundPayment_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentServiceServer).RefundPayment(ctx, req.(*RefundPaymentReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentService_GetMyPayment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMyPaymentReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).GetMyPayment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_GetMyPayment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).GetMyPayment(ctx, req.(*GetMyPaymentReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -407,6 +495,24 @@ func _PaymentService_TopUpCredit_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentService_GetMyCreditBalance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMyCreditBalanceReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).GetMyCreditBalance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_GetMyCreditBalance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).GetMyCreditBalance(ctx, req.(*GetMyCreditBalanceReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PaymentService_ReportUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReportUsageReq)
 	if err := dec(in); err != nil {
@@ -421,6 +527,24 @@ func _PaymentService_ReportUsage_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentServiceServer).ReportUsage(ctx, req.(*ReportUsageReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentService_GetMyUsageMeter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMyUsageMeterReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).GetMyUsageMeter(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_GetMyUsageMeter_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).GetMyUsageMeter(ctx, req.(*GetMyUsageMeterReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -461,6 +585,24 @@ func _PaymentService_Subscribe_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentService_GetMySubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMySubscriptionReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).GetMySubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_GetMySubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).GetMySubscription(ctx, req.(*GetMySubscriptionReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PaymentService_ServiceDesc is the grpc.ServiceDesc for PaymentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -481,6 +623,10 @@ var PaymentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PaymentService_RefundPayment_Handler,
 		},
 		{
+			MethodName: "GetMyPayment",
+			Handler:    _PaymentService_GetMyPayment_Handler,
+		},
+		{
 			MethodName: "IngestStripe",
 			Handler:    _PaymentService_IngestStripe_Handler,
 		},
@@ -497,8 +643,16 @@ var PaymentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PaymentService_TopUpCredit_Handler,
 		},
 		{
+			MethodName: "GetMyCreditBalance",
+			Handler:    _PaymentService_GetMyCreditBalance_Handler,
+		},
+		{
 			MethodName: "ReportUsage",
 			Handler:    _PaymentService_ReportUsage_Handler,
+		},
+		{
+			MethodName: "GetMyUsageMeter",
+			Handler:    _PaymentService_GetMyUsageMeter_Handler,
 		},
 		{
 			MethodName: "CreatePlan",
@@ -507,6 +661,10 @@ var PaymentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Subscribe",
 			Handler:    _PaymentService_Subscribe_Handler,
+		},
+		{
+			MethodName: "GetMySubscription",
+			Handler:    _PaymentService_GetMySubscription_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

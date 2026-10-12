@@ -23,8 +23,10 @@ syntax = "proto3";
 
 package w17.contrib.payment;
 
+import "@self/queries/payment_query.proto";
 import "@self/types/models.proto";
 import "w17/contrib.proto";
+import "w17/field.proto";
 
 option go_package = "@project;@pkg";
 
@@ -199,10 +201,33 @@ message SubscriptionView {
   Subscription subscription = 1;
 }
 
+// ── Reads of the caller's own billing ────────────────────────
+// The REST preset serves these instead of the storage reads: each answers
+// only with the signed-in caller's data. An id that belongs to someone else
+// reads as not found. The project's own code reads through PaymentQuery.
+
+message GetMyPaymentReq {
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message GetMyCreditBalanceReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+}
+message GetMyUsageMeterReq {
+  option (w17.contrib.plugin_feature) = "usage";
+  string meter  = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string period = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+}
+message GetMySubscriptionReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+
 service PaymentService {
   rpc CreateCustomer(NewCustomerReq) returns (NewCustomerResp);
   rpc CreatePayment(ChargeReq) returns (ChargeResp);
   rpc RefundPayment(RefundPaymentReq) returns (RefundPaymentResp);
+  // GetMyPayment — one of the caller's payments.
+  rpc GetMyPayment(GetMyPaymentReq) returns (GetPaymentResp);
 
   // IngestStripe — Stripe webhook ingestion. Gated stripe_webhooks; the
   // handler body is in the feature-staged handlers/webhook_stripe.go.
@@ -225,11 +250,18 @@ service PaymentService {
   rpc TopUpCredit(TopUpCreditReq) returns (TopUpCreditResp) {
     option (w17.contrib.plugin_feature_rpc) = "prepaid";
   }
+  // GetMyCreditBalance — the caller's balance.
+  rpc GetMyCreditBalance(GetMyCreditBalanceReq) returns (GetCreditBalanceResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+  }
 
   // Metered usage (gated usage; body in handlers/usage.go). ReportUsage
-  // appends a usage record + increments the meter atomically. Reading the
-  // meter is a direct storage query (PaymentQuery.GetUsageMeter).
+  // appends a usage record + increments the meter atomically.
   rpc ReportUsage(ReportUsageReq) returns (UsageView) {
+    option (w17.contrib.plugin_feature_rpc) = "usage";
+  }
+  // GetMyUsageMeter — the caller's meter for (meter, period).
+  rpc GetMyUsageMeter(GetMyUsageMeterReq) returns (GetUsageMeterResp) {
     option (w17.contrib.plugin_feature_rpc) = "usage";
   }
 
@@ -242,6 +274,10 @@ service PaymentService {
     option (w17.contrib.plugin_feature_rpc) = "subscriptions";
   }
   rpc Subscribe(SubscribeReq) returns (SubscriptionView) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+  }
+  // GetMySubscription — one of the caller's subscriptions.
+  rpc GetMySubscription(GetMySubscriptionReq) returns (GetSubscriptionResp) {
     option (w17.contrib.plugin_feature_rpc) = "subscriptions";
   }
 }
