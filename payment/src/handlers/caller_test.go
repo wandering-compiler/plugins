@@ -50,6 +50,10 @@ func TestActingFor(t *testing.T) {
 	broken := metadata.NewIncomingContext(context.Background(), metadata.Pairs(callerMetadataKey, "%%%"))
 	noID := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs(callerMetadataKey, base64.StdEncoding.EncodeToString(envelope(""))))
+	empty := metadata.NewIncomingContext(context.Background(), metadata.Pairs(callerMetadataKey, ""))
+	repeated := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		callerMetadataKey, "",
+		callerMetadataKey, base64.StdEncoding.EncodeToString(envelope("user-a"))))
 	for _, c := range []struct {
 		name      string
 		ctx       context.Context
@@ -63,6 +67,8 @@ func TestActingFor(t *testing.T) {
 		{"someone else", asCaller("user-a"), "user-b", "", codes.PermissionDenied},
 		{"an undecodable envelope is not an internal call", broken, "user-b", "", codes.Unauthenticated},
 		{"an envelope without a caller is not an internal call", noID, "user-b", "", codes.Unauthenticated},
+		{"an empty envelope is not an internal call", empty, "user-b", "", codes.Unauthenticated},
+		{"a repeated envelope is not an internal call", repeated, "user-b", "", codes.Unauthenticated},
 	} {
 		got, err := actingFor(c.ctx, c.requested)
 		if code := status.Code(err); code != c.code || got != c.want {
@@ -129,4 +135,42 @@ func TestGetMyReads_RequireASignedInCaller(t *testing.T) {
 	wantCode(t, err, codes.Unauthenticated, "subscription without a caller")
 	_, err = r.h.GetMySubscription(asCaller("user-a"), &pb.GetMySubscriptionReq{Id: "00000000-0000-0000-0000-000000000001"})
 	wantCode(t, err, codes.NotFound, "a subscription that is not the caller's")
+}
+
+// Each caller reads their own balance and meter, never another person's.
+func TestGetMyBalanceAndMeter_TheCallersOwn(t *testing.T) {
+	r := newRig(t)
+	for _, g := range []struct{ user, amount string }{{"user-a", "10"}, {"user-b", "3"}} {
+		if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: g.user, Amount: g.amount, IdempotencyKey: "g-" + g.user}); err != nil {
+			t.Fatalf("grant %s: %v", g.user, err)
+		}
+		if _, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: g.user, Meter: "api", Period: "2026-10", Quantity: int64(len(g.amount)), IdempotencyKey: "u-" + g.user}); err != nil {
+			t.Fatalf("usage %s: %v", g.user, err)
+		}
+	}
+	bal, err := r.h.GetMyCreditBalance(asCaller("user-a"), &pb.GetMyCreditBalanceReq{})
+	if err != nil || bal.GetBalance().GetUserId() != "user-a" {
+		t.Fatalf("balance of user-a: %v, %+v", err, bal)
+	}
+	meter, err := r.h.GetMyUsageMeter(asCaller("user-b"), &pb.GetMyUsageMeterReq{Meter: "api", Period: "2026-10"})
+	if err != nil || meter.GetMeter().GetUserId() != "user-b" || meter.GetMeter().GetTotal() != 1 {
+		t.Fatalf("meter of user-b: %v, %+v", err, meter)
+	}
+}
+
+// A caller reads their own subscription; another customer's reads as not
+// found.
+func TestGetMySubscription_OnlyTheOwnersSubscription(t *testing.T) {
+	q := &fakeQuery{
+		customer:     &pb.Customer{Id: "cust-a", UserId: "user-a"},
+		subscription: &pb.Subscription{Id: "sub-1", CustomerId: "cust-a"},
+	}
+	h := subHandler(q, &fakeMutation{}, &fakeBackend{})
+	got, err := h.GetMySubscription(asCaller("user-a"), &pb.GetMySubscriptionReq{Id: "sub-1"})
+	if err != nil || got.GetSubscription().GetId() != "sub-1" {
+		t.Fatalf("owner read: %v, %+v", err, got)
+	}
+	q.subscription.CustomerId = "cust-b"
+	_, err = h.GetMySubscription(asCaller("user-a"), &pb.GetMySubscriptionReq{Id: "sub-1"})
+	wantCode(t, err, codes.NotFound, "another customer's subscription")
 }

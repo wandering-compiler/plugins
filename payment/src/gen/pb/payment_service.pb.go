@@ -14,7 +14,10 @@
 //   - CreateCustomer  → backend.EnsureCustomer + PaymentMutation.CreateCustomer
 //   - CreatePayment   → resolve/ensure Customer + backend.CreatePayment
 //                       + PaymentMutation.CreatePayment
-//   - GetPayment      → PaymentQuery.GetPayment passthrough
+//   - RefundPayment   → backend.RefundPayment + PaymentMutation.CreateRefund
+//                       (internal: no ownership check, never REST-exposed)
+//   - GetMy*          → the signed-in caller's own rows (PaymentQuery reads
+//                       filtered to the caller's customer / user id)
 //   - IngestStripe    → verify signature (metadata) + dedup
 //                       (MarkWebhookProcessed) + dispatch
 //                       MarkPaymentSucceeded / MarkPaymentFailed

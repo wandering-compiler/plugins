@@ -23,13 +23,21 @@ import (
 //
 // Two kinds of request reach these handlers:
 //
-//   - through the gateway, on behalf of a signed-in person: the envelope is
-//     there, and the request may act only for that person;
-//   - from the project's own code (a job, another service) with no person
-//     behind it: no envelope, and the request names the user it acts for.
+//   - on behalf of a signed-in person: the envelope is there, and the
+//     request may act only for that person;
+//   - from the project's own code with no person behind it (a job, a
+//     webhook, an event subscriber): no envelope, and the request names the
+//     user it acts for.
 //
 // The gateway strips any client-sent `x-w17-*` metadata before it stamps its
 // own, so a client cannot pass for the second kind or forge the first.
+//
+// The envelope follows the request: a project handler that calls
+// PaymentService while serving a signed-in person (in process or over a
+// dialled conn, both relay `x-w17-user`) calls it AS that person. Code that
+// deliberately acts for someone else there (an admin action, an owner paying
+// for a member) removes `x-w17-user` from its incoming metadata first; see
+// the README's "Who a request acts for".
 
 const callerMetadataKey = "x-w17-user"
 
@@ -45,8 +53,13 @@ func callerID(ctx context.Context) (id string, viaGateway bool, err error) {
 		return "", false, nil
 	}
 	vals := md.Get(callerMetadataKey)
-	if len(vals) == 0 || vals[0] == "" {
+	if len(vals) == 0 {
 		return "", false, nil
+	}
+	// The gateway stamps exactly one non-empty value. An empty or repeated
+	// one is a broken envelope, never "no caller".
+	if len(vals) != 1 || vals[0] == "" {
+		return "", true, errNoCaller
 	}
 	raw, err := base64.StdEncoding.DecodeString(vals[0])
 	if err != nil {
@@ -120,42 +133,52 @@ func signedInCaller(ctx context.Context) (string, error) {
 // exist, so ids cannot be probed for other people's billing.
 const errNotYours = "not found"
 
-// callerCustomerID is the signed-in caller's customer id, or "" when the
-// caller is not a customer yet.
-func (h *PaymentServiceHandler) callerCustomerID(ctx context.Context, caller string) (string, error) {
+// callerCustomerID is the signed-in caller's customer id. A caller who is
+// not a customer yet owns nothing, so it answers NotFound like a row that is
+// not theirs.
+func (h *PaymentServiceHandler) callerCustomerID(ctx context.Context) (string, error) {
+	caller, err := signedInCaller(ctx)
+	if err != nil {
+		return "", err
+	}
 	got, err := h.Query.GetCustomerByUserId(ctx, &pb.GetCustomerByUserIdReq{UserId: caller})
 	if err != nil {
 		if absent(err) {
-			return "", nil
+			return "", notFound(errNotYours)
 		}
 		return "", err
 	}
-	return got.GetCustomer().GetId(), nil
+	if id := got.GetCustomer().GetId(); id != "" {
+		return id, nil
+	}
+	return "", notFound(errNotYours)
+}
+
+// ownRow maps a storage read of one row to the caller's view of it: absent,
+// or another customer's, both answer NotFound.
+func ownRow(readErr error, owner, customer string) error {
+	if readErr != nil {
+		if absent(readErr) {
+			return notFound(errNotYours)
+		}
+		return readErr
+	}
+	if owner != customer {
+		return notFound(errNotYours)
+	}
+	return nil
 }
 
 // GetMyPayment returns one of the caller's payments. Another customer's
 // payment answers NotFound.
 func (h *PaymentServiceHandler) GetMyPayment(ctx context.Context, req *pb.GetMyPaymentReq) (*pb.GetPaymentResp, error) {
-	caller, err := signedInCaller(ctx)
+	customer, err := h.callerCustomerID(ctx)
 	if err != nil {
 		return nil, err
-	}
-	customer, err := h.callerCustomerID(ctx, caller)
-	if err != nil {
-		return nil, err
-	}
-	if customer == "" {
-		return nil, notFound(errNotYours) // not a customer: nothing is theirs
 	}
 	got, err := h.Query.GetPayment(ctx, &pb.GetPaymentReq{Id: req.GetId()})
-	if err != nil {
-		if absent(err) {
-			return nil, notFound(errNotYours)
-		}
+	if err := ownRow(err, got.GetPayment().GetCustomerId(), customer); err != nil {
 		return nil, err
-	}
-	if got.GetPayment().GetCustomerId() != customer {
-		return nil, notFound(errNotYours)
 	}
 	return got, nil
 }

@@ -14,7 +14,10 @@
 //   - CreateCustomer  → backend.EnsureCustomer + PaymentMutation.CreateCustomer
 //   - CreatePayment   → resolve/ensure Customer + backend.CreatePayment
 //                       + PaymentMutation.CreatePayment
-//   - GetPayment      → PaymentQuery.GetPayment passthrough
+//   - RefundPayment   → backend.RefundPayment + PaymentMutation.CreateRefund
+//                       (internal: no ownership check, never REST-exposed)
+//   - GetMy*          → the signed-in caller's own rows (PaymentQuery reads
+//                       filtered to the caller's customer / user id)
 //   - IngestStripe    → verify signature (metadata) + dedup
 //                       (MarkWebhookProcessed) + dispatch
 //                       MarkPaymentSucceeded / MarkPaymentFailed
@@ -87,8 +90,7 @@ type PaymentServiceClient interface {
 	// Subscriptions (gated subscriptions; bodies in
 	// handlers/subscriptions.go). CreatePlan defines a plan locally + pushes
 	// the price to the provider; Subscribe enrolls a principal's customer
-	// on a plan via the provider. Reading a subscription is a direct storage
-	// query (PaymentQuery.GetSubscription).
+	// on a plan via the provider. GetMySubscription reads one of the caller's.
 	CreatePlan(ctx context.Context, in *DefinePlanReq, opts ...grpc.CallOption) (*PlanView, error)
 	Subscribe(ctx context.Context, in *SubscribeReq, opts ...grpc.CallOption) (*SubscriptionView, error)
 	// GetMySubscription — one of the caller's subscriptions.
@@ -274,8 +276,7 @@ type PaymentServiceServer interface {
 	// Subscriptions (gated subscriptions; bodies in
 	// handlers/subscriptions.go). CreatePlan defines a plan locally + pushes
 	// the price to the provider; Subscribe enrolls a principal's customer
-	// on a plan via the provider. Reading a subscription is a direct storage
-	// query (PaymentQuery.GetSubscription).
+	// on a plan via the provider. GetMySubscription reads one of the caller's.
 	CreatePlan(context.Context, *DefinePlanReq) (*PlanView, error)
 	Subscribe(context.Context, *SubscribeReq) (*SubscriptionView, error)
 	// GetMySubscription — one of the caller's subscriptions.

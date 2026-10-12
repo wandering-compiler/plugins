@@ -270,26 +270,13 @@ func eventTime(unix int64) *timestamppb.Timestamp {
 // GetMySubscription returns one of the caller's subscriptions. Another
 // customer's subscription answers NotFound.
 func (h *PaymentServiceHandler) GetMySubscription(ctx context.Context, req *pb.GetMySubscriptionReq) (*pb.GetSubscriptionResp, error) {
-	caller, err := signedInCaller(ctx)
+	customer, err := h.callerCustomerID(ctx)
 	if err != nil {
 		return nil, err
-	}
-	customer, err := h.callerCustomerID(ctx, caller)
-	if err != nil {
-		return nil, err
-	}
-	if customer == "" {
-		return nil, notFound(errNotYours) // not a customer: nothing is theirs
 	}
 	got, err := h.Query.GetSubscription(ctx, &pb.GetSubscriptionReq{Id: req.GetId()})
-	if err != nil {
-		if absent(err) {
-			return nil, notFound(errNotYours)
-		}
+	if err := ownRow(err, got.GetSubscription().GetCustomerId(), customer); err != nil {
 		return nil, err
-	}
-	if got.GetSubscription().GetCustomerId() != customer {
-		return nil, notFound(errNotYours)
 	}
 	return got, nil
 }

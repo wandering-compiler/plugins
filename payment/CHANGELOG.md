@@ -10,7 +10,8 @@ What changes:
 
 - **`CreateCustomer`, `CreatePayment`, `Subscribe` and `TopUpCredit` act for the signed-in caller.** Through the gateway an empty `user_id` means the caller, and another id is refused with `PERMISSION_DENIED`. A call from the project's own code, which carries no signed-in caller, names the user as before.
 - **New `GetMyPayment`, `GetMySubscription`, `GetMyCreditBalance` and `GetMyUsageMeter`** answer only with the caller's rows. Another person's payment or subscription reads as not found. The REST preset serves `GET /payments/{id}`, `/subscriptions/{id}`, `/credit/balance` and `/usage/{meter}/{period}` from them instead of from the storage reads. The project's own code still reads through `PaymentQuery`.
-- **The caller is read from field 2 of the gateway's `x-w17-user` envelope.** w17 requires `string user_id = 2` on every auth method's response, and the auth plugin has it. An envelope that is present but carries no readable caller is refused (`UNAUTHENTICATED`), never treated as an internal call.
+- **The caller is read from field 2 of the gateway's `x-w17-user` envelope.** w17 requires `string user_id = 2` on every auth method's response, and the auth plugin has it. An envelope that is present but empty, repeated or without a readable caller is refused (`UNAUTHENTICATED`), never treated as an internal call.
+- **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
 
 

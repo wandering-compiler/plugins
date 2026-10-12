@@ -171,8 +171,7 @@ func TestSubscribe_DistinctKeysNotCollapsed(t *testing.T) {
 	}
 }
 
-// Note: reading a subscription is now a direct storage query
-// (PaymentQuery.GetSubscription via REST preset) — no business handler.
+// Note: the REST subscription read is GetMySubscription (caller_test.go).
 
 // A subscription whose first payment has not gone through is INCOMPLETE, not
 // ACTIVE — and so is every other status the provider reports that does not
