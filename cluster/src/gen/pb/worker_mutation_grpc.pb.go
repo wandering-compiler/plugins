@@ -35,9 +35,10 @@ type WorkerMutationClient interface {
 	// They are opposite decisions, they will diverge (a ban will want a reason),
 	// and an ACL that must distinguish them needs two names to gate.
 	//
-	// A ban takes effect at the relays on the control plane's NEXT call to each
-	// — and every placement makes one — without waiting for the machine to
-	// reconnect: a relay checks the ban on every piece of work.
+	// A ban takes effect at once: the handler delivers the new set to every
+	// registered relay, enabled or not, and every later call to a relay carries
+	// it too. A relay checks the ban on every piece of work, without waiting
+	// for the machine to reconnect.
 	BanWorkers(ctx context.Context, in *DecideWorkersReq, opts ...grpc.CallOption) (*DecideWorkersResp, error)
 	UnbanWorkers(ctx context.Context, in *DecideWorkersReq, opts ...grpc.CallOption) (*DecideWorkersResp, error)
 }
@@ -89,9 +90,10 @@ type WorkerMutationServer interface {
 	// They are opposite decisions, they will diverge (a ban will want a reason),
 	// and an ACL that must distinguish them needs two names to gate.
 	//
-	// A ban takes effect at the relays on the control plane's NEXT call to each
-	// — and every placement makes one — without waiting for the machine to
-	// reconnect: a relay checks the ban on every piece of work.
+	// A ban takes effect at once: the handler delivers the new set to every
+	// registered relay, enabled or not, and every later call to a relay carries
+	// it too. A relay checks the ban on every piece of work, without waiting
+	// for the machine to reconnect.
 	BanWorkers(context.Context, *DecideWorkersReq) (*DecideWorkersResp, error)
 	UnbanWorkers(context.Context, *DecideWorkersReq) (*DecideWorkersResp, error)
 }

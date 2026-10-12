@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"net"
 	"sync"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 )
@@ -292,6 +292,21 @@ func TestWorkerStore_RecordCarriesTheRelayAndTheClaims(t *testing.T) {
 
 // Ban and unban go to their OWN mutations, carrying who decided and when —
 // swapped, an operator's ban would lift one.
+// A decision is never recorded older than the newest one: its time is the
+// ban set's version, and a replica with a slow clock would otherwise lower
+// the version and have every relay ignore the decision.
+func TestWorkerStore_DecideNeverLowersTheVersion(t *testing.T) {
+	ahead := time.Now().Add(time.Hour)
+	tb := &tablesServer{banVersion: timestamppb.New(ahead)}
+	_, workers := serveTables(t, tb)
+	if err := workers.Decide(t.Context(), []string{"w-1"}, false, "op-1"); err != nil {
+		t.Fatal(err)
+	}
+	if at := tb.unbans[0].GetAt().AsTime(); !at.After(ahead) {
+		t.Errorf("decision recorded at %v, not after the newest decision %v", at, ahead)
+	}
+}
+
 func TestWorkerStore_DecideRoutesBanAndUnban(t *testing.T) {
 	tb := &tablesServer{}
 	_, workers := serveTables(t, tb)

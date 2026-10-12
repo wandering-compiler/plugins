@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -115,8 +116,20 @@ func (s workerRegistry) Record(ctx context.Context, relayID string, w *pb.KnownW
 }
 
 func (s workerRegistry) Decide(ctx context.Context, ids []string, ban bool, by string) error {
-	req := &pb.DecideWorkersReq{Ids: ids, DecidedBy: by, At: timestamppb.Now()}
-	var err error
+	// The decision time is the ban set's version (see Banned), so it must
+	// never fall below the newest decision already recorded: a replica whose
+	// clock runs behind would otherwise LOWER the version, and every relay
+	// that had applied the newer one would ignore this decision until the
+	// clocks caught up. Moved just past the newest decision when needed.
+	at := time.Now()
+	v, err := s.q.BanSetVersion(ctx, &pb.BanSetVersionReq{})
+	if err != nil {
+		return err
+	}
+	if t := v.GetVersion(); t != nil && !at.After(t.AsTime()) {
+		at = t.AsTime().Add(time.Millisecond)
+	}
+	req := &pb.DecideWorkersReq{Ids: ids, DecidedBy: by, At: timestamppb.New(at)}
 	if ban {
 		_, err = s.m.BanWorkers(ctx, req)
 	} else {

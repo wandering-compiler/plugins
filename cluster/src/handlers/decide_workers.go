@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"sync"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -59,16 +60,24 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context) {
 		log.Printf("cluster: cannot list relays to deliver the ban set: %v", err)
 		return
 	}
+	// In parallel, so the operator waits at most one dial timeout however
+	// many relays there are, not one per unreachable relay.
+	var wg sync.WaitGroup
 	for _, r := range relays {
-		pctx, cancel := context.WithTimeout(ctx, h.dialTimeout())
-		conn, err := h.dialReady(pctx, r)
-		if err == nil {
-			_, err = newRelayClient(conn).RelayStats(pctx, &pb.RelayStatsReq{})
-			_ = conn.Close()
-		}
-		cancel()
-		if err != nil {
-			log.Printf("cluster: relay %q did not take the new ban set now (it gets it with its next call): %v", r.Name, err)
-		}
+		wg.Add(1)
+		go func(r Relay) {
+			defer wg.Done()
+			pctx, cancel := context.WithTimeout(ctx, h.dialTimeout())
+			defer cancel()
+			conn, err := h.dialReady(pctx, r)
+			if err == nil {
+				_, err = newRelayClient(conn).RelayStats(pctx, &pb.RelayStatsReq{})
+				_ = conn.Close()
+			}
+			if err != nil {
+				log.Printf("cluster: relay %q did not take the new ban set now (it gets it with its next call): %v", r.Name, err)
+			}
+		}(r)
 	}
+	wg.Wait()
 }

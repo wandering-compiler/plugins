@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -114,6 +115,9 @@ type Registry struct {
 	version int64
 	// path, when set, is where the ban set is kept across restarts.
 	path string
+	// persistMu serialises writes of path, so the last write is always of
+	// the newest state (see persist).
+	persistMu sync.Mutex
 }
 
 func New() *Registry {
@@ -140,7 +144,8 @@ func (r *Registry) SetBannedAt(ids []string, version int64) {
 		r.mu.Unlock()
 		return
 	}
-	if version > r.version {
+	versionChanged := version > r.version
+	if versionChanged {
 		r.version = version
 	}
 	old := r.banned
@@ -154,11 +159,12 @@ func (r *Registry) SetBannedAt(ids []string, version int64) {
 		}
 	}
 	notify := r.onBans
-	changed := added || len(old) != len(r.banned)
-	snapshot := r.snapshotLocked()
+	// A new version is kept even when the set is unchanged: a restart that
+	// forgot it would accept a set older than the one already applied.
+	changed := added || len(old) != len(r.banned) || versionChanged
 	r.mu.Unlock()
 	if changed {
-		r.persist(snapshot)
+		r.persist()
 	}
 	// Only when someone is NEWLY banned. The set arrives on every management
 	// call, almost always unchanged, and the hook scans every tunnel.
@@ -255,24 +261,55 @@ func (r *Registry) KeepIn(path string) error {
 	return nil
 }
 
-// persist writes the set atomically (temp file, then rename). A failure is
-// logged and not fatal: the set in memory is current, and the next change
-// writes it again.
-func (r *Registry) persist(s savedBans) {
+// persist writes the current set atomically (temp file, fsync, rename, fsync
+// of the directory), so a crash leaves either the old file or the new one,
+// never a torn one that would refuse the next start. Writes are serialised and
+// each takes its snapshot under the write lock, so two concurrent changes
+// cannot land in the wrong order or share the temp file. A failure is logged
+// and not fatal: the set in memory is current, and the next change writes it
+// again.
+func (r *Registry) persist() {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
 	r.mu.Lock()
 	path := r.path
+	s := r.snapshotLocked()
 	r.mu.Unlock()
 	if path == "" {
 		return
 	}
-	raw, err := json.Marshal(s)
-	if err == nil {
-		tmp := path + ".tmp"
-		if err = os.WriteFile(tmp, raw, 0o600); err == nil {
-			err = os.Rename(tmp, path)
-		}
-	}
-	if err != nil {
+	if err := writeAtomic(path, s); err != nil {
 		log.Printf("workeradmit: keeping the ban set in %s: %v", path, err)
 	}
+}
+
+func writeAtomic(path string, s savedBans) error {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(raw); err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }

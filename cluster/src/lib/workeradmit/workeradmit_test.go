@@ -153,3 +153,23 @@ func TestKeepIn_AnUnreadableFileIsAnError(t *testing.T) {
 		t.Error("an unreadable saved ban set was accepted")
 	}
 }
+
+// A new version is kept even when the set it carries is unchanged: a restart
+// that forgot it would let an older set through.
+func TestKeepIn_KeepsANewVersionOfAnUnchangedSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bans.json")
+	r := New()
+	if err := r.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	r.SetBannedAt([]string{"w1"}, 10)
+	r.SetBannedAt([]string{"w1"}, 30) // unban + re-ban at 20, 30; only 30 arrived
+	again := New()
+	if err := again.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	again.SetBannedAt(nil, 20) // the lift at 20, delivered late
+	if again.Admitted("w1") {
+		t.Error("the saved version was stale: a set older than the applied one lifted the ban")
+	}
+}

@@ -215,7 +215,7 @@ func TestBanWorkers_DeliversTheSetToEveryRelayAtOnce(t *testing.T) {
 	reg, dial := serveRelayWithWorkers(t, workeradmit.Worker{ID: "bb"})
 	ws := &workerStore{banned: []string{"bb"}}
 	h := &ClusterServiceHandler{
-		Relays:  &store{relays: []Relay{{ID: "1", Name: "disabled-one", URL: "live"}}},
+		Relays:  &store{disabled: []Relay{{ID: "1", Name: "disabled-one", URL: "live"}}},
 		Workers: ws,
 		Dial:    dial,
 	}

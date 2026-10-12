@@ -15,10 +15,9 @@ A reservation handle was an unguessable credential, but anyone holding it, for e
 
 Three gaps let a banned worker keep working or renewing:
 
-- **An older ban set could overwrite a newer one.** Control-plane replicas read the set at different moments. The set now carries a version (`w17-cluster-banned-version`: the time of the newest ban or unban decision, from the new `WorkerQuery.BanSetVersion`), and a relay ignores a set older than one it has applied. A control plane that sends no version is applied as before.
+- **An older ban set could overwrite a newer one.** Control-plane replicas read the set at different moments. The set now carries a version (`w17-cluster-banned-version`: the time of the newest ban or unban decision, from the new `WorkerQuery.BanSetVersion`), and a relay ignores a set older than one it has applied. A decision is never recorded older than the newest one (its time is moved just past it), so a replica whose clock runs behind cannot lower the version. A control plane that sends no version is applied as before.
 - **A restarted relay knew no bans** until the control plane next called it, and a banned worker could renew its certificate in that window. With `--identity-dir` (the sandbox sets it), the relay keeps the set in `bans.json` there and loads it at start. An unreadable file refuses the start.
-- **A disabled relay never heard of a ban,** because nothing reaches a disabled relay, and its workers went on renewing. A ban or unban is now delivered to every registered relay at once, enabled or not (best effort; an unreachable relay gets it with its next call).
-
+- **A disabled relay never heard of a ban,** because nothing reaches a disabled relay, and its workers went on renewing. A ban or unban is now delivered to every registered relay at once, enabled or not, in parallel, so the operator waits at most one dial timeout (best effort; an unreachable relay gets it with its next call, which for a disabled one is only a reservation poll).
 
 ### A ban cuts the banned worker's open tunnel
 
