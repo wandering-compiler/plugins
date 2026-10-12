@@ -2779,7 +2779,8 @@ type OrgMembership struct {
 	UserId string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	OrgId  string                 `protobuf:"bytes,3,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
 	// role: owner | admin | member. Free-form CHAR — project policy owns the
-	// vocabulary; the plugin only passes it through.
+	// vocabulary; the plugin only passes it through. An accepted invitation and
+	// the admin's role edit write a Role.name here, so it is as wide as one.
 	Role          string                 `protobuf:"bytes,4,opt,name=role,proto3" json:"role,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -3378,7 +3379,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12#\n" +
 	"\x06org_id\x18\x03 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x05orgId\x12\x1c\n" +
-	"\x04role\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@ R\x04role\x12F\n" +
+	"\x04role\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@dR\x04role\x12F\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:/\xc2\xf3\x18\x19\x12\x17\n" +
 	"\t\n" +

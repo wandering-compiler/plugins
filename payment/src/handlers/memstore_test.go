@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/lib/typere"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
@@ -590,6 +591,12 @@ func (s *memStore) ApplyCredit(_ context.Context, in *pb.ApplyCreditReq, _ ...gr
 	delta, err := decimal4(in.GetDelta())
 	if err != nil {
 		return nil, s.leave("ApplyCredit", err)
+	}
+	// ApplyCreditReq.reason is a SLUG, and the generated storage refuses any
+	// other value before the write. A reason the column cannot hold used to
+	// pass here and fail every top-up refund against a real store.
+	if !typere.Slug.MatchString(in.GetReason()) || len(in.GetReason()) > 64 {
+		return nil, s.leave("ApplyCredit", status.Errorf(codes.InvalidArgument, "reason: %q is not a slug of at most 64 characters", in.GetReason()))
 	}
 	// op "ledger"
 	if _, dup := s.ledger[in.GetIdempotencyKey()]; dup {

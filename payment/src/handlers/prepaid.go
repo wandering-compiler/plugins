@@ -350,14 +350,14 @@ func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := h.applyCredit(ctx, userID, amount, creditTopupRefund, "topup refund", payment.GetId(), key); err != nil {
+	if _, err := h.applyCredit(ctx, userID, amount, creditTopupRefund, "topup-refund", payment.GetId(), key); err != nil {
 		if status.Code(err) == codes.FailedPrecondition {
 			return nil, status.Error(codes.FailedPrecondition, "payment: the top-up's credit is already spent; it cannot be refunded")
 		}
 		return nil, err
 	}
 	undo := func() error {
-		_, err := h.applyCredit(ctx, userID, amount, creditTopupRefundUndo, "topup refund refused", payment.GetId(), key)
+		_, err := h.applyCredit(ctx, userID, amount, creditTopupRefundUndo, "topup-refund-refused", payment.GetId(), key)
 		return err
 	}
 	return undo, nil
