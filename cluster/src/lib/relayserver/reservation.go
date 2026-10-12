@@ -25,6 +25,9 @@ func (s *Server) ReserveTask(context.Context, *pb.ReserveTaskReq) (*pb.Reservati
 	if errors.Is(err, relaycore.ErrDraining) {
 		return nil, refusal.New(codes.Unavailable, refusal.RelayDraining, "relay: draining — place elsewhere")
 	}
+	if errors.Is(err, relaycore.ErrQueueFull) {
+		return nil, refusal.New(codes.ResourceExhausted, refusal.QueueFull, "relay: the queue is full — place elsewhere or retry later")
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "relay: reserving: %v", err)
 	}
