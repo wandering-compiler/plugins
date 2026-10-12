@@ -32,7 +32,7 @@ The sign-up gates gain codes too, on `SignUp` and the OAuth exchange alike. Outa
 | Code | When |
 |---|---|
 | `SIGNUP_NOT_INVITED` | `invite_only`, and nothing invites the address. |
-| `INVITE_OTHER_ADDRESS` | The invitation link is bound to another address, and nothing invites this one. The other address is not revealed. |
+| `INVITE_OTHER_ADDRESS` | The invitation link is bound to another address (or an open link was already used by another registration), and nothing invites this one. The other address is not revealed. |
 | `SIGNUP_CLOSED` | The address is outside `sign_up_allowlist`. |
 
 ### Registering through a provider can carry an invitation

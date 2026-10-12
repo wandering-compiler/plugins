@@ -839,7 +839,7 @@ msgids:
   - "This account has been disabled."
   - "This address does not belong to any organization here. Check the address you registered on."
   - "This authenticator app is already set up. To get new recovery codes, generate them."
-  - "This invitation was sent to a different email address. Register with that address, or ask for a new invitation."
+  - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."

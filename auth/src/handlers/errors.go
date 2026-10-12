@@ -235,7 +235,7 @@ const (
 
 	MsgSignUpNotInvited = "Registration is by invitation only. Ask the organization you are joining to invite you."
 
-	MsgInviteOtherAddress = "This invitation was sent to a different email address. Register with that address, or ask for a new invitation."
+	MsgInviteOtherAddress = "This invitation is for a different email address, or has already been used. Ask for a new invitation."
 
 	MsgSignUpClosed = "Registration is not open for this email address."
 
