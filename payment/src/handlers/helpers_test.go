@@ -293,3 +293,23 @@ func TestValidateConfig_RequiresTheWebhookSecretWhileWebhooksAreOn(t *testing.T)
 		t.Fatalf("with the secret: %v", err)
 	}
 }
+
+// A blank secret refuses every delivery exactly like a missing one.
+func TestValidateConfig_RefusesABlankWebhookSecret(t *testing.T) {
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, WebhookSecret: " \n"}
+	if err := ValidateConfig(h); err == nil || !strings.Contains(err.Error(), "webhook_signing_secret") {
+		t.Fatalf("err = %v, want the blank webhook secret refused", err)
+	}
+}
+
+// With stripe_webhooks off, webhook_stripe.go is not staged and nothing sets
+// webhooksStaged: the secret is not needed and its absence must not stop the
+// bundle. This package always compiles that file, so the flag is cleared here.
+func TestValidateConfig_NoWebhookSecretNeededWhileWebhooksAreOff(t *testing.T) {
+	t.Cleanup(func() { webhooksStaged = true })
+	webhooksStaged = false
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	if err := ValidateConfig(h); err != nil {
+		t.Fatalf("webhooks off, no secret: %v", err)
+	}
+}

@@ -47,8 +47,9 @@ features:
       - handlers/webhook_stripe.go
   - name: prepaid
     default: false
-    # Credit is granted / a subscription settles only when the provider's
-    # webhook confirms it; without the webhook surface neither ever happens.
+    # A top-up's credit is granted only when the provider's webhook confirms
+    # the payment; without the webhook surface TopUpCredit takes the money
+    # and the credit never lands.
     requires: [stripe_webhooks]
     description: "Prepaid credit wallet: append-only CreditLedger + materialized CreditBalance (non-negative CHECK), the atomic ApplyCredit mutation (ledger insert + balance increment in one tx), and PaymentService.GrantCredit/SpendCredit/GetBalance + the CreditApplied event. Off by default — opt in for credit/wallet billing."
     go_files:
@@ -60,8 +61,8 @@ features:
       - handlers/usage.go
   - name: subscriptions
     default: false
-    # Credit is granted / a subscription settles only when the provider's
-    # webhook confirms it; without the webhook surface neither ever happens.
+    # A subscription's status is reconciled only from the provider's
+    # webhook; without the webhook surface it never leaves its first state.
     requires: [stripe_webhooks]
     description: "Recurring plans: locally-authoritative Plan catalogue (pushed to the provider) + Subscription records (provider-authoritative lifecycle). PaymentService.CreatePlan/Subscribe/GetSubscription, MarkSubscriptionStatus (webhook reconciliation), SubscriptionStarted/SubscriptionStatusChanged events. Off by default — opt in for subscription billing."
     go_files:
@@ -105,9 +106,11 @@ presets:
       - prefix: /webhooks
         description: "Inbound payment-provider webhooks (signature-verified, unauthenticated)."
         endpoints:
-          # failed_only: a genuine, signed delivery spends no per-address
-          # budget, so a burst of them from the provider is never answered
-          # 429; a forged one (bad signature) does.
+          # failed_only: a delivery answered 2xx (handled, duplicate, or an
+          # event type that needs nothing) spends no per-address budget, so a
+          # burst of them from the provider is not answered 429. Any failed
+          # answer does spend it: a bad signature, but also a genuine delivery
+          # whose processing failed (no local row yet, a storage error).
           - { ref: PaymentService.IngestStripe, method: POST, path: /stripe, exclude_auth: true, public_limit: failed_only, raw_body_field: raw_payload, feature: stripe_webhooks }
 
 sandboxes:

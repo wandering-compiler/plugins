@@ -44,8 +44,9 @@ func ValidateConfig(h *PaymentServiceHandler) error {
 	}
 	// With webhooks on, a bundle without the signing secret boots and then
 	// refuses every delivery: payments stay pending forever and nothing says
-	// why until someone reads the provider's dashboard.
-	if webhooksStaged && h.WebhookSecret == "" {
+	// why until someone reads the provider's dashboard. A blank value (a
+	// secret file holding only a newline) fails every delivery the same way.
+	if webhooksStaged && strings.TrimSpace(h.WebhookSecret) == "" {
 		return fmt.Errorf("payment plugin: webhook_signing_secret is required while stripe_webhooks is on")
 	}
 	return nil

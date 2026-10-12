@@ -20,8 +20,9 @@ Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on the webhoo
 
 - **`webhook_signing_secret` is required while `stripe_webhooks` is on** (the default). A bundle without it used to boot and then refuse every delivery, leaving payments pending forever. It now fails `RegisterPlugin`.
 - **`prepaid` and `subscriptions` require `stripe_webhooks`.** Credit is granted, and a subscription settles, only when the provider's webhook confirms it. Without the webhook surface, `TopUpCredit` took the money and never granted credit.
-- **`POST /webhooks/stripe` is `public_limit: failed_only`.** A genuine, signed delivery spends no per-address budget, so a burst of them from the provider is never answered 429. A delivery with a bad signature does spend it.
+- **`POST /webhooks/stripe` is `public_limit: failed_only`.** A delivery answered 2xx (handled, a duplicate, or an event type that needs nothing) spends no per-address budget, so a burst of them from the provider is not answered 429. Every failed answer does spend it: a bad signature, and also a genuine delivery whose processing failed (its local row has not landed yet, a storage error). A storage outage longer than the burst can therefore have the provider's address answered 429 for a short while after it ends; the provider retries those too.
 
+**Upgrading.** An activation that lists `features:` explicitly replaces the defaults, so one that lists `prepaid` or `subscriptions` without `stripe_webhooks` is now refused at codegen (`feature "prepaid" requires "stripe_webhooks"`). Add `stripe_webhooks` to the list, and set `webhook_signing_secret`: with the webhooks on, the bundle no longer boots without it. Point the provider's webhook at `POST /webhooks/stripe`.
 
 ### Run a project against Stripe's API mock
 

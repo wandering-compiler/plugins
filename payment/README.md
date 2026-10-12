@@ -243,9 +243,14 @@ webhooks). Off by default. This is the one feature that extends
 
 - `stripe_webhooks` (default on) — the webhook ingestion surface
   (`IngestStripe` + `ProcessedWebhookEvent` + `MarkWebhookProcessed`).
-- `prepaid` (default off) — the credit wallet.
+- `prepaid` (default off) — the credit wallet. Requires `stripe_webhooks`
+  (a top-up's credit is granted from the webhook).
 - `usage` (default off) — metered / pay-as-you-go.
-- `subscriptions` (default off) — recurring plans.
+- `subscriptions` (default off) — recurring plans. Requires
+  `stripe_webhooks` (the provider's webhook settles a subscription).
+
+An activation that lists `features:` replaces the defaults, so a list
+naming `prepaid` or `subscriptions` must name `stripe_webhooks` too.
 
 The baseline (customers / payments / refunds) carries no feature tag —
 always present.
