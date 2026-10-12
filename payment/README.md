@@ -17,7 +17,9 @@ by the `payment_provider` env. **The core ships with one driver, Stripe.**
     (idempotency-keyed), persist the local `Payment`. Returns the
     provider `client_secret` for frontend confirmation. A retry with the
     same `idempotency_key` returns the payment the first attempt recorded;
-    a key already used for another payment is `AlreadyExists`. An empty
+    a key already used for another payment is `AlreadyExists`. A key is the
+    caller's own: the same key from another user, or for a top-up, is a
+    separate charge. An empty
     key gets a random one (no retry safety — send a stable key for that).
   - `RefundPayment` — reverse a payment (full or partial) via the
     provider + record a local `Refund`. The `idempotency_key` names ONE

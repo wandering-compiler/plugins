@@ -16,6 +16,15 @@ What changes:
 - **Project code that calls these methods while serving a signed-in person** acts as that person, because the envelope is relayed with the call (in process and over a dialled conn). Code that acts for someone else there (an admin action, an owner paying for a member) removes `x-w17-user` from its incoming metadata first; the README shows how.
 - **Frontends:** drop `user_id` from the request bodies, or send the caller's own. The read paths are unchanged.
 
+### A payment's key belongs to the caller
+
+`CreatePayment` and `TopUpCredit` stored the caller's idempotency key as it came and sent it to the provider the same way. Keys were one space for every user and both kinds of charge. When a second user chose a key someone had already used (`order-1` is an obvious choice), the provider refused the charge as a reuse with different parameters. A top-up under the key of an earlier payment was refused the same way.
+
+- **The key is scoped by user and by kind of charge** before it is stored and sent: `v2:` and a hash, as the credit and usage keys already were. The same key from another user, or for the other kind of charge, is a separate charge.
+- **`Payment.idempotency_key` holds the scoped key**, so the value a read returns is no longer the one the caller sent.
+- **Payments stored by earlier versions keep their key.** A retry of one by the same user, for the same kind of charge, is still that payment.
+- **New query `GetPaymentByIdempotencyKey`.**
+
 ### Webhook configuration is checked at boot
 
 - **`webhook_signing_secret` is required while `stripe_webhooks` is on** (the default). A bundle without it used to boot and then refuse every delivery, leaving payments pending forever. It now fails `RegisterPlugin`.

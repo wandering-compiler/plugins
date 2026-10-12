@@ -264,6 +264,18 @@ func (s *memStore) GetPaymentByProviderId(_ context.Context, in *pb.GetPaymentBy
 	return &pb.GetPaymentByProviderIdResp{Payment: out}, s.leave("GetPaymentByProviderId", nil)
 }
 
+func (s *memStore) GetPaymentByIdempotencyKey(_ context.Context, in *pb.GetPaymentByIdempotencyKeyReq, _ ...grpc.CallOption) (*pb.GetPaymentByIdempotencyKeyResp, error) {
+	if err := s.enter("GetPaymentByIdempotencyKey"); err != nil {
+		return nil, s.leave("", err)
+	}
+	for _, p := range s.payments {
+		if p.GetIdempotencyKey() == in.GetIdempotencyKey() {
+			return &pb.GetPaymentByIdempotencyKeyResp{Payment: clone(p)}, s.leave("GetPaymentByIdempotencyKey", nil)
+		}
+	}
+	return nil, s.leave("GetPaymentByIdempotencyKey", noRow())
+}
+
 func (s *memStore) paymentByProvider(pid string) *pb.Payment {
 	for _, p := range s.payments {
 		if p.GetProviderPaymentId() == pid {

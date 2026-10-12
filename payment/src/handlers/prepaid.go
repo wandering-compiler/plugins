@@ -19,6 +19,19 @@ import (
 // only when the feature is on (and stripe_webhooks delivers the event).
 func init() {
 	onPaymentSucceededWebhook = grantTopupOnPaymentSuccess
+	isTopupPayment = recordedTopup
+}
+
+// recordedTopup reports whether a CreditTopup row records p as a top-up.
+func recordedTopup(ctx context.Context, h *PaymentServiceHandler, p *pb.Payment) (bool, error) {
+	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: p.GetProviderPaymentId()})
+	if err != nil {
+		if absent(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return got.GetTopup() != nil, nil
 }
 
 // GrantCredit adds credit to a principal's balance (signed +).
@@ -229,7 +242,7 @@ func (h *PaymentServiceHandler) TopUpCredit(ctx context.Context, req *pb.TopUpCr
 	if err != nil {
 		return nil, err
 	}
-	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, idempotencyKeyOrNew(req.GetIdempotencyKey()), "credit top-up", backend.OriginTopup)
+	payment, clientSecret, err := h.charge(ctx, cust, amount, currency, req.GetIdempotencyKey(), topupDescription, backend.OriginTopup)
 	if err != nil {
 		return nil, err
 	}

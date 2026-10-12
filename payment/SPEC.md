@@ -118,7 +118,7 @@ which.
 | `base/refund-in-payment-currency` | A refund MUST be made and recorded in the currency of its payment. The request carries no currency, so it cannot differ. | Consistency & concurrency | `TestFlow_Refunds` (asserts the recorded currency) |
 | `base/one-customer-per-principal` | A principal MUST have at most one `Customer` row, enforced by the unique `user_id`. A repeated `CreateCustomer` MUST return the existing link, and two concurrent first charges MUST both end on the winner's customer. | Consistency & concurrency | `TestFlow_CreateCustomer_IsIdempotentPerPrincipal`, `TestFlow_FirstChargeRace_AdoptsTheWinningCustomer`, `TestFlow_ChargesUseThePrincipalsOwnProviderCustomer`, `TestCreateCustomer`. **Unit (mock) only:** a live test would race N first charges for one principal and assert one `Customer` row and N payments on it. |
 | `base/charge-idempotent` | Every provider create call for a charge MUST carry the idempotency key. A retry with the same key, including after a lost response, MUST return the payment the first attempt recorded, with its client secret, and MUST NOT create a second local row. | Consistency & concurrency | `TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment`, `TestFlow_ChargeRepeatedAfterSuccess_IsIdempotent`, `TestFlow_TransientProviderFailure_RetrySucceedsOnce`, `TestCreatePayment` (driver sends the `Idempotency-Key` header) |
-| `base/charge-key-never-yields-another-payment` | A key already used by another principal, or reused after the provider's idempotency window, MUST be refused (`InvalidArgument` inside the window, `AlreadyExists` after it). The refusal MUST NOT carry the other payment or its ids. | Security | `TestFlow_IdempotencyKeyReusedByAnotherUser_NeverLeaksThePayment` |
+| `base/charge-key-scoped` | A charge key MUST be scoped by principal and by kind of charge (payment or top-up): the same key from another principal, or for the other kind, is a separate charge, never refused because someone used the key first and never answered with the other charge. A key the same principal reuses after the provider's idempotency window MUST be refused (`AlreadyExists`) without carrying another payment or its ids. A payment an earlier version stored under the caller's raw key MUST still answer the same principal's retry of it (one lookup by key per keyed charge), and MUST NOT answer a charge of the other kind under that key: a payment without the top-up description is no top-up, and one with it is a top-up when its `CreditTopup` row says so. Where the kind cannot be told, the raw key is kept: the provider then refuses a charge of the other kind, while scoping a genuine retry would create a second intent. | Security | `TestFlow_IdempotencyKeyReusedByAnotherUser_IsTheirOwnCharge`, `TestFlow_PaymentAndTopUpUnderOneKey_AreTwoCharges`, `TestFlow_RetryOfAPaymentStoredUnderTheRawKey_IsThatPayment`, `TestFlow_RetryOfATopUpStoredUnderTheRawKey_IsThatTopUp`, `TestFlow_OtherKindUnderAnEarlierRawKey_IsANewCharge` |
 | `base/keyless-charges-independent` | A charge without a key MUST get a fresh random key, so two key-less charges never collide on the unique column. | Consistency & concurrency | `TestFlow_KeylessCharges_DoNotCollide`, `TestIdempotencyKeyOrNew` |
 | `base/key-length` | An idempotency key longer than 255 bytes MUST be refused before any provider call. | Failure & configuration | `TestIdempotencyKeyTooLong`, `TestFlow_ChargeAmountAndCurrencyRefusals_NeverReachTheProvider` |
 | `base/charge-failure-moves-no-money` | When the local insert fails after the provider created the payment intent, the caller MUST receive an error and no client secret, so the intent cannot be confirmed and no money moves. A retry with the same key MUST adopt that intent. | Failure & configuration | `TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment` (the committed-row case only). **Unit (mock) only:** a live test would fail the insert before commit and assert no client secret and one intent after the retry. |
@@ -129,7 +129,7 @@ which.
 | `base/refund-outcome-recorded` | A refund's provider status (pending, succeeded, failed, canceled) MUST be recorded and reconciled, so a refund the provider fails is not reported as done. | Consistency & concurrency | none. **Not guaranteed today** (finding 6). |
 | `base/payment-status-reflects-provider` | `Payment.status` MUST follow the provider: initial status from the create response (unknown → `REQUIRES_ACTION`, never `SUCCEEDED` unless the provider said so), then `SUCCEEDED`, `FAILED`, `CANCELED` and `REFUNDED` from the provider's events. | Consistency & concurrency | `TestMapInitialStatus` (initial mapping only). **Not guaranteed** for `CANCELED` and `REFUNDED` (finding 6). |
 | `base/provider-error-classes` | A declined payment MUST surface as `FailedPrecondition`, a request the provider or driver refuses as invalid (bad amount, over-refund, key reused with other parameters) as `InvalidArgument`, and only network, 5xx, 409, 429 and key failures as `Unavailable`, so automatic retries never loop on a request that cannot succeed. | Failure & configuration | `TestFlow_ProviderErrorMapping`, `TestProviderFailure_MapsByClass`, `TestPost_ClassifiesProviderErrors`, `TestCreatePayment_ProviderFailureIsUnavailable`, `TestDriver_EveryCallSurfacesProviderErrors` |
-| `base/no-store-failure-swallowed` | A store failure on any lookup, including the replay lookup after a unique violation, MUST surface as that failure. It MUST NOT become `AlreadyExists` or a success. | Failure & configuration | `TestFlow_StoreReadFailuresSurface`, `TestFlow_ReplayLookupFailureSurfaces` |
+| `base/no-store-failure-swallowed` | A store failure on any lookup, including the replay lookup after a unique violation, MUST surface as that failure. It MUST NOT become `AlreadyExists` or a success. | Failure & configuration | `TestFlow_StoreReadFailuresSurface`, `TestFlow_ReplayLookupFailureSurfaces`, `TestFlow_RawKeyKindLookupFailureSurfaces` |
 | `base/provider-call-bounded` | Every provider call MUST be bounded in time (20 s client timeout and the request context) and read at most 1 MiB of response. A response without an object id MUST be an error, not an empty id stored locally. | Performance | `TestNew_DefaultsAndOptions`, `TestDriver_RefusesResponsesWithoutAnID`, `TestPost_TransportAndDecodeFailures` |
 
 **Gaps / suspected defects**
@@ -141,12 +141,14 @@ which.
    user id from the gateway-stamped principal and ignore the body field, and
    give the reads a handler (or a scoped query joining `Customer.user_id`).
 2. **A charge retried after the provider's window is not recognised.**
-   Unlike refunds, `charge` does not look the key up locally before calling
-   the provider. After the window the provider mints a new, unconfirmed
-   intent (orphaned at the provider) and the caller gets `AlreadyExists`
-   instead of its recorded payment. No money moves, but the retry promise in
-   `ChargeReq` holds only inside the window. A `GetPaymentByIdempotencyKey`
-   read before the provider call would close it.
+   Unlike refunds, `charge` looks a key up locally before calling the
+   provider only to find a payment an earlier version stored under the
+   caller's raw key, never under the scoped key it stores now. After the
+   window the provider mints a new, unconfirmed intent (orphaned at the
+   provider) and the caller gets `AlreadyExists` instead of its recorded
+   payment. No money moves, but the retry promise in `ChargeReq` holds only
+   inside the window. A `GetPaymentByIdempotencyKey` read of the scoped key
+   before the provider call would close it.
 3. **`EnsureCustomer` sends no idempotency key.** A retried or racing first
    charge leaves an unreferenced provider customer. Documented in the code,
    but it accumulates without bound.
@@ -440,7 +442,7 @@ a fake store proves the handler's sequencing only.
 
 | Operation | Key | Sent to provider | Stored as | Scope |
 |---|---|---|---|---|
-| CreatePayment / TopUpCredit | caller key, or `auto:<random>` | verbatim | verbatim, unique | global |
+| CreatePayment / TopUpCredit | caller key, or `auto:<random>` | `v2:sha256("charge", kind, user, key)`; `auto:` keys verbatim | same as sent, unique | principal × kind of charge (a payment an earlier version stored under the raw key keeps it) |
 | RefundPayment | caller key (required) | verbatim | `v2:sha256("refund", key)` | one refund across all payments |
 | Subscribe | caller key (required) | verbatim | not stored (provider id is unique) | provider window only |
 | GrantCredit / SpendCredit | caller key (required) | — | `v2:sha256("credit", kind, user, key)` | principal × operation |
