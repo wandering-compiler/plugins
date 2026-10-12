@@ -630,3 +630,78 @@ func TestResolveOrgScope_SoleOrgInferenceAlsoStampsTheSlug(t *testing.T) {
 		t.Fatalf("scopes = %v, want both id and slug for the sole org", sc)
 	}
 }
+
+// On the admin plane no organization is selected — not from the header, not
+// by inferring the caller's only one — so only realm-wide roles survive the
+// narrowing (TestNarrowGrants_NoActiveOrg) and a role scoped to one
+// organization grants nothing in the console that spans them all.
+func TestResolveOrgScope_TheAdminPlaneSelectsNoOrganization(t *testing.T) {
+	h := &AuthServiceHandler{Query: &orgMock{
+		orgsByUser: map[string][]*pb.UserOrg{"solo": {{OrgId: "org-solo", Slug: "solo", Role: "owner"}}},
+		bySlug:     map[string]*pb.GetUserOrgBySlugResp{"solo|solo": {OrgId: "org-solo"}},
+	}}
+	// "inferred" sends no selector at all, so only the sole-org inference
+	// could pick one; the other two name the org on each channel it arrives on.
+	cases := map[string]struct {
+		ctx     context.Context
+		headers map[string]string
+	}{
+		"inferred":      {ctxWithOrg(""), nil},
+		"named header":  {ctxWithOrg(""), map[string]string{orgScopeMetadataKey: "solo"}},
+		"named context": {ctxWithOrg("solo"), nil},
+	}
+	for name, c := range cases {
+		sc, lb := map[string]string{}, map[string]string{}
+		if err := resolveOrgScope(context.WithValue(c.ctx, adminPlaneKey{}, true), h, "solo", c.headers, sc, lb); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if sc["org_id"] != "" || lb["org_id"] != "" {
+			t.Errorf("%s: the admin plane selected organization %q", name, sc["org_id"])
+		}
+		// Control: without the mark the same request DOES select the org, so
+		// the assertion above is not passing for an unrelated reason.
+		sc, lb = map[string]string{}, map[string]string{}
+		if err := resolveOrgScope(c.ctx, h, "solo", c.headers, sc, lb); err != nil {
+			t.Fatalf("%s (app plane): %v", name, err)
+		}
+		if sc["org_id"] != "org-solo" {
+			t.Errorf("%s (app plane): org_id = %q, want org-solo", name, sc["org_id"])
+		}
+	}
+}
+
+// AuthenticateAdmin is what marks the admin plane, and Authenticate must not:
+// the resolveOrgScope test above sets the mark by hand, so without this one a
+// handler that forgot it would pass every test.
+func TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot(t *testing.T) {
+	prevResolve, prevDec, prevNarrow := resolvePrincipal, scopeDecorators, grantNarrowers
+	t.Cleanup(func() { resolvePrincipal, scopeDecorators, grantNarrowers = prevResolve, prevDec, prevNarrow })
+	resolvePrincipal = func(context.Context, *AuthServiceHandler, string) (*authPrincipal, error) {
+		return &authPrincipal{userID: "u1"}, nil
+	}
+	var seen []bool
+	scopeDecorators = []scopeDecorator{func(ctx context.Context, _ *AuthServiceHandler, _ string, _, _, _ map[string]string) error {
+		seen = append(seen, onAdminPlane(ctx))
+		return nil
+	}}
+	grantNarrowers = []grantNarrower{func(ctx context.Context, _ *AuthServiceHandler, _ *authPrincipal, _ map[string]string) error {
+		seen = append(seen, onAdminPlane(ctx))
+		return nil
+	}}
+	h := &AuthServiceHandler{HeaderName: "Authorization"}
+	req := &pb.AuthReq{Headers: map[string]string{"authorization": "tok"}}
+
+	if _, err := h.AuthenticateAdmin(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || !seen[0] || !seen[1] {
+		t.Fatalf("AuthenticateAdmin: decorator/narrower saw admin plane = %v, want [true true]", seen)
+	}
+	seen = nil
+	if _, err := h.Authenticate(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] || seen[1] {
+		t.Fatalf("Authenticate: decorator/narrower saw admin plane = %v, want [false false]", seen)
+	}
+}
