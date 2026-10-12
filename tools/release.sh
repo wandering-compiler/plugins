@@ -77,6 +77,15 @@ fragments="$(git ls-tree -z --name-only HEAD "$PLUGIN/changes/" | tr '\0' '\n' |
 	echo "!! $PLUGIN/CHANGELOG.md does not start with a ## ${VERSION#v} section — release through make release-pr" >&2
 	exit 1
 }
+# The signature travels in the tag, and w17ctl refuses a tag that carries one
+# while the tree it tags carries a plugin.sig too (two claims about one
+# release). A committed plugin.sig would make a tag that installs nowhere, and
+# a published tag is never moved: refused here, before anything is signed.
+if [ -n "$(git ls-tree --name-only HEAD "$PLUGIN/plugin.sig")" ]; then
+	echo "!! $PLUGIN/plugin.sig is committed — a release carries its signature in the tag." >&2
+	echo "   Remove it from main in a pull request first." >&2
+	exit 1
+fi
 # The REMOTE decides whether a tag exists; a local leftover from a failed run
 # is not a release.
 if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
@@ -130,7 +139,6 @@ git archive "$SHA" "$PLUGIN" | tar -x -C "$WORK"
 		echo "(DRY RUN: not signed — that asks the console)"
 	else
 		echo ">> signing $PLUGIN ..." >&2
-		rm -f "$WORK/$PLUGIN/plugin.sig"
 		"$W17CTL" plugin sign "$WORK/$PLUGIN" >&2 || {
 			echo "!! signing failed — not tagging an unsigned release. Check W17_CONSOLE_ADDR and" >&2
 			echo "   that you are signed in (or W17_TOKEN is set) with a role that may sign." >&2
@@ -162,6 +170,11 @@ EMAIL="$(git config user.email || git log -1 --format=%ae "$SHA")"
 git -c user.name="$NAME" -c user.email="$EMAIL" tag -a --cleanup=verbatim -F "$WORK/message" "$TAG" "$SHA"
 # A plain push, never --force: a rejection means someone else released this
 # version in the meantime, and a published tag is never moved.
-git push --quiet origin "refs/tags/$TAG"
+git push --quiet origin "refs/tags/$TAG" || {
+	if other="$(git ls-remote --tags origin "refs/tags/$TAG^{}" 2>/dev/null | cut -f1)" && [ -n "$other" ]; then
+		echo "!! $TAG was published meanwhile by another run, on commit $other; a published tag stays as it is" >&2
+	fi
+	exit 1
+}
 PUSHED=1
 echo ">> released $TAG → main $(git rev-parse --short "$SHA")"

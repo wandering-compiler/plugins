@@ -34,8 +34,10 @@ nothing else.
    branch and pushes nothing; delete the branch afterwards.
 2. **The release workflow cuts it** (`.github/workflows/release.yml`). When CI
    passes on the merge commit, it runs `tools/release.sh` for every plugin
-   whose version that commit changed: it signs the plugin and tags the
-   commit. Nothing else is needed. A version whose tag already exists is
+   whose `plugin.yaml` or `CHANGELOG.md` that commit changed and whose
+   changelog now opens with the manifest's version (what a release pull
+   request leaves): it signs the plugin and tags the commit. Nothing else is
+   needed. A version whose tag already exists is
    skipped, and every plugin is tried before the run fails, so a re-run
    releases only what is still missing. To retry a failed run, or release from
    `main` by hand, run the workflow with the plugin's name ("Run workflow" on
@@ -59,7 +61,9 @@ releases cut before this, and its tags stay installable.
   unlisted: open the release pull request again);
 - `HEAD` is a commit of `origin/main` (the workflow tags the commit CI passed
   on, even when `main` has moved on since);
-- the tag does not exist yet.
+- the tag does not exist yet;
+- `<plugin>/plugin.sig` is not committed (the signature travels in the tag, and
+  `w17ctl` refuses a tag whose tree carries a second one).
 
 It then does three things:
 1. Runs `make check` for the plugin. `SKIP_CHECK=1` replaces this run with a

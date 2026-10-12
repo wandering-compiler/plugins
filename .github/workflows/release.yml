@@ -1,9 +1,9 @@
 name: Release
 
 # A plugin is released when a release pull request (make release-pr) merges:
-# after CI passes on that commit of main, every plugin whose manifest version
-# the commit changed is signed and tagged by tools/release.sh, exactly as a
-# maintainer would run it by hand. The tag sits on the commit itself; the
+# after CI passes on that commit of main, every plugin it releases (the "Which
+# plugins" step) is signed and tagged by tools/release.sh, as a maintainer
+# would run it by hand. The tag sits on the commit itself; the
 # signature travels in the tag's message.
 #
 # Secrets live in the `release` environment, which only main may use, so a
@@ -65,15 +65,21 @@ jobs:
           if [ -n "$INPUT_PLUGIN" ]; then
             list="$INPUT_PLUGIN"
           else
-            # The plugins whose version this commit changed. A merge commit is
-            # compared with the main it merged into (its first parent), so the
-            # whole pull request counts. The VALUE is compared, not the line:
-            # quoting or spacing the line again releases nothing.
-            ver() { sed -n 's/^version:[[:space:]]*//p' | head -1 | tr -d "\"' "; }
+            # The plugins a release pull request merged: this commit changed
+            # their plugin.yaml or CHANGELOG.md, and the changelog now opens
+            # with the manifest's version. A merge commit is compared with the
+            # main it merged into (its first parent), so the whole pull request
+            # counts. Not "the version changed": a release pull request for a
+            # version that landed earlier (a new plugin's first release) leaves
+            # it as it is, and a new plugin's own pull request changes it
+            # without releasing anything. A version already tagged is skipped
+            # below, so touching a released plugin's manifest releases nothing.
             list=""
-            for m in */plugin.yaml; do
-              if [ "$(ver < "$m")" != "$(git show "HEAD^1:$m" 2>/dev/null | ver)" ]; then
-                list="$list ${m%/plugin.yaml}"
+            for d in $(git diff --name-only HEAD^1 HEAD -- '*/plugin.yaml' '*/CHANGELOG.md' | cut -d/ -f1 | sort -u); do
+              [ -f "$d/plugin.yaml" ] || continue
+              v="$(sed -n 's/^version:[[:space:]]*//p' "$d/plugin.yaml" | head -1 | tr -d "\"' ")"
+              if [ "$(grep -m1 '^## ' "$d/CHANGELOG.md" 2>/dev/null)" = "## $v" ]; then
+                list="$list $d"
               fi
             done
           fi

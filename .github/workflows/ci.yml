@@ -58,7 +58,7 @@ jobs:
           cache-dependency-path: |
             ${{ matrix.plugin }}/src/go.sum
             tools/golangci-version
-      - name: install the pinned w17ctl (the render releases use)
+      - name: install the pinned w17ctl (the render the checks use)
         run: tools/w17ctl.sh
       - name: gofmt
         run: make fmt PLUGIN=${{ matrix.plugin }}
