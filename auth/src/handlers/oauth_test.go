@@ -38,6 +38,7 @@ type oauthMock struct {
 	// loginCodes mirrors OAuthLoginCode: code_hash -> row. Consume is the
 	// conditional UPDATE's semantics: one unconsumed match, then none.
 	trustedDevice bool
+	userDisabled  bool // GetUserById answers with a disabled account
 
 	loginCodes map[string]*pb.CreateOAuthLoginCodeReq
 	consumed   map[string]bool
@@ -615,5 +616,9 @@ func TestOAuthCallback_VerifiedEmail_LinksToExisting(t *testing.T) {
 }
 
 func (m *oauthMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+	u := &pb.User{Id: in.GetUserId()}
+	if m.userDisabled {
+		u.DisabledAt = timestamppb.Now()
+	}
+	return &pb.GetUserByIdResp{User: u}, nil
 }

@@ -64,7 +64,7 @@ func TestOAuthExchange_RefusesASignUpWithoutAnInvitation(t *testing.T) {
 	h, m, state := exchangeHandler(t)
 	saved := signupInviteGate
 	signupInviteGate = func(context.Context, *AuthServiceHandler, string, string) error {
-		return status.Error(codes.PermissionDenied, "not invited")
+		return errSignUpNotInvited // what the real gate answers
 	}
 	t.Cleanup(func() { signupInviteGate = saved })
 	resp, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "google", Code: "c", State: state})
@@ -72,8 +72,8 @@ func TestOAuthExchange_RefusesASignUpWithoutAnInvitation(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("err = %v, want the invite gate's refusal", err)
+	if c, got := detailCode(t, err); c != codes.PermissionDenied || got != CodeSignUpNotInvited {
+		t.Fatalf("err = %v (%v/%q), want the invite gate's refusal", err, c, got)
 	}
 	if m.createdUser != nil {
 		t.Error("an account was created without an invitation")

@@ -23,7 +23,9 @@ An OAuth refusal used to be the bare opaque `invalid credentials`, so a page cou
 | `ACCOUNT_DISABLED` | The sign-in resolved to a disabled account. Only OAuth says this; a password sign-in still answers `INVALID_CREDENTIALS`. |
 | `OAUTH_FAILED` | Everything else: the state, the login code, the verifier, the provider's answer. |
 
-Saying these plainly is safe because the provider has already proven that the caller owns the address.
+Saying these plainly tells an attacker nothing new. `OAUTH_ACCOUNT_UNVERIFIED` and `ACCOUNT_DISABLED` are reached only after the provider proved that the caller owns the address. `OAUTH_EMAIL_UNVERIFIED` is not, because the provider did not verify the address. It says only what the refusal already said: the callback succeeds when no account holds the address and refuses when one does.
+
+Only refusals this plugin made pass through as they are. A storage answer that carries its own detail (not found, a timeout) is still classified, as an outage or as `OAUTH_FAILED`.
 
 The sign-up gates gain codes too, on `SignUp` and the OAuth exchange alike. Outages still answer `AUTH_UNAVAILABLE`.
 

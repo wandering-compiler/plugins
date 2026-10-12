@@ -42,6 +42,11 @@ func TestOAuthRefusal_Codes(t *testing.T) {
 		{"bound elsewhere passes through", errInviteOtherAddress, codes.PermissionDenied, CodeInviteOtherAddress},
 		{"allowlist passes through", errSignUpClosed, codes.PermissionDenied, CodeSignUpClosed},
 		{"an outage stays an outage", status.Error(codes.Unavailable, "db down"), codes.Unavailable, CodeAuthUnavailable},
+		// The storage tier attaches an ErrorDetail to these; carrying one
+		// must not carry the status past the classification.
+		{"a storage timeout with its detail is an outage", storageStatus(codes.DeadlineExceeded, "TIMEOUT"), codes.Unavailable, CodeAuthUnavailable},
+		{"a storage not-found with its detail is a refusal", storageStatus(codes.NotFound, "NOT_FOUND"), codes.Unauthenticated, CodeOAuthFailed},
+		{"a disabled account's outage is an outage", Unauthenticated(status.Error(codes.Unavailable, "db down")), codes.Unavailable, CodeAuthUnavailable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,6 +55,31 @@ func TestOAuthRefusal_Codes(t *testing.T) {
 				t.Errorf("= %v/%q, want %v/%q", c, got, tc.code, tc.want)
 			}
 		})
+	}
+}
+
+func storageStatus(c codes.Code, code string) error {
+	return withUserDetail(status.New(c, "AuthQuery/GetProviderByName: storage words"), code, "storage sentence").Err()
+}
+
+// The handlers route the account gates through the same classification: a
+// provider sign-in to a disabled account says so, on the callback and on the
+// exchange of a code minted before the disable.
+func TestOAuth_ADisabledAccountSaysAccountDisabled(t *testing.T) {
+	h, m, state := exchangeHandler(t)
+	m.identity = &pb.OAuthIdentity{UserId: "user-9", ProviderId: "p1", ExternalId: "ext-1"}
+	resp, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "google", Code: "c", State: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.userDisabled = true
+	_, err = h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
+	if c, got := detailCode(t, err); c != codes.Unauthenticated || got != CodeAccountDisabled {
+		t.Errorf("exchange = %v/%q, want Unauthenticated/%s", c, got, CodeAccountDisabled)
+	}
+	_, err = h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "google", Code: "c", State: state})
+	if c, got := detailCode(t, err); c != codes.Unauthenticated || got != CodeAccountDisabled {
+		t.Errorf("callback = %v/%q, want Unauthenticated/%s", c, got, CodeAccountDisabled)
 	}
 }
 

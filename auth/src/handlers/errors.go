@@ -177,9 +177,14 @@ const (
 	// CodeSignUpClosed: the address is outside sign_up_allowlist.
 	CodeSignUpClosed = "SIGNUP_CLOSED"
 
-	// The OAuth refusals below are said plainly because the provider has
-	// already proven that the caller owns the address: none of them tells an
-	// attacker anything about an address they did not sign in as.
+	// The OAuth refusals below are said plainly because none of them tells
+	// an attacker more than they already had. OAUTH_ACCOUNT_UNVERIFIED and
+	// ACCOUNT_DISABLED are reached only after the provider proved the
+	// caller owns the address (or the linked subject). OAUTH_EMAIL_UNVERIFIED
+	// is NOT: the provider did not verify the address, so whoever controls
+	// the profile can name any address. It answers what the refusal itself
+	// already answered — the callback succeeds when no account holds the
+	// address and refuses when one does — and adds nothing about the account.
 
 	// CodeOAuthAccountUnverified: an account exists for the provider's
 	// address, and that account never verified it, so it is not linked.

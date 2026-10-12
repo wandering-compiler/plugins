@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -175,7 +174,7 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 	}
 	if userID != "" {
 		if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
-			return nil, err
+			return nil, oauthRefusal(err)
 		}
 	}
 
@@ -255,15 +254,17 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 			}
 			if err != nil {
 				// As SignUp answers it: the invitation and allowlist gates
-				// refuse with a code and a sentence the page can show.
-				return nil, err
+				// refuse with a code and a sentence the page can show. Any
+				// other failure (the user insert, the transaction) is
+				// classified like the rest, never sent raw.
+				return nil, oauthRefusal(err)
 			}
 		}
 	}
 	// The account may have changed since the callback; and the device is the
 	// one making THIS request — the page, not the provider's redirect.
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
-		return nil, err
+		return nil, oauthRefusal(err)
 	}
 	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
 	if err != nil {
@@ -820,13 +821,22 @@ func randomToken(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// oauthRefusal is how every OAuth handler refuses. A refusal that already
-// carries its own answer (a sign-up gate's coded status, an outage) passes
-// through; the causes a person can act on get their code; the rest are
+// oauthRefusal is how every OAuth handler refuses. The sign-up gates' own
+// coded refusals pass through, and so does a refusal this package already
+// classified; the causes a person can act on get their code; the rest are
 // OAUTH_FAILED. All keep the opaque status message.
+//
+// The pass-through is by IDENTITY, never "any status that carries details":
+// the storage tier attaches an ErrorDetail to its not-found, timeout, abort
+// and internal answers too, and passing those on would put another
+// service's words on the wire and skip the outage classification below.
 func oauthRefusal(cause error) error {
-	if st, ok := status.FromError(cause); ok && cause != nil && len(st.Details()) > 0 {
+	if errors.Is(cause, errSignUpNotInvited) || errors.Is(cause, errInviteOtherAddress) || errors.Is(cause, errSignUpClosed) {
 		return cause
+	}
+	var classified *authnError
+	if errors.As(cause, &classified) && classified.userCode != "" {
+		return classified
 	}
 	switch {
 	case errors.Is(cause, errOAuthLocalUnverified):
