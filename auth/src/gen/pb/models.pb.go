@@ -2580,12 +2580,21 @@ type CliAuthCode struct {
 	// token endpoint can demand that client's secret and refuse anyone else
 	// redeeming it. Blank for a loopback code: there is no registration and no
 	// secret, and PKCE is the whole binding there.
-	ClientId      string                 `protobuf:"bytes,9,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	ConsumedAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=consumed_at,json=consumedAt,proto3" json:"consumed_at,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ClientId   string                 `protobuf:"bytes,9,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	ExpiresAt  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ConsumedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=consumed_at,json=consumedAt,proto3" json:"consumed_at,omitempty"`
+	CreatedAt  *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// session_expires_at — when the browser session that APPROVED this code
+	// expires. CliToken mints the CLI's session no later than this, so a CLI
+	// login lasts only as long as the session that granted it. Without the cap
+	// a session could renew itself indefinitely: approve a CLI login shortly
+	// before it expires, receive a fresh full-lifetime session, repeat.
+	//
+	// NULL when the approving session never expires (and on a code minted
+	// before this column existed); CliToken then uses the normal session TTL.
+	SessionExpiresAt *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=session_expires_at,json=sessionExpiresAt,proto3" json:"session_expires_at,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CliAuthCode) Reset() {
@@ -2677,6 +2686,13 @@ func (x *CliAuthCode) GetConsumedAt() *timestamppb.Timestamp {
 func (x *CliAuthCode) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *CliAuthCode) GetSessionExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.SessionExpiresAt
 	}
 	return nil
 }
@@ -3375,7 +3391,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\x0eemail_verified\x18\v \x01(\bB\a\xca\xf3\x18\x03\xb8\x01\x1fR\remailVerified:\r\xc2\xf3\x18\x00\xfa\xf4\x18\x05oauthB\n" +
 	"\n" +
 	"\b_user_idB\x0e\n" +
-	"\f_provider_id\"\xeb\x03\n" +
+	"\f_provider_id\"\xbf\x04\n" +
 	"\vCliAuthCode\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12(\n" +
@@ -3389,7 +3405,9 @@ const file_types_models_proto_rawDesc = "" +
 	"\vconsumed_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\n" +
 	"consumedAt\x12F\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x11\xc2\xf3\x18\x00\xfa\xf4\x18\tcli_login\"\x95\x02\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12R\n" +
+	"\x12session_expires_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x10sessionExpiresAt:\x11\xc2\xf3\x18\x00\xfa\xf4\x18\tcli_login\"\x95\x02\n" +
 	"\fOrganization\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12\x1e\n" +
 	"\x04slug\x18\x02 \x01(\tB\n" +
@@ -3536,16 +3554,17 @@ var file_types_models_proto_depIdxs = []int32{
 	26, // 41: w17.contrib.auth.CliAuthCode.expires_at:type_name -> google.protobuf.Timestamp
 	26, // 42: w17.contrib.auth.CliAuthCode.consumed_at:type_name -> google.protobuf.Timestamp
 	26, // 43: w17.contrib.auth.CliAuthCode.created_at:type_name -> google.protobuf.Timestamp
-	26, // 44: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
-	26, // 45: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
-	26, // 46: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
-	26, // 47: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
-	26, // 48: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
-	49, // [49:49] is the sub-list for method output_type
-	49, // [49:49] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	26, // 44: w17.contrib.auth.CliAuthCode.session_expires_at:type_name -> google.protobuf.Timestamp
+	26, // 45: w17.contrib.auth.Organization.created_at:type_name -> google.protobuf.Timestamp
+	26, // 46: w17.contrib.auth.OrgMembership.created_at:type_name -> google.protobuf.Timestamp
+	26, // 47: w17.contrib.auth.OrgInvite.expires_at:type_name -> google.protobuf.Timestamp
+	26, // 48: w17.contrib.auth.OrgInvite.accepted_at:type_name -> google.protobuf.Timestamp
+	26, // 49: w17.contrib.auth.OrgInvite.created_at:type_name -> google.protobuf.Timestamp
+	50, // [50:50] is the sub-list for method output_type
+	50, // [50:50] is the sub-list for method input_type
+	50, // [50:50] is the sub-list for extension type_name
+	50, // [50:50] is the sub-list for extension extendee
+	0,  // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_types_models_proto_init() }

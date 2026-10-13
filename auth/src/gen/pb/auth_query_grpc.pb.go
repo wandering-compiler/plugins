@@ -61,6 +61,7 @@ const (
 	AuthQuery_GetRegisteredRedirect_FullMethodName         = "/w17.contrib.auth.AuthQuery/GetRegisteredRedirect"
 	AuthQuery_ListAuthClients_FullMethodName               = "/w17.contrib.auth.AuthQuery/ListAuthClients"
 	AuthQuery_GetAuthClientSecret_FullMethodName           = "/w17.contrib.auth.AuthQuery/GetAuthClientSecret"
+	AuthQuery_GetLiveSessionExpiry_FullMethodName          = "/w17.contrib.auth.AuthQuery/GetLiveSessionExpiry"
 	AuthQuery_GetProviderByName_FullMethodName             = "/w17.contrib.auth.AuthQuery/GetProviderByName"
 	AuthQuery_GetOAuthIdentity_FullMethodName              = "/w17.contrib.auth.AuthQuery/GetOAuthIdentity"
 	AuthQuery_GetUserById_FullMethodName                   = "/w17.contrib.auth.AuthQuery/GetUserById"
@@ -355,6 +356,17 @@ type AuthQueryClient interface {
 	// row the code was actually minted against. `enabled` rides along: a client
 	// disabled between authorize and exchange must not be able to redeem.
 	GetAuthClientSecret(ctx context.Context, in *GetAuthClientSecretReq, opts ...grpc.CallOption) (*GetAuthClientSecretResp, error)
+	// GetLiveSessionExpiry — the approving session's expires_at, for CliAuthorize
+	// to bind into the code. Scoped by the token id AND the owner, so a caller
+	// can read only their own session, and live only. No row = refuse the
+	// approval.
+	//
+	// No token_type filter: a SELECT cannot gate a WHERE conjunct, and the
+	// column exists only under `api_token`. The session-only guarantee comes
+	// from the handler instead — requireSessionCaller runs first, and the
+	// envelope carries a session_token_id only for a session-realm token, so
+	// the id this query is asked about is always a session's.
+	GetLiveSessionExpiry(ctx context.Context, in *GetLiveSessionExpiryReq, opts ...grpc.CallOption) (*GetLiveSessionExpiryResp, error)
 	GetProviderByName(ctx context.Context, in *GetProviderByNameReq, opts ...grpc.CallOption) (*GetProviderByNameResp, error)
 	// GetOAuthIdentity — the existing User↔subject link for a provider.
 	// NotFound = first sign-in (the handler creates user + identity). Gated
@@ -862,6 +874,16 @@ func (c *authQueryClient) GetAuthClientSecret(ctx context.Context, in *GetAuthCl
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetAuthClientSecretResp)
 	err := c.cc.Invoke(ctx, AuthQuery_GetAuthClientSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authQueryClient) GetLiveSessionExpiry(ctx context.Context, in *GetLiveSessionExpiryReq, opts ...grpc.CallOption) (*GetLiveSessionExpiryResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLiveSessionExpiryResp)
+	err := c.cc.Invoke(ctx, AuthQuery_GetLiveSessionExpiry_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1403,6 +1425,17 @@ type AuthQueryServer interface {
 	// row the code was actually minted against. `enabled` rides along: a client
 	// disabled between authorize and exchange must not be able to redeem.
 	GetAuthClientSecret(context.Context, *GetAuthClientSecretReq) (*GetAuthClientSecretResp, error)
+	// GetLiveSessionExpiry — the approving session's expires_at, for CliAuthorize
+	// to bind into the code. Scoped by the token id AND the owner, so a caller
+	// can read only their own session, and live only. No row = refuse the
+	// approval.
+	//
+	// No token_type filter: a SELECT cannot gate a WHERE conjunct, and the
+	// column exists only under `api_token`. The session-only guarantee comes
+	// from the handler instead — requireSessionCaller runs first, and the
+	// envelope carries a session_token_id only for a session-realm token, so
+	// the id this query is asked about is always a session's.
+	GetLiveSessionExpiry(context.Context, *GetLiveSessionExpiryReq) (*GetLiveSessionExpiryResp, error)
 	GetProviderByName(context.Context, *GetProviderByNameReq) (*GetProviderByNameResp, error)
 	// GetOAuthIdentity — the existing User↔subject link for a provider.
 	// NotFound = first sign-in (the handler creates user + identity). Gated
@@ -1697,6 +1730,9 @@ func (UnimplementedAuthQueryServer) ListAuthClients(context.Context, *ListAuthCl
 }
 func (UnimplementedAuthQueryServer) GetAuthClientSecret(context.Context, *GetAuthClientSecretReq) (*GetAuthClientSecretResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAuthClientSecret not implemented")
+}
+func (UnimplementedAuthQueryServer) GetLiveSessionExpiry(context.Context, *GetLiveSessionExpiryReq) (*GetLiveSessionExpiryResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetLiveSessionExpiry not implemented")
 }
 func (UnimplementedAuthQueryServer) GetProviderByName(context.Context, *GetProviderByNameReq) (*GetProviderByNameResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetProviderByName not implemented")
@@ -2357,6 +2393,24 @@ func _AuthQuery_GetAuthClientSecret_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthQuery_GetLiveSessionExpiry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLiveSessionExpiryReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthQueryServer).GetLiveSessionExpiry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthQuery_GetLiveSessionExpiry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthQueryServer).GetLiveSessionExpiry(ctx, req.(*GetLiveSessionExpiryReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthQuery_GetProviderByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetProviderByNameReq)
 	if err := dec(in); err != nil {
@@ -2973,6 +3027,10 @@ var AuthQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetAuthClientSecret",
 			Handler:    _AuthQuery_GetAuthClientSecret_Handler,
+		},
+		{
+			MethodName: "GetLiveSessionExpiry",
+			Handler:    _AuthQuery_GetLiveSessionExpiry_Handler,
 		},
 		{
 			MethodName: "GetProviderByName",

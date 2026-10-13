@@ -432,6 +432,24 @@ message GetAuthClientSecretResp {
   bool   enabled       = 2;
 }
 
+// GetLiveSessionExpiry reads the expiry of the session approving a CLI login,
+// so the session CliToken mints can inherit it. Keyed on the token id the
+// gateway envelope carries AND the caller's user id, and on live rows only: a
+// session revoked or expired by the time it approves is no approval at all.
+message GetLiveSessionExpiryReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+}
+message GetLiveSessionExpiryResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  // Echoed so the handler can tell "found, never expires" (NULL expires_at)
+  // from "no row".
+  string token_id = 1;
+  // NULL = the session never expires. Declared so a SQL NULL scans.
+  google.protobuf.Timestamp expires_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
 message ListAuthClientsReq {
   option (w17.contrib.plugin_feature) = "cli_login";
 }
@@ -1723,6 +1741,31 @@ service AuthQuery {
           "       c.enabled AS enabled "
           "FROM @module.AuthClient c "
           "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+
+  // GetLiveSessionExpiry — the approving session's expires_at, for CliAuthorize
+  // to bind into the code. Scoped by the token id AND the owner, so a caller
+  // can read only their own session, and live only. No row = refuse the
+  // approval.
+  //
+  // No token_type filter: a SELECT cannot gate a WHERE conjunct, and the
+  // column exists only under `api_token`. The session-only guarantee comes
+  // from the handler instead — requireSessionCaller runs first, and the
+  // envelope carries a session_token_id only for a session-realm token, so
+  // the id this query is asked about is always a session's.
+  rpc GetLiveSessionExpiry(GetLiveSessionExpiryReq) returns (GetLiveSessionExpiryResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS token_id, "
+          "       t.expires_at AS expires_at "
+          "FROM @module.UserToken t "
+          "WHERE t.id = :token_id AND t.user_id = :user_id "
+          "AND (t.expires_at IS NULL OR t.expires_at > NOW())"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "cli_login";

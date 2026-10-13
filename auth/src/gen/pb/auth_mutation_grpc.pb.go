@@ -436,8 +436,6 @@ type AuthMutationClient interface {
 	// derived — accepting a second invitation must not weaken an address somebody
 	// already confirmed, and a guard in the statement cannot be forgotten by a caller.
 	MarkEmailDerivedFromInvite(ctx context.Context, in *MarkEmailDerivedFromInviteReq, opts ...grpc.CallOption) (*MarkEmailDerivedFromInviteResp, error)
-	// CreateCliAuthCode — INSERT a single-use PKCE code bound to the
-	// approving user + challenge (only the hash is stored).
 	// RegisterAuthClient — write down a redirect target an operator vouches
 	// for. One row per (client_id, redirect_uri); the composite unique makes a
 	// repeat registration a no-op rather than a duplicate.
@@ -461,6 +459,9 @@ type AuthMutationClient interface {
 	// row back. The verifier is checked against the returned digest after
 	// the consume, so a wrong verifier burns the code too.
 	ConsumeOAuthLoginCode(ctx context.Context, in *ConsumeOAuthLoginCodeReq, opts ...grpc.CallOption) (*ConsumeOAuthLoginCodeResp, error)
+	// CreateCliAuthCode — INSERT a single-use PKCE code bound to the
+	// approving user + challenge (only the hash is stored), and to the
+	// approving session's expiry, which caps the session CliToken mints.
 	CreateCliAuthCode(ctx context.Context, in *CreateCliAuthCodeReq, opts ...grpc.CallOption) (*CreateCliAuthCodeResp, error)
 	// ConsumeCliAuthCode — atomically claim a live code: flip consumed_at
 	// single-use AND require not-consumed + not-expired in the WHERE, so a
@@ -1742,8 +1743,6 @@ type AuthMutationServer interface {
 	// derived — accepting a second invitation must not weaken an address somebody
 	// already confirmed, and a guard in the statement cannot be forgotten by a caller.
 	MarkEmailDerivedFromInvite(context.Context, *MarkEmailDerivedFromInviteReq) (*MarkEmailDerivedFromInviteResp, error)
-	// CreateCliAuthCode — INSERT a single-use PKCE code bound to the
-	// approving user + challenge (only the hash is stored).
 	// RegisterAuthClient — write down a redirect target an operator vouches
 	// for. One row per (client_id, redirect_uri); the composite unique makes a
 	// repeat registration a no-op rather than a duplicate.
@@ -1767,6 +1766,9 @@ type AuthMutationServer interface {
 	// row back. The verifier is checked against the returned digest after
 	// the consume, so a wrong verifier burns the code too.
 	ConsumeOAuthLoginCode(context.Context, *ConsumeOAuthLoginCodeReq) (*ConsumeOAuthLoginCodeResp, error)
+	// CreateCliAuthCode — INSERT a single-use PKCE code bound to the
+	// approving user + challenge (only the hash is stored), and to the
+	// approving session's expiry, which caps the session CliToken mints.
 	CreateCliAuthCode(context.Context, *CreateCliAuthCodeReq) (*CreateCliAuthCodeResp, error)
 	// ConsumeCliAuthCode — atomically claim a live code: flip consumed_at
 	// single-use AND require not-consumed + not-expired in the WHERE, so a

@@ -45,6 +45,9 @@ var (
 	// client, disabled since authorize, wrong or absent secret. Telling them
 	// apart is precisely what someone probing the registry would want.
 	errCliClientAuthFailed = errors.New("cli auth: client authentication failed")
+	// The session approving the login is no longer live — revoked, expired,
+	// or not the caller's. An approval it cannot back is no approval.
+	errCliSessionNotLive = errors.New("cli auth: the approving session is not live")
 )
 
 // CliAuthorize mints a single-use authorization code for the
@@ -68,6 +71,10 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 	if err := h.checkRedirectAllowed(ctx, req.GetClientId(), req.GetRedirectUri()); err != nil {
 		return nil, Unauthenticated(err)
 	}
+	sessionExpiresAt, err := h.approvingSessionExpiry(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	code, err := randomURLToken()
 	if err != nil {
 		return nil, err
@@ -82,6 +89,9 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 		// no secret, PKCE is the binding (RFC 8252).
 		ClientId:  clientIDForCode(req.GetClientId(), req.GetRedirectUri()),
 		ExpiresAt: timestamppb.New(time.Now().Add(defaultCliAuthCodeTTL)),
+		// The session CliToken mints inherits this, so the CLI login ends
+		// when the browser session that approved it does.
+		SessionExpiresAt: sessionExpiresAt,
 	}); err != nil {
 		return nil, err
 	}
@@ -180,18 +190,75 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, err
 	}
+	expiresAt := cliSessionExpiry(h.sessionTokenExpiry(), consumed.GetSessionExpiresAt())
+	if !expiresAt.AsTime().After(time.Now()) {
+		// The approving session expired between authorize and exchange. The
+		// session minted here would be dead on arrival; refuse instead.
+		return nil, Unauthenticated(errCliSessionNotLive)
+	}
 	token, hash, err := newBearerToken()
 	if err != nil {
 		return nil, err
 	}
 	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
 		UserId:    userID,
-		ExpiresAt: h.sessionTokenExpiry(),
+		ExpiresAt: expiresAt,
 		TokenHash: hash,
 	}); err != nil {
 		return nil, err
 	}
 	return &pb.CliTokenResp{Token: token, UserId: userID}, nil
+}
+
+// approvingSessionExpiry reads the expiry of the session approving a CLI
+// login: the caller's own session token, named by the gateway envelope.
+// nil means that session never expires.
+//
+// A session that is no longer there refuses the approval rather than
+// degrading to "no cap": a missing row read as "never expires" would hand a
+// revoked session a fresh full-lifetime one, which is the renewal this exists
+// to stop. A read that did not answer refuses too.
+func (h *AuthServiceHandler) approvingSessionExpiry(ctx context.Context, userID string) (*timestamppb.Timestamp, error) {
+	tokenID := callerSessionTokenID(ctx)
+	if tokenID == "" {
+		// requireSessionCaller has already refused this; kept so the
+		// function cannot be called into a looser contract.
+		return nil, Unauthenticated(errCliSessionNotLive)
+	}
+	resp, err := h.Query.GetLiveSessionExpiry(ctx, &pb.GetLiveSessionExpiryReq{
+		TokenId: tokenID,
+		UserId:  userID,
+	})
+	if err != nil {
+		if notFoundOK(err) == nil {
+			return nil, Unauthenticated(errCliSessionNotLive)
+		}
+		return nil, Unauthenticated(err)
+	}
+	// The row we got back must be the row we asked for: an empty answer is
+	// "no row", never "found, and it never expires".
+	if resp.GetTokenId() != tokenID {
+		return nil, Unauthenticated(errCliSessionNotLive)
+	}
+	return resp.GetExpiresAt(), nil
+}
+
+// cliSessionExpiry is the expiry of the session CliToken mints: the normal
+// session lifetime from now, but never later than the session that approved
+// the login. A session therefore cannot renew itself through the CLI flow —
+// each login it approves ends when it does.
+//
+// There is deliberately no floor. A minimum lifetime for the CLI session would
+// be exactly the renewal being closed: approve a login a minute before expiry,
+// receive the floor, repeat.
+//
+// approving == nil means the approving session never expires (or the code
+// predates the binding); the normal TTL applies.
+func cliSessionExpiry(normal, approving *timestamppb.Timestamp) *timestamppb.Timestamp {
+	if approving == nil || !approving.AsTime().Before(normal.AsTime()) {
+		return normal
+	}
+	return approving
 }
 
 // authenticateClient verifies a confidential client's secret at the token
