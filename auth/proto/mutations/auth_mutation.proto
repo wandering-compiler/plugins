@@ -2353,7 +2353,11 @@ service AuthMutation {
       ops: [
         {
           name: "disable"
-          dql:  "UPDATE @module.User SET disabled_at = NOW() "
+          // With `devices`, the account's device trust ends too: a device
+          // trusted before the disable must pass the second factor again
+          // once the account is re-enabled (User.device_trust_revoked_at).
+          dql:  "UPDATE @module.User SET disabled_at = NOW(), "
+                "?feature(devices) device_trust_revoked_at = NOW() "
                 "WHERE id IN (:ids) AND disabled_at IS NULL"
         },
         {
@@ -2607,7 +2611,12 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.User SET "
-          "password_hash = :password_hash "
+          "password_hash = :password_hash, "
+          // With `devices`, a change also ends the trust of every device of
+          // the account, the caller's own included: whoever held the old
+          // password may have signed in from a device that is trusted now.
+          // In this statement, so the two cannot come apart.
+          "?feature(devices) device_trust_revoked_at = NOW() "
           "WHERE id = :user_id AND password_hash = :current_hash "
           "RETURNING id AS user_id"
       }

@@ -159,6 +159,26 @@ message User {
     (w17.field) = { zero_is_value: true, default_int: 0 },
     (w17.contrib.plugin_feature_field) = "service_account"
   ];
+
+  // device_trust_revoked_at — when this account's device trust was last
+  // revoked as a whole. A Device trusted at or before this instant no longer
+  // counts as trusted (`two_factor_scope=new_devices` challenges it again),
+  // whatever trust token it replays. NULL = never revoked.
+  //
+  // Written by the statements that end an account's credentials, in the same
+  // statement: a password CHANGE (UpdateUserPasswordIfUnchanged) and
+  // disabling the account (DisableUsers). A changed password usually means
+  // "someone else may have the old one", and a device that person signed in
+  // from must not keep skipping the second factor. A stamp on the account,
+  // not a write to every Device row: those statements belong to other
+  // features and can only gain a gated SET fragment, never a statement on a
+  // table that exists only with `devices`.
+  //
+  // Field-gated `devices`: absent entirely when the feature is off.
+  google.protobuf.Timestamp device_trust_revoked_at = 10 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "devices"
+  ];
 }
 
 // AccountKind separates people from machines.

@@ -31,8 +31,9 @@ Behaviour that is deliberate, and easy to build against wrongly.
 - **A password change signs the person out everywhere else.** `ChangePassword` keeps the session the change came from and deletes every other session of the account, atomically with the new password. API tokens are kept, because they are credentials minted on purpose (CI, scripts). Revoke one with `RevokeApiToken`.
 - **A password reset revokes every token, API tokens included**, so CI tokens the person minted stop working. `ResetPasswordResp.sessions_revoked` reports whether the sweep ran.
 - **A reset or a password change spends every other reset link of the account.** A link asked for earlier, still in a mailbox, cannot set the password again.
+- **A password change or a disable ends device trust.** With `devices`, every device of the account, the one the change came from included, is untrusted in the same statement, so under `two_factor_scope=new_devices` each passes the second factor again on its next sign-in. The session the change came from keeps working. A re-enabled account's devices start untrusted too.
 - **A reset keeps device trust.** Under `two_factor_scope=new_devices`, a device trusted before the reset is still trusted after it. The reset link arrived in the mailbox, and that mailbox is the second factor the reset already proved.
-- **`two_factor_scope=all_logins` applies to password sign-ins.** An OAuth sign-in issues a session without a second factor; the provider is the factor.
+- **`two_factor_scope=all_logins` applies to password sign-ins.** An OAuth sign-in issues a session without this plugin's second factor, also for an account that has one: the provider already verified the identity, and its own second factor is the one that applies.
 - **An OAuth sign-in does not make the device trusted.** Its session is bound to the device, but under `two_factor_scope=new_devices` the next password sign-in from that device still asks for the second factor.
 - **A device becomes trusted only by passing the second factor.** A password sign-in that is not asked for one (the device is already trusted, or `two_factor` is off) renews existing trust and grants none.
 

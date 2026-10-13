@@ -9398,7 +9398,7 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"org_invite\"B\n" +
 	"\x13DeleteOrgInviteResp\x12\x1b\n" +
 	"\tinvite_id\x18\x01 \x01(\tR\binviteId:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xb3\xf1\x01\n" +
+	"org_invite2\x9b\xf2\x01\n" +
 	"\fAuthMutation\x12\xd8\x02\n" +
 	"\rCreateBotUser\x12\".w17.contrib.auth.CreateBotUserReq\x1a#.w17.contrib.auth.CreateBotUserResp\"\xfd\x01\xf2\xf3\x18\xe5\x01B\xe2\x01\n" +
 	"\x04main\x12\xd9\x01INSERT INTO @module.User SET email = :email, password_hash = '!', kind = 1, ?feature(tenant_scope) tenant_id = :tenant_id RETURNING id AS user.id,           email AS user.email,           created_at AS user.created_at\x8a\xf5\x18\x0fservice_account\x12\xe5\x03\n" +
@@ -9605,9 +9605,9 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\auser_id\x12\x11$response.user_id\xf2\xf3\x18\x96\x01BF\n" +
 	"\fpurge_tokens\x126DELETE FROM @module.UserToken WHERE user_id = :user_idBL\n" +
 	"\x04main\x12DDELETE FROM @module.User WHERE id = :user_id RETURNING id AS user_id\x8a\xf5\x18\n" +
-	"user_admin\x12\x8d\x02\n" +
-	"\fDisableUsers\x12!.w17.contrib.auth.DisableUsersReq\x1a\".w17.contrib.auth.DisableUsersResp\"\xb5\x01\xf2\xf3\x18\xa2\x01Ba\n" +
-	"\adisable\x12VUPDATE @module.User SET disabled_at = NOW() WHERE id IN (:ids) AND disabled_at IS NULLB=\n" +
+	"user_admin\x12\xc2\x02\n" +
+	"\fDisableUsers\x12!.w17.contrib.auth.DisableUsersReq\x1a\".w17.contrib.auth.DisableUsersResp\"\xea\x01\xf2\xf3\x18\xd7\x01B\x95\x01\n" +
+	"\adisable\x12\x89\x01UPDATE @module.User SET disabled_at = NOW(), ?feature(devices) device_trust_revoked_at = NOW() WHERE id IN (:ids) AND disabled_at IS NULLB=\n" +
 	"\x04main\x125DELETE FROM @module.UserToken WHERE user_id IN (:ids)\x8a\xf5\x18\n" +
 	"user_admin\x12\xc9\x01\n" +
 	"\vEnableUsers\x12 .w17.contrib.auth.EnableUsersReq\x1a!.w17.contrib.auth.EnableUsersResp\"u\xf2\xf3\x18cBa\n" +
@@ -9670,9 +9670,9 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\x18SpendPasswordResetTokens\x12-.w17.contrib.auth.SpendPasswordResetTokensReq\x1a..w17.contrib.auth.SpendPasswordResetTokensResp\"\x8a\x01\xf2\xf3\x18tBr\n" +
 	"\x04main\x12jUPDATE @module.PasswordResetToken SET consumed_at = NOW() WHERE user_id = :user_id AND consumed_at IS NULL\x8a\xf5\x18\x0epassword_reset\x12\xd9\x01\n" +
 	"\x12UpdateUserPassword\x12'.w17.contrib.auth.UpdateUserPasswordReq\x1a(.w17.contrib.auth.UpdateUserPasswordResp\"p\xf2\xf3\x18lBj\n" +
-	"\x04main\x12bUPDATE @module.User SET password_hash = :password_hash WHERE id = :user_id RETURNING id AS user_id\x12\xb3\x02\n" +
-	"\x1dUpdateUserPasswordIfUnchanged\x122.w17.contrib.auth.UpdateUserPasswordIfUnchangedReq\x1a3.w17.contrib.auth.UpdateUserPasswordIfUnchangedResp\"\xa8\x01\xf2\xf3\x18\x90\x01B\x8d\x01\n" +
-	"\x04main\x12\x84\x01UPDATE @module.User SET password_hash = :password_hash WHERE id = :user_id AND password_hash = :current_hash RETURNING id AS user_id\x8a\xf5\x18\x0fpassword_change\x12\xe9\x01\n" +
+	"\x04main\x12bUPDATE @module.User SET password_hash = :password_hash WHERE id = :user_id RETURNING id AS user_id\x12\xe6\x02\n" +
+	"\x1dUpdateUserPasswordIfUnchanged\x122.w17.contrib.auth.UpdateUserPasswordIfUnchangedReq\x1a3.w17.contrib.auth.UpdateUserPasswordIfUnchangedResp\"\xdb\x01\xf2\xf3\x18\xc3\x01B\xc0\x01\n" +
+	"\x04main\x12\xb7\x01UPDATE @module.User SET password_hash = :password_hash, ?feature(devices) device_trust_revoked_at = NOW() WHERE id = :user_id AND password_hash = :current_hash RETURNING id AS user_id\x8a\xf5\x18\x0fpassword_change\x12\xe9\x01\n" +
 	"\x1aDeleteUserSessionsForReset\x12/.w17.contrib.auth.DeleteUserSessionsForResetReq\x1a0.w17.contrib.auth.DeleteUserSessionsForResetResp\"h\xf2\xf3\x18RBP\n" +
 	"\x04main\x12HDELETE FROM @module.UserToken WHERE user_id = :user_id RETURNING user_id\x8a\xf5\x18\x0epassword_reset\x12\x94\x02\n" +
 	"\x18DeleteOtherSessionTokens\x12-.w17.contrib.auth.DeleteOtherSessionTokensReq\x1a..w17.contrib.auth.DeleteOtherSessionTokensResp\"\x98\x01\xf2\xf3\x18\x80\x01B~\n" +

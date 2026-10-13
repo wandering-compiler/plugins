@@ -161,7 +161,7 @@ features:
       # devices.go names pb.SignInResp — the device gate hangs off the
       # sign-in it decorates, so without it the bundle does not build.
       - sign_in_turnkey
-    description: "Device/session tracking + log-out endpoints (ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices). Adds the Device table + a UserToken.device_id column; each session links to a Device so 'log out a device' is 'delete its tokens'. New vs. trusted devices are distinguished by a client-sent X-Device-Id header (falling back to a UA+IP fingerprint), and trusted_at supplies the trusted-device signal two_factor new-device mode reads. The project must forward X-Device-Id / User-Agent / X-Forwarded-For via (w17.rest_api).metadata_propagation for full-fidelity detection. Off by default."
+    description: "Device/session tracking + log-out endpoints (ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices). Adds the Device table + a UserToken.device_id column; each session links to a Device so 'log out a device' is 'delete its tokens'. New vs. trusted devices are distinguished by a client-sent X-Device-Id header (falling back to a UA+IP fingerprint), and trusted_at supplies the trusted-device signal two_factor new-device mode reads. A password change (password_change) or a disable (user_admin) ends the trust of every device of the account through User.device_trust_revoked_at, which this feature adds. The project must forward X-Device-Id / User-Agent / X-Forwarded-For via (w17.rest_api).metadata_propagation for full-fidelity detection. Off by default."
     default: false
     go_files:
       - handlers/devices.go

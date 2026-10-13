@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -150,6 +151,46 @@ func deviceTrustValid(dev *pb.Device, presented string) bool {
 	return subtle.ConstantTimeCompare([]byte(hashDeviceTrustToken(presented)), []byte(stored)) == 1
 }
 
+// trustOutlivesRevocation reports whether trust stamped at trustedAt still
+// stands against the account's last wholesale revocation (revokedAt, written
+// by a password change or a disable — User.device_trust_revoked_at). Never
+// revoked: it stands. Revoked: only trust stamped strictly LATER stands, so a
+// device trusted before the revocation has to pass the second factor again. An
+// equal instant (a database that keeps whole seconds) counts as revoked — the
+// safe side, at the cost of one extra challenge.
+func trustOutlivesRevocation(trustedAt, revokedAt *timestamppb.Timestamp) bool {
+	if revokedAt == nil {
+		return true
+	}
+	return trustedAt != nil && trustedAt.AsTime().After(revokedAt.AsTime())
+}
+
+// deviceTrustRevokedAt reads when the account's device trust was last revoked
+// (nil = never).
+func deviceTrustRevokedAt(ctx context.Context, h *AuthServiceHandler, userID string) (*timestamppb.Timestamp, error) {
+	resp, err := h.Query.GetDeviceTrustRevokedAt(ctx, &pb.GetDeviceTrustRevokedAtReq{UserId: userID})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetDeviceTrustRevokedAt(), nil
+}
+
+// signInDeviceTrusted is the whole trust decision at sign-in: the request
+// proves the server-issued trust token, AND that trust was granted after the
+// account's last revocation. The revocation is read only for a device that
+// passed the token check; a failed read means untrusted (one extra challenge,
+// never a skipped one).
+func signInDeviceTrusted(ctx context.Context, h *AuthServiceHandler, userID string, dev *pb.Device, presented string) bool {
+	if !deviceTrustValid(dev, presented) {
+		return false
+	}
+	revokedAt, err := deviceTrustRevokedAt(ctx, h, userID)
+	if err != nil {
+		return false
+	}
+	return trustOutlivesRevocation(dev.GetTrustedAt(), revokedAt)
+}
+
 // firstMeta returns the first value for a metadata key, or "".
 func firstMeta(md metadata.MD, key string) string {
 	if vals := md.Get(key); len(vals) > 0 {
@@ -190,8 +231,9 @@ func resolveSignInDeviceImpl(ctx context.Context, h *AuthServiceHandler, userID 
 		// Trust requires proving possession of the server-issued
 		// trust token, not merely a trusted_at flag on a client-named
 		// device (which an attacker who learns the victim's X-Device-Id
-		// could otherwise ride to skip new-device 2FA).
-		return dev.GetId(), deviceTrustValid(dev, di.trustToken), nil
+		// could otherwise ride to skip new-device 2FA). Trust granted
+		// before a password change or a disable does not count.
+		return dev.GetId(), signInDeviceTrusted(ctx, h, userID, dev, di.trustToken), nil
 	}
 	created, err := h.Mutation.CreateDevice(ctx, &pb.CreateDeviceReq{
 		UserId:     userID,
@@ -202,7 +244,7 @@ func resolveSignInDeviceImpl(ctx context.Context, h *AuthServiceHandler, userID 
 	if err != nil {
 		// Likely a concurrent create (unique violation) — re-read.
 		if dev := getDevice(ctx, h, userID, di.identifier); dev != nil {
-			return dev.GetId(), deviceTrustValid(dev, di.trustToken), nil
+			return dev.GetId(), signInDeviceTrusted(ctx, h, userID, dev, di.trustToken), nil
 		}
 		return "", false, err
 	}
@@ -262,7 +304,8 @@ func issueSessionWithDevice(ctx context.Context, h *AuthServiceHandler, userID, 
 }
 
 // ListDevices returns the caller's devices, deriving `trusted`
-// (trusted_at present) and `current` (this device matches the calling
+// (trusted_at present and later than the account's last trust revocation,
+// the same rule the sign-in applies) and `current` (this device matches the calling
 // request's resolved identifier). The raw identifier never leaves the
 // handler.
 func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevicesReq) (*pb.ListDevicesResp, error) {
@@ -274,6 +317,10 @@ func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevice
 	if err != nil {
 		return nil, err
 	}
+	revokedAt, err := deviceTrustRevokedAt(ctx, h, userID)
+	if err != nil {
+		return nil, err
+	}
 	current := resolveDeviceIdentity(ctx).identifier
 	out := make([]*pb.DeviceInfo, 0, len(resp.GetDevices()))
 	for _, d := range resp.GetDevices() {
@@ -282,7 +329,7 @@ func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevice
 			Label:      d.GetLabel(),
 			Ip:         d.GetIp(),
 			LastSeenAt: d.GetLastSeenAt(),
-			Trusted:    d.GetTrustedAt() != nil,
+			Trusted:    d.GetTrustedAt() != nil && trustOutlivesRevocation(d.GetTrustedAt(), revokedAt),
 			Current:    d.GetIdentifier() == current,
 		})
 	}

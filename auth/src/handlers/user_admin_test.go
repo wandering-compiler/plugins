@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -60,5 +61,19 @@ func TestSignIn_RejectsDisabledAccount(t *testing.T) {
 		Password: "correct-horse-battery-staple",
 	}); err == nil {
 		t.Fatal("SignIn must reject a disabled account even with the correct password")
+	}
+}
+
+// Disabling an account ends its device trust as well as its tokens: once the
+// account is re-enabled, a device trusted before the disable must pass the
+// second factor again under two_factor_scope=new_devices. DisableUsers is one
+// multi-op statement set with no Go behind it, so the revocation is a gated SET
+// in its `disable` leg — the same unit of work as the token purge. Behind
+// ?feature(devices): the column exists only with that feature.
+func TestDisableUsers_RevokesDeviceTrustInTheSameStatement(t *testing.T) {
+	body := mutationRPCBody(t, "DisableUsers")
+	leg := body[strings.Index(body, `name: "disable"`):strings.Index(body, `name: "main"`)]
+	if !strings.Contains(leg, `"?feature(devices) device_trust_revoked_at = NOW() "`) {
+		t.Errorf("DisableUsers' disable leg does not revoke device trust behind ?feature(devices):\n%s", body)
 	}
 }

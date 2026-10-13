@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -32,6 +33,19 @@ type deviceMock struct {
 	allTokensFor  string
 	allDevsFor    string
 	undeviced     []*pb.DeleteUndevicedSessionsReq
+
+	// User.device_trust_revoked_at, and a read failure for it
+	revokedAt  *timestamppb.Timestamp
+	revokedErr error
+	revokeRead int
+}
+
+func (m *deviceMock) GetDeviceTrustRevokedAt(ctx context.Context, in *pb.GetDeviceTrustRevokedAtReq, _ ...grpc.CallOption) (*pb.GetDeviceTrustRevokedAtResp, error) {
+	m.revokeRead++
+	if m.revokedErr != nil {
+		return nil, m.revokedErr
+	}
+	return &pb.GetDeviceTrustRevokedAtResp{DeviceTrustRevokedAt: m.revokedAt}, nil
 }
 
 func (m *deviceMock) DeleteUndevicedSessions(ctx context.Context, in *pb.DeleteUndevicedSessionsReq, _ ...grpc.CallOption) (*pb.DeleteUndevicedSessionsResp, error) {
@@ -483,5 +497,109 @@ func TestSignIn_RenewsDeviceTrustButNeverGrantsIt(t *testing.T) {
 		if got := len(dm.trusted) == 1 && resp.GetDeviceTrustToken() != ""; got != c.trusted {
 			t.Errorf("%s: trusted = %v (TrustDevice %+v), want %v", c.name, got, dm.trusted, c.trusted)
 		}
+	}
+}
+
+// Trust granted before the account's last revocation (a password change or a
+// disable stamps User.device_trust_revoked_at) does not count, even with the
+// right trust token replayed: the device passes the second factor again.
+func TestResolveSignInDevice_TrustRevokedByACredentialChange_NotTrusted(t *testing.T) {
+	const tok = "trust-tok-abc"
+	trustedAt := timestamppb.New(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	before := timestamppb.New(trustedAt.AsTime().Add(-time.Hour))
+	after := timestamppb.New(trustedAt.AsTime().Add(time.Hour))
+	for _, c := range []struct {
+		name      string
+		revokedAt *timestamppb.Timestamp
+		readErr   error
+		trusted   bool
+	}{
+		{"never revoked", nil, nil, true},
+		{"revoked before the trust was granted", before, nil, true},
+		{"revoked after the trust was granted", after, nil, false},
+		{"revoked at the same instant", trustedAt, nil, false},
+		{"the revocation cannot be read", nil, status.Error(codes.Unavailable, "db down"), false},
+	} {
+		m := &deviceMock{
+			getByIdent: map[string]*pb.Device{
+				devKey("u1", "phone-1"): {Id: "dev-7", Identifier: "phone-1", TrustedAt: trustedAt, TrustTokenHash: hashDeviceTrustToken(tok)},
+			},
+			revokedAt:  c.revokedAt,
+			revokedErr: c.readErr,
+		}
+		h := &AuthServiceHandler{Query: m, Mutation: m}
+		id, trusted, err := resolveSignInDeviceImpl(ctxWithDeviceTrust("u1", "phone-1", tok), h, "u1")
+		if err != nil {
+			t.Fatalf("%s: resolve: %v", c.name, err)
+		}
+		if id != "dev-7" || trusted != c.trusted {
+			t.Errorf("%s: got id=%q trusted=%v, want dev-7/%v", c.name, id, trusted, c.trusted)
+		}
+	}
+}
+
+// A password sign-in renews only trust that still stands: after a password
+// change or a disable, the device's earlier trust is not renewed by the
+// password alone (it would be laundered back to "trusted" otherwise).
+func TestSignIn_DoesNotRenewRevokedDeviceTrust(t *testing.T) {
+	saved := signInMfaGate
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+		return nil, false, nil // two_factor off: no factor asked for
+	}
+	t.Cleanup(func() { signInMfaGate = saved })
+
+	hashed, err := testPasswordSettings().Hash("pw-long-enough")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustPlain, trustHash, err := newDeviceTrustToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedAt := timestamppb.New(time.Now().Add(-time.Hour))
+	dm := &deviceMock{
+		getByIdent: map[string]*pb.Device{devKey("u1", "d1"): {Id: "dev-1", Identifier: "d1", TrustedAt: trustedAt, TrustTokenHash: trustHash}},
+		revokedAt:  timestamppb.Now(),
+	}
+	m := signInDeviceMock{deviceMock: dm, user: &pb.User{Id: "u1", Email: "a@b.c", PasswordHash: hashed}}
+	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
+	resp, err := h.SignIn(ctxWithDeviceTrust("", "d1", trustPlain), &pb.SignInReq{Email: "a@b.c", Password: "pw-long-enough"})
+	if err != nil {
+		t.Fatalf("sign-in: %v", err)
+	}
+	if resp.GetToken() == "" {
+		t.Error("the sign-in itself must still succeed")
+	}
+	if len(dm.trusted) != 0 || resp.GetDeviceTrustToken() != "" {
+		t.Errorf("revoked trust was renewed (TrustDevice %+v, trust token %q)", dm.trusted, resp.GetDeviceTrustToken())
+	}
+}
+
+// ListDevices applies the sign-in's rule: a device trusted before the
+// account's last revocation is listed as untrusted, so the list never claims a
+// device skips the second factor when it does not. A revocation that cannot be
+// read fails the list rather than guessing.
+func TestListDevices_TrustRevokedByACredentialChange_NotShownTrusted(t *testing.T) {
+	old := timestamppb.New(time.Now().Add(-2 * time.Hour))
+	fresh := timestamppb.Now()
+	m := &deviceMock{
+		listResult: []*pb.Device{
+			{Id: "dev-old", Identifier: "phone-1", TrustedAt: old},
+			{Id: "dev-new", Identifier: "laptop-9", TrustedAt: fresh},
+		},
+		revokedAt: timestamppb.New(time.Now().Add(-time.Hour)),
+	}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	resp, err := h.ListDevices(ctxWithDeviceHeaders("u1", "phone-1", "UA", "1.1.1.1"), &pb.ListDevicesReq{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if got := resp.GetDevices(); len(got) != 2 || got[0].GetTrusted() || !got[1].GetTrusted() {
+		t.Errorf("want dev-old untrusted (trusted before the revocation) and dev-new trusted, got %+v", got)
+	}
+
+	m.revokedErr = status.Error(codes.Unavailable, "db down")
+	if _, err := h.ListDevices(ctxWithDeviceHeaders("u1", "phone-1", "UA", "1.1.1.1"), &pb.ListDevicesReq{}); status.Code(err) != codes.Unavailable {
+		t.Errorf("an unreadable revocation must fail the list, got %v", err)
 	}
 }

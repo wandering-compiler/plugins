@@ -250,21 +250,41 @@ func TestChangePassword_AFailedSpendFailsTheChange(t *testing.T) {
 // feature, so an ungated filter would break every activation of
 // password_change without it, and no filter at all would delete API tokens.
 func TestChangePassword_TheSweepSparesAPITokensOnlyWhereTheyExist(t *testing.T) {
+	body := mutationRPCBody(t, "DeleteOtherSessionTokens")
+	if !strings.Contains(body, `"AND ?feature(api_token) token_type = 1"`) {
+		t.Errorf("DeleteOtherSessionTokens does not filter the session realm behind ?feature(api_token):\n%s", body)
+	}
+}
+
+// A password change ends the trust of every device of the account, in the
+// statement that writes the new password: whoever held the old password may
+// have signed in from a device that would otherwise keep skipping the second
+// factor under two_factor_scope=new_devices. Behind ?feature(devices), because
+// the column exists only with that feature; ungated, every activation of
+// password_change without devices would stop generating.
+func TestChangePassword_RevokesDeviceTrustInTheSameStatement(t *testing.T) {
+	body := mutationRPCBody(t, "UpdateUserPasswordIfUnchanged")
+	if !strings.Contains(body, `"?feature(devices) device_trust_revoked_at = NOW() "`) {
+		t.Errorf("UpdateUserPasswordIfUnchanged does not revoke device trust behind ?feature(devices):\n%s", body)
+	}
+}
+
+// mutationRPCBody returns the declaration of one AuthMutation rpc, from its
+// `rpc Name(` to its closing brace, for a test that pins its statement.
+func mutationRPCBody(t *testing.T, rpc string) string {
+	t.Helper()
 	raw, err := os.ReadFile("../../proto/mutations/auth_mutation.proto")
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(raw)
-	i := strings.Index(src, "rpc DeleteOtherSessionTokens(")
+	i := strings.Index(src, "rpc "+rpc+"(")
 	if i < 0 {
-		t.Fatal("DeleteOtherSessionTokens not found")
+		t.Fatalf("%s not found", rpc)
 	}
 	end := strings.Index(src[i:], "\n  }\n")
 	if end < 0 {
-		t.Fatal("DeleteOtherSessionTokens has no closing brace")
+		t.Fatalf("%s has no closing brace", rpc)
 	}
-	body := src[i : i+end]
-	if !strings.Contains(body, `"AND ?feature(api_token) token_type = 1"`) {
-		t.Errorf("DeleteOtherSessionTokens does not filter the session realm behind ?feature(api_token):\n%s", body)
-	}
+	return src[i : i+end]
 }
