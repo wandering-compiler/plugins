@@ -153,6 +153,20 @@ func (s *memStore) callCount(method string) int {
 	return s.calls[method]
 }
 
+// callsSince is every store call made since before (a callsSince(nil)
+// snapshot), by method name.
+func (s *memStore) callsSince(before map[string]int) map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int{}
+	for m, n := range s.calls {
+		if d := n - before[m]; d != 0 {
+			out[m] = d
+		}
+	}
+	return out
+}
+
 func (s *memStore) events(name string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -413,6 +427,20 @@ func (s *memStore) GetSubscriptionByProviderId(_ context.Context, in *pb.GetSubs
 		return nil, s.leave("GetSubscriptionByProviderId", noRow())
 	}
 	return &pb.GetSubscriptionByProviderIdResp{Subscription: out}, s.leave("GetSubscriptionByProviderId", nil)
+}
+
+func (s *memStore) GetSubscription(_ context.Context, in *pb.GetSubscriptionReq, _ ...grpc.CallOption) (*pb.GetSubscriptionResp, error) {
+	if err := s.enter("GetSubscription"); err != nil {
+		return nil, s.leave("", err)
+	}
+	var out *pb.Subscription
+	if sub, ok := s.subs[in.GetId()]; ok {
+		out = clone(sub)
+	}
+	if out == nil {
+		return nil, s.leave("GetSubscription", noRow())
+	}
+	return &pb.GetSubscriptionResp{Subscription: out}, s.leave("GetSubscription", nil)
 }
 
 // ── PaymentMutation ───────────────────────────────────────────────────

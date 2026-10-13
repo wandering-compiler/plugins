@@ -430,7 +430,7 @@ other plugins it meets.
 | `interaction/auth-cluster-decided-by` | auth × Ban registry | `BanWorkers`/`UnbanWorkers` read the user id from the gateway's verified principal envelope (field 2). Without a principal (no auth plugin, or an unauthenticated route) every decision is refused. | `TestDecideWorkers_RecordsTheSignedInCaller`, `TestDecideWorkers_RefusesWithoutACaller` |
 | `interaction/gateway-acl-only-gate` | Gateway ACL × every RPC | The plugin authorizes no caller itself: ScheduleTask, the reservation RPCs, IssueRegistrationCode, CheckWorkers, DrainRelay and the registry mutations are protected only by the project's ACL. A project MUST gate the operator RPCs (registration codes, drain, ban, relay CRUD) to operators, and MUST NOT expose them to the callers that place work. | none (live only) |
 | `interaction/deploy-registers-local` | deploy block × Relay registry | A deploy upserts the row `local` with the minted fingerprint, refreshes it on re-mint, and deletes it when the environment stops deploying the relay. | none (live only) |
-| `interaction/deploy-issue-worker-fresh-key` | deploy block × Ban registry | A worker issued by `issue-worker` gets a new key and therefore a new identity, so a ban on the previous worker's key does not carry to it. | none |
+| `interaction/deploy-issue-worker-fresh-key` | deploy block × Ban registry | A worker issued by `issue-worker` gets a new key and therefore a new identity, so a ban on the previous worker's key does not carry to it. | `TestIssueWorker_ANewWorkerIsANewIdentityAndEscapesNoBan` (a new state directory is a new key the ban set admits; re-issued into its own directory the worker keeps its key and its ban) |
 
 ### Cross-cutting invariants
 

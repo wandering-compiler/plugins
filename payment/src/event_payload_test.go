@@ -63,6 +63,32 @@ func TestEventEmitPayloads_MapEveryEventFieldFromASourceOfItsType(t *testing.T) 
 	}
 }
 
+// Every event is on the plugin's `events` channel and none is public: they
+// name principals and amounts, and a public event is bridged to the gateway's
+// client-visible event stream. A project that bridges the channel itself must
+// filter per principal; the plugin never does it for it.
+func TestEvents_AllNineOnTheInternalChannelNonePublic(t *testing.T) {
+	msgs := pb.File_events_payment_events_proto.Messages()
+	events := 0
+	for i := 0; i < msgs.Len(); i++ {
+		m := msgs.Get(i)
+		ev, _ := proto.GetExtension(m.Options(), w17pb.E_Event).(*w17pb.Event)
+		if ev == nil {
+			continue
+		}
+		events++
+		if ev.GetChannel() != "events" {
+			t.Errorf("%s is on channel %q, want events", m.Name(), ev.GetChannel())
+		}
+		if ev.GetPublic() {
+			t.Errorf("%s is public: it would reach the client event stream unfiltered", m.Name())
+		}
+	}
+	if events != 9 {
+		t.Errorf("found %d events, want the nine the SPEC lists", events)
+	}
+}
+
 // SubscriptionStarted says what state the subscription was created in. Stripe
 // creates it INCOMPLETE by default (payment_behavior allow_incomplete) until
 // the first invoice is paid; without the status, a subscriber granting
