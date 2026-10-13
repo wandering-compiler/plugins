@@ -201,7 +201,22 @@ const (
 	// CodeOAuthFailed: every other OAuth refusal — the state, the login code,
 	// the verifier, the provider's answer. The sign-in starts again.
 	CodeOAuthFailed = "OAUTH_FAILED"
+
+	// CodeSessionExpired: the bearer is a token this deployment issued and
+	// it is past its expires_at — sign in again (or, for an API token, create
+	// a new one). Not folded into the opaque answer: an expired token is not a
+	// guess, and "invalid credentials" sent its holder looking for what was
+	// wrong with a credential that had merely run out. It reveals nothing the
+	// holder lacked — they hold the token, and its expiry is a property of it.
+	// An UNKNOWN token still answers the opaque refusal with no detail.
+	// Also the ErrorInfo reason (domain ErrorDomain), which a client reads
+	// together with the expires_at metadata.
+	CodeSessionExpired = "SESSION_EXPIRED"
 )
+
+// ErrorDomain is the google.rpc.ErrorInfo domain of the refusals this plugin
+// describes with one.
+const ErrorDomain = "auth.w17"
 
 // The sentences a person reads, and the ONE place each is written.
 //
@@ -270,6 +285,11 @@ const (
 	// Names what to do instead: the caller holds a working credential, just
 	// not one this operation accepts.
 	MsgSessionRequired = "Sign in to do this. An API token cannot create credentials."
+
+	// {date} is the expiry, UTC. Names the remedy, which differs by kind: a
+	// session is renewed by signing in, an API token only by minting another.
+	MsgSessionExpired  = "Your session expired on {date}. Sign in again."
+	MsgAPITokenExpired = "This API token expired on {date}. Create a new token." // #nosec G101 -- the SENTENCE a person reads, not a credential value
 )
 
 // isEmailTaken reports whether creating an account failed on the address's
@@ -369,8 +389,22 @@ func deliberateStatus(cause error) (*status.Status, bool) {
 	if errors.As(cause, &we) {
 		return status.New(we.code, we.msg), true
 	}
+	var se *statusError
+	if errors.As(cause, &se) {
+		return se.st, true
+	}
 	return nil, false
 }
+
+// statusError is a wireError that carries a whole status, details included,
+// for a refusal whose details need the request context to build (a translated
+// ErrorDetail) — GRPCStatus has none. Same rule as wireError: only this
+// package constructs one, so nothing downstream can steer the wire answer.
+type statusError struct{ st *status.Status }
+
+func (e *statusError) Error() string { return e.st.Message() }
+
+func (e *statusError) GRPCStatus() *status.Status { return e.st }
 
 // operationalCode reports the wire code to use when a cause describes the
 // SERVICE rather than the credential, and codes.OK when it does not.

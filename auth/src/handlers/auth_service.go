@@ -300,7 +300,20 @@ type authPrincipal struct {
 	tokenID string
 	realm   pb.TokenType
 	grants  []*pb.RoleGrant
+
+	// usedTokenID / lastUsedAt are the row the bearer resolved to, whatever
+	// its kind (tokenID is a session's only), and when it was last recorded
+	// as used — read by recordTokenUse once authentication succeeded.
+	usedTokenID string
+	lastUsedAt  *timestamppb.Timestamp
 }
+
+// recordTokenUse stamps the accepted token's last_used_at. Base no-op: the
+// column exists only under `api_token`, whose file (handlers/apitoken.go)
+// installs the real one via init(). Called once authentication has
+// succeeded, so a refused request records nothing. Must never fail the
+// request it rides on.
+var recordTokenUse = func(ctx context.Context, h *AuthServiceHandler, p *authPrincipal) {}
 
 // effectivePermissions flattens the surviving grants into the permission set
 // Authenticate answers with. A wildcard grant that survived every axis expands
@@ -346,7 +359,11 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 	hash := sha256Hex(token)
 	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{LegacyToken: token, TokenHash: hash})
 	if err != nil {
-		return nil, err
+		// With api_token off every token is a session.
+		return nil, expiredTokenRefusal(ctx, err, func() (*timestamppb.Timestamp, pb.TokenType, error) {
+			exp, err := h.Query.GetExpiredToken(ctx, &pb.GetExpiredTokenReq{LegacyToken: token, TokenHash: hash})
+			return exp.GetExpiresAt(), pb.TokenType_TOKEN_TYPE_SESSION, err
+		})
 	}
 	h.upgradeLegacyToken(ctx, token, hash, resp.GetStoredTokenHash())
 	// A disabled account's tokens are deleted when it is disabled, but one
@@ -833,6 +850,8 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 			return nil, Unauthenticated(err)
 		}
 	}
+
+	recordTokenUse(ctx, h, prin)
 
 	// Flatten LAST. Every axis has had its say on the roles by now, so a
 	// wildcard expands only if the role carrying it survived all of them —

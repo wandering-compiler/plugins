@@ -29,6 +29,45 @@ import (
 // name), so the init runs once during server bring-up.
 func init() {
 	resolvePrincipal = resolvePrincipalRealmAware
+	recordTokenUse = touchTokenLastUsed
+}
+
+// tokenUseWindow is how often, at most, a token's last_used_at is written.
+// last_used_at answers "is this token still in use", for which a minute is
+// plenty; writing it on every request would turn every authenticated read
+// into a write on the token row.
+const tokenUseWindow = time.Minute
+
+// touchTokenLastUsed records that the token was just used, at most once per
+// tokenUseWindow. Two guards, for two different costs:
+//
+//   - here, against the last_used_at the lookup already read: a token used
+//     within the window skips the round trip entirely, so a busy token costs
+//     no statement at all on most requests;
+//   - in TouchTokenLastUsed's WHERE, against concurrent requests that all
+//     passed the first guard on the same stale value: only the first UPDATE
+//     still matches, the rest write nothing.
+//
+// Best effort, like upgradeLegacyToken: a failed write leaves last_used_at
+// stale and the request it rides on succeeds — an audit timestamp is not a
+// reason to refuse a valid credential. The error is not logged: this package
+// has no logger by design (see AuthServiceHandler), and the next request in a
+// new window tries again.
+func touchTokenLastUsed(ctx context.Context, h *AuthServiceHandler, p *authPrincipal) {
+	if p.usedTokenID == "" {
+		return
+	}
+	now := time.Now()
+	if last := p.lastUsedAt; last != nil && now.Sub(last.AsTime()) < tokenUseWindow {
+		return
+	}
+	// Stamp and cutoff from ONE clock, this one: the pre-check above reads
+	// a value this function wrote, so app/database skew never enters it.
+	_, _ = h.Mutation.TouchTokenLastUsed(ctx, &pb.TouchTokenLastUsedReq{
+		TokenId: p.usedTokenID,
+		UsedAt:  timestamppb.New(now),
+		Cutoff:  timestamppb.New(now.Add(-tokenUseWindow)),
+	})
 }
 
 // resolvePrincipalRealmAware resolves a token to its principal +
@@ -50,7 +89,12 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 	hash := sha256Hex(token)
 	tok, err := h.Query.GetTokenWithType(ctx, &pb.GetTokenWithTypeReq{LegacyToken: token, TokenHash: hash})
 	if err != nil {
-		return nil, err
+		// Expired API tokens answer SESSION_EXPIRED too: the holder knows the
+		// token, and its expiry is all the refusal adds.
+		return nil, expiredTokenRefusal(ctx, err, func() (*timestamppb.Timestamp, pb.TokenType, error) {
+			exp, err := h.Query.GetExpiredTokenWithType(ctx, &pb.GetExpiredTokenWithTypeReq{LegacyToken: token, TokenHash: hash})
+			return exp.GetExpiresAt(), exp.GetTokenType(), err
+		})
 	}
 	h.upgradeLegacyToken(ctx, token, hash, tok.GetStoredTokenHash())
 	// Same rule as the session path: a disabled account authenticates with no
@@ -68,10 +112,12 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		return nil, err
 	}
 	prin := &authPrincipal{
-		userID:  userID,
-		tokenID: tok.GetTokenId(),
-		realm:   tok.GetTokenType(),
-		grants:  realm.GetGrants(),
+		userID:      userID,
+		tokenID:     tok.GetTokenId(),
+		realm:       tok.GetTokenType(),
+		grants:      realm.GetGrants(),
+		usedTokenID: tok.GetTokenId(),
+		lastUsedAt:  tok.GetLastUsedAt(),
 	}
 
 	if tok.GetTokenType() == pb.TokenType_TOKEN_TYPE_API {
