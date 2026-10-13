@@ -85,7 +85,7 @@ write.
 **Why the author tree is signed.** The render depends on the version of
 `w17ctl` that runs it, and a consumer renders with their own. The committed tree
 is the same for everyone, so every client computes the digest that was signed.
-`w17ctl` v0.1.0-rc.73 and newer read the signature from the tag and verify it;
+`w17ctl` v0.1.0-rc.74 and newer read the signature from the tag and verify it;
 an older one installs such a release as unsigned (it does not refuse it).
 
 **The workflow's secrets** live in the `release` environment, which only `main`
