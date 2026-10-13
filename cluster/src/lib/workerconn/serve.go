@@ -26,8 +26,9 @@ import (
 // are extra server options (interceptors, say), applied after the cluster's.
 // `register` is called once per tunnel.
 //
-// It returns when ctx ends or the CURRENT connection drops; a worker loops on
-// it with a backoff, dialling a fresh tunnel each time.
+// It returns when ctx ends (stopping every tunnel it serves gracefully), or
+// when the CURRENT connection drops and every retired tunnel has finished; a
+// worker loops on it with a backoff, dialling a fresh tunnel each time.
 //
 // A tunnel carries the certificate it was opened with, and the relay retires
 // it when that certificate expires. So when the certificate on disk is
@@ -56,11 +57,22 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 	if err != nil {
 		return err
 	}
+	// The retired tunnels are this call's for as long as it runs: finished
+	// ones are dropped, and none outlives the return.
 	var retired []*servedTunnel
-	stopAll := func() {
+	prune := func() {
+		live := retired[:0]
+		for _, t := range retired {
+			if !t.finished() {
+				live = append(live, t)
+			}
+		}
+		retired = live
+	}
+	stop := func(ts []*servedTunnel) {
 		// GracefulStop, not Stop: work already running on these tunnels is
 		// somebody's job, and the relay has no way to re-place it.
-		for _, t := range append(retired, cur) {
+		for _, t := range ts {
 			t.srv.GracefulStop()
 		}
 	}
@@ -69,13 +81,24 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 	for {
 		select {
 		case <-ctx.Done():
-			stopAll()
+			stop(append(retired, cur))
 			return ctx.Err()
-		case err := <-cur.done:
-			// A retired tunnel goes on serving its running work until the
-			// relay closes it.
-			return err
+		case <-cur.ended:
+			// The current tunnel is gone. A retired one is still finishing
+			// calls the relay will close it after; wait for them, or for
+			// ctx, rather than return and leave them unowned.
+			for _, t := range retired {
+				select {
+				case <-t.ended:
+				case <-ctx.Done():
+					prune()
+					stop(retired)
+					return ctx.Err()
+				}
+			}
+			return cur.err
 		case <-tick.C:
+			prune()
 			leaf, err := certificateUsable(cfg)
 			if err != nil || bytes.Equal(leaf.Raw, cur.certRaw) {
 				continue
@@ -96,8 +119,19 @@ type servedTunnel struct {
 	// certRaw is the certificate on disk when the tunnel was dialled — the
 	// one its handshake presented.
 	certRaw []byte
-	// done receives Serve's result once the connection has ended.
-	done chan error
+	// ended is closed once the connection has ended; err is Serve's result,
+	// readable after that.
+	ended chan struct{}
+	err   error
+}
+
+func (t *servedTunnel) finished() bool {
+	select {
+	case <-t.ended:
+		return true
+	default:
+		return false
+	}
 }
 
 func openTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), opts []grpc.ServerOption) (*servedTunnel, error) {
@@ -124,11 +158,11 @@ func openTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), op
 	srv := grpc.NewServer(append(tunnel.WorkServerOptions(), opts...)...)
 	register(srv)
 	lis := tunnel.NewSingleConnListener(conn)
-	t := &servedTunnel{srv: srv, certRaw: leaf.Raw, done: make(chan error, 1)}
+	t := &servedTunnel{srv: srv, certRaw: leaf.Raw, ended: make(chan struct{})}
 	go func() {
-		err := srv.Serve(lis)
+		t.err = srv.Serve(lis)
 		_ = lis.Close()
-		t.done <- err
+		close(t.ended)
 	}()
 	return t, nil
 }

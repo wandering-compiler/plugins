@@ -3,7 +3,9 @@ package workerconn
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -465,4 +467,122 @@ func TestTunnel_ARenewedWorkerKeepsServingAcrossTheOldExpiry(t *testing.T) {
 	if resp, err := callThroughProxy(t, r, next.Ticket); err != nil || resp.GetDiscovered() != 42 {
 		t.Errorf("new work after the old expiry: %v, %v; want the worker's answer", resp, err)
 	}
+}
+
+// ServeTunnel owns the tunnels a renewal retired. When its current tunnel
+// drops while an older one is still finishing a call, it returns only once
+// that call is done and the relay has closed the old tunnel, instead of
+// returning at once and leaving the old server running unowned.
+func TestServeTunnel_WaitsForItsRetiredTunnelsWork(t *testing.T) {
+	work := &fakeWork{hold: make(chan struct{})}
+	var bh *forwarder
+	done := make(chan error, 1)
+	r := standUpWith(t, rigOptions{
+		retry: 20 * time.Millisecond, grace: time.Minute, work: work, tunnelDone: done,
+		via: func(addr string) string { bh = newForwarder(t, addr); return bh.addr() },
+	})
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, client := proxyClient(t, r, grant.Ticket)
+	running := make(chan error, 1)
+	go func() {
+		_, err := client.CheckWorkers(ctx, &pb.CheckWorkersReq{})
+		running <- err
+	}()
+	for deadline := time.Now().Add(5 * time.Second); r.pool.Stats().InUse == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the call never started")
+		}
+	}
+
+	reissue(t, r.ca, r.workerDir, time.Hour)
+	tunnels := func() int {
+		bh.mu.Lock()
+		defer bh.mu.Unlock()
+		return len(bh.conns) / 2
+	}
+	for deadline := time.Now().Add(5 * time.Second); tunnels() < 2; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the worker never opened a tunnel with its renewed certificate")
+		}
+	}
+	bh.mu.Lock()
+	_ = bh.conns[2].Close() // the current tunnel drops
+	_ = bh.conns[3].Close()
+	bh.mu.Unlock()
+
+	select {
+	case err := <-done:
+		t.Fatalf("ServeTunnel returned (%v) with its retired tunnel still running a call", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(work.hold)
+	select {
+	case err := <-running:
+		if err != nil {
+			t.Errorf("the call on the retired tunnel failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call on the retired tunnel never returned")
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ServeTunnel did not return once its retired tunnel's work was done")
+	}
+}
+
+// forwarder relays TCP between the worker and the relay, one pair of sockets
+// per tunnel, and closes both ends when either does — so the worker sees the
+// relay closing a tunnel, and a test can cut one tunnel by its index.
+type forwarder struct {
+	lis   net.Listener
+	mu    sync.Mutex
+	conns []net.Conn // worker side, relay side; two per tunnel
+}
+
+func newForwarder(t *testing.T, target string) *forwarder {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &forwarder{lis: lis}
+	t.Cleanup(func() {
+		_ = lis.Close()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, c := range f.conns {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			in, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			out, err := net.Dial("tcp", target)
+			if err != nil {
+				_ = in.Close()
+				continue
+			}
+			f.mu.Lock()
+			f.conns = append(f.conns, in, out)
+			f.mu.Unlock()
+			go f.pipe(in, out)
+			go f.pipe(out, in)
+		}
+	}()
+	return f
+}
+
+func (f *forwarder) addr() string { return f.lis.Addr().String() }
+
+func (f *forwarder) pipe(dst, src net.Conn) {
+	_, _ = io.Copy(dst, src)
+	_ = dst.Close()
+	_ = src.Close()
 }

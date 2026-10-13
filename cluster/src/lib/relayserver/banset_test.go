@@ -285,6 +285,7 @@ func TestBackends_ANewerTunnelTakesNewWorkAndTheOldOneFinishesItsOwn(t *testing.
 	}
 	newSrv := tunnelTo(t, b, "w")
 	defer newSrv.Stop()
+	b.SetProfile("w", b.NewAttachment(), 2, true) // room for a second call on the machine
 	fresh, err := pickWith(pick, grantTicket(t, pool))
 	if err != nil {
 		t.Fatalf("new work with a newer tunnel attached: %v", err)
@@ -329,6 +330,7 @@ func TestBackends_ABanDuringTheOverlapClosesBothTunnels(t *testing.T) {
 	}
 	newSrv := tunnelTo(t, b, "w")
 	defer newSrv.Stop()
+	b.SetProfile("w", b.NewAttachment(), 2, true) // room for a second call on the machine
 	fresh, err := pickWith(pick, grantTicket(t, pool))
 	if err != nil {
 		t.Fatal(err)
@@ -367,4 +369,62 @@ func TestBackends_AReplacedTunnelStillEndsWithItsCertificate(t *testing.T) {
 		t.Errorf("Count = %d, Capacity = %d, want the new tunnel kept", n, c)
 	}
 	running.Release()
+}
+
+// A worker's slots are the machine's, counted across both its tunnels: one
+// that renewed with every slot busy on its old tunnel takes no new work on
+// the new one until a call there ends, and the other worker gets the work.
+func TestBackends_ARenewedWorkersOldCallsStillCountAgainstItsSlots(t *testing.T) {
+	b := NewBackends()
+	pool := poolWith(t, 10)
+	pick := TicketPicker(pool, b, nil)
+	oldSrv := tunnelTo(t, b, "renewed")
+	defer oldSrv.Stop()
+	b.SetProfile("renewed", b.NewAttachment(), 4, true)
+	var running []tunnel.Backend
+	for i := 0; i < 4; i++ {
+		be, err := pickWith(pick, grantTicket(t, pool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		running = append(running, be)
+	}
+	newSrv := tunnelTo(t, b, "renewed") // the renewal's tunnel
+	defer newSrv.Stop()
+	b.SetProfile("renewed", b.NewAttachment(), 4, true)
+	otherSrv := tunnelTo(t, b, "other")
+	defer otherSrv.Stop()
+	b.SetProfile("other", b.NewAttachment(), 2, true)
+	otherConn := currentConn(b, "other")
+
+	for i := 0; i < 2; i++ {
+		be, err := pickWith(pick, grantTicket(t, pool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if be.Conn != otherConn {
+			t.Fatalf("call %d went to the renewed worker with all 4 slots busy on its old tunnel", i)
+		}
+	}
+	if _, err := pickWith(pick, grantTicket(t, pool)); refusal.ReasonOf(err) != refusal.NoWorker {
+		t.Fatalf("with every slot of both machines busy: %v, want %s", err, refusal.NoWorker)
+	}
+	running[0].Release()
+	be, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatalf("after one old call ended: %v, want the renewed worker's freed slot", err)
+	}
+	if be.Conn == otherConn || be.Conn == running[0].Conn {
+		t.Error("the freed slot was not taken on the renewed worker's new tunnel")
+	}
+}
+
+// currentConn is the tunnel a worker's new work goes to.
+func currentConn(b *Backends, fp string) *grpc.ClientConn {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if be, ok := b.conns[fp]; ok {
+		return be.conn
+	}
+	return nil
 }

@@ -295,8 +295,9 @@ func (b *Backends) Add(fingerprint string, conn *grpc.ClientConn) uint64 {
 	}
 	b.gen++
 	gen := b.gen
-	// inflight starts at zero with the new connection rather than carrying the
-	// old socket's bookings, which nothing will ever release.
+	// inflight counts THIS connection's calls. The old tunnel's bookings stay
+	// with it (retired, released when its calls end), and the machine's room
+	// is counted across both (busyLocked).
 	b.conns[fingerprint] = &backend{conn: conn, gen: gen}
 	publish := b.publishLocked()
 	b.mu.Unlock()
@@ -559,6 +560,21 @@ func (b *Backends) release(fingerprint string, gen uint64) {
 
 var errNoWorker = errors.New("no worker attached")
 
+// busyLocked is how many calls a worker is running: on its current tunnel
+// and on any retired one still finishing work. The slots it declared are the
+// MACHINE's, so a worker that renewed and holds two tunnels is not given its
+// slots twice.
+func (b *Backends) busyLocked(fingerprint string) int {
+	n := 0
+	if be, ok := b.conns[fingerprint]; ok {
+		n += be.inflight
+	}
+	for _, be := range b.retired[fingerprint] {
+		n += be.inflight
+	}
+	return n
+}
+
 // take returns the attached worker with the most room, and books a slot on it.
 //
 // Admission is re-checked here and not only when the tunnel opened, because
@@ -593,7 +609,7 @@ func (b *Backends) take(admitted func(string) bool) (*grpc.ClientConn, string, u
 		if admitted != nil && !admitted(fp) {
 			continue
 		}
-		if free := int(pr.slots) - b.conns[fp].inflight; free > bestFree {
+		if free := int(pr.slots) - b.busyLocked(fp); free > bestFree {
 			best, bestFree = fp, free
 		}
 	}
