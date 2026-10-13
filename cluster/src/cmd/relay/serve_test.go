@@ -135,7 +135,27 @@ func (r *runningRelay) manage(t *testing.T, cp relaydial.Config) pb.ClusterServi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cc.Close() })
-	return pb.NewClusterServiceClient(cc)
+	return pb.NewClusterServiceClient(controlPlaneConn{cc})
+}
+
+// controlPlaneConn sends what a real control plane sends on every call: the
+// ban set, empty unless the test sent one. Without it the relay holds no set
+// and admits no worker.
+type controlPlaneConn struct{ *grpc.ClientConn }
+
+func withBanSet(ctx context.Context) context.Context {
+	if md, ok := metadata.FromOutgoingContext(ctx); ok && len(md.Get(workeradmit.BannedHeader)) > 0 {
+		return ctx
+	}
+	return workeradmit.WithBans(ctx, nil)
+}
+
+func (c controlPlaneConn) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+	return c.ClientConn.Invoke(withBanSet(ctx), method, args, reply, opts...)
+}
+
+func (c controlPlaneConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return c.ClientConn.NewStream(withBanSet(ctx), desc, method, opts...)
 }
 
 // work is what the test's worker serves: CheckWorkers answers 42, which a
@@ -645,6 +665,7 @@ func TestServe_RefusesToStartMisconfigured(t *testing.T) {
 		{"two CAs", withID("--ca-cert", caCrt, "--ca-key", caKey), "two CAs"},
 		{"a CA that is not there", explicit("--ca-cert", caCrt+".missing", "--ca-key", caKey), "CA certificate"},
 		{"a poll timeout shorter than two polls", withID("--poll-interval", "2s", "--poll-timeout", "3s"), "--poll-timeout"},
+		{"a ban-set age shorter than the minimum", withID("--ban-set-max-age", "9m"), "--ban-set-max-age"},
 		{"the management port is taken", withID("--listen", busy.Addr().String()), "listening on"},
 		{"the proxy port is taken", withID("--proxy-listen", busy.Addr().String()), "listening for callers"},
 		{"the attach port is taken", withID("--attach-listen", busy.Addr().String()), "listening for worker attach"},
@@ -792,7 +813,7 @@ func TestParseConfig_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.capacity != 0 || cfg.ticketTTL != 30*time.Second || cfg.listen != ":13444" || cfg.drainTimeout != 15*time.Minute ||
-		cfg.maxQueue != relaycore.DefaultMaxQueue {
+		cfg.maxQueue != relaycore.DefaultMaxQueue || cfg.banSetMaxAge != relayserver.DefaultBanSetMaxAge {
 		t.Errorf("defaults: %+v", cfg)
 	}
 }

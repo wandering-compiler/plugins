@@ -39,6 +39,12 @@ type workerRig struct {
 
 func serveWorkers(t *testing.T) *workerRig {
 	t.Helper()
+	return serveWorkersWith(t, deliveredRegistry())
+}
+
+// serveWorkersWith is serveWorkers over a registry the test chose.
+func serveWorkersWith(t *testing.T, reg *workeradmit.Registry) *workerRig {
+	t.Helper()
 	relay, err := identity.LoadOrCreateIdentity(t.TempDir(), "relay")
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +58,7 @@ func serveWorkers(t *testing.T) *workerRig {
 		t.Fatal(err)
 	}
 	r := &workerRig{
-		relay: relay, ca: ca, reg: workeradmit.New(), backends: NewBackends(),
+		relay: relay, ca: ca, reg: reg, backends: NewBackends(),
 		capacity: make(chan int, 64), ended: make(chan error, 8),
 	}
 	r.backends.OnCapacityChange(func(n int) { r.capacity <- n })
@@ -455,4 +461,13 @@ func TestAttach_SlotsAboveTheCapAreHeldToIt(t *testing.T) {
 	if got := ev.GetAdmitted().GetSlots(); got != DefaultMaxWorkerSlots {
 		t.Errorf("admitted slots = %d, want the cap %d", got, DefaultMaxWorkerSlots)
 	}
+}
+
+// deliveredRegistry is a relay's admission state after a control plane has
+// delivered the (empty) ban set — what every relay holds in steady state. A
+// fresh workeradmit.New() admits nobody until then.
+func deliveredRegistry() *workeradmit.Registry {
+	r := workeradmit.New()
+	r.SetBanned(nil)
+	return r
 }

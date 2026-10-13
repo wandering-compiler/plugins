@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -226,5 +227,68 @@ func TestBanWorkers_DeliversTheSetToEveryRelayAtOnce(t *testing.T) {
 	}
 	if reg.Admitted("bb") {
 		t.Error("the relay did not get the new ban set with the decision")
+	}
+}
+
+// Every registered relay, enabled or not, is handed the ban set again on a
+// schedule — the path that reaches a relay unreachable when the decision was
+// taken, or restarted without a saved set — with no decision and no
+// placement in between. A version that moved is delivered too.
+func TestKeepBansDelivered_ReachesEveryRelayOnASchedule(t *testing.T) {
+	enabledReg, dialEnabled := serveRelayWithWorkers(t)
+	disabledReg, dialDisabled := serveRelayWithWorkers(t)
+	ws := &workerStore{banned: []string{"bb"}, banVersion: 7}
+	h := &ClusterServiceHandler{
+		Relays: &store{
+			relays:   []Relay{{ID: "1", Name: "enabled-one", URL: "enabled"}},
+			disabled: []Relay{{ID: "2", Name: "disabled-one", URL: "disabled"}},
+		},
+		Workers: ws,
+		Dial: func(target, fp string) (*grpc.ClientConn, error) {
+			if target == "disabled" {
+				return dialDisabled(target, fp)
+			}
+			return dialEnabled(target, fp)
+		},
+	}
+	if enabledReg.HoldsBanSet() || disabledReg.HoldsBanSet() {
+		t.Fatal("a relay held a ban set before any delivery")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { h.KeepBansDelivered(ctx, 10*time.Millisecond); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	for name, reg := range map[string]*workeradmit.Registry{"enabled": enabledReg, "disabled": disabledReg} {
+		deadline := time.Now().Add(5 * time.Second)
+		for (!reg.HoldsBanSet() || reg.Admitted("bb")) && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if reg.Admitted("bb") {
+			t.Errorf("the %s relay was never handed the ban set", name)
+		}
+	}
+	first, _ := disabledReg.LastDelivered()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if at, _ := disabledReg.LastDelivered(); at.After(first) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Error("the ban set was delivered once and never again")
+}
+
+// The schedule stops with its context.
+func TestKeepBansDelivered_StopsWithItsContext(t *testing.T) {
+	h := &ClusterServiceHandler{}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { h.KeepBansDelivered(ctx, 0); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("KeepBansDelivered ran on after its context ended")
 	}
 }

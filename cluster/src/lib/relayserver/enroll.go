@@ -34,6 +34,9 @@ type Enrollment struct {
 	// Lifetime of an issued certificate. Zero uses
 	// DefaultWorkerCertLifetime.
 	Lifetime time.Duration
+	// MaxBanSetAge is how recently a control plane must have delivered the
+	// ban set for a renewal to be granted. Zero uses DefaultBanSetMaxAge.
+	MaxBanSetAge time.Duration
 	// Now is a test seam; nil uses the real clock.
 	Now func() time.Time
 }
@@ -43,6 +46,19 @@ func (e *Enrollment) lifetime() time.Duration {
 		return DefaultWorkerCertLifetime
 	}
 	return e.Lifetime
+}
+
+// DefaultBanSetMaxAge is how old the ban set may be when a renewal is granted.
+// The control plane re-delivers it to every registered relay every few
+// minutes, so an hour is many missed deliveries; a worker renews a third of
+// its lifetime (days) before expiry, so a refusal costs it nothing but a retry.
+const DefaultBanSetMaxAge = time.Hour
+
+func (e *Enrollment) maxBanSetAge() time.Duration {
+	if e.MaxBanSetAge <= 0 {
+		return DefaultBanSetMaxAge
+	}
+	return e.MaxBanSetAge
 }
 
 func (e *Enrollment) now() time.Time {
@@ -111,9 +127,23 @@ func (e *Enrollment) Renew(ctx context.Context, req *workerpb.RenewReq) (*worker
 		return nil, notRenewable("the certificate is not a valid one from this relay's CA (" + err.Error() + ")")
 	}
 	id := identity.WorkerID(cert)
+	// A renewed certificate extends a key's standing by weeks, so it is
+	// granted only against a ban set the relay can vouch for: one it holds,
+	// and one a control plane delivered recently. A relay that restarted
+	// without a saved set, or that no control plane has reached for a while
+	// (disabled, or cut off), may be missing a ban.
+	if !e.Workers.HoldsBanSet() {
+		return nil, refusal.New(codes.Unavailable, refusal.BanSetUnknown,
+			"relay: cannot renew yet — this relay has not received the ban set since it started; retry shortly")
+	}
 	if !e.Workers.Admitted(id) {
 		return nil, refusal.New(codes.PermissionDenied, refusal.WorkerBanned,
 			"relay: worker "+id+" is banned and cannot renew")
+	}
+	if at, ok := e.Workers.LastDelivered(); !ok || e.now().Sub(at) > e.maxBanSetAge() {
+		return nil, refusal.New(codes.Unavailable, refusal.BanSetStale,
+			"relay: cannot renew now — no control plane has delivered the ban set within "+
+				e.maxBanSetAge().String()+"; retry later")
 	}
 	csr, err := identity.ParseCSR(req.GetCsr())
 	if err != nil {

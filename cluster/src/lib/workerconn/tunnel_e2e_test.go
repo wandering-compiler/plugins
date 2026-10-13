@@ -95,7 +95,7 @@ func standUpWith(t *testing.T, o rigOptions) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workers := workeradmit.New() // nobody banned
+	workers := deliveredRegistry() // nobody banned
 	backends := relayserver.NewBackends()
 	// The wiring a real relay has: capacity comes from the attached fleet.
 	backends.OnCapacityChange(pool.SetCapacity)

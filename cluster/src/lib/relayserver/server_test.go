@@ -48,7 +48,7 @@ func configured(t *testing.T, pool *relaycore.Pool) *Server {
 	}
 	return &Server{
 		Pool:             pool,
-		Workers:          workeradmit.New(),
+		Workers:          deliveredRegistry(),
 		Codes:            codes,
 		ProxyAddress:     testProxyAddress,
 		ProxyFingerprint: testProxyFP,

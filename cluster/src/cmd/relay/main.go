@@ -55,6 +55,10 @@ import (
 	"github.com/wandering-compiler/plugins/cluster/workerpb"
 )
 
+// minBanSetMaxAge is the lowest --ban-set-max-age: twice the control plane's
+// re-delivery interval, so one missed delivery does not refuse renewals.
+const minBanSetMaxAge = 10 * time.Minute
+
 type config struct {
 	listen         string
 	tunnelListen   string
@@ -76,6 +80,7 @@ type config struct {
 	caKeyPath      string
 	certLifetime   time.Duration
 	codeTTL        time.Duration
+	banSetMaxAge   time.Duration
 
 	// netListen opens every listener; nil is net.Listen. A test seam, never
 	// set from flags: it lets a test make one bind fail deterministically
@@ -154,6 +159,10 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 	fs.DurationVar(&cfg.certLifetime, "worker-cert-lifetime",
 		envDuration("worker-cert-lifetime", "RELAY_WORKER_CERT_LIFETIME", relayserver.DefaultWorkerCertLifetime),
 		"how long an issued worker certificate lasts; workers renew well before, and a forgotten ban runs out with it")
+	fs.DurationVar(&cfg.banSetMaxAge, "ban-set-max-age",
+		envDuration("ban-set-max-age", "RELAY_BAN_SET_MAX_AGE", relayserver.DefaultBanSetMaxAge),
+		"renew a worker certificate only if a control plane delivered the ban set within this long "+
+			"(it re-delivers every few minutes); at least "+minBanSetMaxAge.String())
 	fs.DurationVar(&cfg.codeTTL, "registration-code-ttl", envDuration("registration-code-ttl", "RELAY_REGISTRATION_CODE_TTL", 15*time.Minute),
 		"how long a one-time registration code stays usable")
 	fs.StringVar(&cfg.controlPin, "control-plane-fingerprint", os.Getenv("RELAY_CONTROL_PLANE_FINGERPRINT"),
@@ -264,6 +273,11 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	log.Printf("certificate fingerprint: %s", relaydial.Fingerprint(leaf))
 	log.Printf("  ^ paste this into the relay's row in the control plane, after checking it matches")
 
+	if cfg.banSetMaxAge < minBanSetMaxAge {
+		// Below the control plane's re-delivery interval with some slack,
+		// every renewal would be refused between deliveries.
+		return fmt.Errorf("--ban-set-max-age (%s) must be at least %s", cfg.banSetMaxAge, minBanSetMaxAge)
+	}
 	if cfg.pollTimeout < 2*cfg.pollInterval {
 		// A client told to come back every interval must survive one late
 		// poll, or obedient clients lose their place to jitter.
@@ -283,12 +297,18 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	}
 	workers := workeradmit.New()
 	// With an identity directory the ban set is kept there, so a restarted
-	// relay refuses banned workers (and their renewals) from the start
-	// instead of only after the control plane next calls it.
+	// relay refuses banned workers from the start. Without one (or before
+	// the first set was saved) the relay admits NO worker — attach, tunnel
+	// and renewal are refused BAN_SET_UNKNOWN — until a control plane
+	// delivers the set, which it does every few minutes: closed, because an
+	// empty set would admit a banned key.
 	if dir := strings.TrimSpace(cfg.identityDir); dir != "" {
 		if err := workers.KeepIn(filepath.Join(dir, "bans.json")); err != nil {
 			return err
 		}
+	}
+	if !workers.HoldsBanSet() {
+		log.Printf("no saved ban set: workers are refused until the control plane delivers one")
 	}
 
 	controlPin := strings.ToLower(strings.TrimSpace(cfg.controlPin))
@@ -352,8 +372,12 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 	// out its full complement of tickets and every caller found out at the
 	// proxy.
 	backends.OnCapacityChange(pool.SetCapacity)
+	// A tunnel whose certificate expired takes no new work; what is running
+	// on it gets as long as a drain would before the tunnel is closed.
+	backends.SetExpiryGrace(cfg.drainTimeout)
 	// A ban cuts the banned worker's open tunnel at once, and with it any
-	// call still running there; the attach stream notices on its next poll.
+	// call still running there (it ends WORKER_LOST); the attach stream
+	// notices on its next poll.
 	workers.OnBansChanged(func() {
 		backends.DropWhere(func(fp string) bool { return !workers.Admitted(fp) })
 	})
@@ -422,6 +446,9 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		Codes:    regCodes,
 		Workers:  workers,
 		Lifetime: cfg.certLifetime,
+		// Renewal needs a ban set a control plane delivered recently (see
+		// relayserver.DefaultBanSetMaxAge).
+		MaxBanSetAge: cfg.banSetMaxAge,
 	})
 	attachLis, err := cfg.bind(cfg.attachListen)
 	if err != nil {
