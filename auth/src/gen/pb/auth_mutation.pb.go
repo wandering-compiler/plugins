@@ -4804,12 +4804,14 @@ type TrustDeviceReq struct {
 	// the row; the client must present the matching plaintext to be trusted.
 	TrustTokenHash string `protobuf:"bytes,3,opt,name=trust_token_hash,json=trustTokenHash,proto3" json:"trust_token_hash,omitempty"`
 	// The trust is written only while the account's device trust has not been
-	// revoked AFTER this instant (User.device_trust_revoked_at): the revocation
-	// stamp the sign-in read before it checked anything, or the creation of the
-	// second-factor challenge it answered. A password change or a disable that
-	// commits while the sign-in is in flight then wins, instead of being
-	// overwritten by a trusted_at stamped after it. The epoch when the account
-	// was never revoked.
+	// revoked AFTER this instant (User.device_trust_revoked_at): for a SignIn
+	// renewing trust, the revocation stamp it read while resolving the device
+	// (after the password check); for VerifyMfa, the creation of the challenge
+	// it answered (also after SignIn's password check). The epoch when the
+	// account was never revoked. A password change or a disable that commits
+	// after that instant then wins, instead of being overwritten by a
+	// trusted_at stamped after it; one committing between the password check
+	// and that instant is not caught (SPEC, devices gap 6).
 	NotRevokedAfter *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=not_revoked_after,json=notRevokedAfter,proto3" json:"not_revoked_after,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
