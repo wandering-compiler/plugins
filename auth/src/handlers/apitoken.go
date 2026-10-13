@@ -96,7 +96,6 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 			return exp.GetExpiresAt(), exp.GetTokenType(), exp.GetDeviceThumbprint(), err
 		})
 	}
-	h.upgradeLegacyToken(ctx, token, hash, tok.GetStoredTokenHash())
 	// Same rule as the session path: a disabled account authenticates with no
 	// token, including one minted after the disable deleted the rest.
 	if err := signInDisabledGate(tok.GetUser()); err != nil {
@@ -122,6 +121,7 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		deviceThumbprint: tok.GetDeviceThumbprint(),
 		deviceRevokedAt:  tok.GetDeviceRevokedAt(),
 		mcpOnly:          tok.GetMcpOnly(),
+		legacyToken:      legacyPlaintext(token, tok.GetStoredTokenHash()),
 	}
 
 	if tok.GetTokenType() == pb.TokenType_TOKEN_TYPE_API {

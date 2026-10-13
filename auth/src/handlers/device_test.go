@@ -596,6 +596,15 @@ type bindingQuery struct {
 	known   string
 	expired string
 	lookups int
+	legacy  bool           // the known token's row has no stored hash yet
+	rec     *touchRecorder // the writes Authenticate made (optional)
+}
+
+func (q *bindingQuery) stored(hash string) string {
+	if q.legacy {
+		return ""
+	}
+	return hash
 }
 
 func (q *bindingQuery) GetUserByTokenWithPermissions(_ context.Context, in *pb.GetUserByTokenWithPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserByTokenWithPermissionsResp, error) {
@@ -603,7 +612,7 @@ func (q *bindingQuery) GetUserByTokenWithPermissions(_ context.Context, in *pb.G
 	if in.GetTokenHash() != sha256Hex(q.known) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "tok-1", StoredTokenHash: in.GetTokenHash(),
+	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "tok-1", StoredTokenHash: q.stored(in.GetTokenHash()),
 		DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked, McpOnly: q.mcp}, nil
 }
 
@@ -612,7 +621,7 @@ func (q *bindingQuery) GetTokenWithType(_ context.Context, in *pb.GetTokenWithTy
 	if in.GetTokenHash() != sha256Hex(q.known) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "tok-1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION, StoredTokenHash: in.GetTokenHash(),
+	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "tok-1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION, StoredTokenHash: q.stored(in.GetTokenHash()),
 		User: &pb.User{Id: "u1"}, LastUsedAt: timestamppb.Now(), DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked, McpOnly: q.mcp}, nil
 }
 
@@ -645,7 +654,10 @@ func bindingAuthenticate(t *testing.T, resolver func(context.Context, *AuthServi
 	prevDec, prevNarrow, prevRes := scopeDecorators, grantNarrowers, resolvePrincipal
 	t.Cleanup(func() { scopeDecorators, grantNarrowers, resolvePrincipal = prevDec, prevNarrow, prevRes })
 	scopeDecorators, grantNarrowers, resolvePrincipal = nil, nil, resolver
-	h := &AuthServiceHandler{Query: q, Mutation: &touchRecorder{}, HeaderName: "Authorization", Scheme: "Bearer"}
+	if q.rec == nil {
+		q.rec = &touchRecorder{}
+	}
+	h := &AuthServiceHandler{Query: q, Mutation: q.rec, HeaderName: "Authorization", Scheme: "Bearer"}
 	return h.Authenticate(context.Background(), req)
 }
 
@@ -971,5 +983,39 @@ func TestExpiryAndChallengeStatements_CarryTheKey(t *testing.T) {
 	}
 	if body := queryRPCBody(t, "GetMfaChallenge"); !strings.Contains(body, `COALESCE(c.thumbprint, '') AS challenge.thumbprint`) {
 		t.Errorf("GetMfaChallenge does not read the key:\n%s", body)
+	}
+}
+
+// A legacy row (token in the clear) is moved to the hash only by a request
+// that passed every check: a stolen legacy token presented with the wrong
+// key — or with no proof, or on the MCP surface without being an MCP token —
+// is refused and writes nothing. The key's holder's request moves it.
+func TestAuthenticate_ARefusedRequestNeverUpgradesALegacyToken(t *testing.T) {
+	for name, res := range resolvers {
+		for _, c := range []struct {
+			name string
+			q    *bindingQuery
+			req  *pb.AuthReq
+		}{
+			{"wrong key", &bindingQuery{thumb: testJKT, known: "tok", legacy: true}, boundAuthReq("tok", otherJKT)},
+			{"unbound, a proof", &bindingQuery{known: "tok", legacy: true}, boundAuthReq("tok", testJKT)},
+			{"no proof", &bindingQuery{thumb: testJKT, known: "tok", legacy: true}, &pb.AuthReq{Headers: map[string]string{"authorization": "Bearer tok"}}},
+			{"MCP surface, not an MCP token", &bindingQuery{thumb: testJKT, known: "tok", legacy: true}, mcpAuthReq("tok")},
+		} {
+			_, err := bindingAuthenticate(t, res, c.q, c.req)
+			if err == nil {
+				t.Fatalf("%s/%s: accepted", c.name, name)
+			}
+			if c.q.rec.upgrades != 0 {
+				t.Errorf("%s/%s: a refused request moved the legacy row (%d writes)", c.name, name, c.q.rec.upgrades)
+			}
+		}
+		q := &bindingQuery{thumb: testJKT, known: "tok", legacy: true}
+		if _, err := bindingAuthenticate(t, res, q, boundAuthReq("tok", testJKT)); err != nil {
+			t.Fatalf("%s: the key's holder was refused: %v", name, err)
+		}
+		if q.rec.upgrades != 1 {
+			t.Errorf("%s: the accepted request did not move the legacy row (%d writes)", name, q.rec.upgrades)
+		}
 	}
 }

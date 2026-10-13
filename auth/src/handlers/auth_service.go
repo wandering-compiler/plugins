@@ -315,6 +315,21 @@ type authPrincipal struct {
 	// mcpOnly is UserToken.mcp_only: a token of the MCP OAuth flow, accepted
 	// without a proof on the MCP surface and nowhere else.
 	mcpOnly bool
+
+	// legacyToken is the presented token when it resolved to a LEGACY row
+	// (stored in the clear, no hash yet), "" otherwise. The resolvers only
+	// note it; Authenticate moves the row to the hash once the request has
+	// passed every check, so a refused request writes nothing.
+	legacyToken string
+}
+
+// legacyPlaintext is the token to move to the hash: the presented one when the
+// row it resolved to has no stored hash (a legacy row), "" otherwise.
+func legacyPlaintext(token, storedHash string) string {
+	if storedHash != "" {
+		return ""
+	}
+	return token
 }
 
 // recordTokenUse stamps the accepted token's last_used_at. Base no-op: the
@@ -374,7 +389,6 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 			return exp.GetExpiresAt(), pb.TokenType_TOKEN_TYPE_SESSION, exp.GetDeviceThumbprint(), err
 		})
 	}
-	h.upgradeLegacyToken(ctx, token, hash, resp.GetStoredTokenHash())
 	// A disabled account's tokens are deleted when it is disabled, but one
 	// minted after that (a sign-in racing the disable) must not work either.
 	if err := signInDisabledGate(resp.GetUser()); err != nil {
@@ -396,6 +410,7 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 		deviceThumbprint: resp.GetDeviceThumbprint(),
 		deviceRevokedAt:  resp.GetDeviceRevokedAt(),
 		mcpOnly:          resp.GetMcpOnly(),
+		legacyToken:      legacyPlaintext(token, resp.GetStoredTokenHash()),
 	}, nil
 }
 
@@ -828,6 +843,12 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 		}
 	}
 
+	// Written only now that the request passed every check — the binding
+	// included — so a refused request (a stolen token with the wrong key, a
+	// narrower's refusal) changes nothing.
+	if prin.legacyToken != "" {
+		h.upgradeLegacyToken(ctx, prin.legacyToken, sha256Hex(prin.legacyToken), "")
+	}
 	recordTokenUse(ctx, h, prin)
 
 	// Flatten LAST. Every axis has had its say on the roles by now, so a

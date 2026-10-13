@@ -56,20 +56,22 @@ func TestUpgradeLegacyToken(t *testing.T) {
 	}
 }
 
-// Authenticate looks the bearer up by hash (with the token for a legacy row)
-// and moves a legacy row it resolved to.
+// The resolver looks the bearer up by hash (with the token for a legacy row)
+// and NOTES a legacy row for the move; it writes nothing itself — Authenticate
+// moves the row only once the request passed every check.
 func TestResolvePrincipalRealmAware_LegacyRowIsMovedToTheHash(t *testing.T) {
 	q := &legacyLookupQuery{}
 	rec := &upgradeRecorder{}
 	h := &AuthServiceHandler{Query: q, Mutation: rec}
-	if _, err := resolvePrincipalRealmAware(context.Background(), h, "plain-legacy"); err != nil {
+	p, err := resolvePrincipalRealmAware(context.Background(), h, "plain-legacy")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if q.req.GetTokenHash() != sha256Hex("plain-legacy") || q.req.GetLegacyToken() != "plain-legacy" {
 		t.Errorf("lookup req = %v, want the hash and the token (legacy fallback)", q.req)
 	}
-	if len(rec.calls) != 1 {
-		t.Errorf("legacy row not moved: %v", rec.calls)
+	if p.legacyToken != "plain-legacy" || len(rec.calls) != 0 {
+		t.Errorf("legacy row: noted %q, written %v; want noted, not written", p.legacyToken, rec.calls)
 	}
 }
 
@@ -108,17 +110,15 @@ func TestResolvePrincipalSession_LegacyRowIsMovedToTheHash(t *testing.T) {
 			q := &sessionLookupQuery{stored: tc.stored}
 			rec := &upgradeRecorder{}
 			h := &AuthServiceHandler{Query: q, Mutation: rec}
-			if _, err := resolvePrincipalSession(context.Background(), h, "plain"); err != nil {
+			p, err := resolvePrincipalSession(context.Background(), h, "plain")
+			if err != nil {
 				t.Fatal(err)
 			}
 			if q.req.GetTokenHash() != sha256Hex("plain") || q.req.GetLegacyToken() != "plain" {
 				t.Errorf("lookup req = %v, want the hash and the token (legacy fallback)", q.req)
 			}
-			if len(rec.calls) != tc.want {
-				t.Fatalf("upgrades = %v, want %d", rec.calls, tc.want)
-			}
-			if tc.want == 1 && rec.calls[0].GetTokenHash() != sha256Hex("plain") {
-				t.Errorf("upgrade hash = %q, want sha256 of the token", rec.calls[0].GetTokenHash())
+			if noted := p.legacyToken == "plain"; noted != (tc.want == 1) || len(rec.calls) != 0 {
+				t.Fatalf("noted %q, written %v; want noted=%v and nothing written by the resolver", p.legacyToken, rec.calls, tc.want == 1)
 			}
 		})
 	}
