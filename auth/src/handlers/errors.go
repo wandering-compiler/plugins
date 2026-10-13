@@ -219,14 +219,11 @@ const (
 	// (domain ErrorDomain).
 	//
 	// CodeDeviceProofRequired: no proof of possession where one is needed —
-	// a mint request without one, a bound token without one (or presented as
-	// Bearer), or a token bound to no device at all (minted before device
-	// binding existed: its holder signs in once more).
+	// a mint request, or an authenticated request (no proof, or the token
+	// sent as Bearer). Decided before any token lookup. A token proved by
+	// another key, or bound to none (minted before device binding), gets the
+	// opaque refusal instead, like an unknown one: its thief learns nothing.
 	CodeDeviceProofRequired = "DEVICE_PROOF_REQUIRED"
-
-	// CodeDeviceMismatch: the proof was signed by another key than the one
-	// the token is bound to. Says nothing about the bound device.
-	CodeDeviceMismatch = "DEVICE_MISMATCH"
 
 	// CodeDeviceRevoked: the device was revoked, for good. The client
 	// discards its key, generates a new one and signs in again as a new
@@ -321,7 +318,6 @@ const (
 	// not (or no longer may) prove which device it runs on; the remedy is
 	// always the same — sign in again — and the app does the key handling.
 	MsgDeviceProofRequired = "This app did not prove which device it runs on. Reload or update it, then sign in again."
-	MsgDeviceMismatch      = "This session belongs to another device. Sign in again on this one."
 	MsgDeviceRevoked       = "This device was signed out for good. Sign in again to use it as a new device."
 
 	// An API token needs the public key of the program that will use it;

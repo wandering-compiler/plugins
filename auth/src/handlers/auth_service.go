@@ -311,6 +311,10 @@ type authPrincipal struct {
 	// the token lookup itself so the binding check costs no round trip.
 	deviceThumbprint string
 	deviceRevokedAt  *timestamppb.Timestamp
+
+	// mcpOnly is UserToken.mcp_only: a token of the MCP OAuth flow, accepted
+	// without a proof on the MCP surface and nowhere else.
+	mcpOnly bool
 }
 
 // recordTokenUse stamps the accepted token's last_used_at. Base no-op: the
@@ -365,9 +369,9 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{LegacyToken: token, TokenHash: hash})
 	if err != nil {
 		// With api_token off every token is a session.
-		return nil, expiredTokenRefusal(ctx, err, func() (*timestamppb.Timestamp, pb.TokenType, error) {
+		return nil, expiredTokenRefusal(err, func() (*timestamppb.Timestamp, pb.TokenType, string, error) {
 			exp, err := h.Query.GetExpiredToken(ctx, &pb.GetExpiredTokenReq{LegacyToken: token, TokenHash: hash})
-			return exp.GetExpiresAt(), pb.TokenType_TOKEN_TYPE_SESSION, err
+			return exp.GetExpiresAt(), pb.TokenType_TOKEN_TYPE_SESSION, exp.GetDeviceThumbprint(), err
 		})
 	}
 	h.upgradeLegacyToken(ctx, token, hash, resp.GetStoredTokenHash())
@@ -391,6 +395,7 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 		grants:           grants.GetGrants(),
 		deviceThumbprint: resp.GetDeviceThumbprint(),
 		deviceRevokedAt:  resp.GetDeviceRevokedAt(),
+		mcpOnly:          resp.GetMcpOnly(),
 	}, nil
 }
 
@@ -652,13 +657,14 @@ var signupClaimInvite = func(ctx context.Context, h *AuthServiceHandler, email, 
 }
 
 // signInMfaGate decides whether a second factor challenges this
-// sign-in. Default (no `two_factor`): never — returns (nil, false,
+// sign-in. thumbprint is the device key that signed it: a challenge records
+// it, and only that key may complete the sign-in (VerifyMfa). Default (no `two_factor`): never — returns (nil, false,
 // nil) so SignIn proceeds straight to token issuance.
 // handlers/mfa.go overrides via init(): on a challenge it creates the
 // MfaChallenge (emitting MfaChallengeRequested) and returns the
 // mfa_required SignInResp + challenged=true so SignIn returns it
 // WITHOUT issuing a token.
-var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.User, deviceID string, deviceTrusted bool) (resp *pb.SignInResp, challenged bool, err error) {
+var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted bool) (resp *pb.SignInResp, challenged bool, err error) {
 	return nil, false, nil
 }
 
@@ -756,19 +762,40 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	// Decided BEFORE the token is looked up, so it says nothing about the
+	// token: a request that proves no key is refused here, unless the gateway
+	// marked it as the MCP surface (whose clients cannot sign yet), where only
+	// an MCP-flow token passes — checked after the lookup, with every other
+	// outcome the opaque refusal.
+	jkt := req.GetHeaders()[dpopJKTKey]
+	proofed := viaDPoP && validThumbprint(jkt)
+	mcpSurface := req.GetHeaders()[surfaceKey] == surfaceMCP
+	if !proofed && !mcpSurface {
+		return nil, Unauthenticated(deviceProofRequired(ctx))
+	}
 
 	// Resolve identity + permission IDs. Default = single-realm
 	// session path; api_token swaps in the realm-aware + subset-
 	// narrowed resolver (see resolvePrincipal).
 	prin, err := resolvePrincipal(ctx, h, token)
 	if err != nil {
+		// An expired token says so only to the holder of its key; to anyone
+		// else, as an unknown one, it is the opaque refusal.
+		if proofed {
+			if expired := expiredFor(ctx, err, jkt); expired != nil {
+				return nil, Unauthenticated(expired)
+			}
+		}
 		return nil, Unauthenticated(err)
 	}
-	// The token is bound to a device; the request must prove it holds that
-	// device's key. After the lookup, so an unknown token stays the opaque
-	// refusal; before anything else, so nothing is decorated, narrowed or
+	// The binding, before anything else, so nothing is decorated, narrowed or
 	// recorded as used for a request that fails it.
-	if err := checkTokenBinding(ctx, prin, viaDPoP, req.GetHeaders()[dpopJKTKey]); err != nil {
+	if proofed {
+		err = checkTokenBinding(ctx, prin, jkt)
+	} else {
+		err = checkMCPToken(prin)
+	}
+	if err != nil {
 		return nil, Unauthenticated(err)
 	}
 	userID := prin.userID
@@ -824,8 +851,9 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 // configured scheme of "" takes the header as the bare token.
 func (h *AuthServiceHandler) presentedToken(raw string) (token string, viaDPoP bool, err error) {
 	switch {
-	case strings.HasPrefix(raw, dpopScheme+" "):
-		token, viaDPoP = strings.TrimPrefix(raw, dpopScheme+" "), true
+	// The scheme is case-insensitive (RFC 9110 §11.1).
+	case len(raw) > len(dpopScheme) && strings.EqualFold(raw[:len(dpopScheme)], dpopScheme) && raw[len(dpopScheme)] == ' ':
+		token, viaDPoP = raw[len(dpopScheme)+1:], true
 	case h.Scheme == "":
 		token = raw
 	case strings.HasPrefix(raw, h.Scheme+" "):
@@ -897,7 +925,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	}
 
 	// Register the device the token will be bound to, so the 2FA gate can
-	// make its new-device decision. A revoked device is refused here, after
+	// make its new-device decision (and bind the challenge to this key). A revoked device is refused here, after
 	// the password: only someone who knows it learns the device's state.
 	dev, err := mintDevice(ctx, h, user.GetId(), thumbprint)
 	if err != nil {
@@ -908,7 +936,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	// Second-factor gate (two_factor feature; no-op otherwise). When it
 	// raises a challenge it returns the mfa_required response and we
 	// stop here WITHOUT issuing a token — VerifyMfa completes the login.
-	if resp, challenged, gErr := signInMfaGate(ctx, h, user, deviceID, trusted); gErr != nil {
+	if resp, challenged, gErr := signInMfaGate(ctx, h, user, thumbprint, trusted); gErr != nil {
 		return nil, Unauthenticated(gErr)
 	} else if challenged {
 		return resp, nil

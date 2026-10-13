@@ -584,37 +584,50 @@ func TestEveryMintPath_RefusesWithoutAProofBeforeTouchingStorage(t *testing.T) {
 
 // ── Authenticate: the binding check ─────────────────────────
 
-// bindingQuery resolves one token to a principal bound to `thumb` (revoked
-// at `revoked`), through either resolver.
+// bindingQuery resolves one token (`known`) to a principal bound to `thumb`
+// (revoked at `revoked`; MCP-flow when `mcp`), through either resolver, and
+// answers one expired token (`expired`) bound to the same key. It counts the
+// lookups, so a refusal decided before any lookup can be told apart.
 type bindingQuery struct {
 	pb.AuthQueryClient
 	thumb   string
 	revoked *timestamppb.Timestamp
-	known   string // the only token that resolves
+	mcp     bool
+	known   string
+	expired string
+	lookups int
 }
 
 func (q *bindingQuery) GetUserByTokenWithPermissions(_ context.Context, in *pb.GetUserByTokenWithPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserByTokenWithPermissionsResp, error) {
+	q.lookups++
 	if in.GetTokenHash() != sha256Hex(q.known) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
 	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "tok-1", StoredTokenHash: in.GetTokenHash(),
-		DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked}, nil
+		DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked, McpOnly: q.mcp}, nil
 }
 
 func (q *bindingQuery) GetTokenWithType(_ context.Context, in *pb.GetTokenWithTypeReq, _ ...grpc.CallOption) (*pb.GetTokenWithTypeResp, error) {
+	q.lookups++
 	if in.GetTokenHash() != sha256Hex(q.known) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
 	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "tok-1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION, StoredTokenHash: in.GetTokenHash(),
-		User: &pb.User{Id: "u1"}, LastUsedAt: timestamppb.Now(), DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked}, nil
+		User: &pb.User{Id: "u1"}, LastUsedAt: timestamppb.Now(), DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked, McpOnly: q.mcp}, nil
 }
 
-func (q *bindingQuery) GetExpiredToken(context.Context, *pb.GetExpiredTokenReq, ...grpc.CallOption) (*pb.GetExpiredTokenResp, error) {
-	return nil, status.Error(codes.NotFound, "no rows")
+func (q *bindingQuery) GetExpiredToken(_ context.Context, in *pb.GetExpiredTokenReq, _ ...grpc.CallOption) (*pb.GetExpiredTokenResp, error) {
+	if q.expired == "" || in.GetTokenHash() != sha256Hex(q.expired) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	return &pb.GetExpiredTokenResp{ExpiresAt: timestamppb.New(expiredAt), DeviceThumbprint: q.thumb}, nil
 }
 
-func (q *bindingQuery) GetExpiredTokenWithType(context.Context, *pb.GetExpiredTokenWithTypeReq, ...grpc.CallOption) (*pb.GetExpiredTokenWithTypeResp, error) {
-	return nil, status.Error(codes.NotFound, "no rows")
+func (q *bindingQuery) GetExpiredTokenWithType(_ context.Context, in *pb.GetExpiredTokenWithTypeReq, _ ...grpc.CallOption) (*pb.GetExpiredTokenWithTypeResp, error) {
+	if q.expired == "" || in.GetTokenHash() != sha256Hex(q.expired) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	return &pb.GetExpiredTokenWithTypeResp{ExpiresAt: timestamppb.New(expiredAt), TokenType: pb.TokenType_TOKEN_TYPE_SESSION, DeviceThumbprint: q.thumb}, nil
 }
 
 func (q *bindingQuery) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
@@ -641,57 +654,122 @@ var resolvers = map[string]func(context.Context, *AuthServiceHandler, string) (*
 	"realm-aware": resolvePrincipalRealmAware,
 }
 
+// mcpAuthReq is a proofless request the MCP gateway marked as its surface.
+func mcpAuthReq(token string) *pb.AuthReq {
+	return &pb.AuthReq{Headers: map[string]string{"authorization": "Bearer " + token, surfaceKey: surfaceMCP}}
+}
+
+// wantOpaque asserts err is the plain "invalid credentials" refusal with no
+// detail — the answer an unknown token gets.
+func wantOpaque(t *testing.T, err error) {
+	t.Helper()
+	st, _ := status.FromError(err)
+	if err == nil || st.Code() != codes.Unauthenticated || st.Message() != authnErrorMessage || len(st.Details()) != 0 {
+		t.Fatalf("got %v with %d details, want the opaque refusal", err, len(st.Details()))
+	}
+}
+
 func TestAuthenticate_ABoundTokenWithItsKeyPassesAndNamesTheDevice(t *testing.T) {
 	for name, res := range resolvers {
-		resp, err := bindingAuthenticate(t, res, &bindingQuery{thumb: testJKT, known: "tok"}, boundAuthReq("tok", testJKT))
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if resp.GetDeviceId() != testJKT || resp.GetUserId() != "u1" {
-			t.Errorf("%s: AuthResp = %+v, want device_id = the bound thumbprint", name, resp)
+		for _, scheme := range []string{"DPoP", "dpop", "DPOP"} { // RFC 9110: case-insensitive
+			req := &pb.AuthReq{Headers: map[string]string{"authorization": scheme + " tok", dpopJKTKey: testJKT}}
+			resp, err := bindingAuthenticate(t, res, &bindingQuery{thumb: testJKT, known: "tok"}, req)
+			if err != nil {
+				t.Fatalf("%s, %s: %v", name, scheme, err)
+			}
+			if resp.GetDeviceId() != testJKT || resp.GetUserId() != "u1" {
+				t.Errorf("%s, %s: AuthResp = %+v, want device_id = the bound thumbprint", name, scheme, resp)
+			}
 		}
 	}
 }
 
-// Every refusal of the binding check, through both resolvers.
-func TestAuthenticate_RefusesWhatTheBindingDoesNotAllow(t *testing.T) {
-	revoked := timestamppb.Now()
-	for _, c := range []struct {
-		name  string
-		thumb string
-		rev   *timestamppb.Timestamp
-		req   *pb.AuthReq
-		code  string
-	}{
-		// device/proof-required: a bound token without a proof.
-		{"no proof", testJKT, nil, &pb.AuthReq{Headers: map[string]string{"authorization": "DPoP tok"}}, CodeDeviceProofRequired},
-		{"a malformed proof thumbprint", testJKT, nil, boundAuthReq("tok", "short"), CodeDeviceProofRequired},
-		// A bound token presented as Bearer is refused even next to a proof:
-		// a downgrade is never ambiguous.
-		{"presented as Bearer", testJKT, nil, &pb.AuthReq{Headers: map[string]string{"authorization": "Bearer tok", dpopJKTKey: testJKT}}, CodeDeviceProofRequired},
-		// The one-off introduction: a token minted before binding is refused.
-		{"a legacy unbound token", "", nil, boundAuthReq("tok", testJKT), CodeDeviceProofRequired},
-		{"a proof by another key", testJKT, nil, boundAuthReq("tok", otherJKT), CodeDeviceMismatch},
-		// device/revoked-refused-for-good: said only to the key's holder…
-		{"a revoked device, its own key", testJKT, revoked, boundAuthReq("tok", testJKT), CodeDeviceRevoked},
-		// …anyone else hears only that the key is not the bound one.
-		{"a revoked device, another key", testJKT, revoked, boundAuthReq("tok", otherJKT), CodeDeviceMismatch},
+// device/proof-required: a request that proves no key is refused before the
+// token is looked up, so the refusal says nothing about the token — the same
+// for a live, an unknown and a garbage one.
+func TestAuthenticate_NoProofIsRefusedBeforeTheLookup(t *testing.T) {
+	for _, req := range []*pb.AuthReq{
+		{Headers: map[string]string{"authorization": "DPoP tok"}},
+		boundAuthReq("tok", "short"),
+		// A token sent as Bearer is refused even next to a proof: a
+		// downgrade is never ambiguous.
+		{Headers: map[string]string{"authorization": "Bearer tok", dpopJKTKey: testJKT}},
+		// An MCP-flow token outside the MCP surface needs a proof like any.
+		{Headers: map[string]string{"authorization": "Bearer tok"}},
 	} {
 		for name, res := range resolvers {
-			_, err := bindingAuthenticate(t, res, &bindingQuery{thumb: c.thumb, revoked: c.rev, known: "tok"}, c.req)
-			t.Run(c.name+"/"+name, func(t *testing.T) { wantDeviceRefusal(t, err, c.code) })
+			q := &bindingQuery{thumb: testJKT, known: "tok", mcp: true}
+			_, err := bindingAuthenticate(t, res, q, req)
+			wantDeviceRefusal(t, err, CodeDeviceProofRequired)
+			if q.lookups != 0 {
+				t.Fatalf("%s: the token was looked up (%d) before the proof was required", name, q.lookups)
+			}
 		}
 	}
 }
 
-// An unknown token stays the opaque refusal: the binding check runs only on a
-// token that resolved, so none of its codes says whether a token exists.
-func TestAuthenticate_AnUnknownTokenStaysOpaqueWhateverTheProof(t *testing.T) {
+// device/proof-required: with a proof, every refusal the thief of a token
+// (who lacks its key) could meet is the SAME opaque answer an unknown token
+// gets — live, unbound, bound elsewhere, revoked, expired — so a stolen token
+// says nothing about itself, not even that it was revoked.
+func TestAuthenticate_AThiefLearnsNothingAboutTheToken(t *testing.T) {
+	revoked := timestamppb.Now()
+	for _, c := range []struct {
+		name string
+		q    *bindingQuery
+		tok  string
+	}{
+		{"unknown token", &bindingQuery{thumb: testJKT, known: "tok"}, "other"},
+		{"bound to another key", &bindingQuery{thumb: testJKT, known: "tok"}, "tok"},
+		{"a legacy unbound token", &bindingQuery{thumb: "", known: "tok"}, "tok"},
+		{"an MCP-flow token (unbound)", &bindingQuery{thumb: "", known: "tok", mcp: true}, "tok"},
+		{"revoked, another key", &bindingQuery{thumb: testJKT, known: "tok", revoked: revoked}, "tok"},
+		{"expired, another key", &bindingQuery{thumb: testJKT, expired: "tok"}, "tok"},
+		{"expired, unbound", &bindingQuery{thumb: "", expired: "tok"}, "tok"},
+	} {
+		for name, res := range resolvers {
+			jkt := otherJKT
+			if c.q.thumb == "" {
+				jkt = testJKT
+			}
+			_, err := bindingAuthenticate(t, res, c.q, boundAuthReq(c.tok, jkt))
+			t.Run(c.name+"/"+name, func(t *testing.T) { wantOpaque(t, err) })
+		}
+	}
+}
+
+// Only the holder of the bound key learns the token's state: DEVICE_REVOKED
+// (the client generates a new key), SESSION_EXPIRED (sign in again).
+func TestAuthenticate_OnlyTheKeysHolderLearnsRevokedOrExpired(t *testing.T) {
 	for name, res := range resolvers {
-		_, err := bindingAuthenticate(t, res, &bindingQuery{thumb: testJKT, known: "tok"}, boundAuthReq("other", otherJKT))
-		st, _ := status.FromError(err)
-		if st.Code() != codes.Unauthenticated || len(st.Details()) != 0 {
-			t.Errorf("%s: unknown token = %v with %d details, want the bare opaque refusal", name, err, len(st.Details()))
+		_, err := bindingAuthenticate(t, res, &bindingQuery{thumb: testJKT, known: "tok", revoked: timestamppb.Now()}, boundAuthReq("tok", testJKT))
+		t.Run("revoked/"+name, func(t *testing.T) { wantDeviceRefusal(t, err, CodeDeviceRevoked) })
+		_, err = bindingAuthenticate(t, res, &bindingQuery{thumb: testJKT, expired: "tok"}, boundAuthReq("tok", testJKT))
+		t.Run("expired/"+name, func(t *testing.T) { wantDeviceRefusal(t, err, CodeSessionExpired) })
+	}
+}
+
+// MCP keeps its OAuth flow without DPoP: on the surface the gateway marks as
+// MCP, an MCP-flow token passes without a proof (bound to no device); every
+// other token there is the opaque refusal.
+func TestAuthenticate_TheMCPSurfaceTakesOnlyMCPTokensWithoutAProof(t *testing.T) {
+	for name, res := range resolvers {
+		resp, err := bindingAuthenticate(t, res, &bindingQuery{known: "tok", mcp: true}, mcpAuthReq("tok"))
+		if err != nil || resp.GetUserId() != "u1" || resp.GetDeviceId() != "" {
+			t.Fatalf("%s: MCP token on the MCP surface = %+v, %v; want accepted, no device", name, resp, err)
+		}
+		for _, c := range []struct {
+			name string
+			q    *bindingQuery
+			tok  string
+		}{
+			{"a session token", &bindingQuery{thumb: testJKT, known: "tok"}, "tok"},
+			{"a legacy unbound token", &bindingQuery{known: "tok"}, "tok"},
+			{"an unknown token", &bindingQuery{known: "tok", mcp: true}, "other"},
+			{"an expired token", &bindingQuery{thumb: testJKT, expired: "tok"}, "tok"},
+		} {
+			_, err := bindingAuthenticate(t, res, c.q, mcpAuthReq(c.tok))
+			t.Run(c.name+"/"+name, func(t *testing.T) { wantOpaque(t, err) })
 		}
 	}
 }
@@ -761,6 +839,7 @@ func TestTokenStatements_CarryTheBinding(t *testing.T) {
 			`"LEFT JOIN @module.Device d ON d.id = t.device_id "`,
 			`COALESCE(d.thumbprint, '') AS device_thumbprint`,
 			`d.revoked_at AS device_revoked_at`,
+			`t.mcp_only AS mcp_only`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s lacks %s:\n%s", rpc, want, body)
@@ -797,10 +876,13 @@ func TestMarkDeviceRevoked_IsAnUpdateNeverADelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rpc := range []string{"DeleteDevice", "CreateDevice", "TouchDevice"} {
+	for _, rpc := range []string{"DeleteDevice", "CreateDevice", "TouchDevice", "DeleteAllUserDevices"} {
 		if strings.Contains(string(raw), "rpc "+rpc+"(") {
 			t.Errorf("%s is still declared", rpc)
 		}
+	}
+	if strings.Contains(string(raw), "DELETE FROM @module.Device") {
+		t.Error("a statement deletes Device rows: a revoked key could register again as a fresh device")
 	}
 }
 
@@ -872,5 +954,22 @@ func TestLegacyDevices_StayAsHistoryAndOutOfTheActiveList(t *testing.T) {
 	}
 	if body := mutationRPCBody(t, "RegisterDevice"); !strings.Contains(body, `"thumbprint = :thumbprint, "`) {
 		t.Errorf("RegisterDevice does not write the key:\n%s", body)
+	}
+}
+
+// SESSION_EXPIRED is said only to the bound key's holder, so the expired
+// probes read the binding; the MFA challenge carries the key SignIn proved.
+func TestExpiryAndChallengeStatements_CarryTheKey(t *testing.T) {
+	for _, rpc := range []string{"GetExpiredToken", "GetExpiredTokenWithType"} {
+		body := queryRPCBody(t, rpc)
+		if !strings.Contains(body, `COALESCE(d.thumbprint, '') AS device_thumbprint`) || !strings.Contains(body, `"LEFT JOIN @module.Device d ON d.id = t.device_id "`) {
+			t.Errorf("%s does not read the binding:\n%s", rpc, body)
+		}
+	}
+	if body := mutationRPCBody(t, "CreateMfaChallenge"); !strings.Contains(body, `"thumbprint = :thumbprint "`) {
+		t.Errorf("CreateMfaChallenge does not record the key:\n%s", body)
+	}
+	if body := queryRPCBody(t, "GetMfaChallenge"); !strings.Contains(body, `COALESCE(c.thumbprint, '') AS challenge.thumbprint`) {
+		t.Errorf("GetMfaChallenge does not read the key:\n%s", body)
 	}
 }

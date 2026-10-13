@@ -47,6 +47,9 @@ message GetUserByTokenResp {
 message GetExpiredTokenReq  { string legacy_token = 1; string token_hash = 2; }
 message GetExpiredTokenResp {
   google.protobuf.Timestamp expires_at = 1 [(w17.field) = { type: DATETIME }];
+  // The key the expired token is bound to ('' for none): SESSION_EXPIRED is
+  // said only to a request whose proof is by that key.
+  string device_thumbprint = 2;
 }
 
 message GetUserPermissionsReq {
@@ -146,6 +149,8 @@ message GetUserByTokenWithPermissionsResp {
   // the request's proof and refuses a revoked device.
   string device_thumbprint = 7;
   google.protobuf.Timestamp device_revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+  // UserToken.mcp_only: accepted without a proof on the MCP surface only.
+  bool mcp_only = 9;
 
   // The role grants are NOT here: they come from GetUserRoleGrants.
   //
@@ -378,6 +383,8 @@ message GetTokenWithTypeResp {
   // the request's proof and refuses a revoked device.
   string device_thumbprint = 9;
   google.protobuf.Timestamp device_revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  // UserToken.mcp_only: accepted without a proof on the MCP surface only.
+  bool mcp_only = 11;
 }
 
 // GetExpiredTokenWithType — the lookup Authenticate runs only after
@@ -395,6 +402,8 @@ message GetExpiredTokenWithTypeResp {
   option (w17.contrib.plugin_feature) = "api_token";
   google.protobuf.Timestamp expires_at = 1 [(w17.field) = { type: DATETIME }];
   TokenType                 token_type = 2;
+  // See GetExpiredTokenResp.
+  string device_thumbprint = 3;
 }
 
 message GetUserRolePermissionsByRealmReq {
@@ -1135,8 +1144,10 @@ service AuthQuery {
       ops: {
         name: "main"
         dql:
-          "SELECT t.expires_at AS expires_at "
+          "SELECT t.expires_at AS expires_at, "
+          "       COALESCE(d.thumbprint, '') AS device_thumbprint "
           "FROM @module.UserToken t "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND t.expires_at <= NOW()"
       }
     };
@@ -1188,7 +1199,8 @@ service AuthQuery {
           "       t.id AS token_id, "
           "       COALESCE(t.token_hash, '') AS stored_token_hash, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
-          "       d.revoked_at AS device_revoked_at "
+          "       d.revoked_at AS device_revoked_at, "
+          "       t.mcp_only AS mcp_only "
           "FROM @module.User u "
           "JOIN @module.UserToken t ON t.user_id = u.id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
@@ -1610,7 +1622,8 @@ service AuthQuery {
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           "       t.last_used_at AS last_used_at, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
-          "       d.revoked_at AS device_revoked_at "
+          "       d.revoked_at AS device_revoked_at, "
+          "       t.mcp_only AS mcp_only "
           "FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
@@ -1629,8 +1642,10 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT t.expires_at AS expires_at, "
-          "       t.token_type AS token_type "
+          "       t.token_type AS token_type, "
+          "       COALESCE(d.thumbprint, '') AS device_thumbprint "
           "FROM @module.UserToken t "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND t.expires_at <= NOW()"
       }
     };
@@ -1974,7 +1989,8 @@ service AuthQuery {
           "       c.code_hash AS challenge.code_hash, "
           "       c.consumed_at AS challenge.consumed_at, "
           "       c.created_at AS challenge.created_at, "
-          "       c.attempts AS challenge.attempts "
+          "       c.attempts AS challenge.attempts, "
+          "       COALESCE(c.thumbprint, '') AS challenge.thumbprint "
           "FROM @module.MfaChallenge c WHERE c.id = :challenge_id"
       }
     };

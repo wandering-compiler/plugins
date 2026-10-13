@@ -433,6 +433,9 @@ message CreateMfaChallengeReq {
   string                    email         = 4;
   string                    code          = 5;
   google.protobuf.Timestamp expires_at    = 6;
+  // The key that signed the sign-in raising the challenge; VerifyMfa must
+  // be signed by the same one.
+  string thumbprint = 7 [(w17.field) = { type: CHAR, max_len: 43 }];
 }
 message CreateMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -764,15 +767,6 @@ message DeleteAllUserTokensReq {
   string user_id = 1 [(w17.field) = { type: UUID }];
 }
 message DeleteAllUserTokensResp {
-  option (w17.contrib.plugin_feature) = "devices";
-  string user_id = 1;
-}
-
-message DeleteAllUserDevicesReq {
-  option (w17.contrib.plugin_feature) = "devices";
-  string user_id = 1 [(w17.field) = { type: UUID }];
-}
-message DeleteAllUserDevicesResp {
   option (w17.contrib.plugin_feature) = "devices";
   string user_id = 1;
 }
@@ -1912,7 +1906,8 @@ service AuthMutation {
         dql:
           "INSERT INTO @module.MfaChallenge SET "
           "user_id = :user_id, "
-          "code_hash = :code_hash "
+          "code_hash = :code_hash, "
+          "thumbprint = :thumbprint "
           "RETURNING id AS challenge.id, "
           "          user_id AS challenge.user_id, "
           "          code_hash AS challenge.code_hash, "
@@ -2155,11 +2150,12 @@ service AuthMutation {
   // DeleteDeviceTokens — DELETE every session token a device owns (the "log out
   // this device" primitive). Ownership-guarded by user_id so a caller can't
   // drop another user's sessions. Idempotent. DeleteUndevicedSessions — DELETE
-  // the user's session tokens that carry no device. Every session minted now
-  // is device-bound, but rows minted before device binding are not (they are
-  // refused by Authenticate, and swept here so "log out everywhere" leaves
-  // nothing standing). API tokens are spared — they are not sessions, and are
-  // removed only through RevokeApiToken.
+  // the user's session tokens that carry no device: rows minted before device
+  // binding, which Authenticate already refuses (unbound), so the sweep tidies
+  // rather than ends them. Tokens bound to a legacy (keyless) Device row are
+  // not matched here and are refused at authentication the same way. API
+  // tokens are spared — they are not sessions, and are removed only through
+  // RevokeApiToken.
   rpc DeleteUndevicedSessions(DeleteUndevicedSessionsReq) returns (DeleteUndevicedSessionsResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
@@ -2216,18 +2212,6 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:  "DELETE FROM @module.UserToken WHERE user_id = :user_id RETURNING user_id"
-      }
-    };
-  }
-
-  // DeleteAllUserDevices — DELETE every Device the user holds
-  // (revoke-all cleanup, after DeleteAllUserTokens). Idempotent.
-  rpc DeleteAllUserDevices(DeleteAllUserDevicesReq) returns (DeleteAllUserDevicesResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:  "DELETE FROM @module.Device WHERE user_id = :user_id RETURNING user_id"
       }
     };
   }

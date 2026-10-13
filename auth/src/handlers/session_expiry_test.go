@@ -30,7 +30,17 @@ type expiryLookupQuery struct {
 	liveErr   error                    // overrides the live lookup's NotFound
 	expErr    error                    // the miss-path lookup fails
 	expReqs   []*pb.GetExpiredTokenWithTypeReq
+	thumb     string // the key the expired token is bound to ("" = testJKT)
 	baseReqs  []*pb.GetExpiredTokenReq
+}
+
+// boundTo is the key the expired token is bound to: testJKT (the key
+// bareAuthenticate proves) unless the test names another.
+func (q *expiryLookupQuery) boundTo() string {
+	if q.thumb != "" {
+		return q.thumb
+	}
+	return testJKT
 }
 
 func (q *expiryLookupQuery) liveMiss() error {
@@ -59,7 +69,7 @@ func (q *expiryLookupQuery) GetExpiredTokenWithType(_ context.Context, in *pb.Ge
 	if q.expiredAt == nil {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	return &pb.GetExpiredTokenWithTypeResp{ExpiresAt: q.expiredAt, TokenType: q.kind}, nil
+	return &pb.GetExpiredTokenWithTypeResp{ExpiresAt: q.expiredAt, TokenType: q.kind, DeviceThumbprint: q.boundTo()}, nil
 }
 
 func (q *expiryLookupQuery) GetExpiredToken(_ context.Context, in *pb.GetExpiredTokenReq, _ ...grpc.CallOption) (*pb.GetExpiredTokenResp, error) {
@@ -70,7 +80,7 @@ func (q *expiryLookupQuery) GetExpiredToken(_ context.Context, in *pb.GetExpired
 	if q.expiredAt == nil {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	return &pb.GetExpiredTokenResp{ExpiresAt: q.expiredAt}, nil
+	return &pb.GetExpiredTokenResp{ExpiresAt: q.expiredAt, DeviceThumbprint: q.boundTo()}, nil
 }
 
 func (q *expiryLookupQuery) GetUserRolePermissionsByRealm(context.Context, *pb.GetUserRolePermissionsByRealmReq, ...grpc.CallOption) (*pb.GetUserRolePermissionsByRealmResp, error) {
@@ -321,7 +331,7 @@ func TestResolvePrincipalSession_ExpiredVsUnknown(t *testing.T) {
 	q := &expiryLookupQuery{expiredAt: timestamppb.New(expiredAt)}
 	m := &touchRecorder{}
 	_, err := resolvePrincipalSession(context.Background(), &AuthServiceHandler{Query: q, Mutation: m}, "s-tok")
-	_, ed, info := expiryDetails(t, Unauthenticated(err))
+	_, ed, info := expiryDetails(t, Unauthenticated(expiredFor(context.Background(), err, testJKT)))
 	if ed.GetCode() != CodeSessionExpired || info.GetMetadata()["expires_at"] != "2026-09-01T08:30:00Z" {
 		t.Errorf("expired session: details %v / %v", ed, info)
 	}

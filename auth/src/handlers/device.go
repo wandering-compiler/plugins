@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,7 +28,9 @@ import (
 //   - on every authenticated request as the header `x-w17-dpop-jkt` in
 //     AuthReq.headers. Authenticate compares it with the thumbprint the token
 //     is bound to (checkTokenBinding) and answers the binding as
-//     AuthResp.device_id.
+//     AuthResp.device_id. The MCP surface, whose clients cannot sign yet, is
+//     the one exception: marked `x-w17-surface: mcp` by its gateway, it may
+//     present an mcp_only token without a proof (checkMCPToken).
 //
 // Both keys are in the gateway-owned `x-w17-` namespace, which every surface
 // strips from what a client sends, so a client can name a device only by
@@ -44,6 +47,13 @@ const (
 	// verifies a proof only for this scheme, so a downgrade to Bearer can
 	// never be mistaken for a proofed request.
 	dpopScheme = "DPoP"
+
+	// surfaceKey / surfaceMCP mark a request the MCP gateway authenticates:
+	// gateway-owned (x-w17-*, stripped from client input), set only by the
+	// MCP surface, whose clients keep the OAuth 2.1 flow without DPoP. With
+	// it, a proofless request may present an mcp_only token.
+	surfaceKey = "x-w17-surface"
+	surfaceMCP = "mcp"
 
 	// thumbprintLen is the length of an RFC 7638 SHA-256 thumbprint in
 	// base64url without padding (32 bytes → 43 characters).
@@ -208,34 +218,50 @@ func issueSession(ctx context.Context, h *AuthServiceHandler, userID, deviceID s
 	return token, nil
 }
 
-// checkTokenBinding is Authenticate's device check, run once the token has
-// resolved (so an unknown token stays the opaque refusal and none of these
-// says whether a token exists). viaDPoP is whether the token came under the
-// DPoP scheme; jkt is the thumbprint of the key that signed the request's
-// proof, as the gateway passed it.
+// checkTokenBinding is Authenticate's device check for a request that proved
+// a key (jkt, the thumbprint the gateway verified), run once the token has
+// resolved. What each answer may say decides the order:
 //
-// The order is what each answer may reveal:
-//
-//  1. a token bound to no device — minted before device binding — is refused
-//     with DEVICE_PROOF_REQUIRED: its holder signs in once more, with a key;
-//  2. a bound token without a proof (no jkt, or presented as Bearer) is
-//     refused the same way;
-//  3. a proof by a key other than the bound one is DEVICE_MISMATCH, and says
-//     nothing about the device — the caller does not hold its key;
-//  4. only the holder of the bound key learns DEVICE_REVOKED, which tells
+//   - a token bound to no device (minted before device binding, or an MCP
+//     token) and a token bound to another key are the OPAQUE refusal — the
+//     same answer an unknown token gets, so whoever holds a stolen token but
+//     not its key learns nothing: not that it is live, not when it is
+//     revoked;
+//   - only the holder of the bound key learns DEVICE_REVOKED, which tells
 //     its client to generate a new key.
-func checkTokenBinding(ctx context.Context, p *authPrincipal, viaDPoP bool, jkt string) error {
-	if p.deviceThumbprint == "" || !viaDPoP || !validThumbprint(jkt) {
-		return deviceProofRequired(ctx)
-	}
-	if subtle.ConstantTimeCompare([]byte(jkt), []byte(p.deviceThumbprint)) != 1 {
-		return deviceMismatch(ctx)
+//
+// A request that proved no key never gets here: Authenticate refuses it with
+// DEVICE_PROOF_REQUIRED before looking the token up (or, on the MCP surface,
+// sends it to checkMCPToken).
+func checkTokenBinding(ctx context.Context, p *authPrincipal, jkt string) error {
+	if p.deviceThumbprint == "" || !sameKey(p.deviceThumbprint, jkt) {
+		return errDeviceBindingRefused
 	}
 	if p.deviceRevokedAt != nil {
 		return deviceRevoked(ctx)
 	}
 	return nil
 }
+
+// checkMCPToken is the check for a proofless request on the MCP surface: only
+// a token of the MCP OAuth flow passes (mcp_only), bound to no device. Any
+// other token is the opaque refusal, like an unknown one.
+func checkMCPToken(p *authPrincipal) error {
+	if !p.mcpOnly {
+		return errDeviceBindingRefused
+	}
+	return nil
+}
+
+// sameKey compares two thumbprints in constant time.
+func sameKey(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// errDeviceBindingRefused is the cause behind the opaque refusal of a token
+// the request's proof does not match (or a non-MCP token without a proof on
+// the MCP surface). Never on the wire: it reads as "invalid credentials".
+var errDeviceBindingRefused = errors.New("token not bound to the request's device key")
 
 // trustOutlivesRevocation reports whether trust stamped at trustedAt still
 // stands against the account's last wholesale revocation (revokedAt, written

@@ -48,24 +48,48 @@ func (h *AuthServiceHandler) upgradeLegacyToken(ctx context.Context, token, hash
 	_, _ = h.Mutation.UpgradeTokenHash(ctx, &pb.UpgradeTokenHashReq{LegacyToken: token, TokenHash: hash})
 }
 
-// expiredTokenRefusal turns a failed live lookup into SESSION_EXPIRED when the
+// expiredTokenRefusal turns a failed live lookup into an *expiredTokenError when the
 // token is a row that exists and has expired, and returns lookupErr unchanged
-// otherwise. Only a NotFound is looked into: an outage stays an outage, and a
+// otherwise. Authenticate says SESSION_EXPIRED for it only to a request whose
+// proof is by the key the token is bound to (expiredFor); to anyone else it is
+// the opaque refusal, so a stolen token's expiry says nothing to the thief. Only a NotFound is looked into: an outage stays an outage, and a
 // token that is unknown or was revoked stays the opaque refusal with no detail.
 // The miss-path lookup is the caller's (one per resolver, so each reads the
 // kind it can); a failure of it, or no expired row, is the opaque refusal too.
 //
 // Nothing here touches the row: an expired token is never moved to the hash
 // (upgradeLegacyToken) or stamped as used.
-func expiredTokenRefusal(ctx context.Context, lookupErr error, lookupExpired func() (*timestamppb.Timestamp, pb.TokenType, error)) error {
+func expiredTokenRefusal(lookupErr error, lookupExpired func() (*timestamppb.Timestamp, pb.TokenType, string, error)) error {
 	if status.Code(lookupErr) != codes.NotFound {
 		return lookupErr
 	}
-	expiresAt, kind, err := lookupExpired()
+	expiresAt, kind, thumbprint, err := lookupExpired()
 	if err != nil || expiresAt == nil {
 		return lookupErr
 	}
-	return sessionExpired(ctx, expiresAt.AsTime(), kind)
+	return &expiredTokenError{expiresAt: expiresAt.AsTime(), kind: kind, thumbprint: thumbprint}
+}
+
+// expiredTokenError is a presented token that exists and has expired: its expiry,
+// its kind and the key it is bound to. It carries no wire status of its own,
+// so whatever wraps it without deciding (Unauthenticated) answers the opaque
+// refusal; expiredFor is the one place that may turn it into SESSION_EXPIRED.
+type expiredTokenError struct {
+	expiresAt  time.Time
+	kind       pb.TokenType
+	thumbprint string
+}
+
+func (e *expiredTokenError) Error() string { return "token expired" }
+
+// expiredFor is SESSION_EXPIRED for err when it is an expired token bound to
+// the key jkt (the request's proof), and nil otherwise.
+func expiredFor(ctx context.Context, err error, jkt string) error {
+	var exp *expiredTokenError
+	if !errors.As(err, &exp) || exp.thumbprint == "" || !sameKey(exp.thumbprint, jkt) {
+		return nil
+	}
+	return sessionExpired(ctx, exp.expiresAt, exp.kind)
 }
 
 // sessionExpired is the SESSION_EXPIRED refusal: Unauthenticated, with the
@@ -84,19 +108,12 @@ func sessionExpired(ctx context.Context, expiresAt time.Time, kind pb.TokenType)
 }
 
 // deviceProofRequired is the DEVICE_PROOF_REQUIRED refusal: a mint request
-// without a proof of possession, a bound token presented without one (no
-// proof, or as Bearer), or a token bound to no device (minted before device
-// binding — its holder signs in once more).
+// without a proof of possession, or an authenticated request without one (no
+// proof, or the token sent as Bearer) — decided before the token is looked
+// up, so it says nothing about the token.
 func deviceProofRequired(ctx context.Context) error {
 	return unauthenticatedWithInfo(ctx, CodeDeviceProofRequired,
 		"a DPoP proof of the device key is required", MsgDeviceProofRequired, nil, nil)
-}
-
-// deviceMismatch is the DEVICE_MISMATCH refusal: the request's proof was
-// signed by a key other than the one the token is bound to.
-func deviceMismatch(ctx context.Context) error {
-	return unauthenticatedWithInfo(ctx, CodeDeviceMismatch,
-		"the token is bound to another device key", MsgDeviceMismatch, nil, nil)
 }
 
 // deviceRevoked is the DEVICE_REVOKED refusal: the (user, device) pair was

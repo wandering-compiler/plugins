@@ -120,9 +120,9 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 // DeleteAllUserTokens. DeleteAllUserTokens has no token_type filter (that
 // column is api_token-gated), so it would ALSO delete the user's
 // API tokens — credentials that aren't device-bound (device_id NULL) and must
-// only be removed via RevokeApiToken. "Every interactive session is device-bound"
-// was the premise here, and it is false — see revokeUndevicedSessions, which
-// now sweeps the rest while still sparing API tokens. Mirrors
+// only be removed via RevokeApiToken. Sessions minted before device binding
+// hold no device and are deleted by revokeUndevicedSessions (they no longer
+// authenticate either way), still sparing API tokens. Mirrors
 // RevokeOtherDevices, but includes the caller's current device.
 func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.RevokeAllDevicesReq) (*pb.RevokeAllDevicesResp, error) {
 	userID, err := callerUserID(ctx)
@@ -148,11 +148,13 @@ func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.Revok
 // the empty string would not bind).
 const noTokenKept = "00000000-0000-0000-0000-000000000000"
 
-// revokeUndevicedSessions ends the user's sessions that no device holds, all
-// but keep (the caller's own, or none). Every session minted now is bound to
-// a device, but rows minted before device binding are not: Authenticate
-// refuses them already, and this sweeps them so "log out everywhere" leaves
-// nothing standing.
+// revokeUndevicedSessions deletes the user's sessions that hold no device, all
+// but keep (the caller's own, or none): rows minted before device binding.
+// They no longer authenticate (Authenticate refuses an unbound token), so this
+// is tidying, not what ends them. Sessions bound to a LEGACY device (a
+// pre-binding Device row, no key) carry a device_id and are not swept here;
+// they are refused at authentication all the same, as bound to no key.
+// Recording either as revoked_at instead of deleting is the next step.
 func revokeUndevicedSessions(ctx context.Context, h *AuthServiceHandler, userID, keep string) error {
 	if keep == "" {
 		keep = noTokenKept

@@ -91,9 +91,9 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 	if err != nil {
 		// Expired API tokens answer SESSION_EXPIRED too: the holder knows the
 		// token, and its expiry is all the refusal adds.
-		return nil, expiredTokenRefusal(ctx, err, func() (*timestamppb.Timestamp, pb.TokenType, error) {
+		return nil, expiredTokenRefusal(err, func() (*timestamppb.Timestamp, pb.TokenType, string, error) {
 			exp, err := h.Query.GetExpiredTokenWithType(ctx, &pb.GetExpiredTokenWithTypeReq{LegacyToken: token, TokenHash: hash})
-			return exp.GetExpiresAt(), exp.GetTokenType(), err
+			return exp.GetExpiresAt(), exp.GetTokenType(), exp.GetDeviceThumbprint(), err
 		})
 	}
 	h.upgradeLegacyToken(ctx, token, hash, tok.GetStoredTokenHash())
@@ -121,6 +121,7 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 
 		deviceThumbprint: tok.GetDeviceThumbprint(),
 		deviceRevokedAt:  tok.GetDeviceRevokedAt(),
+		mcpOnly:          tok.GetMcpOnly(),
 	}
 
 	if tok.GetTokenType() == pb.TokenType_TOKEN_TYPE_API {

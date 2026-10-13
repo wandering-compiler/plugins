@@ -323,6 +323,16 @@ message UserToken {
     (w17.db.column) = { index: true }
   ];
 
+  // mcp_only — a token issued by the MCP OAuth 2.1 flow, for MCP clients,
+  // which cannot sign DPoP proofs yet. It is accepted WITHOUT a proof, and
+  // only on the MCP surface: Authenticate takes a proofless request only
+  // when the gateway marks it `x-w17-surface: mcp` (a gateway-owned key no
+  // client can set), and only for a token with this flag. Refused on every
+  // other surface, with or without a proof (it is bound to no device). The
+  // authorization server that mints it sets it; nothing else does — every
+  // other mint leaves the FALSE default. Base tier.
+  bool mcp_only = 11 [(w17.field) = { default_auto: FALSE }];
+
   // token_hash — sha256 (hex) of the bearer token, the only form a token is
   // stored in. The handler that mints a token generates it, stores this
   // hash and hands the token to the caller once; a lookup hashes the
@@ -560,6 +570,12 @@ message MfaChallenge {
   // lockout threshold, so a 6-digit second factor can't be brute-forced
   // within the TTL.
   int64 attempts     = 6 [(w17.field) = { type: COUNTER, default_int: 0 }];
+  // thumbprint — the device key that passed the password (SignIn's proof).
+  // VerifyMfa must be signed by the same key: the second factor completes
+  // the sign-in of THAT device, so the session it issues and the trust it
+  // grants land on the key that was challenged. NULL only on a challenge
+  // raised before device binding (refused, like any other key).
+  string thumbprint  = 7 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
 }
 
 // PendingSignUp — a registration that has not yet proved its address

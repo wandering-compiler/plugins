@@ -844,7 +844,6 @@ msgids:
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
   - "This request names two different organizations. Name one."
-  - "This session belongs to another device. Sign in again on this one."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."

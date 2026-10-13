@@ -54,13 +54,16 @@ const (
 	defaultMfaChallengeWindowSeconds = 900
 )
 
-// scopeNewDevices is the two_factor_scope value that challenges only
-// untrusted devices (requires the `devices` feature — codegen rejects the
-// combo without it, so at runtime an absent devices feature can't reach
-// this branch meaningfully).
+// scopeNewDevices is the two_factor_scope value that challenges only an
+// untrusted (account, device) pair. Device identity is base tier, so it works
+// in every activation.
 const scopeNewDevices = "new_devices"
 
 var errMfaChallengeInvalid = errors.New("mfa challenge invalid/expired/consumed")
+
+// errMfaChallengeOtherDevice: VerifyMfa signed by another key than the
+// SignIn that raised the challenge. Opaque on the wire, like every refusal.
+var errMfaChallengeOtherDevice = errors.New("mfa challenge raised for another device key")
 
 // errMfaChallengeBudget refuses a new challenge once the issuance cap is
 // spent. It is a wireError — a DELIBERATE, non-opaque answer — because it is
@@ -287,7 +290,7 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 // challenge fires (scope), creates the MfaChallenge (which emits
 // MfaChallengeRequested), and returns the mfa_required response so SignIn
 // stops short of issuing a token.
-func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, deviceID string, deviceTrusted bool) (*pb.SignInResp, bool, error) {
+func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted bool) (*pb.SignInResp, bool, error) {
 	// new_devices: only challenge an untrusted device. all_logins (default):
 	// every sign-in challenges.
 	if h.TwoFactorScope == scopeNewDevices && deviceTrusted {
@@ -326,6 +329,7 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, de
 		Email:        user.GetEmail(),
 		Code:         code,
 		ExpiresAt:    expiresAt,
+		Thumbprint:   thumbprint,
 	})
 	if err != nil {
 		return nil, false, err
@@ -549,9 +553,10 @@ func (h *AuthServiceHandler) GetMfaStatus(ctx context.Context, req *pb.GetMfaSta
 
 // VerifyMfa completes a two-step sign-in: load the pending challenge,
 // dual-path verify (confirmed TOTP → check the secret; else → check the
-// event-flow code hash), consume it single-use, then issue the session
-// (re-resolving + trusting the device under `devices`). Every failure is
-// the same opaque Unauthenticated (anti-enumeration).
+// event-flow code hash), consume it single-use, then issue the session bound
+// to — and trusting — the device. The request must be signed by the key the
+// challenged SignIn was signed with. Every failure is the same opaque
+// Unauthenticated (anti-enumeration).
 func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq) (*pb.VerifyMfaResp, error) {
 	// The device key first, before an attempt is claimed: a client that
 	// cannot sign must not spend the challenge's budget on a session it could
@@ -606,6 +611,13 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	if att.GetAttempts() > maxMfaAttempts {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
+	// Only the key that passed the password completes its sign-in. Checked
+	// after the attempt is claimed, so a probe with another key spends the
+	// challenge's budget like a wrong code; the challenge is not consumed
+	// (consuming it records the factor as verified).
+	if !sameKey(ch.GetThumbprint(), thumbprint) {
+		return nil, Unauthenticated(errMfaChallengeOtherDevice)
+	}
 	userID := ch.GetUserId()
 
 	if !h.verifyMfaCode(ctx, userID, ch.GetCodeHash(), req.GetCode()) {
@@ -625,9 +637,9 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, err
 	}
-	// The device is the key that signed THIS request: the one the session is
-	// bound to and the one passing the second factor trusts. A revoked one is
-	// refused even with the right code.
+	// The device is the key that signed THIS request — the challenged one: the
+	// session is bound to it and passing the second factor trusts it. A
+	// revoked one is refused even with the right code.
 	dev, err := mintDevice(ctx, h, userID, thumbprint)
 	if err != nil {
 		return nil, Unauthenticated(err)
