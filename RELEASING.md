@@ -34,9 +34,11 @@ nothing else.
    branch and pushes nothing; delete the branch afterwards.
 2. **The release workflow cuts it** (`.github/workflows/release.yml`). When CI
    passes on the merge commit, it runs `tools/release.sh` for every plugin
-   whose `plugin.yaml` or `CHANGELOG.md` that commit changed and whose
-   changelog now opens with the manifest's version (what a release pull
-   request leaves): it signs the plugin and tags the commit. Nothing else is
+   whose `CHANGELOG.md` that commit changed, whose changelog now opens with
+   the manifest's version and whose `changes/` holds no fragment (what a
+   release pull request leaves): it signs the plugin and tags the commit.
+   An ordinary pull request that edits a manifest is not a release, even
+   while the manifest names a version that is not tagged yet. Nothing else is
    needed. A version whose tag already exists is
    skipped, and every plugin is tried before the run fails, so a re-run
    releases only what is still missing. To retry a failed run, or release from

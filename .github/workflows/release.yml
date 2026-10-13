@@ -66,21 +66,31 @@ jobs:
             list="$INPUT_PLUGIN"
           else
             # The plugins a release pull request merged: this commit changed
-            # their plugin.yaml or CHANGELOG.md, and the changelog now opens
-            # with the manifest's version. A merge commit is compared with the
-            # main it merged into (its first parent), so the whole pull request
-            # counts. Not "the version changed": a release pull request for a
-            # version that landed earlier (a new plugin's first release) leaves
-            # it as it is, and a new plugin's own pull request changes it
-            # without releasing anything. A version already tagged is skipped
-            # below, so touching a released plugin's manifest releases nothing.
+            # their CHANGELOG.md, the changelog now opens with the manifest's
+            # version, and no fragment is waiting in <plugin>/changes/. A merge
+            # commit is compared with the main it merged into (its first
+            # parent), so the whole pull request counts.
+            #
+            # CHANGELOG.md, not plugin.yaml: an ordinary pull request edits a
+            # manifest (a feature's description) while the manifest already
+            # names an unreleased version, and that is not a release. Only
+            # `make release-pr` writes the changelog's new section. Not "the
+            # version changed" either: a release pull request for a version
+            # that landed earlier (a new plugin's first release) leaves it as
+            # it is. A plugin with fragments still waiting is skipped, not
+            # failed: its changelog was edited by hand (a correction under
+            # the no-changelog label), not released. A version already tagged
+            # is skipped below, so touching a released plugin releases nothing.
             list=""
-            for d in $(git diff --name-only HEAD^1 HEAD -- '*/plugin.yaml' '*/CHANGELOG.md' | cut -d/ -f1 | sort -u); do
+            for d in $(git diff --name-only HEAD^1 HEAD -- '*/CHANGELOG.md' | cut -d/ -f1 | sort -u); do
               [ -f "$d/plugin.yaml" ] || continue
               v="$(sed -n 's/^version:[[:space:]]*//p' "$d/plugin.yaml" | head -1 | tr -d "\"' ")"
-              if [ "$(grep -m1 '^## ' "$d/CHANGELOG.md" 2>/dev/null)" = "## $v" ]; then
-                list="$list $d"
+              [ "$(grep -m1 '^## ' "$d/CHANGELOG.md" 2>/dev/null)" = "## $v" ] || continue
+              if [ -n "$(find "$d/changes" -name '*.md' 2>/dev/null | head -1)" ]; then
+                echo "skipped $d: fragments are waiting in $d/changes/, so this was not a release pull request"
+                continue
               fi
+              list="$list $d"
             done
           fi
           echo "list=${list# }" >> "$GITHUB_OUTPUT"
