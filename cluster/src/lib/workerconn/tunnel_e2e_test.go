@@ -532,6 +532,75 @@ func TestServeTunnel_ADroppedTunnelIsRedialledWhileARetiredOneFinishes(t *testin
 	waitFor(t, "the retired tunnel to close with its call", func() bool { return r.backends.Retiring() == 0 })
 }
 
+// A tunnel retired in an EARLIER ServeTunnel call still belongs to the
+// worker: when ctx ends, the latest call returns only after the call running
+// on that tunnel has completed, so the worker's loop cannot exit (and the
+// process with it) under that call.
+func TestServeTunnel_CancellationWaitsForAnEarlierCallsRetiredTunnel(t *testing.T) {
+	work := &fakeWork{hold: make(chan struct{})}
+	var fw *forwarder
+	done := make(chan error, 1)
+	r := standUpWith(t, rigOptions{
+		retry: 20 * time.Millisecond, grace: time.Minute, work: work, tunnelDone: done,
+		via: func(addr string) string { fw = newForwarder(t, addr); return fw.addr() },
+	})
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, client := proxyClient(t, r, grant.Ticket)
+	running := make(chan error, 1)
+	go func() {
+		_, err := client.CheckWorkers(ctx, &pb.CheckWorkersReq{})
+		running <- err
+	}()
+	waitFor(t, "the call to start", func() bool { return r.pool.Stats().InUse == 1 })
+	reissue(t, r.ca, r.workerDir, time.Hour)
+	waitFor(t, "the relay to retire the first tunnel", func() bool { return r.backends.Retiring() == 1 })
+	fw.cut(1)
+	select {
+	case <-done: // the first call returned; its retired tunnel still runs the call
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first ServeTunnel did not return when its current tunnel dropped")
+	}
+
+	waitFor(t, "the dropped tunnel to leave", func() bool { return r.backends.Count() == 0 })
+	second := make(chan error, 1)
+	go func() {
+		second <- ServeTunnel(r.workerCtx, Config{
+			TunnelAddress: fw.addr(), RelayFingerprint: r.relayFP, IdentityDir: r.workerDir,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) })
+	}()
+	waitFor(t, "the second call's tunnel", func() bool { return r.backends.Count() == 1 })
+
+	r.stopWorker()
+	select {
+	case err := <-second:
+		t.Fatalf("the second ServeTunnel returned (%v) while the first call's retired tunnel still ran a call", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(work.hold)
+	select {
+	case err := <-second:
+		if err != context.Canceled {
+			t.Errorf("the second ServeTunnel returned %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second ServeTunnel never returned after the retired call completed")
+	}
+	// The worker's server finished the call before its reply crosses the
+	// relay back to the caller, so the caller's answer is awaited, not
+	// assumed. It must be the answer, not a cut.
+	select {
+	case err := <-running:
+		if err != nil {
+			t.Errorf("the call on the retired tunnel failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call on the retired tunnel never returned")
+	}
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {

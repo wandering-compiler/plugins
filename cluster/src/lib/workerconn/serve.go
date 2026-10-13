@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -26,11 +27,12 @@ import (
 // are extra server options (interceptors, say), applied after the cluster's.
 // `register` is called once per tunnel.
 //
-// It returns when ctx ends (stopping every tunnel it serves gracefully), or
-// as soon as the CURRENT connection drops; a worker loops on it with a
-// backoff, dialling a fresh tunnel each time. A tunnel a renewal retired is
-// not waited for: it keeps serving its running calls until the relay closes
-// it, or until ctx ends.
+// It returns when ctx ends, after stopping gracefully its own tunnel and
+// every tunnel a renewal retired for this worker (IdentityDir), in this call
+// or an earlier one; or as soon as the CURRENT connection drops: a worker
+// loops on it with a backoff, dialling a fresh tunnel each time. A retired
+// tunnel is not waited for then: it keeps serving its running calls until
+// the relay closes it, or until ctx ends.
 //
 // A tunnel carries the certificate it was opened with, and the relay retires
 // it when that certificate expires. So when the certificate on disk is
@@ -59,13 +61,13 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 	if err != nil {
 		return err
 	}
-	// A retired tunnel is tied to ctx, the worker's lifetime, and not to this
+	// A retired tunnel belongs to the worker (its IdentityDir), not to this
 	// call: when the current tunnel drops, this returns at once so the caller
 	// redials, while the retired one goes on finishing its calls until the
-	// relay closes it. ctx ending stops it gracefully.
-	var retired []*servedTunnel
+	// relay closes it. Whichever call sees ctx end stops and waits for every
+	// retired tunnel of the worker, an earlier call's included.
 	retire := func(t *servedTunnel) {
-		retired = append(retired, t)
+		retiredTunnels.add(cfg.IdentityDir, t)
 		go func() {
 			select {
 			case <-ctx.Done():
@@ -75,6 +77,8 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 				t.srv.GracefulStop()
 			case <-t.ended:
 			}
+			<-t.ended
+			retiredTunnels.remove(cfg.IdentityDir, t)
 		}()
 	}
 	tick := time.NewTicker(cfg.retry())
@@ -83,20 +87,14 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 		select {
 		case <-ctx.Done():
 			cur.srv.GracefulStop()
-			for _, t := range retired {
-				<-t.ended // stopped gracefully by its own watcher
+			for _, t := range retiredTunnels.of(cfg.IdentityDir) {
+				t.srv.GracefulStop() // idempotent; its own ctx may differ
+				<-t.ended
 			}
 			return ctx.Err()
 		case <-cur.ended:
 			return cur.err
 		case <-tick.C:
-			live := retired[:0]
-			for _, t := range retired {
-				if !t.finished() {
-					live = append(live, t)
-				}
-			}
-			retired = live
 			leaf, err := certificateUsable(cfg)
 			if err != nil || bytes.Equal(leaf.Raw, cur.certRaw) {
 				continue
@@ -111,6 +109,44 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 	}
 }
 
+// retiredTunnels holds every worker's retired tunnels, by IdentityDir, across
+// ServeTunnel calls: the call that retired one may have returned (its current
+// tunnel dropped) before the worker's ctx ends.
+var retiredTunnels = &tunnelSet{byWorker: map[string]map[*servedTunnel]struct{}{}}
+
+type tunnelSet struct {
+	mu       sync.Mutex
+	byWorker map[string]map[*servedTunnel]struct{}
+}
+
+func (s *tunnelSet) add(worker string, t *servedTunnel) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.byWorker[worker] == nil {
+		s.byWorker[worker] = map[*servedTunnel]struct{}{}
+	}
+	s.byWorker[worker][t] = struct{}{}
+}
+
+func (s *tunnelSet) remove(worker string, t *servedTunnel) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.byWorker[worker], t)
+	if len(s.byWorker[worker]) == 0 {
+		delete(s.byWorker, worker)
+	}
+}
+
+func (s *tunnelSet) of(worker string) []*servedTunnel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*servedTunnel, 0, len(s.byWorker[worker]))
+	for t := range s.byWorker[worker] {
+		out = append(out, t)
+	}
+	return out
+}
+
 // servedTunnel is one tunnel and the server answering on it.
 type servedTunnel struct {
 	srv *grpc.Server
@@ -121,15 +157,6 @@ type servedTunnel struct {
 	// readable after that.
 	ended chan struct{}
 	err   error
-}
-
-func (t *servedTunnel) finished() bool {
-	select {
-	case <-t.ended:
-		return true
-	default:
-		return false
-	}
 }
 
 func openTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), opts []grpc.ServerOption) (*servedTunnel, error) {

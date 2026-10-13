@@ -352,22 +352,29 @@ func (b *Backends) watch(fingerprint string, conn *grpc.ClientConn, gen uint64) 
 	// Only if it is still THE SAME connection: a worker that reconnected has
 	// already replaced this entry, and dropping the new tunnel because the old
 	// one finally noticed it was dead would disconnect a healthy worker.
-	if cur, ok := b.conns[fingerprint]; ok && cur.gen == gen {
-		b.removeLocked(fingerprint)
-	} else if old := b.retiredLocked(fingerprint, conn, 0); old != nil {
-		// A retired tunnel that died: the work on it is lost either way.
-		b.dropRetiredLocked(fingerprint, old)
-	} else {
+	// Only if it is still the worker's CURRENT tunnel. A retired one is
+	// already out of the selectable set and closes with its last call.
+	cur, ok := b.conns[fingerprint]
+	if !ok || cur.gen != gen {
 		b.mu.Unlock()
 		return
 	}
+	// RETIRED, not closed under its calls. Leaving Ready is also what a
+	// worker stopping gracefully looks like (GOAWAY): the calls still
+	// running on it go on, and closing the connection here would cancel
+	// them. On a socket that really died they fail on their own, and the
+	// last one to end closes it (release).
+	b.detachLocked(fingerprint)
+	closing := b.retireLocked(fingerprint, cur)
 	// Republished HERE too. This is the path a dead tunnel actually takes —
 	// Remove is the deliberate one — and without it the pool kept the departed
 	// worker's slots and went on granting tickets that failed at the proxy
 	// until some unrelated attach happened to refresh the total.
 	publish := b.publishLocked()
 	b.mu.Unlock()
-	_ = conn.Close() // outside b.mu — see Add
+	if closing != nil {
+		_ = closing.Close() // outside b.mu — see Add
+	}
 	publish()
 }
 
