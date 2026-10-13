@@ -6413,7 +6413,7 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"org_invite\"n\n" +
 	"\x1eListPendingInvitesForEmailResp\x12<\n" +
 	"\ainvites\x18\x01 \x03(\v2\".w17.contrib.auth.PendingInviteRowR\ainvites:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\x8a\xac\x01\n" +
+	"org_invite2\xe1\xab\x01\n" +
 	"\tAuthQuery\x12\xec\x03\n" +
 	"\x0eGetUserByEmail\x12#.w17.contrib.auth.GetUserByEmailReq\x1a$.w17.contrib.auth.GetUserByEmailResp\"\x8e\x03\xf2\xf3\x18\x89\x03B\x86\x03\n" +
 	"\x04main\x12\xfd\x02SELECT u.id AS user.id,        u.email AS user.email,        u.password_hash AS user.password_hash,        u.created_at AS user.created_at,        ?feature(service_account) u.kind AS user.kind,        ?feature(user_admin) u.disabled_at AS user.disabled_at,        ?feature(email_verification) u.email_verified_at AS user.email_verified_at FROM @module.User u WHERE u.email = :email\x12\x99\x04\n" +
@@ -6479,9 +6479,9 @@ const file_queries_auth_query_proto_rawDesc = "" +
 	"\x0fListAuthClients\x12$.w17.contrib.auth.ListAuthClientsReq\x1a%.w17.contrib.auth.ListAuthClientsResp\"\x8d\x02\xf2\xf3\x18\xfb\x01B\xf8\x01\n" +
 	"\x04main\x12\xef\x01SELECT c.id AS id,        c.client_id AS client_id,        c.name AS name,        c.redirect_uri AS redirect_uri,        c.enabled AS enabled,        c.created_at AS created_at FROM @module.AuthClient c ORDER BY c.client_id, c.redirect_uri\x8a\xf5\x18\tcli_login\x12\xab\x02\n" +
 	"\x13GetAuthClientSecret\x12(.w17.contrib.auth.GetAuthClientSecretReq\x1a).w17.contrib.auth.GetAuthClientSecretResp\"\xbe\x01\xf2\xf3\x18\xac\x01B\xa9\x01\n" +
-	"\x04main\x12\xa0\x01SELECT c.client_secret AS client_secret,        c.enabled AS enabled FROM @module.AuthClient c WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri\x8a\xf5\x18\tcli_login\x12\xed\x02\n" +
-	"\x14GetLiveSessionExpiry\x12).w17.contrib.auth.GetLiveSessionExpiryReq\x1a*.w17.contrib.auth.GetLiveSessionExpiryResp\"\xfd\x01\xf2\xf3\x18\xeb\x01B\xe8\x01\n" +
-	"\x04main\x12\xdf\x01SELECT t.id AS token_id,        t.expires_at AS expires_at FROM @module.UserToken t WHERE t.id = :token_id AND t.user_id = :user_id AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND ?feature(api_token) t.token_type = 1\x8a\xf5\x18\tcli_login\x12\xf2\x05\n" +
+	"\x04main\x12\xa0\x01SELECT c.client_secret AS client_secret,        c.enabled AS enabled FROM @module.AuthClient c WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri\x8a\xf5\x18\tcli_login\x12\xc4\x02\n" +
+	"\x14GetLiveSessionExpiry\x12).w17.contrib.auth.GetLiveSessionExpiryReq\x1a*.w17.contrib.auth.GetLiveSessionExpiryResp\"\xd4\x01\xf2\xf3\x18\xc2\x01B\xbf\x01\n" +
+	"\x04main\x12\xb6\x01SELECT t.id AS token_id,        t.expires_at AS expires_at FROM @module.UserToken t WHERE t.id = :token_id AND t.user_id = :user_id AND (t.expires_at IS NULL OR t.expires_at > NOW())\x8a\xf5\x18\tcli_login\x12\xf2\x05\n" +
 	"\x11GetProviderByName\x12&.w17.contrib.auth.GetProviderByNameReq\x1a'.w17.contrib.auth.GetProviderByNameResp\"\x8b\x05\xf2\xf3\x18\xfd\x04B\xfa\x04\n" +
 	"\x04main\x12\xf1\x04SELECT p.id AS provider.id,        p.name AS provider.name,        p.display_name AS provider.display_name,        p.client_id AS provider.client_id,        p.client_secret AS provider.client_secret,        p.secret AS secret,        p.authorize_url AS provider.authorize_url,        p.token_url AS provider.token_url,        p.userinfo_url AS provider.userinfo_url,        p.scopes AS provider.scopes,        p.subject_path AS provider.subject_path,        p.email_path AS provider.email_path,        p.enabled AS provider.enabled,        p.created_at AS provider.created_at FROM @module.OAuthProvider p WHERE p.name = :name\x8a\xf5\x18\x05oauth\x12\xc9\x03\n" +
 	"\x10GetOAuthIdentity\x12%.w17.contrib.auth.GetOAuthIdentityReq\x1a&.w17.contrib.auth.GetOAuthIdentityResp\"\xe5\x02\xf2\xf3\x18\xd7\x02B\xd4\x02\n" +

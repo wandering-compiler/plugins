@@ -357,8 +357,14 @@ type AuthQueryClient interface {
 	GetAuthClientSecret(ctx context.Context, in *GetAuthClientSecretReq, opts ...grpc.CallOption) (*GetAuthClientSecretResp, error)
 	// GetLiveSessionExpiry — the approving session's expires_at, for CliAuthorize
 	// to bind into the code. Scoped by the token id AND the owner, so a caller
-	// can read only their own session; a SESSION token only (under `api_token`,
-	// where the column exists), and live only. No row = refuse the approval.
+	// can read only their own session, and live only. No row = refuse the
+	// approval.
+	//
+	// No token_type filter: a SELECT cannot gate a WHERE conjunct, and the
+	// column exists only under `api_token`. The session-only guarantee comes
+	// from the handler instead — requireSessionCaller runs first, and the
+	// envelope carries a session_token_id only for a session-realm token, so
+	// the id this query is asked about is always a session's.
 	GetLiveSessionExpiry(ctx context.Context, in *GetLiveSessionExpiryReq, opts ...grpc.CallOption) (*GetLiveSessionExpiryResp, error)
 	GetProviderByName(ctx context.Context, in *GetProviderByNameReq, opts ...grpc.CallOption) (*GetProviderByNameResp, error)
 	// GetOAuthIdentity — the existing User↔subject link for a provider.
@@ -1405,8 +1411,14 @@ type AuthQueryServer interface {
 	GetAuthClientSecret(context.Context, *GetAuthClientSecretReq) (*GetAuthClientSecretResp, error)
 	// GetLiveSessionExpiry — the approving session's expires_at, for CliAuthorize
 	// to bind into the code. Scoped by the token id AND the owner, so a caller
-	// can read only their own session; a SESSION token only (under `api_token`,
-	// where the column exists), and live only. No row = refuse the approval.
+	// can read only their own session, and live only. No row = refuse the
+	// approval.
+	//
+	// No token_type filter: a SELECT cannot gate a WHERE conjunct, and the
+	// column exists only under `api_token`. The session-only guarantee comes
+	// from the handler instead — requireSessionCaller runs first, and the
+	// envelope carries a session_token_id only for a session-realm token, so
+	// the id this query is asked about is always a session's.
 	GetLiveSessionExpiry(context.Context, *GetLiveSessionExpiryReq) (*GetLiveSessionExpiryResp, error)
 	GetProviderByName(context.Context, *GetProviderByNameReq) (*GetProviderByNameResp, error)
 	// GetOAuthIdentity — the existing User↔subject link for a provider.
