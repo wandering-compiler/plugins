@@ -553,6 +553,13 @@ func (h *AuthServiceHandler) GetMfaStatus(ctx context.Context, req *pb.GetMfaSta
 // (re-resolving + trusting the device under `devices`). Every failure is
 // the same opaque Unauthenticated (anti-enumeration).
 func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq) (*pb.VerifyMfaResp, error) {
+	// The device key first, before an attempt is claimed: a client that
+	// cannot sign must not spend the challenge's budget on a session it could
+	// never be given.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := h.Query.GetMfaChallenge(ctx, &pb.GetMfaChallengeReq{ChallengeId: req.GetChallengeId()})
 	if err != nil || resp.GetChallenge() == nil {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
@@ -615,26 +622,25 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 
-	// Re-resolve the device from THIS request (same device as the SignIn
-	// that raised the challenge) so issueSession trusts it under `devices`.
-	dev, err := resolveSignInDevice(ctx, h, userID)
-	if err != nil {
-		return nil, Unauthenticated(err)
-	}
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, err
+	}
+	// The device is the key that signed THIS request: the one the session is
+	// bound to and the one passing the second factor trusts. A revoked one is
+	// refused even with the right code.
+	dev, err := mintDevice(ctx, h, userID, thumbprint)
+	if err != nil {
+		return nil, Unauthenticated(err)
 	}
 	// The trust this completion grants holds only if the account's device
 	// trust was not revoked since the challenge was raised: the password the
 	// SignIn checked may be the one a password change just replaced. A
 	// challenge read without its creation time trusts nothing.
-	token, trustToken, err := issueSession(ctx, h, userID, dev.id, ch.GetCreatedAt())
+	token, err := issueSession(ctx, h, userID, dev.id, ch.GetCreatedAt())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	out := &pb.VerifyMfaResp{UserId: userID, Token: token}
-	stampDeviceTrust(out, trustToken) // devices-gated field; seam is a no-op without `devices`
-	return out, nil
+	return &pb.VerifyMfaResp{UserId: userID, Token: token}, nil
 }
 
 // verifyMfaCode is the dual-path check: a confirmed TOTP user (with the

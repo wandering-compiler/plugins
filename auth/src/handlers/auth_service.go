@@ -31,7 +31,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
@@ -306,6 +305,12 @@ type authPrincipal struct {
 	// as used — read by recordTokenUse once authentication succeeded.
 	usedTokenID string
 	lastUsedAt  *timestamppb.Timestamp
+
+	// deviceThumbprint / deviceRevokedAt are the device the token is bound
+	// to (empty: bound to none) and when it was revoked (nil: live), read by
+	// the token lookup itself so the binding check costs no round trip.
+	deviceThumbprint string
+	deviceRevokedAt  *timestamppb.Timestamp
 }
 
 // recordTokenUse stamps the accepted token's last_used_at. Base no-op: the
@@ -380,10 +385,12 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 		return nil, err
 	}
 	return &authPrincipal{
-		userID:  userID,
-		tokenID: resp.GetTokenId(),
-		realm:   pb.TokenType_TOKEN_TYPE_SESSION,
-		grants:  grants.GetGrants(),
+		userID:           userID,
+		tokenID:          resp.GetTokenId(),
+		realm:            pb.TokenType_TOKEN_TYPE_SESSION,
+		grants:           grants.GetGrants(),
+		deviceThumbprint: resp.GetDeviceThumbprint(),
+		deviceRevokedAt:  resp.GetDeviceRevokedAt(),
 	}, nil
 }
 
@@ -424,19 +431,11 @@ var spendResetLinks = func(ctx context.Context, h *AuthServiceHandler, userID st
 
 // SignIn seams — always-present default behaviours opt-in feature
 // files override via init(), mirroring resolvePrincipal /
-// signupCreateUser / scopeDecorators. They let `devices` and
-// `two_factor` layer into the password sign-in without the base
-// handler knowing about either. With no feature file staged the
-// defaults make SignIn the plain GetUserByEmail → verify →
-// IssueToken flow.
-
-// devicesActive reports whether the `devices` feature is staged into this
-// bundle — handlers/devices.go's init() sets it true. The base value
-// (false) holds when the feature is off. Read by ValidateConfig to reject
-// two_factor_scope=new_devices without devices (the env value isn't
-// visible at codegen, so this fail-loud guard runs at plugin bootstrap —
-// the earliest point both the feature set and the env value are known).
-var devicesActive bool
+// signupCreateUser / scopeDecorators. They let `two_factor` (and the
+// account gates) layer into the password sign-in without the base
+// handler knowing about them. With no feature file staged the
+// defaults make SignIn the plain GetUserByEmail → verify → register the
+// device → IssueToken flow.
 
 // defaultAPITokenTTLHours is the lifetime of an API token whose caller asked
 // for none, when the deployment did not choose one: 90 days.
@@ -453,14 +452,11 @@ const defaultAPITokenTTLHours = 90 * 24
 const maxAPITokenTTLHours = 100 * 365 * 24
 
 // ValidateConfig fails plugin bootstrap loud on a contradictory
-// activation, rather than silently degrading. Today: two_factor_scope=
-// new_devices requires the `devices` feature (without it the trusted-
-// device signal is always "trusted", so new-device 2FA would never fire —
-// a silent no-op). Called from RegisterPlugin after the handler is built.
+// activation, rather than silently degrading. Called from RegisterPlugin
+// after the handler is built. (two_factor_scope=new_devices no longer needs
+// the `devices` feature: device identity is base tier, so every activation
+// knows which device signs in.)
 func ValidateConfig(h *AuthServiceHandler) error {
-	if h.TwoFactorScope == "new_devices" && !devicesActive {
-		return errors.New("auth plugin: two_factor_scope=new_devices requires the `devices` feature (enable it in the activation's features[])")
-	}
 	// Refused at boot rather than at the first mint: past this many hours
 	// time.Duration overflows, and a "practically never" setting would mint
 	// tokens already expired — accepted by the mint, refused by every read.
@@ -528,24 +524,6 @@ func signUpAllowlistGate(h *AuthServiceHandler, email string) error {
 // without that feature there is nothing to record and nothing to refuse.
 var markEmailConfirmed = func(_ context.Context, _ *AuthServiceHandler, _ string) error {
 	return nil
-}
-
-// signInDevice is what resolveSignInDevice found: the device's id, whether it
-// is trusted, and — for a trusted one — the cutoff a renewal of that trust must
-// hold against (see issueSession's trustCutoff).
-type signInDevice struct {
-	id          string
-	trusted     bool
-	trustCutoff *timestamppb.Timestamp
-}
-
-// resolveSignInDevice resolves the device this sign-in belongs to.
-// Default (no `devices`): no device tracking — empty id, and
-// "trusted" reported true so any 2FA new-device check (which itself
-// requires `devices`) is a non-issue. handlers/devices.go overrides
-// via init() with header/fingerprint resolution + upsert.
-var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userID string) (signInDevice, error) {
-	return signInDevice{trusted: true}, nil
 }
 
 // inviteVerifiedEmailGate refuses an acceptance from an account whose address
@@ -684,40 +662,12 @@ var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.Us
 	return nil, false, nil
 }
 
-// issueSession mints the bearer token for an authenticated principal and
-// returns the opaque session token plus (devices only) a server-issued
-// device-trust token the client replays as X-Device-Trust. Default (no
-// `devices`): IssueToken (no device column), empty trust token.
-// handlers/devices.go overrides via init() to stamp device_id + mint
-// + store the device-trust token. Shared by SignIn, OAuth, and (under
-// two_factor) VerifyMfa so they all honour device binding.
-//
-// trustCutoff says whether this sign-in may make the device trusted: nil means
-// it may not. Only a sign-in that passed the plugin's second factor, or was not
-// asked for one, may: a trusted device skips the second factor later
-// (two_factor_scope=new_devices), so trust earned by a sign-in that skipped it
-// — OAuth — would carry that skip over to password sign-ins from the same
-// device. A non-nil cutoff is the instant the sign-in's checks are good for:
-// the trust is written only if the account's device trust (a password change,
-// a disable) was not revoked after it, so a revocation that commits while the
-// sign-in is in flight is not undone by it.
-var issueSession = func(ctx context.Context, h *AuthServiceHandler, userID, deviceID string, trustCutoff *timestamppb.Timestamp) (token, trustToken string, err error) {
-	token, hash, err := newBearerToken()
-	if err != nil {
-		return "", "", err
-	}
-	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry(), TokenHash: hash}); err != nil {
-		return "", "", err
-	}
-	return token, "", nil
-}
-
 // sessionTokenExpiry returns the absolute expiry stamped into a freshly
 // minted session bearer token: NOW + session_token_ttl_seconds (default
 // 30d when unset/<=0). The token-validation queries reject a token past
 // this instant, so a leaked session token stops working after the TTL
-// even without an explicit logout. Shared by issueSession and the
-// `devices` override (issueSessionWithDevice).
+// even without an explicit logout. Read by issueSession, SignUp and
+// ConfirmSignUp; a CLI session takes the earlier of it and its approver's.
 func (h *AuthServiceHandler) sessionTokenExpiry() *timestamppb.Timestamp {
 	ttl := h.SessionTokenTTLSeconds
 	if ttl <= 0 {
@@ -802,16 +752,9 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	if !ok || raw == "" {
 		return nil, Unauthenticated(errAuthnHeaderMissing)
 	}
-	token := raw
-	if h.Scheme != "" {
-		prefix := h.Scheme + " "
-		if !strings.HasPrefix(raw, prefix) {
-			return nil, Unauthenticated(errAuthnSchemeMismatch)
-		}
-		token = strings.TrimPrefix(raw, prefix)
-	}
-	if token == "" {
-		return nil, Unauthenticated(errAuthnTokenEmpty)
+	token, viaDPoP, err := h.presentedToken(raw)
+	if err != nil {
+		return nil, Unauthenticated(err)
 	}
 
 	// Resolve identity + permission IDs. Default = single-realm
@@ -819,6 +762,13 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// narrowed resolver (see resolvePrincipal).
 	prin, err := resolvePrincipal(ctx, h, token)
 	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	// The token is bound to a device; the request must prove it holds that
+	// device's key. After the lookup, so an unknown token stays the opaque
+	// refusal; before anything else, so nothing is decorated, narrowed or
+	// recorded as used for a request that fails it.
+	if err := checkTokenBinding(ctx, prin, viaDPoP, req.GetHeaders()[dpopJKTKey]); err != nil {
 		return nil, Unauthenticated(err)
 	}
 	userID := prin.userID
@@ -863,7 +813,30 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 		Scopes:         scopes,
 		Labels:         labels,
 		SessionTokenId: prin.tokenID,
+		DeviceId:       prin.deviceThumbprint,
 	}, nil
+}
+
+// presentedToken strips the scheme off the auth header. A token may come
+// under DPoP (RFC 9449, a bound token with a proof — viaDPoP) or under the
+// configured scheme (Bearer); checkTokenBinding refuses the latter once the
+// token resolves, with a code that tells the client to sign its requests. A
+// configured scheme of "" takes the header as the bare token.
+func (h *AuthServiceHandler) presentedToken(raw string) (token string, viaDPoP bool, err error) {
+	switch {
+	case strings.HasPrefix(raw, dpopScheme+" "):
+		token, viaDPoP = strings.TrimPrefix(raw, dpopScheme+" "), true
+	case h.Scheme == "":
+		token = raw
+	case strings.HasPrefix(raw, h.Scheme+" "):
+		token = strings.TrimPrefix(raw, h.Scheme+" ")
+	default:
+		return "", false, errAuthnSchemeMismatch
+	}
+	if token == "" {
+		return "", false, errAuthnTokenEmpty
+	}
+	return token, viaDPoP, nil
 }
 
 // SignIn is the canonical email+password→bearer-token flow.
@@ -883,6 +856,13 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 // since the plugin doesn't yet have an UpdateUserPasswordHash
 // mutation to apply the new hash anyway.
 func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb.SignInResp, error) {
+	// The device key first: without a proof there is no token to issue, and
+	// refusing before the lookup costs nothing and says nothing about the
+	// address.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
 	userResp, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: normalizeEmail(req.GetEmail())})
 	if err != nil {
 		// Anti-enumeration: a missing account must cost the same as a wrong
@@ -916,9 +896,10 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 		return nil, UnauthenticatedSignIn(err)
 	}
 
-	// Resolve the device (devices feature; no-op otherwise) so the 2FA
-	// gate can make its new-device decision and the token can be bound.
-	dev, err := resolveSignInDevice(ctx, h, user.GetId())
+	// Register the device the token will be bound to, so the 2FA gate can
+	// make its new-device decision. A revoked device is refused here, after
+	// the password: only someone who knows it learns the device's state.
+	dev, err := mintDevice(ctx, h, user.GetId(), thumbprint)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -943,38 +924,15 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	if trusted {
 		trustCutoff = dev.trustCutoff
 	}
-	token, trustToken, err := issueSession(ctx, h, user.GetId(), deviceID, trustCutoff)
+	token, err := issueSession(ctx, h, user.GetId(), deviceID, trustCutoff)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	resp := &pb.SignInResp{
+	return &pb.SignInResp{
 		UserId: user.GetId(),
 		Token:  token,
-	}
-	stampSignInDeviceTrust(resp, trustToken)
-	return resp, nil
+	}, nil
 }
-
-// stampSignInDeviceTrust sets the device-trust token on a SignInResp.
-// No-op by default: `device_trust_token` is gated behind the `devices`
-// feature, so it is ABSENT from the consumer's generated SignInResp when
-// devices isn't active — the always-compiled base handler must not name the
-// field. handlers/devices.go (staged only when `devices` is active) overrides
-// this via init() to set resp.DeviceTrustToken, mirroring the issueSession
-// seam. Without this seam the base SignIn handler fails to compile on any
-// project that activates auth WITHOUT devices (e.g. console-app).
-var stampSignInDeviceTrust = func(resp *pb.SignInResp, trustToken string) {}
-
-// stampDeviceTrust is the device-trust seam for the responses whose MESSAGE is
-// itself feature-gated — OAuthExchangeResp (`oauth`) and VerifyMfaResp
-// (`two_factor`). Unlike SignInResp (always present), the base handler can't
-// name those Go types' `device_trust_token` field, so this seam sets it by
-// proto field NAME via reflection: the always-compiled base stays free of the
-// gated field and is a no-op unless handlers/devices.go (staged only under
-// `devices`) overrides it. Also a no-op for any message lacking the field
-// (devices off → the field is absent from the generated message). This is what
-// lets a project activate `oauth` / `two_factor` WITHOUT `devices`.
-var stampDeviceTrust = func(msg proto.Message, trustToken string) {}
 
 // signInDisabledGate rejects a soft-disabled account on SignIn. Base
 // no-op: `User.disabled_at` is gated behind the `user_admin` feature, so

@@ -16,6 +16,7 @@ import (
 // credential nobody remembers to rotate still stops working. The mutation is
 // handed the expiry and the caller is told it.
 func TestCreateApiToken_DefaultExpiryReachesTheTokenAndTheCaller(t *testing.T) {
+	mintAPITokensUnbound(t)
 	m := &apiTokenMgmtMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m, APITokenDefaultTTLHours: 24}
 	before := time.Now()

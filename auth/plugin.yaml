@@ -33,7 +33,7 @@ env:
   - name: two_factor_scope
     type: string
     default: all_logins
-    description: "When 2FA fires: all_logins (every password sign-in) | new_devices (only an untrusted device). new_devices requires the `devices` feature — codegen rejects the activation otherwise."
+    description: "When 2FA fires: all_logins (every password sign-in) | new_devices (only an untrusted device). A device is the key its client signs requests with, and trust belongs to the (account, device) pair: a device becomes trusted by passing the second factor, and a password change or a disable ends the trust of every device of the account. Works in every activation — device identity is base tier."
   - name: mfa_code_ttl_seconds
     type: int
     default: "300"
@@ -146,7 +146,7 @@ features:
     go_files:
       - handlers/tenant.go
   - name: api_token
-    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. Two narrowings over bare permission-id SETS cannot compose, so both axes resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (the anonymous case with NO permissions is a custom auth method, as in a public-link view)."
+    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. Two narrowings over bare permission-id SETS cannot compose, so both axes resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (the anonymous case with NO permissions is a custom auth method, as in a public-link view). ⛔ In this version CreateApiToken (and service_account's IssueBotToken) refuse with DEVICE_KEY_REQUIRED: every token is bound to a device key, an API token's device is the program that will use it, and the request cannot carry that program's public key yet. API tokens minted before device binding are refused by Authenticate like every unbound token."
     requires:
       # GetUserRolePermissionsByRealm resolves an API token's permissions
       # from UserRole, Role and RolePermission — rbac's tables. Without rbac
@@ -157,11 +157,7 @@ features:
     go_files:
       - handlers/apitoken.go
   - name: devices
-    requires:
-      # devices.go names pb.SignInResp — the device gate hangs off the
-      # sign-in it decorates, so without it the bundle does not build.
-      - sign_in_turnkey
-    description: "Device/session tracking + log-out endpoints (ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices). Adds the Device table + a UserToken.device_id column; each session links to a Device so 'log out a device' is 'delete its tokens'. New vs. trusted devices are distinguished by a client-sent X-Device-Id header (falling back to a UA+IP fingerprint), and trusted_at supplies the trusted-device signal two_factor new-device mode reads. A password change (password_change) or a disable (user_admin) ends the trust of every device of the account through User.device_trust_revoked_at, which this feature adds. The project must forward X-Device-Id / User-Agent / X-Forwarded-For via (w17.rest_api).metadata_propagation for full-fidelity detection. Off by default."
+    description: "Self-service device management: ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices (REST /auth/devices). Device identity itself is base tier and needs no feature: every token is bound to the device key its client signs requests with (DPoP, RFC 9449; the gateway verifies each proof and hands the plugin the key's thumbprint), the Device table is keyed by (user, thumbprint), and trust for two_factor_scope=new_devices belongs to that pair. Revoking a device here deletes its sessions and stamps Device.revoked_at: the key can never sign in to that account again (DEVICE_REVOKED), and its client generates a new key, which is a new device. Off by default."
     default: false
     go_files:
       - handlers/devices.go
@@ -195,7 +191,7 @@ features:
       # mfa.go names pb.SignInResp: the two-step sign-in RETURNS one
       # (mfa_required instead of a token). No sign-in, no build.
       - sign_in_turnkey
-    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (seed encrypted at rest, codes single-use) + UserRecoveryCode + MfaChallenge tables, the EnrollTotp (returns the otpauth URI and a QR code as SVG)/ConfirmTotp (returns ten recovery codes)/DisableTotp/GetMfaStatus/GenerateRecoveryCodes enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (new_devices requires `devices`). Off by default."
+    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (seed encrypted at rest, codes single-use) + UserRecoveryCode + MfaChallenge tables, the EnrollTotp (returns the otpauth URI and a QR code as SVG)/ConfirmTotp (returns ten recovery codes)/DisableTotp/GetMfaStatus/GenerateRecoveryCodes enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (an untrusted (account, device) pair only). Off by default."
     default: false
     go_files:
       - handlers/mfa.go
@@ -324,17 +320,18 @@ go_files_combined:
 # activation's `registered_as` name.
 presets:
   rest:
-    # Headers the gateway must thread into backend gRPC metadata for the
-    # `devices` feature to resolve a device (client-sent id, else a UA+IP
-    # fingerprint). Activation merges these into the domain's
-    # metadata_propagation (extend_defaults preserves W3C tracing), so a
-    # consuming project doesn't hand-wire forwarding for headers the
-    # plugin owns. Gated `devices`.
+    # Headers the gateway must thread into backend gRPC metadata.
+    # Activation merges these into the domain's metadata_propagation
+    # (extend_defaults preserves W3C tracing), so a consuming project
+    # doesn't hand-wire forwarding for headers the plugin owns.
+    #
+    # User-Agent and X-Forwarded-For label a device (Device.label / .ip) —
+    # display only: a device is identified by its key thumbprint, which the
+    # gateway stamps itself (x-w17-dpop-jkt), never by a header a client
+    # sends. Base tier, like device identity.
     forward_headers:
-      - { name: X-Device-Id, feature: devices }
-      - { name: X-Device-Trust, feature: devices } # server-issued device-trust token replay
-      - { name: User-Agent,      feature: devices }
-      - { name: X-Forwarded-For, feature: devices }
+      - { name: User-Agent }
+      - { name: X-Forwarded-For }
       # tenant_scope resolves a registration's tenant from the request's Host
       # (Tenant.domain). restgw forwards it as x-forwarded-host — the gRPC hop
       # has an :authority of its own. Without this the Host never left the
@@ -432,11 +429,11 @@ presets:
           - { ref: AuthService.DisableTotp,  method: DELETE, path: /totp,                             feature: two_factor }
           - { ref: AuthService.GetMfaStatus, method: GET,    path: /status,                           feature: two_factor }
           - { ref: AuthService.GenerateRecoveryCodes, method: POST, path: /recovery-codes,            feature: two_factor }
-      # Device/session management — the caller manages their OWN devices,
-      # authenticated by their bearer session. Gated devices: the whole
-      # group drops when the feature is off.
+      # Device management — the caller manages their OWN devices,
+      # authenticated by their session. Gated devices: the whole group drops
+      # when the feature is off (device identity itself stays).
       - prefix: /auth/devices
-        description: "Device/session management — list + log out one/others/all, bearer-authenticated."
+        description: "Device management — list + revoke one/others/all, authenticated."
         endpoints:
           - { ref: AuthService.ListDevices,        method: GET,    path: "",              feature: devices }
           - { ref: AuthService.RevokeDevice,       method: DELETE, path: "/{device_id}",  feature: devices }
@@ -821,6 +818,7 @@ sandboxes:
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
   - "A token cannot expire in the past. Choose a later date."
+  - "API tokens cannot be issued in this version. They will need the public key of the program that uses them."
   - "An account with this address already exists. Sign in instead."
   - "An account with this email address exists but has not verified it. Sign in with your password and verify the address first."
   - "An account with this email address exists, and the sign-in provider has not verified the address. Sign in with your password instead."
@@ -838,12 +836,15 @@ msgids:
   - "This API token expired on {date}. Create a new token."
   - "This account has been disabled."
   - "This address does not belong to any organization here. Check the address you registered on."
+  - "This app did not prove which device it runs on. Reload or update it, then sign in again."
   - "This authenticator app is already set up. To get new recovery codes, generate them."
+  - "This device was signed out for good. Sign in again to use it as a new device."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
   - "This request names two different organizations. Name one."
+  - "This session belongs to another device. Sign in again on this one."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."

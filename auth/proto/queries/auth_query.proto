@@ -140,6 +140,13 @@ message GetUserByTokenWithPermissionsResp {
   // row to the hash (UpgradeTokenHash).
   string stored_token_hash = 6;
 
+  // The device the token is bound to: its key thumbprint (empty for a token
+  // bound to none — minted before device binding, or an API token) and when
+  // it was revoked (NULL = live). Authenticate compares the thumbprint with
+  // the request's proof and refuses a revoked device.
+  string device_thumbprint = 7;
+  google.protobuf.Timestamp device_revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+
   // The role grants are NOT here: they come from GetUserRoleGrants.
   //
   // They were, and the emitted scan code did not compile — a response that
@@ -364,6 +371,13 @@ message GetTokenWithTypeResp {
   // last_used_at write within the throttle window without a round trip.
   // NULL = never recorded.
   google.protobuf.Timestamp last_used_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+
+  // The device the token is bound to: its key thumbprint (empty for a token
+  // bound to none — minted before device binding, or an API token) and when
+  // it was revoked (NULL = live). Authenticate compares the thumbprint with
+  // the request's proof and refuses a revoked device.
+  string device_thumbprint = 9;
+  google.protobuf.Timestamp device_revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // GetExpiredTokenWithType — the lookup Authenticate runs only after
@@ -597,29 +611,16 @@ message CountRecentMfaChallengesResp {
   int64 count = 1;
 }
 
-// --- devices feature: device lookup at sign-in + the mgmt list ---
-// GetDeviceByIdentifier resolves the (user, identifier) device the
-// sign-in handler upserts against; ListUserDevices backs the
-// ListDevices management RPC. Both gated `devices`.
-
-message GetDeviceByIdentifierReq {
-  option (w17.contrib.plugin_feature) = "devices";
-  string user_id    = 1;
-  string identifier = 2;
-}
-message GetDeviceByIdentifierResp {
-  option (w17.contrib.plugin_feature) = "devices";
-  Device device = 1;
-}
+// --- device identity: the trust cutoff (base) + the mgmt list (devices) ---
+// The sign-in finds or creates its Device with AuthMutation.RegisterDevice
+// (one UPSERT); ListUserDevices backs the ListDevices management RPC.
 
 // GetDeviceTrustRevokedAt reads User.device_trust_revoked_at: a device
-// trusted at or before it is no longer trusted. Gated `devices`.
+// trusted at or before it is no longer trusted.
 message GetDeviceTrustRevokedAtReq {
-  option (w17.contrib.plugin_feature) = "devices";
   string user_id = 1;
 }
 message GetDeviceTrustRevokedAtResp {
-  option (w17.contrib.plugin_feature) = "devices";
   google.protobuf.Timestamp device_trust_revoked_at = 1;
 }
 
@@ -1185,9 +1186,12 @@ service AuthQuery {
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           "       u.created_at AS user.created_at, "
           "       t.id AS token_id, "
-          "       COALESCE(t.token_hash, '') AS stored_token_hash "
+          "       COALESCE(t.token_hash, '') AS stored_token_hash, "
+          "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
+          "       d.revoked_at AS device_revoked_at "
           "FROM @module.User u "
           "JOIN @module.UserToken t ON t.user_id = u.id "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
       }
     };
@@ -1604,8 +1608,11 @@ service AuthQuery {
           "       u.id AS user.id, "
           "       ?feature(service_account) u.kind AS user.kind, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
-          "       t.last_used_at AS last_used_at "
+          "       t.last_used_at AS last_used_at, "
+          "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
+          "       d.revoked_at AS device_revoked_at "
           "FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
       }
     };
@@ -2009,34 +2016,10 @@ service AuthQuery {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
   }
 
-  // GetDeviceByIdentifier — resolve the (user, identifier) Device the
-  // sign-in handler upserts against. NotFound (zero rows) is the
-  // expected "first sight of this device" signal: the handler treats
-  // any error as absent and falls through to CreateDevice. Gated devices.
-  rpc GetDeviceByIdentifier(GetDeviceByIdentifierReq) returns (GetDeviceByIdentifierResp) {
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "SELECT d.id AS device.id, "
-          "       d.user_id AS device.user_id, "
-          "       d.identifier AS device.identifier, "
-          "       d.label AS device.label, "
-          "       d.ip AS device.ip, "
-          "       d.trusted_at AS device.trusted_at, "
-          "       d.last_seen_at AS device.last_seen_at, "
-          "       d.created_at AS device.created_at, "
-          "       d.trust_token_hash AS device.trust_token_hash "
-          "FROM @module.Device d WHERE d.user_id = :user_id AND d.identifier = :identifier"
-      }
-    };
-    option (w17.contrib.plugin_feature_rpc) = "devices";
-  }
-
   // GetDeviceTrustRevokedAt — when the account's device trust was last
   // revoked (a password change or a disable stamps it). The sign-in resolver
   // and ListDevices count a device as trusted only when its trusted_at is
-  // later. Gated devices.
+  // later. Base tier, like the Device table.
   rpc GetDeviceTrustRevokedAt(GetDeviceTrustRevokedAtReq) returns (GetDeviceTrustRevokedAtResp) {
     option (w17.db.method) = {
       ops: {
@@ -2044,13 +2027,13 @@ service AuthQuery {
         dql: "SELECT u.device_trust_revoked_at AS device_trust_revoked_at FROM @module.User u WHERE u.id = :user_id"
       }
     };
-    option (w17.contrib.plugin_feature_rpc) = "devices";
   }
 
-  // ListUserDevices — the caller's devices (management view), newest
-  // first. The handler maps each row to DeviceInfo, deriving `trusted`
-  // (trusted_at present) + `current` (identifier matches the calling
-  // request's resolved device). Gated devices.
+  // ListUserDevices — the caller's live devices (management view), newest
+  // first; a revoked device is history, not a device to manage. The handler
+  // maps each row to DeviceInfo, deriving `trusted` (trusted_at later than
+  // the account's trust revocation) + `current` (thumbprint matches the
+  // device the caller's token is bound to). Gated devices.
   rpc ListUserDevices(ListUserDevicesReq) returns (ListUserDevicesResp) {
     option (w17.db.method) = {
       ops: {
@@ -2058,13 +2041,13 @@ service AuthQuery {
         dql:
           "SELECT d.id AS id, "
           "       d.user_id AS user_id, "
-          "       d.identifier AS identifier, "
+          "       d.thumbprint AS thumbprint, "
           "       d.label AS label, "
           "       d.ip AS ip, "
           "       d.trusted_at AS trusted_at, "
           "       d.last_seen_at AS last_seen_at, "
           "       d.created_at AS created_at "
-          "FROM @module.Device d WHERE d.user_id = :user_id "
+          "FROM @module.Device d WHERE d.user_id = :user_id AND d.revoked_at IS NULL "
           "ORDER BY d.last_seen_at DESC"
       }
     };

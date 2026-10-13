@@ -57,6 +57,7 @@ func ctxWithCaller(uid string) context.Context {
 }
 
 func TestCreateApiToken_StampsAPIRealm_AndSubset(t *testing.T) {
+	mintAPITokensUnbound(t)
 	m := &apiTokenMgmtMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	resp, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{Name: "ci", PermissionSubset: []int32{5, 7}})
@@ -188,6 +189,7 @@ func newApiTokenHandlerTx(m *apiTokenMgmtMock, tx *recordingDistTx) *AuthService
 // IssueBotToken and CreateBot the same day. The bot endpoints are called by an
 // admin; this one is called by everybody.
 func TestCreateApiToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
+	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	m := &apiTokenMgmtMock{addPermErr: errTestNarrowFailed}
 	h := newApiTokenHandlerTx(m, tx)
@@ -210,6 +212,7 @@ func TestCreateApiToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
 // holds a transaction the two writes never join, so the rollback above would
 // undo nothing.
 func TestCreateApiToken_Success_CommitsOnTheHandlersConnection(t *testing.T) {
+	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	m := &apiTokenMgmtMock{}
 	h := newApiTokenHandlerTx(m, tx)

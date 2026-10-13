@@ -20,7 +20,7 @@ func TestSignUp_ATakenAddressSaysSignInInstead(t *testing.T) {
 	s.users["a@example.com"] = &pb.User{Id: "u-x", Email: "a@example.com"}
 	h := &AuthServiceHandler{Query: s, Mutation: s, PasswordHash: testPasswordSettings()}
 
-	_, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	_, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("code = %v, want AlreadyExists (err=%v)", status.Code(err), err)
 	}
@@ -34,11 +34,11 @@ func TestConfirmSignUp_ATakenAddressSaysSignInInstead(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
 	s.users["a@example.com"] = &pb.User{Id: "u-x", Email: "a@example.com"}
-	resp, err := h.SignUp(ctx, &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	resp, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]})
+	_, err = h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]})
 	if d := detailOf(t, err); d.GetCode() != CodeEmailTaken {
 		t.Fatalf("detail = %v, want %s", d, CodeEmailTaken)
 	}

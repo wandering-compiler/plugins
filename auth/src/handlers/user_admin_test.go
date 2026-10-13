@@ -56,7 +56,7 @@ func TestSignIn_RejectsDisabledAccount(t *testing.T) {
 		}},
 		PasswordHash: ps,
 	}
-	if _, err := h.SignIn(context.Background(), &pb.SignInReq{
+	if _, err := h.SignIn(mintCtx(), &pb.SignInReq{
 		Email:    "u@example.com",
 		Password: "correct-horse-battery-staple",
 	}); err == nil {
@@ -67,9 +67,9 @@ func TestSignIn_RejectsDisabledAccount(t *testing.T) {
 // Disabling an account ends its device trust as well as its tokens: once the
 // account is re-enabled, a device trusted before the disable must pass the
 // second factor again under two_factor_scope=new_devices. DisableUsers is one
-// multi-op statement set with no Go behind it, so the revocation is a gated SET
-// in its `disable` leg — the same unit of work as the token purge. Behind
-// ?feature(devices): the column exists only with that feature.
+// multi-op statement set with no Go behind it, so the revocation is a SET in
+// its `disable` leg — the same unit of work as the token purge. Ungated: the
+// column is base tier with device identity.
 func TestDisableUsers_RevokesDeviceTrustInTheSameStatement(t *testing.T) {
 	body := mutationRPCBody(t, "DisableUsers")
 	from, to := strings.Index(body, `name: "disable"`), strings.Index(body, `name: "main"`)
@@ -77,7 +77,7 @@ func TestDisableUsers_RevokesDeviceTrustInTheSameStatement(t *testing.T) {
 		t.Fatalf("DisableUsers has no `disable` leg before its `main` one:\n%s", body)
 	}
 	leg := body[from:to]
-	if !strings.Contains(leg, `"?feature(devices) device_trust_revoked_at = NOW() "`) {
-		t.Errorf("DisableUsers' disable leg does not revoke device trust behind ?feature(devices):\n%s", body)
+	if !strings.Contains(leg, `"device_trust_revoked_at = NOW() "`) || strings.Contains(leg, "?feature(devices)") {
+		t.Errorf("DisableUsers' disable leg does not revoke device trust in every activation:\n%s", body)
 	}
 }

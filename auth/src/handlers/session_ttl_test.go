@@ -12,11 +12,7 @@ import (
 )
 
 // ttlMutationMock captures the expires_at the service-tier handler
-// stamps on a freshly minted session token. It implements BOTH mint
-// paths (both now go through IssueToken; the devices feature only adds
-// device_id to the same call)
-// because the standalone plugin build stages every feature file, so
-// devices.go's init() swaps issueSession to the device variant.
+// stamps on a freshly minted session token.
 type ttlMutationMock struct {
 	pb.AuthMutationClient
 	gotExpiresAt *timestamppb.Timestamp
@@ -60,13 +56,12 @@ func TestSessionTokenExpiry_DefaultWhenUnset(t *testing.T) {
 	}
 }
 
-// The mint path (whichever variant is active) stamps the expiry into
-// the issued token — wiring proof for issueSession / the devices
-// override.
+// The mint path stamps the expiry into the issued token — wiring proof for
+// issueSession.
 func TestIssueSession_StampsExpiry(t *testing.T) {
 	m := &ttlMutationMock{}
 	h := &AuthServiceHandler{Mutation: m, SessionTokenTTLSeconds: 3600}
-	if _, _, err := issueSession(context.Background(), h, "user-1", "", nil); err != nil {
+	if _, err := issueSession(context.Background(), h, "user-1", "dev-1", nil); err != nil {
 		t.Fatalf("issueSession: %v", err)
 	}
 	if !m.called {

@@ -128,6 +128,7 @@ func TestIssueBotToken_RefusesAPerson(t *testing.T) {
 // The control: a bot must still get one, or the endpoint is refusing everyone
 // and the test above passes for the wrong reason.
 func TestIssueBotToken_MintsForABot(t *testing.T) {
+	mintAPITokensUnbound(t)
 	rec := &mintRecorder{}
 	h := &AuthServiceHandler{Query: botTokenQuery{kind: pb.AccountKind_BOT}, Mutation: rec}
 
@@ -520,7 +521,7 @@ func TestSignIn_RefusesAMachineAccountThatHasAPassword(t *testing.T) {
 	t.Cleanup(func() { signInBotGate = orig })
 
 	h := &AuthServiceHandler{Query: signInBotQuery{kind: pb.AccountKind_BOT, hash: hash}, PasswordHash: s}
-	_, err = h.SignIn(context.Background(), &pb.SignInReq{Email: "ci@example.com", Password: "correct-horse"})
+	_, err = h.SignIn(mintCtx(), &pb.SignInReq{Email: "ci@example.com", Password: "correct-horse"})
 	if err == nil {
 		t.Error("a machine account signed in with its correct password — the path documented as closed")
 	} else if status.Code(err) != codes.Unauthenticated {
@@ -543,7 +544,7 @@ func TestSignIn_RefusesAMachineAccountThatHasAPassword(t *testing.T) {
 	h = &AuthServiceHandler{Query: signInBotQuery{kind: pb.AccountKind_HUMAN, hash: hash}, PasswordHash: s}
 	func() {
 		defer func() { _ = recover() }() // a later stage may need plumbing we do not provide
-		_, _ = h.SignIn(context.Background(), &pb.SignInReq{Email: "person@example.com", Password: "correct-horse"})
+		_, _ = h.SignIn(mintCtx(), &pb.SignInReq{Email: "person@example.com", Password: "correct-horse"})
 	}()
 	if len(seen) != 1 || seen[0] != pb.AccountKind_HUMAN {
 		t.Errorf("the gate saw %v for a person — the decoy is not exercising the same path", seen)
@@ -597,6 +598,7 @@ func newBotTokenHandlerTx(mut pb.AuthMutationClient, tx *recordingDistTx) *AuthS
 // connection — a Begin elsewhere holds a transaction the two writes never
 // join, so the rollback below would undo nothing.
 func TestIssueBotToken_Success_CommitsOnTheHandlersConnection(t *testing.T) {
+	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	mut := &narrowingMint{}
 	h := newBotTokenHandlerTx(mut, tx)
@@ -620,6 +622,7 @@ func TestIssueBotToken_Success_CommitsOnTheHandlersConnection(t *testing.T) {
 // Without the rollback the caller is handed an error and left owning an
 // UNNARROWED token, which the resolver treats as all_permissions.
 func TestIssueBotToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
+	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	mut := &narrowingMint{narrowErr: errTestNarrowFailed}
 	h := newBotTokenHandlerTx(mut, tx)

@@ -141,7 +141,7 @@ func TestSignUpConfirmation_SignUpParksAndConfirmCreates(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
 
-	resp, err := h.SignUp(ctx, &pb.SignUpReq{Email: "Ceo@Example.com", Password: "pw-owner"})
+	resp, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "Ceo@Example.com", Password: "pw-owner"})
 	if err != nil {
 		t.Fatalf("SignUp: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestSignUpConfirmation_SignUpParksAndConfirmCreates(t *testing.T) {
 		t.Fatal("the code was stored in plaintext")
 	}
 
-	done, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: code})
+	done, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: code})
 	if err != nil {
 		t.Fatalf("ConfirmSignUp: %v", err)
 	}
@@ -169,7 +169,11 @@ func TestSignUpConfirmation_SignUpParksAndConfirmCreates(t *testing.T) {
 	if len(s.confirmed) != 1 || s.confirmed[0] != done.GetUserId() {
 		t.Errorf("the confirmed address was not recorded as proved: %v", s.confirmed)
 	}
-	if _, err := h.SignIn(ctx, &pb.SignInReq{Email: "ceo@example.com", Password: "pw-owner"}); err != nil {
+	// Parking issued no session; the confirmation's is bound to its device.
+	if len(s.issued) != 1 || s.issued[0].GetDeviceId() != "dev-"+testJKT[:8] {
+		t.Errorf("the confirmation's session is not bound to its device: %+v", s.issued)
+	}
+	if _, err := h.SignIn(withJKT(ctx, testJKT), &pb.SignInReq{Email: "ceo@example.com", Password: "pw-owner"}); err != nil {
 		t.Errorf("the confirmed account cannot sign in with its password: %v", err)
 	}
 }
@@ -181,18 +185,18 @@ func TestSignUpConfirmation_AnAbandonedRegistrationBlocksNobody(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
 
-	squat, err := h.SignUp(ctx, &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-stranger"})
+	squat, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-stranger"})
 	if err != nil {
 		t.Fatalf("stranger's SignUp: %v", err)
 	}
-	own, err := h.SignUp(ctx, &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner"})
+	own, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner"})
 	if err != nil {
 		t.Fatalf("the owner could not register an address somebody else had started: %v", err)
 	}
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: own.GetPendingId(), Code: s.codes[own.GetPendingId()]}); err != nil {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: own.GetPendingId(), Code: s.codes[own.GetPendingId()]}); err != nil {
 		t.Fatalf("owner's ConfirmSignUp: %v", err)
 	}
-	if _, err := h.SignIn(ctx, &pb.SignInReq{Email: "ceo@example.com", Password: "pw-stranger"}); err == nil {
+	if _, err := h.SignIn(withJKT(ctx, testJKT), &pb.SignInReq{Email: "ceo@example.com", Password: "pw-stranger"}); err == nil {
 		t.Error("the stranger's password signs in to the owner's account")
 	}
 	if _, ok := s.pending[squat.GetPendingId()]; ok {
@@ -200,7 +204,7 @@ func TestSignUpConfirmation_AnAbandonedRegistrationBlocksNobody(t *testing.T) {
 	}
 	// And it cannot be confirmed afterwards either — the code the stranger never
 	// received is not the point; the row is gone.
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: squat.GetPendingId(), Code: s.codes[squat.GetPendingId()]}); err == nil {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: squat.GetPendingId(), Code: s.codes[squat.GetPendingId()]}); err == nil {
 		t.Error("a second account was created for a confirmed address")
 	}
 }
@@ -208,16 +212,16 @@ func TestSignUpConfirmation_AnAbandonedRegistrationBlocksNobody(t *testing.T) {
 func TestSignUpConfirmation_WrongCodesAreRefusedAndExhaustTheRow(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
-	resp, err := h.SignUp(ctx, &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	resp, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	if err != nil {
 		t.Fatalf("SignUp: %v", err)
 	}
 	for i := 0; i < maxSignUpConfirmAttempts; i++ {
-		if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: "00000000"}); status.Code(err) != codes.InvalidArgument {
+		if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: "00000000"}); status.Code(err) != codes.InvalidArgument {
 			t.Fatalf("wrong code %d: want InvalidArgument, got %v", i+1, err)
 		}
 	}
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]}); err == nil {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]}); err == nil {
 		t.Fatal("the right code was accepted after the attempt budget was spent")
 	}
 	if len(s.users) != 0 {
@@ -228,12 +232,12 @@ func TestSignUpConfirmation_WrongCodesAreRefusedAndExhaustTheRow(t *testing.T) {
 func TestSignUpConfirmation_ACodeIsSingleUse(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
-	resp, _ := h.SignUp(ctx, &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	resp, _ := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	req := &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]}
-	if _, err := h.ConfirmSignUp(ctx, req); err != nil {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), req); err != nil {
 		t.Fatalf("first ConfirmSignUp: %v", err)
 	}
-	if _, err := h.ConfirmSignUp(ctx, req); status.Code(err) != codes.InvalidArgument {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), req); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("a spent registration confirmed again: %v", err)
 	}
 }
@@ -241,9 +245,9 @@ func TestSignUpConfirmation_ACodeIsSingleUse(t *testing.T) {
 func TestSignUpConfirmation_AnExpiredRegistrationIsRefused(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
-	resp, _ := h.SignUp(ctx, &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	resp, _ := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	s.pending[resp.GetPendingId()].expiresAt = time.Now().Add(-time.Second)
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]}); status.Code(err) != codes.InvalidArgument {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("an expired registration: want InvalidArgument, got %v", err)
 	}
 }
@@ -257,11 +261,11 @@ func TestSignUpConfirmation_ATakenAddressIsNotRevealedBySignUp(t *testing.T) {
 	ctx := context.Background()
 	s.users["a@example.com"] = &pb.User{Id: "u-x", Email: "a@example.com"}
 
-	taken, err := h.SignUp(ctx, &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	taken, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	if err != nil {
 		t.Fatalf("SignUp for a taken address answered %v — that tells a stranger the address is registered", err)
 	}
-	fresh, err := h.SignUp(ctx, &pb.SignUpReq{Email: "b@example.com", Password: "pw"})
+	fresh, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "b@example.com", Password: "pw"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +276,7 @@ func TestSignUpConfirmation_ATakenAddressIsNotRevealedBySignUp(t *testing.T) {
 	if !mailed {
 		t.Fatal("no code went to the taken address — the owner would never hear of the attempt, and the answer's timing differs")
 	}
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: taken.GetPendingId(), Code: code}); status.Code(err) != codes.AlreadyExists {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: taken.GetPendingId(), Code: code}); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("confirming a taken address: want AlreadyExists (sign in instead), got %v", err)
 	}
 	if s.users["a@example.com"].GetId() != "u-x" {
@@ -287,15 +291,15 @@ func TestSignUpConfirmation_NoNumberOfStrangersRefusesTheOwner(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
 	for i := 0; i < 50; i++ {
-		if _, err := h.SignUp(ctx, &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-stranger"}); err != nil {
+		if _, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-stranger"}); err != nil {
 			t.Fatalf("stranger's SignUp %d: %v", i+1, err)
 		}
 	}
-	own, err := h.SignUp(ctx, &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner"})
+	own, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner"})
 	if err != nil {
 		t.Fatalf("the owner was refused after strangers registered the address: %v", err)
 	}
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: own.GetPendingId(), Code: s.codes[own.GetPendingId()]}); err != nil {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: own.GetPendingId(), Code: s.codes[own.GetPendingId()]}); err != nil {
 		t.Fatalf("owner's ConfirmSignUp: %v", err)
 	}
 	if len(s.pending) != 0 {
@@ -307,10 +311,10 @@ func TestSignUpConfirmation_NoNumberOfStrangersRefusesTheOwner(t *testing.T) {
 func TestSignUpConfirmation_TheCodeIsReadForgivingly(t *testing.T) {
 	h, s := confirmHandler(t)
 	ctx := context.Background()
-	resp, _ := h.SignUp(ctx, &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	resp, _ := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	code := s.codes[resp.GetPendingId()]
 	typed := strings.ToLower(code[:4]) + "-" + strings.ToLower(code[4:])
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: typed}); err != nil {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: typed}); err != nil {
 		t.Fatalf("%q typed as %q was refused: %v", code, typed, err)
 	}
 }
@@ -386,19 +390,19 @@ func TestSignUpAllowlist_GatesBothSteps(t *testing.T) {
 	h.SignUpAllowlist = "@example.com"
 	ctx := context.Background()
 
-	if _, err := h.SignUp(ctx, &pb.SignUpReq{Email: "x@elsewhere.com", Password: "pw"}); status.Code(err) != codes.PermissionDenied {
+	if _, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "x@elsewhere.com", Password: "pw"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("an address outside the list: want PermissionDenied, got %v", err)
 	}
 	if len(s.codes) != 0 {
 		t.Fatal("a refused address still reached the store")
 	}
 
-	resp, err := h.SignUp(ctx, &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	resp, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
 	if err != nil {
 		t.Fatalf("SignUp inside the list: %v", err)
 	}
 	h.SignUpAllowlist = "@other.com"
-	if _, err := h.ConfirmSignUp(ctx, &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]}); status.Code(err) != codes.PermissionDenied {
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: resp.GetPendingId(), Code: s.codes[resp.GetPendingId()]}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("confirming an address the list no longer names: want PermissionDenied, got %v", err)
 	}
 	if len(s.users) != 0 {
@@ -411,10 +415,10 @@ func TestSignUpAllowlist_GatesThePlainSignUp(t *testing.T) {
 	pinConsoleActivation(t)
 	s := newRoundTripStore()
 	h := &AuthServiceHandler{Query: s, Mutation: s, PasswordHash: testPasswordSettings(), SignUpAllowlist: "@example.com"}
-	if _, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: "x@elsewhere.com", Password: "pw"}); status.Code(err) != codes.PermissionDenied {
+	if _, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: "x@elsewhere.com", Password: "pw"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("want PermissionDenied, got %v", err)
 	}
-	if _, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: "a@example.com", Password: "pw"}); err != nil {
+	if _, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: "a@example.com", Password: "pw"}); err != nil {
 		t.Fatalf("an allowed address was refused: %v", err)
 	}
 }

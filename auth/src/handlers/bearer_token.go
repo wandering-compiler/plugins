@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -77,10 +78,48 @@ func sessionExpired(ctx context.Context, expiresAt time.Time, kind pb.TokenType)
 	if kind == pb.TokenType_TOKEN_TYPE_API {
 		dev, msgid = "API token expired; create a new token", MsgAPITokenExpired
 	}
+	return unauthenticatedWithInfo(ctx, CodeSessionExpired, dev, msgid,
+		map[string]string{"date": expiresAt.Format("2006-01-02 15:04 UTC")},
+		map[string]string{"expires_at": expiresAt.Format(time.RFC3339)})
+}
+
+// deviceProofRequired is the DEVICE_PROOF_REQUIRED refusal: a mint request
+// without a proof of possession, a bound token presented without one (no
+// proof, or as Bearer), or a token bound to no device (minted before device
+// binding — its holder signs in once more).
+func deviceProofRequired(ctx context.Context) error {
+	return unauthenticatedWithInfo(ctx, CodeDeviceProofRequired,
+		"a DPoP proof of the device key is required", MsgDeviceProofRequired, nil, nil)
+}
+
+// deviceMismatch is the DEVICE_MISMATCH refusal: the request's proof was
+// signed by a key other than the one the token is bound to.
+func deviceMismatch(ctx context.Context) error {
+	return unauthenticatedWithInfo(ctx, CodeDeviceMismatch,
+		"the token is bound to another device key", MsgDeviceMismatch, nil, nil)
+}
+
+// deviceRevoked is the DEVICE_REVOKED refusal: the (user, device) pair was
+// revoked, for good. Said only to the holder of the device's key (a sign-in
+// that passed the password, or a request whose proof matched the binding).
+func deviceRevoked(ctx context.Context) error {
+	return unauthenticatedWithInfo(ctx, CodeDeviceRevoked,
+		"this device was revoked; generate a new device key and sign in again", MsgDeviceRevoked, nil, nil)
+}
+
+// errDeviceNotRegistered is the cause behind a mint that found no device to
+// bind to (the store answered no row). Never a token, always a refusal.
+var errDeviceNotRegistered = errors.New("no device registered for the token")
+
+// unauthenticatedWithInfo is an Unauthenticated refusal a client can act on:
+// the ErrorDetail a person reads (the translated msgid) and the
+// google.rpc.ErrorInfo a client dispatches on, both carrying code, the latter
+// in ErrorDomain with info as its metadata. dev is the operator's copy.
+func unauthenticatedWithInfo(ctx context.Context, code, dev, msgid string, params, info map[string]string) error {
 	st := status.New(codes.Unauthenticated, dev)
 	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
-		Code:    CodeSessionExpired,
-		Message: i18n.T(ctx, msgid, map[string]string{"date": expiresAt.Format("2006-01-02 15:04 UTC")}),
+		Code:    code,
+		Message: i18n.T(ctx, msgid, params),
 	}))
 	if err != nil {
 		// coverage-exempt: WithDetails only fails if the detail cannot
@@ -88,8 +127,7 @@ func sessionExpired(ctx context.Context, expiresAt time.Time, kind pb.TokenType)
 		return &statusError{st: st}
 	}
 	sp := with.Proto()
-	sp.Details = append(sp.Details, errorInfoAny(CodeSessionExpired, ErrorDomain,
-		map[string]string{"expires_at": expiresAt.Format(time.RFC3339)}))
+	sp.Details = append(sp.Details, errorInfoAny(code, ErrorDomain, info))
 	return &statusError{st: status.FromProto(sp)}
 }
 

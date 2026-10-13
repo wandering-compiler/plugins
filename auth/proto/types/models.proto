@@ -162,8 +162,8 @@ message User {
 
   // device_trust_revoked_at — when this account's device trust was last
   // revoked as a whole. A Device trusted at or before this instant no longer
-  // counts as trusted (`two_factor_scope=new_devices` challenges it again),
-  // whatever trust token it replays. NULL = never revoked.
+  // counts as trusted (`two_factor_scope=new_devices` challenges it again).
+  // NULL = never revoked.
   //
   // Written by the statements that end an account's credentials, in the same
   // statement: a password CHANGE (UpdateUserPasswordIfUnchanged) and
@@ -171,13 +171,11 @@ message User {
   // "someone else may have the old one", and a device that person signed in
   // from must not keep skipping the second factor. A stamp on the account,
   // not a write to every Device row: those statements belong to other
-  // features and can only gain a gated SET fragment, never a statement on a
-  // table that exists only with `devices`.
+  // features and stay single-statement.
   //
-  // Field-gated `devices`: absent entirely when the feature is off.
+  // Base tier since device identity became base (it was gated `devices`).
   google.protobuf.Timestamp device_trust_revoked_at = 10 [
-    (w17.field) = { type: DATETIME, null: true },
-    (w17.contrib.plugin_feature_field) = "devices"
+    (w17.field) = { type: DATETIME, null: true }
   ];
 }
 
@@ -309,23 +307,20 @@ message UserToken {
     (w17.contrib.plugin_feature_field) = "api_token"
   ];
 
-  // device_id — the Device this session belongs to, behind `devices`.
-  // Stamped by IssueToken, whose SET list carries `?feature(devices)
-  // device_id = :device_id`; "log out a device" = delete every token
-  // carrying its id. Field-gated: dropped entirely with the rest of the
-  // device surface, exactly like the api_token columns above — a project
-  // not tracking devices carries no device_id column, and the same
-  // IssueToken emits an INSERT that never names it.
+  // device_id — the Device this token is BOUND to (DPoP's `cnf.jkt`, kept
+  // as a reference to the Device row whose `thumbprint` is the binding).
+  // Every mint path (SignIn, SignUp, ConfirmSignUp, VerifyMfa,
+  // OAuthExchange, CliToken) stamps it from the request's proof of
+  // possession; Authenticate refuses a token whose device's thumbprint is
+  // not the one the request's proof was signed with, and a token with none.
   // No DB-level FK (the activation-rename caveat that applies to every
   // cross-table id ref in this plugin — see the message header).
-  // Nullable: not every token is device-bound. SignUp / API tokens leave
-  // the field unset, so device_id stays NULL there; only the sign-in
-  // paths under `devices` (SignIn / VerifyMfa) pass one. A NOT NULL
-  // column would break SignUp the moment `devices` is enabled.
+  // Nullable only for rows minted before device binding (refused by
+  // Authenticate, so their holders sign in once more) and for API tokens,
+  // which cannot be minted until they carry a key of their own.
   string device_id = 9 [
     (w17.field) = { type: UUID, null: true },
-    (w17.db.column) = { index: true },
-    (w17.contrib.plugin_feature_field) = "devices"
+    (w17.db.column) = { index: true }
   ];
 
   // token_hash — sha256 (hex) of the bearer token, the only form a token is
@@ -342,44 +337,60 @@ message UserToken {
   }];
 }
 
-// Device — a tracked device/session anchor for a user. Created or
-// refreshed at sign-in; `trusted_at` marks it as seen-and-passed-2FA,
-// the signal `two_factor`'s new-device mode reads. `identifier` is the
-// stable client device-id when the request carries `X-Device-Id`,
-// else a server-derived UA+IP fingerprint hash — best-effort, so churn
-// reads as a new device (an extra 2FA prompt, the safe failure). Behind
-// `devices`: present only when the activation enables device tracking.
+// Device — one (user, device key) pair. Base tier: every session is bound
+// to one.
 //
-// (user_id, identifier) is unique so sign-in upserts deterministically.
-// Same no-DB-FK caveat as the rest of the plugin (user_id is app-
-// enforced; see UserToken).
+// A device is identified by the RFC 7638 JWK thumbprint of the public key
+// its client signs DPoP proofs with (base64url SHA-256, 43 characters). The
+// gateway verifies the proof and hands the thumbprint to the plugin as the
+// `x-w17-dpop-jkt` metadata; no header, body field or envelope value a
+// client sends can name a device. The private key never leaves the client.
+//
+// Keyed by (user_id, thumbprint), not by the thumbprint alone: trust and
+// revocation belong to the pair, so one browser shared by two accounts is
+// two rows, and one account's trust never carries over to the other.
+//
+// `trusted_at` is the signal `two_factor_scope=new_devices` reads: set by a
+// sign-in that passed the second factor, renewed by a later one, and void
+// when it is not later than User.device_trust_revoked_at. Holding the key
+// is the proof, so there is no separate trust token to steal.
+//
+// `revoked_at` ends the pair for good: every token bound to it is refused,
+// and a sign-in with the same key is refused with DEVICE_REVOKED. The row
+// is never deleted and never revived — a client answers DEVICE_REVOKED by
+// generating a new key, which is a new device (and passes the second factor
+// like any new device).
+//
+// Same no-DB-FK caveat as the rest of the plugin (user_id is app-enforced;
+// see UserToken).
 message Device {
   option (w17.db.table) = {
     indexes: [
-      { unique: true, fields: [{ name: "user_id" }, { name: "identifier" }] }
+      { unique: true, fields: [{ name: "user_id" }, { name: "thumbprint" }] }
     ]
   };
-  option (w17.contrib.plugin_feature) = "devices";
+
+  // 3 = identifier (a client-chosen X-Device-Id or a UA+IP fingerprint),
+  // 9 = trust_token_hash (a server-issued trust token the client replayed):
+  // both replaced by the key thumbprint.
+  reserved 3, 9;
+  reserved "identifier", "trust_token_hash";
 
   string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  string identifier  = 3 [(w17.field) = { type: CHAR, max_len: 128 }]; // device-id header | fp hash
+  // RFC 7638 JWK thumbprint of the device's public key: base64url (no
+  // padding) of a SHA-256, always 43 characters.
+  string thumbprint  = 10 [(w17.field) = { type: CHAR, max_len: 43 }];
   string label       = 4 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // UA-derived friendly name
-  // IP-as-string (CHAR, not INET): the fingerprint path may resolve no
-  // client IP (absent X-Forwarded-For), and an empty string is a valid
-  // CHAR but not a valid INET. Stored for display in ListDevices only.
+  // IP-as-string (CHAR, not INET): the request may carry no client IP
+  // (absent X-Forwarded-For), and an empty string is a valid CHAR but not a
+  // valid INET. Stored for display in ListDevices only.
   string ip          = 5 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
   google.protobuf.Timestamp trusted_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp last_seen_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW }];
   google.protobuf.Timestamp created_at   = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
-  // SHA-256 hex of the SERVER-issued device-trust token. A device
-  // counts as trusted (new-device 2FA is skipped) only when the client
-  // presents a trust token whose hash matches this column — proving
-  // possession of a server-minted secret rather than a client-chosen
-  // X-Device-Id. Empty until a login mints one; rotated every login.
-  // Stored hashed (never the plaintext) so a DB read can't impersonate a
-  // device.
-  string trust_token_hash = 9 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  // When the pair was revoked; NULL = live. Set once, never cleared.
+  google.protobuf.Timestamp revoked_at   = 11 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // OAuthProvider — an admin-configured OAuth2/OIDC server, behind `oauth`.

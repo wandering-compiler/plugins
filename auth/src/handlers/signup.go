@@ -91,6 +91,14 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 		return signUpConfirmation(ctx, h, req)
 	}
 
+	// The session this registration issues is bound to the caller's device
+	// key. Checked before the hash and before any write, so a client that
+	// cannot sign creates no account it could not use.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	hashed, err := h.PasswordHash.Hash(req.GetPassword())
 	if err != nil {
 		return nil, err
@@ -114,7 +122,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 		}
 	}
 
-	resp, err := h.signUpTx(txCtx, req, hashed, roles)
+	resp, err := h.signUpTx(txCtx, req, hashed, roles, thumbprint)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -130,10 +138,10 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 }
 
 // signUpTx runs SignUp's write side against txCtx (carrying the distx w17-tx-id
-// when a transaction is open): create the user, link its turnkey roles, mint
-// the session token. Every storage call uses txCtx so all three join the one
-// transaction.
-func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles) (*pb.SignUpResp, error) {
+// when a transaction is open): create the user, link its turnkey roles,
+// register the device, mint the session token bound to it. Every storage call
+// uses txCtx so all of them join the one transaction.
+func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles, thumbprint string) (*pb.SignUpResp, error) {
 	if signupCreateUser == nil {
 		// Neither create path staged — see the seam's declaration. This
 		// is a bundle-composition fault, not something a caller did, so
@@ -159,15 +167,15 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 	if err := signupClaimInvite(txCtx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken()); err != nil {
 		return nil, err
 	}
-	// Stamp the absolute session TTL like SignIn (issueSession): a SignUp-minted
-	// bearer expires too. Without ExpiresAt the storage binds the proto zero
-	// time (0001-01-01), which the validation guard reads as already-expired →
-	// the fresh token 401s.
-	token, hash, err := newBearerToken()
+	// A new account's device is new and untrusted: the registration passed
+	// no second factor. Stamp the absolute session TTL like SignIn
+	// (issueSession): a SignUp-minted bearer expires too.
+	dev, err := mintDevice(txCtx, h, userID, thumbprint)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := h.Mutation.IssueToken(txCtx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry(), TokenHash: hash}); err != nil {
+	token, err := h.issueBoundToken(txCtx, userID, dev.id, h.sessionTokenExpiry())
+	if err != nil {
 		return nil, err
 	}
 	return &pb.SignUpResp{

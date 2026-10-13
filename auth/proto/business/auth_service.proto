@@ -132,6 +132,14 @@ message AuthResp {
   // events go out unlabelled and every authenticated client receives them
   // — the single-tenant posture, unchanged.
   map<string, string> labels = 5;
+
+  // device_id — the RFC 7638 key thumbprint the resolved token is BOUND to,
+  // which Authenticate checked against the request's proof of possession
+  // (the gateway's `x-w17-dpop-jkt`) before answering. The gateway stamps it
+  // into the envelope it forwards (`x-w17-device`), so every service the
+  // call reaches knows the verified device beside the user. Never empty on
+  // a successful answer: an unbound token is refused.
+  string              device_id = 6;
 }
 
 // SignInReq / SignInResp — canonical email+password sign-in
@@ -161,13 +169,11 @@ message SignInResp {
   bool   mfa_required = 3 [(w17.contrib.plugin_feature_field) = "two_factor"];
   string challenge_id = 4 [(w17.contrib.plugin_feature_field) = "two_factor"];
 
-  // The server-minted device-trust token for this login (devices
-  // feature). The client stores it and replays it as `X-Device-Trust` on
-  // the next sign-in so a trusted device skips new-device 2FA without
-  // relying on a client-chosen X-Device-Id. Rotated every login; the
-  // client overwrites its stored token only when this is non-empty. Empty
-  // on an mfa_required response (no session issued yet).
-  string device_trust_token = 5 [(w17.contrib.plugin_feature_field) = "devices"];
+  // 5 = device_trust_token (a server-minted token the client replayed as
+  // X-Device-Trust): the device key the token is bound to proves the device
+  // now, so there is nothing to replay.
+  reserved 5;
+  reserved "device_trust_token";
 }
 
 // SignUpReq / SignUpResp — canonical register-and-issue-token
@@ -477,8 +483,9 @@ message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string token   = 2;
-  // Server-minted device-trust token (see SignInResp).
-  string device_trust_token = 3 [(w17.contrib.plugin_feature_field) = "devices"];
+  // 3 = device_trust_token (see SignInResp).
+  reserved 3;
+  reserved "device_trust_token";
 }
 
 // ── two_factor: enrollment + challenge verification surface ──
@@ -570,10 +577,10 @@ message VerifyMfaResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string token   = 2;
-  // Server-minted device-trust token (see SignInResp). Issued here
-  // because passing VerifyMfa is exactly the new-device 2FA pass that
-  // should let the device skip the challenge next time.
-  string device_trust_token = 3 [(w17.contrib.plugin_feature_field) = "devices"];
+  // 3 = device_trust_token (see SignInResp). Passing VerifyMfa still trusts
+  // the device the request's key names; nothing is handed back for it.
+  reserved 3;
+  reserved "device_trust_token";
 }
 
 // ── devices: device/session management business surface ─────
@@ -584,9 +591,8 @@ message VerifyMfaResp {
 
 // DeviceInfo — one device's management view: identity + audit +
 // the two derived booleans the handler computes (never stored):
-// `trusted` (trusted_at present) and `current` (this device is the
-// one the calling request resolved to). Never carries the raw
-// identifier (a fingerprint hash is an internal detail).
+// `trusted` (trusted_at later than the account's trust revocation) and
+// `current` (this device is the one the caller's token is bound to).
 message DeviceInfo {
   option (w17.contrib.plugin_feature) = "devices";
   string                    id           = 1 [(w17.field) = { type: UUID }];
@@ -915,6 +921,11 @@ service AuthService {
   // CreateApiToken — issue an API/MCP token for the caller (bearer-
   // authenticated), optionally narrowed to a permission subset. Returns
   // the opaque token ONCE. Gated api_token.
+  //
+  // ⛔ Refused (Unimplemented, DEVICE_KEY_REQUIRED) until the request can
+  // carry the public key of the client that will use the token: every token
+  // is bound to a device, and binding an API token to the browser that
+  // created it would make it useless to the script it is for.
   rpc CreateApiToken(CreateApiTokenReq) returns (CreateApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
@@ -956,6 +967,9 @@ service AuthService {
   }
   // IssueBotToken — mint an API token FOR a machine account. Refuses any
   // target that is not `kind = BOT`. Gated service_account.
+  //
+  // ⛔ Refused (Unimplemented, DEVICE_KEY_REQUIRED) until the request can
+  // carry the bot's public key — see CreateApiToken.
   rpc IssueBotToken(IssueBotTokenReq) returns (IssueBotTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "service_account";
   }
@@ -1011,9 +1025,10 @@ service AuthService {
 
   // ── devices management — list + log out one/others/all ──────
   // ListDevices — the caller's devices (mgmt view, derived trusted /
-  // current). RevokeDevice — log out one device (delete its tokens +
-  // the Device row). RevokeOtherDevices — log out every device but the
-  // caller's. RevokeAllDevices — log out everywhere (incl. caller).
+  // current). RevokeDevice — revoke one device for good (delete its
+  // tokens, stamp Device.revoked_at; its key can never sign in again).
+  // RevokeOtherDevices — revoke every device but the caller's.
+  // RevokeAllDevices — revoke every device, the caller's included.
   // All gated `devices`.
   rpc ListDevices(ListDevicesReq) returns (ListDevicesResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";

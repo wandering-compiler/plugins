@@ -118,6 +118,7 @@ func TestListBots_InAnOrg_KeepsOnlyTheMachines(t *testing.T) {
 // IssueBotToken needs no organization: the target must be a machine account of
 // the realm, which is every machine account.
 func TestIssueBotToken_WithoutOrgs_MintsForABot(t *testing.T) {
+	mintAPITokensUnbound(t)
 	withoutOrgs(t)
 	m := &botAdminMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
@@ -231,6 +232,7 @@ func TestMachineAccounts_NoTenantInScopeSeesNone(t *testing.T) {
 // operator could not grant gets no token from them — with organizations and
 // without.
 func TestIssueBotToken_RefusesABotAboveTheOperator(t *testing.T) {
+	mintAPITokensUnbound(t)
 	for name, orgs := range map[string]bool{"with orgs": true, "without orgs": false} {
 		t.Run(name, func(t *testing.T) {
 			if !orgs {

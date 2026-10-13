@@ -117,6 +117,14 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 // challenge, then mints the CLI bearer. Unauthenticated — the CLI has no
 // token yet; every failure is the same opaque Unauthenticated.
 func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) (*pb.CliTokenResp, error) {
+	// The CLI's own device key, before the code is spent: the session is
+	// bound to the key of the CLI that redeems the code, never to the
+	// browser that approved it, and a CLI that cannot sign must not burn the
+	// code.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if len(req.GetCodeVerifier()) < pkceMinVerifierLen {
 		return nil, Unauthenticated(errCliVerifierInvalid)
 	}
@@ -196,15 +204,12 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 		// session minted here would be dead on arrival; refuse instead.
 		return nil, Unauthenticated(errCliSessionNotLive)
 	}
-	token, hash, err := newBearerToken()
+	dev, err := mintDevice(ctx, h, userID, thumbprint)
 	if err != nil {
-		return nil, err
+		return nil, Unauthenticated(err)
 	}
-	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
-		UserId:    userID,
-		ExpiresAt: expiresAt,
-		TokenHash: hash,
-	}); err != nil {
+	token, err := h.issueBoundToken(ctx, userID, dev.id, expiresAt)
+	if err != nil {
 		return nil, err
 	}
 	return &pb.CliTokenResp{Token: token, UserId: userID}, nil

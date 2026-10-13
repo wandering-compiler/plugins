@@ -227,6 +227,13 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 //     the session. An address registered meanwhile fails CreateUser's unique
 //     constraint and rolls the claim back.
 func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmSignUpReq) (*pb.ConfirmSignUpResp, error) {
+	// The device key before the attempt is counted: a client that cannot
+	// sign must not spend one of the five guesses on a session it could
+	// never be given.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
 	att, err := h.Mutation.RecordPendingSignUpAttempt(ctx, &pb.RecordPendingSignUpAttemptReq{PendingId: req.GetPendingId()})
 	if err != nil {
 		// Fail closed: an attempt that could not be counted is not granted.
@@ -255,7 +262,7 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 			return nil, err
 		}
 	}
-	resp, err := h.confirmSignUpTx(txCtx, req.GetPendingId(), roles)
+	resp, err := h.confirmSignUpTx(txCtx, req.GetPendingId(), roles, thumbprint)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -270,7 +277,7 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 	return resp, nil
 }
 
-func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID string, roles signupRoles) (*pb.ConfirmSignUpResp, error) {
+func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID string, roles signupRoles, thumbprint string) (*pb.ConfirmSignUpResp, error) {
 	claimed, err := h.Mutation.ClaimPendingSignUp(txCtx, &pb.ClaimPendingSignUpReq{PendingId: pendingID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -298,11 +305,12 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 	if _, err := h.Mutation.DeletePendingSignUpsForEmail(txCtx, &pb.DeletePendingSignUpsForEmailReq{Email: claimed.GetEmail()}); err != nil {
 		return nil, err
 	}
-	token, hash, err := newBearerToken()
+	dev, err := mintDevice(txCtx, h, userID, thumbprint)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := h.Mutation.IssueToken(txCtx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry(), TokenHash: hash}); err != nil {
+	token, err := h.issueBoundToken(txCtx, userID, dev.id, h.sessionTokenExpiry())
+	if err != nil {
 		return nil, err
 	}
 	return &pb.ConfirmSignUpResp{

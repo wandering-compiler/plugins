@@ -47,7 +47,7 @@ func TestOAuthExchange_SignsUpWithTheInvitationItCarries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier(), InviteToken: "open-invite"})
+	ex, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier(), InviteToken: "open-invite"})
 	if err != nil {
 		t.Fatalf("exchange with the invitation: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestOAuthExchange_RefusesASignUpWithoutAnInvitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
+	_, err = h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
 	if c, got := detailCode(t, err); c != codes.PermissionDenied || got != CodeSignUpNotInvited {
 		t.Fatalf("err = %v (%v/%q), want the invite gate's refusal", err, c, got)
 	}
@@ -93,7 +93,7 @@ func TestOAuthExchange_AnExistingAccountIgnoresTheInvitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier(), InviteToken: "anything"})
+	ex, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier(), InviteToken: "anything"})
 	if err != nil || ex.GetUserId() != "u-existing" {
 		t.Fatalf("exchange = %+v, %v; want the existing account", ex, err)
 	}
@@ -112,7 +112,7 @@ func TestOAuthExchange_AnAccountMadeSinceTheCallbackIsUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.identity = &pb.OAuthIdentity{Id: "id-1", UserId: "u-meanwhile"}
-	ex, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
+	ex, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
 	if err != nil || ex.GetUserId() != "u-meanwhile" {
 		t.Fatalf("exchange = %+v, %v; want the account made since the callback", ex, err)
 	}

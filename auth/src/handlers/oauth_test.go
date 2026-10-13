@@ -22,7 +22,8 @@ type oauthMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
-	issuedHash string // the token_hash IssueToken was handed
+	issuedHash   string // the token_hash IssueToken was handed
+	issuedDevice string // the device IssueToken bound the session to
 
 	provider     *pb.OAuthProvider
 	identity     *pb.OAuthIdentity // existing identity (nil = first sign-in)
@@ -79,7 +80,7 @@ func testState(t *testing.T, secret, provider, redirectAfter string) string {
 // callback's code and the browser's verifier.
 func redeem(t *testing.T, h *AuthServiceHandler, cb *pb.OAuthCallbackResp) *pb.OAuthExchangeResp {
 	t.Helper()
-	ex, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: cb.GetCode(), CodeVerifier: validVerifier()})
+	ex, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: cb.GetCode(), CodeVerifier: validVerifier()})
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
 	}
@@ -149,19 +150,16 @@ func (m *oauthMock) CreateOAuthIdentity(ctx context.Context, in *pb.CreateOAuthI
 	return &pb.CreateOAuthIdentityResp{Identity: &pb.OAuthIdentity{Id: "id-1", UserId: in.GetUserId()}}, nil
 }
 
-// device-path methods (issueSession override is active in the combined binary)
-func (m *oauthMock) GetDeviceByIdentifier(ctx context.Context, in *pb.GetDeviceByIdentifierReq, _ ...grpc.CallOption) (*pb.GetDeviceByIdentifierResp, error) {
-	return &pb.GetDeviceByIdentifierResp{}, nil
-}
-func (m *oauthMock) CreateDevice(ctx context.Context, in *pb.CreateDeviceReq, _ ...grpc.CallOption) (*pb.CreateDeviceResp, error) {
-	return &pb.CreateDeviceResp{Device: &pb.Device{Id: "dev-1"}}, nil
+// device-path methods: the device the exchange binds its session to
+func (m *oauthMock) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
 }
 func (m *oauthMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...grpc.CallOption) (*pb.TrustDeviceResp, error) {
 	m.trustedDevice = true
 	return &pb.TrustDeviceResp{}, nil
 }
 func (m *oauthMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
-	m.issuedHash = in.GetTokenHash()
+	m.issuedHash, m.issuedDevice = in.GetTokenHash(), in.GetDeviceId()
 	return &pb.IssueTokenResp{Token: &pb.UserToken{}}, nil
 }
 

@@ -212,6 +212,32 @@ const (
 	// Also the ErrorInfo reason (domain ErrorDomain), which a client reads
 	// together with the expires_at metadata.
 	CodeSessionExpired = "SESSION_EXPIRED"
+
+	// The device-binding refusals. Every token is bound to the key of the
+	// device it was issued to (DPoP, RFC 9449), and each of these tells the
+	// client what to do with its key; all three are also the ErrorInfo reason
+	// (domain ErrorDomain).
+	//
+	// CodeDeviceProofRequired: no proof of possession where one is needed —
+	// a mint request without one, a bound token without one (or presented as
+	// Bearer), or a token bound to no device at all (minted before device
+	// binding existed: its holder signs in once more).
+	CodeDeviceProofRequired = "DEVICE_PROOF_REQUIRED"
+
+	// CodeDeviceMismatch: the proof was signed by another key than the one
+	// the token is bound to. Says nothing about the bound device.
+	CodeDeviceMismatch = "DEVICE_MISMATCH"
+
+	// CodeDeviceRevoked: the device was revoked, for good. The client
+	// discards its key, generates a new one and signs in again as a new
+	// device.
+	CodeDeviceRevoked = "DEVICE_REVOKED"
+
+	// CodeDeviceKeyRequired: an API token (CreateApiToken, IssueBotToken)
+	// asked for without the public key of the client that will use it. Every
+	// token is bound to a device key, and these requests cannot carry one
+	// yet, so they are refused rather than minted unbound.
+	CodeDeviceKeyRequired = "DEVICE_KEY_REQUIRED"
 )
 
 // ErrorDomain is the google.rpc.ErrorInfo domain of the refusals this plugin
@@ -290,6 +316,17 @@ const (
 	// session is renewed by signing in, an API token only by minting another.
 	MsgSessionExpired  = "Your session expired on {date}. Sign in again."
 	MsgAPITokenExpired = "This API token expired on {date}. Create a new token." // #nosec G101 -- the SENTENCE a person reads, not a credential value
+
+	// The device-binding refusals. A person reads them when their app could
+	// not (or no longer may) prove which device it runs on; the remedy is
+	// always the same — sign in again — and the app does the key handling.
+	MsgDeviceProofRequired = "This app did not prove which device it runs on. Reload or update it, then sign in again."
+	MsgDeviceMismatch      = "This session belongs to another device. Sign in again on this one."
+	MsgDeviceRevoked       = "This device was signed out for good. Sign in again to use it as a new device."
+
+	// An API token needs the public key of the program that will use it;
+	// this version cannot take one, so it issues none.
+	MsgClientKeyNeeded = "API tokens cannot be issued in this version. They will need the public key of the program that uses them."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

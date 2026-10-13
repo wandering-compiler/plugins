@@ -118,6 +118,9 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		grants:      realm.GetGrants(),
 		usedTokenID: tok.GetTokenId(),
 		lastUsedAt:  tok.GetLastUsedAt(),
+
+		deviceThumbprint: tok.GetDeviceThumbprint(),
+		deviceRevokedAt:  tok.GetDeviceRevokedAt(),
 	}
 
 	if tok.GetTokenType() == pb.TokenType_TOKEN_TYPE_API {
@@ -228,6 +231,9 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 // were two copies of this function, which is how one of them would have been
 // left minting never-expiring tokens.
 func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, userID, name string, subset []int32, expiresAt *timestamppb.Timestamp) (token, tokenID string, err error) {
+	if err := apiTokenBindingGate(txCtx); err != nil {
+		return "", "", err
+	}
 	token, hash, err := newBearerToken()
 	if err != nil {
 		return "", "", err
@@ -252,6 +258,27 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, userID, name
 		}
 	}
 	return token, id, nil
+}
+
+// apiTokenBindingGate stands where an API token would be bound to its
+// client's key, and refuses: every token is bound to a device
+// (device/no-unbound-credential), and an API token's device is the program
+// that will use it — a CI job, a script, a bot — not the browser creating
+// it, so binding it to the caller's key would mint a credential useless to
+// the program it is for. The requests cannot carry that program's public key
+// yet; until they do, no API token is minted at all rather than one minted
+// unbound. Authenticate refuses an unbound token anyway, so one minted here
+// would be dead on arrival.
+//
+// Inside issueApiTokenTx, the one minting path for every API token, so
+// CreateApiToken and IssueBotToken cannot drift apart; IssueBotToken's
+// authorization checks run first, so a caller who may not mint for the bot
+// still hears that. A var so the tests of the minting machinery (the
+// transaction, the subset, the expiry) can still drive it.
+var apiTokenBindingGate = func(ctx context.Context) error {
+	return refusal(ctx, codes.Unimplemented,
+		"API tokens need the public key of the client that will use them, which this version cannot accept; none is minted unbound",
+		CodeDeviceKeyRequired, "", MsgClientKeyNeeded, nil)
 }
 
 // ListApiTokens returns the calling user's API tokens (management view —

@@ -677,7 +677,7 @@ func TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot(t *testing.T
 	prevResolve, prevDec, prevNarrow := resolvePrincipal, scopeDecorators, grantNarrowers
 	t.Cleanup(func() { resolvePrincipal, scopeDecorators, grantNarrowers = prevResolve, prevDec, prevNarrow })
 	resolvePrincipal = func(context.Context, *AuthServiceHandler, string) (*authPrincipal, error) {
-		return &authPrincipal{userID: "u1"}, nil
+		return &authPrincipal{userID: "u1", deviceThumbprint: testJKT}, nil
 	}
 	var seen []bool
 	scopeDecorators = []scopeDecorator{func(ctx context.Context, _ *AuthServiceHandler, _ string, _, _, _ map[string]string) error {
@@ -689,7 +689,7 @@ func TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot(t *testing.T
 		return nil
 	}}
 	h := &AuthServiceHandler{HeaderName: "Authorization"}
-	req := &pb.AuthReq{Headers: map[string]string{"authorization": "tok"}}
+	req := boundAuthReq("tok", testJKT)
 
 	if _, err := h.AuthenticateAdmin(context.Background(), req); err != nil {
 		t.Fatal(err)

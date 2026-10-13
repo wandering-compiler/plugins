@@ -264,8 +264,8 @@ func TestChangePassword_TheSweepSparesAPITokensOnlyWhereTheyExist(t *testing.T) 
 // password_change without devices would stop generating.
 func TestChangePassword_RevokesDeviceTrustInTheSameStatement(t *testing.T) {
 	body := mutationRPCBody(t, "UpdateUserPasswordIfUnchanged")
-	if !strings.Contains(body, `"?feature(devices) device_trust_revoked_at = NOW() "`) {
-		t.Errorf("UpdateUserPasswordIfUnchanged does not revoke device trust behind ?feature(devices):\n%s", body)
+	if !strings.Contains(body, `"device_trust_revoked_at = NOW() "`) || strings.Contains(body, "?feature(devices)") {
+		t.Errorf("UpdateUserPasswordIfUnchanged does not revoke device trust in every activation:\n%s", body)
 	}
 }
 

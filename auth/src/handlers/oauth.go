@@ -209,6 +209,12 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 // once; it is spent before the verifier is compared, so a wrong verifier
 // burns it rather than leaving it open to guesses.
 func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExchangeReq) (*pb.OAuthExchangeResp, error) {
+	// The device key before the code is spent: a client that cannot sign
+	// must not burn a single-use code on a session it could never be given.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if len(req.GetCodeVerifier()) < pkceMinVerifierLen || req.GetCode() == "" {
 		return nil, oauthRefusal(errOAuthVerifierInvalid)
 	}
@@ -266,20 +272,18 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, oauthRefusal(err)
 	}
-	dev, err := resolveSignInDevice(ctx, h, userID)
+	dev, err := mintDevice(ctx, h, userID, thumbprint)
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}
 	// Bound to the device, never trusting it: this sign-in skipped the
 	// plugin's second factor, and a trusted device skips it later for a
 	// password sign-in too.
-	token, trustToken, err := issueSession(ctx, h, userID, dev.id, nil)
+	token, err := issueSession(ctx, h, userID, dev.id, nil)
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}
-	resp := &pb.OAuthExchangeResp{UserId: userID, Token: token}
-	stampDeviceTrust(resp, trustToken) // devices-gated field; seam is a no-op without `devices`
-	return resp, nil
+	return &pb.OAuthExchangeResp{UserId: userID, Token: token}, nil
 }
 
 // loadEnabledProvider resolves a provider by slug and enforces `enabled`.

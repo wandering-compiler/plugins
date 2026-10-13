@@ -93,27 +93,11 @@ message CreateUserResp { User user = 1; }
 message IssueTokenReq {
   string user_id = 1;
   google.protobuf.Timestamp expires_at = 2;
-  // device_id — the session's device, added by `devices`. Field-gated
-  // in step with the column and with the SET assignment that writes it.
-  //
-  // This is what retired IssueTokenWithDevice, and that twin was the
-  // THIRD instance of the same shape (CreateUserWithTenant and the
-  // org-role mutations were the other two). Its cost was subtler than
-  // CreateUser's: `TokenIssued` kept an emit site here, so nothing
-  // looked missing — but with `devices` on, SignIn routes through the
-  // twin, so the surviving emitter sat on a path nobody takes and the
-  // event never fired for a device-bound session.
-  // `null: true` because most tokens are NOT device-bound — SignUp and
-  // API tokens leave it unset. Without it the generated request
-  // validation makes the field REQUIRED, and the very first signup on a
-  // `devices` activation fails with REQUIRED_VIOLATION. That is the shape
-  // the old IssueTokenWithDeviceReq hid: it was a separate request only
-  // the device path ever built, so "required" was true there and is not
-  // true here.
-  string device_id = 3 [
-    (w17.field) = { type: UUID, null: true },
-    (w17.contrib.plugin_feature_field) = "devices"
-  ];
+  // device_id — the Device the token is bound to (RegisterDevice's row for
+  // the request's key thumbprint). REQUIRED: a session is never minted
+  // unbound, and the request validation refuses one without it. The column
+  // stays nullable for rows minted before device binding.
+  string device_id = 3 [(w17.field) = { type: UUID }];
   // sha256(token), hex: the handler mints the token, stores only this, and
   // returns the token to the caller itself (it is never read back).
   string token_hash = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
@@ -706,32 +690,27 @@ message MarkEmailVerifiedResp {
   string user_id = 1;
 }
 
-// ── devices mutation request/response messages ──────────────
+// ── device identity mutation request/response messages ───────
 //
-// Device tracking writes the sign-in handler + the device-mgmt
-// RPCs compose. All gated `devices` (they touch the Device table /
-// UserToken.device_id column the feature adds).
+// RegisterDevice / TrustDevice are base tier (every mint binds a device);
+// the revoke primitives below them are the `devices` management surface.
 
-
-message CreateDeviceReq {
-  option (w17.contrib.plugin_feature) = "devices";
+message RegisterDeviceReq {
   string user_id    = 1 [(w17.field) = { type: UUID }];
-  string identifier = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // The key thumbprint the gateway verified (x-w17-dpop-jkt).
+  string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
   string label      = 3 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   string ip         = 4 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
 }
-message CreateDeviceResp {
-  option (w17.contrib.plugin_feature) = "devices";
+message RegisterDeviceResp {
   Device device = 1;
 }
 
 message TrustDeviceReq {
-  option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
-  // SHA-256 hex of the freshly-minted device-trust token stored on
-  // the row; the client must present the matching plaintext to be trusted.
-  string trust_token_hash = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  // 3 = trust_token_hash: holding the device key is the proof now.
+  reserved 3;
   // The trust is written only while the account's device trust has not been
   // revoked AFTER this instant (User.device_trust_revoked_at): for a SignIn
   // renewing trust, the revocation stamp it read while resolving the device
@@ -740,22 +719,10 @@ message TrustDeviceReq {
   // account was never revoked. A password change or a disable that commits
   // after that instant then wins, instead of being overwritten by a
   // trusted_at stamped after it; one committing between the password check
-  // and that instant is not caught (SPEC, devices gap 6).
+  // and that instant is not caught (SPEC, device gap).
   google.protobuf.Timestamp not_revoked_after = 4 [(w17.field) = { type: DATETIME }];
 }
 message TrustDeviceResp {
-  option (w17.contrib.plugin_feature) = "devices";
-  string device_id = 1;
-}
-
-message TouchDeviceReq {
-  option (w17.contrib.plugin_feature) = "devices";
-  string user_id   = 1 [(w17.field) = { type: UUID }];
-  string device_id = 2 [(w17.field) = { type: UUID }];
-  string ip        = 3 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
-}
-message TouchDeviceResp {
-  option (w17.contrib.plugin_feature) = "devices";
   string device_id = 1;
 }
 
@@ -769,12 +736,12 @@ message DeleteDeviceTokensResp {
   string device_id = 1;
 }
 
-message DeleteDeviceReq {
+message MarkDeviceRevokedReq {
   option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
 }
-message DeleteDeviceResp {
+message MarkDeviceRevokedResp {
   option (w17.contrib.plugin_feature) = "devices";
   string device_id = 1;
 }
@@ -1424,10 +1391,10 @@ service AuthMutation {
           "user_id = :user_id, "
           "token_hash = :token_hash, "
           "expires_at = :expires_at, "
-          "?feature(devices) device_id = :device_id "
+          "device_id = :device_id "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
-          "          ?feature(devices) device_id AS token.device_id, "
+          "          device_id AS token.device_id, "
           "          created_at AS token.created_at"
       }
     };
@@ -2119,78 +2086,64 @@ service AuthMutation {
   }
 
   // ────────────────────────────────────────────────────────────
-  // devices mutations — device upsert/trust at sign-in + the
-  // revoke primitives the device-mgmt RPCs compose. All gated
-  // `devices`.
+  // device identity mutations — the device every mint binds to
+  // (base) + the revoke primitives the device-mgmt RPCs compose
+  // (gated `devices`).
   // ────────────────────────────────────────────────────────────
 
 
-  // CreateDevice — INSERT a Device on first sight of an
-  // (user, identifier). last_seen_at / created_at fill via their
-  // NOW defaults; trusted_at stays NULL until a login completes
-  // (TrustDevice). Composite-unique (user_id, identifier) refuses a
-  // racing duplicate with AlreadyExists; the handler re-reads.
-  rpc CreateDevice(CreateDeviceReq) returns (CreateDeviceResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
+  // RegisterDevice — find or create the (user, thumbprint) Device in ONE
+  // statement, and say what it is: a mint binds its token to the returned
+  // id, refuses a row with revoked_at set (DEVICE_REVOKED, for good), and
+  // reads trusted_at for the new-device second factor. On a conflict the
+  // row's last_seen_at / label / ip are refreshed — on a revoked row too,
+  // where it records the last refused attempt with that key. No create-
+  // then-re-read race: the unique (user_id, thumbprint) index decides.
+  rpc RegisterDevice(RegisterDeviceReq) returns (RegisterDeviceResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "INSERT INTO @module.Device SET "
+          "UPSERT INTO @module.Device SET "
           "user_id = :user_id, "
-          "identifier = :identifier, "
+          "thumbprint = :thumbprint, "
+          "label = :label, "
+          "ip = :ip "
+          "ON CONFLICT (user_id, thumbprint) DO UPDATE SET "
+          "last_seen_at = NOW(), "
           "label = :label, "
           "ip = :ip "
           "RETURNING id AS device.id, "
           "          user_id AS device.user_id, "
-          "          identifier AS device.identifier, "
+          "          thumbprint AS device.thumbprint, "
           "          label AS device.label, "
           "          ip AS device.ip, "
           "          trusted_at AS device.trusted_at, "
           "          last_seen_at AS device.last_seen_at, "
-          "          created_at AS device.created_at"
+          "          created_at AS device.created_at, "
+          "          revoked_at AS device.revoked_at"
       }
     };
   }
 
-  // TrustDevice — mark the (user, identifier) device trusted +
-  // refresh last_seen. Called when a login (or VerifyMfa) for the
-  // device completes; the trusted_at it stamps is the signal
-  // `two_factor` new-device mode reads to skip the challenge. Matches no
-  // row when the account's device trust was revoked after
-  // :not_revoked_after (see the request): the sign-in then gets its
-  // session but no trust.
+  // TrustDevice — mark the device trusted + refresh last_seen. Called when
+  // a sign-in that passed the second factor (VerifyMfa), or renewed trust
+  // the device already had (SignIn), completes; the trusted_at it stamps is
+  // the signal `two_factor` new-device mode reads to skip the challenge.
+  // Matches no row for a revoked device, or when the account's device trust
+  // was revoked after :not_revoked_after (see the request): the sign-in
+  // then gets its session but no trust.
   rpc TrustDevice(TrustDeviceReq) returns (TrustDeviceResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
           "UPDATE @module.Device SET "
           "trusted_at = NOW(), "
-          "last_seen_at = NOW(), "
-          "trust_token_hash = :trust_token_hash "
-          "WHERE id = :device_id AND user_id = :user_id "
+          "last_seen_at = NOW() "
+          "WHERE id = :device_id AND user_id = :user_id AND revoked_at IS NULL "
           "AND NOT EXISTS (SELECT u.id FROM @module.User u "
           "WHERE u.id = :user_id AND u.device_trust_revoked_at > :not_revoked_after) "
-          "RETURNING id AS device_id"
-      }
-    };
-  }
-
-  // TouchDevice — refresh last_seen (+ ip) without trusting. Used
-  // when a new-device sign-in raises a 2FA challenge: the device is
-  // seen but not yet trusted (trust waits for VerifyMfa). Idempotent.
-  rpc TouchDevice(TouchDeviceReq) returns (TouchDeviceResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "UPDATE @module.Device SET "
-          "last_seen_at = NOW(), "
-          "ip = :ip "
-          "WHERE id = :device_id AND user_id = :user_id "
           "RETURNING id AS device_id"
       }
     };
@@ -2199,11 +2152,11 @@ service AuthMutation {
   // DeleteDeviceTokens — DELETE every session token a device owns (the "log out
   // this device" primitive). Ownership-guarded by user_id so a caller can't
   // drop another user's sessions. Idempotent. DeleteUndevicedSessions — DELETE
-  // the user's session tokens that carry no device. Not every session is
-  // device-bound: SignUp, ConfirmSignUp, the OAuth callback and CliToken issue
-  // a session with no device, so "log out everywhere" swept device by device
-  // would leave those standing. API tokens are spared — they are not sessions,
-  // and are removed only through RevokeApiToken.
+  // the user's session tokens that carry no device. Every session minted now
+  // is device-bound, but rows minted before device binding are not (they are
+  // refused by Authenticate, and swept here so "log out everywhere" leaves
+  // nothing standing). API tokens are spared — they are not sessions, and are
+  // removed only through RevokeApiToken.
   rpc DeleteUndevicedSessions(DeleteUndevicedSessionsReq) returns (DeleteUndevicedSessionsResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
@@ -2231,16 +2184,22 @@ service AuthMutation {
     };
   }
 
-  // DeleteDevice — DELETE the Device row itself (after its tokens).
-  // Ownership-guarded (id AND user_id). Idempotent.
-  rpc DeleteDevice(DeleteDeviceReq) returns (DeleteDeviceResp) {
+  // MarkDeviceRevoked — revoke the (user, device) pair for good: every
+  // token bound to it is refused from now on (Authenticate reads revoked_at
+  // through the token's binding), and a sign-in with the same key is
+  // refused with DEVICE_REVOKED. Never a DELETE: a deleted row would let the
+  // same key register again as a fresh device. Ownership-guarded (id AND
+  // user_id); guarded on revoked_at IS NULL so the first revocation's time
+  // stands. Zero rows (already revoked, or not the caller's) → NotFound,
+  // which the handler treats as done.
+  rpc MarkDeviceRevoked(MarkDeviceRevokedReq) returns (MarkDeviceRevokedResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.Device "
-          "WHERE id = :device_id AND user_id = :user_id "
+          "UPDATE @module.Device SET revoked_at = NOW() "
+          "WHERE id = :device_id AND user_id = :user_id AND revoked_at IS NULL "
           "RETURNING id AS device_id"
       }
     };
@@ -2433,11 +2392,11 @@ service AuthMutation {
       ops: [
         {
           name: "disable"
-          // With `devices`, the account's device trust ends too: a device
-          // trusted before the disable must pass the second factor again
-          // once the account is re-enabled (User.device_trust_revoked_at).
+          // The account's device trust ends too: a device trusted before
+          // the disable must pass the second factor again once the account
+          // is re-enabled (User.device_trust_revoked_at).
           dql:  "UPDATE @module.User SET disabled_at = NOW(), "
-                "?feature(devices) device_trust_revoked_at = NOW() "
+                "device_trust_revoked_at = NOW() "
                 "WHERE id IN (:ids) AND disabled_at IS NULL"
         },
         {
@@ -2692,11 +2651,11 @@ service AuthMutation {
         dql:
           "UPDATE @module.User SET "
           "password_hash = :password_hash, "
-          // With `devices`, a change also ends the trust of every device of
-          // the account, the caller's own included: whoever held the old
-          // password may have signed in from a device that is trusted now.
-          // In this statement, so the two cannot come apart.
-          "?feature(devices) device_trust_revoked_at = NOW() "
+          // A change also ends the trust of every device of the account, the
+          // caller's own included: whoever held the old password may have
+          // signed in from a device that is trusted now. In this statement,
+          // so the two cannot come apart.
+          "device_trust_revoked_at = NOW() "
           "WHERE id = :user_id AND password_hash = :current_hash "
           "RETURNING id AS user_id"
       }

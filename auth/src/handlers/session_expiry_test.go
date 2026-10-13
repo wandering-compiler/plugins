@@ -113,7 +113,7 @@ func bareAuthenticate(t *testing.T, h *AuthServiceHandler, token string) (*pb.Au
 	t.Cleanup(func() { scopeDecorators, grantNarrowers = prevDec, prevNarrow })
 	scopeDecorators, grantNarrowers = nil, nil
 	h.HeaderName, h.Scheme = "Authorization", "Bearer"
-	return h.Authenticate(context.Background(), &pb.AuthReq{Headers: map[string]string{"authorization": "Bearer " + token}})
+	return h.Authenticate(context.Background(), boundAuthReq(token, testJKT))
 }
 
 // errorInfo is google.rpc.ErrorInfo as a client decodes it. Decoded with
@@ -346,7 +346,7 @@ func liveToken(lastUsed *timestamppb.Timestamp) *pb.GetTokenWithTypeResp {
 	return &pb.GetTokenWithTypeResp{
 		StoredTokenHash: "stored", UserId: "u1", TokenId: "tok-1",
 		TokenType: pb.TokenType_TOKEN_TYPE_API, User: &pb.User{Id: "u1"},
-		LastUsedAt: lastUsed,
+		LastUsedAt: lastUsed, DeviceThumbprint: testJKT,
 	}
 }
 
