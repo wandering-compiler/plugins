@@ -1018,6 +1018,15 @@ message CliAuthCode {
   google.protobuf.Timestamp expires_at  = 5 [(w17.field) = { type: DATETIME }];
   google.protobuf.Timestamp consumed_at = 6 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at  = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // session_expires_at — when the browser session that APPROVED this code
+  // expires. CliToken mints the CLI's session no later than this, so a CLI
+  // login lasts only as long as the session that granted it. Without the cap
+  // a session could renew itself indefinitely: approve a CLI login shortly
+  // before it expires, receive a fresh full-lifetime session, repeat.
+  //
+  // NULL when the approving session never expires (and on a code minted
+  // before this column existed); CliToken then uses the normal session TTL.
+  google.protobuf.Timestamp session_expires_at = 10 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // Organization is a GitHub-style org — a membership boundary an identity
