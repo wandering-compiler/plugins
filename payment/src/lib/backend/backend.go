@@ -160,11 +160,17 @@ type PaymentResult struct {
 // RefundResult is what the provider returns for a refund.
 type RefundResult struct {
 	ProviderRefundID string
-	Status           string
+	// Status is the provider's refund status ("pending", "succeeded",
+	// "failed", "canceled", "requires_action"), mapped by the caller onto
+	// the local Refund.Status.
+	Status string
 	// Amount is the refund's amount, in the payment's currency. FindRefund
-	// must set it: the caller compares it with the amount a retry asks
-	// for, and a key that names a refund of another amount is refused.
+	// and ListRefunds must set it: the caller compares it with the amount a
+	// retry asks for, and records it for a refund it did not make.
 	Amount Money
+	// Key is the idempotency key RefundPayment stored on the refund (empty
+	// on a refund it did not make). FindRefund and ListRefunds set it.
+	Key string
 }
 
 // PlanSpec is the input to UpsertPlan — a recurring price the provider
@@ -221,6 +227,12 @@ type Backend interface {
 	// provider has forgotten the idempotency key. A provider that cannot
 	// look a refund up by key returns (_, false, nil): the old behaviour.
 	FindRefund(ctx context.Context, providerPaymentID, idemKey string) (RefundResult, bool, error)
+	// ListRefunds returns every refund of providerPaymentID the provider
+	// holds, in their current state, with Amount and Key set — the refunds
+	// made through RefundPayment and those made at the provider directly. The
+	// refund webhooks reconcile against it rather than against the event's
+	// own snapshot, which may be older than the refund's current state.
+	ListRefunds(ctx context.Context, providerPaymentID string) ([]RefundResult, error)
 
 	// UpsertPlan creates (or returns) the provider price object for a
 	// recurring plan and returns its opaque provider price id.

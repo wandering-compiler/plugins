@@ -58,6 +58,9 @@ func (f *fakeBackend) FindSubscription(_ context.Context, _ string, _ string) (b
 func (f *fakeBackend) FindRefund(_ context.Context, _ string, _ string) (backend.RefundResult, bool, error) {
 	return f.findRes, f.findOK, nil
 }
+func (f *fakeBackend) ListRefunds(_ context.Context, _ string) ([]backend.RefundResult, error) {
+	return nil, nil
+}
 func (f *fakeBackend) UpsertPlan(_ context.Context, spec backend.PlanSpec) (string, error) {
 	f.lastPlan = spec
 	return f.priceID, nil

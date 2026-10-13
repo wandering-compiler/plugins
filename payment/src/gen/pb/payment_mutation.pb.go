@@ -541,6 +541,94 @@ func (x *MarkPaymentRefundedResp) GetPayment() *Payment {
 	return nil
 }
 
+type MarkPaymentRefundReversedReq struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ProviderPaymentId string                 `protobuf:"bytes,1,opt,name=provider_payment_id,json=providerPaymentId,proto3" json:"provider_payment_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *MarkPaymentRefundReversedReq) Reset() {
+	*x = MarkPaymentRefundReversedReq{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkPaymentRefundReversedReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkPaymentRefundReversedReq) ProtoMessage() {}
+
+func (x *MarkPaymentRefundReversedReq) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkPaymentRefundReversedReq.ProtoReflect.Descriptor instead.
+func (*MarkPaymentRefundReversedReq) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *MarkPaymentRefundReversedReq) GetProviderPaymentId() string {
+	if x != nil {
+		return x.ProviderPaymentId
+	}
+	return ""
+}
+
+type MarkPaymentRefundReversedResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Payment       *Payment               `protobuf:"bytes,1,opt,name=payment,proto3" json:"payment,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarkPaymentRefundReversedResp) Reset() {
+	*x = MarkPaymentRefundReversedResp{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkPaymentRefundReversedResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkPaymentRefundReversedResp) ProtoMessage() {}
+
+func (x *MarkPaymentRefundReversedResp) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkPaymentRefundReversedResp.ProtoReflect.Descriptor instead.
+func (*MarkPaymentRefundReversedResp) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *MarkPaymentRefundReversedResp) GetPayment() *Payment {
+	if x != nil {
+		return x.Payment
+	}
+	return nil
+}
+
 type MarkPaymentCanceledReq struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	ProviderPaymentId string                 `protobuf:"bytes,1,opt,name=provider_payment_id,json=providerPaymentId,proto3" json:"provider_payment_id,omitempty"`
@@ -550,7 +638,7 @@ type MarkPaymentCanceledReq struct {
 
 func (x *MarkPaymentCanceledReq) Reset() {
 	*x = MarkPaymentCanceledReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[10]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -562,7 +650,7 @@ func (x *MarkPaymentCanceledReq) String() string {
 func (*MarkPaymentCanceledReq) ProtoMessage() {}
 
 func (x *MarkPaymentCanceledReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[10]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -575,7 +663,7 @@ func (x *MarkPaymentCanceledReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkPaymentCanceledReq.ProtoReflect.Descriptor instead.
 func (*MarkPaymentCanceledReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{10}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MarkPaymentCanceledReq) GetProviderPaymentId() string {
@@ -594,7 +682,7 @@ type MarkPaymentCanceledResp struct {
 
 func (x *MarkPaymentCanceledResp) Reset() {
 	*x = MarkPaymentCanceledResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[11]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -606,7 +694,7 @@ func (x *MarkPaymentCanceledResp) String() string {
 func (*MarkPaymentCanceledResp) ProtoMessage() {}
 
 func (x *MarkPaymentCanceledResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[11]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -619,7 +707,7 @@ func (x *MarkPaymentCanceledResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkPaymentCanceledResp.ProtoReflect.Descriptor instead.
 func (*MarkPaymentCanceledResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{11}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *MarkPaymentCanceledResp) GetPayment() *Payment {
@@ -636,13 +724,17 @@ type CreateRefundReq struct {
 	Amount           string                 `protobuf:"bytes,3,opt,name=amount,proto3" json:"amount,omitempty"`
 	Currency         string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
 	IdempotencyKey   string                 `protobuf:"bytes,5,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Refund.Status numeric value (the provider's outcome). Plain int — the
+	// fixed INSERT DQL binds it without an enum literal.
+	Status          int32  `protobuf:"varint,6,opt,name=status,proto3" json:"status,omitempty"`
+	CreditShortfall string `protobuf:"bytes,7,opt,name=credit_shortfall,json=creditShortfall,proto3" json:"credit_shortfall,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateRefundReq) Reset() {
 	*x = CreateRefundReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[12]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -654,7 +746,7 @@ func (x *CreateRefundReq) String() string {
 func (*CreateRefundReq) ProtoMessage() {}
 
 func (x *CreateRefundReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[12]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -667,7 +759,7 @@ func (x *CreateRefundReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRefundReq.ProtoReflect.Descriptor instead.
 func (*CreateRefundReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{12}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CreateRefundReq) GetPaymentId() string {
@@ -705,6 +797,20 @@ func (x *CreateRefundReq) GetIdempotencyKey() string {
 	return ""
 }
 
+func (x *CreateRefundReq) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *CreateRefundReq) GetCreditShortfall() string {
+	if x != nil {
+		return x.CreditShortfall
+	}
+	return ""
+}
+
 type CreateRefundResp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Refund        *Refund                `protobuf:"bytes,1,opt,name=refund,proto3" json:"refund,omitempty"`
@@ -714,7 +820,7 @@ type CreateRefundResp struct {
 
 func (x *CreateRefundResp) Reset() {
 	*x = CreateRefundResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[13]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -726,7 +832,7 @@ func (x *CreateRefundResp) String() string {
 func (*CreateRefundResp) ProtoMessage() {}
 
 func (x *CreateRefundResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[13]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -739,10 +845,235 @@ func (x *CreateRefundResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRefundResp.ProtoReflect.Descriptor instead.
 func (*CreateRefundResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{13}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CreateRefundResp) GetRefund() *Refund {
+	if x != nil {
+		return x.Refund
+	}
+	return nil
+}
+
+// RecordProviderRefundReq — a refund made at the provider directly: no key.
+type RecordProviderRefundReq struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	PaymentId        string                 `protobuf:"bytes,1,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
+	ProviderRefundId string                 `protobuf:"bytes,2,opt,name=provider_refund_id,json=providerRefundId,proto3" json:"provider_refund_id,omitempty"`
+	Amount           string                 `protobuf:"bytes,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	Currency         string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
+	Status           int32                  `protobuf:"varint,5,opt,name=status,proto3" json:"status,omitempty"`
+	CreditShortfall  string                 `protobuf:"bytes,6,opt,name=credit_shortfall,json=creditShortfall,proto3" json:"credit_shortfall,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RecordProviderRefundReq) Reset() {
+	*x = RecordProviderRefundReq{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordProviderRefundReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordProviderRefundReq) ProtoMessage() {}
+
+func (x *RecordProviderRefundReq) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordProviderRefundReq.ProtoReflect.Descriptor instead.
+func (*RecordProviderRefundReq) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *RecordProviderRefundReq) GetPaymentId() string {
+	if x != nil {
+		return x.PaymentId
+	}
+	return ""
+}
+
+func (x *RecordProviderRefundReq) GetProviderRefundId() string {
+	if x != nil {
+		return x.ProviderRefundId
+	}
+	return ""
+}
+
+func (x *RecordProviderRefundReq) GetAmount() string {
+	if x != nil {
+		return x.Amount
+	}
+	return ""
+}
+
+func (x *RecordProviderRefundReq) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *RecordProviderRefundReq) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *RecordProviderRefundReq) GetCreditShortfall() string {
+	if x != nil {
+		return x.CreditShortfall
+	}
+	return ""
+}
+
+type RecordProviderRefundResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Refund        *Refund                `protobuf:"bytes,1,opt,name=refund,proto3" json:"refund,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordProviderRefundResp) Reset() {
+	*x = RecordProviderRefundResp{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordProviderRefundResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordProviderRefundResp) ProtoMessage() {}
+
+func (x *RecordProviderRefundResp) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordProviderRefundResp.ProtoReflect.Descriptor instead.
+func (*RecordProviderRefundResp) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RecordProviderRefundResp) GetRefund() *Refund {
+	if x != nil {
+		return x.Refund
+	}
+	return nil
+}
+
+type MarkRefundStatusReq struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ProviderRefundId string                 `protobuf:"bytes,1,opt,name=provider_refund_id,json=providerRefundId,proto3" json:"provider_refund_id,omitempty"`
+	Status           int32                  `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *MarkRefundStatusReq) Reset() {
+	*x = MarkRefundStatusReq{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkRefundStatusReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkRefundStatusReq) ProtoMessage() {}
+
+func (x *MarkRefundStatusReq) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkRefundStatusReq.ProtoReflect.Descriptor instead.
+func (*MarkRefundStatusReq) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *MarkRefundStatusReq) GetProviderRefundId() string {
+	if x != nil {
+		return x.ProviderRefundId
+	}
+	return ""
+}
+
+func (x *MarkRefundStatusReq) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+type MarkRefundStatusResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Refund        *Refund                `protobuf:"bytes,1,opt,name=refund,proto3" json:"refund,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarkRefundStatusResp) Reset() {
+	*x = MarkRefundStatusResp{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkRefundStatusResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkRefundStatusResp) ProtoMessage() {}
+
+func (x *MarkRefundStatusResp) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkRefundStatusResp.ProtoReflect.Descriptor instead.
+func (*MarkRefundStatusResp) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *MarkRefundStatusResp) GetRefund() *Refund {
 	if x != nil {
 		return x.Refund
 	}
@@ -759,7 +1090,7 @@ type SetRefundIdempotencyKeyReq struct {
 
 func (x *SetRefundIdempotencyKeyReq) Reset() {
 	*x = SetRefundIdempotencyKeyReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[14]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -771,7 +1102,7 @@ func (x *SetRefundIdempotencyKeyReq) String() string {
 func (*SetRefundIdempotencyKeyReq) ProtoMessage() {}
 
 func (x *SetRefundIdempotencyKeyReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[14]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -784,7 +1115,7 @@ func (x *SetRefundIdempotencyKeyReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetRefundIdempotencyKeyReq.ProtoReflect.Descriptor instead.
 func (*SetRefundIdempotencyKeyReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{14}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SetRefundIdempotencyKeyReq) GetId() string {
@@ -810,7 +1141,7 @@ type SetRefundIdempotencyKeyResp struct {
 
 func (x *SetRefundIdempotencyKeyResp) Reset() {
 	*x = SetRefundIdempotencyKeyResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[15]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -822,7 +1153,7 @@ func (x *SetRefundIdempotencyKeyResp) String() string {
 func (*SetRefundIdempotencyKeyResp) ProtoMessage() {}
 
 func (x *SetRefundIdempotencyKeyResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[15]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -835,7 +1166,7 @@ func (x *SetRefundIdempotencyKeyResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetRefundIdempotencyKeyResp.ProtoReflect.Descriptor instead.
 func (*SetRefundIdempotencyKeyResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{15}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SetRefundIdempotencyKeyResp) GetId() string {
@@ -843,6 +1174,255 @@ func (x *SetRefundIdempotencyKeyResp) GetId() string {
 		return x.Id
 	}
 	return ""
+}
+
+// ── dispute mutation request/response (stripe_webhooks) ─────────────
+type CreateDisputeReq struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	PaymentId         string                 `protobuf:"bytes,1,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
+	ProviderDisputeId string                 `protobuf:"bytes,2,opt,name=provider_dispute_id,json=providerDisputeId,proto3" json:"provider_dispute_id,omitempty"`
+	Amount            string                 `protobuf:"bytes,3,opt,name=amount,proto3" json:"amount,omitempty"`
+	Currency          string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
+	Status            int32                  `protobuf:"varint,5,opt,name=status,proto3" json:"status,omitempty"`
+	CreditShortfall   string                 `protobuf:"bytes,6,opt,name=credit_shortfall,json=creditShortfall,proto3" json:"credit_shortfall,omitempty"`
+	ProviderEventAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=provider_event_at,json=providerEventAt,proto3" json:"provider_event_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *CreateDisputeReq) Reset() {
+	*x = CreateDisputeReq{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDisputeReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDisputeReq) ProtoMessage() {}
+
+func (x *CreateDisputeReq) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDisputeReq.ProtoReflect.Descriptor instead.
+func (*CreateDisputeReq) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *CreateDisputeReq) GetPaymentId() string {
+	if x != nil {
+		return x.PaymentId
+	}
+	return ""
+}
+
+func (x *CreateDisputeReq) GetProviderDisputeId() string {
+	if x != nil {
+		return x.ProviderDisputeId
+	}
+	return ""
+}
+
+func (x *CreateDisputeReq) GetAmount() string {
+	if x != nil {
+		return x.Amount
+	}
+	return ""
+}
+
+func (x *CreateDisputeReq) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *CreateDisputeReq) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *CreateDisputeReq) GetCreditShortfall() string {
+	if x != nil {
+		return x.CreditShortfall
+	}
+	return ""
+}
+
+func (x *CreateDisputeReq) GetProviderEventAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ProviderEventAt
+	}
+	return nil
+}
+
+type CreateDisputeResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dispute       *Dispute               `protobuf:"bytes,1,opt,name=dispute,proto3" json:"dispute,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateDisputeResp) Reset() {
+	*x = CreateDisputeResp{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDisputeResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDisputeResp) ProtoMessage() {}
+
+func (x *CreateDisputeResp) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDisputeResp.ProtoReflect.Descriptor instead.
+func (*CreateDisputeResp) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *CreateDisputeResp) GetDispute() *Dispute {
+	if x != nil {
+		return x.Dispute
+	}
+	return nil
+}
+
+type MarkDisputeStatusReq struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ProviderDisputeId string                 `protobuf:"bytes,1,opt,name=provider_dispute_id,json=providerDisputeId,proto3" json:"provider_dispute_id,omitempty"`
+	Status            int32                  `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
+	CreditShortfall   string                 `protobuf:"bytes,3,opt,name=credit_shortfall,json=creditShortfall,proto3" json:"credit_shortfall,omitempty"`
+	ProviderEventAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=provider_event_at,json=providerEventAt,proto3" json:"provider_event_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *MarkDisputeStatusReq) Reset() {
+	*x = MarkDisputeStatusReq{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkDisputeStatusReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkDisputeStatusReq) ProtoMessage() {}
+
+func (x *MarkDisputeStatusReq) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkDisputeStatusReq.ProtoReflect.Descriptor instead.
+func (*MarkDisputeStatusReq) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *MarkDisputeStatusReq) GetProviderDisputeId() string {
+	if x != nil {
+		return x.ProviderDisputeId
+	}
+	return ""
+}
+
+func (x *MarkDisputeStatusReq) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *MarkDisputeStatusReq) GetCreditShortfall() string {
+	if x != nil {
+		return x.CreditShortfall
+	}
+	return ""
+}
+
+func (x *MarkDisputeStatusReq) GetProviderEventAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ProviderEventAt
+	}
+	return nil
+}
+
+type MarkDisputeStatusResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dispute       *Dispute               `protobuf:"bytes,1,opt,name=dispute,proto3" json:"dispute,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarkDisputeStatusResp) Reset() {
+	*x = MarkDisputeStatusResp{}
+	mi := &file_mutations_payment_mutation_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkDisputeStatusResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkDisputeStatusResp) ProtoMessage() {}
+
+func (x *MarkDisputeStatusResp) ProtoReflect() protoreflect.Message {
+	mi := &file_mutations_payment_mutation_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkDisputeStatusResp.ProtoReflect.Descriptor instead.
+func (*MarkDisputeStatusResp) Descriptor() ([]byte, []int) {
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *MarkDisputeStatusResp) GetDispute() *Dispute {
+	if x != nil {
+		return x.Dispute
+	}
+	return nil
 }
 
 type MarkWebhookProcessedReq struct {
@@ -855,7 +1435,7 @@ type MarkWebhookProcessedReq struct {
 
 func (x *MarkWebhookProcessedReq) Reset() {
 	*x = MarkWebhookProcessedReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[16]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -867,7 +1447,7 @@ func (x *MarkWebhookProcessedReq) String() string {
 func (*MarkWebhookProcessedReq) ProtoMessage() {}
 
 func (x *MarkWebhookProcessedReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[16]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -880,7 +1460,7 @@ func (x *MarkWebhookProcessedReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkWebhookProcessedReq.ProtoReflect.Descriptor instead.
 func (*MarkWebhookProcessedReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{16}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MarkWebhookProcessedReq) GetProviderEventId() string {
@@ -906,7 +1486,7 @@ type MarkWebhookProcessedResp struct {
 
 func (x *MarkWebhookProcessedResp) Reset() {
 	*x = MarkWebhookProcessedResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[17]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -918,7 +1498,7 @@ func (x *MarkWebhookProcessedResp) String() string {
 func (*MarkWebhookProcessedResp) ProtoMessage() {}
 
 func (x *MarkWebhookProcessedResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[17]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -931,7 +1511,7 @@ func (x *MarkWebhookProcessedResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkWebhookProcessedResp.ProtoReflect.Descriptor instead.
 func (*MarkWebhookProcessedResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{17}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MarkWebhookProcessedResp) GetProviderEventId() string {
@@ -955,7 +1535,7 @@ type ApplyCreditReq struct {
 
 func (x *ApplyCreditReq) Reset() {
 	*x = ApplyCreditReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[18]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -967,7 +1547,7 @@ func (x *ApplyCreditReq) String() string {
 func (*ApplyCreditReq) ProtoMessage() {}
 
 func (x *ApplyCreditReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[18]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -980,7 +1560,7 @@ func (x *ApplyCreditReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyCreditReq.ProtoReflect.Descriptor instead.
 func (*ApplyCreditReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{18}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ApplyCreditReq) GetUserId() string {
@@ -1029,7 +1609,7 @@ type ApplyCreditResp struct {
 
 func (x *ApplyCreditResp) Reset() {
 	*x = ApplyCreditResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[19]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1041,7 +1621,7 @@ func (x *ApplyCreditResp) String() string {
 func (*ApplyCreditResp) ProtoMessage() {}
 
 func (x *ApplyCreditResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[19]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1054,7 +1634,7 @@ func (x *ApplyCreditResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyCreditResp.ProtoReflect.Descriptor instead.
 func (*ApplyCreditResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{19}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ApplyCreditResp) GetUserId() string {
@@ -1089,7 +1669,7 @@ type CreateCreditTopupReq struct {
 
 func (x *CreateCreditTopupReq) Reset() {
 	*x = CreateCreditTopupReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[20]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1101,7 +1681,7 @@ func (x *CreateCreditTopupReq) String() string {
 func (*CreateCreditTopupReq) ProtoMessage() {}
 
 func (x *CreateCreditTopupReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[20]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1114,7 +1694,7 @@ func (x *CreateCreditTopupReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCreditTopupReq.ProtoReflect.Descriptor instead.
 func (*CreateCreditTopupReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{20}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CreateCreditTopupReq) GetProviderPaymentId() string {
@@ -1147,7 +1727,7 @@ type CreateCreditTopupResp struct {
 
 func (x *CreateCreditTopupResp) Reset() {
 	*x = CreateCreditTopupResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[21]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1159,7 +1739,7 @@ func (x *CreateCreditTopupResp) String() string {
 func (*CreateCreditTopupResp) ProtoMessage() {}
 
 func (x *CreateCreditTopupResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[21]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1172,7 +1752,7 @@ func (x *CreateCreditTopupResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCreditTopupResp.ProtoReflect.Descriptor instead.
 func (*CreateCreditTopupResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{21}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *CreateCreditTopupResp) GetTopup() *CreditTopup {
@@ -1191,7 +1771,7 @@ type MarkTopupGrantedReq struct {
 
 func (x *MarkTopupGrantedReq) Reset() {
 	*x = MarkTopupGrantedReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[22]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1203,7 +1783,7 @@ func (x *MarkTopupGrantedReq) String() string {
 func (*MarkTopupGrantedReq) ProtoMessage() {}
 
 func (x *MarkTopupGrantedReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[22]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1216,7 +1796,7 @@ func (x *MarkTopupGrantedReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkTopupGrantedReq.ProtoReflect.Descriptor instead.
 func (*MarkTopupGrantedReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{22}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *MarkTopupGrantedReq) GetProviderPaymentId() string {
@@ -1235,7 +1815,7 @@ type MarkTopupGrantedResp struct {
 
 func (x *MarkTopupGrantedResp) Reset() {
 	*x = MarkTopupGrantedResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[23]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1247,7 +1827,7 @@ func (x *MarkTopupGrantedResp) String() string {
 func (*MarkTopupGrantedResp) ProtoMessage() {}
 
 func (x *MarkTopupGrantedResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[23]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1260,7 +1840,7 @@ func (x *MarkTopupGrantedResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkTopupGrantedResp.ProtoReflect.Descriptor instead.
 func (*MarkTopupGrantedResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{23}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *MarkTopupGrantedResp) GetProviderPaymentId() string {
@@ -1286,7 +1866,7 @@ type RecordUsageReq struct {
 
 func (x *RecordUsageReq) Reset() {
 	*x = RecordUsageReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[24]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1298,7 +1878,7 @@ func (x *RecordUsageReq) String() string {
 func (*RecordUsageReq) ProtoMessage() {}
 
 func (x *RecordUsageReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[24]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1311,7 +1891,7 @@ func (x *RecordUsageReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordUsageReq.ProtoReflect.Descriptor instead.
 func (*RecordUsageReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{24}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *RecordUsageReq) GetUserId() string {
@@ -1376,7 +1956,7 @@ type RecordUsageResp struct {
 
 func (x *RecordUsageResp) Reset() {
 	*x = RecordUsageResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[25]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1388,7 +1968,7 @@ func (x *RecordUsageResp) String() string {
 func (*RecordUsageResp) ProtoMessage() {}
 
 func (x *RecordUsageResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[25]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1401,7 +1981,7 @@ func (x *RecordUsageResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordUsageResp.ProtoReflect.Descriptor instead.
 func (*RecordUsageResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{25}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *RecordUsageResp) GetUserId() string {
@@ -1454,7 +2034,7 @@ type CreatePlanReq struct {
 
 func (x *CreatePlanReq) Reset() {
 	*x = CreatePlanReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[26]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1466,7 +2046,7 @@ func (x *CreatePlanReq) String() string {
 func (*CreatePlanReq) ProtoMessage() {}
 
 func (x *CreatePlanReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[26]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1479,7 +2059,7 @@ func (x *CreatePlanReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePlanReq.ProtoReflect.Descriptor instead.
 func (*CreatePlanReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{26}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *CreatePlanReq) GetSlug() string {
@@ -1533,7 +2113,7 @@ type CreatePlanResp struct {
 
 func (x *CreatePlanResp) Reset() {
 	*x = CreatePlanResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[27]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1545,7 +2125,7 @@ func (x *CreatePlanResp) String() string {
 func (*CreatePlanResp) ProtoMessage() {}
 
 func (x *CreatePlanResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[27]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1558,7 +2138,7 @@ func (x *CreatePlanResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePlanResp.ProtoReflect.Descriptor instead.
 func (*CreatePlanResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{27}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *CreatePlanResp) GetPlan() *Plan {
@@ -1581,7 +2161,7 @@ type CreateSubscriptionReq struct {
 
 func (x *CreateSubscriptionReq) Reset() {
 	*x = CreateSubscriptionReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[28]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1593,7 +2173,7 @@ func (x *CreateSubscriptionReq) String() string {
 func (*CreateSubscriptionReq) ProtoMessage() {}
 
 func (x *CreateSubscriptionReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[28]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1606,7 +2186,7 @@ func (x *CreateSubscriptionReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSubscriptionReq.ProtoReflect.Descriptor instead.
 func (*CreateSubscriptionReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{28}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *CreateSubscriptionReq) GetCustomerId() string {
@@ -1653,7 +2233,7 @@ type CreateSubscriptionResp struct {
 
 func (x *CreateSubscriptionResp) Reset() {
 	*x = CreateSubscriptionResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[29]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1665,7 +2245,7 @@ func (x *CreateSubscriptionResp) String() string {
 func (*CreateSubscriptionResp) ProtoMessage() {}
 
 func (x *CreateSubscriptionResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[29]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1678,7 +2258,7 @@ func (x *CreateSubscriptionResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSubscriptionResp.ProtoReflect.Descriptor instead.
 func (*CreateSubscriptionResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{29}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *CreateSubscriptionResp) GetSubscription() *Subscription {
@@ -1700,7 +2280,7 @@ type MarkSubscriptionStatusReq struct {
 
 func (x *MarkSubscriptionStatusReq) Reset() {
 	*x = MarkSubscriptionStatusReq{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[30]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1712,7 +2292,7 @@ func (x *MarkSubscriptionStatusReq) String() string {
 func (*MarkSubscriptionStatusReq) ProtoMessage() {}
 
 func (x *MarkSubscriptionStatusReq) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[30]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1725,7 +2305,7 @@ func (x *MarkSubscriptionStatusReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkSubscriptionStatusReq.ProtoReflect.Descriptor instead.
 func (*MarkSubscriptionStatusReq) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{30}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *MarkSubscriptionStatusReq) GetProviderSubscriptionId() string {
@@ -1765,7 +2345,7 @@ type MarkSubscriptionStatusResp struct {
 
 func (x *MarkSubscriptionStatusResp) Reset() {
 	*x = MarkSubscriptionStatusResp{}
-	mi := &file_mutations_payment_mutation_proto_msgTypes[31]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1777,7 +2357,7 @@ func (x *MarkSubscriptionStatusResp) String() string {
 func (*MarkSubscriptionStatusResp) ProtoMessage() {}
 
 func (x *MarkSubscriptionStatusResp) ProtoReflect() protoreflect.Message {
-	mi := &file_mutations_payment_mutation_proto_msgTypes[31]
+	mi := &file_mutations_payment_mutation_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1790,7 +2370,7 @@ func (x *MarkSubscriptionStatusResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkSubscriptionStatusResp.ProtoReflect.Descriptor instead.
 func (*MarkSubscriptionStatusResp) Descriptor() ([]byte, []int) {
-	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{31}
+	return file_mutations_payment_mutation_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *MarkSubscriptionStatusResp) GetSubscription() *Subscription {
@@ -1833,25 +2413,64 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x16MarkPaymentRefundedReq\x129\n" +
 	"\x13provider_payment_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x11providerPaymentId\"Q\n" +
 	"\x17MarkPaymentRefundedResp\x126\n" +
+	"\apayment\x18\x01 \x01(\v2\x1c.w17.contrib.payment.PaymentR\apayment\"Y\n" +
+	"\x1cMarkPaymentRefundReversedReq\x129\n" +
+	"\x13provider_payment_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x11providerPaymentId\"W\n" +
+	"\x1dMarkPaymentRefundReversedResp\x126\n" +
 	"\apayment\x18\x01 \x01(\v2\x1c.w17.contrib.payment.PaymentR\apayment\"S\n" +
 	"\x16MarkPaymentCanceledReq\x129\n" +
 	"\x13provider_payment_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x11providerPaymentId\"Q\n" +
 	"\x17MarkPaymentCanceledResp\x126\n" +
-	"\apayment\x18\x01 \x01(\v2\x1c.w17.contrib.payment.PaymentR\apayment\"\xfa\x01\n" +
+	"\apayment\x18\x01 \x01(\v2\x1c.w17.contrib.payment.PaymentR\apayment\"\xd4\x02\n" +
 	"\x0fCreateRefundReq\x12%\n" +
 	"\n" +
 	"payment_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\tpaymentId\x127\n" +
 	"\x12provider_refund_id\x18\x02 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x10providerRefundId\x12-\n" +
 	"\x06amount\x18\x03 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x06amount\x12$\n" +
 	"\bcurrency\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x122\n" +
-	"\x0fidempotency_key\x18\x05 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x0eidempotencyKey\"G\n" +
+	"\x0fidempotency_key\x18\x05 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x0eidempotencyKey\x12\x16\n" +
+	"\x06status\x18\x06 \x01(\x05R\x06status\x12@\n" +
+	"\x10credit_shortfall\x18\a \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x0fcreditShortfall\"G\n" +
 	"\x10CreateRefundResp\x123\n" +
+	"\x06refund\x18\x01 \x01(\v2\x1b.w17.contrib.payment.RefundR\x06refund\"\xa8\x02\n" +
+	"\x17RecordProviderRefundReq\x12%\n" +
+	"\n" +
+	"payment_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\tpaymentId\x127\n" +
+	"\x12provider_refund_id\x18\x02 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x10providerRefundId\x12-\n" +
+	"\x06amount\x18\x03 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x06amount\x12$\n" +
+	"\bcurrency\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\x05R\x06status\x12@\n" +
+	"\x10credit_shortfall\x18\x06 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x0fcreditShortfall\"O\n" +
+	"\x18RecordProviderRefundResp\x123\n" +
+	"\x06refund\x18\x01 \x01(\v2\x1b.w17.contrib.payment.RefundR\x06refund\"f\n" +
+	"\x13MarkRefundStatusReq\x127\n" +
+	"\x12provider_refund_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x10providerRefundId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\x05R\x06status\"K\n" +
+	"\x14MarkRefundStatusResp\x123\n" +
 	"\x06refund\x18\x01 \x01(\v2\x1b.w17.contrib.payment.RefundR\x06refund\"h\n" +
 	"\x1aSetRefundIdempotencyKeyReq\x12\x16\n" +
 	"\x02id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x02id\x122\n" +
 	"\x0fidempotency_key\x18\x02 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x0eidempotencyKey\"-\n" +
 	"\x1bSetRefundIdempotencyKeyResp\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x91\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x80\x03\n" +
+	"\x10CreateDisputeReq\x12%\n" +
+	"\n" +
+	"payment_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\tpaymentId\x129\n" +
+	"\x13provider_dispute_id\x18\x02 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x11providerDisputeId\x12-\n" +
+	"\x06amount\x18\x03 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x06amount\x12$\n" +
+	"\bcurrency\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\x05R\x06status\x12@\n" +
+	"\x10credit_shortfall\x18\x06 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x0fcreditShortfall\x12F\n" +
+	"\x11provider_event_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x0fproviderEventAt:\x13\xfa\xf4\x18\x0fstripe_webhooks\"`\n" +
+	"\x11CreateDisputeResp\x126\n" +
+	"\adispute\x18\x01 \x01(\v2\x1c.w17.contrib.payment.DisputeR\adispute:\x13\xfa\xf4\x18\x0fstripe_webhooks\"\x88\x02\n" +
+	"\x14MarkDisputeStatusReq\x129\n" +
+	"\x13provider_dispute_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x11providerDisputeId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\x05R\x06status\x12@\n" +
+	"\x10credit_shortfall\x18\x03 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x0fcreditShortfall\x12F\n" +
+	"\x11provider_event_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0fproviderEventAt:\x13\xfa\xf4\x18\x0fstripe_webhooks\"d\n" +
+	"\x15MarkDisputeStatusResp\x126\n" +
+	"\adispute\x18\x01 \x01(\v2\x1c.w17.contrib.payment.DisputeR\adispute:\x13\xfa\xf4\x18\x0fstripe_webhooks\"\x91\x01\n" +
 	"\x17MarkWebhookProcessedReq\x125\n" +
 	"\x11provider_event_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x0fproviderEventId\x12*\n" +
 	"\n" +
@@ -1919,7 +2538,7 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x12current_period_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10currentPeriodEnd\x12F\n" +
 	"\x11provider_event_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0fproviderEventAt:\x11\xfa\xf4\x18\rsubscriptions\"v\n" +
 	"\x1aMarkSubscriptionStatusResp\x12E\n" +
-	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\xa4Q\n" +
+	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\x8em\n" +
 	"\x0fPaymentMutation\x12\xba\x03\n" +
 	"\x0eCreateCustomer\x12&.w17.contrib.payment.CreateCustomerReq\x1a'.w17.contrib.payment.CreateCustomerResp\"\xd6\x02\xf2\xf3\x18\xd1\x02B\xce\x02\n" +
 	"\x04main\x12\xc5\x02INSERT INTO @module.Customer SET user_id = :user_id, provider_customer_id = :provider_customer_id, email = :email RETURNING id AS customer.id,           user_id AS customer.user_id,           provider_customer_id AS customer.provider_customer_id,           email AS customer.email,           created_at AS customer.created_at\x12\x85\x06\n" +
@@ -1956,7 +2575,23 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\bcurrency\x12\x1a$response.payment.currency\n" +
 	"+\n" +
 	"\vrefunded_at\x12\x1c$response.payment.updated_at\xf2\xf3\x18\x84\x03B\x81\x03\n" +
-	"\x04main\x12\xf8\x02UPDATE @module.Payment SET status = 6, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status = 3 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           amount AS payment.amount,           currency AS payment.currency,           updated_at AS payment.updated_at\x12\xa7\x05\n" +
+	"\x04main\x12\xf8\x02UPDATE @module.Payment SET status = 6, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status = 3 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           amount AS payment.amount,           currency AS payment.currency,           updated_at AS payment.updated_at\x12\xb6\x06\n" +
+	"\x19MarkPaymentRefundReversed\x121.w17.contrib.payment.MarkPaymentRefundReversedReq\x1a2.w17.contrib.payment.MarkPaymentRefundReversedResp\"\xb1\x05\x9a\xbd\x18\xa3\x02\n" +
+	"\x15PaymentRefundReversed\x12\x89\x02\n" +
+	"\"\n" +
+	"\n" +
+	"payment_id\x12\x14$response.payment.id\n" +
+	",\n" +
+	"\vcustomer_id\x12\x1d$response.payment.customer_id\n" +
+	"<\n" +
+	"\x13provider_payment_id\x12%$response.payment.provider_payment_id\n" +
+	"\"\n" +
+	"\x06amount\x12\x18$response.payment.amount\n" +
+	"&\n" +
+	"\bcurrency\x12\x1a$response.payment.currency\n" +
+	"+\n" +
+	"\vreversed_at\x12\x1c$response.payment.updated_at\xf2\xf3\x18\x84\x03B\x81\x03\n" +
+	"\x04main\x12\xf8\x02UPDATE @module.Payment SET status = 3, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status = 6 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           amount AS payment.amount,           currency AS payment.currency,           updated_at AS payment.updated_at\x12\xa7\x05\n" +
 	"\x13MarkPaymentCanceled\x12+.w17.contrib.payment.MarkPaymentCanceledReq\x1a,.w17.contrib.payment.MarkPaymentCanceledResp\"\xb4\x04\x9a\xbd\x18\xd1\x01\n" +
 	"\x0fPaymentCanceled\x12\xbd\x01\n" +
 	"\"\n" +
@@ -1980,11 +2615,19 @@ const file_mutations_payment_mutation_proto_rawDesc = "" +
 	"\x13provider_payment_id\x12%$response.payment.provider_payment_id\n" +
 	")\n" +
 	"\tfailed_at\x12\x1c$response.payment.updated_at\xf2\xf3\x18\xe9\x02B\xe6\x02\n" +
-	"\x04main\x12\xdd\x02UPDATE @module.Payment SET status = 4, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 4 AND status <> 5 AND status <> 6 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           updated_at AS payment.updated_at\x12\xc6\x04\n" +
-	"\fCreateRefund\x12$.w17.contrib.payment.CreateRefundReq\x1a%.w17.contrib.payment.CreateRefundResp\"\xe8\x03\xf2\xf3\x18\xe3\x03B\xe0\x03\n" +
-	"\x04main\x12\xd7\x03INSERT INTO @module.Refund SET payment_id = :payment_id, provider_refund_id = :provider_refund_id, amount = :amount, currency = :currency, idempotency_key = :idempotency_key RETURNING id AS refund.id,           payment_id AS refund.payment_id,           provider_refund_id AS refund.provider_refund_id,           amount AS refund.amount,           currency AS refund.currency,           created_at AS refund.created_at,           idempotency_key AS refund.idempotency_key\x12\x81\x02\n" +
+	"\x04main\x12\xdd\x02UPDATE @module.Payment SET status = 4, updated_at = NOW() WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 4 AND status <> 5 AND status <> 6 RETURNING id AS payment.id,           customer_id AS payment.customer_id,           provider_payment_id AS payment.provider_payment_id,           updated_at AS payment.updated_at\x12\xd8\x05\n" +
+	"\fCreateRefund\x12$.w17.contrib.payment.CreateRefundReq\x1a%.w17.contrib.payment.CreateRefundResp\"\xfa\x04\xf2\xf3\x18\xf5\x04B\xf2\x04\n" +
+	"\x04main\x12\xe9\x04INSERT INTO @module.Refund SET payment_id = :payment_id, provider_refund_id = :provider_refund_id, amount = :amount, currency = :currency, idempotency_key = :idempotency_key, status = :status, credit_shortfall = :credit_shortfall RETURNING id AS refund.id,           payment_id AS refund.payment_id,           provider_refund_id AS refund.provider_refund_id,           amount AS refund.amount,           currency AS refund.currency,           created_at AS refund.created_at,           idempotency_key AS refund.idempotency_key,           status AS refund.status,           credit_shortfall AS refund.credit_shortfall\x12\x97\x05\n" +
+	"\x14RecordProviderRefund\x12,.w17.contrib.payment.RecordProviderRefundReq\x1a-.w17.contrib.payment.RecordProviderRefundResp\"\xa1\x04\xf2\xf3\x18\x9c\x04B\x99\x04\n" +
+	"\x04main\x12\x90\x04INSERT INTO @module.Refund SET payment_id = :payment_id, provider_refund_id = :provider_refund_id, amount = :amount, currency = :currency, status = :status, credit_shortfall = :credit_shortfall RETURNING id AS refund.id,           payment_id AS refund.payment_id,           provider_refund_id AS refund.provider_refund_id,           amount AS refund.amount,           currency AS refund.currency,           created_at AS refund.created_at,           status AS refund.status,           credit_shortfall AS refund.credit_shortfall\x12\xf7\x03\n" +
+	"\x10MarkRefundStatus\x12(.w17.contrib.payment.MarkRefundStatusReq\x1a).w17.contrib.payment.MarkRefundStatusResp\"\x8d\x03\xf2\xf3\x18\x88\x03B\x85\x03\n" +
+	"\x04main\x12\xfc\x02UPDATE @module.Refund SET status = :status WHERE provider_refund_id = :provider_refund_id AND status <> 3 AND status <> 4 AND status <> :status RETURNING id AS refund.id,           payment_id AS refund.payment_id,           provider_refund_id AS refund.provider_refund_id,           amount AS refund.amount,           currency AS refund.currency,           status AS refund.status\x12\x81\x02\n" +
 	"\x17SetRefundIdempotencyKey\x12/.w17.contrib.payment.SetRefundIdempotencyKeyReq\x1a0.w17.contrib.payment.SetRefundIdempotencyKeyResp\"\x82\x01\xf2\xf3\x18~B|\n" +
-	"\x04main\x12tUPDATE @module.Refund SET idempotency_key = :idempotency_key WHERE id = :id AND idempotency_key IS NULL RETURNING id\x12\xa4\x02\n" +
+	"\x04main\x12tUPDATE @module.Refund SET idempotency_key = :idempotency_key WHERE id = :id AND idempotency_key IS NULL RETURNING id\x12\x9e\x05\n" +
+	"\rCreateDispute\x12%.w17.contrib.payment.CreateDisputeReq\x1a&.w17.contrib.payment.CreateDisputeResp\"\xbd\x04\xf2\xf3\x18\xa5\x04B\xa2\x04\n" +
+	"\x04main\x12\x99\x04INSERT INTO @module.Dispute SET payment_id = :payment_id, provider_dispute_id = :provider_dispute_id, amount = :amount, currency = :currency, status = :status, credit_shortfall = :credit_shortfall, provider_event_at = :provider_event_at RETURNING id AS dispute.id,           payment_id AS dispute.payment_id,           provider_dispute_id AS dispute.provider_dispute_id,           amount AS dispute.amount,           currency AS dispute.currency,           status AS dispute.status,           credit_shortfall AS dispute.credit_shortfall\x8a\xf5\x18\x0fstripe_webhooks\x12\xe7\x05\n" +
+	"\x11MarkDisputeStatus\x12).w17.contrib.payment.MarkDisputeStatusReq\x1a*.w17.contrib.payment.MarkDisputeStatusResp\"\xfa\x04\xf2\xf3\x18\xe2\x04B\xdf\x04\n" +
+	"\x04main\x12\xd6\x04UPDATE @module.Dispute SET status = :status, credit_shortfall = :credit_shortfall, provider_event_at = :provider_event_at, updated_at = NOW() WHERE provider_dispute_id = :provider_dispute_id AND status <> 5 AND status <> 6 AND (provider_event_at IS NULL OR provider_event_at <= :provider_event_at) RETURNING id AS dispute.id,           payment_id AS dispute.payment_id,           provider_dispute_id AS dispute.provider_dispute_id,           amount AS dispute.amount,           currency AS dispute.currency,           status AS dispute.status,           credit_shortfall AS dispute.credit_shortfall\x8a\xf5\x18\x0fstripe_webhooks\x12\xa4\x02\n" +
 	"\x14MarkWebhookProcessed\x12,.w17.contrib.payment.MarkWebhookProcessedReq\x1a-.w17.contrib.payment.MarkWebhookProcessedResp\"\xae\x01\xf2\xf3\x18\x96\x01B\x93\x01\n" +
 	"\x04main\x12\x8a\x01INSERT INTO @module.ProcessedWebhookEvent SET provider_event_id = :provider_event_id, event_type = :event_type RETURNING provider_event_id\x8a\xf5\x18\x0fstripe_webhooks\x12\xc1\x05\n" +
 	"\vApplyCredit\x12#.w17.contrib.payment.ApplyCreditReq\x1a$.w17.contrib.payment.ApplyCreditResp\"\xe6\x04\x9a\xbd\x18\xaa\x01\n" +
@@ -2068,102 +2711,130 @@ func file_mutations_payment_mutation_proto_rawDescGZIP() []byte {
 	return file_mutations_payment_mutation_proto_rawDescData
 }
 
-var file_mutations_payment_mutation_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_mutations_payment_mutation_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_mutations_payment_mutation_proto_goTypes = []any{
-	(*CreateCustomerReq)(nil),           // 0: w17.contrib.payment.CreateCustomerReq
-	(*CreateCustomerResp)(nil),          // 1: w17.contrib.payment.CreateCustomerResp
-	(*CreatePaymentReq)(nil),            // 2: w17.contrib.payment.CreatePaymentReq
-	(*CreatePaymentResp)(nil),           // 3: w17.contrib.payment.CreatePaymentResp
-	(*MarkPaymentSucceededReq)(nil),     // 4: w17.contrib.payment.MarkPaymentSucceededReq
-	(*MarkPaymentSucceededResp)(nil),    // 5: w17.contrib.payment.MarkPaymentSucceededResp
-	(*MarkPaymentFailedReq)(nil),        // 6: w17.contrib.payment.MarkPaymentFailedReq
-	(*MarkPaymentFailedResp)(nil),       // 7: w17.contrib.payment.MarkPaymentFailedResp
-	(*MarkPaymentRefundedReq)(nil),      // 8: w17.contrib.payment.MarkPaymentRefundedReq
-	(*MarkPaymentRefundedResp)(nil),     // 9: w17.contrib.payment.MarkPaymentRefundedResp
-	(*MarkPaymentCanceledReq)(nil),      // 10: w17.contrib.payment.MarkPaymentCanceledReq
-	(*MarkPaymentCanceledResp)(nil),     // 11: w17.contrib.payment.MarkPaymentCanceledResp
-	(*CreateRefundReq)(nil),             // 12: w17.contrib.payment.CreateRefundReq
-	(*CreateRefundResp)(nil),            // 13: w17.contrib.payment.CreateRefundResp
-	(*SetRefundIdempotencyKeyReq)(nil),  // 14: w17.contrib.payment.SetRefundIdempotencyKeyReq
-	(*SetRefundIdempotencyKeyResp)(nil), // 15: w17.contrib.payment.SetRefundIdempotencyKeyResp
-	(*MarkWebhookProcessedReq)(nil),     // 16: w17.contrib.payment.MarkWebhookProcessedReq
-	(*MarkWebhookProcessedResp)(nil),    // 17: w17.contrib.payment.MarkWebhookProcessedResp
-	(*ApplyCreditReq)(nil),              // 18: w17.contrib.payment.ApplyCreditReq
-	(*ApplyCreditResp)(nil),             // 19: w17.contrib.payment.ApplyCreditResp
-	(*CreateCreditTopupReq)(nil),        // 20: w17.contrib.payment.CreateCreditTopupReq
-	(*CreateCreditTopupResp)(nil),       // 21: w17.contrib.payment.CreateCreditTopupResp
-	(*MarkTopupGrantedReq)(nil),         // 22: w17.contrib.payment.MarkTopupGrantedReq
-	(*MarkTopupGrantedResp)(nil),        // 23: w17.contrib.payment.MarkTopupGrantedResp
-	(*RecordUsageReq)(nil),              // 24: w17.contrib.payment.RecordUsageReq
-	(*RecordUsageResp)(nil),             // 25: w17.contrib.payment.RecordUsageResp
-	(*CreatePlanReq)(nil),               // 26: w17.contrib.payment.CreatePlanReq
-	(*CreatePlanResp)(nil),              // 27: w17.contrib.payment.CreatePlanResp
-	(*CreateSubscriptionReq)(nil),       // 28: w17.contrib.payment.CreateSubscriptionReq
-	(*CreateSubscriptionResp)(nil),      // 29: w17.contrib.payment.CreateSubscriptionResp
-	(*MarkSubscriptionStatusReq)(nil),   // 30: w17.contrib.payment.MarkSubscriptionStatusReq
-	(*MarkSubscriptionStatusResp)(nil),  // 31: w17.contrib.payment.MarkSubscriptionStatusResp
-	(*Customer)(nil),                    // 32: w17.contrib.payment.Customer
-	(*Payment)(nil),                     // 33: w17.contrib.payment.Payment
-	(*Refund)(nil),                      // 34: w17.contrib.payment.Refund
-	(*timestamppb.Timestamp)(nil),       // 35: google.protobuf.Timestamp
-	(*CreditTopup)(nil),                 // 36: w17.contrib.payment.CreditTopup
-	(*Plan)(nil),                        // 37: w17.contrib.payment.Plan
-	(*Subscription)(nil),                // 38: w17.contrib.payment.Subscription
+	(*CreateCustomerReq)(nil),             // 0: w17.contrib.payment.CreateCustomerReq
+	(*CreateCustomerResp)(nil),            // 1: w17.contrib.payment.CreateCustomerResp
+	(*CreatePaymentReq)(nil),              // 2: w17.contrib.payment.CreatePaymentReq
+	(*CreatePaymentResp)(nil),             // 3: w17.contrib.payment.CreatePaymentResp
+	(*MarkPaymentSucceededReq)(nil),       // 4: w17.contrib.payment.MarkPaymentSucceededReq
+	(*MarkPaymentSucceededResp)(nil),      // 5: w17.contrib.payment.MarkPaymentSucceededResp
+	(*MarkPaymentFailedReq)(nil),          // 6: w17.contrib.payment.MarkPaymentFailedReq
+	(*MarkPaymentFailedResp)(nil),         // 7: w17.contrib.payment.MarkPaymentFailedResp
+	(*MarkPaymentRefundedReq)(nil),        // 8: w17.contrib.payment.MarkPaymentRefundedReq
+	(*MarkPaymentRefundedResp)(nil),       // 9: w17.contrib.payment.MarkPaymentRefundedResp
+	(*MarkPaymentRefundReversedReq)(nil),  // 10: w17.contrib.payment.MarkPaymentRefundReversedReq
+	(*MarkPaymentRefundReversedResp)(nil), // 11: w17.contrib.payment.MarkPaymentRefundReversedResp
+	(*MarkPaymentCanceledReq)(nil),        // 12: w17.contrib.payment.MarkPaymentCanceledReq
+	(*MarkPaymentCanceledResp)(nil),       // 13: w17.contrib.payment.MarkPaymentCanceledResp
+	(*CreateRefundReq)(nil),               // 14: w17.contrib.payment.CreateRefundReq
+	(*CreateRefundResp)(nil),              // 15: w17.contrib.payment.CreateRefundResp
+	(*RecordProviderRefundReq)(nil),       // 16: w17.contrib.payment.RecordProviderRefundReq
+	(*RecordProviderRefundResp)(nil),      // 17: w17.contrib.payment.RecordProviderRefundResp
+	(*MarkRefundStatusReq)(nil),           // 18: w17.contrib.payment.MarkRefundStatusReq
+	(*MarkRefundStatusResp)(nil),          // 19: w17.contrib.payment.MarkRefundStatusResp
+	(*SetRefundIdempotencyKeyReq)(nil),    // 20: w17.contrib.payment.SetRefundIdempotencyKeyReq
+	(*SetRefundIdempotencyKeyResp)(nil),   // 21: w17.contrib.payment.SetRefundIdempotencyKeyResp
+	(*CreateDisputeReq)(nil),              // 22: w17.contrib.payment.CreateDisputeReq
+	(*CreateDisputeResp)(nil),             // 23: w17.contrib.payment.CreateDisputeResp
+	(*MarkDisputeStatusReq)(nil),          // 24: w17.contrib.payment.MarkDisputeStatusReq
+	(*MarkDisputeStatusResp)(nil),         // 25: w17.contrib.payment.MarkDisputeStatusResp
+	(*MarkWebhookProcessedReq)(nil),       // 26: w17.contrib.payment.MarkWebhookProcessedReq
+	(*MarkWebhookProcessedResp)(nil),      // 27: w17.contrib.payment.MarkWebhookProcessedResp
+	(*ApplyCreditReq)(nil),                // 28: w17.contrib.payment.ApplyCreditReq
+	(*ApplyCreditResp)(nil),               // 29: w17.contrib.payment.ApplyCreditResp
+	(*CreateCreditTopupReq)(nil),          // 30: w17.contrib.payment.CreateCreditTopupReq
+	(*CreateCreditTopupResp)(nil),         // 31: w17.contrib.payment.CreateCreditTopupResp
+	(*MarkTopupGrantedReq)(nil),           // 32: w17.contrib.payment.MarkTopupGrantedReq
+	(*MarkTopupGrantedResp)(nil),          // 33: w17.contrib.payment.MarkTopupGrantedResp
+	(*RecordUsageReq)(nil),                // 34: w17.contrib.payment.RecordUsageReq
+	(*RecordUsageResp)(nil),               // 35: w17.contrib.payment.RecordUsageResp
+	(*CreatePlanReq)(nil),                 // 36: w17.contrib.payment.CreatePlanReq
+	(*CreatePlanResp)(nil),                // 37: w17.contrib.payment.CreatePlanResp
+	(*CreateSubscriptionReq)(nil),         // 38: w17.contrib.payment.CreateSubscriptionReq
+	(*CreateSubscriptionResp)(nil),        // 39: w17.contrib.payment.CreateSubscriptionResp
+	(*MarkSubscriptionStatusReq)(nil),     // 40: w17.contrib.payment.MarkSubscriptionStatusReq
+	(*MarkSubscriptionStatusResp)(nil),    // 41: w17.contrib.payment.MarkSubscriptionStatusResp
+	(*Customer)(nil),                      // 42: w17.contrib.payment.Customer
+	(*Payment)(nil),                       // 43: w17.contrib.payment.Payment
+	(*Refund)(nil),                        // 44: w17.contrib.payment.Refund
+	(*timestamppb.Timestamp)(nil),         // 45: google.protobuf.Timestamp
+	(*Dispute)(nil),                       // 46: w17.contrib.payment.Dispute
+	(*CreditTopup)(nil),                   // 47: w17.contrib.payment.CreditTopup
+	(*Plan)(nil),                          // 48: w17.contrib.payment.Plan
+	(*Subscription)(nil),                  // 49: w17.contrib.payment.Subscription
 }
 var file_mutations_payment_mutation_proto_depIdxs = []int32{
-	32, // 0: w17.contrib.payment.CreateCustomerResp.customer:type_name -> w17.contrib.payment.Customer
-	33, // 1: w17.contrib.payment.CreatePaymentResp.payment:type_name -> w17.contrib.payment.Payment
-	33, // 2: w17.contrib.payment.MarkPaymentSucceededResp.payment:type_name -> w17.contrib.payment.Payment
-	33, // 3: w17.contrib.payment.MarkPaymentFailedResp.payment:type_name -> w17.contrib.payment.Payment
-	33, // 4: w17.contrib.payment.MarkPaymentRefundedResp.payment:type_name -> w17.contrib.payment.Payment
-	33, // 5: w17.contrib.payment.MarkPaymentCanceledResp.payment:type_name -> w17.contrib.payment.Payment
-	34, // 6: w17.contrib.payment.CreateRefundResp.refund:type_name -> w17.contrib.payment.Refund
-	35, // 7: w17.contrib.payment.ApplyCreditResp.updated_at:type_name -> google.protobuf.Timestamp
-	36, // 8: w17.contrib.payment.CreateCreditTopupResp.topup:type_name -> w17.contrib.payment.CreditTopup
-	35, // 9: w17.contrib.payment.RecordUsageResp.updated_at:type_name -> google.protobuf.Timestamp
-	37, // 10: w17.contrib.payment.CreatePlanResp.plan:type_name -> w17.contrib.payment.Plan
-	35, // 11: w17.contrib.payment.CreateSubscriptionReq.current_period_end:type_name -> google.protobuf.Timestamp
-	38, // 12: w17.contrib.payment.CreateSubscriptionResp.subscription:type_name -> w17.contrib.payment.Subscription
-	35, // 13: w17.contrib.payment.MarkSubscriptionStatusReq.current_period_end:type_name -> google.protobuf.Timestamp
-	35, // 14: w17.contrib.payment.MarkSubscriptionStatusReq.provider_event_at:type_name -> google.protobuf.Timestamp
-	38, // 15: w17.contrib.payment.MarkSubscriptionStatusResp.subscription:type_name -> w17.contrib.payment.Subscription
-	0,  // 16: w17.contrib.payment.PaymentMutation.CreateCustomer:input_type -> w17.contrib.payment.CreateCustomerReq
-	2,  // 17: w17.contrib.payment.PaymentMutation.CreatePayment:input_type -> w17.contrib.payment.CreatePaymentReq
-	4,  // 18: w17.contrib.payment.PaymentMutation.MarkPaymentSucceeded:input_type -> w17.contrib.payment.MarkPaymentSucceededReq
-	8,  // 19: w17.contrib.payment.PaymentMutation.MarkPaymentRefunded:input_type -> w17.contrib.payment.MarkPaymentRefundedReq
-	10, // 20: w17.contrib.payment.PaymentMutation.MarkPaymentCanceled:input_type -> w17.contrib.payment.MarkPaymentCanceledReq
-	6,  // 21: w17.contrib.payment.PaymentMutation.MarkPaymentFailed:input_type -> w17.contrib.payment.MarkPaymentFailedReq
-	12, // 22: w17.contrib.payment.PaymentMutation.CreateRefund:input_type -> w17.contrib.payment.CreateRefundReq
-	14, // 23: w17.contrib.payment.PaymentMutation.SetRefundIdempotencyKey:input_type -> w17.contrib.payment.SetRefundIdempotencyKeyReq
-	16, // 24: w17.contrib.payment.PaymentMutation.MarkWebhookProcessed:input_type -> w17.contrib.payment.MarkWebhookProcessedReq
-	18, // 25: w17.contrib.payment.PaymentMutation.ApplyCredit:input_type -> w17.contrib.payment.ApplyCreditReq
-	20, // 26: w17.contrib.payment.PaymentMutation.CreateCreditTopup:input_type -> w17.contrib.payment.CreateCreditTopupReq
-	22, // 27: w17.contrib.payment.PaymentMutation.MarkTopupGranted:input_type -> w17.contrib.payment.MarkTopupGrantedReq
-	24, // 28: w17.contrib.payment.PaymentMutation.RecordUsage:input_type -> w17.contrib.payment.RecordUsageReq
-	26, // 29: w17.contrib.payment.PaymentMutation.CreatePlan:input_type -> w17.contrib.payment.CreatePlanReq
-	28, // 30: w17.contrib.payment.PaymentMutation.CreateSubscription:input_type -> w17.contrib.payment.CreateSubscriptionReq
-	30, // 31: w17.contrib.payment.PaymentMutation.MarkSubscriptionStatus:input_type -> w17.contrib.payment.MarkSubscriptionStatusReq
-	1,  // 32: w17.contrib.payment.PaymentMutation.CreateCustomer:output_type -> w17.contrib.payment.CreateCustomerResp
-	3,  // 33: w17.contrib.payment.PaymentMutation.CreatePayment:output_type -> w17.contrib.payment.CreatePaymentResp
-	5,  // 34: w17.contrib.payment.PaymentMutation.MarkPaymentSucceeded:output_type -> w17.contrib.payment.MarkPaymentSucceededResp
-	9,  // 35: w17.contrib.payment.PaymentMutation.MarkPaymentRefunded:output_type -> w17.contrib.payment.MarkPaymentRefundedResp
-	11, // 36: w17.contrib.payment.PaymentMutation.MarkPaymentCanceled:output_type -> w17.contrib.payment.MarkPaymentCanceledResp
-	7,  // 37: w17.contrib.payment.PaymentMutation.MarkPaymentFailed:output_type -> w17.contrib.payment.MarkPaymentFailedResp
-	13, // 38: w17.contrib.payment.PaymentMutation.CreateRefund:output_type -> w17.contrib.payment.CreateRefundResp
-	15, // 39: w17.contrib.payment.PaymentMutation.SetRefundIdempotencyKey:output_type -> w17.contrib.payment.SetRefundIdempotencyKeyResp
-	17, // 40: w17.contrib.payment.PaymentMutation.MarkWebhookProcessed:output_type -> w17.contrib.payment.MarkWebhookProcessedResp
-	19, // 41: w17.contrib.payment.PaymentMutation.ApplyCredit:output_type -> w17.contrib.payment.ApplyCreditResp
-	21, // 42: w17.contrib.payment.PaymentMutation.CreateCreditTopup:output_type -> w17.contrib.payment.CreateCreditTopupResp
-	23, // 43: w17.contrib.payment.PaymentMutation.MarkTopupGranted:output_type -> w17.contrib.payment.MarkTopupGrantedResp
-	25, // 44: w17.contrib.payment.PaymentMutation.RecordUsage:output_type -> w17.contrib.payment.RecordUsageResp
-	27, // 45: w17.contrib.payment.PaymentMutation.CreatePlan:output_type -> w17.contrib.payment.CreatePlanResp
-	29, // 46: w17.contrib.payment.PaymentMutation.CreateSubscription:output_type -> w17.contrib.payment.CreateSubscriptionResp
-	31, // 47: w17.contrib.payment.PaymentMutation.MarkSubscriptionStatus:output_type -> w17.contrib.payment.MarkSubscriptionStatusResp
-	32, // [32:48] is the sub-list for method output_type
-	16, // [16:32] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	42, // 0: w17.contrib.payment.CreateCustomerResp.customer:type_name -> w17.contrib.payment.Customer
+	43, // 1: w17.contrib.payment.CreatePaymentResp.payment:type_name -> w17.contrib.payment.Payment
+	43, // 2: w17.contrib.payment.MarkPaymentSucceededResp.payment:type_name -> w17.contrib.payment.Payment
+	43, // 3: w17.contrib.payment.MarkPaymentFailedResp.payment:type_name -> w17.contrib.payment.Payment
+	43, // 4: w17.contrib.payment.MarkPaymentRefundedResp.payment:type_name -> w17.contrib.payment.Payment
+	43, // 5: w17.contrib.payment.MarkPaymentRefundReversedResp.payment:type_name -> w17.contrib.payment.Payment
+	43, // 6: w17.contrib.payment.MarkPaymentCanceledResp.payment:type_name -> w17.contrib.payment.Payment
+	44, // 7: w17.contrib.payment.CreateRefundResp.refund:type_name -> w17.contrib.payment.Refund
+	44, // 8: w17.contrib.payment.RecordProviderRefundResp.refund:type_name -> w17.contrib.payment.Refund
+	44, // 9: w17.contrib.payment.MarkRefundStatusResp.refund:type_name -> w17.contrib.payment.Refund
+	45, // 10: w17.contrib.payment.CreateDisputeReq.provider_event_at:type_name -> google.protobuf.Timestamp
+	46, // 11: w17.contrib.payment.CreateDisputeResp.dispute:type_name -> w17.contrib.payment.Dispute
+	45, // 12: w17.contrib.payment.MarkDisputeStatusReq.provider_event_at:type_name -> google.protobuf.Timestamp
+	46, // 13: w17.contrib.payment.MarkDisputeStatusResp.dispute:type_name -> w17.contrib.payment.Dispute
+	45, // 14: w17.contrib.payment.ApplyCreditResp.updated_at:type_name -> google.protobuf.Timestamp
+	47, // 15: w17.contrib.payment.CreateCreditTopupResp.topup:type_name -> w17.contrib.payment.CreditTopup
+	45, // 16: w17.contrib.payment.RecordUsageResp.updated_at:type_name -> google.protobuf.Timestamp
+	48, // 17: w17.contrib.payment.CreatePlanResp.plan:type_name -> w17.contrib.payment.Plan
+	45, // 18: w17.contrib.payment.CreateSubscriptionReq.current_period_end:type_name -> google.protobuf.Timestamp
+	49, // 19: w17.contrib.payment.CreateSubscriptionResp.subscription:type_name -> w17.contrib.payment.Subscription
+	45, // 20: w17.contrib.payment.MarkSubscriptionStatusReq.current_period_end:type_name -> google.protobuf.Timestamp
+	45, // 21: w17.contrib.payment.MarkSubscriptionStatusReq.provider_event_at:type_name -> google.protobuf.Timestamp
+	49, // 22: w17.contrib.payment.MarkSubscriptionStatusResp.subscription:type_name -> w17.contrib.payment.Subscription
+	0,  // 23: w17.contrib.payment.PaymentMutation.CreateCustomer:input_type -> w17.contrib.payment.CreateCustomerReq
+	2,  // 24: w17.contrib.payment.PaymentMutation.CreatePayment:input_type -> w17.contrib.payment.CreatePaymentReq
+	4,  // 25: w17.contrib.payment.PaymentMutation.MarkPaymentSucceeded:input_type -> w17.contrib.payment.MarkPaymentSucceededReq
+	8,  // 26: w17.contrib.payment.PaymentMutation.MarkPaymentRefunded:input_type -> w17.contrib.payment.MarkPaymentRefundedReq
+	10, // 27: w17.contrib.payment.PaymentMutation.MarkPaymentRefundReversed:input_type -> w17.contrib.payment.MarkPaymentRefundReversedReq
+	12, // 28: w17.contrib.payment.PaymentMutation.MarkPaymentCanceled:input_type -> w17.contrib.payment.MarkPaymentCanceledReq
+	6,  // 29: w17.contrib.payment.PaymentMutation.MarkPaymentFailed:input_type -> w17.contrib.payment.MarkPaymentFailedReq
+	14, // 30: w17.contrib.payment.PaymentMutation.CreateRefund:input_type -> w17.contrib.payment.CreateRefundReq
+	16, // 31: w17.contrib.payment.PaymentMutation.RecordProviderRefund:input_type -> w17.contrib.payment.RecordProviderRefundReq
+	18, // 32: w17.contrib.payment.PaymentMutation.MarkRefundStatus:input_type -> w17.contrib.payment.MarkRefundStatusReq
+	20, // 33: w17.contrib.payment.PaymentMutation.SetRefundIdempotencyKey:input_type -> w17.contrib.payment.SetRefundIdempotencyKeyReq
+	22, // 34: w17.contrib.payment.PaymentMutation.CreateDispute:input_type -> w17.contrib.payment.CreateDisputeReq
+	24, // 35: w17.contrib.payment.PaymentMutation.MarkDisputeStatus:input_type -> w17.contrib.payment.MarkDisputeStatusReq
+	26, // 36: w17.contrib.payment.PaymentMutation.MarkWebhookProcessed:input_type -> w17.contrib.payment.MarkWebhookProcessedReq
+	28, // 37: w17.contrib.payment.PaymentMutation.ApplyCredit:input_type -> w17.contrib.payment.ApplyCreditReq
+	30, // 38: w17.contrib.payment.PaymentMutation.CreateCreditTopup:input_type -> w17.contrib.payment.CreateCreditTopupReq
+	32, // 39: w17.contrib.payment.PaymentMutation.MarkTopupGranted:input_type -> w17.contrib.payment.MarkTopupGrantedReq
+	34, // 40: w17.contrib.payment.PaymentMutation.RecordUsage:input_type -> w17.contrib.payment.RecordUsageReq
+	36, // 41: w17.contrib.payment.PaymentMutation.CreatePlan:input_type -> w17.contrib.payment.CreatePlanReq
+	38, // 42: w17.contrib.payment.PaymentMutation.CreateSubscription:input_type -> w17.contrib.payment.CreateSubscriptionReq
+	40, // 43: w17.contrib.payment.PaymentMutation.MarkSubscriptionStatus:input_type -> w17.contrib.payment.MarkSubscriptionStatusReq
+	1,  // 44: w17.contrib.payment.PaymentMutation.CreateCustomer:output_type -> w17.contrib.payment.CreateCustomerResp
+	3,  // 45: w17.contrib.payment.PaymentMutation.CreatePayment:output_type -> w17.contrib.payment.CreatePaymentResp
+	5,  // 46: w17.contrib.payment.PaymentMutation.MarkPaymentSucceeded:output_type -> w17.contrib.payment.MarkPaymentSucceededResp
+	9,  // 47: w17.contrib.payment.PaymentMutation.MarkPaymentRefunded:output_type -> w17.contrib.payment.MarkPaymentRefundedResp
+	11, // 48: w17.contrib.payment.PaymentMutation.MarkPaymentRefundReversed:output_type -> w17.contrib.payment.MarkPaymentRefundReversedResp
+	13, // 49: w17.contrib.payment.PaymentMutation.MarkPaymentCanceled:output_type -> w17.contrib.payment.MarkPaymentCanceledResp
+	7,  // 50: w17.contrib.payment.PaymentMutation.MarkPaymentFailed:output_type -> w17.contrib.payment.MarkPaymentFailedResp
+	15, // 51: w17.contrib.payment.PaymentMutation.CreateRefund:output_type -> w17.contrib.payment.CreateRefundResp
+	17, // 52: w17.contrib.payment.PaymentMutation.RecordProviderRefund:output_type -> w17.contrib.payment.RecordProviderRefundResp
+	19, // 53: w17.contrib.payment.PaymentMutation.MarkRefundStatus:output_type -> w17.contrib.payment.MarkRefundStatusResp
+	21, // 54: w17.contrib.payment.PaymentMutation.SetRefundIdempotencyKey:output_type -> w17.contrib.payment.SetRefundIdempotencyKeyResp
+	23, // 55: w17.contrib.payment.PaymentMutation.CreateDispute:output_type -> w17.contrib.payment.CreateDisputeResp
+	25, // 56: w17.contrib.payment.PaymentMutation.MarkDisputeStatus:output_type -> w17.contrib.payment.MarkDisputeStatusResp
+	27, // 57: w17.contrib.payment.PaymentMutation.MarkWebhookProcessed:output_type -> w17.contrib.payment.MarkWebhookProcessedResp
+	29, // 58: w17.contrib.payment.PaymentMutation.ApplyCredit:output_type -> w17.contrib.payment.ApplyCreditResp
+	31, // 59: w17.contrib.payment.PaymentMutation.CreateCreditTopup:output_type -> w17.contrib.payment.CreateCreditTopupResp
+	33, // 60: w17.contrib.payment.PaymentMutation.MarkTopupGranted:output_type -> w17.contrib.payment.MarkTopupGrantedResp
+	35, // 61: w17.contrib.payment.PaymentMutation.RecordUsage:output_type -> w17.contrib.payment.RecordUsageResp
+	37, // 62: w17.contrib.payment.PaymentMutation.CreatePlan:output_type -> w17.contrib.payment.CreatePlanResp
+	39, // 63: w17.contrib.payment.PaymentMutation.CreateSubscription:output_type -> w17.contrib.payment.CreateSubscriptionResp
+	41, // 64: w17.contrib.payment.PaymentMutation.MarkSubscriptionStatus:output_type -> w17.contrib.payment.MarkSubscriptionStatusResp
+	44, // [44:65] is the sub-list for method output_type
+	23, // [23:44] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_mutations_payment_mutation_proto_init() }
@@ -2179,7 +2850,7 @@ func file_mutations_payment_mutation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mutations_payment_mutation_proto_rawDesc), len(file_mutations_payment_mutation_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   32,
+			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

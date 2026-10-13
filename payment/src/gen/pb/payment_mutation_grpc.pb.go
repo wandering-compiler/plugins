@@ -29,22 +29,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PaymentMutation_CreateCustomer_FullMethodName          = "/w17.contrib.payment.PaymentMutation/CreateCustomer"
-	PaymentMutation_CreatePayment_FullMethodName           = "/w17.contrib.payment.PaymentMutation/CreatePayment"
-	PaymentMutation_MarkPaymentSucceeded_FullMethodName    = "/w17.contrib.payment.PaymentMutation/MarkPaymentSucceeded"
-	PaymentMutation_MarkPaymentRefunded_FullMethodName     = "/w17.contrib.payment.PaymentMutation/MarkPaymentRefunded"
-	PaymentMutation_MarkPaymentCanceled_FullMethodName     = "/w17.contrib.payment.PaymentMutation/MarkPaymentCanceled"
-	PaymentMutation_MarkPaymentFailed_FullMethodName       = "/w17.contrib.payment.PaymentMutation/MarkPaymentFailed"
-	PaymentMutation_CreateRefund_FullMethodName            = "/w17.contrib.payment.PaymentMutation/CreateRefund"
-	PaymentMutation_SetRefundIdempotencyKey_FullMethodName = "/w17.contrib.payment.PaymentMutation/SetRefundIdempotencyKey"
-	PaymentMutation_MarkWebhookProcessed_FullMethodName    = "/w17.contrib.payment.PaymentMutation/MarkWebhookProcessed"
-	PaymentMutation_ApplyCredit_FullMethodName             = "/w17.contrib.payment.PaymentMutation/ApplyCredit"
-	PaymentMutation_CreateCreditTopup_FullMethodName       = "/w17.contrib.payment.PaymentMutation/CreateCreditTopup"
-	PaymentMutation_MarkTopupGranted_FullMethodName        = "/w17.contrib.payment.PaymentMutation/MarkTopupGranted"
-	PaymentMutation_RecordUsage_FullMethodName             = "/w17.contrib.payment.PaymentMutation/RecordUsage"
-	PaymentMutation_CreatePlan_FullMethodName              = "/w17.contrib.payment.PaymentMutation/CreatePlan"
-	PaymentMutation_CreateSubscription_FullMethodName      = "/w17.contrib.payment.PaymentMutation/CreateSubscription"
-	PaymentMutation_MarkSubscriptionStatus_FullMethodName  = "/w17.contrib.payment.PaymentMutation/MarkSubscriptionStatus"
+	PaymentMutation_CreateCustomer_FullMethodName            = "/w17.contrib.payment.PaymentMutation/CreateCustomer"
+	PaymentMutation_CreatePayment_FullMethodName             = "/w17.contrib.payment.PaymentMutation/CreatePayment"
+	PaymentMutation_MarkPaymentSucceeded_FullMethodName      = "/w17.contrib.payment.PaymentMutation/MarkPaymentSucceeded"
+	PaymentMutation_MarkPaymentRefunded_FullMethodName       = "/w17.contrib.payment.PaymentMutation/MarkPaymentRefunded"
+	PaymentMutation_MarkPaymentRefundReversed_FullMethodName = "/w17.contrib.payment.PaymentMutation/MarkPaymentRefundReversed"
+	PaymentMutation_MarkPaymentCanceled_FullMethodName       = "/w17.contrib.payment.PaymentMutation/MarkPaymentCanceled"
+	PaymentMutation_MarkPaymentFailed_FullMethodName         = "/w17.contrib.payment.PaymentMutation/MarkPaymentFailed"
+	PaymentMutation_CreateRefund_FullMethodName              = "/w17.contrib.payment.PaymentMutation/CreateRefund"
+	PaymentMutation_RecordProviderRefund_FullMethodName      = "/w17.contrib.payment.PaymentMutation/RecordProviderRefund"
+	PaymentMutation_MarkRefundStatus_FullMethodName          = "/w17.contrib.payment.PaymentMutation/MarkRefundStatus"
+	PaymentMutation_SetRefundIdempotencyKey_FullMethodName   = "/w17.contrib.payment.PaymentMutation/SetRefundIdempotencyKey"
+	PaymentMutation_CreateDispute_FullMethodName             = "/w17.contrib.payment.PaymentMutation/CreateDispute"
+	PaymentMutation_MarkDisputeStatus_FullMethodName         = "/w17.contrib.payment.PaymentMutation/MarkDisputeStatus"
+	PaymentMutation_MarkWebhookProcessed_FullMethodName      = "/w17.contrib.payment.PaymentMutation/MarkWebhookProcessed"
+	PaymentMutation_ApplyCredit_FullMethodName               = "/w17.contrib.payment.PaymentMutation/ApplyCredit"
+	PaymentMutation_CreateCreditTopup_FullMethodName         = "/w17.contrib.payment.PaymentMutation/CreateCreditTopup"
+	PaymentMutation_MarkTopupGranted_FullMethodName          = "/w17.contrib.payment.PaymentMutation/MarkTopupGranted"
+	PaymentMutation_RecordUsage_FullMethodName               = "/w17.contrib.payment.PaymentMutation/RecordUsage"
+	PaymentMutation_CreatePlan_FullMethodName                = "/w17.contrib.payment.PaymentMutation/CreatePlan"
+	PaymentMutation_CreateSubscription_FullMethodName        = "/w17.contrib.payment.PaymentMutation/CreateSubscription"
+	PaymentMutation_MarkSubscriptionStatus_FullMethodName    = "/w17.contrib.payment.PaymentMutation/MarkSubscriptionStatus"
 )
 
 // PaymentMutationClient is the client API for PaymentMutation service.
@@ -88,11 +93,19 @@ type PaymentMutationClient interface {
 	// see IngestStripe.
 	MarkPaymentSucceeded(ctx context.Context, in *MarkPaymentSucceededReq, opts ...grpc.CallOption) (*MarkPaymentSucceededResp, error)
 	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
-	// only a captured payment can be refunded, and REFUNDED is terminal. Set
-	// by RefundPayment when its refund completes the amount, and by the
-	// provider's charge.refunded webhook, which also covers partial refunds
-	// that completed it concurrently.
+	// only a captured payment can be refunded, and a redelivery must not emit
+	// twice. Set by RefundPayment when its refund completes the amount, and by
+	// the refund webhooks once the provider's pending and succeeded refunds
+	// reach it (also partial refunds that completed it concurrently). Terminal
+	// for every other reconciliation; only MarkPaymentRefundReversed leaves it,
+	// when a refund that completed the amount later fails.
 	MarkPaymentRefunded(ctx context.Context, in *MarkPaymentRefundedReq, opts ...grpc.CallOption) (*MarkPaymentRefundedResp, error)
+	// MarkPaymentRefundReversed — a REFUNDED payment back to SUCCEEDED (3),
+	// because a refund that completed its amount later failed or was canceled
+	// at the provider and what still counts no longer reaches the amount. Only
+	// from REFUNDED, so a redelivery (or a payment that never read REFUNDED)
+	// matches zero rows and emits nothing. Emits PaymentRefundReversed.
+	MarkPaymentRefundReversed(ctx context.Context, in *MarkPaymentRefundReversedReq, opts ...grpc.CallOption) (*MarkPaymentRefundReversedResp, error)
 	// MarkPaymentCanceled — the provider canceled a payment that never
 	// completed. Not from SUCCEEDED, CANCELED or REFUNDED. From FAILED it is
 	// allowed: a failed attempt leaves the provider's PaymentIntent open
@@ -118,8 +131,28 @@ type PaymentMutationClient interface {
 	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
 	MarkPaymentFailed(ctx context.Context, in *MarkPaymentFailedReq, opts ...grpc.CallOption) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
-	// provider refund. Duplicate provider_refund_id → AlreadyExists.
+	// provider refund, with the outcome the provider answered. Duplicate
+	// provider_refund_id or idempotency_key → UNIQUE_VIOLATION.
 	CreateRefund(ctx context.Context, in *CreateRefundReq, opts ...grpc.CallOption) (*CreateRefundResp, error)
+	// RecordProviderRefund — INSERT a refund the webhook found at the provider
+	// that no local row records: one made at the provider directly (its
+	// dashboard, its API, another tool). It has no caller key, so
+	// idempotency_key stays NULL — the unique column admits any number of
+	// NULLs, and an empty string would let only one such refund ever be
+	// recorded. Duplicate provider_refund_id → UNIQUE_VIOLATION (a concurrent
+	// delivery recorded it first).
+	RecordProviderRefund(ctx context.Context, in *RecordProviderRefundReq, opts ...grpc.CallOption) (*RecordProviderRefundResp, error)
+	// MarkRefundStatus — reconcile a refund's outcome from the provider.
+	//
+	// TRANSITION-GUARDED (`status <> 3 AND status <> 4 AND status <> :status`):
+	// FAILED and CANCELED are terminal — the provider never revives a refund
+	// — so an older observation that still says pending or succeeded, read or
+	// delivered after the failure, matches zero rows. SUCCEEDED is not
+	// terminal: a provider can fail a refund it reported as succeeded. A
+	// same-status write matches zero rows too, so the handler can tell a real
+	// transition from a redelivery. Zero rows is NotFound; the handler looks
+	// the refund up to tell "already there" from "no such row".
+	MarkRefundStatus(ctx context.Context, in *MarkRefundStatusReq, opts ...grpc.CallOption) (*MarkRefundStatusResp, error)
 	// SetRefundIdempotencyKey — stamp the kept refund key on a Refund row an
 	// earlier version wrote without one. RefundPayment calls it when a retry
 	// under the raw key is replayed by the provider onto such a row: unstamped,
@@ -130,6 +163,22 @@ type PaymentMutationClient interface {
 	// it, and the guard's refusal is a no-row result. A key another row already
 	// holds is a UNIQUE_VIOLATION.
 	SetRefundIdempotencyKey(ctx context.Context, in *SetRefundIdempotencyKeyReq, opts ...grpc.CallOption) (*SetRefundIdempotencyKeyResp, error)
+	// CreateDispute — INSERT the local record of a provider dispute, the first
+	// time one of its charge.dispute.* events arrives. Duplicate
+	// provider_dispute_id → UNIQUE_VIOLATION (a concurrent delivery recorded
+	// it first; the handler then applies its status with MarkDisputeStatus).
+	// Gated stripe_webhooks.
+	CreateDispute(ctx context.Context, in *CreateDisputeReq, opts ...grpc.CallOption) (*CreateDisputeResp, error)
+	// MarkDisputeStatus — reconcile a dispute's status from a later event.
+	// Gated stripe_webhooks.
+	//
+	// TRANSITION-GUARDED (`status <> 5 AND status <> 6`): WON and LOST are
+	// terminal, so an earlier event delivered late cannot reopen a closed
+	// dispute. Between the open states the provider's own order decides
+	// (`provider_event_at <= :provider_event_at`), as for subscriptions.
+	// credit_shortfall is written with the status: only a LOST event carries
+	// one, and nothing is written after LOST.
+	MarkDisputeStatus(ctx context.Context, in *MarkDisputeStatusReq, opts ...grpc.CallOption) (*MarkDisputeStatusResp, error)
 	// MarkWebhookProcessed — INSERT the provider event id into the
 	// idempotency ledger AFTER the side effects have been applied
 	// (the original order was the reverse; recording it first stranded
@@ -260,6 +309,16 @@ func (c *paymentMutationClient) MarkPaymentRefunded(ctx context.Context, in *Mar
 	return out, nil
 }
 
+func (c *paymentMutationClient) MarkPaymentRefundReversed(ctx context.Context, in *MarkPaymentRefundReversedReq, opts ...grpc.CallOption) (*MarkPaymentRefundReversedResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkPaymentRefundReversedResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_MarkPaymentRefundReversed_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *paymentMutationClient) MarkPaymentCanceled(ctx context.Context, in *MarkPaymentCanceledReq, opts ...grpc.CallOption) (*MarkPaymentCanceledResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MarkPaymentCanceledResp)
@@ -290,10 +349,50 @@ func (c *paymentMutationClient) CreateRefund(ctx context.Context, in *CreateRefu
 	return out, nil
 }
 
+func (c *paymentMutationClient) RecordProviderRefund(ctx context.Context, in *RecordProviderRefundReq, opts ...grpc.CallOption) (*RecordProviderRefundResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordProviderRefundResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_RecordProviderRefund_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentMutationClient) MarkRefundStatus(ctx context.Context, in *MarkRefundStatusReq, opts ...grpc.CallOption) (*MarkRefundStatusResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkRefundStatusResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_MarkRefundStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *paymentMutationClient) SetRefundIdempotencyKey(ctx context.Context, in *SetRefundIdempotencyKeyReq, opts ...grpc.CallOption) (*SetRefundIdempotencyKeyResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetRefundIdempotencyKeyResp)
 	err := c.cc.Invoke(ctx, PaymentMutation_SetRefundIdempotencyKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentMutationClient) CreateDispute(ctx context.Context, in *CreateDisputeReq, opts ...grpc.CallOption) (*CreateDisputeResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateDisputeResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_CreateDispute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentMutationClient) MarkDisputeStatus(ctx context.Context, in *MarkDisputeStatusReq, opts ...grpc.CallOption) (*MarkDisputeStatusResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkDisputeStatusResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_MarkDisputeStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -421,11 +520,19 @@ type PaymentMutationServer interface {
 	// see IngestStripe.
 	MarkPaymentSucceeded(context.Context, *MarkPaymentSucceededReq) (*MarkPaymentSucceededResp, error)
 	// MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
-	// only a captured payment can be refunded, and REFUNDED is terminal. Set
-	// by RefundPayment when its refund completes the amount, and by the
-	// provider's charge.refunded webhook, which also covers partial refunds
-	// that completed it concurrently.
+	// only a captured payment can be refunded, and a redelivery must not emit
+	// twice. Set by RefundPayment when its refund completes the amount, and by
+	// the refund webhooks once the provider's pending and succeeded refunds
+	// reach it (also partial refunds that completed it concurrently). Terminal
+	// for every other reconciliation; only MarkPaymentRefundReversed leaves it,
+	// when a refund that completed the amount later fails.
 	MarkPaymentRefunded(context.Context, *MarkPaymentRefundedReq) (*MarkPaymentRefundedResp, error)
+	// MarkPaymentRefundReversed — a REFUNDED payment back to SUCCEEDED (3),
+	// because a refund that completed its amount later failed or was canceled
+	// at the provider and what still counts no longer reaches the amount. Only
+	// from REFUNDED, so a redelivery (or a payment that never read REFUNDED)
+	// matches zero rows and emits nothing. Emits PaymentRefundReversed.
+	MarkPaymentRefundReversed(context.Context, *MarkPaymentRefundReversedReq) (*MarkPaymentRefundReversedResp, error)
 	// MarkPaymentCanceled — the provider canceled a payment that never
 	// completed. Not from SUCCEEDED, CANCELED or REFUNDED. From FAILED it is
 	// allowed: a failed attempt leaves the provider's PaymentIntent open
@@ -451,8 +558,28 @@ type PaymentMutationServer interface {
 	// SUCCEEDED stays open: a retried attempt must still be able to succeed.
 	MarkPaymentFailed(context.Context, *MarkPaymentFailedReq) (*MarkPaymentFailedResp, error)
 	// CreateRefund — INSERT a Refund row after the backend confirms the
-	// provider refund. Duplicate provider_refund_id → AlreadyExists.
+	// provider refund, with the outcome the provider answered. Duplicate
+	// provider_refund_id or idempotency_key → UNIQUE_VIOLATION.
 	CreateRefund(context.Context, *CreateRefundReq) (*CreateRefundResp, error)
+	// RecordProviderRefund — INSERT a refund the webhook found at the provider
+	// that no local row records: one made at the provider directly (its
+	// dashboard, its API, another tool). It has no caller key, so
+	// idempotency_key stays NULL — the unique column admits any number of
+	// NULLs, and an empty string would let only one such refund ever be
+	// recorded. Duplicate provider_refund_id → UNIQUE_VIOLATION (a concurrent
+	// delivery recorded it first).
+	RecordProviderRefund(context.Context, *RecordProviderRefundReq) (*RecordProviderRefundResp, error)
+	// MarkRefundStatus — reconcile a refund's outcome from the provider.
+	//
+	// TRANSITION-GUARDED (`status <> 3 AND status <> 4 AND status <> :status`):
+	// FAILED and CANCELED are terminal — the provider never revives a refund
+	// — so an older observation that still says pending or succeeded, read or
+	// delivered after the failure, matches zero rows. SUCCEEDED is not
+	// terminal: a provider can fail a refund it reported as succeeded. A
+	// same-status write matches zero rows too, so the handler can tell a real
+	// transition from a redelivery. Zero rows is NotFound; the handler looks
+	// the refund up to tell "already there" from "no such row".
+	MarkRefundStatus(context.Context, *MarkRefundStatusReq) (*MarkRefundStatusResp, error)
 	// SetRefundIdempotencyKey — stamp the kept refund key on a Refund row an
 	// earlier version wrote without one. RefundPayment calls it when a retry
 	// under the raw key is replayed by the provider onto such a row: unstamped,
@@ -463,6 +590,22 @@ type PaymentMutationServer interface {
 	// it, and the guard's refusal is a no-row result. A key another row already
 	// holds is a UNIQUE_VIOLATION.
 	SetRefundIdempotencyKey(context.Context, *SetRefundIdempotencyKeyReq) (*SetRefundIdempotencyKeyResp, error)
+	// CreateDispute — INSERT the local record of a provider dispute, the first
+	// time one of its charge.dispute.* events arrives. Duplicate
+	// provider_dispute_id → UNIQUE_VIOLATION (a concurrent delivery recorded
+	// it first; the handler then applies its status with MarkDisputeStatus).
+	// Gated stripe_webhooks.
+	CreateDispute(context.Context, *CreateDisputeReq) (*CreateDisputeResp, error)
+	// MarkDisputeStatus — reconcile a dispute's status from a later event.
+	// Gated stripe_webhooks.
+	//
+	// TRANSITION-GUARDED (`status <> 5 AND status <> 6`): WON and LOST are
+	// terminal, so an earlier event delivered late cannot reopen a closed
+	// dispute. Between the open states the provider's own order decides
+	// (`provider_event_at <= :provider_event_at`), as for subscriptions.
+	// credit_shortfall is written with the status: only a LOST event carries
+	// one, and nothing is written after LOST.
+	MarkDisputeStatus(context.Context, *MarkDisputeStatusReq) (*MarkDisputeStatusResp, error)
 	// MarkWebhookProcessed — INSERT the provider event id into the
 	// idempotency ledger AFTER the side effects have been applied
 	// (the original order was the reverse; recording it first stranded
@@ -564,6 +707,9 @@ func (UnimplementedPaymentMutationServer) MarkPaymentSucceeded(context.Context, 
 func (UnimplementedPaymentMutationServer) MarkPaymentRefunded(context.Context, *MarkPaymentRefundedReq) (*MarkPaymentRefundedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MarkPaymentRefunded not implemented")
 }
+func (UnimplementedPaymentMutationServer) MarkPaymentRefundReversed(context.Context, *MarkPaymentRefundReversedReq) (*MarkPaymentRefundReversedResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkPaymentRefundReversed not implemented")
+}
 func (UnimplementedPaymentMutationServer) MarkPaymentCanceled(context.Context, *MarkPaymentCanceledReq) (*MarkPaymentCanceledResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MarkPaymentCanceled not implemented")
 }
@@ -573,8 +719,20 @@ func (UnimplementedPaymentMutationServer) MarkPaymentFailed(context.Context, *Ma
 func (UnimplementedPaymentMutationServer) CreateRefund(context.Context, *CreateRefundReq) (*CreateRefundResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateRefund not implemented")
 }
+func (UnimplementedPaymentMutationServer) RecordProviderRefund(context.Context, *RecordProviderRefundReq) (*RecordProviderRefundResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordProviderRefund not implemented")
+}
+func (UnimplementedPaymentMutationServer) MarkRefundStatus(context.Context, *MarkRefundStatusReq) (*MarkRefundStatusResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkRefundStatus not implemented")
+}
 func (UnimplementedPaymentMutationServer) SetRefundIdempotencyKey(context.Context, *SetRefundIdempotencyKeyReq) (*SetRefundIdempotencyKeyResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetRefundIdempotencyKey not implemented")
+}
+func (UnimplementedPaymentMutationServer) CreateDispute(context.Context, *CreateDisputeReq) (*CreateDisputeResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateDispute not implemented")
+}
+func (UnimplementedPaymentMutationServer) MarkDisputeStatus(context.Context, *MarkDisputeStatusReq) (*MarkDisputeStatusResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkDisputeStatus not implemented")
 }
 func (UnimplementedPaymentMutationServer) MarkWebhookProcessed(context.Context, *MarkWebhookProcessedReq) (*MarkWebhookProcessedResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method MarkWebhookProcessed not implemented")
@@ -692,6 +850,24 @@ func _PaymentMutation_MarkPaymentRefunded_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentMutation_MarkPaymentRefundReversed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkPaymentRefundReversedReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).MarkPaymentRefundReversed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_MarkPaymentRefundReversed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).MarkPaymentRefundReversed(ctx, req.(*MarkPaymentRefundReversedReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PaymentMutation_MarkPaymentCanceled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(MarkPaymentCanceledReq)
 	if err := dec(in); err != nil {
@@ -746,6 +922,42 @@ func _PaymentMutation_CreateRefund_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentMutation_RecordProviderRefund_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordProviderRefundReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).RecordProviderRefund(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_RecordProviderRefund_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).RecordProviderRefund(ctx, req.(*RecordProviderRefundReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentMutation_MarkRefundStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkRefundStatusReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).MarkRefundStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_MarkRefundStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).MarkRefundStatus(ctx, req.(*MarkRefundStatusReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PaymentMutation_SetRefundIdempotencyKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetRefundIdempotencyKeyReq)
 	if err := dec(in); err != nil {
@@ -760,6 +972,42 @@ func _PaymentMutation_SetRefundIdempotencyKey_Handler(srv interface{}, ctx conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentMutationServer).SetRefundIdempotencyKey(ctx, req.(*SetRefundIdempotencyKeyReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentMutation_CreateDispute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateDisputeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).CreateDispute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_CreateDispute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).CreateDispute(ctx, req.(*CreateDisputeReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentMutation_MarkDisputeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkDisputeStatusReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).MarkDisputeStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_MarkDisputeStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).MarkDisputeStatus(ctx, req.(*MarkDisputeStatusReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -932,6 +1180,10 @@ var PaymentMutation_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PaymentMutation_MarkPaymentRefunded_Handler,
 		},
 		{
+			MethodName: "MarkPaymentRefundReversed",
+			Handler:    _PaymentMutation_MarkPaymentRefundReversed_Handler,
+		},
+		{
 			MethodName: "MarkPaymentCanceled",
 			Handler:    _PaymentMutation_MarkPaymentCanceled_Handler,
 		},
@@ -944,8 +1196,24 @@ var PaymentMutation_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PaymentMutation_CreateRefund_Handler,
 		},
 		{
+			MethodName: "RecordProviderRefund",
+			Handler:    _PaymentMutation_RecordProviderRefund_Handler,
+		},
+		{
+			MethodName: "MarkRefundStatus",
+			Handler:    _PaymentMutation_MarkRefundStatus_Handler,
+		},
+		{
 			MethodName: "SetRefundIdempotencyKey",
 			Handler:    _PaymentMutation_SetRefundIdempotencyKey_Handler,
+		},
+		{
+			MethodName: "CreateDispute",
+			Handler:    _PaymentMutation_CreateDispute_Handler,
+		},
+		{
+			MethodName: "MarkDisputeStatus",
+			Handler:    _PaymentMutation_MarkDisputeStatus_Handler,
 		},
 		{
 			MethodName: "MarkWebhookProcessed",

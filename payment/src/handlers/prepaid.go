@@ -73,10 +73,19 @@ const (
 	// are out of reach of a caller's SpendCredit / GrantCredit key.
 	creditTopupRefund     creditKind = "topup-refund"
 	creditTopupRefundUndo creditKind = "topup-refund-undo" //nolint:gosec // G101: a ledger kind name, not a credential
+
+	// A top-up's credit taken back because its money left without
+	// RefundPayment (a refund made at the provider, a lost dispute), and given
+	// back when such a refund fails. idem = the reversal ("refund:<id>",
+	// "dispute:<id>").
+	creditTopupReversal     creditKind = "topup-reversal"
+	creditTopupReversalUndo creditKind = "topup-reversal-undo"
 )
 
 // debit reports whether an apply of this kind takes credit away.
-func (k creditKind) debit() bool { return k == creditSpend || k == creditTopupRefund }
+func (k creditKind) debit() bool {
+	return k == creditSpend || k == creditTopupRefund || k == creditTopupReversal
+}
 
 // applyCredit is the shared grant/spend path. A spend negates the
 // (unsigned) amount. The atomic ledger+balance write lives in the
@@ -331,7 +340,11 @@ func (h *PaymentServiceHandler) GetMyCreditBalance(ctx context.Context, _ *pb.Ge
 	return got, err
 }
 
-func init() { takeBackRefundedCredit = takeBackTopupCredit }
+func init() {
+	takeBackRefundedCredit = takeBackTopupCredit
+	takeBackReversedCredit = takeBackTopupReversal
+	giveBackRefundCredit = giveBackTopupRefundCredit
+}
 
 // takeBackTopupCredit spends, from the top-up's owner, the credit a refund
 // of a top-up payment returns as money. A top-up whose credit is already
@@ -397,4 +410,132 @@ func (h *PaymentServiceHandler) topupRefundGeneration(ctx context.Context, userI
 			return "", err
 		}
 	}
+}
+
+// takeBackTopupReversal takes back, from a top-up's owner, the credit whose
+// money left without RefundPayment — a refund made at the provider directly,
+// or a lost dispute (see takeBackReversedCredit). It takes what the balance
+// holds, up to amount, and returns the shortfall: credit already spent, which
+// the owner now owes. The balance's `>= 0` CHECK stays the one guard every
+// spend relies on; driving it negative would need that guard dropped.
+//
+// Idempotent per reversal: the take-back is keyed by reversalID, and a
+// redelivery finds it and answers the same shortfall from what it took.
+//
+// A top-up whose credit was never granted has nothing to take yet. If the
+// payment is REFUNDED the grant is refused for good (grantTopupOnPaymentSuccess),
+// so nothing is owed; otherwise this fails, the event stays unrecorded, and
+// its redelivery takes the credit back once the grant has landed.
+func takeBackTopupReversal(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, reversalID string) (string, error) {
+	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+	if err != nil {
+		if absent(err) {
+			return "0", nil // not a top-up
+		}
+		return "", err
+	}
+	topup := got.GetTopup()
+	if topup == nil {
+		return "0", nil
+	}
+	userID := topup.GetUserId()
+	taken, done, err := h.ledgerAmount(ctx, ledgerKey(creditTopupReversal, userID, reversalID))
+	if err != nil {
+		return "", err
+	}
+	if done {
+		return decimalShortfall(amount, taken), nil
+	}
+	// The grant's own ledger row, not granted_at: the stamp follows the grant
+	// and can lag it.
+	if _, granted, err := h.ledgerAmount(ctx, ledgerKey(creditTopup, userID, payment.GetProviderPaymentId())); err != nil || !granted {
+		if err != nil {
+			return "", err
+		}
+		if payment.GetStatus() == pb.Payment_REFUNDED {
+			return "0", nil
+		}
+		return "", status.Error(codes.FailedPrecondition, "payment: the top-up's credit is not granted yet; its reversal is taken back once it is")
+	}
+	// A spend can land between the read and the take; the CHECK then refuses
+	// the take, and the balance is read again.
+	for attempt := 0; attempt < 3; attempt++ {
+		bal, err := h.currentBalance(ctx, userID)
+		if err != nil {
+			return "", err
+		}
+		take := decimalMin(amount, bal.GetBalance())
+		if !isPositiveDecimal(take) {
+			return decimalShortfall(amount, "0"), nil // all of it already spent
+		}
+		_, err = h.applyCredit(ctx, userID, take, creditTopupReversal, "topup-reversal", payment.GetId(), reversalID)
+		if status.Code(err) == codes.FailedPrecondition {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		// Read back: a concurrent delivery may have taken first, and its
+		// take is the one that stands.
+		taken, _, err := h.ledgerAmount(ctx, ledgerKey(creditTopupReversal, userID, reversalID))
+		if err != nil {
+			return "", err
+		}
+		return decimalShortfall(amount, taken), nil
+	}
+	return "", status.Error(codes.Unavailable, "payment: the balance kept changing while a reversed top-up's credit was taken back; retry")
+}
+
+// giveBackTopupRefundCredit returns the credit a top-up refund took back,
+// after the refund failed or was canceled at the provider (see
+// giveBackRefundCredit). The take-back is found where it was made:
+//
+//   - RefundPayment's (callerKey set): the live generation of the refund key,
+//     given back under that generation's undo key — the key a refusal's undo
+//     uses, so a take-back is never given back twice whichever path saw the
+//     failure first;
+//   - the webhook's, for a refund made at the provider directly: under the
+//     refund's reversal key.
+//
+// Nothing taken (a refund that failed before anything was taken, a payment
+// that is no top-up) gives nothing.
+func giveBackTopupRefundCredit(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, providerRefundID, callerKey string) error {
+	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+	if err != nil {
+		if absent(err) {
+			return nil // not a top-up
+		}
+		return err
+	}
+	if got.GetTopup() == nil {
+		return nil
+	}
+	userID := got.GetTopup().GetUserId()
+	kind, undoKind, reason, idem := creditTopupReversal, creditTopupReversalUndo, "topup-reversal-undone", "refund:"+providerRefundID
+	if callerKey != "" {
+		key, err := h.topupRefundGeneration(ctx, userID, callerKey)
+		if err != nil {
+			return err
+		}
+		kind, undoKind, reason, idem = creditTopupRefund, creditTopupRefundUndo, "topup-refund-failed", key
+	}
+	taken, ok, err := h.ledgerAmount(ctx, ledgerKey(kind, userID, idem))
+	if err != nil || !ok {
+		return err
+	}
+	_, err = h.applyCredit(ctx, userID, taken, undoKind, reason, payment.GetId(), idem)
+	return err
+}
+
+// ledgerAmount returns the unsigned amount of the ledger entry stored under
+// key, and whether there is one.
+func (h *PaymentServiceHandler) ledgerAmount(ctx context.Context, key string) (string, bool, error) {
+	got, err := h.Query.GetCreditLedgerByKey(ctx, &pb.GetCreditLedgerByKeyReq{IdempotencyKey: key})
+	if absent(err) {
+		return "0", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return strings.TrimPrefix(strings.TrimSpace(got.GetEntry().GetDelta()), "-"), true, nil
 }

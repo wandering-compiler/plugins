@@ -32,17 +32,28 @@ by the `payment_provider` env. **The core ships with one driver, Stripe.**
     before refunding: a retry after the provider has forgotten its
     idempotency key does not refund twice, even when the first attempt's
     local record failed. A refund made before rc.5 carries no such
-    metadata.
+    metadata. The provider's answer is recorded as the refund's `status`
+    (`PENDING`, `SUCCEEDED`, `FAILED`, `CANCELED`); a refund that fails
+    later is settled by the refund webhooks below.
     Privileged / internal (not REST-exposed).
   - `IngestStripe` — webhook sink (gated `stripe_webhooks`): verify the
     `Stripe-Signature` HMAC (constant-time, multi-`v1`) + timestamp
     tolerance (5-min replay window), dispatch the terminal state to
     `MarkPaymentSucceeded` / `MarkPaymentFailed` / `MarkPaymentCanceled`
-    (`payment_intent.canceled`) / `MarkPaymentRefunded` (`charge.refunded`
-    with the charge fully refunded) (transition-guarded, so a
-    redelivered or out-of-order event changes and emits nothing; CANCELED
-    and REFUNDED are terminal, and an older subscription event never
-    overwrites a newer one), then record the event id. Every object the
+    (`payment_intent.canceled`) (transition-guarded, so a redelivered or
+    out-of-order event changes and emits nothing; CANCELED is terminal, and
+    an older subscription event never overwrites a newer one), then record
+    the event id. A refund event (`charge.refunded`, `refund.created`,
+    `refund.updated`, `refund.failed`, `charge.refund.updated`) makes the
+    plugin read the payment's refunds from the provider and reconcile
+    them: a refund it does not know (made at the provider directly) is
+    recorded, a known one takes the provider's outcome (`FAILED` and
+    `CANCELED` never move back), and the payment moves to `REFUNDED` when
+    the pending and succeeded refunds reach its amount — and back to
+    `SUCCEEDED` (`PaymentRefundReversed`) when one that completed it
+    fails. Subscribe the endpoint to the `refund.*` events: without them a
+    refund's later failure is seen only on the next `charge.refunded`.
+    `charge.dispute.*` records a `Dispute` (see "Refunding a top-up"). Every object the
     plugin creates carries `metadata[w17_payment]` (what it is) and
     `metadata[w17_install]` (which installation made it: a keyed hash of
     the webhook signing secret); an event for an object THIS installation
@@ -73,13 +84,15 @@ before any provider call.
 rows (see "Who a request acts for"). The storage `PaymentQuery` tier
 takes any id and is for the project's own code only.
 - **Events** — `PaymentSucceeded`, `PaymentFailed`, `PaymentCanceled`,
-  `PaymentRefunded` (provider-neutral), emitted from the reconciliation
-  mutations after the provider confirms. A payment reads `REFUNDED` once its
-  refunds reach its amount: `RefundPayment` sets it when its refund completes
-  the amount, and the provider's `charge.refunded` settles it otherwise.
+  `PaymentRefunded`, `PaymentRefundReversed` (provider-neutral), emitted
+  from the reconciliation mutations after the provider confirms. A payment
+  reads `REFUNDED` once its pending and succeeded refunds reach its amount:
+  `RefundPayment` sets it when its refund completes the amount, and the
+  refund webhooks settle it otherwise; a failed or canceled refund does not
+  count.
 - **Stripe driver** (`src/lib/backend/stripe`) — `EnsureCustomer`,
   `CreatePayment`, `RefundPayment`, `FindRefund` (and the subscription
-  calls below) over the Stripe REST API (no vendored SDK), plus webhook
+  calls below), `ListRefunds` over the Stripe REST API (no vendored SDK), plus webhook
   signature verification. Exact money handling
   (decimal string → integer minor units, no float64).
 
@@ -200,8 +213,20 @@ charge). Off by default.
   refunded amount from the owner's credit before the provider is asked.
   Credit already spent, or not granted yet, makes the refund
   `FailedPrecondition`; a refusal the provider will repeat gives the credit
-  back. A refund made at the provider directly, or a dispute, leaves the
-  credit.
+  back, and so does a refund the provider fails later.
+- **Refunds and disputes at the provider** (needs `stripe_webhooks`) — a
+  refund made at the provider directly (its dashboard, its API) takes the
+  top-up's credit back when its webhook arrives, and gives it back if the
+  refund fails. A webhook cannot refuse: the money is already gone. It takes
+  what the balance holds, never below zero, and records the rest as the
+  refund's `credit_shortfall` — credit the owner spent and now owes. A lost
+  dispute does the same, recorded on the `Dispute` row. An open dispute
+  takes nothing (most are won; the credit stays spendable until it is
+  lost), and an inquiry, a won dispute or a refund first seen failed take
+  nothing. A reversal of a top-up whose credit has not been granted yet is
+  not acknowledged until the grant lands, unless the payment is fully
+  refunded (its grant is then refused). Query `credit_shortfall > 0` to
+  find owners who owe credit; the plugin does not collect it.
 - **Event** — `CreditApplied` (signed delta + new balance).
 
 ## Metered / pay-as-you-go (feature `usage`)

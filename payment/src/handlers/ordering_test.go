@@ -120,7 +120,7 @@ func TestFlow_RefundMadeBeforeTheUpgrade_RetriedAfterIt_RefundsOnce(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: res.ProviderRefundID, Amount: "4", Currency: "usd"})
+	legacy, err := r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: res.ProviderRefundID, Amount: "4", Currency: "usd", Status: int32(pb.Refund_SUCCEEDED)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestFlow_RefundMadeBeforeTheUpgrade_StampOutcomes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		legacy, err := r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: res.ProviderRefundID, Amount: "4", Currency: "usd"})
+		legacy, err := r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: res.ProviderRefundID, Amount: "4", Currency: "usd", Status: int32(pb.Refund_SUCCEEDED)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,7 +207,7 @@ func TestFlow_RefundKeyRace_ComparesTheRecordedRefund(t *testing.T) {
 	r := newRig(t)
 	p := r.charge("user-a", "10", "k")
 	r.store.onceBefore("CreateRefund", func() {
-		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: "re_concurrent", Amount: "3", Currency: "usd", IdempotencyKey: refundKey("race")})
+		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: "re_concurrent", Amount: "3", Currency: "usd", IdempotencyKey: refundKey("race"), Status: int32(pb.Refund_SUCCEEDED)})
 	})
 	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "race"})
 	if status.Code(err) != codes.AlreadyExists {

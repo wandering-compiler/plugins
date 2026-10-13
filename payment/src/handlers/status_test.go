@@ -46,6 +46,7 @@ func TestFlow_RefundsMoveThePaymentToRefundedWhenComplete(t *testing.T) {
 func TestWebhook_ChargeRefundedSettlesTheStatus(t *testing.T) {
 	r := newRig(t)
 	p := succeededPayment(t, r, "10")
+	r.stripe.refundAtProvider(p.GetProviderPaymentId(), 400)
 	if _, err := r.deliver(eventJSON("evt_partial", "charge.refunded", "ch_1",
 		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": false})); err != nil {
 		t.Fatal(err)
@@ -53,6 +54,7 @@ func TestWebhook_ChargeRefundedSettlesTheStatus(t *testing.T) {
 	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_SUCCEEDED {
 		t.Errorf("partly refunded charge: %v, want SUCCEEDED", st)
 	}
+	r.stripe.refundAtProvider(p.GetProviderPaymentId(), 600)
 	if _, err := r.deliver(eventJSON("evt_full", "charge.refunded", "ch_1",
 		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": true})); err != nil {
 		t.Fatal(err)
@@ -117,6 +119,7 @@ func TestWebhook_PaymentIntentCanceledAfterAFailure(t *testing.T) {
 func TestWebhook_ChargeRefundedBeforeTheSuccess(t *testing.T) {
 	r := newRig(t)
 	p := r.charge("user-a", "10", "k-early")
+	r.stripe.refundAtProvider(p.GetProviderPaymentId(), 1000)
 	refunded := eventJSON("evt_early_refund", "charge.refunded", "ch_e",
 		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": true})
 	if _, err := r.deliver(refunded); err == nil {
@@ -151,6 +154,7 @@ func TestFlow_RefundedTopUpIsNotGrantedOnRedelivery(t *testing.T) {
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "rf"}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("RefundPayment of an ungranted top-up: %v, want FailedPrecondition", err)
 	}
+	r.stripe.refundAtProvider(p.GetProviderPaymentId(), 2000)
 	refunded := eventJSON("evt_top_refund", "charge.refunded", "ch_top",
 		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": true})
 	if _, err := r.deliver(refunded); err != nil {

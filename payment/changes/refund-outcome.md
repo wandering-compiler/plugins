@@ -1,0 +1,10 @@
+### A refund's outcome is recorded, and refunds or disputes made at the provider take a top-up's credit back
+
+A refund was recorded as done whatever the provider answered, and a refund that failed later still counted toward `REFUNDED`. A refund made in the provider's dashboard, or a lost dispute, left a top-up's credit spendable.
+
+- **`Refund.status`** (`PENDING`, `SUCCEEDED`, `FAILED`, `CANCELED`) holds the provider's answer, and the refund webhooks keep it current. Only pending and succeeded refunds count toward `REFUNDED` (`SumRefundsForPayment`). `FAILED` and `CANCELED` never move back.
+- **A payment whose completing refund fails goes back to `SUCCEEDED`** and emits the new event `PaymentRefundReversed` (`payment.payment.refund_reversed`). A subscriber that acted on `PaymentRefunded` undoes that there.
+- **The webhook handles `refund.created`, `refund.updated`, `refund.failed` and `charge.refund.updated`** besides `charge.refunded`. Each one makes the plugin read the payment's refunds from the provider (one `GET /v1/refunds` per event) and reconcile them. Subscribe your webhook endpoint to the `refund.*` events.
+- **A refund made at the provider directly is recorded** (no key). On a top-up it takes the credit back, as far as the balance holds it. The balance never goes below zero: what the owner already spent is recorded as the refund's `credit_shortfall`, credit the owner owes. A top-up refund that fails gives its credit back, whichever way it was made.
+- **Disputes are recorded** in the new `Dispute` table (feature `stripe_webhooks`) from `charge.dispute.*` events. A lost dispute takes a top-up's credit back like a refund made at the provider, with any shortfall on the dispute. An open dispute takes nothing.
+- **Migration.** New columns `Refund.status` (enum, default `SUCCEEDED`, so existing rows keep meaning what they did) and `Refund.credit_shortfall` (nullable `DECIMAL(20,4)`); new table `Dispute` under `stripe_webhooks`. New mutations `RecordProviderRefund`, `MarkRefundStatus`, `MarkPaymentRefundReversed`, `CreateDispute`, `MarkDisputeStatus` and query `GetDisputeByProviderId`. Generate a migration.

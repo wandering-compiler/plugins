@@ -85,7 +85,8 @@ type apiError struct {
 // webhookEnvelope is the parsed shape of an inbound webhook event. For
 // payment_intent.* events data.object.id is the payment-intent id; for
 // customer.subscription.* it is the subscription id (+ status /
-// current_period_end).
+// current_period_end); for charge.dispute.* the dispute id (+ status, amount,
+// currency, payment_intent); for refund.* the refund id.
 type webhookEnvelope struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
@@ -100,6 +101,9 @@ type webhookEnvelope struct {
 			// is fully refunded.
 			PaymentIntent string `json:"payment_intent"`
 			Refunded      bool   `json:"refunded"`
+			// On a refund or a dispute: its amount (minor units) and currency.
+			Amount   int64  `json:"amount"`
+			Currency string `json:"currency"`
 		} `json:"object"`
 	} `json:"data"`
 }

@@ -350,12 +350,19 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 			return nil, err
 		}
 		resp, err := sameRefund(prior, payment, amount)
-		if err == nil {
-			// A retry is where a first attempt's missed status settle is
-			// caught up (no-op once REFUNDED).
-			h.markRefundedIfFull(ctx, payment)
+		if err != nil {
+			return nil, err
 		}
-		return resp, err
+		// A retry is where a first attempt's missed follow-ups are caught up:
+		// the credit of a top-up refund that did not go through (no-op once
+		// given back), and the status settle (no-op once REFUNDED).
+		if !refundCounts(prior.GetStatus()) {
+			if err := giveBackRefundCredit(ctx, h, payment, prior.GetProviderRefundId(), req.GetIdempotencyKey()); err != nil {
+				return nil, err
+			}
+		}
+		h.markRefundedIfFull(ctx, payment)
+		return resp, nil
 	}
 
 	// The provider gets the caller's key VERBATIM, so one key names one
@@ -414,12 +421,19 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		}
 	}
 
+	// The provider's answer is recorded, not assumed: a refund can be pending
+	// (and fail later), or fail at once. Only pending and succeeded refunds
+	// count toward REFUNDED (SumRefundsForPayment).
+	outcome := mapRefundStatus(res.Status)
 	created, err := h.Mutation.CreateRefund(ctx, &pb.CreateRefundReq{
 		PaymentId:        payment.GetId(),
 		ProviderRefundId: res.ProviderRefundID,
 		Amount:           amount,
 		Currency:         payment.GetCurrency(),
 		IdempotencyKey:   storedKey,
+		Status:           int32(outcome),
+		// RefundPayment refuses to refund spent credit, so it never owes.
+		CreditShortfall: "0",
 	})
 	if err != nil {
 		// A concurrent call with the same key recorded it first: its refund
@@ -433,6 +447,8 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		// replayed, and its local row already exists: that row is the
 		// answer. Only when it belongs to THIS payment.
 		if constraintCode(err) == codeUniqueViolation {
+			// It may also be the refund webhook's row: the provider's event can
+			// outrun this insert, and the webhook records the refund it finds.
 			r, gerr := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: res.ProviderRefundID})
 			if gerr != nil && !absent(gerr) {
 				return nil, gerr
@@ -447,8 +463,66 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		}
 		return nil, err
 	}
+	if !refundCounts(outcome) {
+		// Refused after the fact (the provider answered failed or canceled):
+		// a top-up's credit comes back. A failure here leaves the refund
+		// recorded; the caller's retry finds it and gives the credit back.
+		if err := giveBackRefundCredit(ctx, h, payment, res.ProviderRefundID, req.GetIdempotencyKey()); err != nil {
+			return nil, err
+		}
+	}
 	h.markRefundedIfFull(ctx, payment)
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
+}
+
+// mapRefundStatus maps the provider's refund status onto Refund.Status.
+// requires_action, an empty status and any status this version does not know
+// are PENDING: not done, and not failed either — the refund webhooks settle it
+// once the provider reports an outcome.
+func mapRefundStatus(providerStatus string) pb.Refund_Status {
+	switch providerStatus {
+	case "succeeded":
+		return pb.Refund_SUCCEEDED
+	case "failed":
+		return pb.Refund_FAILED
+	case "canceled":
+		return pb.Refund_CANCELED
+	default:
+		return pb.Refund_PENDING
+	}
+}
+
+// refundCounts reports whether a refund in this state counts toward the
+// payment's refunded total: pending and succeeded do — the provider holds the
+// money for them and counts them against what is left to refund — failed and
+// canceled returned nothing. Rows an earlier version wrote read SUCCEEDED.
+func refundCounts(st pb.Refund_Status) bool {
+	return st != pb.Refund_FAILED && st != pb.Refund_CANCELED
+}
+
+// giveBackRefundCredit returns the credit a top-up refund took back, once the
+// refund has failed or been canceled at the provider: the money stayed, so the
+// credit does too. callerKey is the refund's RefundPayment key (empty for a
+// refund made at the provider directly). Idempotent: run on every delivery and
+// retry that sees the failure. Base no-op; handlers/prepaid.go installs the
+// real one.
+var giveBackRefundCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, providerRefundID, callerKey string) error {
+	return nil
+}
+
+// takeBackReversedCredit takes back the credit of a top-up whose money left
+// without RefundPayment: a refund made at the provider directly, or a lost
+// dispute. reversalID names the reversal ("refund:<id>", "dispute:<id>") and
+// keys the take-back, so a redelivery takes nothing twice.
+//
+// A webhook cannot refuse the way RefundPayment does: the money is gone
+// whatever the balance holds. So it takes what the balance holds, up to the
+// amount, and returns the rest — the shortfall, credit the owner already
+// spent and now owes — for the caller to record ("0" when nothing is owed or
+// the payment is no top-up). The balance never goes below zero. Base no-op;
+// handlers/prepaid.go installs the real one.
+var takeBackReversedCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, reversalID string) (shortfall string, err error) {
+	return "0", nil
 }
 
 // markRefundedIfFull moves a payment to REFUNDED once its recorded refunds

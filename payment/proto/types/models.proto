@@ -80,10 +80,27 @@ message Payment {
   google.protobuf.Timestamp updated_at = 10 [(w17.field) = { type: DATETIME, default_auto: NOW }];
 }
 
-// Refund — a reversal of a Payment. v1 records the provider refund id +
-// amount; partial refunds are supported (amount may be < the payment).
+// Refund — a reversal of a Payment: the provider refund id, amount and
+// outcome; partial refunds are supported (amount may be < the payment). A row
+// is written by RefundPayment, and by the webhook for a refund made at the
+// provider directly (its idempotency_key stays NULL).
 message Refund {
   option (w17.db.table) = {};
+
+  // Status is the provider's refund outcome, mapped one to one (requires_action
+  // and any status this version does not know read PENDING: not done, not
+  // failed). FAILED and CANCELED are terminal; SUCCEEDED is not — a provider
+  // can fail a refund it first reported as succeeded. PENDING and SUCCEEDED
+  // count toward the payment's refunded total (SumRefundsForPayment), the way
+  // the provider counts them against the refundable amount. Values are
+  // appended, never renumbered (the column stores the number).
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    PENDING            = 1;
+    SUCCEEDED          = 2;
+    FAILED             = 3;
+    CANCELED           = 4;
+  }
 
   string id                 = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   // Indexed: SumRefundsForPayment totals a payment's refunds on every refund.
@@ -98,6 +115,49 @@ message Refund {
   // forgets an idempotency key after a day, and a retry after that would
   // refund a second time. NULL on rows written before the key was kept.
   string idempotency_key    = 7 [(w17.field) = { type: CHAR, max_len: 255, unique: true, null: true }];
+  // Rows written before the outcome was kept read SUCCEEDED: what every
+  // earlier version assumed of them.
+  Status status             = 8 [(w17.field) = { type: ENUM, default_int: 2 }];
+  // The part of a top-up refund's credit that could not be taken back because
+  // the owner had already spent it — what the owner owes. Only a refund made
+  // at the provider directly can leave one (RefundPayment refuses to refund
+  // spent credit); "0" or NULL means nothing is owed.
+  string credit_shortfall   = 9 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0, null: true }];
+}
+
+// Dispute — a chargeback (or an inquiry) the cardholder's bank opened on a
+// Payment, recorded from the provider's charge.dispute.* webhooks. Status is
+// the provider's, mapped one to one; WON and LOST are terminal. A LOST
+// dispute on a top-up takes its credit back like a refund made at the
+// provider; credit_shortfall is what could not be taken back. Gated
+// `stripe_webhooks`: only the webhook writes it.
+message Dispute {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+
+  enum Status {
+    STATUS_UNSPECIFIED  = 0;
+    INQUIRY             = 1;  // warning_needs_response / warning_under_review: no funds withdrawn
+    INQUIRY_CLOSED      = 2;  // warning_closed
+    NEEDS_RESPONSE      = 3;  // funds withdrawn, evidence due
+    UNDER_REVIEW        = 4;
+    WON                 = 5;  // terminal; funds reinstated
+    LOST                = 6;  // terminal
+    UNRECOGNIZED_STATUS = 7;  // a provider status this version does not know
+  }
+
+  string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string payment_id          = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string provider_dispute_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
+  string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency            = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
+  Status status              = 6 [(w17.field) = { type: ENUM }];
+  string credit_shortfall    = 7 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  // When the provider created the last event applied to this row. Events
+  // arrive out of order; an older one must not overwrite a newer status.
+  google.protobuf.Timestamp provider_event_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at = 9  [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp updated_at = 10 [(w17.field) = { type: DATETIME, default_auto: NOW }];
 }
 
 // ProcessedWebhookEvent — the inbound-idempotency ledger. The webhook
@@ -136,7 +196,7 @@ message CreditLedger {
   string id              = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
   string delta           = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
-  string reason          = 4 [(w17.field) = { type: SLUG, max_len: 64 }];   // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused
+  string reason          = 4 [(w17.field) = { type: SLUG, max_len: 64 }];   // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused|topup-refund-failed|topup-reversal|topup-reversal-undone
   string ref             = 5 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // payment id / order id / …
   string idempotency_key = 6 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
   google.protobuf.Timestamp created_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];

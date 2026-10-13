@@ -852,7 +852,7 @@ func TestFlow_Refund_ReplayLookupChecksThePayment(t *testing.T) {
 	// The provider replays a refund id that is locally recorded against a
 	// different payment (corrupt state / a reused key across payments).
 	r.store.onceBefore("CreateRefund", func() {
-		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: "pay-other", ProviderRefundId: "re_fake0003", Amount: "1", Currency: "usd"})
+		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: "pay-other", ProviderRefundId: "re_fake0003", Amount: "1", Currency: "usd", Status: int32(pb.Refund_SUCCEEDED)})
 	})
 	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: "rx"})
 	if err == nil {

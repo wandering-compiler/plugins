@@ -211,6 +211,38 @@ func decimalAtLeast(a, b string) bool {
 	return ok1 && ok2 && x.Cmp(y) >= 0
 }
 
+// decimalSum is a + b for two decimal strings, at the columns' scale; a value
+// that does not parse counts as zero (the provider's amounts always parse).
+func decimalSum(a, b string) string {
+	x, _ := new(big.Rat).SetString(strings.TrimSpace(a))
+	y, _ := new(big.Rat).SetString(strings.TrimSpace(b))
+	if x == nil {
+		x = new(big.Rat)
+	}
+	if y == nil {
+		y = new(big.Rat)
+	}
+	return new(big.Rat).Add(x, y).FloatString(amountMaxFracDigits)
+}
+
+// decimalMin is the smaller of two decimal strings, at the columns' scale;
+// a value that does not parse counts as zero.
+func decimalMin(a, b string) string {
+	if decimalAtLeast(a, b) {
+		return decimalSum(b, "0")
+	}
+	return decimalSum(a, "0")
+}
+
+// decimalShortfall is amount - taken, never below zero: what a reversal could
+// not take back.
+func decimalShortfall(amount, taken string) string {
+	if decimalAtLeast(taken, amount) {
+		return "0"
+	}
+	return decimalSum(amount, "-"+strings.TrimSpace(taken))
+}
+
 // isCurrencyCode reports whether c (already trimmed + lowercased) has
 // the ISO-4217 shape: exactly three ASCII letters. The currency column
 // is CHAR(3); a longer code used to reach the provider first and fail

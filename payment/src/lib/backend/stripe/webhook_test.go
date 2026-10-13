@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
 func sign(payload []byte, secret, t string) string {
@@ -34,6 +36,22 @@ func TestVerifyAndParse_Valid(t *testing.T) {
 		t.Fatalf("VerifyAndParse: %v", err)
 	}
 	if ev.ID != "evt_1" || ev.Type != "payment_intent.succeeded" || ev.PaymentIntentID != "pi_7" {
+		t.Errorf("parsed = %+v", ev)
+	}
+}
+
+// A dispute (or refund) event carries the payment it belongs to and its
+// amount, as a decimal of its currency.
+func TestVerifyAndParse_DisputeAmountAndPayment(t *testing.T) {
+	pinClock(t, 123)
+	secret := "whsec_x"
+	body := []byte(`{"id":"evt_1","type":"charge.dispute.closed","created":120,"data":{"object":{"id":"dp_1","status":"lost","amount":1999,"currency":"USD","payment_intent":"pi_7"}}}`)
+	ev, err := VerifyAndParse(body, sign(body, secret, "123"), secret)
+	if err != nil {
+		t.Fatalf("VerifyAndParse: %v", err)
+	}
+	if ev.ObjectID != "dp_1" || ev.ObjectStatus != "lost" || ev.ChargePaymentIntent != "pi_7" || ev.Created != 120 ||
+		ev.Amount != (backend.Money{Amount: "19.99", Currency: "usd"}) {
 		t.Errorf("parsed = %+v", ev)
 	}
 }
