@@ -1,6 +1,7 @@
 package workerconn
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -23,9 +24,18 @@ import (
 // `register` installs the worker's own services on the server — this package
 // has no idea what they are, which is the same ignorance the relay has. `opts`
 // are extra server options (interceptors, say), applied after the cluster's.
+// `register` is called once per tunnel.
 //
-// It returns when ctx ends or the ONE connection drops; a worker loops on it
-// with a backoff, dialling a fresh tunnel each time.
+// It returns when ctx ends or the CURRENT connection drops; a worker loops on
+// it with a backoff, dialling a fresh tunnel each time.
+//
+// A tunnel carries the certificate it was opened with, and the relay retires
+// it when that certificate expires. So when the certificate on disk is
+// renewed (Run renews it), this opens a new tunnel with the new one and keeps
+// serving the old tunnel for the work already running on it; the relay sends
+// new work to the new tunnel and closes the old one when its last call ends.
+// Without this a long-lived worker lost its tunnel, and the work on it, once
+// per certificate lifetime, and a fleet enrolled together lost it at once.
 func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), opts ...grpc.ServerOption) error {
 	if register == nil {
 		return errors.New("workerconn: ServeTunnel needs something to serve")
@@ -42,17 +52,69 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 		// relay would refuse the handshake, so say why instead.
 		return err
 	}
+	cur, err := openTunnel(ctx, cfg, register, opts)
+	if err != nil {
+		return err
+	}
+	var retired []*servedTunnel
+	stopAll := func() {
+		// GracefulStop, not Stop: work already running on these tunnels is
+		// somebody's job, and the relay has no way to re-place it.
+		for _, t := range append(retired, cur) {
+			t.srv.GracefulStop()
+		}
+	}
+	tick := time.NewTicker(cfg.retry())
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			stopAll()
+			return ctx.Err()
+		case err := <-cur.done:
+			// A retired tunnel goes on serving its running work until the
+			// relay closes it.
+			return err
+		case <-tick.C:
+			leaf, err := certificateUsable(cfg)
+			if err != nil || bytes.Equal(leaf.Raw, cur.certRaw) {
+				continue
+			}
+			next, err := openTunnel(ctx, cfg, register, opts)
+			if err != nil {
+				continue // keep the old tunnel; try again on the next tick
+			}
+			retired = append(retired, cur)
+			cur = next
+		}
+	}
+}
+
+// servedTunnel is one tunnel and the server answering on it.
+type servedTunnel struct {
+	srv *grpc.Server
+	// certRaw is the certificate on disk when the tunnel was dialled — the
+	// one its handshake presented.
+	certRaw []byte
+	// done receives Serve's result once the connection has ended.
+	done chan error
+}
+
+func openTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), opts []grpc.ServerOption) (*servedTunnel, error) {
+	leaf, err := certificateUsable(cfg)
+	if err != nil {
+		return nil, err
+	}
 	// The same TLS as every other connection to the relay: pinned through
 	// relaydial (full AND resumed handshakes — the tunnel carries the work, so
 	// a pin a resumed session skipped would be the worst place for one), and
-	// this worker's current certificate, read at the handshake so a renewal
-	// takes effect on the next tunnel.
+	// this worker's current certificate, read at the handshake.
 	d := &tls.Dialer{Config: clientTLS(cfg, true)}
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	conn, err := d.DialContext(dialCtx, "tcp", cfg.TunnelAddress)
 	if err != nil {
-		return fmt.Errorf("workerconn: dialling the tunnel: %w", err)
+		return nil, fmt.Errorf("workerconn: dialling the tunnel: %w", err)
 	}
 
 	// The work server is built with the cluster's keepalive and the MaxMessage
@@ -62,18 +124,11 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 	srv := grpc.NewServer(append(tunnel.WorkServerOptions(), opts...)...)
 	register(srv)
 	lis := tunnel.NewSingleConnListener(conn)
-
-	done := make(chan error, 1)
-	go func() { done <- srv.Serve(lis) }()
-	select {
-	case <-ctx.Done():
-		// GracefulStop, not Stop: work already running on this tunnel is
-		// somebody's job, and the relay has no way to re-place it.
-		srv.GracefulStop()
+	t := &servedTunnel{srv: srv, certRaw: leaf.Raw, done: make(chan error, 1)}
+	go func() {
+		err := srv.Serve(lis)
 		_ = lis.Close()
-		return ctx.Err()
-	case err := <-done:
-		_ = lis.Close()
-		return err
-	}
+		t.done <- err
+	}()
+	return t, nil
 }

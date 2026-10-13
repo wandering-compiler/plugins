@@ -33,11 +33,13 @@ import (
 // plugin registered so a test can call it.
 type registry struct {
 	impl      pb.ClusterServiceServer
-	shutdowns int
+	shutdowns []func(context.Context) error
 }
 
 func (r *registry) RegisterClusterServiceServer(impl pb.ClusterServiceServer) { r.impl = impl }
-func (r *registry) RegisterShutdown(func(context.Context) error)              { r.shutdowns++ }
+func (r *registry) RegisterShutdown(fn func(context.Context) error) {
+	r.shutdowns = append(r.shutdowns, fn)
+}
 
 // relayRow is the one row the fake registry tables hold.
 type tables struct {
@@ -369,5 +371,23 @@ func TestRegisterPlugin_NeedsARegistryAndClients(t *testing.T) {
 	}
 	if err := RegisterPlugin(cfg, &registry{}, nil); err == nil {
 		t.Error("RegisterPlugin accepted a nil client set")
+	}
+}
+
+// The periodic ban delivery belongs to the plugin's lifetime: RegisterPlugin
+// registers a shutdown hook, and running it stops the loop and waits for it.
+func TestRegisterPlugin_TheBanDeliveryStopsAtShutdown(t *testing.T) {
+	certPath, keyPath, _ := identityFiles(t, "console")
+	reg := &registry{}
+	if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath}, reg, clientSet{&tables{}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.shutdowns) != 1 {
+		t.Fatalf("%d shutdown hooks registered, want the ban delivery's one", len(reg.shutdowns))
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := reg.shutdowns[0](ctx); err != nil {
+		t.Errorf("shutdown: %v, want the delivery loop stopped", err)
 	}
 }
