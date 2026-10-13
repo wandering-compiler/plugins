@@ -1,10 +1,10 @@
 package handlers
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
-
-	"google.golang.org/grpc/codes"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
@@ -292,10 +292,11 @@ func TestWebhook_UnknownRefundFirstSeenFailed_TakesNothing(t *testing.T) {
 	wantRefundStatus(t, r, id, pb.Refund_FAILED)
 }
 
-// A partial refund at the provider of a top-up whose grant has not landed
-// takes nothing yet and is not acknowledged; its redelivery after the grant
-// takes the credit back.
-func TestWebhook_RefundAtTheProviderOfAnUngrantedTopUp_WaitsForTheGrant(t *testing.T) {
+// A partial refund at the provider of a top-up whose grant has not landed is
+// acknowledged with nothing taken (there is nothing to take, and waiting would
+// hold up every other refund of the payment); the grant leaves the refunded
+// part out.
+func TestWebhook_RefundAtTheProviderOfAnUngrantedTopUp_IsLeftOutOfTheGrant(t *testing.T) {
 	r := newRig(t)
 	p := r.topUp("user-a", "10.00", "top-x")
 	success := eventJSON("evt_top", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)
@@ -304,15 +305,162 @@ func TestWebhook_RefundAtTheProviderOfAnUngrantedTopUp_WaitsForTheGrant(t *testi
 		t.Fatal("want the grant failure to surface")
 	}
 	id := r.stripe.refundAtProvider(p.GetProviderPaymentId(), 400)
-	body := refundEvent("evt_rc", "refund.created", id, p.GetProviderPaymentId())
-	_, err := r.deliver(body)
-	wantCode(t, err, codes.FailedPrecondition, "refund of an ungranted top-up")
-	if r.store.isProcessed("evt_rc") || r.store.count("refunds") != 0 {
-		t.Fatal("the refund was recorded before the credit it reverses existed")
+	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, p.GetProviderPaymentId()))
+	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "0.0000" {
+		t.Errorf("shortfall %q, want 0.0000 (the grant leaves it out)", row.GetCreditShortfall())
 	}
-	deliverOK(t, r, success)
-	deliverOK(t, r, body)
+	// The payment is SUCCEEDED and its grant due: the refund's delivery
+	// grants what is left, and the success's redelivery grants nothing more.
 	wantBalance(t, r, "6.0000")
+	deliverOK(t, r, success)
+	wantBalance(t, r, "6.0000")
+}
+
+// A top-up refunded in full at the provider before its grant reads REFUNDED,
+// and its grant is refused. When that refund fails, the payment is SUCCEEDED
+// again and the credit — paid for, and kept — is granted. Later reversals of
+// the payment are reconciled, never held up.
+func TestWebhook_FailedFullRefundOfAnUngrantedTopUp_GrantsTheCredit(t *testing.T) {
+	r := newRig(t)
+	p := r.topUp("user-a", "10.00", "top-x")
+	pi := p.GetProviderPaymentId()
+	success := eventJSON("evt_top", "payment_intent.succeeded", pi, nil)
+	r.store.injectBefore("ApplyCredit", errTransient)
+	if _, err := r.deliver(success); err == nil {
+		t.Fatal("want the grant failure to surface")
+	}
+	id := r.stripe.refundAtProvider(pi, 1000)
+	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, pi))
+	wantPaymentStatus(t, r, p, pb.Payment_REFUNDED)
+	deliverOK(t, r, success)
+	wantBalance(t, r, "0.0000")
+
+	r.stripe.setRefundStatus(id, "failed")
+	failed := refundEvent("evt_rf", "refund.failed", id, pi)
+	deliverOK(t, r, failed)
+	deliverOK(t, r, failed)
+	wantPaymentStatus(t, r, p, pb.Payment_SUCCEEDED)
+	wantBalance(t, r, "10.0000")
+	deliverOK(t, r, success)
+	wantBalance(t, r, "10.0000")
+
+	again := r.stripe.refundAtProvider(pi, 400)
+	deliverOK(t, r, refundEvent("evt_rc2", "refund.created", again, pi))
+	wantBalance(t, r, "6.0000")
+}
+
+// A lost dispute on a top-up whose grant has not landed takes nothing (there
+// is nothing to take) and is acknowledged; the grant will hand the credit
+// over, so its amount is recorded as owed.
+func TestWebhook_LostDisputeOnAnUngrantedTopUp_IsOwed(t *testing.T) {
+	r := newRig(t)
+	p := r.topUp("user-a", "10.00", "top-x")
+	r.store.injectBefore("ApplyCredit", errTransient)
+	if _, err := r.deliver(eventJSON("evt_top", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err == nil {
+		t.Fatal("want the grant failure to surface")
+	}
+	deliverOK(t, r, disputeEvent(t, "evt_d", "charge.dispute.closed", "dp_u", p.GetProviderPaymentId(), "lost", 1000, time.Now().Unix()))
+	if d := r.store.dispute(t, "dp_u"); d == nil || d.GetStatus() != pb.Dispute_LOST || d.GetCreditShortfall() != "10.0000" {
+		t.Errorf("dispute %+v, want LOST owing 10.0000", d)
+	}
+}
+
+// Two deliveries of one provider refund: A takes what the balance holds; B
+// checked the ledger before A committed, then finds the balance emptied by A.
+// Both answer the shortfall from the one ledger row, so B — recording the
+// refund first — records what A could not take, not the whole amount.
+func TestWebhook_ConcurrentReversalDeliveries_RecordOneShortfall(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "6", IdempotencyKey: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	pi := p.GetProviderPaymentId()
+	id := r.stripe.refundAtProvider(pi, 1000)
+	atInsert, release, aDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	r.store.onceBefore("RecordProviderRefund", func() { close(atInsert); <-release })
+	r.store.onceBefore("GetCreditBalance", func() {
+		go func() {
+			_, err := r.deliver(refundEvent("evt_a", "refund.created", id, pi))
+			aDone <- err
+		}()
+		<-atInsert // A has taken the 4 and waits to record the refund
+	})
+	_, errB := r.deliver(refundEvent("evt_b", "charge.refunded", "ch_1", pi))
+	close(release)
+	if errA := <-aDone; errA != nil || errB != nil {
+		t.Fatalf("deliveries: A %v, B %v", errA, errB)
+	}
+	wantBalance(t, r, "0.0000")
+	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "6.0000" {
+		t.Errorf("shortfall %q, want 6.0000 (10 refunded, 4 taken)", row.GetCreditShortfall())
+	}
+}
+
+// The same, as a free-for-all: eight deliveries at once, every run.
+func TestWebhook_ConcurrentReversalDeliveries_Stress(t *testing.T) {
+	for run := 0; run < 15; run++ {
+		r := newRig(t)
+		p := grantedTopUp(t, r, "10.00")
+		if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "6", IdempotencyKey: "s1"}); err != nil {
+			t.Fatal(err)
+		}
+		pi := p.GetProviderPaymentId()
+		id := r.stripe.refundAtProvider(pi, 1000)
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				if _, err := r.deliver(refundEvent(fmt.Sprintf("evt_%d", i), "refund.created", id, pi)); err != nil {
+					t.Errorf("delivery %d: %v", i, err)
+				}
+			}(i)
+		}
+		wg.Wait()
+		wantBalance(t, r, "0.0000")
+		if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "6.0000" {
+			t.Fatalf("run %d: shortfall %q, want 6.0000", run, row.GetCreditShortfall())
+		}
+	}
+}
+
+// A delivery that read the refund as succeeded is about to mark the payment
+// REFUNDED; meanwhile the refund fails and a second delivery records that,
+// finding nothing to reverse yet. The first one's REFUNDED must not stand.
+func TestWebhook_StaleRefundListCannotLeaveThePaymentRefunded(t *testing.T) {
+	r := newRig(t)
+	p := succeededPayment(t, r, "10")
+	pi := p.GetProviderPaymentId()
+	id := r.stripe.refundAtProvider(pi, 1000)
+	r.store.onceBefore("MarkPaymentRefunded", func() {
+		r.stripe.setRefundStatus(id, "failed")
+		deliverOK(t, r, refundEvent("evt_b", "refund.failed", id, pi))
+	})
+	deliverOK(t, r, refundEvent("evt_a", "refund.created", id, pi))
+	wantRefundStatus(t, r, id, pb.Refund_FAILED)
+	wantPaymentStatus(t, r, p, pb.Payment_SUCCEEDED)
+}
+
+// A refund made at the provider over spent credit records what is owed; when
+// it fails, what it took comes back and nothing is owed any more.
+func TestWebhook_FailedRefundClearsItsShortfall(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "8", IdempotencyKey: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	id := r.stripe.refundAtProvider(p.GetProviderPaymentId(), 1000)
+	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, p.GetProviderPaymentId()))
+	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "8.0000" {
+		t.Fatalf("shortfall %q, want 8.0000", row.GetCreditShortfall())
+	}
+	r.stripe.setRefundStatus(id, "failed")
+	deliverOK(t, r, refundEvent("evt_rf", "refund.failed", id, p.GetProviderPaymentId()))
+	wantBalance(t, r, "2.0000")
+	if row := wantRefundStatus(t, r, id, pb.Refund_FAILED); row.GetCreditShortfall() != "0.0000" {
+		t.Errorf("a failed refund still owes %q", row.GetCreditShortfall())
+	}
 }
 
 // A payment this installation never made is acknowledged without a provider
@@ -433,4 +581,43 @@ func TestFlow_FailedRefundsCreditIsGivenBackOnRetry(t *testing.T) {
 		t.Errorf("retry answered %v, want the FAILED refund", ref.GetStatus())
 	}
 	wantBalance(t, r, "10.0000")
+}
+
+// A refund made at the provider when the whole credit was already spent takes
+// nothing (its take-back row holds zero) and owes all of it; when it fails,
+// there is nothing to give back and nothing owed.
+func TestWebhook_FailedRefundThatTookNothing(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "10", IdempotencyKey: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	pi := p.GetProviderPaymentId()
+	id := r.stripe.refundAtProvider(pi, 1000)
+	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, pi))
+	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "10.0000" {
+		t.Fatalf("shortfall %q, want 10.0000", row.GetCreditShortfall())
+	}
+	r.stripe.setRefundStatus(id, "failed")
+	deliverOK(t, r, refundEvent("evt_rf", "refund.failed", id, pi))
+	wantBalance(t, r, "0.0000")
+	if row := wantRefundStatus(t, r, id, pb.Refund_FAILED); row.GetCreditShortfall() != "0.0000" {
+		t.Errorf("a failed refund still owes %q", row.GetCreditShortfall())
+	}
+}
+
+// RefundPayment marking REFUNDED races the webhook recording that refund's
+// failure (which found nothing to reverse yet): RefundPayment reads the rows
+// again after its write, so the payment does not stay REFUNDED.
+func TestFlow_RefundPaymentRacingTheRefundsFailure_DoesNotStayRefunded(t *testing.T) {
+	r := newRig(t)
+	p := succeededPayment(t, r, "10")
+	pi := p.GetProviderPaymentId()
+	r.store.onceBefore("MarkPaymentRefunded", func() {
+		id := r.stripe.lastRefundID()
+		r.stripe.setRefundStatus(id, "failed")
+		deliverOK(t, r, refundEvent("evt_rf", "refund.failed", id, pi))
+	})
+	refundNow(t, r, p, "10", "r1")
+	wantPaymentStatus(t, r, p, pb.Payment_SUCCEEDED)
 }

@@ -206,13 +206,13 @@ func isRefundEvent(typ string) bool {
 // the provider never revives one, so a read that disagrees is older than the
 // failure (MarkRefundStatus is guarded the same way).
 //
-// The payment's status comes first, from that total, so a top-up refunded in
-// full before its credit was ever granted reads REFUNDED (its grant is then
-// refused) before its refunds are recorded. Then every refund: an unknown one
-// is recorded (and a top-up's credit taken back), a known one takes the
-// provider's outcome, and a failed or canceled one gives a top-up's credit
-// back. Every step is idempotent, and any failure leaves the event unrecorded,
-// so the provider's redelivery runs the whole reconciliation again.
+// Every refund first: an unknown one is recorded (and a top-up's credit taken
+// back), a known one takes the provider's outcome, and a failed or canceled
+// one gives a top-up's credit back. Then the payment's status, from the LOCAL
+// rows — never from this read, which a concurrent delivery may already have
+// overtaken (settleRefundedStatus). Every step is idempotent, and any failure
+// leaves the event unrecorded, so the provider's redelivery runs the whole
+// reconciliation again.
 func (h *PaymentServiceHandler) reconcileRefunds(ctx context.Context, providerPaymentID string) error {
 	if providerPaymentID == "" {
 		return nil // a charge without a PaymentIntent: never one this plugin made
@@ -227,8 +227,6 @@ func (h *PaymentServiceHandler) reconcileRefunds(ctx context.Context, providerPa
 	if err != nil {
 		return providerFailure(err)
 	}
-	seen := make([]seenRefund, 0, len(refunds))
-	counted := "0"
 	for _, r := range refunds {
 		got, err := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: r.ProviderRefundID})
 		if err != nil && !absent(err) {
@@ -238,23 +236,11 @@ func (h *PaymentServiceHandler) reconcileRefunds(ctx context.Context, providerPa
 		if sr.row != nil && !refundCounts(sr.row.GetStatus()) {
 			sr.outcome = sr.row.GetStatus()
 		}
-		if refundCounts(sr.outcome) {
-			counted = decimalSum(counted, r.Amount.Amount)
-		}
-		seen = append(seen, sr)
-	}
-	if err := h.settleRefundedStatus(ctx, payment, counted); err != nil {
-		return err
-	}
-	if payment, err = h.paymentByProviderID(ctx, providerPaymentID); err != nil || payment == nil {
-		return err
-	}
-	for _, sr := range seen {
 		if err := h.reconcileRefund(ctx, payment, sr); err != nil {
 			return err
 		}
 	}
-	return nil
+	return h.settleRefundedStatus(ctx, payment)
 }
 
 // seenRefund is one provider refund with its local row (nil when none) and
@@ -265,23 +251,53 @@ type seenRefund struct {
 	outcome pb.Refund_Status
 }
 
-// settleRefundedStatus moves the payment to REFUNDED once what the provider
-// counts as refunded reaches its amount, and back to SUCCEEDED when a refund
-// that had completed it has since failed (PaymentRefundReversed).
-func (h *PaymentServiceHandler) settleRefundedStatus(ctx context.Context, payment *pb.Payment, counted string) error {
+// settleRefundedStatus moves the payment to REFUNDED once its recorded
+// pending and succeeded refunds reach its amount, and back to SUCCEEDED when a
+// refund that had completed it has since failed (PaymentRefundReversed).
+//
+// Two deliveries can race: one about to mark REFUNDED from rows it read while
+// the refund still counted, one that has just recorded the refund's failure
+// and found the payment not REFUNDED yet, so nothing to reverse. Each writes
+// first and reads the other's half after: the marker re-reads the rows once
+// REFUNDED has landed and reverses it if they no longer reach the amount, so
+// whichever runs last sees both writes and the payment cannot stay REFUNDED
+// on a failed refund. (The cost is a PaymentRefunded followed by a
+// PaymentRefundReversed in that interleaving.)
+//
+// A payment that is SUCCEEDED again gets a top-up grant the REFUNDED had
+// refused (grantTopupWhenDue).
+func (h *PaymentServiceHandler) settleRefundedStatus(ctx context.Context, payment *pb.Payment) error {
 	pid := payment.GetProviderPaymentId()
-	if decimalAtLeast(counted, payment.GetAmount()) {
-		_, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: pid})
-		if guardRefused(err) {
-			return h.refundNotSettled(ctx, pid)
-		}
+	full, err := h.refundedInFull(ctx, payment)
+	if err != nil {
 		return err
 	}
-	_, err := h.Mutation.MarkPaymentRefundReversed(ctx, &pb.MarkPaymentRefundReversedReq{ProviderPaymentId: pid})
-	if guardRefused(err) {
-		return nil // not REFUNDED: nothing to reverse (or a redelivery reversed it)
+	if full {
+		_, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: pid})
+		if guardRefused(err) {
+			err = h.refundNotSettled(ctx, pid)
+		}
+		if err != nil {
+			return err
+		}
+		if full, err = h.refundedInFull(ctx, payment); err != nil || full {
+			return err
+		}
 	}
-	return err
+	if _, err := h.Mutation.MarkPaymentRefundReversed(ctx, &pb.MarkPaymentRefundReversedReq{ProviderPaymentId: pid}); err != nil && !guardRefused(err) {
+		return err // refused: not REFUNDED, nothing to reverse
+	}
+	return grantTopupWhenDue(ctx, h, payment)
+}
+
+// refundedInFull reports whether the payment's recorded pending and succeeded
+// refunds reach its amount.
+func (h *PaymentServiceHandler) refundedInFull(ctx context.Context, payment *pb.Payment) (bool, error) {
+	sum, err := h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
+	if err != nil {
+		return false, err
+	}
+	return decimalAtLeast(sum.GetTotal(), payment.GetAmount()), nil
 }
 
 // reconcileRefund applies one provider refund to its local row.
@@ -303,8 +319,17 @@ func (h *PaymentServiceHandler) reconcileRefund(ctx context.Context, payment *pb
 			return err
 		}
 	}
-	if !refundCounts(outcome) {
-		return giveBackRefundCredit(ctx, h, payment, r.ProviderRefundID, r.Key)
+	if refundCounts(outcome) {
+		return nil
+	}
+	if err := giveBackRefundCredit(ctx, h, payment, r.ProviderRefundID, r.Key); err != nil {
+		return err
+	}
+	// The money stayed and the credit is back: nothing is owed any more.
+	if isPositiveDecimal(row.GetCreditShortfall()) {
+		if _, err := h.Mutation.ClearRefundShortfall(ctx, &pb.ClearRefundShortfallReq{ProviderRefundId: r.ProviderRefundID}); err != nil && !guardRefused(err) {
+			return err
+		}
 	}
 	return nil
 }
@@ -468,16 +493,6 @@ func mapDisputeStatus(providerStatus string) pb.Dispute_Status {
 	default:
 		return pb.Dispute_UNRECOGNIZED_STATUS
 	}
-}
-
-// paymentByProviderID is the local payment for a provider id, nil when there
-// is none.
-func (h *PaymentServiceHandler) paymentByProviderID(ctx context.Context, providerPaymentID string) (*pb.Payment, error) {
-	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: providerPaymentID})
-	if err != nil && !absent(err) {
-		return nil, err
-	}
-	return got.GetPayment(), nil
 }
 
 // refundNotSettled resolves a refused MarkPaymentRefunded on a fully refunded

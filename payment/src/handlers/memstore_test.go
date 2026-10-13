@@ -640,6 +640,24 @@ func (s *memStore) MarkRefundStatus(_ context.Context, in *pb.MarkRefundStatusRe
 	return nil, s.leave("MarkRefundStatus", noRows("MarkRefundStatus"))
 }
 
+// ClearRefundShortfall: `WHERE … AND (status = 3 OR status = 4) AND
+// credit_shortfall > 0`.
+func (s *memStore) ClearRefundShortfall(_ context.Context, in *pb.ClearRefundShortfallReq, _ ...grpc.CallOption) (*pb.ClearRefundShortfallResp, error) {
+	if err := s.enter("ClearRefundShortfall"); err != nil {
+		return nil, s.leave("", err)
+	}
+	for _, r := range s.refunds {
+		if r.GetProviderRefundId() != in.GetProviderRefundId() || (r.GetStatus() != pb.Refund_FAILED && r.GetStatus() != pb.Refund_CANCELED) {
+			continue
+		}
+		if sh, err := decimal4(r.GetCreditShortfall()); err == nil && sh.Sign() > 0 {
+			r.CreditShortfall = "0.0000"
+			return &pb.ClearRefundShortfallResp{Id: r.GetId()}, s.leave("ClearRefundShortfall", nil)
+		}
+	}
+	return nil, s.leave("ClearRefundShortfall", noRows("ClearRefundShortfall"))
+}
+
 // MarkPaymentRefundReversed: `WHERE … AND status = 6`.
 func (s *memStore) MarkPaymentRefundReversed(_ context.Context, in *pb.MarkPaymentRefundReversedReq, _ ...grpc.CallOption) (*pb.MarkPaymentRefundReversedResp, error) {
 	if err := s.enter("MarkPaymentRefundReversed"); err != nil {

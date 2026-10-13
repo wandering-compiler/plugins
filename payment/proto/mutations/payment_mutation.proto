@@ -86,6 +86,9 @@ message MarkRefundStatusReq {
 }
 message MarkRefundStatusResp { Refund refund = 1; }
 
+message ClearRefundShortfallReq  { string provider_refund_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message ClearRefundShortfallResp { string id = 1; }
+
 message SetRefundIdempotencyKeyReq {
   string id              = 1 [(w17.field) = { type: UUID }];
   string idempotency_key = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
@@ -596,6 +599,23 @@ service PaymentMutation {
         dql:
           "UPDATE @module.Refund SET idempotency_key = :idempotency_key "
           "WHERE id = :id AND idempotency_key IS NULL "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // ClearRefundShortfall — a refund that failed or was canceled owes nothing:
+  // the money stayed, and what its take-back took is given back. GUARDED
+  // (`status` FAILED or CANCELED, a positive shortfall), so it can never
+  // clear the debt of a refund that counts, and a repeat matches zero rows.
+  rpc ClearRefundShortfall(ClearRefundShortfallReq) returns (ClearRefundShortfallResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Refund SET credit_shortfall = 0 "
+          "WHERE provider_refund_id = :provider_refund_id "
+          "AND (status = 3 OR status = 4) AND credit_shortfall > 0 "
           "RETURNING id"
       }
     };

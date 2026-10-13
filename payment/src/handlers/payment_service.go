@@ -510,6 +510,14 @@ var giveBackRefundCredit = func(ctx context.Context, h *PaymentServiceHandler, p
 	return nil
 }
 
+// grantTopupWhenDue grants a top-up whose grant never landed, once its payment
+// reads SUCCEEDED again after a refund that made it REFUNDED failed (the grant
+// is refused while REFUNDED). Idempotent. Base no-op; handlers/prepaid.go
+// installs the real one.
+var grantTopupWhenDue = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) error {
+	return nil
+}
+
 // takeBackReversedCredit takes back the credit of a top-up whose money left
 // without RefundPayment: a refund made at the provider directly, or a lost
 // dispute. reversalID names the reversal ("refund:<id>", "dispute:<id>") and
@@ -537,7 +545,16 @@ func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment 
 	if err != nil || !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
 		return
 	}
-	_, _ = h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+	if _, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()}); err != nil {
+		return
+	}
+	// A refund failure the webhook recorded meanwhile found nothing to
+	// reverse; read the rows again now that REFUNDED has landed (see the
+	// webhook's settleRefundedStatus).
+	sum, err = h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
+	if err == nil && !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
+		_, _ = h.Mutation.MarkPaymentRefundReversed(ctx, &pb.MarkPaymentRefundReversedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+	}
 }
 
 // takeBackRefundedCredit removes the credit a refunded top-up granted,
@@ -599,6 +616,16 @@ func (h *PaymentServiceHandler) refundByKey(ctx context.Context, storedKey strin
 		return nil, err
 	}
 	return got.GetRefund(), nil
+}
+
+// paymentByProviderID is the local payment for a provider id, nil when there
+// is none. Here (always staged): the webhook and the prepaid hooks read it.
+func (h *PaymentServiceHandler) paymentByProviderID(ctx context.Context, providerPaymentID string) (*pb.Payment, error) {
+	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: providerPaymentID})
+	if err != nil && !absent(err) {
+		return nil, err
+	}
+	return got.GetPayment(), nil
 }
 
 // resolveCustomer returns the principal's Customer row, creating it (and

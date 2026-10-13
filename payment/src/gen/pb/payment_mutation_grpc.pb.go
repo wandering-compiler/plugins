@@ -40,6 +40,7 @@ const (
 	PaymentMutation_RecordProviderRefund_FullMethodName      = "/w17.contrib.payment.PaymentMutation/RecordProviderRefund"
 	PaymentMutation_MarkRefundStatus_FullMethodName          = "/w17.contrib.payment.PaymentMutation/MarkRefundStatus"
 	PaymentMutation_SetRefundIdempotencyKey_FullMethodName   = "/w17.contrib.payment.PaymentMutation/SetRefundIdempotencyKey"
+	PaymentMutation_ClearRefundShortfall_FullMethodName      = "/w17.contrib.payment.PaymentMutation/ClearRefundShortfall"
 	PaymentMutation_CreateDispute_FullMethodName             = "/w17.contrib.payment.PaymentMutation/CreateDispute"
 	PaymentMutation_MarkDisputeStatus_FullMethodName         = "/w17.contrib.payment.PaymentMutation/MarkDisputeStatus"
 	PaymentMutation_MarkWebhookProcessed_FullMethodName      = "/w17.contrib.payment.PaymentMutation/MarkWebhookProcessed"
@@ -163,6 +164,11 @@ type PaymentMutationClient interface {
 	// it, and the guard's refusal is a no-row result. A key another row already
 	// holds is a UNIQUE_VIOLATION.
 	SetRefundIdempotencyKey(ctx context.Context, in *SetRefundIdempotencyKeyReq, opts ...grpc.CallOption) (*SetRefundIdempotencyKeyResp, error)
+	// ClearRefundShortfall — a refund that failed or was canceled owes nothing:
+	// the money stayed, and what its take-back took is given back. GUARDED
+	// (`status` FAILED or CANCELED, a positive shortfall), so it can never
+	// clear the debt of a refund that counts, and a repeat matches zero rows.
+	ClearRefundShortfall(ctx context.Context, in *ClearRefundShortfallReq, opts ...grpc.CallOption) (*ClearRefundShortfallResp, error)
 	// CreateDispute — INSERT the local record of a provider dispute, the first
 	// time one of its charge.dispute.* events arrives. Duplicate
 	// provider_dispute_id → UNIQUE_VIOLATION (a concurrent delivery recorded
@@ -373,6 +379,16 @@ func (c *paymentMutationClient) SetRefundIdempotencyKey(ctx context.Context, in 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetRefundIdempotencyKeyResp)
 	err := c.cc.Invoke(ctx, PaymentMutation_SetRefundIdempotencyKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentMutationClient) ClearRefundShortfall(ctx context.Context, in *ClearRefundShortfallReq, opts ...grpc.CallOption) (*ClearRefundShortfallResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearRefundShortfallResp)
+	err := c.cc.Invoke(ctx, PaymentMutation_ClearRefundShortfall_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -590,6 +606,11 @@ type PaymentMutationServer interface {
 	// it, and the guard's refusal is a no-row result. A key another row already
 	// holds is a UNIQUE_VIOLATION.
 	SetRefundIdempotencyKey(context.Context, *SetRefundIdempotencyKeyReq) (*SetRefundIdempotencyKeyResp, error)
+	// ClearRefundShortfall — a refund that failed or was canceled owes nothing:
+	// the money stayed, and what its take-back took is given back. GUARDED
+	// (`status` FAILED or CANCELED, a positive shortfall), so it can never
+	// clear the debt of a refund that counts, and a repeat matches zero rows.
+	ClearRefundShortfall(context.Context, *ClearRefundShortfallReq) (*ClearRefundShortfallResp, error)
 	// CreateDispute — INSERT the local record of a provider dispute, the first
 	// time one of its charge.dispute.* events arrives. Duplicate
 	// provider_dispute_id → UNIQUE_VIOLATION (a concurrent delivery recorded
@@ -727,6 +748,9 @@ func (UnimplementedPaymentMutationServer) MarkRefundStatus(context.Context, *Mar
 }
 func (UnimplementedPaymentMutationServer) SetRefundIdempotencyKey(context.Context, *SetRefundIdempotencyKeyReq) (*SetRefundIdempotencyKeyResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetRefundIdempotencyKey not implemented")
+}
+func (UnimplementedPaymentMutationServer) ClearRefundShortfall(context.Context, *ClearRefundShortfallReq) (*ClearRefundShortfallResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearRefundShortfall not implemented")
 }
 func (UnimplementedPaymentMutationServer) CreateDispute(context.Context, *CreateDisputeReq) (*CreateDisputeResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateDispute not implemented")
@@ -976,6 +1000,24 @@ func _PaymentMutation_SetRefundIdempotencyKey_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentMutation_ClearRefundShortfall_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearRefundShortfallReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentMutationServer).ClearRefundShortfall(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentMutation_ClearRefundShortfall_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentMutationServer).ClearRefundShortfall(ctx, req.(*ClearRefundShortfallReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PaymentMutation_CreateDispute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateDisputeReq)
 	if err := dec(in); err != nil {
@@ -1206,6 +1248,10 @@ var PaymentMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetRefundIdempotencyKey",
 			Handler:    _PaymentMutation_SetRefundIdempotencyKey_Handler,
+		},
+		{
+			MethodName: "ClearRefundShortfall",
+			Handler:    _PaymentMutation_ClearRefundShortfall_Handler,
 		},
 		{
 			MethodName: "CreateDispute",

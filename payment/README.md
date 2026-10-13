@@ -51,9 +51,12 @@ by the `payment_provider` env. **The core ships with one driver, Stripe.**
     `CANCELED` never move back), and the payment moves to `REFUNDED` when
     the pending and succeeded refunds reach its amount — and back to
     `SUCCEEDED` (`PaymentRefundReversed`) when one that completed it
-    fails. Subscribe the endpoint to the `refund.*` events: without them a
-    refund's later failure is seen only on the next `charge.refunded`.
-    `charge.dispute.*` records a `Dispute` (see "Refunding a top-up"). Every object the
+    fails; the status always follows the local refund rows, never one
+    read of the provider. Subscribe the endpoint to the `refund.*` and
+    `charge.dispute.*` events: without the first a refund's later failure
+    is seen only on the next `charge.refunded`, without the second no
+    dispute is recorded. `charge.dispute.*` records a `Dispute` (see
+    "Refunding a top-up"). Every object the
     plugin creates carries `metadata[w17_payment]` (what it is) and
     `metadata[w17_install]` (which installation made it: a keyed hash of
     the webhook signing secret); an event for an object THIS installation
@@ -223,10 +226,15 @@ charge). Off by default.
   dispute does the same, recorded on the `Dispute` row. An open dispute
   takes nothing (most are won; the credit stays spendable until it is
   lost), and an inquiry, a won dispute or a refund first seen failed take
-  nothing. A reversal of a top-up whose credit has not been granted yet is
-  not acknowledged until the grant lands, unless the payment is fully
-  refunded (its grant is then refused). Query `credit_shortfall > 0` to
-  find owners who owe credit; the plugin does not collect it.
+  nothing. The take-back's ledger row is written even when nothing could be
+  taken (a `CreditApplied` with delta `0`), so concurrent deliveries record
+  one shortfall. A refund that fails clears its shortfall. A reversal of a
+  top-up whose credit has not been granted yet takes nothing and is
+  acknowledged: the grant, when it lands, leaves the refunded part out (a
+  fully refunded top-up is not granted; if that refund fails, the credit is
+  granted then), and a lost dispute's amount is recorded as owed. Query
+  `credit_shortfall > 0` to find owners who owe credit; the plugin does not
+  collect it.
 - **Event** — `CreditApplied` (signed delta + new balance).
 
 ## Metered / pay-as-you-go (feature `usage`)
