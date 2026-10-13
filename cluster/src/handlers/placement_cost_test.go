@@ -45,24 +45,24 @@ func TestObserve_IsThrottledAndAChangeWritesAtOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h.observe(r, nil)
+	h.observe(t.Context(), r, nil)
 	settle()
-	h.observe(r, nil)
+	h.observe(t.Context(), r, nil)
 	settle()
 	if len(s.reached) != 1 {
 		t.Fatalf("reached written %d times in a row, want 1", len(s.reached))
 	}
 	down := errors.New("down")
-	h.observe(r, down)
+	h.observe(t.Context(), r, down)
 	settle()
-	h.observe(r, down)
+	h.observe(t.Context(), r, down)
 	settle()
 	if len(s.failed) != 1 {
 		t.Fatalf("the same failure written %d times in a row, want 1", len(s.failed))
 	}
-	h.observe(r, errors.New("refused"))
+	h.observe(t.Context(), r, errors.New("refused"))
 	settle()
-	h.observe(r, nil)
+	h.observe(t.Context(), r, nil)
 	settle()
 	if len(s.failed) != 2 || len(s.reached) != 2 {
 		t.Errorf("reached=%v failed=%v; want a new failure and the success after it recorded", s.reached, s.failed)

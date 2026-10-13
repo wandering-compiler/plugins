@@ -57,11 +57,13 @@ type banSetKey struct{}
 type banSet struct {
 	ids     []string
 	version int64
+	// full sends the complete set whatever the relay said it holds.
+	full bool
 }
 
 // withBanSet stores the set for relayConn to deliver.
-func withBanSet(ctx context.Context, ids []string, version int64) context.Context {
-	return context.WithValue(ctx, banSetKey{}, banSet{ids: ids, version: version})
+func withBanSet(ctx context.Context, ids []string, version int64, full bool) context.Context {
+	return context.WithValue(ctx, banSetKey{}, banSet{ids: ids, version: version, full: full})
 }
 
 // outgoing puts the ban set on a call to this relay: the version alone when
@@ -73,7 +75,7 @@ func (c *relayConn) outgoing(ctx context.Context) (out context.Context, versionO
 	if !ok {
 		return ctx, false
 	}
-	if bs.version != 0 && c.held.Load() >= bs.version {
+	if !bs.full && bs.version != 0 && c.held.Load() >= bs.version {
 		return workeradmit.WithBanVersion(ctx, bs.version), true
 	}
 	return workeradmit.WithBansAt(ctx, bs.ids, bs.version), false
@@ -117,6 +119,31 @@ func (c *relayConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method
 // forgetHeld makes the next call send the complete set.
 func (c *relayConn) forgetHeld() { c.held.Store(0) }
 
+// forgetHeldOnReconnect forgets the held version whenever the connection
+// leaves Ready, until it is closed.
+//
+// gRPC reconnects a ClientConn silently, and what answers at the same url and
+// pin afterwards may be another process: a relay restarted without its saved
+// set, or rolled back to a version that ignores a ban-set version sent without
+// the set. Either would keep its older set while being sent the version alone.
+// The first call on the new transport therefore carries the complete set,
+// and learns again what the relay holds.
+func (c *relayConn) forgetHeldOnReconnect(ctx context.Context) {
+	st := c.cc.GetState()
+	for st != connectivity.Shutdown {
+		if !c.cc.WaitForStateChange(ctx, st) {
+			return
+		}
+		if st == connectivity.Ready {
+			c.held.Store(0)
+		}
+		st = c.cc.GetState()
+		if st != connectivity.Ready {
+			c.held.Store(0)
+		}
+	}
+}
+
 var errConnsClosed = errors.New("cluster: the control plane is shutting down")
 
 // acquire returns the relay's shared connection, opening it when there is
@@ -147,6 +174,8 @@ func (h *ClusterServiceHandler) acquire(ctx context.Context, r Relay) (*relayCon
 			return nil, err
 		}
 		c = &relayConn{cc: cc, key: key}
+		// Outlives this call: it ends when the connection is closed.
+		go c.forgetHeldOnReconnect(context.WithoutCancel(ctx))
 		if h.conns == nil {
 			h.conns = map[string]*relayConn{}
 		}
@@ -157,7 +186,11 @@ func (h *ClusterServiceHandler) acquire(ctx context.Context, r Relay) (*relayCon
 
 	if err := h.waitReady(ctx, r, c.cc); err != nil {
 		h.release(c)
-		h.retire(r.ID, c)
+		// Not when the caller left: the connection may be coming up fine,
+		// and other calls may be waiting on it.
+		if ctx.Err() == nil {
+			h.retire(r.ID, c)
+		}
 		return nil, err
 	}
 	return c, nil
@@ -278,7 +311,14 @@ type observation struct {
 //
 // A failure also retires the relay's connection, so the next call dials
 // afresh instead of waiting on one that just failed.
-func (h *ClusterServiceHandler) observe(r Relay, err error) {
+//
+// A failure while the CALLER's ctx is done is the caller leaving (cancel,
+// deadline), not the relay failing: it is neither recorded nor allowed to
+// retire a connection other calls are using.
+func (h *ClusterServiceHandler) observe(ctx context.Context, r Relay, err error) {
+	if err != nil && ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		h.retireRelay(r.ID)
 	}

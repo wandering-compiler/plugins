@@ -83,7 +83,7 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 		if refusal.ReasonOf(err) == "" {
 			// No reason: the connection that just answered its stats failed
 			// under us. Not this relay's opinion of the request.
-			h.observe(c.Relay, err)
+			h.observe(ctx, c.Relay, err)
 			err = errors.Join(errUnreachable, err)
 		}
 		if !fallsThrough(err) {
@@ -138,7 +138,7 @@ func (h *ClusterServiceHandler) GetReservation(ctx context.Context, req *pb.GetR
 	}
 	conn, err := h.acquire(ctx, relay)
 	if err != nil {
-		h.observe(relay, err)
+		h.observe(ctx, relay, err)
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
 	defer h.release(conn)
@@ -170,7 +170,7 @@ func (h *ClusterServiceHandler) CancelReservation(ctx context.Context, req *pb.C
 	}
 	conn, err := h.acquire(ctx, relay)
 	if err != nil {
-		h.observe(relay, err)
+		h.observe(ctx, relay, err)
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
 	defer h.release(conn)

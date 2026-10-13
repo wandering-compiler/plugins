@@ -184,7 +184,7 @@ func (h *ClusterServiceHandler) placeable(ctx context.Context) (candidates, erro
 			errs[i] = err
 			// Queued, never waited for: a slow registry must not delay the
 			// placement at all (see observe).
-			h.observe(r, err)
+			h.observe(ctx, r, err)
 		}()
 	}
 	wg.Wait()
@@ -241,7 +241,7 @@ func (h *ClusterServiceHandler) proxyOne(
 ) error {
 	up, err := newRelayClient(c.conn).ScheduleTask(ctx, req)
 	if err != nil {
-		h.observe(c.Relay, err)
+		h.observe(ctx, c.Relay, err)
 		return errors.Join(errUnreachable, err)
 	}
 
@@ -256,7 +256,7 @@ func (h *ClusterServiceHandler) proxyOne(
 			resent = true
 			c.conn.forgetHeld()
 			if up, err = newRelayClient(c.conn).ScheduleTask(ctx, req); err != nil {
-				h.observe(c.Relay, err)
+				h.observe(ctx, c.Relay, err)
 				return errors.Join(errUnreachable, err)
 			}
 			continue
@@ -272,7 +272,7 @@ func (h *ClusterServiceHandler) proxyOne(
 			if !answered && refusal.ReasonOf(err) == "" {
 				// Nothing came back and the relay gave no reason: the
 				// connection that just answered its stats failed under us.
-				h.observe(c.Relay, err)
+				h.observe(ctx, c.Relay, err)
 				return errors.Join(errUnreachable, err)
 			}
 			return err
@@ -309,6 +309,9 @@ func (h *ClusterServiceHandler) proxyOne(
 // say so. Placements and polls use observe, which never waits. Both swallow
 // their own errors (see record).
 func (h *ClusterServiceHandler) note(ctx context.Context, r Relay, cause error) {
+	if ctx.Err() != nil {
+		return // the operator left; the relay did not fail (see observe)
+	}
 	h.retireRelay(r.ID)
 	h.record(ctx, r, cause, true)
 }

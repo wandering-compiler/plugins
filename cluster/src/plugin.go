@@ -4,6 +4,7 @@ package cluster
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -69,12 +70,15 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	}()
 	registry.RegisterShutdown(func(sctx context.Context) error {
 		stop()
+		var late error
 		select {
 		case <-done:
 		case <-sctx.Done():
-			return sctx.Err()
+			late = sctx.Err()
 		}
-		return h.Close(sctx)
+		// Always: the connections close even when the delivery outlived the
+		// deadline, and the queued writes get what is left of it.
+		return errors.Join(late, h.Close(sctx))
 	})
 	return nil
 }

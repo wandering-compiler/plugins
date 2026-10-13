@@ -77,8 +77,9 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 			pctx, cancel := context.WithTimeout(ctx, h.dialTimeout())
 			defer cancel()
 			// The shared connection, so the periodic delivery costs no
-			// handshake, and a relay already holding the version is sent
-			// the version alone — the set travels only to a relay behind.
+			// handshake. Always the complete set (withFreshBans): this is
+			// what corrects a relay whose report of the version it holds
+			// cannot be trusted.
 			conn, err := h.acquire(pctx, r)
 			if err == nil {
 				_, err = newRelayClient(conn).RelayStats(pctx, &pb.RelayStatsReq{})

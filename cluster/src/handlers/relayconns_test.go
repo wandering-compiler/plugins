@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
@@ -89,7 +92,7 @@ func TestRelayConns_ANewPinOrAFailureGetsANewConnection(t *testing.T) {
 	}
 	h.release(fresh)
 
-	h.observe(rotated, errors.New("transport is closing"))
+	h.observe(t.Context(), rotated, errors.New("transport is closing"))
 	settle(t, h)
 	again, err := h.acquire(t.Context(), rotated)
 	if err != nil {
@@ -442,5 +445,210 @@ func TestPlacement_CallerQueueFull(t *testing.T) {
 	}
 	if len(owners) != 2 || owners[0] != ownerOf(userHolder+"alice") || owners[1] != owners[0] {
 		t.Errorf("owners the relays saw on the stream = %v, want alice's on both", owners)
+	}
+}
+
+// The periodic delivery always sends the complete set, even to a relay that
+// said it holds the version: it is what corrects a relay whose report cannot
+// be trusted.
+func TestBans_TheDeliveryAlwaysSendsTheSet(t *testing.T) {
+	_, seen, h, _ := banRelay(t)
+	if _, err := h.ReserveTask(t.Context(), &pb.ReserveTaskReq{}); err != nil {
+		t.Fatal(err)
+	}
+	before, _, _ := seen.snapshot()
+	h.pushBans(t.Context(), true)
+	h.pushBans(t.Context(), true)
+	if after, _, _ := seen.snapshot(); after != before+2 {
+		t.Errorf("two deliveries sent the set %d times, want 2", after-before)
+	}
+}
+
+// movingRelay is one url whose process can be replaced under a live
+// ClientConn: gRPC reconnects to whatever listens there next.
+type movingRelay struct {
+	mu  sync.Mutex
+	lis *bufconn.Listener
+}
+
+func (m *movingRelay) serve(t *testing.T, impl pb.ClusterServiceServer, opts ...grpc.ServerOption) *grpc.Server {
+	t.Helper()
+	lis := bufconn.Listen(1 << 20)
+	srv := grpc.NewServer(opts...)
+	pb.RegisterClusterServiceServer(srv, impl)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	m.mu.Lock()
+	m.lis = lis
+	m.mu.Unlock()
+	return srv
+}
+
+func (m *movingRelay) dial(string, string) (*grpc.ClientConn, error) {
+	return grpc.NewClient("passthrough:///moving",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			m.mu.Lock()
+			lis := m.lis
+			m.mu.Unlock()
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+}
+
+// A relay replaced at the same url and pin by one that ignores a version sent
+// alone (rolled back to an older release) is sent the complete set: the held
+// version is forgotten when the connection leaves Ready, so the reconnect's
+// first call carries the set, and a ban taken since reaches the old relay.
+func TestBans_AReconnectForgetsTheHeldVersion(t *testing.T) {
+	m := &movingRelay{}
+	reg := workeradmit.New()
+	p, err := relaycore.New(relaycore.Options{TicketTTL: minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCapacity(64)
+	current := m.serve(t, &relayserver.Server{Pool: p, Workers: workeradmit.New(), ProxyAddress: "w:1", ProxyFingerprint: "cafe"},
+		relayserver.BanServerOptions(reg)...)
+	ws := &workerStore{banned: []string{"aa"}, banVersion: 7}
+	h := &ClusterServiceHandler{
+		Relays:  &store{relays: []Relay{{ID: "r", Name: "r", URL: "r", Fingerprint: "f"}}},
+		Workers: ws,
+		Dial:    m.dial,
+	}
+	if _, err := h.ReserveTask(t.Context(), &pb.ReserveTaskReq{}); err != nil {
+		t.Fatal(err)
+	}
+	h.connsMu.Lock()
+	c := h.conns["r"]
+	h.connsMu.Unlock()
+	if c.held.Load() != 7 {
+		t.Fatalf("held = %d after the first call, want 7", c.held.Load())
+	}
+
+	// The rollback: the relay process is replaced by one that applies a sent
+	// set but does nothing with a version alone (no BanInterceptors of this
+	// version), at the same url.
+	old := workeradmit.New()
+	old.SetBanned([]string{"aa"})
+	apply := func(ctx context.Context) {
+		if bans, ok := workeradmit.BansFrom(ctx); ok {
+			old.SetBanned(bans)
+		}
+	}
+	current.Stop()
+	m.serve(t, &scripted{},
+		grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, hd grpc.UnaryHandler) (any, error) {
+			apply(ctx)
+			return hd(ctx, req)
+		}))
+	deadline := time.Now().Add(5 * time.Second)
+	for c.held.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the held version survived the connection leaving Ready")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	ws.mu.Lock()
+	ws.banned, ws.banVersion = []string{"aa", "bb"}, 8
+	ws.mu.Unlock()
+	h.forgetBans()
+	c.held.Store(9) // even a relay that claimed a newer version is corrected by the delivery
+	h.pushBans(t.Context(), true)
+	if old.Admitted("bb") {
+		t.Error("a ban taken after the rollback did not reach the old relay")
+	}
+}
+
+// slowStats is a relay whose stats answer can be held until the caller gives
+// up.
+type slowStats struct {
+	scripted
+	block atomic.Bool
+}
+
+func (s *slowStats) RelayStats(ctx context.Context, req *pb.RelayStatsReq) (*pb.RelayStatsResp, error) {
+	if s.block.Load() {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return s.scripted.RelayStats(ctx, req)
+}
+
+// A caller that leaves (cancel, deadline) is not a relay failure: nothing is
+// recorded on the relay's row, and the shared connection stays.
+func TestPlacement_ACallerLeavingIsNotARelayFailure(t *testing.T) {
+	relay := &slowStats{}
+	_, dial := serveOn(t, relay)
+	st := &store{relays: []Relay{{ID: "id-a", Name: "relay-a", URL: "a", Fingerprint: "f"}}}
+	h := &ClusterServiceHandler{Relays: st, Workers: &workerStore{}, DialTimeout: 5 * time.Second, Dial: dial}
+	if _, err := h.ReserveTask(t.Context(), &pb.ReserveTaskReq{}); err != nil {
+		t.Fatal(err)
+	}
+	h.connsMu.Lock()
+	before := h.conns["id-a"]
+	h.connsMu.Unlock()
+
+	relay.block.Store(true)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := h.ReserveTask(ctx, &pb.ReserveTaskReq{}); err == nil {
+		t.Fatal("a placement whose caller left succeeded")
+	}
+	c := &collect{ctx: ctx}
+	_ = h.ScheduleTask(&pb.ScheduleTaskReq{}, c)
+	if _, err := h.GetReservation(ctx, &pb.GetReservationReq{Reservation: handleFor("id-a", "r1")}); err == nil {
+		t.Fatal("a poll whose caller left succeeded")
+	}
+	settle(t, h)
+	if f := st.failedFor("id-a"); len(f) != 0 {
+		t.Errorf("the caller leaving was recorded as the relay failing: %v", f)
+	}
+	h.connsMu.Lock()
+	after := h.conns["id-a"]
+	h.connsMu.Unlock()
+	if after != before {
+		t.Error("the caller leaving retired the shared connection")
+	}
+}
+
+// A caller that leaves while a connection is still coming up does not retire
+// it: the relay did not fail, and the next call waits on the same connection.
+func TestAcquire_ACallerLeavingKeepsAConnectionComingUp(t *testing.T) {
+	hole, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hole.Close() })
+	go func() {
+		var held []net.Conn
+		defer func() {
+			for _, c := range held {
+				_ = c.Close()
+			}
+		}()
+		for {
+			c, err := hole.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, c) // accepted, never answered
+		}
+	}()
+	h := &ClusterServiceHandler{DialTimeout: 5 * time.Second, Dial: func(target, _ string) (*grpc.ClientConn, error) {
+		return grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}}
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	r := Relay{ID: "id-hole", Name: "hole", URL: hole.Addr().String(), Fingerprint: "f"}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := h.acquire(ctx, r); err == nil {
+		t.Fatal("a connection that never came up was acquired")
+	}
+	h.connsMu.Lock()
+	c := h.conns["id-hole"]
+	h.connsMu.Unlock()
+	if c == nil || c.cc.GetState() == connectivity.Shutdown {
+		t.Error("the caller leaving retired the connection that was coming up")
 	}
 }

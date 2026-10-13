@@ -53,18 +53,21 @@ type WorkerStore interface {
 // empty set: empty is "nobody is banned", and a database blip must not lift
 // every ban at once.
 func (h *ClusterServiceHandler) withBans(ctx context.Context) (context.Context, error) {
-	return h.withBansFrom(ctx, h.cachedBans)
+	return h.withBansFrom(ctx, h.cachedBans, false)
 }
 
 // withFreshBans is withBans reading the registry, never the cache: the push
 // after a decision must carry that decision, and a disabled relay hears of
-// it through nothing else.
+// it through nothing else. It always sends the COMPLETE set, whatever a relay
+// said it holds: the delivery is what corrects a relay whose own report
+// cannot be trusted — one rolled back to a version that ignores a version
+// sent alone, at the same url and pin.
 func (h *ClusterServiceHandler) withFreshBans(ctx context.Context) (context.Context, error) {
-	return h.withBansFrom(ctx, h.readBans)
+	return h.withBansFrom(ctx, h.readBans, true)
 }
 
 func (h *ClusterServiceHandler) withBansFrom(
-	ctx context.Context, read func(context.Context) ([]string, int64, error),
+	ctx context.Context, read func(context.Context) ([]string, int64, error), full bool,
 ) (context.Context, error) {
 	if h.Workers == nil {
 		return nil, status.Error(codes.FailedPrecondition,
@@ -74,7 +77,7 @@ func (h *ClusterServiceHandler) withBansFrom(
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err)
 	}
-	return withBanSet(ctx, bans, version), nil
+	return withBanSet(ctx, bans, version, full), nil
 }
 
 // CheckWorkers contacts every enabled relay and records every worker it has
