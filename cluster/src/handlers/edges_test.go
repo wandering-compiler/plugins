@@ -195,6 +195,7 @@ func TestReserveTask_AFailureWithoutAReasonIsUnreachable(t *testing.T) {
 	if err != nil || !strings.HasPrefix(got.GetReservation(), "id-b.") {
 		t.Fatalf("ReserveTask = %v, %v — want placed on b", got, err)
 	}
+	settle(t, h)
 	if f := st.failedFor("id-a"); len(f) == 0 || !strings.Contains(f[0], "transport is closing") {
 		t.Errorf("a's failure was not recorded on its row: %v", f)
 	}
@@ -319,6 +320,7 @@ func TestGetReservation_AnUnreachableRelayIsNotExpired(t *testing.T) {
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v, want Unavailable (the place may still be there)", err)
 	}
+	settle(t, h)
 	if len(st.failedFor("id-")) == 0 {
 		t.Error("the unreachable relay was not noted on its row")
 	}
@@ -449,6 +451,7 @@ func TestScheduleTask_AnUnpinnedRowIsSkippedAndSaysWhy(t *testing.T) {
 	if g := c.seen()[0].GetGranted(); g.GetRelay() != "pinned" {
 		t.Errorf("granted on %q, want the pinned relay", g.GetRelay())
 	}
+	settle(t, h)
 	if f := st.failedFor("id-a"); len(f) == 0 || !strings.Contains(f[0], "cert_fingerprint") {
 		t.Errorf("the unpinned row's refusal was not recorded on it: %v", f)
 	}
@@ -512,6 +515,7 @@ func TestScheduleTask_ABlackHoledRelayIsSkippedWithinTheDialTimeout(t *testing.T
 	if g := c.seen()[0].GetGranted(); g.GetRelay() != "healthy" {
 		t.Errorf("granted on %q", g.GetRelay())
 	}
+	settle(t, h)
 	if f := st.failedFor("id-hole"); len(f) == 0 || !strings.Contains(f[0], "not reachable within") {
 		t.Errorf("the black hole was not noted as unreachable: %v", f)
 	}
@@ -521,7 +525,7 @@ func TestScheduleTask_ABlackHoledRelayIsSkippedWithinTheDialTimeout(t *testing.T
 
 // A dialer that hands back a connection that is already shut down is an
 // unreachable relay, reported at once rather than waited on.
-func TestDialReady_AShutDownConnectionIsUnreachable(t *testing.T) {
+func TestAcquire_AShutDownConnectionIsUnreachable(t *testing.T) {
 	h := &ClusterServiceHandler{Dial: func(target, _ string) (*grpc.ClientConn, error) {
 		cc, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err == nil {
@@ -529,7 +533,7 @@ func TestDialReady_AShutDownConnectionIsUnreachable(t *testing.T) {
 		}
 		return cc, err
 	}}
-	if _, err := h.dialReady(t.Context(), Relay{Name: "acme", URL: "127.0.0.1:1"}); err == nil || !strings.Contains(err.Error(), "shut down") {
+	if _, err := h.acquire(t.Context(), Relay{Name: "acme", URL: "127.0.0.1:1"}); err == nil || !strings.Contains(err.Error(), "shut down") {
 		t.Fatalf("err = %v, want a shut-down connection reported", err)
 	}
 	if got := (&ClusterServiceHandler{}).dialTimeout(); got != 5*time.Second {

@@ -4,6 +4,7 @@ package cluster
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -58,7 +59,9 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	// Every relay, enabled or not, is handed the ban set every few minutes:
 	// it refuses workers until it holds one after a restart, and refuses
 	// renewals when it has not been handed one recently. Stopped at the
-	// bundle's shutdown, which waits for a delivery under way to finish.
+	// bundle's shutdown, which waits for a delivery under way to finish, then
+	// closes the shared relay connections and lets the queued observed-state
+	// writes land.
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -67,12 +70,15 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	}()
 	registry.RegisterShutdown(func(sctx context.Context) error {
 		stop()
+		var late error
 		select {
 		case <-done:
-			return nil
 		case <-sctx.Done():
-			return sctx.Err()
+			late = sctx.Err()
 		}
+		// Always: the connections close even when the delivery outlived the
+		// deadline, and the queued writes get what is left of it.
+		return errors.Join(late, h.Close(sctx))
 	})
 	return nil
 }

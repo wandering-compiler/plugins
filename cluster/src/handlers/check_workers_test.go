@@ -26,7 +26,9 @@ type workerStore struct {
 	bannedErr   error
 	banVersion  int64
 	bannedCalls int
-	decisions   []decision
+	// versionCalls counts BanVersion reads.
+	versionCalls int
+	decisions    []decision
 }
 
 type decision struct {
@@ -40,6 +42,12 @@ func (w *workerStore) Banned(context.Context) ([]string, int64, error) {
 	defer w.mu.Unlock()
 	w.bannedCalls++
 	return w.banned, w.banVersion, w.bannedErr
+}
+func (w *workerStore) BanVersion(context.Context) (int64, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.versionCalls++
+	return w.banVersion, w.bannedErr
 }
 func (w *workerStore) Record(_ context.Context, relayID string, k *pb.KnownWorker) error {
 	w.mu.Lock()

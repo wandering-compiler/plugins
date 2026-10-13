@@ -6,9 +6,14 @@
 // whether an operator has BANNED that worker since. That set, and the workers
 // the relay has met, are what this holds.
 //
-// The control plane sends the COMPLETE ban set, with its version, on every
-// call it makes to a relay (BannedHeader), and delivers it to every registered
-// relay on each decision and periodically. A relay keeps the set in its
+// The control plane names the ban set's version on every call it makes to a
+// relay (BannedVersionHeader), and sends the COMPLETE set beside it
+// (BannedHeader) unless the relay confirmed holding that version already
+// (BannedHeldHeader); a relay named a newer version than it holds, without
+// the set, refuses the call so the control plane sends it (see Current). It
+// is delivered to every registered relay on each decision and periodically.
+// The set therefore travels once per version per relay connection, not on
+// every placement and poll. A relay keeps the set in its
 // identity directory when it has one (KeepIn). Until it holds a set — loaded
 // from there, or delivered — it does not know whom to refuse, and says so
 // (HoldsBanSet) instead of admitting everyone.
@@ -54,6 +59,33 @@ func WithBansAt(ctx context.Context, ids []string, version int64) context.Contex
 		ctx = metadata.AppendToOutgoingContext(ctx, BannedVersionHeader, strconv.FormatInt(version, 10))
 	}
 	return ctx
+}
+
+// BannedHeldHeader is a relay's answer, on every call that named a ban set
+// version: the version it holds after the call's set (if any) was applied.
+// A control plane that reads one sends the version alone to that relay while
+// the relay holds it; a relay too old to send it gets the complete set, as
+// before.
+const BannedHeldHeader = "w17-cluster-banned-held"
+
+// WithBanVersion returns ctx naming the ban set's version WITHOUT the set:
+// for a relay that confirmed holding it (BannedHeldHeader).
+func WithBanVersion(ctx context.Context, version int64) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, BannedVersionHeader, strconv.FormatInt(version, 10))
+}
+
+// HeldFrom reads a relay's BannedHeldHeader; false when it sent none or an
+// unreadable one.
+func HeldFrom(md metadata.MD) (int64, bool) {
+	vals := md.Get(BannedHeldHeader)
+	if len(vals) == 0 {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(vals[0], 10, 64)
+	if err != nil || v < 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 // BanVersionFrom reads the version sent with the ban set; 0 when absent or
@@ -183,6 +215,29 @@ func (r *Registry) SetBannedAt(ids []string, version int64) {
 	if added && notify != nil {
 		notify() // outside the lock: it asks Admitted
 	}
+}
+
+// Current reports whether the relay holds a ban set at least as new as
+// version, which a control plane named without sending the set. When it does,
+// that counts as a delivery (LastDelivered): the control plane read the set at
+// that version moments ago, so the one held is as fresh as a delivered one.
+// When it does not, nothing changes and the caller must be sent the set.
+func (r *Registry) Current(version int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.holds || version <= 0 || r.version < version {
+		return false
+	}
+	r.delivered = time.Now()
+	return true
+}
+
+// Version is the version of the ban set held; 0 when none, or one sent
+// without a version.
+func (r *Registry) Version() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.version
 }
 
 // HoldsBanSet reports whether the relay knows a ban set at all — one loaded

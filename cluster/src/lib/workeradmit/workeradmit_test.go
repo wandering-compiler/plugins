@@ -246,3 +246,36 @@ func TestKeepIn_AMissingFileHoldsNoSet(t *testing.T) {
 		t.Error("a missing file was read as an empty ban set")
 	}
 }
+
+// Current confirms a version only when a set of at least that version is
+// held, and refreshes the delivery time only then; HeldFrom reads the
+// relay's answer and ignores a malformed one.
+func TestCurrent_ConfirmsOnlyAHeldVersion(t *testing.T) {
+	r := New()
+	if r.Current(3) {
+		t.Fatal("a registry holding no set confirmed a version")
+	}
+	r.SetBannedAt([]string{"aa"}, 3)
+	first, _ := r.LastDelivered()
+	time.Sleep(5 * time.Millisecond)
+	if !r.Current(3) || !r.Current(2) {
+		t.Error("the version held, or an older one, was not confirmed")
+	}
+	if after, _ := r.LastDelivered(); !after.After(first) {
+		t.Error("a confirmed version did not count as a delivery")
+	}
+	if r.Current(4) || r.Current(0) {
+		t.Error("a newer version, or none, was confirmed")
+	}
+	if r.Version() != 3 {
+		t.Errorf("Version = %d, want 3", r.Version())
+	}
+	if v, ok := HeldFrom(metadata.Pairs(BannedHeldHeader, "7")); !ok || v != 7 {
+		t.Errorf("HeldFrom = %d, %v", v, ok)
+	}
+	for _, bad := range []metadata.MD{nil, metadata.Pairs(BannedHeldHeader, "x"), metadata.Pairs(BannedHeldHeader, "-1")} {
+		if _, ok := HeldFrom(bad); ok {
+			t.Errorf("HeldFrom(%v) read a version", bad)
+		}
+	}
+}

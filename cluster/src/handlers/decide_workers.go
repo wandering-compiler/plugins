@@ -64,6 +64,9 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 		log.Printf("cluster: cannot list relays to deliver the ban set: %v", err)
 		return
 	}
+	// The complete registry is in hand: connections to relays deleted since,
+	// or re-registered under another url or pin, are closed here.
+	h.pruneConns(relays)
 	// In parallel, so the operator waits at most one dial timeout however
 	// many relays there are, not one per unreachable relay.
 	var wg sync.WaitGroup
@@ -73,10 +76,17 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 			defer wg.Done()
 			pctx, cancel := context.WithTimeout(ctx, h.dialTimeout())
 			defer cancel()
-			conn, err := h.dialReady(pctx, r)
+			// The shared connection, so the periodic delivery costs no
+			// handshake. Always the complete set (withFreshBans): this is
+			// what corrects a relay whose report of the version it holds
+			// cannot be trusted.
+			conn, err := h.acquire(pctx, r)
 			if err == nil {
 				_, err = newRelayClient(conn).RelayStats(pctx, &pb.RelayStatsReq{})
-				_ = conn.Close()
+				h.release(conn)
+				if err != nil {
+					h.retireRelay(r.ID)
+				}
 			}
 			if err != nil && logFailures {
 				log.Printf("cluster: relay %q did not take the new ban set now (it gets it with the next delivery): %v", r.Name, err)

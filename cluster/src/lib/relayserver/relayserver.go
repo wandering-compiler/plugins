@@ -21,6 +21,7 @@ import (
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/plugins/cluster/lib/regcode"
 	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
+	"github.com/wandering-compiler/plugins/cluster/lib/resowner"
 	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
@@ -105,7 +106,9 @@ func (s *Server) ScheduleTask(
 	// its name in the control plane's registry, and inventing one — its
 	// hostname, say — would put a second, disagreeing identity on the wire.
 	// The control plane stamps it as the events pass through.
-	grant, err := s.Pool.Wait(srv.Context(), func(pos int) error {
+	// The owner a control plane names counts against the per-caller share of
+	// the queue (relaycore.Options.MaxQueuePerOwner), as a reservation's does.
+	grant, err := s.Pool.WaitFor(srv.Context(), resowner.From(srv.Context()), func(pos int) error {
 		return srv.Send(&pb.ScheduleTaskEvent{
 			Event: &pb.ScheduleTaskEvent_Queued{
 				Queued: &pb.TaskQueued{Position: int32(pos)},
@@ -119,6 +122,8 @@ func (s *Server) ScheduleTask(
 		return refusal.New(codes.Unavailable, refusal.RelayDraining, "relay: draining — place elsewhere")
 	case errors.Is(err, relaycore.ErrQueueFull):
 		return refusal.New(codes.ResourceExhausted, refusal.QueueFull, "relay: the queue is full — place elsewhere or retry later")
+	case errors.Is(err, relaycore.ErrOwnerQueueFull):
+		return callerQueueFull()
 	case err != nil:
 		// Context errors land here — the caller left, or its deadline passed.
 		// Both are the caller's own status, not a failure of this relay.

@@ -66,6 +66,9 @@ var (
 	ErrDraining = errors.New("relaycore: relay is draining")
 	// ErrQueueFull refuses a new waiter while the queue holds MaxQueue.
 	ErrQueueFull = errors.New("relaycore: the queue of waiting callers is full")
+	// ErrOwnerQueueFull refuses a new waiter whose owner already holds
+	// MaxQueuePerOwner places in the queue. Other owners still queue.
+	ErrOwnerQueueFull = errors.New("relaycore: this caller already holds its share of the queue")
 )
 
 // reservation is one place in the queue, and later the slot it was granted.
@@ -132,6 +135,12 @@ type Pool struct {
 	reservations map[string]*reservation
 	queue        []*reservation
 	maxQueue     int
+	// queuedBy counts the places each owner holds in the queue (not its
+	// grants), for maxPerOwner. The empty owner is not counted: it is a
+	// control plane from before owners existed, and every caller it serves
+	// shares it.
+	queuedBy    map[string]int
+	maxPerOwner int
 	// draining is one-way for the life of the process. A relay is drained to
 	// be taken away; bringing it back is a restart, which is also what clears
 	// every other piece of state it holds.
@@ -158,6 +167,11 @@ type Options struct {
 	// DefaultMaxQueue. Each waiter holds memory and a timer, and the queue
 	// is scanned for positions, so it cannot be allowed to grow without end.
 	MaxQueue int
+	// MaxQueuePerOwner bounds the places ONE owner (a caller, as the control
+	// plane names it — see Reserve) may hold in the queue; 0 means half of
+	// MaxQueue. Without it a single caller could take the whole queue and
+	// every other caller would be refused QUEUE_FULL behind it.
+	MaxQueuePerOwner int
 	// Now and NewID are seams for tests. Nil uses the real ones.
 	Now   func() time.Time
 	NewID func() string
@@ -172,6 +186,17 @@ const (
 	DefaultMaxQueue     = 1000
 )
 
+// DefaultMaxQueuePerOwner is the per-owner bound when none is configured:
+// half the queue, at least one. Half, so no one caller can fill the queue,
+// while a project whose own code is one caller (see the control plane's
+// holders) still queues deep.
+func DefaultMaxQueuePerOwner(maxQueue int) int {
+	if maxQueue < 2 {
+		return 1
+	}
+	return maxQueue / 2
+}
+
 func New(o Options) (*Pool, error) {
 	if o.Capacity < 0 {
 		return nil, fmt.Errorf("relaycore: capacity ceiling cannot be negative, got %d", o.Capacity)
@@ -185,6 +210,15 @@ func New(o Options) (*Pool, error) {
 	if o.MaxQueue == 0 {
 		o.MaxQueue = DefaultMaxQueue
 	}
+	if o.MaxQueuePerOwner < 0 {
+		return nil, fmt.Errorf("relaycore: per-caller queue limit cannot be negative, got %d", o.MaxQueuePerOwner)
+	}
+	if o.MaxQueuePerOwner == 0 {
+		o.MaxQueuePerOwner = DefaultMaxQueuePerOwner(o.MaxQueue)
+	}
+	if o.MaxQueuePerOwner > o.MaxQueue {
+		return nil, fmt.Errorf("relaycore: per-caller queue limit %d is above the queue limit %d", o.MaxQueuePerOwner, o.MaxQueue)
+	}
 	if o.PollTimeout < 0 {
 		return nil, fmt.Errorf("relaycore: poll timeout cannot be negative, got %s", o.PollTimeout)
 	}
@@ -193,6 +227,8 @@ func New(o Options) (*Pool, error) {
 		ttl:          o.TicketTTL,
 		pollTimeout:  o.PollTimeout,
 		maxQueue:     o.MaxQueue,
+		maxPerOwner:  o.MaxQueuePerOwner,
+		queuedBy:     map[string]int{},
 		now:          o.Now,
 		newID:        o.NewID,
 		tickets:      map[string]*time.Timer{},
@@ -234,11 +270,10 @@ func (p *Pool) Reserve(owner string) (Reservation, error) {
 	if p.draining {
 		return Reservation{}, ErrDraining
 	}
-	r, err := p.enqueueLocked()
+	r, err := p.enqueueLocked(owner)
 	if err != nil {
 		return Reservation{}, err
 	}
-	r.owner = owner
 	r.abandon = time.AfterFunc(p.pollTimeout, func() { p.abandonReservation(r) })
 	st, err := p.pollLocked(r)
 	return Reservation{ID: r.id, State: st}, err
@@ -338,12 +373,19 @@ func (p *Pool) Cancel(id, owner string) {
 // cannot take one that was already given away, and no compare-and-swap is
 // needed to make that true.
 func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, error) {
+	return p.WaitFor(ctx, "", onPosition)
+}
+
+// WaitFor is Wait for a named owner, which counts against MaxQueuePerOwner
+// like a reservation of the same owner. The owner is never handed out: a Wait
+// is not polled, so nobody else can name its place.
+func (p *Pool) WaitFor(ctx context.Context, owner string, onPosition func(int) error) (Grant, error) {
 	p.mu.Lock()
 	if p.draining {
 		p.mu.Unlock()
 		return Grant{}, ErrDraining
 	}
-	r, err := p.enqueueLocked()
+	r, err := p.enqueueLocked(owner)
 	p.mu.Unlock()
 	if err != nil {
 		return Grant{}, err
@@ -384,15 +426,36 @@ func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, err
 	}
 }
 
-func (p *Pool) enqueueLocked() (*reservation, error) {
+func (p *Pool) enqueueLocked(owner string) (*reservation, error) {
 	if len(p.queue) >= p.maxQueue {
 		return nil, ErrQueueFull
 	}
-	r := &reservation{id: p.newID(), changed: make(chan struct{}, 1)}
+	// Checked against places QUEUED, not reservations held: a grant has left
+	// the queue and keeps nobody waiting. An owner at its share is refused
+	// even when this one would be granted at once — whether it would is a
+	// race with the other places it holds, and a refusal that depends on it
+	// would be one a caller cannot reason about.
+	if owner != "" && p.queuedBy[owner] >= p.maxPerOwner {
+		return nil, ErrOwnerQueueFull
+	}
+	r := &reservation{id: p.newID(), owner: owner, changed: make(chan struct{}, 1)}
 	p.reservations[r.id] = r
 	p.queue = append(p.queue, r)
+	p.countQueuedLocked(r, 1)
 	p.promoteLocked()
 	return r, nil
+}
+
+// countQueuedLocked moves r's owner's count of queued places by delta.
+func (p *Pool) countQueuedLocked(r *reservation, delta int) {
+	if r.owner == "" {
+		return
+	}
+	if n := p.queuedBy[r.owner] + delta; n > 0 {
+		p.queuedBy[r.owner] = n
+	} else {
+		delete(p.queuedBy, r.owner)
+	}
 }
 
 func (p *Pool) positionLocked(r *reservation) int {
@@ -430,6 +493,7 @@ func (p *Pool) promoteLocked() {
 	for p.inUse < p.capacity && len(p.queue) > 0 {
 		r := p.queue[0]
 		p.queue = p.queue[1:]
+		p.countQueuedLocked(r, -1)
 		p.inUse++
 		ticket := p.newID()
 		r.grant = &Grant{Ticket: ticket}
@@ -463,6 +527,7 @@ func (p *Pool) retireLocked(r *reservation) {
 	for i, q := range p.queue {
 		if q == r {
 			p.queue = append(p.queue[:i], p.queue[i+1:]...)
+			p.countQueuedLocked(r, -1)
 			p.notifyLocked()
 			break
 		}
@@ -595,6 +660,7 @@ func (p *Pool) Drain() {
 		poke(r)
 	}
 	p.queue = nil
+	clear(p.queuedBy)
 }
 
 // Stats is what a relay is doing, for the control plane choosing a relay and

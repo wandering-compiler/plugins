@@ -49,7 +49,8 @@ type RelayStore interface {
 }
 
 // Dialer opens a pinned connection to one relay. Injected so a test can stand
-// a relay up in-process without certificates.
+// a relay up in-process without certificates. The handler keeps what it
+// returns open and shares it between calls (see relayConn).
 type Dialer func(target, fingerprint string) (*grpc.ClientConn, error)
 
 // ClusterServiceHandler serves the project's side of ClusterService.
@@ -121,23 +122,40 @@ type ClusterServiceHandler struct {
 	bansFull bool
 	bansGen  uint64
 
-	// reached remembers when each relay was last recorded as reached, so a
-	// healthy relay's row is written at most once per reachedEvery instead of
-	// on every placement.
-	reachedMu sync.Mutex
-	reached   map[string]time.Time
+	// written remembers what this replica last wrote onto each relay's row,
+	// and when, so an unchanged state is written at most once per
+	// reachedEvery instead of on every placement (see record).
+	writtenMu sync.Mutex
+	written   map[string]writtenState
+
+	// conns is one shared management connection per relay (see relayConn).
+	connsMu     sync.Mutex
+	conns       map[string]*relayConn
+	connsClosed bool
+
+	// obs* queue the observed state for the background flush (see observe).
+	obsMu      sync.Mutex
+	obsPending map[string]observation
+	obsRunning bool
+	obsIdle    *sync.Cond
 }
 
 // banCacheTTL bounds how stale the ban set this replica sends may be when
 // another replica made the decision.
 const banCacheTTL = 2 * time.Second
 
-// reachedEvery is how often a reachable relay's last_seen_at is refreshed.
+// reachedEvery is how often an unchanged observed state — a reachable relay's
+// last_seen_at, or an unreachable one's error — is written again.
 const reachedEvery = 30 * time.Second
 
 // cachedBans returns the ban set and its version, from the cache while fresh.
 // A read error is returned, never a stale set in its place: the caller refuses
 // the call (see withBans).
+//
+// Once the cache is older than banCacheTTL, the version alone is read first:
+// a decision always moves it forward (WorkerStore.Decide), so an unchanged
+// version is an unchanged set, and the set — which grows with every ban ever
+// taken — is read again only when it changed.
 func (h *ClusterServiceHandler) cachedBans(ctx context.Context) ([]string, int64, error) {
 	h.bansMu.Lock()
 	if h.bansFull && time.Since(h.bansAt) < banCacheTTL {
@@ -145,7 +163,24 @@ func (h *ClusterServiceHandler) cachedBans(ctx context.Context) ([]string, int64
 		h.bansMu.Unlock()
 		return bans, v, nil
 	}
+	full, cachedVer, gen := h.bansFull, h.bansVer, h.bansGen
 	h.bansMu.Unlock()
+	if full && cachedVer != 0 {
+		v, err := h.Workers.BanVersion(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		if v == cachedVer {
+			h.bansMu.Lock()
+			if h.bansFull && h.bansGen == gen && h.bansVer == v {
+				h.bansAt = time.Now()
+				bans := h.bans
+				h.bansMu.Unlock()
+				return bans, v, nil
+			}
+			h.bansMu.Unlock()
+		}
+	}
 	return h.readBans(ctx)
 }
 

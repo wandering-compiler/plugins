@@ -361,7 +361,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // a place frees up when a waiter leaves. A caller that gets a slot at once
 // never counts against the queue.
 func TestReserve_TheQueueIsBounded(t *testing.T) {
-	p, err := New(Options{TicketTTL: time.Minute, PollTimeout: time.Minute, MaxQueue: 2})
+	p, err := New(Options{TicketTTL: time.Minute, PollTimeout: time.Minute, MaxQueue: 2, MaxQueuePerOwner: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

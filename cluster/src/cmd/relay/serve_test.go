@@ -905,6 +905,26 @@ func TestParseConfig_RefusesAQueueBelowOne(t *testing.T) {
 	}
 }
 
+// --max-queue-per-caller defaults to half the queue (0) and must fit in it.
+func TestParseConfig_PerCallerShare(t *testing.T) {
+	quiet(t)
+	cfg, err := parseConfig([]string{"--max-queue", "10", "--max-queue-per-caller", "3"}, io.Discard)
+	if err != nil || cfg.maxQueueCaller != 3 {
+		t.Fatalf("a share of 3 in 10: %v, %d", err, cfg.maxQueueCaller)
+	}
+	if cfg, err = parseConfig(nil, io.Discard); err != nil || cfg.maxQueueCaller != 0 {
+		t.Fatalf("the default share: %v, %d, want 0 (half of --max-queue)", err, cfg.maxQueueCaller)
+	}
+	for _, args := range [][]string{
+		{"--max-queue-per-caller", "-1"},
+		{"--max-queue", "4", "--max-queue-per-caller", "5"},
+	} {
+		if _, err := parseConfig(args, io.Discard); err == nil || !strings.Contains(err.Error(), "--max-queue-per-caller") {
+			t.Errorf("%v: %v, want a refusal naming the flag", args, err)
+		}
+	}
+}
+
 // A flag given on the command line replaces its variable, so a malformed
 // variable under an explicit flag is not a reason to refuse: the operator
 // said what they want. It used to be checked BEFORE the flags were parsed,

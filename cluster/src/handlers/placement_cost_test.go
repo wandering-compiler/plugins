@@ -32,26 +32,47 @@ func TestWithBans_CachesTheSetAndADecisionRefreshesIt(t *testing.T) {
 	}
 }
 
-// A reachable relay's row is written once per reachedEvery; a failure is
-// written every time and makes the next success write again.
-func TestNoteReached_IsThrottledAndAFailureResetsIt(t *testing.T) {
+// The observed state is throttled: an unchanged state — reached, or failed
+// with the same message — is written once per reachedEvery, a change is
+// written at once, and an operator action writes every time.
+func TestObserve_IsThrottledAndAChangeWritesAtOnce(t *testing.T) {
 	s := &store{}
 	h := &ClusterServiceHandler{Relays: s}
 	r := Relay{ID: "r-1", Name: "one"}
-	h.noteReached(context.Background(), r)
-	h.noteReached(context.Background(), r)
+	settle := func() {
+		t.Helper()
+		if err := h.waitObserved(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.observe(t.Context(), r, nil)
+	settle()
+	h.observe(t.Context(), r, nil)
+	settle()
 	if len(s.reached) != 1 {
 		t.Fatalf("reached written %d times in a row, want 1", len(s.reached))
 	}
-	h.note(context.Background(), r, errors.New("down"))
-	h.noteReached(context.Background(), r)
-	if len(s.reached) != 2 || len(s.failed) != 1 {
-		t.Errorf("reached=%v failed=%v; want the success after a failure recorded", s.reached, s.failed)
+	down := errors.New("down")
+	h.observe(t.Context(), r, down)
+	settle()
+	h.observe(t.Context(), r, down)
+	settle()
+	if len(s.failed) != 1 {
+		t.Fatalf("the same failure written %d times in a row, want 1", len(s.failed))
+	}
+	h.observe(t.Context(), r, errors.New("refused"))
+	settle()
+	h.observe(t.Context(), r, nil)
+	settle()
+	if len(s.failed) != 2 || len(s.reached) != 2 {
+		t.Errorf("reached=%v failed=%v; want a new failure and the success after it recorded", s.reached, s.failed)
 	}
 	// An operator action records every time, throttle or not.
-	h.noteOK(context.Background(), r)
-	if len(s.reached) != 3 {
-		t.Errorf("reached written %d times; an operator action must always record", len(s.reached))
+	h.noteOK(t.Context(), r)
+	h.note(t.Context(), r, errors.New("refused"))
+	h.note(t.Context(), r, errors.New("refused"))
+	if len(s.reached) != 3 || len(s.failed) != 4 {
+		t.Errorf("reached=%d failed=%d; an operator action must always record", len(s.reached), len(s.failed))
 	}
 }
 

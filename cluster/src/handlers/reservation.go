@@ -58,11 +58,12 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 	if err != nil {
 		return nil, err
 	}
-	defer cands.close()
+	defer h.closeCandidates(cands)
 	ctx = resowner.With(ctx, ownerOf(holder))
 
 	var lastErr error
 	var unbound []string
+	callerFull := false
 	for _, c := range cands.list {
 		var hdr metadata.MD
 		rc := newRelayClient(c.conn)
@@ -82,13 +83,17 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 		if refusal.ReasonOf(err) == "" {
 			// No reason: the connection that just answered its stats failed
 			// under us. Not this relay's opinion of the request.
-			h.note(ctx, c.Relay, err)
+			h.observe(ctx, c.Relay, err)
 			err = errors.Join(errUnreachable, err)
 		}
 		if !fallsThrough(err) {
 			return nil, err
 		}
+		callerFull = callerFull || refusal.ReasonOf(err) == refusal.CallerQueueFull
 		lastErr = err
+	}
+	if callerFull && len(unbound) == 0 {
+		return nil, callerQueueFull(cands)
 	}
 	// An old relay is named whatever failed after it: it is the one cause
 	// an operator can fix, and the last error would hide it behind, say, a
@@ -131,12 +136,12 @@ func (h *ClusterServiceHandler) GetReservation(ctx context.Context, req *pb.GetR
 			}},
 		}, nil
 	}
-	conn, err := h.dialReady(ctx, relay)
+	conn, err := h.acquire(ctx, relay)
 	if err != nil {
-		h.note(ctx, relay, err)
+		h.observe(ctx, relay, err)
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer h.release(conn)
 	ctx = resowner.With(ctx, ownerOf(holder))
 	st, err := newRelayClient(conn).GetReservation(ctx, &pb.GetReservationReq{Reservation: local})
 	if err != nil {
@@ -163,12 +168,12 @@ func (h *ClusterServiceHandler) CancelReservation(ctx context.Context, req *pb.C
 	if gone {
 		return &pb.CancelReservationResp{}, nil
 	}
-	conn, err := h.dialReady(ctx, relay)
+	conn, err := h.acquire(ctx, relay)
 	if err != nil {
-		h.note(ctx, relay, err)
+		h.observe(ctx, relay, err)
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer h.release(conn)
 	ctx = resowner.With(ctx, ownerOf(holder))
 	return newRelayClient(conn).CancelReservation(ctx, &pb.CancelReservationReq{Reservation: local})
 }
