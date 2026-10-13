@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"context"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
 	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
@@ -44,4 +47,15 @@ func (h *PaymentServiceHandler) installID() string {
 func (h *PaymentServiceHandler) madeHere(ev stripe.Event) bool {
 	id := h.installID()
 	return ev.Origin != "" && id != "" && ev.Install == id
+}
+
+// eventTime is the provider's creation time of an event — its order, which
+// delivery order is not. An event without one (the provider always sends it)
+// counts as now. Here (always staged): the core webhook (disputes) and the
+// subscriptions hook read it.
+func eventTime(unix int64) *timestamppb.Timestamp {
+	if unix <= 0 {
+		return timestamppb.Now()
+	}
+	return timestamppb.New(time.Unix(unix, 0))
 }

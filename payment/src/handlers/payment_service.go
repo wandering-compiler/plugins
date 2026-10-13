@@ -350,12 +350,17 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 			return nil, err
 		}
 		resp, err := sameRefund(prior, payment, amount)
-		if err == nil {
-			// A retry is where a first attempt's missed status settle is
-			// caught up (no-op once REFUNDED).
-			h.markRefundedIfFull(ctx, payment)
+		if err != nil {
+			return nil, err
 		}
-		return resp, err
+		// A retry is where a first attempt's missed follow-ups are caught up:
+		// the status settle (no-op once REFUNDED), and a top-up's credit
+		// (no-op once reconciled).
+		h.markRefundedIfFull(ctx, payment)
+		if err := reconcileTopupCredit(ctx, h, payment); err != nil {
+			return nil, err
+		}
+		return resp, nil
 	}
 
 	// The provider gets the caller's key VERBATIM, so one key names one
@@ -414,12 +419,17 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		}
 	}
 
+	// The provider's answer is recorded, not assumed: a refund can be pending
+	// (and fail later), or fail at once. Only pending and succeeded refunds
+	// count toward REFUNDED (SumRefundsForPayment).
+	outcome := mapRefundStatus(res.Status)
 	created, err := h.Mutation.CreateRefund(ctx, &pb.CreateRefundReq{
 		PaymentId:        payment.GetId(),
 		ProviderRefundId: res.ProviderRefundID,
 		Amount:           amount,
 		Currency:         payment.GetCurrency(),
 		IdempotencyKey:   storedKey,
+		Status:           int32(outcome),
 	})
 	if err != nil {
 		// A concurrent call with the same key recorded it first: its refund
@@ -433,6 +443,8 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		// replayed, and its local row already exists: that row is the
 		// answer. Only when it belongs to THIS payment.
 		if constraintCode(err) == codeUniqueViolation {
+			// It may also be the refund webhook's row: the provider's event can
+			// outrun this insert, and the webhook records the refund it finds.
 			r, gerr := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: res.ProviderRefundID})
 			if gerr != nil && !absent(gerr) {
 				return nil, gerr
@@ -448,7 +460,54 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		return nil, err
 	}
 	h.markRefundedIfFull(ctx, payment)
+	// The refund is recorded: a top-up's credit follows it — nothing more
+	// once the take-back above counted it, back if the provider answered
+	// failed or canceled. A failure here leaves the refund recorded; the
+	// caller's retry finds it and reconciles again.
+	if err := reconcileTopupCredit(ctx, h, payment); err != nil {
+		return nil, err
+	}
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
+}
+
+// mapRefundStatus maps the provider's refund status onto Refund.Status.
+// requires_action, an empty status and any status this version does not know
+// are PENDING: not done, and not failed either — the refund webhooks settle it
+// once the provider reports an outcome.
+func mapRefundStatus(providerStatus string) pb.Refund_Status {
+	switch providerStatus {
+	case "succeeded":
+		return pb.Refund_SUCCEEDED
+	case "failed":
+		return pb.Refund_FAILED
+	case "canceled":
+		return pb.Refund_CANCELED
+	default:
+		return pb.Refund_PENDING
+	}
+}
+
+// refundCounts reports whether a refund in this state counts toward the
+// payment's refunded total: pending and succeeded do — the provider holds the
+// money for them and counts them against what is left to refund — failed and
+// canceled returned nothing. Rows an earlier version wrote read SUCCEEDED.
+func refundCounts(st pb.Refund_Status) bool {
+	return st != pb.Refund_FAILED && st != pb.Refund_CANCELED
+}
+
+// reconcileTopupCredit brings the credit of the top-up paid by payment to
+// what the payment's refunds and lost disputes leave of it (see settleTopup in
+// handlers/prepaid.go, which installs it). Called after every change to them;
+// idempotent. Base no-op: top-ups exist only under `prepaid`.
+var reconcileTopupCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) error {
+	return nil
+}
+
+// lostDisputeTotal is what payment lost to disputes, part of a top-up's
+// reconciliation target. Base "0": disputes are recorded only by
+// handlers/webhook_stripe.go, which installs the real one.
+var lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (string, error) {
+	return "0", nil
 }
 
 // markRefundedIfFull moves a payment to REFUNDED once its recorded refunds
@@ -463,7 +522,16 @@ func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment 
 	if err != nil || !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
 		return
 	}
-	_, _ = h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+	if _, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()}); err != nil {
+		return
+	}
+	// A refund failure the webhook recorded meanwhile found nothing to
+	// reverse; read the rows again now that REFUNDED has landed (see the
+	// webhook's settleRefundedStatus).
+	sum, err = h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
+	if err == nil && !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
+		_, _ = h.Mutation.MarkPaymentRefundReversed(ctx, &pb.MarkPaymentRefundReversedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
+	}
 }
 
 // takeBackRefundedCredit removes the credit a refunded top-up granted,
@@ -525,6 +593,16 @@ func (h *PaymentServiceHandler) refundByKey(ctx context.Context, storedKey strin
 		return nil, err
 	}
 	return got.GetRefund(), nil
+}
+
+// paymentByProviderID is the local payment for a provider id, nil when there
+// is none. Here (always staged): the webhook and the prepaid hooks read it.
+func (h *PaymentServiceHandler) paymentByProviderID(ctx context.Context, providerPaymentID string) (*pb.Payment, error) {
+	got, err := h.Query.GetPaymentByProviderId(ctx, &pb.GetPaymentByProviderIdReq{ProviderPaymentId: providerPaymentID})
+	if err != nil && !absent(err) {
+		return nil, err
+	}
+	return got.GetPayment(), nil
 }
 
 // resolveCustomer returns the principal's Customer row, creating it (and

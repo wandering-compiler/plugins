@@ -61,6 +61,7 @@ type memStore struct {
 	meters    map[string]*pb.UsageMeter  // by user|meter|period
 	plans     map[string]*pb.Plan        // by slug
 	subs      map[string]*pb.Subscription
+	disputes  map[string]*pb.Dispute // by id
 
 	emitted []string // event names, in emit order
 
@@ -84,6 +85,7 @@ func newMemStore() *memStore {
 		meters:     map[string]*pb.UsageMeter{},
 		plans:      map[string]*pb.Plan{},
 		subs:       map[string]*pb.Subscription{},
+		disputes:   map[string]*pb.Dispute{},
 		failBefore: map[string][]error{},
 		failAfter:  map[string][]error{},
 		before:     map[string]func(){},
@@ -530,14 +532,15 @@ func (s *memStore) MarkPaymentCanceled(_ context.Context, in *pb.MarkPaymentCanc
 	return &pb.MarkPaymentCanceledResp{Payment: p}, s.leave("MarkPaymentCanceled", nil)
 }
 
-// SumRefundsForPayment: COALESCE(SUM(amount), 0).
+// SumRefundsForPayment: COALESCE(SUM(amount), 0) over the refunds that are
+// not FAILED (3) or CANCELED (4).
 func (s *memStore) SumRefundsForPayment(_ context.Context, in *pb.SumRefundsForPaymentReq, _ ...grpc.CallOption) (*pb.SumRefundsForPaymentResp, error) {
 	if err := s.enter("SumRefundsForPayment"); err != nil {
 		return nil, s.leave("", err)
 	}
 	total := new(big.Rat)
 	for _, r := range s.refunds {
-		if r.GetPaymentId() == in.GetPaymentId() {
+		if r.GetPaymentId() == in.GetPaymentId() && r.GetStatus() != pb.Refund_FAILED && r.GetStatus() != pb.Refund_CANCELED {
 			a, _ := decimal4(r.GetAmount())
 			total.Add(total, a)
 		}
@@ -561,9 +564,244 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 			return nil, s.leave("CreateRefund", uniqueErr("idempotency_key"))
 		}
 	}
-	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(), IdempotencyKey: in.GetIdempotencyKey()}
+	if err := refundStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("CreateRefund", err)
+	}
+	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(), IdempotencyKey: in.GetIdempotencyKey(),
+		Status: pb.Refund_Status(in.GetStatus())}
 	s.refunds[r.Id] = r
 	return &pb.CreateRefundResp{Refund: clone(r)}, s.leave("CreateRefund", nil)
+}
+
+// RecordProviderRefund: INSERT without idempotency_key (NULL, so it never
+// collides on that column).
+func (s *memStore) RecordProviderRefund(_ context.Context, in *pb.RecordProviderRefundReq, _ ...grpc.CallOption) (*pb.RecordProviderRefundResp, error) {
+	if err := s.enter("RecordProviderRefund"); err != nil {
+		return nil, s.leave("", err)
+	}
+	amt, err := decimal4(in.GetAmount())
+	if err != nil {
+		return nil, s.leave("RecordProviderRefund", err)
+	}
+	if err := refundStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("RecordProviderRefund", err)
+	}
+	for _, r := range s.refunds {
+		if r.GetProviderRefundId() == in.GetProviderRefundId() {
+			return nil, s.leave("RecordProviderRefund", uniqueErr("provider_refund_id"))
+		}
+	}
+	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(),
+		Status: pb.Refund_Status(in.GetStatus())}
+	s.refunds[r.Id] = r
+	return &pb.RecordProviderRefundResp{Refund: clone(r)}, s.leave("RecordProviderRefund", nil)
+}
+
+// MarkRefundStatus: `WHERE … AND status <> 3 AND status <> 4 AND status <> :status`.
+func (s *memStore) MarkRefundStatus(_ context.Context, in *pb.MarkRefundStatusReq, _ ...grpc.CallOption) (*pb.MarkRefundStatusResp, error) {
+	if err := s.enter("MarkRefundStatus"); err != nil {
+		return nil, s.leave("", err)
+	}
+	if err := refundStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("MarkRefundStatus", err)
+	}
+	for _, r := range s.refunds {
+		if r.GetProviderRefundId() != in.GetProviderRefundId() {
+			continue
+		}
+		st := r.GetStatus()
+		if st == pb.Refund_FAILED || st == pb.Refund_CANCELED || int32(st) == in.GetStatus() {
+			break
+		}
+		r.Status = pb.Refund_Status(in.GetStatus())
+		return &pb.MarkRefundStatusResp{Refund: clone(r)}, s.leave("MarkRefundStatus", nil)
+	}
+	return nil, s.leave("MarkRefundStatus", noRows("MarkRefundStatus"))
+}
+
+// MarkPaymentRefundReversed: `WHERE … AND status = 6`.
+func (s *memStore) MarkPaymentRefundReversed(_ context.Context, in *pb.MarkPaymentRefundReversedReq, _ ...grpc.CallOption) (*pb.MarkPaymentRefundReversedResp, error) {
+	if err := s.enter("MarkPaymentRefundReversed"); err != nil {
+		return nil, s.leave("", err)
+	}
+	p, err := s.setPaymentStatus("MarkPaymentRefundReversed", in.GetProviderPaymentId(), pb.Payment_SUCCEEDED,
+		pb.Payment_STATUS_UNSPECIFIED, pb.Payment_REQUIRES_ACTION, pb.Payment_PROCESSING, pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED)
+	if err != nil {
+		return nil, s.leave("MarkPaymentRefundReversed", err)
+	}
+	s.emitted = append(s.emitted, "PaymentRefundReversed")
+	return &pb.MarkPaymentRefundReversedResp{Payment: p}, s.leave("MarkPaymentRefundReversed", nil)
+}
+
+// refundStatusCheck is the Refund.status column's CHECK IN (the zero sentinel
+// excluded).
+func refundStatusCheck(st int32) error {
+	if _, ok := pb.Refund_Status_name[st]; !ok || st == 0 {
+		return storeConstraintErr(codeInvalidValue, fmt.Sprintf("refund status %d violates its CHECK", st))
+	}
+	return nil
+}
+
+// ── disputes ──────────────────────────────────────────────────────────
+
+func (s *memStore) GetDisputeByProviderId(_ context.Context, in *pb.GetDisputeByProviderIdReq, _ ...grpc.CallOption) (*pb.GetDisputeByProviderIdResp, error) {
+	if err := s.enter("GetDisputeByProviderId"); err != nil {
+		return nil, s.leave("", err)
+	}
+	for _, d := range s.disputes {
+		if d.GetProviderDisputeId() == in.GetProviderDisputeId() {
+			return &pb.GetDisputeByProviderIdResp{Dispute: clone(d)}, s.leave("GetDisputeByProviderId", nil)
+		}
+	}
+	return nil, s.leave("GetDisputeByProviderId", noRow())
+}
+
+func disputeStatusCheck(st int32) error {
+	if _, ok := pb.Dispute_Status_name[st]; !ok || st == 0 {
+		return storeConstraintErr(codeInvalidValue, fmt.Sprintf("dispute status %d violates its CHECK", st))
+	}
+	return nil
+}
+
+func (s *memStore) CreateDispute(_ context.Context, in *pb.CreateDisputeReq, _ ...grpc.CallOption) (*pb.CreateDisputeResp, error) {
+	if err := s.enter("CreateDispute"); err != nil {
+		return nil, s.leave("", err)
+	}
+	amt, err := decimal4(in.GetAmount())
+	if err != nil {
+		return nil, s.leave("CreateDispute", err)
+	}
+	if err := disputeStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("CreateDispute", err)
+	}
+	for _, d := range s.disputes {
+		if d.GetProviderDisputeId() == in.GetProviderDisputeId() {
+			return nil, s.leave("CreateDispute", uniqueErr("provider_dispute_id"))
+		}
+	}
+	d := &pb.Dispute{Id: s.nextID("dp"), PaymentId: in.GetPaymentId(), ProviderDisputeId: in.GetProviderDisputeId(), Amount: fmt4(amt), Currency: in.GetCurrency(),
+		Status: pb.Dispute_Status(in.GetStatus()), ProviderEventAt: in.GetProviderEventAt()}
+	s.disputes[d.Id] = d
+	return &pb.CreateDisputeResp{Dispute: clone(d)}, s.leave("CreateDispute", nil)
+}
+
+// MarkDisputeStatus: `WHERE … AND status <> 5 AND status <> 6 AND
+// (provider_event_at IS NULL OR provider_event_at <= :provider_event_at)`.
+func (s *memStore) MarkDisputeStatus(_ context.Context, in *pb.MarkDisputeStatusReq, _ ...grpc.CallOption) (*pb.MarkDisputeStatusResp, error) {
+	if err := s.enter("MarkDisputeStatus"); err != nil {
+		return nil, s.leave("", err)
+	}
+	if err := disputeStatusCheck(in.GetStatus()); err != nil {
+		return nil, s.leave("MarkDisputeStatus", err)
+	}
+	for _, d := range s.disputes {
+		if d.GetProviderDisputeId() != in.GetProviderDisputeId() {
+			continue
+		}
+		if d.GetStatus() == pb.Dispute_WON || d.GetStatus() == pb.Dispute_LOST {
+			break
+		}
+		if at := d.GetProviderEventAt(); at != nil && at.AsTime().After(in.GetProviderEventAt().AsTime()) {
+			break
+		}
+		d.Status = pb.Dispute_Status(in.GetStatus())
+		d.ProviderEventAt = in.GetProviderEventAt()
+		return &pb.MarkDisputeStatusResp{Dispute: clone(d)}, s.leave("MarkDisputeStatus", nil)
+	}
+	return nil, s.leave("MarkDisputeStatus", noRows("MarkDisputeStatus"))
+}
+
+// SumLostDisputesForPayment: SUM(amount) over status = 6 (LOST).
+func (s *memStore) SumLostDisputesForPayment(_ context.Context, in *pb.SumLostDisputesForPaymentReq, _ ...grpc.CallOption) (*pb.SumLostDisputesForPaymentResp, error) {
+	if err := s.enter("SumLostDisputesForPayment"); err != nil {
+		return nil, s.leave("", err)
+	}
+	total := new(big.Rat)
+	for _, d := range s.disputes {
+		if d.GetPaymentId() == in.GetPaymentId() && d.GetStatus() == pb.Dispute_LOST {
+			a, _ := decimal4(d.GetAmount())
+			total.Add(total, a)
+		}
+	}
+	return &pb.SumLostDisputesForPaymentResp{Total: fmt4(total)}, s.leave("SumLostDisputesForPayment", nil)
+}
+
+// SumTopupCredit: SUM(delta) WHERE user_id AND ref IN (payment_id,
+// provider_payment_id) AND reason IN (the four bound reasons).
+func (s *memStore) SumTopupCredit(_ context.Context, in *pb.SumTopupCreditReq, _ ...grpc.CallOption) (*pb.SumTopupCreditResp, error) {
+	if err := s.enter("SumTopupCredit"); err != nil {
+		return nil, s.leave("", err)
+	}
+	total := new(big.Rat)
+	for _, e := range s.ledger {
+		if e.GetUserId() != in.GetUserId() || (e.GetRef() != in.GetPaymentId() && e.GetRef() != in.GetProviderPaymentId()) {
+			continue
+		}
+		switch e.GetReason() {
+		case in.GetReasonGrant(), in.GetReasonRefund(), in.GetReasonRefused(), in.GetReasonReconcile():
+			d, _ := decimal4(e.GetDelta())
+			total.Add(total, d)
+		}
+	}
+	return &pb.SumTopupCreditResp{Total: fmt4(total)}, s.leave("SumTopupCredit", nil)
+}
+
+// SetTopupCreditOwed: `WHERE provider_payment_id = … AND reconciled_step <
+// :reconciled_step`.
+func (s *memStore) SetTopupCreditOwed(_ context.Context, in *pb.SetTopupCreditOwedReq, _ ...grpc.CallOption) (*pb.SetTopupCreditOwedResp, error) {
+	if err := s.enter("SetTopupCreditOwed"); err != nil {
+		return nil, s.leave("", err)
+	}
+	owed, err := decimal4(in.GetCreditOwed())
+	if err != nil {
+		return nil, s.leave("SetTopupCreditOwed", err)
+	}
+	t, ok := s.topups[in.GetProviderPaymentId()]
+	if !ok || t.GetReconciledStep() >= in.GetReconciledStep() {
+		return nil, s.leave("SetTopupCreditOwed", noRows("SetTopupCreditOwed"))
+	}
+	t.CreditOwed = fmt4(owed)
+	t.ReconciledStep = in.GetReconciledStep()
+	return &pb.SetTopupCreditOwedResp{ProviderPaymentId: t.ProviderPaymentId}, s.leave("SetTopupCreditOwed", nil)
+}
+
+// owed is the top-up's recorded credit_owed ("0.0000" when none).
+func (s *memStore) owed(t *testing.T, providerPaymentID string) string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tp, ok := s.topups[providerPaymentID]
+	if !ok {
+		t.Fatalf("no top-up %s", providerPaymentID)
+	}
+	if tp.GetCreditOwed() == "" {
+		return "0.0000"
+	}
+	return tp.GetCreditOwed()
+}
+
+func (s *memStore) dispute(t *testing.T, providerID string) *pb.Dispute {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.disputes {
+		if d.GetProviderDisputeId() == providerID {
+			return clone(d)
+		}
+	}
+	return nil
+}
+
+func (s *memStore) refundByProvider(t *testing.T, providerID string) *pb.Refund {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.refunds {
+		if r.GetProviderRefundId() == providerID {
+			return clone(r)
+		}
+	}
+	return nil
 }
 
 // SetRefundIdempotencyKey: `WHERE id = :id AND idempotency_key IS NULL`,

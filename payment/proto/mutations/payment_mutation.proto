@@ -51,6 +51,8 @@ message MarkPaymentFailedResp { Payment payment = 1; }
 
 message MarkPaymentRefundedReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
 message MarkPaymentRefundedResp { Payment payment = 1; }
+message MarkPaymentRefundReversedReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message MarkPaymentRefundReversedResp { Payment payment = 1; }
 message MarkPaymentCanceledReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
 message MarkPaymentCanceledResp { Payment payment = 1; }
 
@@ -60,14 +62,60 @@ message CreateRefundReq {
   string amount             = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   string currency           = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   string idempotency_key    = 5 [(w17.field) = { type: CHAR, max_len: 255 }];
+  // Refund.Status numeric value (the provider's outcome). Plain int — the
+  // fixed INSERT DQL binds it without an enum literal.
+  int32  status             = 6;
 }
 message CreateRefundResp { Refund refund = 1; }
+
+// RecordProviderRefundReq — a refund made at the provider directly: no key.
+message RecordProviderRefundReq {
+  string payment_id         = 1 [(w17.field) = { type: UUID }];
+  string provider_refund_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string amount             = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string currency           = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
+  int32  status             = 5;
+}
+message RecordProviderRefundResp { Refund refund = 1; }
+
+message MarkRefundStatusReq {
+  string provider_refund_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  int32  status             = 2;
+}
+message MarkRefundStatusResp { Refund refund = 1; }
+
 
 message SetRefundIdempotencyKeyReq {
   string id              = 1 [(w17.field) = { type: UUID }];
   string idempotency_key = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
 }
 message SetRefundIdempotencyKeyResp { string id = 1; }
+
+// ── dispute mutation request/response (stripe_webhooks) ─────────────
+message CreateDisputeReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string                    payment_id          = 1 [(w17.field) = { type: UUID }];
+  string                    provider_dispute_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string                    amount              = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string                    currency            = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
+  int32                     status              = 5;
+  google.protobuf.Timestamp provider_event_at   = 6;
+}
+message CreateDisputeResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  Dispute dispute = 1;
+}
+
+message MarkDisputeStatusReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string                    provider_dispute_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  int32                     status              = 2;
+  google.protobuf.Timestamp provider_event_at   = 3;
+}
+message MarkDisputeStatusResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  Dispute dispute = 1;
+}
 
 message MarkWebhookProcessedReq {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
@@ -111,6 +159,17 @@ message MarkTopupGrantedReq {
   string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
 }
 message MarkTopupGrantedResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1;
+}
+
+message SetTopupCreditOwedReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string credit_owed         = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64  reconciled_step     = 3 [(w17.field) = { type: NUMBER, gte: 0 }];
+}
+message SetTopupCreditOwedResp {
   option (w17.contrib.plugin_feature) = "prepaid";
   string provider_payment_id = 1;
 }
@@ -288,10 +347,12 @@ service PaymentMutation {
   }
 
   // MarkPaymentRefunded — a fully refunded payment. Only from SUCCEEDED:
-  // only a captured payment can be refunded, and REFUNDED is terminal. Set
-  // by RefundPayment when its refund completes the amount, and by the
-  // provider's charge.refunded webhook, which also covers partial refunds
-  // that completed it concurrently.
+  // only a captured payment can be refunded, and a redelivery must not emit
+  // twice. Set by RefundPayment when its refund completes the amount, and by
+  // the refund webhooks once the provider's pending and succeeded refunds
+  // reach it (also partial refunds that completed it concurrently). Terminal
+  // for every other reconciliation; only MarkPaymentRefundReversed leaves it,
+  // when a refund that completed the amount later fails.
   rpc MarkPaymentRefunded(MarkPaymentRefundedReq) returns (MarkPaymentRefundedResp) {
     option (w17.db.method) = {
       ops: {
@@ -319,6 +380,43 @@ service PaymentMutation {
           { key: "amount",              value: "$response.payment.amount" },
           { key: "currency",            value: "$response.payment.currency" },
           { key: "refunded_at",         value: "$response.payment.updated_at" }
+        ]
+      }
+    };
+  }
+
+  // MarkPaymentRefundReversed — a REFUNDED payment back to SUCCEEDED (3),
+  // because a refund that completed its amount later failed or was canceled
+  // at the provider and what still counts no longer reaches the amount. Only
+  // from REFUNDED, so a redelivery (or a payment that never read REFUNDED)
+  // matches zero rows and emits nothing. Emits PaymentRefundReversed.
+  rpc MarkPaymentRefundReversed(MarkPaymentRefundReversedReq) returns (MarkPaymentRefundReversedResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Payment SET "
+          "status = 3, "
+          "updated_at = NOW() "
+          "WHERE provider_payment_id = :provider_payment_id AND status = 6 "
+          "RETURNING id AS payment.id, "
+          "          customer_id AS payment.customer_id, "
+          "          provider_payment_id AS payment.provider_payment_id, "
+          "          amount AS payment.amount, "
+          "          currency AS payment.currency, "
+          "          updated_at AS payment.updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "PaymentRefundReversed"
+      payload: {
+        fields: [
+          { key: "payment_id",          value: "$response.payment.id" },
+          { key: "customer_id",         value: "$response.payment.customer_id" },
+          { key: "provider_payment_id", value: "$response.payment.provider_payment_id" },
+          { key: "amount",              value: "$response.payment.amount" },
+          { key: "currency",            value: "$response.payment.currency" },
+          { key: "reversed_at",         value: "$response.payment.updated_at" }
         ]
       }
     };
@@ -403,7 +501,8 @@ service PaymentMutation {
   }
 
   // CreateRefund — INSERT a Refund row after the backend confirms the
-  // provider refund. Duplicate provider_refund_id → AlreadyExists.
+  // provider refund, with the outcome the provider answered. Duplicate
+  // provider_refund_id or idempotency_key → UNIQUE_VIOLATION.
   rpc CreateRefund(CreateRefundReq) returns (CreateRefundResp) {
     option (w17.db.method) = {
       ops: {
@@ -414,14 +513,73 @@ service PaymentMutation {
           "provider_refund_id = :provider_refund_id, "
           "amount = :amount, "
           "currency = :currency, "
-          "idempotency_key = :idempotency_key "
+          "idempotency_key = :idempotency_key, "
+          "status = :status "
           "RETURNING id AS refund.id, "
           "          payment_id AS refund.payment_id, "
           "          provider_refund_id AS refund.provider_refund_id, "
           "          amount AS refund.amount, "
           "          currency AS refund.currency, "
           "          created_at AS refund.created_at, "
-          "          idempotency_key AS refund.idempotency_key"
+          "          idempotency_key AS refund.idempotency_key, "
+          "          status AS refund.status"
+      }
+    };
+  }
+
+  // RecordProviderRefund — INSERT a refund the webhook found at the provider
+  // that no local row records: one made at the provider directly (its
+  // dashboard, its API, another tool). It has no caller key, so
+  // idempotency_key stays NULL — the unique column admits any number of
+  // NULLs, and an empty string would let only one such refund ever be
+  // recorded. Duplicate provider_refund_id → UNIQUE_VIOLATION (a concurrent
+  // delivery recorded it first).
+  rpc RecordProviderRefund(RecordProviderRefundReq) returns (RecordProviderRefundResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Refund SET "
+          "payment_id = :payment_id, "
+          "provider_refund_id = :provider_refund_id, "
+          "amount = :amount, "
+          "currency = :currency, "
+          "status = :status "
+          "RETURNING id AS refund.id, "
+          "          payment_id AS refund.payment_id, "
+          "          provider_refund_id AS refund.provider_refund_id, "
+          "          amount AS refund.amount, "
+          "          currency AS refund.currency, "
+          "          created_at AS refund.created_at, "
+          "          status AS refund.status"
+      }
+    };
+  }
+
+  // MarkRefundStatus — reconcile a refund's outcome from the provider.
+  //
+  // TRANSITION-GUARDED (`status <> 3 AND status <> 4 AND status <> :status`):
+  // FAILED and CANCELED are terminal — the provider never revives a refund
+  // — so an older observation that still says pending or succeeded, read or
+  // delivered after the failure, matches zero rows. SUCCEEDED is not
+  // terminal: a provider can fail a refund it reported as succeeded. A
+  // same-status write matches zero rows too, so the handler can tell a real
+  // transition from a redelivery. Zero rows is NotFound; the handler looks
+  // the refund up to tell "already there" from "no such row".
+  rpc MarkRefundStatus(MarkRefundStatusReq) returns (MarkRefundStatusResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Refund SET status = :status "
+          "WHERE provider_refund_id = :provider_refund_id "
+          "AND status <> 3 AND status <> 4 AND status <> :status "
+          "RETURNING id AS refund.id, "
+          "          payment_id AS refund.payment_id, "
+          "          provider_refund_id AS refund.provider_refund_id, "
+          "          amount AS refund.amount, "
+          "          currency AS refund.currency, "
+          "          status AS refund.status"
       }
     };
   }
@@ -443,6 +601,63 @@ service PaymentMutation {
           "UPDATE @module.Refund SET idempotency_key = :idempotency_key "
           "WHERE id = :id AND idempotency_key IS NULL "
           "RETURNING id"
+      }
+    };
+  }
+
+  // CreateDispute — INSERT the local record of a provider dispute, the first
+  // time one of its charge.dispute.* events arrives. Duplicate
+  // provider_dispute_id → UNIQUE_VIOLATION (a concurrent delivery recorded
+  // it first; the handler then applies its status with MarkDisputeStatus).
+  // Gated stripe_webhooks.
+  rpc CreateDispute(CreateDisputeReq) returns (CreateDisputeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Dispute SET "
+          "payment_id = :payment_id, "
+          "provider_dispute_id = :provider_dispute_id, "
+          "amount = :amount, "
+          "currency = :currency, "
+          "status = :status, "
+          "provider_event_at = :provider_event_at "
+          "RETURNING id AS dispute.id, "
+          "          payment_id AS dispute.payment_id, "
+          "          provider_dispute_id AS dispute.provider_dispute_id, "
+          "          amount AS dispute.amount, "
+          "          currency AS dispute.currency, "
+          "          status AS dispute.status"
+      }
+    };
+  }
+
+  // MarkDisputeStatus — reconcile a dispute's status from a later event.
+  // Gated stripe_webhooks.
+  //
+  // TRANSITION-GUARDED (`status <> 5 AND status <> 6`): WON and LOST are
+  // terminal, so an earlier event delivered late cannot reopen a closed
+  // dispute. Between the open states the provider's own order decides
+  // (`provider_event_at <= :provider_event_at`), as for subscriptions.
+  rpc MarkDisputeStatus(MarkDisputeStatusReq) returns (MarkDisputeStatusResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Dispute SET "
+          "status = :status, "
+          "provider_event_at = :provider_event_at, "
+          "updated_at = NOW() "
+          "WHERE provider_dispute_id = :provider_dispute_id AND status <> 5 AND status <> 6 "
+          "AND (provider_event_at IS NULL OR provider_event_at <= :provider_event_at) "
+          "RETURNING id AS dispute.id, "
+          "          payment_id AS dispute.payment_id, "
+          "          provider_dispute_id AS dispute.provider_dispute_id, "
+          "          amount AS dispute.amount, "
+          "          currency AS dispute.currency, "
+          "          status AS dispute.status"
       }
     };
   }
@@ -575,6 +790,25 @@ service PaymentMutation {
         dql:
           "UPDATE @module.CreditTopup SET granted_at = NOW() "
           "WHERE provider_payment_id = :provider_payment_id AND granted_at IS NULL "
+          "RETURNING provider_payment_id"
+      }
+    };
+  }
+
+  // SetTopupCreditOwed — record what a top-up's reconciliation left owed,
+  // with the step it computed it at. GUARDED (`reconciled_step <
+  // :reconciled_step`): the step's ledger row was written first under a key
+  // unique per (payment, step), so a newer step's answer is never
+  // overwritten by an older one's, and a repeat matches zero rows. Gated
+  // prepaid.
+  rpc SetTopupCreditOwed(SetTopupCreditOwedReq) returns (SetTopupCreditOwedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.CreditTopup SET credit_owed = :credit_owed, reconciled_step = :reconciled_step "
+          "WHERE provider_payment_id = :provider_payment_id AND reconciled_step < :reconciled_step "
           "RETURNING provider_payment_id"
       }
     };

@@ -107,6 +107,132 @@ func (Payment_Status) EnumDescriptor() ([]byte, []int) {
 	return file_types_models_proto_rawDescGZIP(), []int{1, 0}
 }
 
+// Status is the provider's refund outcome, mapped one to one (requires_action
+// and any status this version does not know read PENDING: not done, not
+// failed). FAILED and CANCELED are terminal; SUCCEEDED is not — a provider
+// can fail a refund it first reported as succeeded. PENDING and SUCCEEDED
+// count toward the payment's refunded total (SumRefundsForPayment), the way
+// the provider counts them against the refundable amount. Values are
+// appended, never renumbered (the column stores the number).
+type Refund_Status int32
+
+const (
+	Refund_STATUS_UNSPECIFIED Refund_Status = 0
+	Refund_PENDING            Refund_Status = 1
+	Refund_SUCCEEDED          Refund_Status = 2
+	Refund_FAILED             Refund_Status = 3
+	Refund_CANCELED           Refund_Status = 4
+)
+
+// Enum value maps for Refund_Status.
+var (
+	Refund_Status_name = map[int32]string{
+		0: "STATUS_UNSPECIFIED",
+		1: "PENDING",
+		2: "SUCCEEDED",
+		3: "FAILED",
+		4: "CANCELED",
+	}
+	Refund_Status_value = map[string]int32{
+		"STATUS_UNSPECIFIED": 0,
+		"PENDING":            1,
+		"SUCCEEDED":          2,
+		"FAILED":             3,
+		"CANCELED":           4,
+	}
+)
+
+func (x Refund_Status) Enum() *Refund_Status {
+	p := new(Refund_Status)
+	*p = x
+	return p
+}
+
+func (x Refund_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Refund_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_types_models_proto_enumTypes[1].Descriptor()
+}
+
+func (Refund_Status) Type() protoreflect.EnumType {
+	return &file_types_models_proto_enumTypes[1]
+}
+
+func (x Refund_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Refund_Status.Descriptor instead.
+func (Refund_Status) EnumDescriptor() ([]byte, []int) {
+	return file_types_models_proto_rawDescGZIP(), []int{2, 0}
+}
+
+type Dispute_Status int32
+
+const (
+	Dispute_STATUS_UNSPECIFIED  Dispute_Status = 0
+	Dispute_INQUIRY             Dispute_Status = 1 // warning_needs_response / warning_under_review: no funds withdrawn
+	Dispute_INQUIRY_CLOSED      Dispute_Status = 2 // warning_closed
+	Dispute_NEEDS_RESPONSE      Dispute_Status = 3 // funds withdrawn, evidence due
+	Dispute_UNDER_REVIEW        Dispute_Status = 4
+	Dispute_WON                 Dispute_Status = 5 // terminal; funds reinstated
+	Dispute_LOST                Dispute_Status = 6 // terminal
+	Dispute_UNRECOGNIZED_STATUS Dispute_Status = 7 // a provider status this version does not know
+)
+
+// Enum value maps for Dispute_Status.
+var (
+	Dispute_Status_name = map[int32]string{
+		0: "STATUS_UNSPECIFIED",
+		1: "INQUIRY",
+		2: "INQUIRY_CLOSED",
+		3: "NEEDS_RESPONSE",
+		4: "UNDER_REVIEW",
+		5: "WON",
+		6: "LOST",
+		7: "UNRECOGNIZED_STATUS",
+	}
+	Dispute_Status_value = map[string]int32{
+		"STATUS_UNSPECIFIED":  0,
+		"INQUIRY":             1,
+		"INQUIRY_CLOSED":      2,
+		"NEEDS_RESPONSE":      3,
+		"UNDER_REVIEW":        4,
+		"WON":                 5,
+		"LOST":                6,
+		"UNRECOGNIZED_STATUS": 7,
+	}
+)
+
+func (x Dispute_Status) Enum() *Dispute_Status {
+	p := new(Dispute_Status)
+	*p = x
+	return p
+}
+
+func (x Dispute_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Dispute_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_types_models_proto_enumTypes[2].Descriptor()
+}
+
+func (Dispute_Status) Type() protoreflect.EnumType {
+	return &file_types_models_proto_enumTypes[2]
+}
+
+func (x Dispute_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Dispute_Status.Descriptor instead.
+func (Dispute_Status) EnumDescriptor() ([]byte, []int) {
+	return file_types_models_proto_rawDescGZIP(), []int{3, 0}
+}
+
 // Status is the provider's lifecycle, mapped one to one — never rounded
 // up to ACTIVE. Only TRIALING and ACTIVE mean "paid up"; a consumer that
 // grants access should grant it on those two and nothing else. Values
@@ -165,11 +291,11 @@ func (x Subscription_Status) String() string {
 }
 
 func (Subscription_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_types_models_proto_enumTypes[1].Descriptor()
+	return file_types_models_proto_enumTypes[3].Descriptor()
 }
 
 func (Subscription_Status) Type() protoreflect.EnumType {
-	return &file_types_models_proto_enumTypes[1]
+	return &file_types_models_proto_enumTypes[3]
 }
 
 func (x Subscription_Status) Number() protoreflect.EnumNumber {
@@ -178,7 +304,7 @@ func (x Subscription_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Subscription_Status.Descriptor instead.
 func (Subscription_Status) EnumDescriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{10, 0}
+	return file_types_models_proto_rawDescGZIP(), []int{11, 0}
 }
 
 // Customer — the project principal ↔ provider customer link. One row
@@ -383,8 +509,10 @@ func (x *Payment) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// Refund — a reversal of a Payment. v1 records the provider refund id +
-// amount; partial refunds are supported (amount may be < the payment).
+// Refund — a reversal of a Payment: the provider refund id, amount and
+// outcome; partial refunds are supported (amount may be < the payment). A row
+// is written by RefundPayment, and by the webhook for a refund made at the
+// provider directly (its idempotency_key stays NULL).
 type Refund struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -400,8 +528,11 @@ type Refund struct {
 	// forgets an idempotency key after a day, and a retry after that would
 	// refund a second time. NULL on rows written before the key was kept.
 	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Rows written before the outcome was kept read SUCCEEDED: what every
+	// earlier version assumed of them.
+	Status        Refund_Status `protobuf:"varint,8,opt,name=status,proto3,enum=w17.contrib.payment.Refund_Status" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Refund) Reset() {
@@ -483,6 +614,128 @@ func (x *Refund) GetIdempotencyKey() string {
 	return ""
 }
 
+func (x *Refund) GetStatus() Refund_Status {
+	if x != nil {
+		return x.Status
+	}
+	return Refund_STATUS_UNSPECIFIED
+}
+
+// Dispute — a chargeback (or an inquiry) the cardholder's bank opened on a
+// Payment, recorded from the provider's charge.dispute.* webhooks. Status is
+// the provider's, mapped one to one; WON and LOST are terminal. A LOST
+// dispute on a top-up takes its amount out of the top-up's credit (see
+// CreditTopup). Gated `stripe_webhooks`: only the webhook writes it.
+type Dispute struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	PaymentId         string                 `protobuf:"bytes,2,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
+	ProviderDisputeId string                 `protobuf:"bytes,3,opt,name=provider_dispute_id,json=providerDisputeId,proto3" json:"provider_dispute_id,omitempty"`
+	Amount            string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
+	Currency          string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`
+	Status            Dispute_Status         `protobuf:"varint,6,opt,name=status,proto3,enum=w17.contrib.payment.Dispute_Status" json:"status,omitempty"`
+	// When the provider created the last event applied to this row. Events
+	// arrive out of order; an older one must not overwrite a newer status.
+	ProviderEventAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=provider_event_at,json=providerEventAt,proto3" json:"provider_event_at,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *Dispute) Reset() {
+	*x = Dispute{}
+	mi := &file_types_models_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Dispute) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Dispute) ProtoMessage() {}
+
+func (x *Dispute) ProtoReflect() protoreflect.Message {
+	mi := &file_types_models_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Dispute.ProtoReflect.Descriptor instead.
+func (*Dispute) Descriptor() ([]byte, []int) {
+	return file_types_models_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Dispute) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Dispute) GetPaymentId() string {
+	if x != nil {
+		return x.PaymentId
+	}
+	return ""
+}
+
+func (x *Dispute) GetProviderDisputeId() string {
+	if x != nil {
+		return x.ProviderDisputeId
+	}
+	return ""
+}
+
+func (x *Dispute) GetAmount() string {
+	if x != nil {
+		return x.Amount
+	}
+	return ""
+}
+
+func (x *Dispute) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *Dispute) GetStatus() Dispute_Status {
+	if x != nil {
+		return x.Status
+	}
+	return Dispute_STATUS_UNSPECIFIED
+}
+
+func (x *Dispute) GetProviderEventAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ProviderEventAt
+	}
+	return nil
+}
+
+func (x *Dispute) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *Dispute) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
 // ProcessedWebhookEvent — the inbound-idempotency ledger. The webhook
 // handler INSERTs the provider event id before applying side effects;
 // a unique-PK violation means "already handled" so retries (the
@@ -500,7 +753,7 @@ type ProcessedWebhookEvent struct {
 
 func (x *ProcessedWebhookEvent) Reset() {
 	*x = ProcessedWebhookEvent{}
-	mi := &file_types_models_proto_msgTypes[3]
+	mi := &file_types_models_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -512,7 +765,7 @@ func (x *ProcessedWebhookEvent) String() string {
 func (*ProcessedWebhookEvent) ProtoMessage() {}
 
 func (x *ProcessedWebhookEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[3]
+	mi := &file_types_models_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -525,7 +778,7 @@ func (x *ProcessedWebhookEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessedWebhookEvent.ProtoReflect.Descriptor instead.
 func (*ProcessedWebhookEvent) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{3}
+	return file_types_models_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ProcessedWebhookEvent) GetProviderEventId() string {
@@ -557,7 +810,7 @@ type CreditLedger struct {
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Delta          string                 `protobuf:"bytes,3,opt,name=delta,proto3" json:"delta,omitempty"`
-	Reason         string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused
+	Reason         string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused|topup-reconcile
 	Ref            string                 `protobuf:"bytes,5,opt,name=ref,proto3" json:"ref,omitempty"`       // payment id / order id / …
 	IdempotencyKey string                 `protobuf:"bytes,6,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -567,7 +820,7 @@ type CreditLedger struct {
 
 func (x *CreditLedger) Reset() {
 	*x = CreditLedger{}
-	mi := &file_types_models_proto_msgTypes[4]
+	mi := &file_types_models_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -579,7 +832,7 @@ func (x *CreditLedger) String() string {
 func (*CreditLedger) ProtoMessage() {}
 
 func (x *CreditLedger) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[4]
+	mi := &file_types_models_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -592,7 +845,7 @@ func (x *CreditLedger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreditLedger.ProtoReflect.Descriptor instead.
 func (*CreditLedger) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{4}
+	return file_types_models_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CreditLedger) GetId() string {
@@ -662,7 +915,7 @@ type CreditBalance struct {
 
 func (x *CreditBalance) Reset() {
 	*x = CreditBalance{}
-	mi := &file_types_models_proto_msgTypes[5]
+	mi := &file_types_models_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -674,7 +927,7 @@ func (x *CreditBalance) String() string {
 func (*CreditBalance) ProtoMessage() {}
 
 func (x *CreditBalance) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[5]
+	mi := &file_types_models_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -687,7 +940,7 @@ func (x *CreditBalance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreditBalance.ProtoReflect.Descriptor instead.
 func (*CreditBalance) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{5}
+	return file_types_models_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CreditBalance) GetUserId() string {
@@ -711,11 +964,16 @@ func (x *CreditBalance) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// CreditTopup — links a Payment (the money charge) to the credit grant
-// it funds. TopUpCredit inserts one (granted_at NULL) when it creates
-// the charge; the payment-succeeded webhook hook grants the credit and
-// stamps granted_at. provider_payment_id is unique (one top-up per
-// charge). Gated prepaid.
+// CreditTopup — links a Payment (the money charge) to the credit it funds.
+// TopUpCredit inserts one (granted_at NULL) when it creates the charge.
+// provider_payment_id is unique (one top-up per charge). Gated prepaid.
+//
+// The top-up's credit is reconciled, never patched: its target is the
+// amount, less the payment's pending and succeeded refunds and lost
+// disputes (never below zero; zero until the payment has succeeded), and
+// every change moves the credit this payment holds in the ledger to it. A
+// decrease takes only what the balance holds; the rest is credit_owed.
+// granted_at is stamped the first time the paid top-up is reconciled.
 type CreditTopup struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -724,13 +982,22 @@ type CreditTopup struct {
 	Amount            string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
 	GrantedAt         *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
 	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Credit the owner spent that a refund or a lost dispute took back from
+	// this top-up — what the owner owes. NULL or 0: nothing. A later
+	// reconciliation that can take more (the balance grew) or needs less (a
+	// refund failed) lowers it first.
+	CreditOwed string `protobuf:"bytes,7,opt,name=credit_owed,json=creditOwed,proto3" json:"credit_owed,omitempty"`
+	// The last reconciliation step whose credit_owed is written here; the
+	// ledger rows of the steps are keyed by (payment, step), so a stale
+	// reconciliation never overwrites a newer one's answer.
+	ReconciledStep int64 `protobuf:"varint,8,opt,name=reconciled_step,json=reconciledStep,proto3" json:"reconciled_step,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CreditTopup) Reset() {
 	*x = CreditTopup{}
-	mi := &file_types_models_proto_msgTypes[6]
+	mi := &file_types_models_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -742,7 +1009,7 @@ func (x *CreditTopup) String() string {
 func (*CreditTopup) ProtoMessage() {}
 
 func (x *CreditTopup) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[6]
+	mi := &file_types_models_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -755,7 +1022,7 @@ func (x *CreditTopup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreditTopup.ProtoReflect.Descriptor instead.
 func (*CreditTopup) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{6}
+	return file_types_models_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CreditTopup) GetId() string {
@@ -800,6 +1067,20 @@ func (x *CreditTopup) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *CreditTopup) GetCreditOwed() string {
+	if x != nil {
+		return x.CreditOwed
+	}
+	return ""
+}
+
+func (x *CreditTopup) GetReconciledStep() int64 {
+	if x != nil {
+		return x.ReconciledStep
+	}
+	return 0
+}
+
 // UsageRecord — append-only usage journal. quantity is integer units
 // of the meter (seconds, API calls, render jobs, …). item_ref + metadata
 // are blank for raw time-burn, set for a concrete service line item.
@@ -820,7 +1101,7 @@ type UsageRecord struct {
 
 func (x *UsageRecord) Reset() {
 	*x = UsageRecord{}
-	mi := &file_types_models_proto_msgTypes[7]
+	mi := &file_types_models_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -832,7 +1113,7 @@ func (x *UsageRecord) String() string {
 func (*UsageRecord) ProtoMessage() {}
 
 func (x *UsageRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[7]
+	mi := &file_types_models_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -845,7 +1126,7 @@ func (x *UsageRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageRecord.ProtoReflect.Descriptor instead.
 func (*UsageRecord) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{7}
+	return file_types_models_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *UsageRecord) GetId() string {
@@ -932,7 +1213,7 @@ type UsageMeter struct {
 
 func (x *UsageMeter) Reset() {
 	*x = UsageMeter{}
-	mi := &file_types_models_proto_msgTypes[8]
+	mi := &file_types_models_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -944,7 +1225,7 @@ func (x *UsageMeter) String() string {
 func (*UsageMeter) ProtoMessage() {}
 
 func (x *UsageMeter) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[8]
+	mi := &file_types_models_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -957,7 +1238,7 @@ func (x *UsageMeter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageMeter.ProtoReflect.Descriptor instead.
 func (*UsageMeter) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{8}
+	return file_types_models_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UsageMeter) GetId() string {
@@ -1029,7 +1310,7 @@ type Plan struct {
 
 func (x *Plan) Reset() {
 	*x = Plan{}
-	mi := &file_types_models_proto_msgTypes[9]
+	mi := &file_types_models_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1041,7 +1322,7 @@ func (x *Plan) String() string {
 func (*Plan) ProtoMessage() {}
 
 func (x *Plan) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[9]
+	mi := &file_types_models_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1054,7 +1335,7 @@ func (x *Plan) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Plan.ProtoReflect.Descriptor instead.
 func (*Plan) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{9}
+	return file_types_models_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Plan) GetId() string {
@@ -1142,7 +1423,7 @@ type Subscription struct {
 
 func (x *Subscription) Reset() {
 	*x = Subscription{}
-	mi := &file_types_models_proto_msgTypes[10]
+	mi := &file_types_models_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1154,7 +1435,7 @@ func (x *Subscription) String() string {
 func (*Subscription) ProtoMessage() {}
 
 func (x *Subscription) ProtoReflect() protoreflect.Message {
-	mi := &file_types_models_proto_msgTypes[10]
+	mi := &file_types_models_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1167,7 +1448,7 @@ func (x *Subscription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscription.ProtoReflect.Descriptor instead.
 func (*Subscription) Descriptor() ([]byte, []int) {
-	return file_types_models_proto_rawDescGZIP(), []int{10}
+	return file_types_models_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Subscription) GetId() string {
@@ -1269,7 +1550,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"\x06FAILED\x10\x04\x12\f\n" +
 	"\bCANCELED\x10\x05\x12\f\n" +
-	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\xe8\x02\n" +
+	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\x87\x04\n" +
 	"\x06Refund\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12+\n" +
 	"\n" +
@@ -1279,7 +1560,37 @@ const file_types_models_proto_rawDesc = "" +
 	"\bcurrency\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x12F\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x126\n" +
-	"\x0fidempotency_key\x18\a \x01(\tB\r\xca\xf3\x18\t\b\x01(\x018\x01@\xff\x01R\x0eidempotencyKey:\x04\xc2\xf3\x18\x00\"\xdf\x01\n" +
+	"\x0fidempotency_key\x18\a \x01(\tB\r\xca\xf3\x18\t\b\x01(\x018\x01@\xff\x01R\x0eidempotencyKey\x12E\n" +
+	"\x06status\x18\b \x01(\x0e2\".w17.contrib.payment.Refund.StatusB\t\xca\xf3\x18\x05\b2\xa8\x01\x02R\x06status\"V\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aPENDING\x10\x01\x12\r\n" +
+	"\tSUCCEEDED\x10\x02\x12\n" +
+	"\n" +
+	"\x06FAILED\x10\x03\x12\f\n" +
+	"\bCANCELED\x10\x04:\x04\xc2\xf3\x18\x00\"\xb9\x05\n" +
+	"\aDispute\x12\x1b\n" +
+	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12+\n" +
+	"\n" +
+	"payment_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\tpaymentId\x12;\n" +
+	"\x13provider_dispute_id\x18\x03 \x01(\tB\v\xca\xf3\x18\a\b\x018\x01@\xff\x01R\x11providerDisputeId\x12-\n" +
+	"\x06amount\x18\x04 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x06amount\x12$\n" +
+	"\bcurrency\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x12C\n" +
+	"\x06status\x18\x06 \x01(\x0e2#.w17.contrib.payment.Dispute.StatusB\x06\xca\xf3\x18\x02\b2R\x06status\x12P\n" +
+	"\x11provider_event_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x0fproviderEventAt\x12F\n" +
+	"\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12D\n" +
+	"\n" +
+	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt\"\x93\x01\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aINQUIRY\x10\x01\x12\x12\n" +
+	"\x0eINQUIRY_CLOSED\x10\x02\x12\x12\n" +
+	"\x0eNEEDS_RESPONSE\x10\x03\x12\x10\n" +
+	"\fUNDER_REVIEW\x10\x04\x12\a\n" +
+	"\x03WON\x10\x05\x12\b\n" +
+	"\x04LOST\x10\x06\x12\x17\n" +
+	"\x13UNRECOGNIZED_STATUS\x10\a:\x17\xc2\xf3\x18\x00\xfa\xf4\x18\x0fstripe_webhooks\"\xdf\x01\n" +
 	"\x15ProcessedWebhookEvent\x127\n" +
 	"\x11provider_event_id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x01\x10\x01@\xff\x01R\x0fproviderEventId\x12*\n" +
 	"\n" +
@@ -1300,7 +1611,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\abalance\x18\x02 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\abalance\x12D\n" +
 	"\n" +
 	"updated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt:6\xc2\xf3\x18'\x1a%\n" +
-	"\x15credit_balance_nonneg\x12\fbalance >= 0\xfa\xf4\x18\aprepaid\"\xdb\x02\n" +
+	"\x15credit_balance_nonneg\x12\fbalance >= 0\xfa\xf4\x18\aprepaid\"\xd2\x03\n" +
 	"\vCreditTopup\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12;\n" +
 	"\x13provider_payment_id\x18\x02 \x01(\tB\v\xca\xf3\x18\a\b\x018\x01@\xff\x01R\x11providerPaymentId\x12%\n" +
@@ -1309,7 +1620,11 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"granted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\tgrantedAt\x12F\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x0f\xc2\xf3\x18\x00\xfa\xf4\x18\aprepaid\"\x9b\x03\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x128\n" +
+	"\vcredit_owed\x18\a \x01(\tB\x17\xca\xf3\x18\x13\b\x10(\x01Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\n" +
+	"creditOwed\x12;\n" +
+	"\x0freconciled_step\x18\b \x01(\x03B\x12\xca\xf3\x18\x0e\b\n" +
+	"Y\x00\x00\x00\x00\x00\x00\x00\x00\xa8\x01\x00R\x0ereconciledStep:\x0f\xc2\xf3\x18\x00\xfa\xf4\x18\aprepaid\"\x9b\x03\n" +
 	"\vUsageRecord\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12\x1e\n" +
@@ -1393,48 +1708,56 @@ func file_types_models_proto_rawDescGZIP() []byte {
 	return file_types_models_proto_rawDescData
 }
 
-var file_types_models_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_types_models_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_types_models_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_types_models_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_types_models_proto_goTypes = []any{
 	(Payment_Status)(0),           // 0: w17.contrib.payment.Payment.Status
-	(Subscription_Status)(0),      // 1: w17.contrib.payment.Subscription.Status
-	(*Customer)(nil),              // 2: w17.contrib.payment.Customer
-	(*Payment)(nil),               // 3: w17.contrib.payment.Payment
-	(*Refund)(nil),                // 4: w17.contrib.payment.Refund
-	(*ProcessedWebhookEvent)(nil), // 5: w17.contrib.payment.ProcessedWebhookEvent
-	(*CreditLedger)(nil),          // 6: w17.contrib.payment.CreditLedger
-	(*CreditBalance)(nil),         // 7: w17.contrib.payment.CreditBalance
-	(*CreditTopup)(nil),           // 8: w17.contrib.payment.CreditTopup
-	(*UsageRecord)(nil),           // 9: w17.contrib.payment.UsageRecord
-	(*UsageMeter)(nil),            // 10: w17.contrib.payment.UsageMeter
-	(*Plan)(nil),                  // 11: w17.contrib.payment.Plan
-	(*Subscription)(nil),          // 12: w17.contrib.payment.Subscription
-	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
+	(Refund_Status)(0),            // 1: w17.contrib.payment.Refund.Status
+	(Dispute_Status)(0),           // 2: w17.contrib.payment.Dispute.Status
+	(Subscription_Status)(0),      // 3: w17.contrib.payment.Subscription.Status
+	(*Customer)(nil),              // 4: w17.contrib.payment.Customer
+	(*Payment)(nil),               // 5: w17.contrib.payment.Payment
+	(*Refund)(nil),                // 6: w17.contrib.payment.Refund
+	(*Dispute)(nil),               // 7: w17.contrib.payment.Dispute
+	(*ProcessedWebhookEvent)(nil), // 8: w17.contrib.payment.ProcessedWebhookEvent
+	(*CreditLedger)(nil),          // 9: w17.contrib.payment.CreditLedger
+	(*CreditBalance)(nil),         // 10: w17.contrib.payment.CreditBalance
+	(*CreditTopup)(nil),           // 11: w17.contrib.payment.CreditTopup
+	(*UsageRecord)(nil),           // 12: w17.contrib.payment.UsageRecord
+	(*UsageMeter)(nil),            // 13: w17.contrib.payment.UsageMeter
+	(*Plan)(nil),                  // 14: w17.contrib.payment.Plan
+	(*Subscription)(nil),          // 15: w17.contrib.payment.Subscription
+	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
 }
 var file_types_models_proto_depIdxs = []int32{
-	13, // 0: w17.contrib.payment.Customer.created_at:type_name -> google.protobuf.Timestamp
+	16, // 0: w17.contrib.payment.Customer.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: w17.contrib.payment.Payment.status:type_name -> w17.contrib.payment.Payment.Status
-	13, // 2: w17.contrib.payment.Payment.created_at:type_name -> google.protobuf.Timestamp
-	13, // 3: w17.contrib.payment.Payment.updated_at:type_name -> google.protobuf.Timestamp
-	13, // 4: w17.contrib.payment.Refund.created_at:type_name -> google.protobuf.Timestamp
-	13, // 5: w17.contrib.payment.ProcessedWebhookEvent.received_at:type_name -> google.protobuf.Timestamp
-	13, // 6: w17.contrib.payment.CreditLedger.created_at:type_name -> google.protobuf.Timestamp
-	13, // 7: w17.contrib.payment.CreditBalance.updated_at:type_name -> google.protobuf.Timestamp
-	13, // 8: w17.contrib.payment.CreditTopup.granted_at:type_name -> google.protobuf.Timestamp
-	13, // 9: w17.contrib.payment.CreditTopup.created_at:type_name -> google.protobuf.Timestamp
-	13, // 10: w17.contrib.payment.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
-	13, // 11: w17.contrib.payment.UsageMeter.updated_at:type_name -> google.protobuf.Timestamp
-	13, // 12: w17.contrib.payment.Plan.created_at:type_name -> google.protobuf.Timestamp
-	1,  // 13: w17.contrib.payment.Subscription.status:type_name -> w17.contrib.payment.Subscription.Status
-	13, // 14: w17.contrib.payment.Subscription.current_period_end:type_name -> google.protobuf.Timestamp
-	13, // 15: w17.contrib.payment.Subscription.created_at:type_name -> google.protobuf.Timestamp
-	13, // 16: w17.contrib.payment.Subscription.updated_at:type_name -> google.protobuf.Timestamp
-	13, // 17: w17.contrib.payment.Subscription.provider_event_at:type_name -> google.protobuf.Timestamp
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	16, // 2: w17.contrib.payment.Payment.created_at:type_name -> google.protobuf.Timestamp
+	16, // 3: w17.contrib.payment.Payment.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 4: w17.contrib.payment.Refund.created_at:type_name -> google.protobuf.Timestamp
+	1,  // 5: w17.contrib.payment.Refund.status:type_name -> w17.contrib.payment.Refund.Status
+	2,  // 6: w17.contrib.payment.Dispute.status:type_name -> w17.contrib.payment.Dispute.Status
+	16, // 7: w17.contrib.payment.Dispute.provider_event_at:type_name -> google.protobuf.Timestamp
+	16, // 8: w17.contrib.payment.Dispute.created_at:type_name -> google.protobuf.Timestamp
+	16, // 9: w17.contrib.payment.Dispute.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 10: w17.contrib.payment.ProcessedWebhookEvent.received_at:type_name -> google.protobuf.Timestamp
+	16, // 11: w17.contrib.payment.CreditLedger.created_at:type_name -> google.protobuf.Timestamp
+	16, // 12: w17.contrib.payment.CreditBalance.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 13: w17.contrib.payment.CreditTopup.granted_at:type_name -> google.protobuf.Timestamp
+	16, // 14: w17.contrib.payment.CreditTopup.created_at:type_name -> google.protobuf.Timestamp
+	16, // 15: w17.contrib.payment.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
+	16, // 16: w17.contrib.payment.UsageMeter.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 17: w17.contrib.payment.Plan.created_at:type_name -> google.protobuf.Timestamp
+	3,  // 18: w17.contrib.payment.Subscription.status:type_name -> w17.contrib.payment.Subscription.Status
+	16, // 19: w17.contrib.payment.Subscription.current_period_end:type_name -> google.protobuf.Timestamp
+	16, // 20: w17.contrib.payment.Subscription.created_at:type_name -> google.protobuf.Timestamp
+	16, // 21: w17.contrib.payment.Subscription.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 22: w17.contrib.payment.Subscription.provider_event_at:type_name -> google.protobuf.Timestamp
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_types_models_proto_init() }
@@ -1447,8 +1770,8 @@ func file_types_models_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_types_models_proto_rawDesc), len(file_types_models_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   11,
+			NumEnums:      4,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

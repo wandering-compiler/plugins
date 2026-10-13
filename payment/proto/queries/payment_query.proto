@@ -43,6 +43,48 @@ message GetRefundByIdempotencyKeyResp { Refund refund = 1; }
 message SumRefundsForPaymentReq  { string payment_id = 1 [(w17.field) = { type: UUID }]; }
 message SumRefundsForPaymentResp { string total = 1 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }]; }
 
+// GetDisputeByProviderId — provider_dispute_id is UNIQUE. Gated
+// stripe_webhooks.
+message GetDisputeByProviderIdReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string provider_dispute_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetDisputeByProviderIdResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  Dispute dispute = 1;
+}
+
+// SumLostDisputesForPayment — the amount of a payment's LOST disputes. Gated
+// stripe_webhooks.
+message SumLostDisputesForPaymentReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string payment_id = 1 [(w17.field) = { type: UUID }];
+}
+message SumLostDisputesForPaymentResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string total = 1 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
+}
+
+// SumTopupCredit — the credit a top-up holds in the ledger: the sum of the
+// rows the plugin wrote for it. Reasons and refs are bound, not literal; the
+// handler passes the top-up reasons (callers cannot use them) and both refs
+// a top-up's rows have carried (the provider payment id on the grant, the
+// local payment id on everything else). Gated prepaid.
+message SumTopupCreditReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string user_id             = 1 [(w17.field) = { type: UUID }];
+  string payment_id          = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string provider_payment_id = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string reason_grant        = 4 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string reason_refund       = 5 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string reason_refused      = 6 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string reason_reconcile    = 7 [(w17.field) = { type: SLUG, max_len: 64 }];
+}
+message SumTopupCreditResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string total = 1 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
+}
+
 message GetCreditBalanceReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -217,7 +259,8 @@ service PaymentQuery {
   // GetRefundByProviderId — fetch one Refund by the provider's refund id.
   // RefundPayment reads it when a retried refund (same idempotency key, so
   // the provider replays the same refund object) hits the unique key on
-  // its local INSERT.
+  // its local INSERT; the refund webhooks read it for every refund the
+  // provider lists, to tell a known refund from one made at the provider.
   rpc GetRefundByProviderId(GetRefundByProviderIdReq) returns (GetRefundByProviderIdResp) {
     option (w17.db.method) = {
       ops: {
@@ -228,17 +271,23 @@ service PaymentQuery {
           "       r.provider_refund_id AS refund.provider_refund_id, "
           "       r.amount AS refund.amount, "
           "       r.currency AS refund.currency, "
-          "       r.created_at AS refund.created_at "
+          "       r.created_at AS refund.created_at, "
+          "       r.idempotency_key AS refund.idempotency_key, "
+          "       r.status AS refund.status "
           "FROM @module.Refund r WHERE r.provider_refund_id = :provider_refund_id"
       }
     };
   }
-  // SumRefundsForPayment — what has been refunded of a payment so far.
+  // SumRefundsForPayment — what has been refunded of a payment so far: its
+  // PENDING and SUCCEEDED refunds. A FAILED or CANCELED refund returned
+  // nothing and does not count; a PENDING one does, because the provider
+  // already counts it against the refundable amount (and reports the charge
+  // fully refunded on it).
   rpc SumRefundsForPayment(SumRefundsForPaymentReq) returns (SumRefundsForPaymentResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT COALESCE(SUM(r.amount), 0) AS total FROM @module.Refund r WHERE r.payment_id = :payment_id"
+        dql: "SELECT COALESCE(SUM(r.amount), 0) AS total FROM @module.Refund r WHERE r.payment_id = :payment_id AND r.status <> 3 AND r.status <> 4"
       }
     };
   }
@@ -256,8 +305,60 @@ service PaymentQuery {
           "       r.amount AS refund.amount, "
           "       r.currency AS refund.currency, "
           "       r.created_at AS refund.created_at, "
-          "       r.idempotency_key AS refund.idempotency_key "
+          "       r.idempotency_key AS refund.idempotency_key, "
+          "       r.status AS refund.status "
           "FROM @module.Refund r WHERE r.idempotency_key = :idempotency_key"
+      }
+    };
+  }
+
+  // GetDisputeByProviderId — one Dispute by the provider's dispute id. The
+  // webhook reads it when MarkDisputeStatus matched no row: a row that exists
+  // is already closed or newer (acknowledge), a missing one is created.
+  rpc GetDisputeByProviderId(GetDisputeByProviderIdReq) returns (GetDisputeByProviderIdResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS dispute.id, "
+          "       d.payment_id AS dispute.payment_id, "
+          "       d.provider_dispute_id AS dispute.provider_dispute_id, "
+          "       d.amount AS dispute.amount, "
+          "       d.currency AS dispute.currency, "
+          "       d.status AS dispute.status, "
+          "       d.provider_event_at AS dispute.provider_event_at, "
+          "       d.created_at AS dispute.created_at, "
+          "       d.updated_at AS dispute.updated_at "
+          "FROM @module.Dispute d WHERE d.provider_dispute_id = :provider_dispute_id"
+      }
+    };
+  }
+
+  // SumLostDisputesForPayment — what a payment lost to disputes; part of a
+  // top-up's reconciliation target. Gated stripe_webhooks.
+  rpc SumLostDisputesForPayment(SumLostDisputesForPaymentReq) returns (SumLostDisputesForPaymentResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT COALESCE(SUM(d.amount), 0) AS total FROM @module.Dispute d WHERE d.payment_id = :payment_id AND d.status = 6"
+      }
+    };
+  }
+
+  // SumTopupCredit — the credit a top-up holds in the ledger (see the
+  // message). Served by the user_id index. Gated prepaid.
+  rpc SumTopupCredit(SumTopupCreditReq) returns (SumTopupCreditResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT COALESCE(SUM(l.delta), 0) AS total FROM @module.CreditLedger l "
+          "WHERE l.user_id = :user_id "
+          "AND (l.ref = :payment_id OR l.ref = :provider_payment_id) "
+          "AND (l.reason = :reason_grant OR l.reason = :reason_refund OR l.reason = :reason_refused OR l.reason = :reason_reconcile)"
       }
     };
   }
@@ -316,7 +417,9 @@ service PaymentQuery {
           "       t.user_id AS topup.user_id, "
           "       t.amount AS topup.amount, "
           "       t.granted_at AS topup.granted_at, "
-          "       t.created_at AS topup.created_at "
+          "       t.created_at AS topup.created_at, "
+          "       t.credit_owed AS topup.credit_owed, "
+          "       t.reconciled_step AS topup.reconciled_step "
           "FROM @module.CreditTopup t WHERE t.provider_payment_id = :provider_payment_id"
       }
     };

@@ -138,7 +138,7 @@ func (b *Backend) RefundPayment(ctx context.Context, providerPaymentID string, a
 	if err := b.post(ctx, "/v1/refunds", form, idemKey, &resp); err != nil {
 		return backend.RefundResult{}, err
 	}
-	return backend.RefundResult{ProviderRefundID: resp.ID, Status: resp.Status}, nil
+	return backend.RefundResult{ProviderRefundID: resp.ID, Status: resp.Status, Key: idemKey}, nil
 }
 
 // refundKeyMeta is the refund metadata key carrying the caller's
@@ -146,32 +146,49 @@ func (b *Backend) RefundPayment(ctx context.Context, providerPaymentID string, a
 const refundKeyMeta = "w17_refund"
 
 // FindRefund looks for a refund of the PaymentIntent made under idemKey,
-// by the key RefundPayment stores in the refund's metadata. It walks the
-// intent's refunds page by page; a PaymentIntent has few.
+// by the key RefundPayment stores in the refund's metadata.
 func (b *Backend) FindRefund(ctx context.Context, providerPaymentID, idemKey string) (backend.RefundResult, bool, error) {
+	refunds, err := b.ListRefunds(ctx, providerPaymentID)
+	if err != nil {
+		return backend.RefundResult{}, false, err
+	}
+	for _, r := range refunds {
+		if r.Key == idemKey {
+			return r, true, nil
+		}
+	}
+	return backend.RefundResult{}, false, nil
+}
+
+// ListRefunds walks the PaymentIntent's refunds page by page; a PaymentIntent
+// has few.
+func (b *Backend) ListRefunds(ctx context.Context, providerPaymentID string) ([]backend.RefundResult, error) {
 	q := url.Values{}
 	q.Set("payment_intent", providerPaymentID)
 	q.Set("limit", "100")
+	var out []backend.RefundResult
 	for page := 0; page < 20; page++ {
 		var list refundList
 		if err := b.get(ctx, "/v1/refunds", q, &list); err != nil {
-			return backend.RefundResult{}, false, err
+			return nil, err
 		}
 		for _, r := range list.Data {
-			if r.Metadata[refundKeyMeta] == idemKey {
-				return backend.RefundResult{
-					ProviderRefundID: r.ID,
-					Status:           r.Status,
-					Amount:           backend.Money{Amount: fromMinorUnits(r.Amount, r.Currency), Currency: r.Currency},
-				}, true, nil
+			if r.ID == "" {
+				return nil, fmt.Errorf("stripe: /v1/refunds: a refund on %s without an id", providerPaymentID)
 			}
+			out = append(out, backend.RefundResult{
+				ProviderRefundID: r.ID,
+				Status:           r.Status,
+				Amount:           backend.Money{Amount: fromMinorUnits(r.Amount, r.Currency), Currency: r.Currency},
+				Key:              r.Metadata[refundKeyMeta],
+			})
 		}
 		if !list.HasMore || len(list.Data) == 0 {
-			return backend.RefundResult{}, false, nil
+			return out, nil
 		}
 		q.Set("starting_after", list.Data[len(list.Data)-1].ID)
 	}
-	return backend.RefundResult{}, false, fmt.Errorf("stripe: /v1/refunds: more refunds on %s than this lookup walks", providerPaymentID)
+	return nil, fmt.Errorf("stripe: /v1/refunds: more refunds on %s than this lookup walks", providerPaymentID)
 }
 
 // UpsertPlan creates a recurring Stripe Price (with an inline product)

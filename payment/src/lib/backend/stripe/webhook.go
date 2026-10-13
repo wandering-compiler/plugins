@@ -51,12 +51,17 @@ type Event struct {
 	// installation that created the object (backend.InstallID); empty on
 	// objects no installation marked.
 	Install string
-	// ChargePaymentIntent and ChargeRefunded are data.object.payment_intent
-	// and data.object.refunded on charge.* events: the payment a charge
-	// belongs to, and whether the charge is fully refunded.
+	// ChargePaymentIntent is data.object.payment_intent: the payment a
+	// charge, a refund or a dispute belongs to (charge.*, refund.*,
+	// charge.dispute.* events). ChargeRefunded is data.object.refunded on a
+	// charge: whether it is fully refunded.
 	ChargePaymentIntent string
 	ChargeRefunded      bool
-	Raw                 []byte
+	// Amount is data.object.amount with data.object.currency, as a decimal
+	// of the currency (a dispute's disputed amount, a refund's amount);
+	// empty when the object carries no currency.
+	Amount backend.Money
+	Raw    []byte
 }
 
 // ErrBadSignature is returned when the Stripe-Signature HMAC does not
@@ -128,7 +133,12 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 	if raw.ID == "" || raw.Type == "" {
 		return Event{}, fmt.Errorf("stripe: malformed webhook body: missing event id or type")
 	}
+	var amount backend.Money
+	if cur := strings.ToLower(raw.Data.Object.Currency); cur != "" {
+		amount = backend.Money{Amount: fromMinorUnits(raw.Data.Object.Amount, cur), Currency: cur}
+	}
 	return Event{
+		Amount:              amount,
 		ID:                  raw.ID,
 		Type:                raw.Type,
 		ObjectID:            raw.Data.Object.ID,

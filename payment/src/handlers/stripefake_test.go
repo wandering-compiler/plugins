@@ -52,8 +52,11 @@ type stripeFake struct {
 	subStatus string            // status a created subscription reports ("" = active)
 	origins   map[string]string // object id → metadata[w17_payment] it was created with
 	installs  map[string]string // object id → metadata[w17_install] it was created with
-	refunds   []fakeRefund      // in creation order
-	subs      []fakeSub         // in creation order
+	refunds   []*fakeRefund     // in creation order
+	// refundStatus is the status a created refund answers with ("" =
+	// succeeded); setRefundStatus moves one later.
+	refundStatus string
+	subs         []fakeSub // in creation order
 }
 
 type fakeSub struct {
@@ -62,6 +65,7 @@ type fakeSub struct {
 
 type fakeRefund struct {
 	id, intent, currency, key string // key = metadata[w17_refund]
+	status                    string
 	amount                    int64
 }
 
@@ -268,10 +272,16 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 			return stripeErr(w, http.StatusBadRequest, "invalid_request_error",
 				"Refund amount is greater than unrefunded amount on charge")
 		}
-		in.refunded += amount
-		re := fakeRefund{id: f.id("re"), intent: in.id, currency: in.currency, amount: amount, key: r.PostForm.Get("metadata[w17_refund]")}
+		st := f.refundStatus
+		if st == "" {
+			st = "succeeded"
+		}
+		if st != "failed" && st != "canceled" {
+			in.refunded += amount
+		}
+		re := &fakeRefund{id: f.id("re"), intent: in.id, currency: in.currency, amount: amount, key: r.PostForm.Get("metadata[w17_refund]"), status: st}
 		f.refunds = append(f.refunds, re)
-		return okJSON(map[string]any{"id": re.id, "object": "refund", "amount": amount, "status": "succeeded",
+		return okJSON(map[string]any{"id": re.id, "object": "refund", "amount": amount, "status": st,
 			"metadata": map[string]string{"w17_refund": re.key}})
 
 	case "/v1/prices":
@@ -385,8 +395,12 @@ func (f *stripeFake) listRefunds(w http.ResponseWriter, r *http.Request) {
 	var data []map[string]any
 	for _, re := range f.refunds {
 		if re.intent == r.URL.Query().Get("payment_intent") {
-			data = append(data, map[string]any{"id": re.id, "object": "refund", "status": "succeeded",
-				"amount": re.amount, "currency": re.currency, "metadata": map[string]string{"w17_refund": re.key}})
+			md := map[string]string{}
+			if re.key != "" {
+				md["w17_refund"] = re.key
+			}
+			data = append(data, map[string]any{"id": re.id, "object": "refund", "status": re.status,
+				"amount": re.amount, "currency": re.currency, "payment_intent": re.intent, "metadata": md})
 		}
 	}
 	body, _ := json.Marshal(map[string]any{"object": "list", "data": data, "has_more": false})
@@ -414,4 +428,72 @@ func (f *stripeFake) listSubs(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(map[string]any{"object": "list", "data": data, "has_more": false})
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
+}
+
+// refundAtProvider makes a refund the way the provider's dashboard does: no
+// idempotency key, no metadata. It returns the refund id.
+func (f *stripeFake) refundAtProvider(intent string, amount int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	in, ok := f.intents[intent]
+	if !ok {
+		f.t.Fatalf("refundAtProvider: no intent %s", intent)
+	}
+	if amount > in.amount-in.refunded {
+		f.t.Fatalf("refundAtProvider: %d exceeds what is left on %s", amount, intent)
+	}
+	in.refunded += amount
+	re := &fakeRefund{id: f.id("re"), intent: intent, currency: in.currency, amount: amount, status: "succeeded"}
+	f.refunds = append(f.refunds, re)
+	return re.id
+}
+
+// setRefundStatus moves a refund to another status, as the provider does when
+// a refund settles or fails. A failed or canceled refund's amount is
+// refundable again.
+func (f *stripeFake) setRefundStatus(id, st string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, re := range f.refunds {
+		if re.id != id {
+			continue
+		}
+		gone := func(s string) bool { return s == "failed" || s == "canceled" }
+		if in := f.intents[re.intent]; in != nil && gone(st) != gone(re.status) {
+			if gone(st) {
+				in.refunded -= re.amount
+			} else {
+				in.refunded += re.amount
+			}
+		}
+		re.status = st
+		return
+	}
+	f.t.Fatalf("setRefundStatus: no refund %s", id)
+}
+
+// lastRefundID is the id of the newest refund.
+func (f *stripeFake) lastRefundID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.refunds) == 0 {
+		f.t.Fatal("lastRefundID: no refund")
+	}
+	return f.refunds[len(f.refunds)-1].id
+}
+
+// refundEvent renders a refund.* / charge.refunded event naming the payment
+// the refunds belong to. The handler reads the refunds from the provider's
+// list, so the snapshot carries only what routes it.
+func refundEvent(id, typ, objectID, intent string) []byte {
+	return eventJSON(id, typ, objectID, map[string]any{"payment_intent": intent})
+}
+
+// disputeEvent renders a charge.dispute.* event for a dispute of amount
+// (minor units, usd) on intent, in the given status, created at unix time at.
+func disputeEvent(t *testing.T, id, typ, disputeID, intent, st string, amount, at int64) []byte {
+	t.Helper()
+	return withCreated(t, eventJSON(id, typ, disputeID, map[string]any{
+		"payment_intent": intent, "status": st, "amount": amount, "currency": "usd",
+	}), at)
 }

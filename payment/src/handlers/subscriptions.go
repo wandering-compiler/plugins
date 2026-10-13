@@ -272,16 +272,6 @@ func unixToTimestamp(sec int64) *timestamppb.Timestamp {
 	return timestamppb.New(time.Unix(sec, 0).UTC())
 }
 
-// eventTime is the provider's creation time of an event — its order, which
-// delivery order is not. An event without one (the provider always sends it)
-// counts as now.
-func eventTime(unix int64) *timestamppb.Timestamp {
-	if unix <= 0 {
-		return timestamppb.Now()
-	}
-	return timestamppb.New(time.Unix(unix, 0))
-}
-
 // GetMySubscription returns one of the caller's subscriptions. Another
 // customer's subscription answers NotFound.
 func (h *PaymentServiceHandler) GetMySubscription(ctx context.Context, req *pb.GetMySubscriptionReq) (*pb.GetSubscriptionResp, error) {

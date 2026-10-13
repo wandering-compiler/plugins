@@ -9,7 +9,8 @@ syntax = "proto3";
 // mutations (MarkPaymentSucceeded / MarkPaymentFailed / MarkPaymentCanceled
 // / MarkPaymentRefunded) AFTER the provider confirms — never speculatively
 // at intent time. PaymentRefunded also fires from RefundPayment once its
-// refund completes the amount.
+// refund completes the amount; PaymentRefundReversed fires when a refund that
+// completed it later fails.
 //
 // Channel reference uses the plugin-internal alias `events`; the
 // activation maps it to a real project channel (NATS / Redis /
@@ -71,6 +72,23 @@ message PaymentRefunded {
   string                    amount              = 4;
   string                    currency            = 5;
   google.protobuf.Timestamp refunded_at         = 6;
+}
+
+// PaymentRefundReversed — a payment that read REFUNDED is SUCCEEDED again:
+// a refund that completed its amount later failed (or was canceled) at the
+// provider, so the money stayed with the merchant. A subscriber that acted on
+// PaymentRefunded (revoked access, closed an order) undoes that here.
+message PaymentRefundReversed {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.payment.refund_reversed"
+  };
+  string                    payment_id          = 1;
+  string                    customer_id         = 2;
+  string                    provider_payment_id = 3;
+  string                    amount              = 4;
+  string                    currency            = 5;
+  google.protobuf.Timestamp reversed_at         = 6;
 }
 
 // PaymentCanceled — the provider canceled a payment that never completed

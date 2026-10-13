@@ -34,6 +34,9 @@ const (
 	PaymentQuery_GetRefundByProviderId_FullMethodName       = "/w17.contrib.payment.PaymentQuery/GetRefundByProviderId"
 	PaymentQuery_SumRefundsForPayment_FullMethodName        = "/w17.contrib.payment.PaymentQuery/SumRefundsForPayment"
 	PaymentQuery_GetRefundByIdempotencyKey_FullMethodName   = "/w17.contrib.payment.PaymentQuery/GetRefundByIdempotencyKey"
+	PaymentQuery_GetDisputeByProviderId_FullMethodName      = "/w17.contrib.payment.PaymentQuery/GetDisputeByProviderId"
+	PaymentQuery_SumLostDisputesForPayment_FullMethodName   = "/w17.contrib.payment.PaymentQuery/SumLostDisputesForPayment"
+	PaymentQuery_SumTopupCredit_FullMethodName              = "/w17.contrib.payment.PaymentQuery/SumTopupCredit"
 	PaymentQuery_GetCreditBalance_FullMethodName            = "/w17.contrib.payment.PaymentQuery/GetCreditBalance"
 	PaymentQuery_GetCreditLedgerByKey_FullMethodName        = "/w17.contrib.payment.PaymentQuery/GetCreditLedgerByKey"
 	PaymentQuery_GetCreditTopupByProviderId_FullMethodName  = "/w17.contrib.payment.PaymentQuery/GetCreditTopupByProviderId"
@@ -75,13 +78,28 @@ type PaymentQueryClient interface {
 	// GetRefundByProviderId — fetch one Refund by the provider's refund id.
 	// RefundPayment reads it when a retried refund (same idempotency key, so
 	// the provider replays the same refund object) hits the unique key on
-	// its local INSERT.
+	// its local INSERT; the refund webhooks read it for every refund the
+	// provider lists, to tell a known refund from one made at the provider.
 	GetRefundByProviderId(ctx context.Context, in *GetRefundByProviderIdReq, opts ...grpc.CallOption) (*GetRefundByProviderIdResp, error)
-	// SumRefundsForPayment — what has been refunded of a payment so far.
+	// SumRefundsForPayment — what has been refunded of a payment so far: its
+	// PENDING and SUCCEEDED refunds. A FAILED or CANCELED refund returned
+	// nothing and does not count; a PENDING one does, because the provider
+	// already counts it against the refundable amount (and reports the charge
+	// fully refunded on it).
 	SumRefundsForPayment(ctx context.Context, in *SumRefundsForPaymentReq, opts ...grpc.CallOption) (*SumRefundsForPaymentResp, error)
 	// GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
 	// already produced, looked up before the provider is asked again.
 	GetRefundByIdempotencyKey(ctx context.Context, in *GetRefundByIdempotencyKeyReq, opts ...grpc.CallOption) (*GetRefundByIdempotencyKeyResp, error)
+	// GetDisputeByProviderId — one Dispute by the provider's dispute id. The
+	// webhook reads it when MarkDisputeStatus matched no row: a row that exists
+	// is already closed or newer (acknowledge), a missing one is created.
+	GetDisputeByProviderId(ctx context.Context, in *GetDisputeByProviderIdReq, opts ...grpc.CallOption) (*GetDisputeByProviderIdResp, error)
+	// SumLostDisputesForPayment — what a payment lost to disputes; part of a
+	// top-up's reconciliation target. Gated stripe_webhooks.
+	SumLostDisputesForPayment(ctx context.Context, in *SumLostDisputesForPaymentReq, opts ...grpc.CallOption) (*SumLostDisputesForPaymentResp, error)
+	// SumTopupCredit — the credit a top-up holds in the ledger (see the
+	// message). Served by the user_id index. Gated prepaid.
+	SumTopupCredit(ctx context.Context, in *SumTopupCreditReq, opts ...grpc.CallOption) (*SumTopupCreditResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
@@ -199,6 +217,36 @@ func (c *paymentQueryClient) GetRefundByIdempotencyKey(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *paymentQueryClient) GetDisputeByProviderId(ctx context.Context, in *GetDisputeByProviderIdReq, opts ...grpc.CallOption) (*GetDisputeByProviderIdResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetDisputeByProviderIdResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetDisputeByProviderId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) SumLostDisputesForPayment(ctx context.Context, in *SumLostDisputesForPaymentReq, opts ...grpc.CallOption) (*SumLostDisputesForPaymentResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SumLostDisputesForPaymentResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_SumLostDisputesForPayment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) SumTopupCredit(ctx context.Context, in *SumTopupCreditReq, opts ...grpc.CallOption) (*SumTopupCreditResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SumTopupCreditResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_SumTopupCredit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *paymentQueryClient) GetCreditBalance(ctx context.Context, in *GetCreditBalanceReq, opts ...grpc.CallOption) (*GetCreditBalanceResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCreditBalanceResp)
@@ -310,13 +358,28 @@ type PaymentQueryServer interface {
 	// GetRefundByProviderId — fetch one Refund by the provider's refund id.
 	// RefundPayment reads it when a retried refund (same idempotency key, so
 	// the provider replays the same refund object) hits the unique key on
-	// its local INSERT.
+	// its local INSERT; the refund webhooks read it for every refund the
+	// provider lists, to tell a known refund from one made at the provider.
 	GetRefundByProviderId(context.Context, *GetRefundByProviderIdReq) (*GetRefundByProviderIdResp, error)
-	// SumRefundsForPayment — what has been refunded of a payment so far.
+	// SumRefundsForPayment — what has been refunded of a payment so far: its
+	// PENDING and SUCCEEDED refunds. A FAILED or CANCELED refund returned
+	// nothing and does not count; a PENDING one does, because the provider
+	// already counts it against the refundable amount (and reports the charge
+	// fully refunded on it).
 	SumRefundsForPayment(context.Context, *SumRefundsForPaymentReq) (*SumRefundsForPaymentResp, error)
 	// GetRefundByIdempotencyKey — the refund a caller's key (stored hashed)
 	// already produced, looked up before the provider is asked again.
 	GetRefundByIdempotencyKey(context.Context, *GetRefundByIdempotencyKeyReq) (*GetRefundByIdempotencyKeyResp, error)
+	// GetDisputeByProviderId — one Dispute by the provider's dispute id. The
+	// webhook reads it when MarkDisputeStatus matched no row: a row that exists
+	// is already closed or newer (acknowledge), a missing one is created.
+	GetDisputeByProviderId(context.Context, *GetDisputeByProviderIdReq) (*GetDisputeByProviderIdResp, error)
+	// SumLostDisputesForPayment — what a payment lost to disputes; part of a
+	// top-up's reconciliation target. Gated stripe_webhooks.
+	SumLostDisputesForPayment(context.Context, *SumLostDisputesForPaymentReq) (*SumLostDisputesForPaymentResp, error)
+	// SumTopupCredit — the credit a top-up holds in the ledger (see the
+	// message). Served by the user_id index. Gated prepaid.
+	SumTopupCredit(context.Context, *SumTopupCreditReq) (*SumTopupCreditResp, error)
 	// GetCreditBalance — read the materialized prepaid balance for a
 	// principal (empty result = no credits ever applied → treat as zero).
 	// Gated prepaid.
@@ -383,6 +446,15 @@ func (UnimplementedPaymentQueryServer) SumRefundsForPayment(context.Context, *Su
 }
 func (UnimplementedPaymentQueryServer) GetRefundByIdempotencyKey(context.Context, *GetRefundByIdempotencyKeyReq) (*GetRefundByIdempotencyKeyResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRefundByIdempotencyKey not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetDisputeByProviderId(context.Context, *GetDisputeByProviderIdReq) (*GetDisputeByProviderIdResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetDisputeByProviderId not implemented")
+}
+func (UnimplementedPaymentQueryServer) SumLostDisputesForPayment(context.Context, *SumLostDisputesForPaymentReq) (*SumLostDisputesForPaymentResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method SumLostDisputesForPayment not implemented")
+}
+func (UnimplementedPaymentQueryServer) SumTopupCredit(context.Context, *SumTopupCreditReq) (*SumTopupCreditResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method SumTopupCredit not implemented")
 }
 func (UnimplementedPaymentQueryServer) GetCreditBalance(context.Context, *GetCreditBalanceReq) (*GetCreditBalanceResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCreditBalance not implemented")
@@ -550,6 +622,60 @@ func _PaymentQuery_GetRefundByIdempotencyKey_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentQueryServer).GetRefundByIdempotencyKey(ctx, req.(*GetRefundByIdempotencyKeyReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_GetDisputeByProviderId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDisputeByProviderIdReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetDisputeByProviderId(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetDisputeByProviderId_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetDisputeByProviderId(ctx, req.(*GetDisputeByProviderIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_SumLostDisputesForPayment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SumLostDisputesForPaymentReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).SumLostDisputesForPayment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_SumLostDisputesForPayment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).SumLostDisputesForPayment(ctx, req.(*SumLostDisputesForPaymentReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_SumTopupCredit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SumTopupCreditReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).SumTopupCredit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_SumTopupCredit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).SumTopupCredit(ctx, req.(*SumTopupCreditReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -732,6 +858,18 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRefundByIdempotencyKey",
 			Handler:    _PaymentQuery_GetRefundByIdempotencyKey_Handler,
+		},
+		{
+			MethodName: "GetDisputeByProviderId",
+			Handler:    _PaymentQuery_GetDisputeByProviderId_Handler,
+		},
+		{
+			MethodName: "SumLostDisputesForPayment",
+			Handler:    _PaymentQuery_SumLostDisputesForPayment_Handler,
+		},
+		{
+			MethodName: "SumTopupCredit",
+			Handler:    _PaymentQuery_SumTopupCredit_Handler,
 		},
 		{
 			MethodName: "GetCreditBalance",

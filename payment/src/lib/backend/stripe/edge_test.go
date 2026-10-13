@@ -504,6 +504,64 @@ func TestFindRefund_ReportsTheAmount(t *testing.T) {
 	}
 }
 
+// ListRefunds reports every refund of the intent, across pages, in its
+// current state: status, amount, and the key RefundPayment stored (none on a
+// refund made at the provider directly).
+func TestListRefunds_EveryRefundWithItsStateAcrossPages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/refunds" || r.URL.Query().Get("payment_intent") != "pi_9" {
+			t.Errorf("request = %s %s", r.Method, r.URL)
+		}
+		if r.URL.Query().Get("starting_after") == "" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"re_1","status":"failed","amount":400,"currency":"usd","metadata":{"w17_refund":"rk"}}],"has_more":true}`))
+			return
+		}
+		if r.URL.Query().Get("starting_after") != "re_1" {
+			t.Errorf("starting_after = %q", r.URL.Query().Get("starting_after"))
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"re_2","status":"pending","amount":250,"currency":"usd","metadata":{}}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	got, err := testBackend(srv).ListRefunds(context.Background(), "pi_9")
+	want := []backend.RefundResult{
+		{ProviderRefundID: "re_1", Status: "failed", Amount: backend.Money{Amount: "4.00", Currency: "usd"}, Key: "rk"},
+		{ProviderRefundID: "re_2", Status: "pending", Amount: backend.Money{Amount: "2.50", Currency: "usd"}},
+	}
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("ListRefunds = %+v, %v", got, err)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("refund %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// A listed refund without an id cannot be recorded or matched: the listing
+// fails rather than answer an empty id.
+func TestListRefunds_RefusesARefundWithoutAnID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"status":"succeeded","amount":1,"currency":"usd"}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	if got, err := testBackend(srv).ListRefunds(context.Background(), "pi_9"); err == nil {
+		t.Fatalf("ListRefunds = %+v, want an error", got)
+	}
+}
+
+// RefundPayment reports the provider's status for the refund it made, and the
+// key it stored on it.
+func TestRefundPayment_ReportsTheOutcome(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"re_1","status":"pending","amount":500,"currency":"usd"}`))
+	}))
+	defer srv.Close()
+	res, err := testBackend(srv).RefundPayment(context.Background(), "pi_9", backend.Money{Amount: "5", Currency: "usd"}, "rk")
+	if err != nil || res.ProviderRefundID != "re_1" || res.Status != "pending" || res.Key != "rk" {
+		t.Fatalf("RefundPayment = %+v, %v", res, err)
+	}
+}
+
 // FindSubscription lists every status (a canceled subscription still holds
 // its key) and reports the price the subscription is on.
 func TestFindSubscription_AllStatusesAndThePrice(t *testing.T) {

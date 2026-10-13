@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/plugins/payment/lib/backend"
 	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
@@ -143,16 +144,12 @@ func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) 
 			err = h.requirePayment(ctx, ev)
 		}
 		return err
-	case ev.Type == "charge.refunded" && ev.ChargeRefunded && ev.ChargePaymentIntent != "":
-		// The charge is fully refunded — however many refunds it took, and
-		// whether or not they were made through this plugin.
-		_, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{
-			ProviderPaymentId: ev.ChargePaymentIntent,
-		})
-		if guardRefused(err) {
-			return h.refundNotSettled(ctx, ev.ChargePaymentIntent)
-		}
-		return err
+	case isRefundEvent(ev.Type):
+		// A refund was made, or its outcome changed — through this plugin
+		// or at the provider directly.
+		return h.reconcileRefunds(ctx, ev.ChargePaymentIntent)
+	case strings.HasPrefix(ev.Type, "charge.dispute."):
+		return h.reconcileDispute(ctx, ev)
 	case strings.HasPrefix(ev.Type, "customer.subscription."):
 		// Cross-feature: reconcile subscription lifecycle (subscriptions
 		// feature; no-op when off — hook is nil). The hook resolves its
@@ -183,6 +180,293 @@ func (h *PaymentServiceHandler) requirePayment(ctx context.Context, ev stripe.Ev
 		return nil
 	}
 	return errNoLocalRecord
+}
+
+// isRefundEvent reports whether an event type announces a refund or a change
+// of its outcome: charge.refunded (a Charge, partly or fully refunded) and the
+// Refund events (refund.created / refund.updated / refund.failed, and the
+// older charge.refund.updated). All carry the PaymentIntent the refunds
+// belong to as data.object.payment_intent.
+func isRefundEvent(typ string) bool {
+	return typ == "charge.refunded" || typ == "charge.refund.updated" || strings.HasPrefix(typ, "refund.")
+}
+
+// reconcileRefunds brings a payment's local refunds and status in line with
+// the provider's refunds of it.
+//
+// The provider's CURRENT list is the truth, not the event's own snapshot. A
+// snapshot is as old as its event and events arrive in any order: a
+// charge.refunded that says "fully refunded", delivered after the refund.failed
+// that undid it, would put REFUNDED back. Nor does every snapshot name the
+// refunds (a Charge stopped embedding them in newer API versions), and only
+// the list says which refunds this plugin has not recorded — those made at the
+// provider directly.
+//
+// A refund recorded FAILED or CANCELED stays so whatever a later read says:
+// the provider never revives one, so a read that disagrees is older than the
+// failure (MarkRefundStatus is guarded the same way).
+//
+// Every refund first: an unknown one is recorded, a known one takes the
+// provider's outcome. Then the payment's status, from the LOCAL rows — never
+// from this read, which a concurrent delivery may already have overtaken
+// (settleRefundedStatus). Then a top-up's credit, from the same rows
+// (reconcileTopupCredit). Every step is idempotent, and any failure leaves
+// the event unrecorded, so the provider's redelivery runs the whole
+// reconciliation again.
+func (h *PaymentServiceHandler) reconcileRefunds(ctx context.Context, providerPaymentID string) error {
+	if providerPaymentID == "" {
+		return nil // a charge without a PaymentIntent: never one this plugin made
+	}
+	payment, err := h.paymentByProviderID(ctx, providerPaymentID)
+	if err != nil || payment == nil {
+		// No local payment: not this installation's. A refund needs a
+		// succeeded payment, whose row landed before its client secret left.
+		return err
+	}
+	refunds, err := h.Backend.ListRefunds(ctx, providerPaymentID)
+	if err != nil {
+		return providerFailure(err)
+	}
+	for _, r := range refunds {
+		got, err := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: r.ProviderRefundID})
+		if err != nil && !absent(err) {
+			return err
+		}
+		sr := seenRefund{RefundResult: r, row: got.GetRefund(), outcome: mapRefundStatus(r.Status)}
+		if sr.row != nil && !refundCounts(sr.row.GetStatus()) {
+			sr.outcome = sr.row.GetStatus()
+		}
+		if err := h.reconcileRefund(ctx, payment, sr); err != nil {
+			return err
+		}
+	}
+	if err := h.settleRefundedStatus(ctx, payment); err != nil {
+		return err
+	}
+	return reconcileTopupCredit(ctx, h, payment)
+}
+
+// seenRefund is one provider refund with its local row (nil when none) and
+// the outcome to record.
+type seenRefund struct {
+	backend.RefundResult
+	row     *pb.Refund
+	outcome pb.Refund_Status
+}
+
+// settleRefundedStatus moves the payment to REFUNDED once its recorded
+// pending and succeeded refunds reach its amount, and back to SUCCEEDED when a
+// refund that had completed it has since failed (PaymentRefundReversed).
+//
+// Two deliveries can race: one about to mark REFUNDED from rows it read while
+// the refund still counted, one that has just recorded the refund's failure
+// and found the payment not REFUNDED yet, so nothing to reverse. Each writes
+// first and reads the other's half after: the marker re-reads the rows once
+// REFUNDED has landed and reverses it if they no longer reach the amount, so
+// whichever runs last sees both writes and the payment cannot stay REFUNDED
+// on a failed refund. (The cost is a PaymentRefunded followed by a
+// PaymentRefundReversed in that interleaving.)
+func (h *PaymentServiceHandler) settleRefundedStatus(ctx context.Context, payment *pb.Payment) error {
+	pid := payment.GetProviderPaymentId()
+	full, err := h.refundedInFull(ctx, payment)
+	if err != nil {
+		return err
+	}
+	if full {
+		_, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: pid})
+		if guardRefused(err) {
+			err = h.refundNotSettled(ctx, pid)
+		}
+		if err != nil {
+			return err
+		}
+		if full, err = h.refundedInFull(ctx, payment); err != nil || full {
+			return err
+		}
+	}
+	if _, err := h.Mutation.MarkPaymentRefundReversed(ctx, &pb.MarkPaymentRefundReversedReq{ProviderPaymentId: pid}); err != nil && !guardRefused(err) {
+		return err // refused: not REFUNDED, nothing to reverse
+	}
+	return nil
+}
+
+// refundedInFull reports whether the payment's recorded pending and succeeded
+// refunds reach its amount.
+func (h *PaymentServiceHandler) refundedInFull(ctx context.Context, payment *pb.Payment) (bool, error) {
+	sum, err := h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
+	if err != nil {
+		return false, err
+	}
+	return decimalAtLeast(sum.GetTotal(), payment.GetAmount()), nil
+}
+
+// reconcileRefund applies one provider refund to its local row.
+func (h *PaymentServiceHandler) reconcileRefund(ctx context.Context, payment *pb.Payment, r seenRefund) error {
+	outcome, row := r.outcome, r.row
+	if row == nil {
+		var err error
+		if row, err = h.recordProviderRefund(ctx, payment, r.RefundResult, outcome); err != nil {
+			return err
+		}
+	}
+	if row.GetStatus() != outcome {
+		// Guarded: FAILED and CANCELED never move back, so an older state
+		// (from a lagging read) changes nothing.
+		if _, err := h.Mutation.MarkRefundStatus(ctx, &pb.MarkRefundStatusReq{
+			ProviderRefundId: r.ProviderRefundID,
+			Status:           int32(outcome),
+		}); err != nil && !guardRefused(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// recordProviderRefund records a provider refund no local row knows.
+//
+// One carrying a RefundPayment key is this plugin's own, whose local insert
+// has not landed (it is in flight, or it failed and the caller has not
+// retried). It is recorded under that key, so the caller's retry finds it.
+// One without a key was made at the provider directly. Either way a top-up's
+// credit follows from the rows (reconcileTopupCredit), not from here.
+//
+// A concurrent writer (the other delivery, or RefundPayment itself) recording
+// it first is the answer: its row is returned.
+func (h *PaymentServiceHandler) recordProviderRefund(ctx context.Context, payment *pb.Payment, r backend.RefundResult, outcome pb.Refund_Status) (*pb.Refund, error) {
+	currency := r.Amount.Currency
+	if currency == "" {
+		currency = payment.GetCurrency()
+	}
+	var created interface{ GetRefund() *pb.Refund }
+	var err error
+	if r.Key != "" {
+		created, err = h.Mutation.CreateRefund(ctx, &pb.CreateRefundReq{
+			PaymentId:        payment.GetId(),
+			ProviderRefundId: r.ProviderRefundID,
+			Amount:           r.Amount.Amount,
+			Currency:         currency,
+			IdempotencyKey:   refundKey(r.Key),
+			Status:           int32(outcome),
+		})
+	}
+	if r.Key == "" || (constraintCode(err) == codeUniqueViolation && !h.refundRecorded(ctx, r.ProviderRefundID)) {
+		// No key, or a key some other refund already holds (refused at
+		// RefundPayment, so not one it made): recorded without the key.
+		created, err = h.Mutation.RecordProviderRefund(ctx, &pb.RecordProviderRefundReq{
+			PaymentId:        payment.GetId(),
+			ProviderRefundId: r.ProviderRefundID,
+			Amount:           r.Amount.Amount,
+			Currency:         currency,
+			Status:           int32(outcome),
+		})
+	}
+	if err == nil {
+		return created.GetRefund(), nil
+	}
+	if constraintCode(err) != codeUniqueViolation {
+		return nil, err
+	}
+	got, gerr := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: r.ProviderRefundID})
+	if gerr != nil {
+		return nil, gerr
+	}
+	return got.GetRefund(), nil
+}
+
+// refundRecorded reports whether a local row holds the provider refund (a read
+// failure counts as recorded: the caller's insert then surfaces its own error).
+func (h *PaymentServiceHandler) refundRecorded(ctx context.Context, providerRefundID string) bool {
+	_, err := h.Query.GetRefundByProviderId(ctx, &pb.GetRefundByProviderIdReq{ProviderRefundId: providerRefundID})
+	return !absent(err)
+}
+
+// reconcileDispute records a dispute's status from its charge.dispute.* event,
+// then reconciles a top-up's credit, whose target a LOST dispute lowers by its
+// amount (reconcileTopupCredit).
+//
+// An open dispute (needs_response, under_review) lowers nothing yet, although
+// the provider has already withdrawn the disputed amount: most disputes are
+// won. The credit stays spendable until the dispute is lost; whatever is spent
+// by then is owed. An inquiry (warning_*) withdraws nothing.
+//
+// The dispute's own event is used, not a fresh read: its status only moves
+// forward to WON or LOST, both terminal, and between the open states the
+// event's creation time orders the writes.
+func (h *PaymentServiceHandler) reconcileDispute(ctx context.Context, ev stripe.Event) error {
+	if ev.ChargePaymentIntent == "" || ev.ObjectID == "" {
+		return nil
+	}
+	payment, err := h.paymentByProviderID(ctx, ev.ChargePaymentIntent)
+	if err != nil || payment == nil {
+		return err // no local payment: not this installation's
+	}
+	if err := h.recordDispute(ctx, ev, payment); err != nil {
+		return err
+	}
+	return reconcileTopupCredit(ctx, h, payment)
+}
+
+// recordDispute writes the dispute's status, creating its row the first time.
+func (h *PaymentServiceHandler) recordDispute(ctx context.Context, ev stripe.Event, payment *pb.Payment) error {
+	amount, currency := ev.Amount.Amount, ev.Amount.Currency
+	if amount == "" {
+		amount, currency = payment.GetAmount(), payment.GetCurrency()
+	}
+	outcome := mapDisputeStatus(ev.ObjectStatus)
+	mark := func() error {
+		_, err := h.Mutation.MarkDisputeStatus(ctx, &pb.MarkDisputeStatusReq{
+			ProviderDisputeId: ev.ObjectID,
+			Status:            int32(outcome),
+			ProviderEventAt:   eventTime(ev.Created),
+		})
+		return err
+	}
+	err := mark()
+	if !guardRefused(err) {
+		return err
+	}
+	got, err := h.Query.GetDisputeByProviderId(ctx, &pb.GetDisputeByProviderIdReq{ProviderDisputeId: ev.ObjectID})
+	if err != nil && !absent(err) {
+		return err
+	}
+	if got.GetDispute() != nil {
+		return nil // already closed, or a newer event applied: this one is stale
+	}
+	_, err = h.Mutation.CreateDispute(ctx, &pb.CreateDisputeReq{
+		PaymentId:         payment.GetId(),
+		ProviderDisputeId: ev.ObjectID,
+		Amount:            amount,
+		Currency:          currency,
+		Status:            int32(outcome),
+		ProviderEventAt:   eventTime(ev.Created),
+	})
+	if constraintCode(err) == codeUniqueViolation {
+		// A concurrent delivery created it: apply this status over it.
+		if err = mark(); guardRefused(err) {
+			return nil
+		}
+	}
+	return err
+}
+
+// mapDisputeStatus maps the provider's dispute status onto Dispute.Status.
+func mapDisputeStatus(providerStatus string) pb.Dispute_Status {
+	switch providerStatus {
+	case "warning_needs_response", "warning_under_review":
+		return pb.Dispute_INQUIRY
+	case "warning_closed":
+		return pb.Dispute_INQUIRY_CLOSED
+	case "needs_response":
+		return pb.Dispute_NEEDS_RESPONSE
+	case "under_review":
+		return pb.Dispute_UNDER_REVIEW
+	case "won":
+		return pb.Dispute_WON
+	case "lost":
+		return pb.Dispute_LOST
+	default:
+		return pb.Dispute_UNRECOGNIZED_STATUS
+	}
 }
 
 // refundNotSettled resolves a refused MarkPaymentRefunded on a fully refunded
@@ -223,4 +507,13 @@ func metadataValue(ctx context.Context, key string) string {
 	return ""
 }
 
-func init() { webhooksStaged = true }
+func init() {
+	webhooksStaged = true
+	lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (string, error) {
+		got, err := h.Query.SumLostDisputesForPayment(ctx, &pb.SumLostDisputesForPaymentReq{PaymentId: payment.GetId()})
+		if err != nil {
+			return "", err
+		}
+		return got.GetTotal(), nil
+	}
+}

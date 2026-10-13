@@ -59,9 +59,13 @@ func TestTopUpCredit(t *testing.T) {
 	}
 }
 
+// paidTopUpPayment is the SUCCEEDED payment of the fakes' top-up pi_42.
+var paidTopUpPayment = &pb.Payment{Id: "pay-42", ProviderPaymentId: "pi_42", Amount: "20.0000", Status: pb.Payment_SUCCEEDED}
+
 func TestIngestStripe_TopUpSuccess_GrantsCredit(t *testing.T) {
 	m := &fakeMutation{}
-	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}}
+	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}, paymentByProvider: paidTopUpPayment}
+	m.heldBy = q
 	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
 	body := []byte(`{"id":"evt_p1","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42"}}}`)
 
@@ -71,7 +75,7 @@ func TestIngestStripe_TopUpSuccess_GrantsCredit(t *testing.T) {
 	if m.succeededFor != "pi_42" {
 		t.Errorf("payment not marked succeeded: %q", m.succeededFor)
 	}
-	if m.lastApply == nil || m.lastApply.GetUserId() != "u1" || m.lastApply.GetDelta() != "20.00" {
+	if m.lastApply == nil || m.lastApply.GetUserId() != "u1" || m.lastApply.GetDelta() != "20.0000" || m.lastApply.GetRef() != "pay-42" {
 		t.Errorf("credit not granted: %+v", m.lastApply)
 	}
 	if m.lastApply.GetReason() != "topup" {
@@ -84,7 +88,8 @@ func TestIngestStripe_TopUpSuccess_GrantsCredit(t *testing.T) {
 
 func TestIngestStripe_TopUpAlreadyGranted_NoOp(t *testing.T) {
 	m := &fakeMutation{}
-	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00", GrantedAt: timestamppb.Now()}}
+	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00", GrantedAt: timestamppb.Now(), ReconciledStep: 1, CreditOwed: "0"},
+		paymentByProvider: paidTopUpPayment, topupHeld: "20.0000"}
 	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
 	body := []byte(`{"id":"evt_p2","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42"}}}`)
 
