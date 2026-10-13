@@ -255,6 +255,22 @@ func (s *memStore) GetCustomerByUserId(_ context.Context, in *pb.GetCustomerByUs
 	return &pb.GetCustomerByUserIdResp{Customer: out}, s.leave("GetCustomerByUserId", nil)
 }
 
+func (s *memStore) GetCustomerByProviderId(_ context.Context, in *pb.GetCustomerByProviderIdReq, _ ...grpc.CallOption) (*pb.GetCustomerByProviderIdResp, error) {
+	if err := s.enter("GetCustomerByProviderId"); err != nil {
+		return nil, s.leave("", err)
+	}
+	var out *pb.Customer
+	for _, c := range s.customers {
+		if c.GetProviderCustomerId() == in.GetProviderCustomerId() {
+			out = clone(c)
+		}
+	}
+	if out == nil {
+		return nil, s.leave("GetCustomerByProviderId", noRow())
+	}
+	return &pb.GetCustomerByProviderIdResp{Customer: out}, s.leave("GetCustomerByProviderId", nil)
+}
+
 func (s *memStore) GetPayment(_ context.Context, in *pb.GetPaymentReq, _ ...grpc.CallOption) (*pb.GetPaymentResp, error) {
 	if err := s.enter("GetPayment"); err != nil {
 		return nil, s.leave("", err)
@@ -411,6 +427,22 @@ func (s *memStore) GetPlanBySlug(_ context.Context, in *pb.GetPlanBySlugReq, _ .
 		return nil, s.leave("GetPlanBySlug", noRow())
 	}
 	return &pb.GetPlanBySlugResp{Plan: out}, s.leave("GetPlanBySlug", nil)
+}
+
+func (s *memStore) GetPlanByProviderPriceId(_ context.Context, in *pb.GetPlanByProviderPriceIdReq, _ ...grpc.CallOption) (*pb.GetPlanByProviderPriceIdResp, error) {
+	if err := s.enter("GetPlanByProviderPriceId"); err != nil {
+		return nil, s.leave("", err)
+	}
+	var out *pb.Plan
+	for _, p := range s.plans {
+		if p.GetProviderPriceId() == in.GetProviderPriceId() {
+			out = clone(p)
+		}
+	}
+	if out == nil {
+		return nil, s.leave("GetPlanByProviderPriceId", noRow())
+	}
+	return &pb.GetPlanByProviderPriceIdResp{Plan: out}, s.leave("GetPlanByProviderPriceId", nil)
 }
 
 func (s *memStore) GetSubscriptionByProviderId(_ context.Context, in *pb.GetSubscriptionByProviderIdReq, _ ...grpc.CallOption) (*pb.GetSubscriptionByProviderIdResp, error) {
@@ -970,7 +1002,7 @@ func (s *memStore) CreateSubscription(_ context.Context, in *pb.CreateSubscripti
 			return nil, s.leave("CreateSubscription", uniqueErr("provider_subscription_id"))
 		}
 	}
-	sub := &pb.Subscription{Id: s.nextID("sub"), CustomerId: in.GetCustomerId(), PlanId: in.GetPlanId(), ProviderSubscriptionId: in.GetProviderSubscriptionId(), Status: pb.Subscription_Status(in.GetStatus()), CurrentPeriodEnd: in.GetCurrentPeriodEnd()}
+	sub := &pb.Subscription{Id: s.nextID("sub"), CustomerId: in.GetCustomerId(), PlanId: in.GetPlanId(), ProviderSubscriptionId: in.GetProviderSubscriptionId(), Status: pb.Subscription_Status(in.GetStatus()), CurrentPeriodEnd: in.GetCurrentPeriodEnd(), ProviderEventAt: in.GetProviderEventAt()}
 	s.subs[sub.Id] = sub
 	s.emitted = append(s.emitted, "SubscriptionStarted")
 	return &pb.CreateSubscriptionResp{Subscription: clone(sub)}, s.leave("CreateSubscription", nil)

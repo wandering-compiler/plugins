@@ -182,6 +182,7 @@ must be exact. Amounts cross the API as decimal strings (`"19.99"`).
 | `webhook_signing_secret` | **yes** while `stripe_webhooks` is on (the default); the bundle refuses to boot without it | webhook HMAC secret (`whsec_…`) |
 | `provider_api_base` | no | root of a Stripe-compatible API instead of `https://api.stripe.com` (e.g. the `stripemock` sandbox, `http://stripemock:12111`); empty = the real API; test keys only |
 | `default_currency` | no | ISO-4217 applied when a charge omits one |
+| `previous_install_marks` | no | comma-separated installation marks written under earlier signing secrets (see below); a malformed one fails boot |
 
 ## Prepaid credit wallet (feature `prepaid`)
 
@@ -307,10 +308,93 @@ webhooks). Off by default. This is the one feature that extends
   the `SubscriptionStatusChanged` that moves it there; never on
   `SubscriptionStarted` alone.
 
+## Reconciling with the provider (`ReconcileProvider`)
+
+The webhooks keep the local rows in step with the provider, but two things
+can lose a change for good: a local write that failed after the provider
+call and was never retried (an intent, a refund, a subscription or a
+customer with no row), and a webhook endpoint that was down or refusing for
+longer than the provider redelivers (about three days), which leaves a row
+whose status never moves again — a charge that reads pending although it was
+paid, a top-up whose credit was never granted, a dashboard refund never
+recorded.
+
+`PaymentService.ReconcileProvider` (feature `stripe_webhooks`) closes both.
+It walks the provider's customers, payment intents, refunds and (with
+`subscriptions`) subscriptions created at or after `since`, and for every
+object **this installation** made — recognised by the `w17_payment` /
+`w17_install` marks the plugin writes — it records the missing row or brings
+the lagging one up to date, through the same paths the create calls and the
+webhook use. So the events fire as they would have (`PaymentSucceeded` once,
+not on every run), a top-up's credit is granted or taken back once, and a
+run is safe beside webhook deliveries and beside another run. Objects
+without this installation's marks are counted `foreign` and left alone.
+Nothing is ever deleted.
+
+The plugin schedules nothing, and no preset exposes the method (it is not
+for end users). Call it from your own code — a scheduled job, an operator
+action — through the plugin's service in your bundle:
+
+```go
+req := &paymentpb.ReconcileProviderReq{Since: timestamppb.New(time.Now().Add(-96 * time.Hour))}
+for {
+	resp, err := payments.ReconcileProvider(ctx, req)
+	if err != nil {
+		return err // an invalid request, or no installation id
+	}
+	log(resp) // counts per kind: created, updated, in_sync, foreign, superseded, failed
+	if resp.GetStopped() != "" {
+		saveForLater(resp.GetNextCursor()) // a provider list failed: resume later, not now
+		break
+	}
+	if resp.GetNextCursor() == "" {
+		break
+	}
+	req = &paymentpb.ReconcileProviderReq{Cursor: resp.GetNextCursor()}
+}
+```
+
+- **`since`** is required; `limit` caps the objects one call examines
+  (default 1000, at most 10000); `next_cursor` continues the walk (send it
+  alone — it carries its `since`).
+- **A provider list that fails does not lose the walk.** A rate limit, a
+  5xx or a timeout is retried three times (about five seconds, never past
+  the call's deadline); a list that still fails, or that the provider
+  refuses, ends the call with the counts so far, `stopped` saying which list,
+  and `next_cursor` at the page that failed. A cursor whose object was since
+  deleted at the provider continues from that object's creation time.
+- **Suggested cadence:** hourly with `since` four days back (a little more
+  than the provider's redelivery window, so a webhook still being retried is
+  usually there first), and after any webhook outage once with `since` at the
+  outage's start. Each run lists every object created since `since`, so keep
+  the window as short as your outages allow.
+- **`failed`** objects are logged server-side with their cause and retried
+  by the next run; a count that stays above zero needs a look. `superseded`
+  is a customer whose principal is already linked to another one (the loser
+  of two concurrent first charges): harmless.
+- **Rotating `webhook_signing_secret` changes the installation mark**
+  (`w17_install` derives from it). Every object created before the rotation
+  then reads as foreign: the reconciliation never touches it again, and its
+  webhooks are acknowledged without effect. List the old mark — read it off
+  any older object's metadata in the provider's dashboard — in
+  `previous_install_marks` to keep those objects this installation's.
+- **Not covered:** provider prices (`CreatePlan` is locally authoritative; an
+  orphan price is never referenced and moves no money), disputes (only the
+  webhook records them), and customers created before this version (they
+  carry no marks and count as `foreign`; their payments are still matched).
+
+## Audit tables are never pruned
+
+`ProcessedWebhookEvent`, `CreditLedger`, `UsageRecord`, `Refund` and
+`Dispute` are audit logs: the plugin never deletes a row from any table, and
+does not expect you to. Archiving them at scale (partitioning, moving old
+rows to cold storage) is a deployment concern.
+
 ## Features
 
 - `stripe_webhooks` (default on) — the webhook ingestion surface
-  (`IngestStripe` + `ProcessedWebhookEvent` + `MarkWebhookProcessed`).
+  (`IngestStripe` + `ProcessedWebhookEvent` + `MarkWebhookProcessed`), and
+  `ReconcileProvider`.
 - `prepaid` (default off) — the credit wallet. The wallet is local;
   `TopUpCredit` needs `stripe_webhooks` too (a top-up's credit is granted
   from the webhook) and refuses to charge without it.

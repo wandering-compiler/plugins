@@ -11,6 +11,7 @@ package stripe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,7 +72,14 @@ func (b *Backend) EnsureCustomer(ctx context.Context, spec backend.CustomerSpec)
 		form.Set("email", spec.Email)
 	}
 	if spec.UserID != "" {
-		form.Set("metadata[user_id]", spec.UserID)
+		form.Set("metadata["+customerUserMeta+"]", spec.UserID)
+	}
+	// Marked like every object the plugin creates, so the provider
+	// reconciliation can tell this installation's customers from the rest
+	// of the account's.
+	if spec.Install != "" {
+		form.Set("metadata["+backend.OriginMetadataKey+"]", backend.OriginCustomer)
+		form.Set("metadata["+backend.InstallMetadataKey+"]", spec.Install)
 	}
 	var resp customerResp
 	if err := b.post(ctx, "/v1/customers", form, "", &resp); err != nil {
@@ -279,6 +287,165 @@ func (b *Backend) FindSubscription(ctx context.Context, providerCustomerID, idem
 	return backend.SubscriptionResult{}, false, fmt.Errorf("stripe: /v1/subscriptions: more subscriptions on %s than this lookup walks", providerCustomerID)
 }
 
+// customerUserMeta is the customer metadata key carrying the principal.
+const customerUserMeta = "user_id"
+
+// ListCustomerPage lists one page of the account's customers.
+func (b *Backend) ListCustomerPage(ctx context.Context, q backend.ListQuery) ([]backend.CustomerObject, bool, error) {
+	var list customerList
+	if _, err := b.list(ctx, "/v1/customers", q, nil, &list); err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.CustomerObject, 0, len(list.Data))
+	for _, c := range list.Data {
+		if c.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/customers: a customer without an id")
+		}
+		out = append(out, backend.CustomerObject{
+			ProviderCustomerID: c.ID,
+			UserID:             c.Metadata[customerUserMeta],
+			Email:              c.Email,
+			Created:            c.Created,
+			Marks:              marks(c.Metadata),
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// ListPaymentPage lists one page of the account's PaymentIntents.
+func (b *Backend) ListPaymentPage(ctx context.Context, q backend.ListQuery) ([]backend.PaymentObject, bool, error) {
+	var list paymentIntentList
+	if _, err := b.list(ctx, "/v1/payment_intents", q, nil, &list); err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.PaymentObject, 0, len(list.Data))
+	for _, p := range list.Data {
+		if p.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/payment_intents: an intent without an id")
+		}
+		cur := strings.ToLower(p.Currency)
+		out = append(out, backend.PaymentObject{
+			ProviderPaymentID:  p.ID,
+			ProviderCustomerID: p.Customer,
+			Status:             p.Status,
+			Amount:             backend.Money{Amount: fromMinorUnits(p.Amount, cur), Currency: cur},
+			Description:        p.Description,
+			// A failed attempt leaves the intent requires_payment_method
+			// with the attempt's error, which a fresh intent has none of.
+			Failed:  p.Status == "requires_payment_method" && len(p.LastPaymentError) > 0 && string(p.LastPaymentError) != "null",
+			Created: p.Created,
+			Marks:   marks(p.Metadata),
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// ListRefundPage lists one page of the account's refunds, of every payment.
+func (b *Backend) ListRefundPage(ctx context.Context, q backend.ListQuery) ([]backend.ListedRefund, bool, error) {
+	var list refundList
+	if _, err := b.list(ctx, "/v1/refunds", q, nil, &list); err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.ListedRefund, 0, len(list.Data))
+	for _, r := range list.Data {
+		if r.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/refunds: a refund without an id")
+		}
+		out = append(out, backend.ListedRefund{
+			RefundResult: backend.RefundResult{
+				ProviderRefundID: r.ID,
+				Status:           r.Status,
+				Amount:           backend.Money{Amount: fromMinorUnits(r.Amount, r.Currency), Currency: r.Currency},
+				Key:              r.Metadata[refundKeyMeta],
+			},
+			ProviderPaymentID: r.PaymentIntent,
+			Created:           r.Created,
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// ListSubscriptionPage lists one page of the account's subscriptions, in any
+// status (the list leaves canceled ones out unless asked).
+func (b *Backend) ListSubscriptionPage(ctx context.Context, q backend.ListQuery) ([]backend.SubscriptionObject, bool, error) {
+	var list subscriptionList
+	readAt, err := b.list(ctx, "/v1/subscriptions", q, url.Values{"status": {"all"}}, &list)
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.SubscriptionObject, 0, len(list.Data))
+	for _, s := range list.Data {
+		if s.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/subscriptions: a subscription without an id")
+		}
+		out = append(out, backend.SubscriptionObject{
+			SubscriptionResult: backend.SubscriptionResult{
+				ProviderSubscriptionID: s.ID,
+				Status:                 s.Status,
+				CurrentPeriodEnd:       s.CurrentPeriodEnd,
+				ProviderPriceID:        s.priceID(),
+			},
+			ProviderCustomerID: s.Customer,
+			Created:            s.Created,
+			ReadAt:             readAt,
+			Marks:              marks(s.Metadata),
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// list fetches one page of an account-wide list into out, and answers the
+// provider's clock at the answer (its Date header; 0 when absent). A page
+// refused because its starting_after object is gone is ErrListCursorGone.
+func (b *Backend) list(ctx context.Context, path string, q backend.ListQuery, extra url.Values, out any) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.baseURL+path+"?"+listParams(q, extra).Encode(), nil)
+	if err != nil {
+		return 0, err
+	}
+	hdr, err := b.doHeader(req, path, "", out)
+	if err != nil {
+		var coded *backend.CodedError
+		if q.After != "" && errors.As(err, &coded) && coded.Code == "resource_missing" {
+			return 0, fmt.Errorf("%w: %w", backend.ErrListCursorGone, err)
+		}
+		return 0, err
+	}
+	var at int64
+	if t, perr := http.ParseTime(hdr.Get("Date")); perr == nil {
+		at = t.Unix()
+	}
+	return at, nil
+}
+
+// listParams is the query of one page of a list: created[gte], created[lte],
+// limit (1 to 100, the provider's bounds) and starting_after, plus extra.
+func listParams(q backend.ListQuery, extra url.Values) url.Values {
+	v := url.Values{}
+	for k, vs := range extra {
+		v[k] = vs
+	}
+	if q.Since > 0 {
+		v.Set("created[gte]", strconv.FormatInt(q.Since, 10))
+	}
+	if q.Until > 0 {
+		v.Set("created[lte]", strconv.FormatInt(q.Until, 10))
+	}
+	limit := q.Limit
+	if limit < 1 || limit > 100 {
+		limit = 100
+	}
+	v.Set("limit", strconv.Itoa(limit))
+	if q.After != "" {
+		v.Set("starting_after", q.After)
+	}
+	return v
+}
+
+// marks reads the plugin's marks from an object's metadata.
+func marks(md map[string]string) backend.Marks {
+	return backend.Marks{Origin: md[backend.OriginMetadataKey], Install: md[backend.InstallMetadataKey]}
+}
+
 // post issues a form-encoded POST to the Stripe API with bearer auth +
 // an optional idempotency key, and decodes the JSON response into out.
 // A non-2xx surfaces the Stripe error message.
@@ -301,6 +468,12 @@ func (b *Backend) get(ctx context.Context, path string, query url.Values, out an
 }
 
 func (b *Backend) do(req *http.Request, path, idemKey string, out any) error {
+	_, err := b.doHeader(req, path, idemKey, out)
+	return err
+}
+
+// doHeader is do, answering the response headers of a successful call too.
+func (b *Backend) doHeader(req *http.Request, path, idemKey string, out any) (http.Header, error) {
 	req.Header.Set("Authorization", "Bearer "+b.apiKey)
 	req.Header.Set("Accept", "application/json")
 	if idemKey != "" {
@@ -309,12 +482,12 @@ func (b *Backend) do(req *http.Request, path, idemKey string, out any) error {
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("stripe: %s: %w", path, err)
+		return nil, fmt.Errorf("stripe: %s: %w", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("stripe: %s: read body: %w", path, err)
+		return nil, fmt.Errorf("stripe: %s: read body: %w", path, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var e apiError
@@ -330,14 +503,14 @@ func (b *Backend) do(req *http.Request, path, idemKey string, out any) error {
 		if code := reasonCode(e.Error.DeclineCode, e.Error.Code); code != "" {
 			err = &backend.CodedError{Code: code, Err: err}
 		}
-		return err
+		return nil, err
 	}
 	if out != nil {
 		if err := json.Unmarshal(body, out); err != nil {
-			return fmt.Errorf("stripe: %s: decode response: %w", path, err)
+			return nil, fmt.Errorf("stripe: %s: decode response: %w", path, err)
 		}
 	}
-	return nil
+	return resp.Header, nil
 }
 
 // reasonCode picks the most specific machine code a Stripe error names

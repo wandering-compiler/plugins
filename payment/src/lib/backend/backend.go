@@ -78,6 +78,9 @@ type Money struct {
 type CustomerSpec struct {
 	UserID string
 	Email  string
+	// Install is written as the customer's install mark, beside the origin
+	// mark OriginCustomer (see PaymentSpec.Install). Empty writes neither.
+	Install string
 }
 
 // PaymentSpec is the input to CreatePayment.
@@ -106,6 +109,7 @@ const (
 	OriginCharge       = "charge"
 	OriginTopup        = "topup"
 	OriginSubscription = "subscription"
+	OriginCustomer     = "customer"
 )
 
 // InstallMetadataKey is the provider metadata key carrying the InstallID of
@@ -205,6 +209,85 @@ type SubscriptionResult struct {
 	ProviderPriceID string
 }
 
+// ListQuery selects one page of a provider list, newest object first.
+type ListQuery struct {
+	// Since bounds the list to objects created at or after it (Unix seconds).
+	Since int64
+	// After continues the list after this object id, the last of the previous
+	// page; empty starts at the newest.
+	After string
+	// Until bounds the list to objects created at or before it (Unix
+	// seconds); 0 = no bound. How a walk continues when the object After
+	// names is gone (ErrListCursorGone): from that object's creation time.
+	Until int64
+	// Limit is the page size, 1 to 100.
+	Limit int
+}
+
+// Marks are the metadata marks this plugin writes on an object it creates:
+// the origin (OriginMetadataKey) and the installation (InstallMetadataKey).
+// Both empty on an object no installation of the plugin made.
+type Marks struct {
+	Origin  string
+	Install string
+}
+
+// CustomerObject is a provider customer as a list returns it.
+type CustomerObject struct {
+	ProviderCustomerID string
+	// UserID is the principal EnsureCustomer wrote into the customer's
+	// metadata; Email its e-mail.
+	UserID string
+	Email  string
+	// Created is the object's creation time (Unix seconds), on every listed
+	// object.
+	Created int64
+	Marks
+}
+
+// PaymentObject is a provider payment as a list returns it.
+type PaymentObject struct {
+	ProviderPaymentID  string
+	ProviderCustomerID string
+	// Status is the provider's payment status (see PaymentResult.Status).
+	Status      string
+	Amount      Money
+	Description string
+	// Failed reports that the last attempt to pay failed: the provider
+	// keeps such a payment open for another attempt, under the same status
+	// a payment nobody has tried to pay yet has.
+	Failed  bool
+	Created int64
+	Marks
+}
+
+// ListedRefund is a refund as the account-wide refund list returns it, with
+// the payment it belongs to.
+type ListedRefund struct {
+	RefundResult
+	ProviderPaymentID string
+	Created           int64
+}
+
+// SubscriptionObject is a provider subscription as a list returns it, with
+// ProviderPriceID set.
+type SubscriptionObject struct {
+	SubscriptionResult
+	ProviderCustomerID string
+	Created            int64
+	// ReadAt is the provider's own clock when it answered the list (Unix
+	// seconds; 0 when it did not say). The provider stamps its webhook events
+	// on the same clock, so a status recorded from this read is ordered
+	// against them without trusting the local clock.
+	ReadAt int64
+	Marks
+}
+
+// ErrListCursorGone is a list page refused because the object ListQuery.After
+// names no longer exists (deleted at the provider). Continue with Until set
+// to that object's creation time instead.
+var ErrListCursorGone = errors.New("payment provider: the object a list continues after is gone")
+
 // Backend is a payment provider. Implementations are constructed with
 // their API credentials and are safe for concurrent use.
 type Backend interface {
@@ -244,4 +327,13 @@ type Backend interface {
 	// idemKey, if the provider holds one, whatever its status, with its
 	// ProviderPriceID set (see FindRefund).
 	FindSubscription(ctx context.Context, providerCustomerID, idemKey string) (SubscriptionResult, bool, error)
+
+	// The account-wide lists the provider reconciliation walks
+	// (ReconcileProvider): one page each, newest first, of the objects
+	// created at or after q.Since, and whether more follow. Subscriptions are
+	// listed whatever their status.
+	ListCustomerPage(ctx context.Context, q ListQuery) ([]CustomerObject, bool, error)
+	ListPaymentPage(ctx context.Context, q ListQuery) ([]PaymentObject, bool, error)
+	ListRefundPage(ctx context.Context, q ListQuery) ([]ListedRefund, bool, error)
+	ListSubscriptionPage(ctx context.Context, q ListQuery) ([]SubscriptionObject, bool, error)
 }

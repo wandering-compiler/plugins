@@ -35,6 +35,9 @@ env:
     type: string
     default: usd
     description: "ISO-4217 currency (lowercase) applied to a CreatePayment that omits one."
+  - name: previous_install_marks
+    type: string
+    description: "Comma-separated w17_install marks this installation wrote under earlier webhook signing secrets (16 lowercase hex characters each; read one off any provider object's metadata). The mark derives from the signing secret, so rotating the secret makes every object created before the rotation look foreign; listed here, they stay this installation's for the webhook and ReconcileProvider. Not secret: the mark is a one-way derivation."
 
 features:
   # Baseline (Customer / Payment / Refund + CreateCustomer / CreatePayment
@@ -42,9 +45,10 @@ features:
   # plugin's User/UserToken core. Only the webhook surface is toggleable.
   - name: stripe_webhooks
     default: true
-    description: "Inbound Stripe webhook ingestion: the ProcessedWebhookEvent idempotency ledger, the MarkWebhookProcessed mutation, and PaymentService.IngestStripe (signature verify + dedup + dispatch to MarkPaymentSucceeded/MarkPaymentFailed/MarkPaymentCanceled, refund reconciliation against the provider's refund list, and the Dispute record from charge.dispute.* events). Disable for projects that reconcile payment status another way (polling, manual)."
+    description: "Inbound Stripe webhook ingestion: the ProcessedWebhookEvent idempotency ledger, the MarkWebhookProcessed mutation, and PaymentService.IngestStripe (signature verify + dedup + dispatch to MarkPaymentSucceeded/MarkPaymentFailed/MarkPaymentCanceled, refund reconciliation against the provider's refund list, and the Dispute record from charge.dispute.* events), plus PaymentService.ReconcileProvider, which the project calls to record provider objects the webhooks never brought in. Disable for projects that reconcile payment status another way (polling, manual)."
     go_files:
       - handlers/webhook_stripe.go
+      - handlers/reconcile_provider.go
   - name: prepaid
     default: false
     # No `requires`: the wallet itself (GrantCredit / SpendCredit / the

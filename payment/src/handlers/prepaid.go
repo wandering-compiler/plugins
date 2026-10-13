@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,38 @@ import (
 func init() {
 	onPaymentSucceededWebhook = grantTopupOnPaymentSuccess
 	isTopupPayment = recordedTopup
+	ensureTopupRecord = recordTopup
+	topupState = topupFingerprint
+}
+
+// recordTopup records the CreditTopup of a top-up payment, the row
+// TopUpCredit writes after the Payment: for the provider reconciliation,
+// which finds a top-up whose second write never landed. A row already there
+// (unique provider_payment_id) is the answer. The credit itself follows from
+// the reconciliation (settleTopup), never from here.
+func recordTopup(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, userID string) error {
+	if _, err := h.Mutation.CreateCreditTopup(ctx, &pb.CreateCreditTopupReq{
+		ProviderPaymentId: payment.GetProviderPaymentId(),
+		UserId:            userID,
+		Amount:            payment.GetAmount(),
+	}); err != nil && constraintCode(err) != codeUniqueViolation {
+		return err
+	}
+	return nil
+}
+
+// topupFingerprint is the state of a top-up's credit record ("" for a payment
+// that is no top-up): whether it is granted, what is owed and the last step.
+func topupFingerprint(ctx context.Context, h *PaymentServiceHandler, providerPaymentID string) (string, error) {
+	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: providerPaymentID})
+	if absent(err) || (err == nil && got.GetTopup() == nil) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	t := got.GetTopup()
+	return fmt.Sprintf("topup granted=%t owed=%s step=%d", t.GetGrantedAt() != nil, orDefault(t.GetCreditOwed(), "0"), t.GetReconciledStep()), nil
 }
 
 // recordedTopup reports whether a CreditTopup row records p as a top-up.

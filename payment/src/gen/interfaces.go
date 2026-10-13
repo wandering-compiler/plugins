@@ -45,6 +45,10 @@ type EnvConfig struct {
 	// DefaultCurrency (ISO-4217, lowercase) applies to a CreatePayment
 	// that omits a currency.
 	DefaultCurrency string
+
+	// PreviousInstallMarks lists, comma-separated, the installation marks
+	// this installation wrote under earlier webhook signing secrets.
+	PreviousInstallMarks string
 }
 
 // ClientSet exposes the in-process typed clients the plugin's handlers

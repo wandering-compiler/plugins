@@ -2,12 +2,15 @@ package handlers
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
 	"github.com/wandering-compiler/plugins/payment/lib/backend/stripe"
+
+	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
 // Cross-feature webhook hooks. The webhook ingestion handler
@@ -45,9 +48,64 @@ func (h *PaymentServiceHandler) installID() string {
 // row and never will, and is acknowledged. Here (always staged) because the
 // core webhook and both feature hooks read it.
 func (h *PaymentServiceHandler) madeHere(ev stripe.Event) bool {
-	id := h.installID()
-	return ev.Origin != "" && id != "" && ev.Install == id
+	return h.markedHere(backend.Marks{Origin: ev.Origin, Install: ev.Install})
 }
+
+// markedHere reports whether an object's marks say THIS installation created
+// it (see madeHere). The provider reconciliation reads it too.
+//
+// The mark derives from the signing secret, so a rotated secret changes it,
+// and every object made before the rotation would read as foreign: its
+// pending webhook acknowledged, and the reconciliation never touching it
+// again. The marks the earlier secrets gave are configured as
+// previous_install_marks and still count.
+func (h *PaymentServiceHandler) markedHere(m backend.Marks) bool {
+	id := h.installID()
+	if m.Origin == "" || id == "" || m.Install == "" {
+		return false
+	}
+	return m.Install == id || slices.Contains(h.PreviousInstallMarks, m.Install)
+}
+
+// ── provider reconciliation hooks ───────────────────────────────────
+//
+// ReconcileProvider (handlers/reconcile_provider.go, staged with
+// stripe_webhooks) reaches the feature-owned records through these, set in
+// init() by the feature's own file; nil (or the base value) when the
+// feature is off. Declared here, in an always-staged file, for the reason
+// the webhook hooks above are.
+
+// reconcileOutcome is what the provider reconciliation did with one provider
+// object; ReconcileCounts has a counter for each.
+type reconcileOutcome int
+
+const (
+	reconcileInSync reconcileOutcome = iota
+	reconcileCreated
+	reconcileUpdated
+	reconcileForeign
+	reconcileSuperseded
+	reconcileFailed
+)
+
+var (
+	// reconcileSubscription — set by subscriptions.go; records one provider
+	// subscription (a local row for an orphan, the status of a lagging one).
+	reconcileSubscription func(ctx context.Context, h *PaymentServiceHandler, sub backend.SubscriptionObject) (reconcileOutcome, error)
+
+	// ensureTopupRecord — set by prepaid.go; records the CreditTopup of a
+	// top-up payment whose row never landed (TopUpCredit writes the Payment
+	// first and the CreditTopup second, and a failure between them leaves the
+	// charge without its credit record). Idempotent.
+	ensureTopupRecord func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, userID string) error
+
+	// topupState — set by prepaid.go; a fingerprint of a top-up's credit
+	// record ("" when the payment is no top-up), so the reconciliation can
+	// tell whether its pass changed it.
+	topupState = func(ctx context.Context, h *PaymentServiceHandler, providerPaymentID string) (string, error) {
+		return "", nil
+	}
+)
 
 // eventTime is the provider's creation time of an event — its order, which
 // delivery order is not. An event without one (the provider always sends it)

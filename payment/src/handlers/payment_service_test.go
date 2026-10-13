@@ -61,6 +61,18 @@ func (f *fakeBackend) FindRefund(_ context.Context, _ string, _ string) (backend
 func (f *fakeBackend) ListRefunds(_ context.Context, _ string) ([]backend.RefundResult, error) {
 	return nil, nil
 }
+func (f *fakeBackend) ListCustomerPage(context.Context, backend.ListQuery) ([]backend.CustomerObject, bool, error) {
+	return nil, false, nil
+}
+func (f *fakeBackend) ListPaymentPage(context.Context, backend.ListQuery) ([]backend.PaymentObject, bool, error) {
+	return nil, false, nil
+}
+func (f *fakeBackend) ListRefundPage(context.Context, backend.ListQuery) ([]backend.ListedRefund, bool, error) {
+	return nil, false, nil
+}
+func (f *fakeBackend) ListSubscriptionPage(context.Context, backend.ListQuery) ([]backend.SubscriptionObject, bool, error) {
+	return nil, false, nil
+}
 func (f *fakeBackend) UpsertPlan(_ context.Context, spec backend.PlanSpec) (string, error) {
 	f.lastPlan = spec
 	return f.priceID, nil

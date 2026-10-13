@@ -14,6 +14,9 @@ syntax = "proto3";
 //                       (internal: no ownership check, never REST-exposed)
 //   - GetMy*          → the signed-in caller's own rows (PaymentQuery reads
 //                       filtered to the caller's customer / user id)
+//   - ReconcileProvider → walk the provider's lists (backend.List*Page) and
+//                       bring the local rows in line through the webhook's
+//                       own paths (internal: never REST-exposed)
 //   - IngestStripe    → verify signature (metadata) + dedup
 //                       (MarkWebhookProcessed) + dispatch
 //                       MarkPaymentSucceeded / MarkPaymentFailed /
@@ -27,6 +30,7 @@ syntax = "proto3";
 
 package w17.contrib.payment;
 
+import "google/protobuf/timestamp.proto";
 import "@self/queries/payment_query.proto";
 import "@self/types/models.proto";
 import "w17/contrib.proto";
@@ -99,6 +103,59 @@ message IngestStripeResp {
   bool   handled    = 1;  // false = duplicate event (already processed)
   string event_id   = 2;
   string event_type = 3;
+}
+
+// ── provider reconciliation (gated stripe_webhooks) ─────────────────
+//
+// ReconcileProvider walks the provider objects created at or after `since`
+// and records what the webhooks never brought in: an object this
+// installation made whose local row never landed, or a row whose status lags
+// the provider's. The project calls it from its own code (a scheduled job, an
+// operator action); the plugin schedules nothing and no preset exposes it.
+
+// ReconcileProviderReq — `since` bounds the walk by the objects' creation
+// time; `limit` caps the objects examined in this call (0 = 1000, at most
+// 10000); `cursor`, from a previous answer's `next_cursor`, continues that
+// walk (it carries its own `since`; a different `since` beside it is
+// refused).
+message ReconcileProviderReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  google.protobuf.Timestamp since = 1 [(w17.field) = { type: DATETIME }];
+  int32  limit  = 2;
+  string cursor = 3;
+}
+
+// ReconcileCounts — what one kind of provider object came to: created (a
+// local row recorded for it), updated (its row brought up to date), in_sync
+// (nothing to change), foreign (not this installation's: left alone),
+// superseded (this installation's, but another object holds its place — a
+// customer whose principal is linked to another), failed (logged; a later
+// run retries it).
+message ReconcileCounts {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  int32 created    = 1;
+  int32 updated    = 2;
+  int32 in_sync    = 3;
+  int32 foreign    = 4;
+  int32 superseded = 5;
+  int32 failed     = 6;
+}
+
+// ReconcileProviderResp — the counts per kind (subscriptions stay zero
+// without the subscriptions feature), and `next_cursor`: empty when the walk
+// is complete, otherwise where the next call continues it. `stopped` is set
+// when a provider list failed (after retries for a transient failure): the
+// counts are what the call did before it, and `next_cursor` resumes at the
+// page that failed — call again later, not at once. A list failure is
+// answered this way, never as an error, so a long walk keeps its progress.
+message ReconcileProviderResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  ReconcileCounts customers     = 1;
+  ReconcileCounts payments      = 2;
+  ReconcileCounts refunds       = 3;
+  ReconcileCounts subscriptions = 4;
+  string          next_cursor   = 5;
+  string          stopped       = 6;
 }
 
 // ── prepaid feature: credit grant / spend / balance ─────────────────
@@ -236,6 +293,14 @@ service PaymentService {
   // IngestStripe — Stripe webhook ingestion. Gated stripe_webhooks; the
   // handler body is in the feature-staged handlers/webhook_stripe.go.
   rpc IngestStripe(IngestStripeReq) returns (IngestStripeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+  }
+  // ReconcileProvider — record provider objects the webhooks never brought
+  // in. Gated stripe_webhooks (an object is recognised as this
+  // installation's by the install mark, which derives from the webhook
+  // signing secret); the body is in handlers/reconcile_provider.go. Internal:
+  // the project's own code calls it.
+  rpc ReconcileProvider(ReconcileProviderReq) returns (ReconcileProviderResp) {
     option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
   }
 
