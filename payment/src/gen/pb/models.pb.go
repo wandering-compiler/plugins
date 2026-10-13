@@ -530,14 +530,9 @@ type Refund struct {
 	IdempotencyKey string `protobuf:"bytes,7,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	// Rows written before the outcome was kept read SUCCEEDED: what every
 	// earlier version assumed of them.
-	Status Refund_Status `protobuf:"varint,8,opt,name=status,proto3,enum=w17.contrib.payment.Refund_Status" json:"status,omitempty"`
-	// The part of a top-up refund's credit that could not be taken back because
-	// the owner had already spent it — what the owner owes. Only a refund made
-	// at the provider directly can leave one (RefundPayment refuses to refund
-	// spent credit); "0" or NULL means nothing is owed.
-	CreditShortfall string `protobuf:"bytes,9,opt,name=credit_shortfall,json=creditShortfall,proto3" json:"credit_shortfall,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	Status        Refund_Status `protobuf:"varint,8,opt,name=status,proto3,enum=w17.contrib.payment.Refund_Status" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Refund) Reset() {
@@ -626,19 +621,11 @@ func (x *Refund) GetStatus() Refund_Status {
 	return Refund_STATUS_UNSPECIFIED
 }
 
-func (x *Refund) GetCreditShortfall() string {
-	if x != nil {
-		return x.CreditShortfall
-	}
-	return ""
-}
-
 // Dispute — a chargeback (or an inquiry) the cardholder's bank opened on a
 // Payment, recorded from the provider's charge.dispute.* webhooks. Status is
 // the provider's, mapped one to one; WON and LOST are terminal. A LOST
-// dispute on a top-up takes its credit back like a refund made at the
-// provider; credit_shortfall is what could not be taken back. Gated
-// `stripe_webhooks`: only the webhook writes it.
+// dispute on a top-up takes its amount out of the top-up's credit (see
+// CreditTopup). Gated `stripe_webhooks`: only the webhook writes it.
 type Dispute struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -647,12 +634,11 @@ type Dispute struct {
 	Amount            string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
 	Currency          string                 `protobuf:"bytes,5,opt,name=currency,proto3" json:"currency,omitempty"`
 	Status            Dispute_Status         `protobuf:"varint,6,opt,name=status,proto3,enum=w17.contrib.payment.Dispute_Status" json:"status,omitempty"`
-	CreditShortfall   string                 `protobuf:"bytes,7,opt,name=credit_shortfall,json=creditShortfall,proto3" json:"credit_shortfall,omitempty"`
 	// When the provider created the last event applied to this row. Events
 	// arrive out of order; an older one must not overwrite a newer status.
-	ProviderEventAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=provider_event_at,json=providerEventAt,proto3" json:"provider_event_at,omitempty"`
-	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	ProviderEventAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=provider_event_at,json=providerEventAt,proto3" json:"provider_event_at,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -727,13 +713,6 @@ func (x *Dispute) GetStatus() Dispute_Status {
 		return x.Status
 	}
 	return Dispute_STATUS_UNSPECIFIED
-}
-
-func (x *Dispute) GetCreditShortfall() string {
-	if x != nil {
-		return x.CreditShortfall
-	}
-	return ""
 }
 
 func (x *Dispute) GetProviderEventAt() *timestamppb.Timestamp {
@@ -831,7 +810,7 @@ type CreditLedger struct {
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Delta          string                 `protobuf:"bytes,3,opt,name=delta,proto3" json:"delta,omitempty"`
-	Reason         string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused|topup-refund-failed|topup-reversal|topup-reversal-undone
+	Reason         string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused|topup-reconcile
 	Ref            string                 `protobuf:"bytes,5,opt,name=ref,proto3" json:"ref,omitempty"`       // payment id / order id / …
 	IdempotencyKey string                 `protobuf:"bytes,6,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -985,11 +964,16 @@ func (x *CreditBalance) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// CreditTopup — links a Payment (the money charge) to the credit grant
-// it funds. TopUpCredit inserts one (granted_at NULL) when it creates
-// the charge; the payment-succeeded webhook hook grants the credit and
-// stamps granted_at. provider_payment_id is unique (one top-up per
-// charge). Gated prepaid.
+// CreditTopup — links a Payment (the money charge) to the credit it funds.
+// TopUpCredit inserts one (granted_at NULL) when it creates the charge.
+// provider_payment_id is unique (one top-up per charge). Gated prepaid.
+//
+// The top-up's credit is reconciled, never patched: its target is the
+// amount, less the payment's pending and succeeded refunds and lost
+// disputes (never below zero; zero until the payment has succeeded), and
+// every change moves the credit this payment holds in the ledger to it. A
+// decrease takes only what the balance holds; the rest is credit_owed.
+// granted_at is stamped the first time the paid top-up is reconciled.
 type CreditTopup struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -998,8 +982,17 @@ type CreditTopup struct {
 	Amount            string                 `protobuf:"bytes,4,opt,name=amount,proto3" json:"amount,omitempty"`
 	GrantedAt         *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
 	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Credit the owner spent that a refund or a lost dispute took back from
+	// this top-up — what the owner owes. NULL or 0: nothing. A later
+	// reconciliation that can take more (the balance grew) or needs less (a
+	// refund failed) lowers it first.
+	CreditOwed string `protobuf:"bytes,7,opt,name=credit_owed,json=creditOwed,proto3" json:"credit_owed,omitempty"`
+	// The last reconciliation step whose credit_owed is written here; the
+	// ledger rows of the steps are keyed by (payment, step), so a stale
+	// reconciliation never overwrites a newer one's answer.
+	ReconciledStep int64 `protobuf:"varint,8,opt,name=reconciled_step,json=reconciledStep,proto3" json:"reconciled_step,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CreditTopup) Reset() {
@@ -1072,6 +1065,20 @@ func (x *CreditTopup) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *CreditTopup) GetCreditOwed() string {
+	if x != nil {
+		return x.CreditOwed
+	}
+	return ""
+}
+
+func (x *CreditTopup) GetReconciledStep() int64 {
+	if x != nil {
+		return x.ReconciledStep
+	}
+	return 0
 }
 
 // UsageRecord — append-only usage journal. quantity is integer units
@@ -1543,7 +1550,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"\x06FAILED\x10\x04\x12\f\n" +
 	"\bCANCELED\x10\x05\x12\f\n" +
-	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\xcb\x04\n" +
+	"\bREFUNDED\x10\x06:\x04\xc2\xf3\x18\x00\"\x87\x04\n" +
 	"\x06Refund\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12+\n" +
 	"\n" +
@@ -1554,15 +1561,14 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x126\n" +
 	"\x0fidempotency_key\x18\a \x01(\tB\r\xca\xf3\x18\t\b\x01(\x018\x01@\xff\x01R\x0eidempotencyKey\x12E\n" +
-	"\x06status\x18\b \x01(\x0e2\".w17.contrib.payment.Refund.StatusB\t\xca\xf3\x18\x05\b2\xa8\x01\x02R\x06status\x12B\n" +
-	"\x10credit_shortfall\x18\t \x01(\tB\x17\xca\xf3\x18\x13\b\x10(\x01Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x0fcreditShortfall\"V\n" +
+	"\x06status\x18\b \x01(\x0e2\".w17.contrib.payment.Refund.StatusB\t\xca\xf3\x18\x05\b2\xa8\x01\x02R\x06status\"V\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aPENDING\x10\x01\x12\r\n" +
 	"\tSUCCEEDED\x10\x02\x12\n" +
 	"\n" +
 	"\x06FAILED\x10\x03\x12\f\n" +
-	"\bCANCELED\x10\x04:\x04\xc2\xf3\x18\x00\"\xfb\x05\n" +
+	"\bCANCELED\x10\x04:\x04\xc2\xf3\x18\x00\"\xb9\x05\n" +
 	"\aDispute\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12+\n" +
 	"\n" +
@@ -1570,14 +1576,12 @@ const file_types_models_proto_rawDesc = "" +
 	"\x13provider_dispute_id\x18\x03 \x01(\tB\v\xca\xf3\x18\a\b\x018\x01@\xff\x01R\x11providerDisputeId\x12-\n" +
 	"\x06amount\x18\x04 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x06amount\x12$\n" +
 	"\bcurrency\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x01@\x03R\bcurrency\x12C\n" +
-	"\x06status\x18\x06 \x01(\x0e2#.w17.contrib.payment.Dispute.StatusB\x06\xca\xf3\x18\x02\b2R\x06status\x12@\n" +
-	"\x10credit_shortfall\x18\a \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\x0fcreditShortfall\x12P\n" +
-	"\x11provider_event_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x0fproviderEventAt\x12F\n" +
+	"\x06status\x18\x06 \x01(\x0e2#.w17.contrib.payment.Dispute.StatusB\x06\xca\xf3\x18\x02\b2R\x06status\x12P\n" +
+	"\x11provider_event_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\x0fproviderEventAt\x12F\n" +
 	"\n" +
-	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12D\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x12D\n" +
 	"\n" +
-	"updated_at\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt\"\x93\x01\n" +
+	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt\"\x93\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aINQUIRY\x10\x01\x12\x12\n" +
@@ -1607,7 +1611,7 @@ const file_types_models_proto_rawDesc = "" +
 	"\abalance\x18\x02 \x01(\tB\x15\xca\xf3\x18\x11\b\x10Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\abalance\x12D\n" +
 	"\n" +
 	"updated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\t\xca\xf3\x18\x05\b\x16\xb8\x01\x01R\tupdatedAt:6\xc2\xf3\x18'\x1a%\n" +
-	"\x15credit_balance_nonneg\x12\fbalance >= 0\xfa\xf4\x18\aprepaid\"\xdb\x02\n" +
+	"\x15credit_balance_nonneg\x12\fbalance >= 0\xfa\xf4\x18\aprepaid\"\xd2\x03\n" +
 	"\vCreditTopup\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12;\n" +
 	"\x13provider_payment_id\x18\x02 \x01(\tB\v\xca\xf3\x18\a\b\x018\x01@\xff\x01R\x11providerPaymentId\x12%\n" +
@@ -1616,7 +1620,11 @@ const file_types_models_proto_rawDesc = "" +
 	"\n" +
 	"granted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\b\xca\xf3\x18\x04\b\x16(\x01R\tgrantedAt\x12F\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt:\x0f\xc2\xf3\x18\x00\xfa\xf4\x18\aprepaid\"\x9b\x03\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampB\v\xca\xf3\x18\a\b\x16 \x01\xb8\x01\x01R\tcreatedAt\x128\n" +
+	"\vcredit_owed\x18\a \x01(\tB\x17\xca\xf3\x18\x13\b\x10(\x01Y\x00\x00\x00\x00\x00\x00\x00\x00\x88\x01\x14\x90\x01\x04R\n" +
+	"creditOwed\x12;\n" +
+	"\x0freconciled_step\x18\b \x01(\x03B\x12\xca\xf3\x18\x0e\b\n" +
+	"Y\x00\x00\x00\x00\x00\x00\x00\x00\xa8\x01\x00R\x0ereconciledStep:\x0f\xc2\xf3\x18\x00\xfa\xf4\x18\aprepaid\"\x9b\x03\n" +
 	"\vUsageRecord\x12\x1b\n" +
 	"\x02id\x18\x01 \x01(\tB\v\xca\xf3\x18\a\b\x03\x10\x01\xb8\x01\vR\x02id\x12%\n" +
 	"\auser_id\x18\x02 \x01(\tB\f\xca\xf3\x18\x02\b\x03\xd2\xf3\x18\x02\b\x01R\x06userId\x12\x1e\n" +

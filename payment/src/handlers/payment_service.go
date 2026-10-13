@@ -354,14 +354,12 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 			return nil, err
 		}
 		// A retry is where a first attempt's missed follow-ups are caught up:
-		// the credit of a top-up refund that did not go through (no-op once
-		// given back), and the status settle (no-op once REFUNDED).
-		if !refundCounts(prior.GetStatus()) {
-			if err := giveBackRefundCredit(ctx, h, payment, prior.GetProviderRefundId(), req.GetIdempotencyKey()); err != nil {
-				return nil, err
-			}
-		}
+		// the status settle (no-op once REFUNDED), and a top-up's credit
+		// (no-op once reconciled).
 		h.markRefundedIfFull(ctx, payment)
+		if err := reconcileTopupCredit(ctx, h, payment); err != nil {
+			return nil, err
+		}
 		return resp, nil
 	}
 
@@ -432,8 +430,6 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		Currency:         payment.GetCurrency(),
 		IdempotencyKey:   storedKey,
 		Status:           int32(outcome),
-		// RefundPayment refuses to refund spent credit, so it never owes.
-		CreditShortfall: "0",
 	})
 	if err != nil {
 		// A concurrent call with the same key recorded it first: its refund
@@ -463,15 +459,14 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		}
 		return nil, err
 	}
-	if !refundCounts(outcome) {
-		// Refused after the fact (the provider answered failed or canceled):
-		// a top-up's credit comes back. A failure here leaves the refund
-		// recorded; the caller's retry finds it and gives the credit back.
-		if err := giveBackRefundCredit(ctx, h, payment, res.ProviderRefundID, req.GetIdempotencyKey()); err != nil {
-			return nil, err
-		}
-	}
 	h.markRefundedIfFull(ctx, payment)
+	// The refund is recorded: a top-up's credit follows it — nothing more
+	// once the take-back above counted it, back if the provider answered
+	// failed or canceled. A failure here leaves the refund recorded; the
+	// caller's retry finds it and reconciles again.
+	if err := reconcileTopupCredit(ctx, h, payment); err != nil {
+		return nil, err
+	}
 	return &pb.RefundPaymentResp{Refund: created.GetRefund()}, nil
 }
 
@@ -500,36 +495,18 @@ func refundCounts(st pb.Refund_Status) bool {
 	return st != pb.Refund_FAILED && st != pb.Refund_CANCELED
 }
 
-// giveBackRefundCredit returns the credit a top-up refund took back, once the
-// refund has failed or been canceled at the provider: the money stayed, so the
-// credit does too. callerKey is the refund's RefundPayment key (empty for a
-// refund made at the provider directly). Idempotent: run on every delivery and
-// retry that sees the failure. Base no-op; handlers/prepaid.go installs the
-// real one.
-var giveBackRefundCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, providerRefundID, callerKey string) error {
+// reconcileTopupCredit brings the credit of the top-up paid by payment to
+// what the payment's refunds and lost disputes leave of it (see settleTopup in
+// handlers/prepaid.go, which installs it). Called after every change to them;
+// idempotent. Base no-op: top-ups exist only under `prepaid`.
+var reconcileTopupCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) error {
 	return nil
 }
 
-// grantTopupWhenDue grants a top-up whose grant never landed, once its payment
-// reads SUCCEEDED again after a refund that made it REFUNDED failed (the grant
-// is refused while REFUNDED). Idempotent. Base no-op; handlers/prepaid.go
-// installs the real one.
-var grantTopupWhenDue = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) error {
-	return nil
-}
-
-// takeBackReversedCredit takes back the credit of a top-up whose money left
-// without RefundPayment: a refund made at the provider directly, or a lost
-// dispute. reversalID names the reversal ("refund:<id>", "dispute:<id>") and
-// keys the take-back, so a redelivery takes nothing twice.
-//
-// A webhook cannot refuse the way RefundPayment does: the money is gone
-// whatever the balance holds. So it takes what the balance holds, up to the
-// amount, and returns the rest — the shortfall, credit the owner already
-// spent and now owes — for the caller to record ("0" when nothing is owed or
-// the payment is no top-up). The balance never goes below zero. Base no-op;
-// handlers/prepaid.go installs the real one.
-var takeBackReversedCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, reversalID string) (shortfall string, err error) {
+// lostDisputeTotal is what payment lost to disputes, part of a top-up's
+// reconciliation target. Base "0": disputes are recorded only by
+// handlers/webhook_stripe.go, which installs the real one.
+var lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (string, error) {
 	return "0", nil
 }
 

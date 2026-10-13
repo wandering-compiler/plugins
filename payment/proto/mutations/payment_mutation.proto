@@ -65,7 +65,6 @@ message CreateRefundReq {
   // Refund.Status numeric value (the provider's outcome). Plain int — the
   // fixed INSERT DQL binds it without an enum literal.
   int32  status             = 6;
-  string credit_shortfall   = 7 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
 }
 message CreateRefundResp { Refund refund = 1; }
 
@@ -76,7 +75,6 @@ message RecordProviderRefundReq {
   string amount             = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   string currency           = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   int32  status             = 5;
-  string credit_shortfall   = 6 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
 }
 message RecordProviderRefundResp { Refund refund = 1; }
 
@@ -86,8 +84,6 @@ message MarkRefundStatusReq {
 }
 message MarkRefundStatusResp { Refund refund = 1; }
 
-message ClearRefundShortfallReq  { string provider_refund_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
-message ClearRefundShortfallResp { string id = 1; }
 
 message SetRefundIdempotencyKeyReq {
   string id              = 1 [(w17.field) = { type: UUID }];
@@ -103,8 +99,7 @@ message CreateDisputeReq {
   string                    amount              = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   string                    currency            = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   int32                     status              = 5;
-  string                    credit_shortfall    = 6 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
-  google.protobuf.Timestamp provider_event_at   = 7;
+  google.protobuf.Timestamp provider_event_at   = 6;
 }
 message CreateDisputeResp {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
@@ -115,8 +110,7 @@ message MarkDisputeStatusReq {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
   string                    provider_dispute_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
   int32                     status              = 2;
-  string                    credit_shortfall    = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
-  google.protobuf.Timestamp provider_event_at   = 4;
+  google.protobuf.Timestamp provider_event_at   = 3;
 }
 message MarkDisputeStatusResp {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
@@ -165,6 +159,17 @@ message MarkTopupGrantedReq {
   string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
 }
 message MarkTopupGrantedResp {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1;
+}
+
+message SetTopupCreditOwedReq {
+  option (w17.contrib.plugin_feature) = "prepaid";
+  string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string credit_owed         = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64  reconciled_step     = 3 [(w17.field) = { type: NUMBER, gte: 0 }];
+}
+message SetTopupCreditOwedResp {
   option (w17.contrib.plugin_feature) = "prepaid";
   string provider_payment_id = 1;
 }
@@ -509,8 +514,7 @@ service PaymentMutation {
           "amount = :amount, "
           "currency = :currency, "
           "idempotency_key = :idempotency_key, "
-          "status = :status, "
-          "credit_shortfall = :credit_shortfall "
+          "status = :status "
           "RETURNING id AS refund.id, "
           "          payment_id AS refund.payment_id, "
           "          provider_refund_id AS refund.provider_refund_id, "
@@ -518,8 +522,7 @@ service PaymentMutation {
           "          currency AS refund.currency, "
           "          created_at AS refund.created_at, "
           "          idempotency_key AS refund.idempotency_key, "
-          "          status AS refund.status, "
-          "          credit_shortfall AS refund.credit_shortfall"
+          "          status AS refund.status"
       }
     };
   }
@@ -541,16 +544,14 @@ service PaymentMutation {
           "provider_refund_id = :provider_refund_id, "
           "amount = :amount, "
           "currency = :currency, "
-          "status = :status, "
-          "credit_shortfall = :credit_shortfall "
+          "status = :status "
           "RETURNING id AS refund.id, "
           "          payment_id AS refund.payment_id, "
           "          provider_refund_id AS refund.provider_refund_id, "
           "          amount AS refund.amount, "
           "          currency AS refund.currency, "
           "          created_at AS refund.created_at, "
-          "          status AS refund.status, "
-          "          credit_shortfall AS refund.credit_shortfall"
+          "          status AS refund.status"
       }
     };
   }
@@ -604,23 +605,6 @@ service PaymentMutation {
     };
   }
 
-  // ClearRefundShortfall — a refund that failed or was canceled owes nothing:
-  // the money stayed, and what its take-back took is given back. GUARDED
-  // (`status` FAILED or CANCELED, a positive shortfall), so it can never
-  // clear the debt of a refund that counts, and a repeat matches zero rows.
-  rpc ClearRefundShortfall(ClearRefundShortfallReq) returns (ClearRefundShortfallResp) {
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "UPDATE @module.Refund SET credit_shortfall = 0 "
-          "WHERE provider_refund_id = :provider_refund_id "
-          "AND (status = 3 OR status = 4) AND credit_shortfall > 0 "
-          "RETURNING id"
-      }
-    };
-  }
-
   // CreateDispute — INSERT the local record of a provider dispute, the first
   // time one of its charge.dispute.* events arrives. Duplicate
   // provider_dispute_id → UNIQUE_VIOLATION (a concurrent delivery recorded
@@ -638,15 +622,13 @@ service PaymentMutation {
           "amount = :amount, "
           "currency = :currency, "
           "status = :status, "
-          "credit_shortfall = :credit_shortfall, "
           "provider_event_at = :provider_event_at "
           "RETURNING id AS dispute.id, "
           "          payment_id AS dispute.payment_id, "
           "          provider_dispute_id AS dispute.provider_dispute_id, "
           "          amount AS dispute.amount, "
           "          currency AS dispute.currency, "
-          "          status AS dispute.status, "
-          "          credit_shortfall AS dispute.credit_shortfall"
+          "          status AS dispute.status"
       }
     };
   }
@@ -658,8 +640,6 @@ service PaymentMutation {
   // terminal, so an earlier event delivered late cannot reopen a closed
   // dispute. Between the open states the provider's own order decides
   // (`provider_event_at <= :provider_event_at`), as for subscriptions.
-  // credit_shortfall is written with the status: only a LOST event carries
-  // one, and nothing is written after LOST.
   rpc MarkDisputeStatus(MarkDisputeStatusReq) returns (MarkDisputeStatusResp) {
     option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
     option (w17.db.method) = {
@@ -668,7 +648,6 @@ service PaymentMutation {
         dql:
           "UPDATE @module.Dispute SET "
           "status = :status, "
-          "credit_shortfall = :credit_shortfall, "
           "provider_event_at = :provider_event_at, "
           "updated_at = NOW() "
           "WHERE provider_dispute_id = :provider_dispute_id AND status <> 5 AND status <> 6 "
@@ -678,8 +657,7 @@ service PaymentMutation {
           "          provider_dispute_id AS dispute.provider_dispute_id, "
           "          amount AS dispute.amount, "
           "          currency AS dispute.currency, "
-          "          status AS dispute.status, "
-          "          credit_shortfall AS dispute.credit_shortfall"
+          "          status AS dispute.status"
       }
     };
   }
@@ -812,6 +790,25 @@ service PaymentMutation {
         dql:
           "UPDATE @module.CreditTopup SET granted_at = NOW() "
           "WHERE provider_payment_id = :provider_payment_id AND granted_at IS NULL "
+          "RETURNING provider_payment_id"
+      }
+    };
+  }
+
+  // SetTopupCreditOwed — record what a top-up's reconciliation left owed,
+  // with the step it computed it at. GUARDED (`reconciled_step <
+  // :reconciled_step`): the step's ledger row was written first under a key
+  // unique per (payment, step), so a newer step's answer is never
+  // overwritten by an older one's, and a repeat matches zero rows. Gated
+  // prepaid.
+  rpc SetTopupCreditOwed(SetTopupCreditOwedReq) returns (SetTopupCreditOwedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "prepaid";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.CreditTopup SET credit_owed = :credit_owed, reconciled_step = :reconciled_step "
+          "WHERE provider_payment_id = :provider_payment_id AND reconciled_step < :reconciled_step "
           "RETURNING provider_payment_id"
       }
     };

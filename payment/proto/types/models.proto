@@ -118,19 +118,13 @@ message Refund {
   // Rows written before the outcome was kept read SUCCEEDED: what every
   // earlier version assumed of them.
   Status status             = 8 [(w17.field) = { type: ENUM, default_int: 2 }];
-  // The part of a top-up refund's credit that could not be taken back because
-  // the owner had already spent it — what the owner owes. Only a refund made
-  // at the provider directly can leave one (RefundPayment refuses to refund
-  // spent credit); "0" or NULL means nothing is owed.
-  string credit_shortfall   = 9 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0, null: true }];
 }
 
 // Dispute — a chargeback (or an inquiry) the cardholder's bank opened on a
 // Payment, recorded from the provider's charge.dispute.* webhooks. Status is
 // the provider's, mapped one to one; WON and LOST are terminal. A LOST
-// dispute on a top-up takes its credit back like a refund made at the
-// provider; credit_shortfall is what could not be taken back. Gated
-// `stripe_webhooks`: only the webhook writes it.
+// dispute on a top-up takes its amount out of the top-up's credit (see
+// CreditTopup). Gated `stripe_webhooks`: only the webhook writes it.
 message Dispute {
   option (w17.db.table) = {};
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
@@ -152,12 +146,11 @@ message Dispute {
   string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   string currency            = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
   Status status              = 6 [(w17.field) = { type: ENUM }];
-  string credit_shortfall    = 7 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   // When the provider created the last event applied to this row. Events
   // arrive out of order; an older one must not overwrite a newer status.
-  google.protobuf.Timestamp provider_event_at = 8 [(w17.field) = { type: DATETIME, null: true }];
-  google.protobuf.Timestamp created_at = 9  [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
-  google.protobuf.Timestamp updated_at = 10 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+  google.protobuf.Timestamp provider_event_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp updated_at = 9 [(w17.field) = { type: DATETIME, default_auto: NOW }];
 }
 
 // ProcessedWebhookEvent — the inbound-idempotency ledger. The webhook
@@ -196,7 +189,7 @@ message CreditLedger {
   string id              = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
   string delta           = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
-  string reason          = 4 [(w17.field) = { type: SLUG, max_len: 64 }];   // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused|topup-refund-failed|topup-reversal|topup-reversal-undone
+  string reason          = 4 [(w17.field) = { type: SLUG, max_len: 64 }];   // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused|topup-reconcile
   string ref             = 5 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // payment id / order id / …
   string idempotency_key = 6 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
   google.protobuf.Timestamp created_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
@@ -220,11 +213,16 @@ message CreditBalance {
   google.protobuf.Timestamp updated_at = 3 [(w17.field) = { type: DATETIME, default_auto: NOW }];
 }
 
-// CreditTopup — links a Payment (the money charge) to the credit grant
-// it funds. TopUpCredit inserts one (granted_at NULL) when it creates
-// the charge; the payment-succeeded webhook hook grants the credit and
-// stamps granted_at. provider_payment_id is unique (one top-up per
-// charge). Gated prepaid.
+// CreditTopup — links a Payment (the money charge) to the credit it funds.
+// TopUpCredit inserts one (granted_at NULL) when it creates the charge.
+// provider_payment_id is unique (one top-up per charge). Gated prepaid.
+//
+// The top-up's credit is reconciled, never patched: its target is the
+// amount, less the payment's pending and succeeded refunds and lost
+// disputes (never below zero; zero until the payment has succeeded), and
+// every change moves the credit this payment holds in the ledger to it. A
+// decrease takes only what the balance holds; the rest is credit_owed.
+// granted_at is stamped the first time the paid top-up is reconciled.
 message CreditTopup {
   option (w17.db.table) = {};
   option (w17.contrib.plugin_feature) = "prepaid";
@@ -235,6 +233,15 @@ message CreditTopup {
   string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   google.protobuf.Timestamp granted_at = 5 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // Credit the owner spent that a refund or a lost dispute took back from
+  // this top-up — what the owner owes. NULL or 0: nothing. A later
+  // reconciliation that can take more (the balance grew) or needs less (a
+  // refund failed) lowers it first.
+  string credit_owed = 7 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0, null: true }];
+  // The last reconciliation step whose credit_owed is written here; the
+  // ledger rows of the steps are keyed by (payment, step), so a stale
+  // reconciliation never overwrites a newer one's answer.
+  int64 reconciled_step = 8 [(w17.field) = { type: NUMBER, gte: 0, default_int: 0 }];
 }
 
 // ── usage feature: metered / pay-as-you-go ──────────────────────────

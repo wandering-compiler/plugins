@@ -204,19 +204,6 @@ func decimal4(s string) (*big.Rat, error) {
 
 func fmt4(r *big.Rat) string { return r.FloatString(4) }
 
-// nullableDecimal4 is decimal4 for a nullable column: "" is NULL, read back
-// as "".
-func nullableDecimal4(s string) (string, error) {
-	if s == "" {
-		return "", nil
-	}
-	r, err := decimal4(s)
-	if err != nil {
-		return "", err
-	}
-	return fmt4(r), nil
-}
-
 // subscriptionStatusCheck is the Subscription.status column's CHECK IN: the
 // enum's declared numbers WITHOUT the zero sentinel (the migrator excludes
 // it), so STATUS_UNSPECIFIED — or a number the enum does not declare — is
@@ -580,12 +567,8 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 	if err := refundStatusCheck(in.GetStatus()); err != nil {
 		return nil, s.leave("CreateRefund", err)
 	}
-	short, err := nullableDecimal4(in.GetCreditShortfall())
-	if err != nil {
-		return nil, s.leave("CreateRefund", err)
-	}
 	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(), IdempotencyKey: in.GetIdempotencyKey(),
-		Status: pb.Refund_Status(in.GetStatus()), CreditShortfall: short}
+		Status: pb.Refund_Status(in.GetStatus())}
 	s.refunds[r.Id] = r
 	return &pb.CreateRefundResp{Refund: clone(r)}, s.leave("CreateRefund", nil)
 }
@@ -600,10 +583,6 @@ func (s *memStore) RecordProviderRefund(_ context.Context, in *pb.RecordProvider
 	if err != nil {
 		return nil, s.leave("RecordProviderRefund", err)
 	}
-	short, err := decimal4(in.GetCreditShortfall())
-	if err != nil {
-		return nil, s.leave("RecordProviderRefund", err)
-	}
 	if err := refundStatusCheck(in.GetStatus()); err != nil {
 		return nil, s.leave("RecordProviderRefund", err)
 	}
@@ -613,7 +592,7 @@ func (s *memStore) RecordProviderRefund(_ context.Context, in *pb.RecordProvider
 		}
 	}
 	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(),
-		Status: pb.Refund_Status(in.GetStatus()), CreditShortfall: fmt4(short)}
+		Status: pb.Refund_Status(in.GetStatus())}
 	s.refunds[r.Id] = r
 	return &pb.RecordProviderRefundResp{Refund: clone(r)}, s.leave("RecordProviderRefund", nil)
 }
@@ -638,24 +617,6 @@ func (s *memStore) MarkRefundStatus(_ context.Context, in *pb.MarkRefundStatusRe
 		return &pb.MarkRefundStatusResp{Refund: clone(r)}, s.leave("MarkRefundStatus", nil)
 	}
 	return nil, s.leave("MarkRefundStatus", noRows("MarkRefundStatus"))
-}
-
-// ClearRefundShortfall: `WHERE … AND (status = 3 OR status = 4) AND
-// credit_shortfall > 0`.
-func (s *memStore) ClearRefundShortfall(_ context.Context, in *pb.ClearRefundShortfallReq, _ ...grpc.CallOption) (*pb.ClearRefundShortfallResp, error) {
-	if err := s.enter("ClearRefundShortfall"); err != nil {
-		return nil, s.leave("", err)
-	}
-	for _, r := range s.refunds {
-		if r.GetProviderRefundId() != in.GetProviderRefundId() || (r.GetStatus() != pb.Refund_FAILED && r.GetStatus() != pb.Refund_CANCELED) {
-			continue
-		}
-		if sh, err := decimal4(r.GetCreditShortfall()); err == nil && sh.Sign() > 0 {
-			r.CreditShortfall = "0.0000"
-			return &pb.ClearRefundShortfallResp{Id: r.GetId()}, s.leave("ClearRefundShortfall", nil)
-		}
-	}
-	return nil, s.leave("ClearRefundShortfall", noRows("ClearRefundShortfall"))
 }
 
 // MarkPaymentRefundReversed: `WHERE … AND status = 6`.
@@ -710,10 +671,6 @@ func (s *memStore) CreateDispute(_ context.Context, in *pb.CreateDisputeReq, _ .
 	if err != nil {
 		return nil, s.leave("CreateDispute", err)
 	}
-	short, err := decimal4(in.GetCreditShortfall())
-	if err != nil {
-		return nil, s.leave("CreateDispute", err)
-	}
 	if err := disputeStatusCheck(in.GetStatus()); err != nil {
 		return nil, s.leave("CreateDispute", err)
 	}
@@ -723,7 +680,7 @@ func (s *memStore) CreateDispute(_ context.Context, in *pb.CreateDisputeReq, _ .
 		}
 	}
 	d := &pb.Dispute{Id: s.nextID("dp"), PaymentId: in.GetPaymentId(), ProviderDisputeId: in.GetProviderDisputeId(), Amount: fmt4(amt), Currency: in.GetCurrency(),
-		Status: pb.Dispute_Status(in.GetStatus()), CreditShortfall: fmt4(short), ProviderEventAt: in.GetProviderEventAt()}
+		Status: pb.Dispute_Status(in.GetStatus()), ProviderEventAt: in.GetProviderEventAt()}
 	s.disputes[d.Id] = d
 	return &pb.CreateDisputeResp{Dispute: clone(d)}, s.leave("CreateDispute", nil)
 }
@@ -737,10 +694,6 @@ func (s *memStore) MarkDisputeStatus(_ context.Context, in *pb.MarkDisputeStatus
 	if err := disputeStatusCheck(in.GetStatus()); err != nil {
 		return nil, s.leave("MarkDisputeStatus", err)
 	}
-	short, err := decimal4(in.GetCreditShortfall())
-	if err != nil {
-		return nil, s.leave("MarkDisputeStatus", err)
-	}
 	for _, d := range s.disputes {
 		if d.GetProviderDisputeId() != in.GetProviderDisputeId() {
 			continue
@@ -752,11 +705,79 @@ func (s *memStore) MarkDisputeStatus(_ context.Context, in *pb.MarkDisputeStatus
 			break
 		}
 		d.Status = pb.Dispute_Status(in.GetStatus())
-		d.CreditShortfall = fmt4(short)
 		d.ProviderEventAt = in.GetProviderEventAt()
 		return &pb.MarkDisputeStatusResp{Dispute: clone(d)}, s.leave("MarkDisputeStatus", nil)
 	}
 	return nil, s.leave("MarkDisputeStatus", noRows("MarkDisputeStatus"))
+}
+
+// SumLostDisputesForPayment: SUM(amount) over status = 6 (LOST).
+func (s *memStore) SumLostDisputesForPayment(_ context.Context, in *pb.SumLostDisputesForPaymentReq, _ ...grpc.CallOption) (*pb.SumLostDisputesForPaymentResp, error) {
+	if err := s.enter("SumLostDisputesForPayment"); err != nil {
+		return nil, s.leave("", err)
+	}
+	total := new(big.Rat)
+	for _, d := range s.disputes {
+		if d.GetPaymentId() == in.GetPaymentId() && d.GetStatus() == pb.Dispute_LOST {
+			a, _ := decimal4(d.GetAmount())
+			total.Add(total, a)
+		}
+	}
+	return &pb.SumLostDisputesForPaymentResp{Total: fmt4(total)}, s.leave("SumLostDisputesForPayment", nil)
+}
+
+// SumTopupCredit: SUM(delta) WHERE user_id AND ref IN (payment_id,
+// provider_payment_id) AND reason IN (the four bound reasons).
+func (s *memStore) SumTopupCredit(_ context.Context, in *pb.SumTopupCreditReq, _ ...grpc.CallOption) (*pb.SumTopupCreditResp, error) {
+	if err := s.enter("SumTopupCredit"); err != nil {
+		return nil, s.leave("", err)
+	}
+	total := new(big.Rat)
+	for _, e := range s.ledger {
+		if e.GetUserId() != in.GetUserId() || (e.GetRef() != in.GetPaymentId() && e.GetRef() != in.GetProviderPaymentId()) {
+			continue
+		}
+		switch e.GetReason() {
+		case in.GetReasonGrant(), in.GetReasonRefund(), in.GetReasonRefused(), in.GetReasonReconcile():
+			d, _ := decimal4(e.GetDelta())
+			total.Add(total, d)
+		}
+	}
+	return &pb.SumTopupCreditResp{Total: fmt4(total)}, s.leave("SumTopupCredit", nil)
+}
+
+// SetTopupCreditOwed: `WHERE provider_payment_id = … AND reconciled_step <
+// :reconciled_step`.
+func (s *memStore) SetTopupCreditOwed(_ context.Context, in *pb.SetTopupCreditOwedReq, _ ...grpc.CallOption) (*pb.SetTopupCreditOwedResp, error) {
+	if err := s.enter("SetTopupCreditOwed"); err != nil {
+		return nil, s.leave("", err)
+	}
+	owed, err := decimal4(in.GetCreditOwed())
+	if err != nil {
+		return nil, s.leave("SetTopupCreditOwed", err)
+	}
+	t, ok := s.topups[in.GetProviderPaymentId()]
+	if !ok || t.GetReconciledStep() >= in.GetReconciledStep() {
+		return nil, s.leave("SetTopupCreditOwed", noRows("SetTopupCreditOwed"))
+	}
+	t.CreditOwed = fmt4(owed)
+	t.ReconciledStep = in.GetReconciledStep()
+	return &pb.SetTopupCreditOwedResp{ProviderPaymentId: t.ProviderPaymentId}, s.leave("SetTopupCreditOwed", nil)
+}
+
+// owed is the top-up's recorded credit_owed ("0.0000" when none).
+func (s *memStore) owed(t *testing.T, providerPaymentID string) string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tp, ok := s.topups[providerPaymentID]
+	if !ok {
+		t.Fatalf("no top-up %s", providerPaymentID)
+	}
+	if tp.GetCreditOwed() == "" {
+		return "0.0000"
+	}
+	return tp.GetCreditOwed()
 }
 
 func (s *memStore) dispute(t *testing.T, providerID string) *pb.Dispute {

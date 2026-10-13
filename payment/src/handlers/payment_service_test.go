@@ -85,12 +85,19 @@ type fakeQuery struct {
 	plan         *pb.Plan          // subscriptions
 	subscription *pb.Subscription
 	creditTopup  *pb.CreditTopup  // prepaid top-up
+	topupHeld    string           // SumTopupCredit's answer ("" = 0)
 	ledgerEntry  *pb.CreditLedger // GetCreditLedgerByKey answer (prepaid)
 
 	paymentByProvider *pb.Payment // GetPaymentByProviderId answer
 	refundedTotal     string      // SumRefundsForPayment answer
 }
 
+func (q *fakeQuery) SumTopupCredit(context.Context, *pb.SumTopupCreditReq, ...grpc.CallOption) (*pb.SumTopupCreditResp, error) {
+	return &pb.SumTopupCreditResp{Total: orDefault(q.topupHeld, "0")}, nil
+}
+func (q *fakeQuery) SumLostDisputesForPayment(context.Context, *pb.SumLostDisputesForPaymentReq, ...grpc.CallOption) (*pb.SumLostDisputesForPaymentResp, error) {
+	return &pb.SumLostDisputesForPaymentResp{Total: "0"}, nil
+}
 func (q *fakeQuery) SumRefundsForPayment(context.Context, *pb.SumRefundsForPaymentReq, ...grpc.CallOption) (*pb.SumRefundsForPaymentResp, error) {
 	return &pb.SumRefundsForPaymentResp{Total: q.refundedTotal}, nil
 }
@@ -167,6 +174,9 @@ func (q *fakeQuery) GetCreditTopupByProviderId(_ context.Context, _ *pb.GetCredi
 
 type fakeMutation struct {
 	pb.PaymentMutationClient
+	// heldBy, when set, has its SumTopupCredit answer follow the top-up
+	// applies, as the ledger would.
+	heldBy          *fakeQuery
 	createdCustomer *pb.Customer
 	createPayReq    *pb.CreatePaymentReq
 
@@ -210,6 +220,10 @@ func (m *fakeMutation) CreateCreditTopup(_ context.Context, in *pb.CreateCreditT
 	m.lastCreateTopup = in
 	return &pb.CreateCreditTopupResp{Topup: &pb.CreditTopup{ProviderPaymentId: in.GetProviderPaymentId(), UserId: in.GetUserId(), Amount: in.GetAmount()}}, nil
 }
+func (m *fakeMutation) SetTopupCreditOwed(_ context.Context, in *pb.SetTopupCreditOwedReq, _ ...grpc.CallOption) (*pb.SetTopupCreditOwedResp, error) {
+	return &pb.SetTopupCreditOwedResp{ProviderPaymentId: in.GetProviderPaymentId()}, nil
+}
+
 func (m *fakeMutation) MarkTopupGranted(_ context.Context, in *pb.MarkTopupGrantedReq, _ ...grpc.CallOption) (*pb.MarkTopupGrantedResp, error) {
 	m.markGrantedFor = in.GetProviderPaymentId()
 	return &pb.MarkTopupGrantedResp{ProviderPaymentId: in.GetProviderPaymentId()}, nil
@@ -246,6 +260,9 @@ func (m *fakeMutation) ApplyCredit(_ context.Context, in *pb.ApplyCreditReq, _ .
 	m.lastApply = in
 	if m.applyErr != nil {
 		return nil, m.applyErr
+	}
+	if m.heldBy != nil && isTopupReason(in.GetReason()) {
+		m.heldBy.topupHeld = decimalSum(m.heldBy.topupHeld, in.GetDelta())
 	}
 	if m.applyResp != nil {
 		return m.applyResp, nil

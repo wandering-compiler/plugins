@@ -206,12 +206,12 @@ func isRefundEvent(typ string) bool {
 // the provider never revives one, so a read that disagrees is older than the
 // failure (MarkRefundStatus is guarded the same way).
 //
-// Every refund first: an unknown one is recorded (and a top-up's credit taken
-// back), a known one takes the provider's outcome, and a failed or canceled
-// one gives a top-up's credit back. Then the payment's status, from the LOCAL
-// rows — never from this read, which a concurrent delivery may already have
-// overtaken (settleRefundedStatus). Every step is idempotent, and any failure
-// leaves the event unrecorded, so the provider's redelivery runs the whole
+// Every refund first: an unknown one is recorded, a known one takes the
+// provider's outcome. Then the payment's status, from the LOCAL rows — never
+// from this read, which a concurrent delivery may already have overtaken
+// (settleRefundedStatus). Then a top-up's credit, from the same rows
+// (reconcileTopupCredit). Every step is idempotent, and any failure leaves
+// the event unrecorded, so the provider's redelivery runs the whole
 // reconciliation again.
 func (h *PaymentServiceHandler) reconcileRefunds(ctx context.Context, providerPaymentID string) error {
 	if providerPaymentID == "" {
@@ -240,7 +240,10 @@ func (h *PaymentServiceHandler) reconcileRefunds(ctx context.Context, providerPa
 			return err
 		}
 	}
-	return h.settleRefundedStatus(ctx, payment)
+	if err := h.settleRefundedStatus(ctx, payment); err != nil {
+		return err
+	}
+	return reconcileTopupCredit(ctx, h, payment)
 }
 
 // seenRefund is one provider refund with its local row (nil when none) and
@@ -263,9 +266,6 @@ type seenRefund struct {
 // whichever runs last sees both writes and the payment cannot stay REFUNDED
 // on a failed refund. (The cost is a PaymentRefunded followed by a
 // PaymentRefundReversed in that interleaving.)
-//
-// A payment that is SUCCEEDED again gets a top-up grant the REFUNDED had
-// refused (grantTopupWhenDue).
 func (h *PaymentServiceHandler) settleRefundedStatus(ctx context.Context, payment *pb.Payment) error {
 	pid := payment.GetProviderPaymentId()
 	full, err := h.refundedInFull(ctx, payment)
@@ -287,7 +287,7 @@ func (h *PaymentServiceHandler) settleRefundedStatus(ctx context.Context, paymen
 	if _, err := h.Mutation.MarkPaymentRefundReversed(ctx, &pb.MarkPaymentRefundReversedReq{ProviderPaymentId: pid}); err != nil && !guardRefused(err) {
 		return err // refused: not REFUNDED, nothing to reverse
 	}
-	return grantTopupWhenDue(ctx, h, payment)
+	return nil
 }
 
 // refundedInFull reports whether the payment's recorded pending and succeeded
@@ -319,18 +319,6 @@ func (h *PaymentServiceHandler) reconcileRefund(ctx context.Context, payment *pb
 			return err
 		}
 	}
-	if refundCounts(outcome) {
-		return nil
-	}
-	if err := giveBackRefundCredit(ctx, h, payment, r.ProviderRefundID, r.Key); err != nil {
-		return err
-	}
-	// The money stayed and the credit is back: nothing is owed any more.
-	if isPositiveDecimal(row.GetCreditShortfall()) {
-		if _, err := h.Mutation.ClearRefundShortfall(ctx, &pb.ClearRefundShortfallReq{ProviderRefundId: r.ProviderRefundID}); err != nil && !guardRefused(err) {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -338,13 +326,9 @@ func (h *PaymentServiceHandler) reconcileRefund(ctx context.Context, payment *pb
 //
 // One carrying a RefundPayment key is this plugin's own, whose local insert
 // has not landed (it is in flight, or it failed and the caller has not
-// retried). It is recorded under that key, so the caller's retry finds it, and
-// its credit was taken back before the provider was asked.
-//
-// One without a key was made at the provider directly. Its credit is taken
-// back here, as far as the balance holds it, and what could not be taken is
-// recorded on the row as the credit shortfall. A refund first seen failed or
-// canceled took nothing and takes nothing.
+// retried). It is recorded under that key, so the caller's retry finds it.
+// One without a key was made at the provider directly. Either way a top-up's
+// credit follows from the rows (reconcileTopupCredit), not from here.
 //
 // A concurrent writer (the other delivery, or RefundPayment itself) recording
 // it first is the answer: its row is returned.
@@ -363,25 +347,17 @@ func (h *PaymentServiceHandler) recordProviderRefund(ctx context.Context, paymen
 			Currency:         currency,
 			IdempotencyKey:   refundKey(r.Key),
 			Status:           int32(outcome),
-			CreditShortfall:  "0",
 		})
 	}
 	if r.Key == "" || (constraintCode(err) == codeUniqueViolation && !h.refundRecorded(ctx, r.ProviderRefundID)) {
 		// No key, or a key some other refund already holds (refused at
 		// RefundPayment, so not one it made): recorded without the key.
-		shortfall := "0"
-		if r.Key == "" && refundCounts(outcome) {
-			if shortfall, err = takeBackReversedCredit(ctx, h, payment, r.Amount.Amount, "refund:"+r.ProviderRefundID); err != nil {
-				return nil, err
-			}
-		}
 		created, err = h.Mutation.RecordProviderRefund(ctx, &pb.RecordProviderRefundReq{
 			PaymentId:        payment.GetId(),
 			ProviderRefundId: r.ProviderRefundID,
 			Amount:           r.Amount.Amount,
 			Currency:         currency,
 			Status:           int32(outcome),
-			CreditShortfall:  shortfall,
 		})
 	}
 	if err == nil {
@@ -404,16 +380,14 @@ func (h *PaymentServiceHandler) refundRecorded(ctx context.Context, providerRefu
 	return !absent(err)
 }
 
-// reconcileDispute records a dispute's status from its charge.dispute.* event
-// and, once the dispute is LOST, takes a top-up's credit back like a refund
-// made at the provider (the shortfall is recorded on the dispute).
+// reconcileDispute records a dispute's status from its charge.dispute.* event,
+// then reconciles a top-up's credit, whose target a LOST dispute lowers by its
+// amount (reconcileTopupCredit).
 //
-// An open dispute (needs_response, under_review) takes nothing yet, although
+// An open dispute (needs_response, under_review) lowers nothing yet, although
 // the provider has already withdrawn the disputed amount: most disputes are
-// won, and a credit taken at opening would have to be given back on a win,
-// which out-of-order events make unsafe to do exactly once. The credit stays
-// spendable until the dispute is lost; whatever is spent by then is the
-// shortfall. An inquiry (warning_*) withdraws nothing and takes nothing.
+// won. The credit stays spendable until the dispute is lost; whatever is spent
+// by then is owed. An inquiry (warning_*) withdraws nothing.
 //
 // The dispute's own event is used, not a fresh read: its status only moves
 // forward to WON or LOST, both terminal, and between the open states the
@@ -426,27 +400,28 @@ func (h *PaymentServiceHandler) reconcileDispute(ctx context.Context, ev stripe.
 	if err != nil || payment == nil {
 		return err // no local payment: not this installation's
 	}
+	if err := h.recordDispute(ctx, ev, payment); err != nil {
+		return err
+	}
+	return reconcileTopupCredit(ctx, h, payment)
+}
+
+// recordDispute writes the dispute's status, creating its row the first time.
+func (h *PaymentServiceHandler) recordDispute(ctx context.Context, ev stripe.Event, payment *pb.Payment) error {
 	amount, currency := ev.Amount.Amount, ev.Amount.Currency
 	if amount == "" {
 		amount, currency = payment.GetAmount(), payment.GetCurrency()
 	}
 	outcome := mapDisputeStatus(ev.ObjectStatus)
-	shortfall := "0"
-	if outcome == pb.Dispute_LOST {
-		if shortfall, err = takeBackReversedCredit(ctx, h, payment, amount, "dispute:"+ev.ObjectID); err != nil {
-			return err
-		}
-	}
 	mark := func() error {
 		_, err := h.Mutation.MarkDisputeStatus(ctx, &pb.MarkDisputeStatusReq{
 			ProviderDisputeId: ev.ObjectID,
 			Status:            int32(outcome),
-			CreditShortfall:   shortfall,
 			ProviderEventAt:   eventTime(ev.Created),
 		})
 		return err
 	}
-	err = mark()
+	err := mark()
 	if !guardRefused(err) {
 		return err
 	}
@@ -463,7 +438,6 @@ func (h *PaymentServiceHandler) reconcileDispute(ctx context.Context, ev stripe.
 		Amount:            amount,
 		Currency:          currency,
 		Status:            int32(outcome),
-		CreditShortfall:   shortfall,
 		ProviderEventAt:   eventTime(ev.Created),
 	})
 	if constraintCode(err) == codeUniqueViolation {
@@ -533,4 +507,13 @@ func metadataValue(ctx context.Context, key string) string {
 	return ""
 }
 
-func init() { webhooksStaged = true }
+func init() {
+	webhooksStaged = true
+	lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (string, error) {
+		got, err := h.Query.SumLostDisputesForPayment(ctx, &pb.SumLostDisputesForPaymentReq{PaymentId: payment.GetId()})
+		if err != nil {
+			return "", err
+		}
+		return got.GetTotal(), nil
+	}
+}

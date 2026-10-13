@@ -225,6 +225,30 @@ func decimalSum(a, b string) string {
 	return new(big.Rat).Add(x, y).FloatString(amountMaxFracDigits)
 }
 
+// decimalSub is a - b for two decimal strings, at the columns' scale; a value
+// that does not parse counts as zero.
+func decimalSub(a, b string) string {
+	x, _ := new(big.Rat).SetString(strings.TrimSpace(a))
+	y, _ := new(big.Rat).SetString(strings.TrimSpace(b))
+	if x == nil {
+		x = new(big.Rat)
+	}
+	if y == nil {
+		y = new(big.Rat)
+	}
+	return new(big.Rat).Sub(x, y).FloatString(amountMaxFracDigits)
+}
+
+// decimalSign is -1, 0 or +1 for a decimal string; one that does not parse
+// is 0.
+func decimalSign(a string) int {
+	x, ok := new(big.Rat).SetString(strings.TrimSpace(a))
+	if !ok {
+		return 0
+	}
+	return x.Sign()
+}
+
 // decimalMin is the smaller of two decimal strings, at the columns' scale;
 // a value that does not parse counts as zero.
 func decimalMin(a, b string) string {
@@ -234,13 +258,12 @@ func decimalMin(a, b string) string {
 	return decimalSum(a, "0")
 }
 
-// decimalShortfall is amount - taken, never below zero: what a reversal could
-// not take back.
+// decimalShortfall is amount - taken, never below zero.
 func decimalShortfall(amount, taken string) string {
-	if decimalAtLeast(taken, amount) {
-		return "0"
+	if d := decimalSub(amount, taken); decimalSign(d) > 0 {
+		return d
 	}
-	return decimalSum(amount, "-"+strings.TrimSpace(taken))
+	return "0"
 }
 
 // isCurrencyCode reports whether c (already trimmed + lowercased) has

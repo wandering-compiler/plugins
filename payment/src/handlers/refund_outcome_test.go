@@ -224,8 +224,9 @@ func TestWebhook_RefundAtTheProviderTakesTheTopUpCreditBack(t *testing.T) {
 	deliverOK(t, r, body)
 	deliverOK(t, r, refundEvent("evt_cr", "charge.refunded", "ch_1", p.GetProviderPaymentId()))
 	wantBalance(t, r, "6.0000")
-	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "0.0000" {
-		t.Errorf("shortfall %q, want 0.0000", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "0.0000" {
+		t.Errorf("owed %q, want 0.0000", got)
 	}
 }
 
@@ -242,8 +243,9 @@ func TestWebhook_RefundAtTheProviderOfSpentCredit_RecordsTheShortfall(t *testing
 	deliverOK(t, r, body)
 	deliverOK(t, r, body)
 	wantBalance(t, r, "0.0000")
-	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "8.0000" {
-		t.Errorf("shortfall %q, want 8.0000", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "8.0000" {
+		t.Errorf("owed %q, want 8.0000", got)
 	}
 	wantPaymentStatus(t, r, p, pb.Payment_REFUNDED)
 }
@@ -261,8 +263,9 @@ func TestWebhook_RefundAtTheProvider_ASpendRacingTheTakeBack(t *testing.T) {
 	})
 	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, p.GetProviderPaymentId()))
 	wantBalance(t, r, "0.0000")
-	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "3.0000" {
-		t.Errorf("shortfall %q, want 3.0000", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "3.0000" {
+		t.Errorf("owed %q, want 3.0000", got)
 	}
 }
 
@@ -306,8 +309,9 @@ func TestWebhook_RefundAtTheProviderOfAnUngrantedTopUp_IsLeftOutOfTheGrant(t *te
 	}
 	id := r.stripe.refundAtProvider(p.GetProviderPaymentId(), 400)
 	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, p.GetProviderPaymentId()))
-	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "0.0000" {
-		t.Errorf("shortfall %q, want 0.0000 (the grant leaves it out)", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "0.0000" {
+		t.Errorf("owed %q, want 0.0000 (the grant leaves it out)", got)
 	}
 	// The payment is SUCCEEDED and its grant due: the refund's delivery
 	// grants what is left, and the success's redelivery grants nothing more.
@@ -349,26 +353,48 @@ func TestWebhook_FailedFullRefundOfAnUngrantedTopUp_GrantsTheCredit(t *testing.T
 	wantBalance(t, r, "6.0000")
 }
 
-// A lost dispute on a top-up whose grant has not landed takes nothing (there
-// is nothing to take) and is acknowledged; the grant will hand the credit
-// over, so its amount is recorded as owed.
-func TestWebhook_LostDisputeOnAnUngrantedTopUp_IsOwed(t *testing.T) {
+// A lost dispute on a top-up whose grant has not landed: the target is the
+// amount less the dispute, so the grant, when it lands, grants nothing — not
+// the whole amount spendable AND owed.
+func TestWebhook_LostDisputeBeforeTheGrant_IsNotCountedTwice(t *testing.T) {
 	r := newRig(t)
 	p := r.topUp("user-a", "10.00", "top-x")
+	success := eventJSON("evt_top", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)
 	r.store.injectBefore("ApplyCredit", errTransient)
-	if _, err := r.deliver(eventJSON("evt_top", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err == nil {
+	if _, err := r.deliver(success); err == nil {
 		t.Fatal("want the grant failure to surface")
 	}
 	deliverOK(t, r, disputeEvent(t, "evt_d", "charge.dispute.closed", "dp_u", p.GetProviderPaymentId(), "lost", 1000, time.Now().Unix()))
-	if d := r.store.dispute(t, "dp_u"); d == nil || d.GetStatus() != pb.Dispute_LOST || d.GetCreditShortfall() != "10.0000" {
-		t.Errorf("dispute %+v, want LOST owing 10.0000", d)
+	deliverOK(t, r, success)
+	wantBalance(t, r, "0.0000")
+	if owed := r.store.owed(t, p.GetProviderPaymentId()); owed != "0.0000" {
+		t.Errorf("owed %s, want 0.0000", owed)
 	}
 }
 
-// Two deliveries of one provider refund: A takes what the balance holds; B
-// checked the ledger before A committed, then finds the balance emptied by A.
-// Both answer the shortfall from the one ledger row, so B — recording the
-// refund first — records what A could not take, not the whole amount.
+// A partial refund at the provider before the grant leaves 7 to grant; when
+// that refund fails, the 3 is credited too.
+func TestWebhook_PartialRefundBeforeTheGrantThatFails_CreditsTheWholeTopUp(t *testing.T) {
+	r := newRig(t)
+	p := r.topUp("user-a", "10.00", "top-x")
+	pi := p.GetProviderPaymentId()
+	success := eventJSON("evt_top", "payment_intent.succeeded", pi, nil)
+	r.store.injectBefore("ApplyCredit", errTransient)
+	if _, err := r.deliver(success); err == nil {
+		t.Fatal("want the grant failure to surface")
+	}
+	id := r.stripe.refundAtProvider(pi, 300)
+	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, pi))
+	deliverOK(t, r, success)
+	wantBalance(t, r, "7.0000")
+	r.stripe.setRefundStatus(id, "failed")
+	deliverOK(t, r, refundEvent("evt_rf", "refund.failed", id, pi))
+	wantBalance(t, r, "10.0000")
+}
+
+// Two reconciliations of one top-up race for the same step: A takes the 4 the
+// balance holds while B, which read the same state, is about to write. B's
+// write loses the step, B reads again, and both agree: 6 owed.
 func TestWebhook_ConcurrentReversalDeliveries_RecordOneShortfall(t *testing.T) {
 	r := newRig(t)
 	p := grantedTopUp(t, r, "10.00")
@@ -377,23 +403,14 @@ func TestWebhook_ConcurrentReversalDeliveries_RecordOneShortfall(t *testing.T) {
 	}
 	pi := p.GetProviderPaymentId()
 	id := r.stripe.refundAtProvider(pi, 1000)
-	atInsert, release, aDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	r.store.onceBefore("RecordProviderRefund", func() { close(atInsert); <-release })
-	r.store.onceBefore("GetCreditBalance", func() {
-		go func() {
-			_, err := r.deliver(refundEvent("evt_a", "refund.created", id, pi))
-			aDone <- err
-		}()
-		<-atInsert // A has taken the 4 and waits to record the refund
+	r.store.onceBefore("ApplyCredit", func() {
+		deliverOK(t, r, refundEvent("evt_a", "refund.created", id, pi))
 	})
-	_, errB := r.deliver(refundEvent("evt_b", "charge.refunded", "ch_1", pi))
-	close(release)
-	if errA := <-aDone; errA != nil || errB != nil {
-		t.Fatalf("deliveries: A %v, B %v", errA, errB)
-	}
+	deliverOK(t, r, refundEvent("evt_b", "charge.refunded", "ch_1", pi))
 	wantBalance(t, r, "0.0000")
-	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "6.0000" {
-		t.Errorf("shortfall %q, want 6.0000 (10 refunded, 4 taken)", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+	if got := r.store.owed(t, pi); got != "6.0000" {
+		t.Errorf("owed %q, want 6.0000 (10 refunded, 4 taken)", got)
 	}
 }
 
@@ -419,8 +436,9 @@ func TestWebhook_ConcurrentReversalDeliveries_Stress(t *testing.T) {
 		}
 		wg.Wait()
 		wantBalance(t, r, "0.0000")
-		if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "6.0000" {
-			t.Fatalf("run %d: shortfall %q, want 6.0000", run, row.GetCreditShortfall())
+		wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+		if got := r.store.owed(t, p.GetProviderPaymentId()); got != "6.0000" {
+			t.Fatalf("run %d: owed %q, want 6.0000", run, got)
 		}
 	}
 }
@@ -452,14 +470,16 @@ func TestWebhook_FailedRefundClearsItsShortfall(t *testing.T) {
 	}
 	id := r.stripe.refundAtProvider(p.GetProviderPaymentId(), 1000)
 	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, p.GetProviderPaymentId()))
-	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "8.0000" {
-		t.Fatalf("shortfall %q, want 8.0000", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "8.0000" {
+		t.Fatalf("owed %q, want 8.0000", got)
 	}
 	r.stripe.setRefundStatus(id, "failed")
 	deliverOK(t, r, refundEvent("evt_rf", "refund.failed", id, p.GetProviderPaymentId()))
 	wantBalance(t, r, "2.0000")
-	if row := wantRefundStatus(t, r, id, pb.Refund_FAILED); row.GetCreditShortfall() != "0.0000" {
-		t.Errorf("a failed refund still owes %q", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_FAILED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "0.0000" {
+		t.Errorf("a failed refund still owes %q", got)
 	}
 }
 
@@ -494,8 +514,8 @@ func TestWebhook_LostDisputeTakesTheTopUpCreditBack(t *testing.T) {
 	wantBalance(t, r, "0.0000")
 	// The opening event redelivered late.
 	deliverOK(t, r, disputeEvent(t, "evt_d1b", "charge.dispute.updated", "dp_1", pi, "under_review", 1000, t0+5))
-	if d := r.store.dispute(t, "dp_1"); d.GetStatus() != pb.Dispute_LOST || d.GetCreditShortfall() != "0.0000" {
-		t.Errorf("dispute: %v shortfall %s, want LOST 0.0000", d.GetStatus(), d.GetCreditShortfall())
+	if d, owed := r.store.dispute(t, "dp_1"), r.store.owed(t, pi); d.GetStatus() != pb.Dispute_LOST || owed != "0.0000" {
+		t.Errorf("dispute: %v owed %s, want LOST 0.0000", d.GetStatus(), owed)
 	}
 	wantBalance(t, r, "0.0000")
 }
@@ -510,8 +530,8 @@ func TestWebhook_LostDisputeOverSpentCredit_RecordsTheShortfall(t *testing.T) {
 	// The first event this installation sees is the closing one.
 	deliverOK(t, r, disputeEvent(t, "evt_d", "charge.dispute.closed", "dp_2", p.GetProviderPaymentId(), "lost", 1000, time.Now().Unix()))
 	wantBalance(t, r, "0.0000")
-	if d := r.store.dispute(t, "dp_2"); d == nil || d.GetStatus() != pb.Dispute_LOST || d.GetCreditShortfall() != "7.5000" {
-		t.Errorf("dispute %+v, want LOST with shortfall 7.5000", d)
+	if d, owed := r.store.dispute(t, "dp_2"), r.store.owed(t, p.GetProviderPaymentId()); d == nil || d.GetStatus() != pb.Dispute_LOST || owed != "7.5000" {
+		t.Errorf("dispute %+v owed %s, want LOST owing 7.5000", d, owed)
 	}
 }
 
@@ -555,7 +575,7 @@ func TestWebhook_LostDisputeOnAPayment_TakesNoCredit(t *testing.T) {
 	grantedTopUp(t, r, "10.00")
 	p := succeededPayment(t, r, "5")
 	deliverOK(t, r, disputeEvent(t, "evt_d", "charge.dispute.closed", "dp_p", p.GetProviderPaymentId(), "lost", 500, time.Now().Unix()))
-	if d := r.store.dispute(t, "dp_p"); d == nil || d.GetStatus() != pb.Dispute_LOST || d.GetCreditShortfall() != "0.0000" {
+	if d := r.store.dispute(t, "dp_p"); d == nil || d.GetStatus() != pb.Dispute_LOST {
 		t.Errorf("dispute %+v", d)
 	}
 	wantBalance(t, r, "10.0000")
@@ -595,14 +615,16 @@ func TestWebhook_FailedRefundThatTookNothing(t *testing.T) {
 	pi := p.GetProviderPaymentId()
 	id := r.stripe.refundAtProvider(pi, 1000)
 	deliverOK(t, r, refundEvent("evt_rc", "refund.created", id, pi))
-	if row := wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED); row.GetCreditShortfall() != "10.0000" {
-		t.Fatalf("shortfall %q, want 10.0000", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_SUCCEEDED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "10.0000" {
+		t.Fatalf("owed %q, want 10.0000", got)
 	}
 	r.stripe.setRefundStatus(id, "failed")
 	deliverOK(t, r, refundEvent("evt_rf", "refund.failed", id, pi))
 	wantBalance(t, r, "0.0000")
-	if row := wantRefundStatus(t, r, id, pb.Refund_FAILED); row.GetCreditShortfall() != "0.0000" {
-		t.Errorf("a failed refund still owes %q", row.GetCreditShortfall())
+	wantRefundStatus(t, r, id, pb.Refund_FAILED)
+	if got := r.store.owed(t, p.GetProviderPaymentId()); got != "0.0000" {
+		t.Errorf("a failed refund still owes %q", got)
 	}
 }
 
@@ -620,4 +642,23 @@ func TestFlow_RefundPaymentRacingTheRefundsFailure_DoesNotStayRefunded(t *testin
 	})
 	refundNow(t, r, p, "10", "r1")
 	wantPaymentStatus(t, r, p, pb.Payment_SUCCEEDED)
+}
+
+// A reconciliation computes from a refund that has meanwhile failed; the
+// failure's own delivery reconciled before that stale step was written and
+// found nothing to change. The stale writer checks again after its write and
+// gives the credit back.
+func TestWebhook_StaleReconciliationIsCorrectedByItsOwnRecheck(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, "10.00")
+	pi := p.GetProviderPaymentId()
+	id := r.stripe.refundAtProvider(pi, 400)
+	r.store.onceBefore("ApplyCredit", func() {
+		// A has read the refund as counted and is about to take 4.
+		r.stripe.setRefundStatus(id, "failed")
+		deliverOK(t, r, refundEvent("evt_b", "refund.failed", id, pi))
+	})
+	deliverOK(t, r, refundEvent("evt_a", "refund.created", id, pi))
+	wantRefundStatus(t, r, id, pb.Refund_FAILED)
+	wantBalance(t, r, "10.0000")
 }

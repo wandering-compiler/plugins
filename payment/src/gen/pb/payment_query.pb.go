@@ -742,6 +742,237 @@ func (x *GetDisputeByProviderIdResp) GetDispute() *Dispute {
 	return nil
 }
 
+// SumLostDisputesForPayment — the amount of a payment's LOST disputes. Gated
+// stripe_webhooks.
+type SumLostDisputesForPaymentReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PaymentId     string                 `protobuf:"bytes,1,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SumLostDisputesForPaymentReq) Reset() {
+	*x = SumLostDisputesForPaymentReq{}
+	mi := &file_queries_payment_query_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SumLostDisputesForPaymentReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SumLostDisputesForPaymentReq) ProtoMessage() {}
+
+func (x *SumLostDisputesForPaymentReq) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_payment_query_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SumLostDisputesForPaymentReq.ProtoReflect.Descriptor instead.
+func (*SumLostDisputesForPaymentReq) Descriptor() ([]byte, []int) {
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SumLostDisputesForPaymentReq) GetPaymentId() string {
+	if x != nil {
+		return x.PaymentId
+	}
+	return ""
+}
+
+type SumLostDisputesForPaymentResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Total         string                 `protobuf:"bytes,1,opt,name=total,proto3" json:"total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SumLostDisputesForPaymentResp) Reset() {
+	*x = SumLostDisputesForPaymentResp{}
+	mi := &file_queries_payment_query_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SumLostDisputesForPaymentResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SumLostDisputesForPaymentResp) ProtoMessage() {}
+
+func (x *SumLostDisputesForPaymentResp) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_payment_query_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SumLostDisputesForPaymentResp.ProtoReflect.Descriptor instead.
+func (*SumLostDisputesForPaymentResp) Descriptor() ([]byte, []int) {
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SumLostDisputesForPaymentResp) GetTotal() string {
+	if x != nil {
+		return x.Total
+	}
+	return ""
+}
+
+// SumTopupCredit — the credit a top-up holds in the ledger: the sum of the
+// rows the plugin wrote for it. Reasons and refs are bound, not literal; the
+// handler passes the top-up reasons (callers cannot use them) and both refs
+// a top-up's rows have carried (the provider payment id on the grant, the
+// local payment id on everything else). Gated prepaid.
+type SumTopupCreditReq struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	UserId            string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	PaymentId         string                 `protobuf:"bytes,2,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
+	ProviderPaymentId string                 `protobuf:"bytes,3,opt,name=provider_payment_id,json=providerPaymentId,proto3" json:"provider_payment_id,omitempty"`
+	ReasonGrant       string                 `protobuf:"bytes,4,opt,name=reason_grant,json=reasonGrant,proto3" json:"reason_grant,omitempty"`
+	ReasonRefund      string                 `protobuf:"bytes,5,opt,name=reason_refund,json=reasonRefund,proto3" json:"reason_refund,omitempty"`
+	ReasonRefused     string                 `protobuf:"bytes,6,opt,name=reason_refused,json=reasonRefused,proto3" json:"reason_refused,omitempty"`
+	ReasonReconcile   string                 `protobuf:"bytes,7,opt,name=reason_reconcile,json=reasonReconcile,proto3" json:"reason_reconcile,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *SumTopupCreditReq) Reset() {
+	*x = SumTopupCreditReq{}
+	mi := &file_queries_payment_query_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SumTopupCreditReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SumTopupCreditReq) ProtoMessage() {}
+
+func (x *SumTopupCreditReq) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_payment_query_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SumTopupCreditReq.ProtoReflect.Descriptor instead.
+func (*SumTopupCreditReq) Descriptor() ([]byte, []int) {
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SumTopupCreditReq) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *SumTopupCreditReq) GetPaymentId() string {
+	if x != nil {
+		return x.PaymentId
+	}
+	return ""
+}
+
+func (x *SumTopupCreditReq) GetProviderPaymentId() string {
+	if x != nil {
+		return x.ProviderPaymentId
+	}
+	return ""
+}
+
+func (x *SumTopupCreditReq) GetReasonGrant() string {
+	if x != nil {
+		return x.ReasonGrant
+	}
+	return ""
+}
+
+func (x *SumTopupCreditReq) GetReasonRefund() string {
+	if x != nil {
+		return x.ReasonRefund
+	}
+	return ""
+}
+
+func (x *SumTopupCreditReq) GetReasonRefused() string {
+	if x != nil {
+		return x.ReasonRefused
+	}
+	return ""
+}
+
+func (x *SumTopupCreditReq) GetReasonReconcile() string {
+	if x != nil {
+		return x.ReasonReconcile
+	}
+	return ""
+}
+
+type SumTopupCreditResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Total         string                 `protobuf:"bytes,1,opt,name=total,proto3" json:"total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SumTopupCreditResp) Reset() {
+	*x = SumTopupCreditResp{}
+	mi := &file_queries_payment_query_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SumTopupCreditResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SumTopupCreditResp) ProtoMessage() {}
+
+func (x *SumTopupCreditResp) ProtoReflect() protoreflect.Message {
+	mi := &file_queries_payment_query_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SumTopupCreditResp.ProtoReflect.Descriptor instead.
+func (*SumTopupCreditResp) Descriptor() ([]byte, []int) {
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SumTopupCreditResp) GetTotal() string {
+	if x != nil {
+		return x.Total
+	}
+	return ""
+}
+
 type GetCreditBalanceReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -751,7 +982,7 @@ type GetCreditBalanceReq struct {
 
 func (x *GetCreditBalanceReq) Reset() {
 	*x = GetCreditBalanceReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[16]
+	mi := &file_queries_payment_query_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -763,7 +994,7 @@ func (x *GetCreditBalanceReq) String() string {
 func (*GetCreditBalanceReq) ProtoMessage() {}
 
 func (x *GetCreditBalanceReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[16]
+	mi := &file_queries_payment_query_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -776,7 +1007,7 @@ func (x *GetCreditBalanceReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCreditBalanceReq.ProtoReflect.Descriptor instead.
 func (*GetCreditBalanceReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{16}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetCreditBalanceReq) GetUserId() string {
@@ -795,7 +1026,7 @@ type GetCreditBalanceResp struct {
 
 func (x *GetCreditBalanceResp) Reset() {
 	*x = GetCreditBalanceResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[17]
+	mi := &file_queries_payment_query_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -807,7 +1038,7 @@ func (x *GetCreditBalanceResp) String() string {
 func (*GetCreditBalanceResp) ProtoMessage() {}
 
 func (x *GetCreditBalanceResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[17]
+	mi := &file_queries_payment_query_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -820,7 +1051,7 @@ func (x *GetCreditBalanceResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCreditBalanceResp.ProtoReflect.Descriptor instead.
 func (*GetCreditBalanceResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{17}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetCreditBalanceResp) GetBalance() *CreditBalance {
@@ -839,7 +1070,7 @@ type GetCreditLedgerByKeyReq struct {
 
 func (x *GetCreditLedgerByKeyReq) Reset() {
 	*x = GetCreditLedgerByKeyReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[18]
+	mi := &file_queries_payment_query_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +1082,7 @@ func (x *GetCreditLedgerByKeyReq) String() string {
 func (*GetCreditLedgerByKeyReq) ProtoMessage() {}
 
 func (x *GetCreditLedgerByKeyReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[18]
+	mi := &file_queries_payment_query_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +1095,7 @@ func (x *GetCreditLedgerByKeyReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCreditLedgerByKeyReq.ProtoReflect.Descriptor instead.
 func (*GetCreditLedgerByKeyReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{18}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetCreditLedgerByKeyReq) GetIdempotencyKey() string {
@@ -883,7 +1114,7 @@ type GetCreditLedgerByKeyResp struct {
 
 func (x *GetCreditLedgerByKeyResp) Reset() {
 	*x = GetCreditLedgerByKeyResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[19]
+	mi := &file_queries_payment_query_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -895,7 +1126,7 @@ func (x *GetCreditLedgerByKeyResp) String() string {
 func (*GetCreditLedgerByKeyResp) ProtoMessage() {}
 
 func (x *GetCreditLedgerByKeyResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[19]
+	mi := &file_queries_payment_query_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -908,7 +1139,7 @@ func (x *GetCreditLedgerByKeyResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCreditLedgerByKeyResp.ProtoReflect.Descriptor instead.
 func (*GetCreditLedgerByKeyResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{19}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetCreditLedgerByKeyResp) GetEntry() *CreditLedger {
@@ -927,7 +1158,7 @@ type GetCreditTopupByProviderIdReq struct {
 
 func (x *GetCreditTopupByProviderIdReq) Reset() {
 	*x = GetCreditTopupByProviderIdReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[20]
+	mi := &file_queries_payment_query_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -939,7 +1170,7 @@ func (x *GetCreditTopupByProviderIdReq) String() string {
 func (*GetCreditTopupByProviderIdReq) ProtoMessage() {}
 
 func (x *GetCreditTopupByProviderIdReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[20]
+	mi := &file_queries_payment_query_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -952,7 +1183,7 @@ func (x *GetCreditTopupByProviderIdReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCreditTopupByProviderIdReq.ProtoReflect.Descriptor instead.
 func (*GetCreditTopupByProviderIdReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{20}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetCreditTopupByProviderIdReq) GetProviderPaymentId() string {
@@ -971,7 +1202,7 @@ type GetCreditTopupByProviderIdResp struct {
 
 func (x *GetCreditTopupByProviderIdResp) Reset() {
 	*x = GetCreditTopupByProviderIdResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[21]
+	mi := &file_queries_payment_query_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -983,7 +1214,7 @@ func (x *GetCreditTopupByProviderIdResp) String() string {
 func (*GetCreditTopupByProviderIdResp) ProtoMessage() {}
 
 func (x *GetCreditTopupByProviderIdResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[21]
+	mi := &file_queries_payment_query_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -996,7 +1227,7 @@ func (x *GetCreditTopupByProviderIdResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCreditTopupByProviderIdResp.ProtoReflect.Descriptor instead.
 func (*GetCreditTopupByProviderIdResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{21}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetCreditTopupByProviderIdResp) GetTopup() *CreditTopup {
@@ -1017,7 +1248,7 @@ type GetUsageMeterReq struct {
 
 func (x *GetUsageMeterReq) Reset() {
 	*x = GetUsageMeterReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[22]
+	mi := &file_queries_payment_query_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1029,7 +1260,7 @@ func (x *GetUsageMeterReq) String() string {
 func (*GetUsageMeterReq) ProtoMessage() {}
 
 func (x *GetUsageMeterReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[22]
+	mi := &file_queries_payment_query_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1042,7 +1273,7 @@ func (x *GetUsageMeterReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageMeterReq.ProtoReflect.Descriptor instead.
 func (*GetUsageMeterReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{22}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetUsageMeterReq) GetUserId() string {
@@ -1075,7 +1306,7 @@ type GetUsageMeterResp struct {
 
 func (x *GetUsageMeterResp) Reset() {
 	*x = GetUsageMeterResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[23]
+	mi := &file_queries_payment_query_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1087,7 +1318,7 @@ func (x *GetUsageMeterResp) String() string {
 func (*GetUsageMeterResp) ProtoMessage() {}
 
 func (x *GetUsageMeterResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[23]
+	mi := &file_queries_payment_query_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1100,7 +1331,7 @@ func (x *GetUsageMeterResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageMeterResp.ProtoReflect.Descriptor instead.
 func (*GetUsageMeterResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{23}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetUsageMeterResp) GetMeter() *UsageMeter {
@@ -1119,7 +1350,7 @@ type GetUsageRecordByKeyReq struct {
 
 func (x *GetUsageRecordByKeyReq) Reset() {
 	*x = GetUsageRecordByKeyReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[24]
+	mi := &file_queries_payment_query_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1131,7 +1362,7 @@ func (x *GetUsageRecordByKeyReq) String() string {
 func (*GetUsageRecordByKeyReq) ProtoMessage() {}
 
 func (x *GetUsageRecordByKeyReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[24]
+	mi := &file_queries_payment_query_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1144,7 +1375,7 @@ func (x *GetUsageRecordByKeyReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageRecordByKeyReq.ProtoReflect.Descriptor instead.
 func (*GetUsageRecordByKeyReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{24}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetUsageRecordByKeyReq) GetIdempotencyKey() string {
@@ -1163,7 +1394,7 @@ type GetUsageRecordByKeyResp struct {
 
 func (x *GetUsageRecordByKeyResp) Reset() {
 	*x = GetUsageRecordByKeyResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[25]
+	mi := &file_queries_payment_query_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1175,7 +1406,7 @@ func (x *GetUsageRecordByKeyResp) String() string {
 func (*GetUsageRecordByKeyResp) ProtoMessage() {}
 
 func (x *GetUsageRecordByKeyResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[25]
+	mi := &file_queries_payment_query_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1188,7 +1419,7 @@ func (x *GetUsageRecordByKeyResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageRecordByKeyResp.ProtoReflect.Descriptor instead.
 func (*GetUsageRecordByKeyResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{25}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetUsageRecordByKeyResp) GetRecord() *UsageRecord {
@@ -1207,7 +1438,7 @@ type GetPlanBySlugReq struct {
 
 func (x *GetPlanBySlugReq) Reset() {
 	*x = GetPlanBySlugReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[26]
+	mi := &file_queries_payment_query_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1219,7 +1450,7 @@ func (x *GetPlanBySlugReq) String() string {
 func (*GetPlanBySlugReq) ProtoMessage() {}
 
 func (x *GetPlanBySlugReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[26]
+	mi := &file_queries_payment_query_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1232,7 +1463,7 @@ func (x *GetPlanBySlugReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlanBySlugReq.ProtoReflect.Descriptor instead.
 func (*GetPlanBySlugReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{26}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetPlanBySlugReq) GetSlug() string {
@@ -1251,7 +1482,7 @@ type GetPlanBySlugResp struct {
 
 func (x *GetPlanBySlugResp) Reset() {
 	*x = GetPlanBySlugResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[27]
+	mi := &file_queries_payment_query_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1263,7 +1494,7 @@ func (x *GetPlanBySlugResp) String() string {
 func (*GetPlanBySlugResp) ProtoMessage() {}
 
 func (x *GetPlanBySlugResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[27]
+	mi := &file_queries_payment_query_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1276,7 +1507,7 @@ func (x *GetPlanBySlugResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlanBySlugResp.ProtoReflect.Descriptor instead.
 func (*GetPlanBySlugResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{27}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetPlanBySlugResp) GetPlan() *Plan {
@@ -1295,7 +1526,7 @@ type GetSubscriptionReq struct {
 
 func (x *GetSubscriptionReq) Reset() {
 	*x = GetSubscriptionReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[28]
+	mi := &file_queries_payment_query_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1307,7 +1538,7 @@ func (x *GetSubscriptionReq) String() string {
 func (*GetSubscriptionReq) ProtoMessage() {}
 
 func (x *GetSubscriptionReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[28]
+	mi := &file_queries_payment_query_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1320,7 +1551,7 @@ func (x *GetSubscriptionReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubscriptionReq.ProtoReflect.Descriptor instead.
 func (*GetSubscriptionReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{28}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetSubscriptionReq) GetId() string {
@@ -1339,7 +1570,7 @@ type GetSubscriptionResp struct {
 
 func (x *GetSubscriptionResp) Reset() {
 	*x = GetSubscriptionResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[29]
+	mi := &file_queries_payment_query_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1351,7 +1582,7 @@ func (x *GetSubscriptionResp) String() string {
 func (*GetSubscriptionResp) ProtoMessage() {}
 
 func (x *GetSubscriptionResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[29]
+	mi := &file_queries_payment_query_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1364,7 +1595,7 @@ func (x *GetSubscriptionResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubscriptionResp.ProtoReflect.Descriptor instead.
 func (*GetSubscriptionResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{29}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetSubscriptionResp) GetSubscription() *Subscription {
@@ -1384,7 +1615,7 @@ type GetSubscriptionByProviderIdReq struct {
 
 func (x *GetSubscriptionByProviderIdReq) Reset() {
 	*x = GetSubscriptionByProviderIdReq{}
-	mi := &file_queries_payment_query_proto_msgTypes[30]
+	mi := &file_queries_payment_query_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1396,7 +1627,7 @@ func (x *GetSubscriptionByProviderIdReq) String() string {
 func (*GetSubscriptionByProviderIdReq) ProtoMessage() {}
 
 func (x *GetSubscriptionByProviderIdReq) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[30]
+	mi := &file_queries_payment_query_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1409,7 +1640,7 @@ func (x *GetSubscriptionByProviderIdReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubscriptionByProviderIdReq.ProtoReflect.Descriptor instead.
 func (*GetSubscriptionByProviderIdReq) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{30}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GetSubscriptionByProviderIdReq) GetProviderSubscriptionId() string {
@@ -1428,7 +1659,7 @@ type GetSubscriptionByProviderIdResp struct {
 
 func (x *GetSubscriptionByProviderIdResp) Reset() {
 	*x = GetSubscriptionByProviderIdResp{}
-	mi := &file_queries_payment_query_proto_msgTypes[31]
+	mi := &file_queries_payment_query_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1440,7 +1671,7 @@ func (x *GetSubscriptionByProviderIdResp) String() string {
 func (*GetSubscriptionByProviderIdResp) ProtoMessage() {}
 
 func (x *GetSubscriptionByProviderIdResp) ProtoReflect() protoreflect.Message {
-	mi := &file_queries_payment_query_proto_msgTypes[31]
+	mi := &file_queries_payment_query_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1453,7 +1684,7 @@ func (x *GetSubscriptionByProviderIdResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubscriptionByProviderIdResp.ProtoReflect.Descriptor instead.
 func (*GetSubscriptionByProviderIdResp) Descriptor() ([]byte, []int) {
-	return file_queries_payment_query_proto_rawDescGZIP(), []int{31}
+	return file_queries_payment_query_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GetSubscriptionByProviderIdResp) GetSubscription() *Subscription {
@@ -1500,7 +1731,23 @@ const file_queries_payment_query_proto_rawDesc = "" +
 	"\x19GetDisputeByProviderIdReq\x129\n" +
 	"\x13provider_dispute_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x11providerDisputeId:\x13\xfa\xf4\x18\x0fstripe_webhooks\"i\n" +
 	"\x1aGetDisputeByProviderIdResp\x126\n" +
-	"\adispute\x18\x01 \x01(\v2\x1c.w17.contrib.payment.DisputeR\adispute:\x13\xfa\xf4\x18\x0fstripe_webhooks\"C\n" +
+	"\adispute\x18\x01 \x01(\v2\x1c.w17.contrib.payment.DisputeR\adispute:\x13\xfa\xf4\x18\x0fstripe_webhooks\"Z\n" +
+	"\x1cSumLostDisputesForPaymentReq\x12%\n" +
+	"\n" +
+	"payment_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\tpaymentId:\x13\xfa\xf4\x18\x0fstripe_webhooks\"X\n" +
+	"\x1dSumLostDisputesForPaymentResp\x12\"\n" +
+	"\x05total\x18\x01 \x01(\tB\f\xca\xf3\x18\b\b\x10\x88\x01\x14\x90\x01\x04R\x05total:\x13\xfa\xf4\x18\x0fstripe_webhooks\"\xe8\x02\n" +
+	"\x11SumTopupCreditReq\x12\x1f\n" +
+	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId\x12(\n" +
+	"\n" +
+	"payment_id\x18\x02 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\tpaymentId\x129\n" +
+	"\x13provider_payment_id\x18\x03 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x11providerPaymentId\x12+\n" +
+	"\freason_grant\x18\x04 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\vreasonGrant\x12-\n" +
+	"\rreason_refund\x18\x05 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\freasonRefund\x12/\n" +
+	"\x0ereason_refused\x18\x06 \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\rreasonRefused\x123\n" +
+	"\x10reason_reconcile\x18\a \x01(\tB\b\xca\xf3\x18\x04\b\x06@@R\x0freasonReconcile:\v\xfa\xf4\x18\aprepaid\"E\n" +
+	"\x12SumTopupCreditResp\x12\"\n" +
+	"\x05total\x18\x01 \x01(\tB\f\xca\xf3\x18\b\b\x10\x88\x01\x14\x90\x01\x04R\x05total:\v\xfa\xf4\x18\aprepaid\"C\n" +
 	"\x13GetCreditBalanceReq\x12\x1f\n" +
 	"\auser_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\x06userId:\v\xfa\xf4\x18\aprepaid\"a\n" +
 	"\x14GetCreditBalanceResp\x12<\n" +
@@ -1534,7 +1781,7 @@ const file_queries_payment_query_proto_rawDesc = "" +
 	"\x1eGetSubscriptionByProviderIdReq\x12C\n" +
 	"\x18provider_subscription_id\x18\x01 \x01(\tB\t\xca\xf3\x18\x05\b\x01@\xff\x01R\x16providerSubscriptionId:\x11\xfa\xf4\x18\rsubscriptions\"{\n" +
 	"\x1fGetSubscriptionByProviderIdResp\x12E\n" +
-	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\x84A\n" +
+	"\fsubscription\x18\x01 \x01(\v2!.w17.contrib.payment.SubscriptionR\fsubscription:\x11\xfa\xf4\x18\rsubscriptions2\xf2E\n" +
 	"\fPaymentQuery\x12\x85\x03\n" +
 	"\x13GetCustomerByUserId\x12+.w17.contrib.payment.GetCustomerByUserIdReq\x1a,.w17.contrib.payment.GetCustomerByUserIdResp\"\x92\x02\xf2\xf3\x18\x8d\x02B\x8a\x02\n" +
 	"\x04main\x12\x81\x02SELECT c.id AS customer.id,        c.user_id AS customer.user_id,        c.provider_customer_id AS customer.provider_customer_id,        c.email AS customer.email,        c.created_at AS customer.created_at FROM @module.Customer c WHERE c.user_id = :user_id\x12\xb9\x04\n" +
@@ -1544,21 +1791,25 @@ const file_queries_payment_query_proto_rawDesc = "" +
 	"\x16GetPaymentByProviderId\x12..w17.contrib.payment.GetPaymentByProviderIdReq\x1a/.w17.contrib.payment.GetPaymentByProviderIdResp\"\x83\x04\xf2\xf3\x18\xfe\x03B\xfb\x03\n" +
 	"\x04main\x12\xf2\x03SELECT p.id AS payment.id,        p.customer_id AS payment.customer_id,        p.provider_payment_id AS payment.provider_payment_id,        p.amount AS payment.amount,        p.currency AS payment.currency,        p.status AS payment.status,        p.idempotency_key AS payment.idempotency_key,        p.description AS payment.description,        p.created_at AS payment.created_at,        p.updated_at AS payment.updated_at FROM @module.Payment p WHERE p.provider_payment_id = :provider_payment_id\x12\x83\x05\n" +
 	"\x1aGetPaymentByIdempotencyKey\x122.w17.contrib.payment.GetPaymentByIdempotencyKeyReq\x1a3.w17.contrib.payment.GetPaymentByIdempotencyKeyResp\"\xfb\x03\xf2\xf3\x18\xf6\x03B\xf3\x03\n" +
-	"\x04main\x12\xea\x03SELECT p.id AS payment.id,        p.customer_id AS payment.customer_id,        p.provider_payment_id AS payment.provider_payment_id,        p.amount AS payment.amount,        p.currency AS payment.currency,        p.status AS payment.status,        p.idempotency_key AS payment.idempotency_key,        p.description AS payment.description,        p.created_at AS payment.created_at,        p.updated_at AS payment.updated_at FROM @module.Payment p WHERE p.idempotency_key = :idempotency_key\x12\xcb\x04\n" +
-	"\x15GetRefundByProviderId\x12-.w17.contrib.payment.GetRefundByProviderIdReq\x1a..w17.contrib.payment.GetRefundByProviderIdResp\"\xd2\x03\xf2\xf3\x18\xcd\x03B\xca\x03\n" +
-	"\x04main\x12\xc1\x03SELECT r.id AS refund.id,        r.payment_id AS refund.payment_id,        r.provider_refund_id AS refund.provider_refund_id,        r.amount AS refund.amount,        r.currency AS refund.currency,        r.created_at AS refund.created_at,        r.idempotency_key AS refund.idempotency_key,        r.status AS refund.status,        r.credit_shortfall AS refund.credit_shortfall FROM @module.Refund r WHERE r.provider_refund_id = :provider_refund_id\x12\x8c\x02\n" +
+	"\x04main\x12\xea\x03SELECT p.id AS payment.id,        p.customer_id AS payment.customer_id,        p.provider_payment_id AS payment.provider_payment_id,        p.amount AS payment.amount,        p.currency AS payment.currency,        p.status AS payment.status,        p.idempotency_key AS payment.idempotency_key,        p.description AS payment.description,        p.created_at AS payment.created_at,        p.updated_at AS payment.updated_at FROM @module.Payment p WHERE p.idempotency_key = :idempotency_key\x12\x95\x04\n" +
+	"\x15GetRefundByProviderId\x12-.w17.contrib.payment.GetRefundByProviderIdReq\x1a..w17.contrib.payment.GetRefundByProviderIdResp\"\x9c\x03\xf2\xf3\x18\x97\x03B\x94\x03\n" +
+	"\x04main\x12\x8b\x03SELECT r.id AS refund.id,        r.payment_id AS refund.payment_id,        r.provider_refund_id AS refund.provider_refund_id,        r.amount AS refund.amount,        r.currency AS refund.currency,        r.created_at AS refund.created_at,        r.idempotency_key AS refund.idempotency_key,        r.status AS refund.status FROM @module.Refund r WHERE r.provider_refund_id = :provider_refund_id\x12\x8c\x02\n" +
 	"\x14SumRefundsForPayment\x12,.w17.contrib.payment.SumRefundsForPaymentReq\x1a-.w17.contrib.payment.SumRefundsForPaymentResp\"\x96\x01\xf2\xf3\x18\x91\x01B\x8e\x01\n" +
-	"\x04main\x12\x85\x01SELECT COALESCE(SUM(r.amount), 0) AS total FROM @module.Refund r WHERE r.payment_id = :payment_id AND r.status <> 3 AND r.status <> 4\x12\xd1\x04\n" +
-	"\x19GetRefundByIdempotencyKey\x121.w17.contrib.payment.GetRefundByIdempotencyKeyReq\x1a2.w17.contrib.payment.GetRefundByIdempotencyKeyResp\"\xcc\x03\xf2\xf3\x18\xc7\x03B\xc4\x03\n" +
-	"\x04main\x12\xbb\x03SELECT r.id AS refund.id,        r.payment_id AS refund.payment_id,        r.provider_refund_id AS refund.provider_refund_id,        r.amount AS refund.amount,        r.currency AS refund.currency,        r.created_at AS refund.created_at,        r.idempotency_key AS refund.idempotency_key,        r.status AS refund.status,        r.credit_shortfall AS refund.credit_shortfall FROM @module.Refund r WHERE r.idempotency_key = :idempotency_key\x12\x9e\x05\n" +
-	"\x16GetDisputeByProviderId\x12..w17.contrib.payment.GetDisputeByProviderIdReq\x1a/.w17.contrib.payment.GetDisputeByProviderIdResp\"\xa2\x04\xf2\xf3\x18\x8a\x04B\x87\x04\n" +
-	"\x04main\x12\xfe\x03SELECT d.id AS dispute.id,        d.payment_id AS dispute.payment_id,        d.provider_dispute_id AS dispute.provider_dispute_id,        d.amount AS dispute.amount,        d.currency AS dispute.currency,        d.status AS dispute.status,        d.credit_shortfall AS dispute.credit_shortfall,        d.provider_event_at AS dispute.provider_event_at,        d.created_at AS dispute.created_at,        d.updated_at AS dispute.updated_at FROM @module.Dispute d WHERE d.provider_dispute_id = :provider_dispute_id\x8a\xf5\x18\x0fstripe_webhooks\x12\xb1\x02\n" +
+	"\x04main\x12\x85\x01SELECT COALESCE(SUM(r.amount), 0) AS total FROM @module.Refund r WHERE r.payment_id = :payment_id AND r.status <> 3 AND r.status <> 4\x12\x9b\x04\n" +
+	"\x19GetRefundByIdempotencyKey\x121.w17.contrib.payment.GetRefundByIdempotencyKeyReq\x1a2.w17.contrib.payment.GetRefundByIdempotencyKeyResp\"\x96\x03\xf2\xf3\x18\x91\x03B\x8e\x03\n" +
+	"\x04main\x12\x85\x03SELECT r.id AS refund.id,        r.payment_id AS refund.payment_id,        r.provider_refund_id AS refund.provider_refund_id,        r.amount AS refund.amount,        r.currency AS refund.currency,        r.created_at AS refund.created_at,        r.idempotency_key AS refund.idempotency_key,        r.status AS refund.status FROM @module.Refund r WHERE r.idempotency_key = :idempotency_key\x12\xe7\x04\n" +
+	"\x16GetDisputeByProviderId\x12..w17.contrib.payment.GetDisputeByProviderIdReq\x1a/.w17.contrib.payment.GetDisputeByProviderIdResp\"\xeb\x03\xf2\xf3\x18\xd3\x03B\xd0\x03\n" +
+	"\x04main\x12\xc7\x03SELECT d.id AS dispute.id,        d.payment_id AS dispute.payment_id,        d.provider_dispute_id AS dispute.provider_dispute_id,        d.amount AS dispute.amount,        d.currency AS dispute.currency,        d.status AS dispute.status,        d.provider_event_at AS dispute.provider_event_at,        d.created_at AS dispute.created_at,        d.updated_at AS dispute.updated_at FROM @module.Dispute d WHERE d.provider_dispute_id = :provider_dispute_id\x8a\xf5\x18\x0fstripe_webhooks\x12\x99\x02\n" +
+	"\x19SumLostDisputesForPayment\x121.w17.contrib.payment.SumLostDisputesForPaymentReq\x1a2.w17.contrib.payment.SumLostDisputesForPaymentResp\"\x94\x01\xf2\xf3\x18}B{\n" +
+	"\x04main\x12sSELECT COALESCE(SUM(d.amount), 0) AS total FROM @module.Dispute d WHERE d.payment_id = :payment_id AND d.status = 6\x8a\xf5\x18\x0fstripe_webhooks\x12\x94\x03\n" +
+	"\x0eSumTopupCredit\x12&.w17.contrib.payment.SumTopupCreditReq\x1a'.w17.contrib.payment.SumTopupCreditResp\"\xb0\x02\xf2\xf3\x18\xa0\x02B\x9d\x02\n" +
+	"\x04main\x12\x94\x02SELECT COALESCE(SUM(l.delta), 0) AS total FROM @module.CreditLedger l WHERE l.user_id = :user_id AND (l.ref = :payment_id OR l.ref = :provider_payment_id) AND (l.reason = :reason_grant OR l.reason = :reason_refund OR l.reason = :reason_refused OR l.reason = :reason_reconcile)\x8a\xf5\x18\aprepaid\x12\xb1\x02\n" +
 	"\x10GetCreditBalance\x12(.w17.contrib.payment.GetCreditBalanceReq\x1a).w17.contrib.payment.GetCreditBalanceResp\"\xc7\x01\xf2\xf3\x18\xb7\x01B\xb4\x01\n" +
 	"\x04main\x12\xab\x01SELECT b.user_id AS balance.user_id,        b.balance AS balance.balance,        b.updated_at AS balance.updated_at FROM @module.CreditBalance b WHERE b.user_id = :user_id\x8a\xf5\x18\aprepaid\x12\xca\x03\n" +
 	"\x14GetCreditLedgerByKey\x12,.w17.contrib.payment.GetCreditLedgerByKeyReq\x1a-.w17.contrib.payment.GetCreditLedgerByKeyResp\"\xd4\x02\xf2\xf3\x18\xc4\x02B\xc1\x02\n" +
-	"\x04main\x12\xb8\x02SELECT l.id AS entry.id,        l.user_id AS entry.user_id,        l.delta AS entry.delta,        l.reason AS entry.reason,        l.ref AS entry.ref,        l.idempotency_key AS entry.idempotency_key,        l.created_at AS entry.created_at FROM @module.CreditLedger l WHERE l.idempotency_key = :idempotency_key\x8a\xf5\x18\aprepaid\x12\xda\x03\n" +
-	"\x1aGetCreditTopupByProviderId\x122.w17.contrib.payment.GetCreditTopupByProviderIdReq\x1a3.w17.contrib.payment.GetCreditTopupByProviderIdResp\"\xd2\x02\xf2\xf3\x18\xc2\x02B\xbf\x02\n" +
-	"\x04main\x12\xb6\x02SELECT t.id AS topup.id,        t.provider_payment_id AS topup.provider_payment_id,        t.user_id AS topup.user_id,        t.amount AS topup.amount,        t.granted_at AS topup.granted_at,        t.created_at AS topup.created_at FROM @module.CreditTopup t WHERE t.provider_payment_id = :provider_payment_id\x8a\xf5\x18\aprepaid\x12\xb6\x03\n" +
+	"\x04main\x12\xb8\x02SELECT l.id AS entry.id,        l.user_id AS entry.user_id,        l.delta AS entry.delta,        l.reason AS entry.reason,        l.ref AS entry.ref,        l.idempotency_key AS entry.idempotency_key,        l.created_at AS entry.created_at FROM @module.CreditLedger l WHERE l.idempotency_key = :idempotency_key\x8a\xf5\x18\aprepaid\x12\xb8\x04\n" +
+	"\x1aGetCreditTopupByProviderId\x122.w17.contrib.payment.GetCreditTopupByProviderIdReq\x1a3.w17.contrib.payment.GetCreditTopupByProviderIdResp\"\xb0\x03\xf2\xf3\x18\xa0\x03B\x9d\x03\n" +
+	"\x04main\x12\x94\x03SELECT t.id AS topup.id,        t.provider_payment_id AS topup.provider_payment_id,        t.user_id AS topup.user_id,        t.amount AS topup.amount,        t.granted_at AS topup.granted_at,        t.created_at AS topup.created_at,        t.credit_owed AS topup.credit_owed,        t.reconciled_step AS topup.reconciled_step FROM @module.CreditTopup t WHERE t.provider_payment_id = :provider_payment_id\x8a\xf5\x18\aprepaid\x12\xb6\x03\n" +
 	"\rGetUsageMeter\x12%.w17.contrib.payment.GetUsageMeterReq\x1a&.w17.contrib.payment.GetUsageMeterResp\"\xd5\x02\xf2\xf3\x18\xc7\x02B\xc4\x02\n" +
 	"\x04main\x12\xbb\x02SELECT m.user_id AS meter.user_id,        m.meter AS meter.meter,        m.period AS meter.period,        m.total AS meter.total,        m.reported_total AS meter.reported_total,        m.updated_at AS meter.updated_at FROM @module.UsageMeter m WHERE m.user_id = :user_id AND m.meter = :meter AND m.period = :period\x8a\xf5\x18\x05usage\x12\xfb\x03\n" +
 	"\x13GetUsageRecordByKey\x12+.w17.contrib.payment.GetUsageRecordByKeyReq\x1a,.w17.contrib.payment.GetUsageRecordByKeyResp\"\x88\x03\xf2\xf3\x18\xfa\x02B\xf7\x02\n" +
@@ -1583,7 +1834,7 @@ func file_queries_payment_query_proto_rawDescGZIP() []byte {
 	return file_queries_payment_query_proto_rawDescData
 }
 
-var file_queries_payment_query_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_queries_payment_query_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_queries_payment_query_proto_goTypes = []any{
 	(*GetCustomerByUserIdReq)(nil),          // 0: w17.contrib.payment.GetCustomerByUserIdReq
 	(*GetCustomerByUserIdResp)(nil),         // 1: w17.contrib.payment.GetCustomerByUserIdResp
@@ -1601,50 +1852,54 @@ var file_queries_payment_query_proto_goTypes = []any{
 	(*SumRefundsForPaymentResp)(nil),        // 13: w17.contrib.payment.SumRefundsForPaymentResp
 	(*GetDisputeByProviderIdReq)(nil),       // 14: w17.contrib.payment.GetDisputeByProviderIdReq
 	(*GetDisputeByProviderIdResp)(nil),      // 15: w17.contrib.payment.GetDisputeByProviderIdResp
-	(*GetCreditBalanceReq)(nil),             // 16: w17.contrib.payment.GetCreditBalanceReq
-	(*GetCreditBalanceResp)(nil),            // 17: w17.contrib.payment.GetCreditBalanceResp
-	(*GetCreditLedgerByKeyReq)(nil),         // 18: w17.contrib.payment.GetCreditLedgerByKeyReq
-	(*GetCreditLedgerByKeyResp)(nil),        // 19: w17.contrib.payment.GetCreditLedgerByKeyResp
-	(*GetCreditTopupByProviderIdReq)(nil),   // 20: w17.contrib.payment.GetCreditTopupByProviderIdReq
-	(*GetCreditTopupByProviderIdResp)(nil),  // 21: w17.contrib.payment.GetCreditTopupByProviderIdResp
-	(*GetUsageMeterReq)(nil),                // 22: w17.contrib.payment.GetUsageMeterReq
-	(*GetUsageMeterResp)(nil),               // 23: w17.contrib.payment.GetUsageMeterResp
-	(*GetUsageRecordByKeyReq)(nil),          // 24: w17.contrib.payment.GetUsageRecordByKeyReq
-	(*GetUsageRecordByKeyResp)(nil),         // 25: w17.contrib.payment.GetUsageRecordByKeyResp
-	(*GetPlanBySlugReq)(nil),                // 26: w17.contrib.payment.GetPlanBySlugReq
-	(*GetPlanBySlugResp)(nil),               // 27: w17.contrib.payment.GetPlanBySlugResp
-	(*GetSubscriptionReq)(nil),              // 28: w17.contrib.payment.GetSubscriptionReq
-	(*GetSubscriptionResp)(nil),             // 29: w17.contrib.payment.GetSubscriptionResp
-	(*GetSubscriptionByProviderIdReq)(nil),  // 30: w17.contrib.payment.GetSubscriptionByProviderIdReq
-	(*GetSubscriptionByProviderIdResp)(nil), // 31: w17.contrib.payment.GetSubscriptionByProviderIdResp
-	(*Customer)(nil),                        // 32: w17.contrib.payment.Customer
-	(*Payment)(nil),                         // 33: w17.contrib.payment.Payment
-	(*Refund)(nil),                          // 34: w17.contrib.payment.Refund
-	(*Dispute)(nil),                         // 35: w17.contrib.payment.Dispute
-	(*CreditBalance)(nil),                   // 36: w17.contrib.payment.CreditBalance
-	(*CreditLedger)(nil),                    // 37: w17.contrib.payment.CreditLedger
-	(*CreditTopup)(nil),                     // 38: w17.contrib.payment.CreditTopup
-	(*UsageMeter)(nil),                      // 39: w17.contrib.payment.UsageMeter
-	(*UsageRecord)(nil),                     // 40: w17.contrib.payment.UsageRecord
-	(*Plan)(nil),                            // 41: w17.contrib.payment.Plan
-	(*Subscription)(nil),                    // 42: w17.contrib.payment.Subscription
+	(*SumLostDisputesForPaymentReq)(nil),    // 16: w17.contrib.payment.SumLostDisputesForPaymentReq
+	(*SumLostDisputesForPaymentResp)(nil),   // 17: w17.contrib.payment.SumLostDisputesForPaymentResp
+	(*SumTopupCreditReq)(nil),               // 18: w17.contrib.payment.SumTopupCreditReq
+	(*SumTopupCreditResp)(nil),              // 19: w17.contrib.payment.SumTopupCreditResp
+	(*GetCreditBalanceReq)(nil),             // 20: w17.contrib.payment.GetCreditBalanceReq
+	(*GetCreditBalanceResp)(nil),            // 21: w17.contrib.payment.GetCreditBalanceResp
+	(*GetCreditLedgerByKeyReq)(nil),         // 22: w17.contrib.payment.GetCreditLedgerByKeyReq
+	(*GetCreditLedgerByKeyResp)(nil),        // 23: w17.contrib.payment.GetCreditLedgerByKeyResp
+	(*GetCreditTopupByProviderIdReq)(nil),   // 24: w17.contrib.payment.GetCreditTopupByProviderIdReq
+	(*GetCreditTopupByProviderIdResp)(nil),  // 25: w17.contrib.payment.GetCreditTopupByProviderIdResp
+	(*GetUsageMeterReq)(nil),                // 26: w17.contrib.payment.GetUsageMeterReq
+	(*GetUsageMeterResp)(nil),               // 27: w17.contrib.payment.GetUsageMeterResp
+	(*GetUsageRecordByKeyReq)(nil),          // 28: w17.contrib.payment.GetUsageRecordByKeyReq
+	(*GetUsageRecordByKeyResp)(nil),         // 29: w17.contrib.payment.GetUsageRecordByKeyResp
+	(*GetPlanBySlugReq)(nil),                // 30: w17.contrib.payment.GetPlanBySlugReq
+	(*GetPlanBySlugResp)(nil),               // 31: w17.contrib.payment.GetPlanBySlugResp
+	(*GetSubscriptionReq)(nil),              // 32: w17.contrib.payment.GetSubscriptionReq
+	(*GetSubscriptionResp)(nil),             // 33: w17.contrib.payment.GetSubscriptionResp
+	(*GetSubscriptionByProviderIdReq)(nil),  // 34: w17.contrib.payment.GetSubscriptionByProviderIdReq
+	(*GetSubscriptionByProviderIdResp)(nil), // 35: w17.contrib.payment.GetSubscriptionByProviderIdResp
+	(*Customer)(nil),                        // 36: w17.contrib.payment.Customer
+	(*Payment)(nil),                         // 37: w17.contrib.payment.Payment
+	(*Refund)(nil),                          // 38: w17.contrib.payment.Refund
+	(*Dispute)(nil),                         // 39: w17.contrib.payment.Dispute
+	(*CreditBalance)(nil),                   // 40: w17.contrib.payment.CreditBalance
+	(*CreditLedger)(nil),                    // 41: w17.contrib.payment.CreditLedger
+	(*CreditTopup)(nil),                     // 42: w17.contrib.payment.CreditTopup
+	(*UsageMeter)(nil),                      // 43: w17.contrib.payment.UsageMeter
+	(*UsageRecord)(nil),                     // 44: w17.contrib.payment.UsageRecord
+	(*Plan)(nil),                            // 45: w17.contrib.payment.Plan
+	(*Subscription)(nil),                    // 46: w17.contrib.payment.Subscription
 }
 var file_queries_payment_query_proto_depIdxs = []int32{
-	32, // 0: w17.contrib.payment.GetCustomerByUserIdResp.customer:type_name -> w17.contrib.payment.Customer
-	33, // 1: w17.contrib.payment.GetPaymentResp.payment:type_name -> w17.contrib.payment.Payment
-	33, // 2: w17.contrib.payment.GetPaymentByProviderIdResp.payment:type_name -> w17.contrib.payment.Payment
-	33, // 3: w17.contrib.payment.GetPaymentByIdempotencyKeyResp.payment:type_name -> w17.contrib.payment.Payment
-	34, // 4: w17.contrib.payment.GetRefundByProviderIdResp.refund:type_name -> w17.contrib.payment.Refund
-	34, // 5: w17.contrib.payment.GetRefundByIdempotencyKeyResp.refund:type_name -> w17.contrib.payment.Refund
-	35, // 6: w17.contrib.payment.GetDisputeByProviderIdResp.dispute:type_name -> w17.contrib.payment.Dispute
-	36, // 7: w17.contrib.payment.GetCreditBalanceResp.balance:type_name -> w17.contrib.payment.CreditBalance
-	37, // 8: w17.contrib.payment.GetCreditLedgerByKeyResp.entry:type_name -> w17.contrib.payment.CreditLedger
-	38, // 9: w17.contrib.payment.GetCreditTopupByProviderIdResp.topup:type_name -> w17.contrib.payment.CreditTopup
-	39, // 10: w17.contrib.payment.GetUsageMeterResp.meter:type_name -> w17.contrib.payment.UsageMeter
-	40, // 11: w17.contrib.payment.GetUsageRecordByKeyResp.record:type_name -> w17.contrib.payment.UsageRecord
-	41, // 12: w17.contrib.payment.GetPlanBySlugResp.plan:type_name -> w17.contrib.payment.Plan
-	42, // 13: w17.contrib.payment.GetSubscriptionResp.subscription:type_name -> w17.contrib.payment.Subscription
-	42, // 14: w17.contrib.payment.GetSubscriptionByProviderIdResp.subscription:type_name -> w17.contrib.payment.Subscription
+	36, // 0: w17.contrib.payment.GetCustomerByUserIdResp.customer:type_name -> w17.contrib.payment.Customer
+	37, // 1: w17.contrib.payment.GetPaymentResp.payment:type_name -> w17.contrib.payment.Payment
+	37, // 2: w17.contrib.payment.GetPaymentByProviderIdResp.payment:type_name -> w17.contrib.payment.Payment
+	37, // 3: w17.contrib.payment.GetPaymentByIdempotencyKeyResp.payment:type_name -> w17.contrib.payment.Payment
+	38, // 4: w17.contrib.payment.GetRefundByProviderIdResp.refund:type_name -> w17.contrib.payment.Refund
+	38, // 5: w17.contrib.payment.GetRefundByIdempotencyKeyResp.refund:type_name -> w17.contrib.payment.Refund
+	39, // 6: w17.contrib.payment.GetDisputeByProviderIdResp.dispute:type_name -> w17.contrib.payment.Dispute
+	40, // 7: w17.contrib.payment.GetCreditBalanceResp.balance:type_name -> w17.contrib.payment.CreditBalance
+	41, // 8: w17.contrib.payment.GetCreditLedgerByKeyResp.entry:type_name -> w17.contrib.payment.CreditLedger
+	42, // 9: w17.contrib.payment.GetCreditTopupByProviderIdResp.topup:type_name -> w17.contrib.payment.CreditTopup
+	43, // 10: w17.contrib.payment.GetUsageMeterResp.meter:type_name -> w17.contrib.payment.UsageMeter
+	44, // 11: w17.contrib.payment.GetUsageRecordByKeyResp.record:type_name -> w17.contrib.payment.UsageRecord
+	45, // 12: w17.contrib.payment.GetPlanBySlugResp.plan:type_name -> w17.contrib.payment.Plan
+	46, // 13: w17.contrib.payment.GetSubscriptionResp.subscription:type_name -> w17.contrib.payment.Subscription
+	46, // 14: w17.contrib.payment.GetSubscriptionByProviderIdResp.subscription:type_name -> w17.contrib.payment.Subscription
 	0,  // 15: w17.contrib.payment.PaymentQuery.GetCustomerByUserId:input_type -> w17.contrib.payment.GetCustomerByUserIdReq
 	2,  // 16: w17.contrib.payment.PaymentQuery.GetPayment:input_type -> w17.contrib.payment.GetPaymentReq
 	4,  // 17: w17.contrib.payment.PaymentQuery.GetPaymentByProviderId:input_type -> w17.contrib.payment.GetPaymentByProviderIdReq
@@ -1653,32 +1908,36 @@ var file_queries_payment_query_proto_depIdxs = []int32{
 	12, // 20: w17.contrib.payment.PaymentQuery.SumRefundsForPayment:input_type -> w17.contrib.payment.SumRefundsForPaymentReq
 	10, // 21: w17.contrib.payment.PaymentQuery.GetRefundByIdempotencyKey:input_type -> w17.contrib.payment.GetRefundByIdempotencyKeyReq
 	14, // 22: w17.contrib.payment.PaymentQuery.GetDisputeByProviderId:input_type -> w17.contrib.payment.GetDisputeByProviderIdReq
-	16, // 23: w17.contrib.payment.PaymentQuery.GetCreditBalance:input_type -> w17.contrib.payment.GetCreditBalanceReq
-	18, // 24: w17.contrib.payment.PaymentQuery.GetCreditLedgerByKey:input_type -> w17.contrib.payment.GetCreditLedgerByKeyReq
-	20, // 25: w17.contrib.payment.PaymentQuery.GetCreditTopupByProviderId:input_type -> w17.contrib.payment.GetCreditTopupByProviderIdReq
-	22, // 26: w17.contrib.payment.PaymentQuery.GetUsageMeter:input_type -> w17.contrib.payment.GetUsageMeterReq
-	24, // 27: w17.contrib.payment.PaymentQuery.GetUsageRecordByKey:input_type -> w17.contrib.payment.GetUsageRecordByKeyReq
-	26, // 28: w17.contrib.payment.PaymentQuery.GetPlanBySlug:input_type -> w17.contrib.payment.GetPlanBySlugReq
-	28, // 29: w17.contrib.payment.PaymentQuery.GetSubscription:input_type -> w17.contrib.payment.GetSubscriptionReq
-	30, // 30: w17.contrib.payment.PaymentQuery.GetSubscriptionByProviderId:input_type -> w17.contrib.payment.GetSubscriptionByProviderIdReq
-	1,  // 31: w17.contrib.payment.PaymentQuery.GetCustomerByUserId:output_type -> w17.contrib.payment.GetCustomerByUserIdResp
-	3,  // 32: w17.contrib.payment.PaymentQuery.GetPayment:output_type -> w17.contrib.payment.GetPaymentResp
-	5,  // 33: w17.contrib.payment.PaymentQuery.GetPaymentByProviderId:output_type -> w17.contrib.payment.GetPaymentByProviderIdResp
-	7,  // 34: w17.contrib.payment.PaymentQuery.GetPaymentByIdempotencyKey:output_type -> w17.contrib.payment.GetPaymentByIdempotencyKeyResp
-	9,  // 35: w17.contrib.payment.PaymentQuery.GetRefundByProviderId:output_type -> w17.contrib.payment.GetRefundByProviderIdResp
-	13, // 36: w17.contrib.payment.PaymentQuery.SumRefundsForPayment:output_type -> w17.contrib.payment.SumRefundsForPaymentResp
-	11, // 37: w17.contrib.payment.PaymentQuery.GetRefundByIdempotencyKey:output_type -> w17.contrib.payment.GetRefundByIdempotencyKeyResp
-	15, // 38: w17.contrib.payment.PaymentQuery.GetDisputeByProviderId:output_type -> w17.contrib.payment.GetDisputeByProviderIdResp
-	17, // 39: w17.contrib.payment.PaymentQuery.GetCreditBalance:output_type -> w17.contrib.payment.GetCreditBalanceResp
-	19, // 40: w17.contrib.payment.PaymentQuery.GetCreditLedgerByKey:output_type -> w17.contrib.payment.GetCreditLedgerByKeyResp
-	21, // 41: w17.contrib.payment.PaymentQuery.GetCreditTopupByProviderId:output_type -> w17.contrib.payment.GetCreditTopupByProviderIdResp
-	23, // 42: w17.contrib.payment.PaymentQuery.GetUsageMeter:output_type -> w17.contrib.payment.GetUsageMeterResp
-	25, // 43: w17.contrib.payment.PaymentQuery.GetUsageRecordByKey:output_type -> w17.contrib.payment.GetUsageRecordByKeyResp
-	27, // 44: w17.contrib.payment.PaymentQuery.GetPlanBySlug:output_type -> w17.contrib.payment.GetPlanBySlugResp
-	29, // 45: w17.contrib.payment.PaymentQuery.GetSubscription:output_type -> w17.contrib.payment.GetSubscriptionResp
-	31, // 46: w17.contrib.payment.PaymentQuery.GetSubscriptionByProviderId:output_type -> w17.contrib.payment.GetSubscriptionByProviderIdResp
-	31, // [31:47] is the sub-list for method output_type
-	15, // [15:31] is the sub-list for method input_type
+	16, // 23: w17.contrib.payment.PaymentQuery.SumLostDisputesForPayment:input_type -> w17.contrib.payment.SumLostDisputesForPaymentReq
+	18, // 24: w17.contrib.payment.PaymentQuery.SumTopupCredit:input_type -> w17.contrib.payment.SumTopupCreditReq
+	20, // 25: w17.contrib.payment.PaymentQuery.GetCreditBalance:input_type -> w17.contrib.payment.GetCreditBalanceReq
+	22, // 26: w17.contrib.payment.PaymentQuery.GetCreditLedgerByKey:input_type -> w17.contrib.payment.GetCreditLedgerByKeyReq
+	24, // 27: w17.contrib.payment.PaymentQuery.GetCreditTopupByProviderId:input_type -> w17.contrib.payment.GetCreditTopupByProviderIdReq
+	26, // 28: w17.contrib.payment.PaymentQuery.GetUsageMeter:input_type -> w17.contrib.payment.GetUsageMeterReq
+	28, // 29: w17.contrib.payment.PaymentQuery.GetUsageRecordByKey:input_type -> w17.contrib.payment.GetUsageRecordByKeyReq
+	30, // 30: w17.contrib.payment.PaymentQuery.GetPlanBySlug:input_type -> w17.contrib.payment.GetPlanBySlugReq
+	32, // 31: w17.contrib.payment.PaymentQuery.GetSubscription:input_type -> w17.contrib.payment.GetSubscriptionReq
+	34, // 32: w17.contrib.payment.PaymentQuery.GetSubscriptionByProviderId:input_type -> w17.contrib.payment.GetSubscriptionByProviderIdReq
+	1,  // 33: w17.contrib.payment.PaymentQuery.GetCustomerByUserId:output_type -> w17.contrib.payment.GetCustomerByUserIdResp
+	3,  // 34: w17.contrib.payment.PaymentQuery.GetPayment:output_type -> w17.contrib.payment.GetPaymentResp
+	5,  // 35: w17.contrib.payment.PaymentQuery.GetPaymentByProviderId:output_type -> w17.contrib.payment.GetPaymentByProviderIdResp
+	7,  // 36: w17.contrib.payment.PaymentQuery.GetPaymentByIdempotencyKey:output_type -> w17.contrib.payment.GetPaymentByIdempotencyKeyResp
+	9,  // 37: w17.contrib.payment.PaymentQuery.GetRefundByProviderId:output_type -> w17.contrib.payment.GetRefundByProviderIdResp
+	13, // 38: w17.contrib.payment.PaymentQuery.SumRefundsForPayment:output_type -> w17.contrib.payment.SumRefundsForPaymentResp
+	11, // 39: w17.contrib.payment.PaymentQuery.GetRefundByIdempotencyKey:output_type -> w17.contrib.payment.GetRefundByIdempotencyKeyResp
+	15, // 40: w17.contrib.payment.PaymentQuery.GetDisputeByProviderId:output_type -> w17.contrib.payment.GetDisputeByProviderIdResp
+	17, // 41: w17.contrib.payment.PaymentQuery.SumLostDisputesForPayment:output_type -> w17.contrib.payment.SumLostDisputesForPaymentResp
+	19, // 42: w17.contrib.payment.PaymentQuery.SumTopupCredit:output_type -> w17.contrib.payment.SumTopupCreditResp
+	21, // 43: w17.contrib.payment.PaymentQuery.GetCreditBalance:output_type -> w17.contrib.payment.GetCreditBalanceResp
+	23, // 44: w17.contrib.payment.PaymentQuery.GetCreditLedgerByKey:output_type -> w17.contrib.payment.GetCreditLedgerByKeyResp
+	25, // 45: w17.contrib.payment.PaymentQuery.GetCreditTopupByProviderId:output_type -> w17.contrib.payment.GetCreditTopupByProviderIdResp
+	27, // 46: w17.contrib.payment.PaymentQuery.GetUsageMeter:output_type -> w17.contrib.payment.GetUsageMeterResp
+	29, // 47: w17.contrib.payment.PaymentQuery.GetUsageRecordByKey:output_type -> w17.contrib.payment.GetUsageRecordByKeyResp
+	31, // 48: w17.contrib.payment.PaymentQuery.GetPlanBySlug:output_type -> w17.contrib.payment.GetPlanBySlugResp
+	33, // 49: w17.contrib.payment.PaymentQuery.GetSubscription:output_type -> w17.contrib.payment.GetSubscriptionResp
+	35, // 50: w17.contrib.payment.PaymentQuery.GetSubscriptionByProviderId:output_type -> w17.contrib.payment.GetSubscriptionByProviderIdResp
+	33, // [33:51] is the sub-list for method output_type
+	15, // [15:33] is the sub-list for method input_type
 	15, // [15:15] is the sub-list for extension type_name
 	15, // [15:15] is the sub-list for extension extendee
 	0,  // [0:15] is the sub-list for field type_name
@@ -1696,7 +1955,7 @@ func file_queries_payment_query_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_queries_payment_query_proto_rawDesc), len(file_queries_payment_query_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   32,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

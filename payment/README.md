@@ -212,29 +212,33 @@ charge). Off by default.
   - read the caller's balance via `GET /credit/balance` →
     `PaymentService.GetMyCreditBalance` (zero before the first credit);
     grant/spend/top-up are privileged business ops, not REST-exposed.
-- **Refunding a top-up** — `RefundPayment` on a top-up payment spends the
+- **A top-up's credit is reconciled, not patched.** One rule decides what
+  a top-up is worth: its amount, less its pending and succeeded refunds and
+  its lost disputes, never below zero, and nothing until its payment has
+  succeeded. After every change to those — the success, a refund (through
+  `RefundPayment` or made at the provider directly), a refund's outcome, a
+  dispute, a retry — the plugin moves the credit it holds for the top-up to
+  that target. An increase cancels what the owner owes first, then adds
+  spendable credit. A decrease takes only what the balance holds — never
+  below zero; the rest is recorded as `CreditTopup.credit_owed`, credit the
+  owner spent and now owes, taken later if the balance grows while the
+  top-up is reconciled again. The plugin does not otherwise collect it;
+  query `credit_owed > 0` to find owners who owe credit.
+- **Refunding a top-up** — `RefundPayment` on a top-up payment takes the
   refunded amount from the owner's credit before the provider is asked.
   Credit already spent, or not granted yet, makes the refund
   `FailedPrecondition`; a refusal the provider will repeat gives the credit
   back, and so does a refund the provider fails later.
 - **Refunds and disputes at the provider** (needs `stripe_webhooks`) — a
-  refund made at the provider directly (its dashboard, its API) takes the
-  top-up's credit back when its webhook arrives, and gives it back if the
-  refund fails. A webhook cannot refuse: the money is already gone. It takes
-  what the balance holds, never below zero, and records the rest as the
-  refund's `credit_shortfall` — credit the owner spent and now owes. A lost
-  dispute does the same, recorded on the `Dispute` row. An open dispute
-  takes nothing (most are won; the credit stays spendable until it is
-  lost), and an inquiry, a won dispute or a refund first seen failed take
-  nothing. The take-back's ledger row is written even when nothing could be
-  taken (a `CreditApplied` with delta `0`), so concurrent deliveries record
-  one shortfall. A refund that fails clears its shortfall. A reversal of a
-  top-up whose credit has not been granted yet takes nothing and is
-  acknowledged: the grant, when it lands, leaves the refunded part out (a
-  fully refunded top-up is not granted; if that refund fails, the credit is
-  granted then), and a lost dispute's amount is recorded as owed. Query
-  `credit_shortfall > 0` to find owners who owe credit; the plugin does not
-  collect it.
+  refund made at the provider directly (its dashboard, its API), and a lost
+  dispute, lower the top-up's target when their webhook arrives; a webhook
+  cannot refuse, so spent credit is owed. An open dispute lowers nothing
+  (most are won; the credit stays spendable until it is lost), and an
+  inquiry, a won dispute or a refund first seen failed change nothing. A
+  refund or dispute that arrives before the top-up's grant is simply left
+  out of it. The ledger reasons `topup`, `topup-refund`,
+  `topup-refund-refused` and `topup-reconcile` are the plugin's own:
+  `GrantCredit` and `SpendCredit` refuse them.
 - **Event** — `CreditApplied` (signed delta + new balance).
 
 ## Metered / pay-as-you-go (feature `usage`)
