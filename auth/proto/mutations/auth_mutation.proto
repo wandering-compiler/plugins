@@ -1062,6 +1062,10 @@ message CreateCliAuthCodeReq {
   // demand ITS secret. Blank for loopback, which has no registration.
   string client_id      = 6 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+  // The approving session's own expiry, read by CliAuthorize from the
+  // caller's UserToken row (GetLiveSessionExpiry). Absent = that session
+  // never expires. See CliAuthCode.session_expires_at.
+  google.protobuf.Timestamp session_expires_at = 7 [(w17.field) = { type: DATETIME, null: true }];
 }
 message CreateCliAuthCodeResp {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -1087,6 +1091,10 @@ message ConsumeCliAuthCodeResp {
   // must present that client's secret; blank is a loopback code, where there
   // is no client to authenticate and PKCE is the binding.
   string client_id      = 4;
+  // The approving session's expiry: CliToken mints no later than this.
+  // NULL (unset) = that session never expires, or the code predates the
+  // column — the normal session TTL applies. Declared so a SQL NULL scans.
+  google.protobuf.Timestamp session_expires_at = 5 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // ── org_membership mutation request/response messages ───────
@@ -2742,8 +2750,6 @@ service AuthMutation {
 
   // ── cli_login (first-party CLI OAuth authorization code) ──
 
-  // CreateCliAuthCode — INSERT a single-use PKCE code bound to the
-  // approving user + challenge (only the hash is stored).
   // RegisterAuthClient — write down a redirect target an operator vouches
   // for. One row per (client_id, redirect_uri); the composite unique makes a
   // repeat registration a no-op rather than a duplicate.
@@ -2851,6 +2857,9 @@ service AuthMutation {
   }
 
 
+  // CreateCliAuthCode — INSERT a single-use PKCE code bound to the
+  // approving user + challenge (only the hash is stored), and to the
+  // approving session's expiry, which caps the session CliToken mints.
   rpc CreateCliAuthCode(CreateCliAuthCodeReq) returns (CreateCliAuthCodeResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
     option (w17.db.method) = {
@@ -2863,7 +2872,8 @@ service AuthMutation {
           "code_challenge = :code_challenge, "
           "redirect_uri = :redirect_uri, "
           "client_id = :client_id, "
-          "expires_at = :expires_at "
+          "expires_at = :expires_at, "
+          "session_expires_at = :session_expires_at "
           "RETURNING id AS code.id, "
           "          user_id AS code.user_id, "
           "          code_hash AS code.code_hash, "
@@ -2888,7 +2898,7 @@ service AuthMutation {
           "UPDATE @module.CliAuthCode SET "
           "consumed_at = NOW() "
           "WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() "
-          "RETURNING user_id, code_challenge, redirect_uri, client_id"
+          "RETURNING user_id, code_challenge, redirect_uri, client_id, session_expires_at"
       }
     };
   }

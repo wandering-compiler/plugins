@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -28,15 +29,26 @@ type cliCode struct {
 	redirectURI string
 	expiresAt   time.Time
 	consumed    bool
+	// the approving session's expiry, as CliAuthorize bound it
+	sessionExpiresAt *timestamppb.Timestamp
 }
 
 type cliMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
-	codes      map[string]*cliCode // code_hash -> stored code
-	issuedHash string
-	issuedFor  string // user_id IssueToken was last called with
+	codes        map[string]*cliCode // code_hash -> stored code
+	issuedHash   string
+	issuedFor    string                 // user_id IssueToken was last called with
+	issuedExpiry *timestamppb.Timestamp // expires_at IssueToken was last called with
+
+	// sessions mirrors the live UserToken rows GetLiveSessionExpiry reads,
+	// keyed on the exact (token_id, user_id) pair its WHERE matches; a nil
+	// value is a session that never expires. A nil MAP stands for "every
+	// caller's session is live and never expires", the fixture the tests
+	// that are not about the expiry binding run on.
+	sessions   map[[2]string]*time.Time
+	sessionErr error
 
 	// registered mirrors the AuthClient rows. Keyed on the exact pair the
 	// query's WHERE matches, so the mock cannot be looser than the statement
@@ -59,6 +71,8 @@ func (m *cliMock) CreateCliAuthCode(ctx context.Context, in *pb.CreateCliAuthCod
 		challenge:   in.GetCodeChallenge(),
 		redirectURI: in.GetRedirectUri(),
 		expiresAt:   in.GetExpiresAt().AsTime(),
+
+		sessionExpiresAt: in.GetSessionExpiresAt(),
 	}
 	return &pb.CreateCliAuthCodeResp{Code: &pb.CliAuthCode{Id: "cac-1", UserId: in.GetUserId(), CodeHash: in.GetCodeHash()}}, nil
 }
@@ -74,7 +88,37 @@ func (m *cliMock) ConsumeCliAuthCode(ctx context.Context, in *pb.ConsumeCliAuthC
 		return &pb.ConsumeCliAuthCodeResp{}, nil
 	}
 	c.consumed = true
-	return &pb.ConsumeCliAuthCodeResp{UserId: c.userID, CodeChallenge: c.challenge, RedirectUri: c.redirectURI}, nil
+	return &pb.ConsumeCliAuthCodeResp{
+		UserId: c.userID, CodeChallenge: c.challenge, RedirectUri: c.redirectURI,
+		SessionExpiresAt: c.sessionExpiresAt,
+	}, nil
+}
+
+func (m *cliMock) GetLiveSessionExpiry(ctx context.Context, in *pb.GetLiveSessionExpiryReq, _ ...grpc.CallOption) (*pb.GetLiveSessionExpiryResp, error) {
+	if m.sessionErr != nil {
+		return nil, m.sessionErr
+	}
+	if m.sessions == nil {
+		return &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId()}, nil
+	}
+	exp, ok := m.sessions[[2]string{in.GetTokenId(), in.GetUserId()}]
+	// Mirror the WHERE's liveness filter: an expired row matches nothing.
+	if !ok || (exp != nil && !exp.After(time.Now())) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	resp := &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId()}
+	if exp != nil {
+		resp.ExpiresAt = timestamppb.New(*exp)
+	}
+	return resp, nil
+}
+
+// session records a live UserToken row for GetLiveSessionExpiry.
+func (m *cliMock) session(tokenID, userID string, expiresAt *time.Time) {
+	if m.sessions == nil {
+		m.sessions = map[[2]string]*time.Time{}
+	}
+	m.sessions[[2]string{tokenID, userID}] = expiresAt
 }
 
 func (m *cliMock) GetRegisteredRedirect(ctx context.Context, in *pb.GetRegisteredRedirectReq, _ ...grpc.CallOption) (*pb.GetRegisteredRedirectResp, error) {
@@ -107,6 +151,7 @@ func (m *cliMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grp
 	}
 	m.issuedFor = in.GetUserId()
 	m.issuedHash = in.GetTokenHash()
+	m.issuedExpiry = in.GetExpiresAt()
 	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", UserId: in.GetUserId()}}, nil
 }
 
