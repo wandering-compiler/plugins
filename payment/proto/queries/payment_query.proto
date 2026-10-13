@@ -21,6 +21,10 @@ option go_package = "@project;@pkg";
 message GetCustomerByUserIdReq  { string user_id = 1 [(w17.field) = { type: UUID }]; }
 message GetCustomerByUserIdResp { Customer customer = 1; }
 
+// GetCustomerByProviderId — provider_customer_id is UNIQUE (models.proto).
+message GetCustomerByProviderIdReq  { string provider_customer_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
+message GetCustomerByProviderIdResp { Customer customer = 1; }
+
 message GetPaymentReq  { string id = 1 [(w17.field) = { type: UUID }]; }
 message GetPaymentResp { Payment payment = 1; }
 
@@ -141,6 +145,17 @@ message GetPlanBySlugResp {
   Plan plan = 1;
 }
 
+// GetPlanByProviderPriceId — the plan a provider price belongs to. Gated
+// subscriptions.
+message GetPlanByProviderPriceIdReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string provider_price_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetPlanByProviderPriceIdResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  Plan plan = 1;
+}
+
 message GetSubscriptionReq {
   option (w17.contrib.plugin_feature) = "subscriptions";
   string id = 1 [(w17.field) = { type: UUID }];
@@ -175,6 +190,24 @@ service PaymentQuery {
           "       c.email AS customer.email, "
           "       c.created_at AS customer.created_at "
           "FROM @module.Customer c WHERE c.user_id = :user_id"
+      }
+    };
+  }
+
+  // GetCustomerByProviderId — the local link of a provider customer. Read by
+  // the provider reconciliation (ReconcileProvider), which holds only the
+  // provider's ids.
+  rpc GetCustomerByProviderId(GetCustomerByProviderIdReq) returns (GetCustomerByProviderIdResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS customer.id, "
+          "       c.user_id AS customer.user_id, "
+          "       c.provider_customer_id AS customer.provider_customer_id, "
+          "       c.email AS customer.email, "
+          "       c.created_at AS customer.created_at "
+          "FROM @module.Customer c WHERE c.provider_customer_id = :provider_customer_id"
       }
     };
   }
@@ -489,6 +522,30 @@ service PaymentQuery {
           "       p.enabled AS plan.enabled, "
           "       p.created_at AS plan.created_at "
           "FROM @module.Plan p WHERE p.slug = :slug"
+      }
+    };
+  }
+
+  // GetPlanByProviderPriceId — the plan whose provider price a subscription
+  // is on. Read by the provider reconciliation for a subscription whose local
+  // row never landed. Not indexed: the plan catalogue is small, and the
+  // reconciliation is no request path. Gated subscriptions.
+  rpc GetPlanByProviderPriceId(GetPlanByProviderPriceIdReq) returns (GetPlanByProviderPriceIdResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS plan.id, "
+          "       p.slug AS plan.slug, "
+          "       p.name AS plan.name, "
+          "       p.amount AS plan.amount, "
+          "       p.currency AS plan.currency, "
+          "       p.interval AS plan.interval, "
+          "       p.provider_price_id AS plan.provider_price_id, "
+          "       p.enabled AS plan.enabled, "
+          "       p.created_at AS plan.created_at "
+          "FROM @module.Plan p WHERE p.provider_price_id = :provider_price_id"
       }
     };
   }

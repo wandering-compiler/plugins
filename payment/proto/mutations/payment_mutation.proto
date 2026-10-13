@@ -216,6 +216,11 @@ message CreateSubscriptionReq {
   string                    provider_subscription_id = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
   int32                     status                   = 4;
   google.protobuf.Timestamp current_period_end       = 5;
+  // When the provider state the row starts from was read: NULL from
+  // Subscribe (the create call's answer), the read time from the provider
+  // reconciliation, so a webhook event older than that read cannot overwrite
+  // it (see MarkSubscriptionStatus).
+  google.protobuf.Timestamp provider_event_at        = 6;
 }
 message CreateSubscriptionResp {
   option (w17.contrib.plugin_feature) = "subscriptions";
@@ -903,7 +908,8 @@ service PaymentMutation {
           "plan_id = :plan_id, "
           "provider_subscription_id = :provider_subscription_id, "
           "status = :status, "
-          "current_period_end = :current_period_end "
+          "current_period_end = :current_period_end, "
+          "provider_event_at = :provider_event_at "
           "RETURNING id AS subscription.id, "
           "          customer_id AS subscription.customer_id, "
           "          plan_id AS subscription.plan_id, "

@@ -1,0 +1,10 @@
+### `ReconcileProvider` records what the webhooks never brought in
+
+A provider object whose local row never landed (a failed insert nobody retried), or a row whose webhook was lost for good (an endpoint down longer than the provider redelivers), stayed wrong forever: a paid charge read pending, a top-up's credit was never granted, a dashboard refund never recorded.
+
+- **New method `PaymentService.ReconcileProvider(since, limit, cursor)`** (feature `stripe_webhooks`). It walks the provider's customers, payment intents, refunds and subscriptions created at or after `since`, and records every object this installation made that has no local row, and every status a row lags, through the same paths the create calls and the webhook use (events fire once; a top-up's credit is granted or taken back once). Objects of other installations or apps are left alone. It answers per-kind counts and a cursor when `limit` stopped it.
+- **The plugin schedules nothing and no preset exposes it.** Call it from your own code (a scheduled job, an operator action); the README suggests hourly with `since` four days back. Without a call nothing changes.
+- **Provider customers are now marked** (`w17_payment=customer`, `w17_install`) like every other object the plugin creates. Customers made before this version are not recognised by the reconciliation.
+- **A payment row the reconciliation records** carries a stand-in idempotency key; a caller's retry the provider replays onto that intent is answered with it.
+- **Nothing is ever deleted.** `ProcessedWebhookEvent` and the ledgers are audit logs and are never pruned; archiving them at scale is a deployment concern.
+- **Generated code.** New queries `GetCustomerByProviderId` (base) and `GetPlanByProviderPriceId` (`subscriptions`); `CreateSubscription` now also writes `provider_event_at` (an existing column). No new table, column or index, so no migration. Regenerate your project so the new method and queries are emitted. A custom `backend.Backend` driver must implement the four new `List*Page` methods.

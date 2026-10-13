@@ -52,7 +52,8 @@ It covers plugin version 0.1.0-rc.5.
 | `usage` | off | — | — |
 | `subscriptions` | off | `stripe_webhooks` | — |
 
-`go_files`: `handlers/webhook_stripe.go` (`stripe_webhooks`),
+`go_files`: `handlers/webhook_stripe.go` and `handlers/reconcile_provider.go`
+(`stripe_webhooks`),
 `handlers/prepaid.go` (`prepaid`), `handlers/usage.go` (`usage`),
 `handlers/subscriptions.go` (`subscriptions`). No `go_files_combined`. Always
 staged: `handlers/payment_service.go`, `handlers/caller.go` (who a request
@@ -98,7 +99,7 @@ hold it. **Partly fixed** says what is still open.
   caller's key, NULL for a refund made at the provider directly; `status`
   enum `PENDING`/`SUCCEEDED`/`FAILED`/`CANCELED`, default `SUCCEEDED`).
   Queries
-  `GetCustomerByUserId`, `GetPayment`, `GetPaymentByProviderId`,
+  `GetCustomerByUserId`, `GetCustomerByProviderId`, `GetPayment`, `GetPaymentByProviderId`,
   `GetPaymentByIdempotencyKey`, `GetRefundByProviderId`,
   `GetRefundByIdempotencyKey`, `SumRefundsForPayment` (pending and
   succeeded refunds only). Mutations
@@ -201,7 +202,21 @@ hold it. **Partly fixed** says what is still open.
   credit); `charge.dispute.*` → `reconcileDispute` (`CreateDispute` /
   `MarkDisputeStatus`, then reconciles a top-up's credit);
   `customer.subscription.*` → the `subscriptions` hook. Every other type is
-  acknowledged and recorded. Table `Dispute` (`provider_dispute_id` unique,
+  acknowledged and recorded. Service method `ReconcileProvider` (internal, in
+  no preset): walks the provider objects created at or after `since`
+  (`Backend.ListCustomerPage`, `ListPaymentPage`, `ListRefundPage`,
+  `ListSubscriptionPage`; customers, then payments, then refunds, then
+  subscriptions while that feature is on), at most `limit` objects per call
+  (default 1000, at most 10000) with a cursor to continue, and applies each
+  through the paths above: a marked customer without a link gets
+  `CreateCustomer`; a marked intent without a row gets `CreatePayment` at a
+  pre-terminal status (key `reconciledChargeKey`) and then the webhook's own
+  `reconcile` for its provider status (so `MarkPaymentSucceeded` and the
+  top-up grant run as for a delivery), a top-up also its `CreditTopup`;
+  every refund of a local payment goes through `reconcileRefunds`; a marked
+  subscription gets `CreateSubscription` or `MarkSubscriptionStatus` stamped
+  with the time of the read. It answers per-kind counts (created, updated,
+  in sync, foreign, superseded, failed). The plugin schedules nothing. Table `Dispute` (`provider_dispute_id` unique,
   `payment_id` indexed, status enum, `provider_event_at`), queries
   `GetDisputeByProviderId`, `SumLostDisputesForPayment` (`LOST` only), mutations
   `CreateDispute`, `MarkDisputeStatus` (guarded: not from `WON` or `LOST`,
@@ -233,6 +248,10 @@ hold it. **Partly fixed** says what is still open.
 | `stripe_webhooks/refunds-reconciled-from-provider` | A refund event MUST reconcile against the provider's current list of the payment's refunds, not the event's snapshot: every refund this plugin does not know is recorded once (no key; under the caller's key when it carries RefundPayment's `w17_refund`, without taking its credit again), every known one takes the provider's outcome, and the payment's status follows the LOCAL rows' counted total afterwards, re-read after a `REFUNDED` write so a concurrent failure cannot leave it `REFUNDED`. A refund event for a payment this installation never made MUST be acknowledged without a provider call. | Consistency & concurrency | `TestWebhook_UnknownRefundIsRecorded`, `TestWebhook_RefundEventBeforeRefundPaymentRecordedIt`, `TestWebhook_RefundOfAForeignPaymentIsAcknowledged`, `TestWebhook_StaleRefundListCannotLeaveThePaymentRefunded`, `TestFlow_RefundPaymentRacingTheRefundsFailure_DoesNotStayRefunded`, `TestWebhook_ChargeRefundedSettlesTheStatus`, `TestWebhook_ChargeRefundedBeforeTheSuccess`, `TestListRefunds_EveryRefundWithItsStateAcrossPages`, `TestListRefunds_RefusesARefundWithoutAnID` |
 | `stripe_webhooks/disputes-recorded` | A `charge.dispute.*` event for a payment this installation made MUST record the dispute and its status once; an older event MUST NOT overwrite a newer status, and `WON` / `LOST` are terminal. A dispute of another payment MUST be acknowledged and not recorded. | Consistency & concurrency | `TestWebhook_LostDisputeTakesTheTopUpCreditBack`, `TestWebhook_DisputeStatesThatTakeNothing`, `TestWebhook_DisputeOfAForeignPaymentIsAcknowledged`, `TestWebhook_LostDisputeOnAPayment_TakesNoCredit`, `TestVerifyAndParse_DisputeAmountAndPayment`. **Unit (mock) only** for the guards (DQL). |
 | `stripe_webhooks/provider-deliveries-not-throttled` | Authentic deliveries MUST NOT spend the gateway's per-address budget; only failed ones MAY. | Failure & configuration | none (manifest only: `public_limit: failed_only`, enforced by the gateway; finding 7 fixed) |
+| `stripe_webhooks/reconcile-records-what-webhooks-missed` | `ReconcileProvider` MUST record every provider object this installation made (both marks match) that has no local row — a customer whose principal has no link, a payment intent (and a top-up's `CreditTopup`), a refund of a local payment, a subscription — and MUST bring a lagging row to the provider's status, through the same mutations and guards the create calls and the webhook use: a payment reaches `SUCCEEDED` by `MarkPaymentSucceeded` (one `PaymentSucceeded`), never by an insert at that status, and a caller's later retry of the charge is answered with the recorded row. | Failure & configuration | `TestReconcile_OrphanPayment_RecordedWithItsStatus`, `TestReconcile_FailedAndOpenIntents`, `TestReconcile_LaggingStatus_UpdatedThenInSync`, `TestReconcile_TopupWithoutItsRecord_GrantedOnce`, `TestReconcile_OrphanRefundOnTopup_TakesTheCreditOnce`, `TestReconcile_OrphanSubscription`, `TestReconcile_Customers`, `TestListPaymentPage_TellsAFailedAttemptFromAnOpenIntent`, `TestListSubscriptionPage_AllStatuses`, `TestEnsureCustomer_MarksTheCustomer`. **Unit (mock) only:** a live test would fail a local insert against a provider test account, run the reconciliation and assert the row, its status and one event on the bus. |
+| `stripe_webhooks/reconcile-leaves-foreign-alone` | An object without this installation's marks (unmarked, another installation's, a customer made before customers were marked) or a refund of a payment with no local row MUST be counted foreign and MUST NOT be written. A marked customer whose principal is linked to another customer MUST be counted superseded and the existing link kept. Nothing is deleted. | Security | `TestReconcile_ForeignObjectsAreLeftAlone`, `TestReconcile_Customers` |
+| `stripe_webhooks/reconcile-idempotent` | A rerun MUST change nothing, and a run concurrent with deliveries of the same events or with another run MUST produce each transition, event and credit grant once (the transition guards, the unique keys and the top-up's step keys arbitrate). A webhook event created before a run's read MUST NOT overwrite a subscription status the run recorded; one created after it MUST apply. | Consistency & concurrency | `TestReconcile_LaggingStatus_UpdatedThenInSync`, `TestReconcile_TopupWithoutItsRecord_GrantedOnce`, `TestReconcile_ConcurrentWithWebhooksAndItself_GrantsOnce`, `TestReconcile_OrphanSubscription`. **Unit (mock) only** for the guards (DQL). |
+| `stripe_webhooks/reconcile-bounded` | One call MUST examine at most `limit` objects (default 1000, at most 10000), in pages of at most 100, and answer a cursor that continues the same walk (its `since` travels with it); a walk MUST require `since`. A failure on one object MUST be counted and logged and MUST NOT stop the walk; a failed list MUST fail the call. | Performance | `TestReconcile_PagingLimitAndCursor`, `TestReconcile_Refusals`, `TestReconcile_OneFailureDoesNotStopTheWalk`, `TestListPages_SendTheBounds`, `TestListPages_RefuseAnObjectWithoutAnID` |
 | `stripe_webhooks/hot-path-bounded` | One delivery MUST cost one HMAC, at most one guarded `UPDATE` and one primary-key lookup per object, the hook's bounded work, and one ledger insert. A refund event costs, besides, one provider listing of the payment's refunds (at most 20 pages) and per refund one unique-key lookup and at most one write. A forged delivery MUST cost one HMAC and nothing else. | Performance | none (structural) |
 
 **Gaps / suspected defects**
@@ -249,7 +268,17 @@ hold it. **Partly fixed** says what is still open.
    changed at the provider is marked succeeded at the old amount.
 3. **The ledger is never read.** Idempotency comes from the guards; the
    ledger only distinguishes `handled=false`. It grows by one row per event
-   and nothing prunes it.
+   and nothing prunes it, by decision (see `payment/unbounded-tables`).
+6. **Objects made before the marks.** `ReconcileProvider` recognises an
+   object as this installation's by its marks. Customers carry them from this
+   version on; a customer made earlier, and any object made before the
+   installation mark existed, is foreign to it. A provider price (`CreatePlan`)
+   is not walked: `Plan` is locally authoritative, an orphan price is never
+   referenced and moves no money, and recording one would invent a catalogue
+   entry nobody defined. Disputes are not walked either; only the webhook
+   records them. A payment row recorded by the reconciliation holds a stand-in
+   key, so a charge retried after the provider forgot its key is not matched
+   to it (it never was matched without the row either).
 4. **Rotating the signing secret changes the installation mark.** An object
    created under the old mark whose row has not landed is treated as
    foreign and acknowledged. Documented: rotate while nothing is in flight.
@@ -367,15 +396,19 @@ hold it. **Partly fixed** says what is still open.
 - **Adds.** Tables `Plan` (`slug` unique, `provider_price_id`, `enabled`),
   `Subscription` (`provider_subscription_id` unique, `customer_id` indexed,
   status enum mapped one to one, `provider_event_at` for ordering). Queries
-  `GetPlanBySlug`, `GetSubscription`, `GetSubscriptionByProviderId`. Mutations
+  `GetPlanBySlug`, `GetPlanByProviderPriceId` (the provider reconciliation's;
+  not indexed, the catalogue is small), `GetSubscription`,
+  `GetSubscriptionByProviderId`. Mutations
   `CreatePlan`, `CreateSubscription` (emits `SubscriptionStarted` with
-  `status`), `MarkSubscriptionStatus` (guarded `status <> 4` and
+  `status`; `provider_event_at` NULL from `Subscribe`, the read time from the
+  provider reconciliation), `MarkSubscriptionStatus` (guarded `status <> 4` and
   `provider_event_at` not newer; emits `SubscriptionStatusChanged`). Service
   methods `CreatePlan`, `Subscribe`, `GetMySubscription`. REST endpoints
   `POST /billing/subscriptions` and `GET /billing/subscriptions/{id}`
   (`GetMySubscription`, the caller's own), bearer. `CreatePlan` is not in the
   preset. Uses the backend's `UpsertPlan`, `StartSubscription` and
-  `FindSubscription`. The subscription hook `reconcileSubscriptionWebhook`.
+  `FindSubscription`. The subscription hook `reconcileSubscriptionWebhook`, and
+  the reconciliation hook `reconcileProviderSubscription`.
 - **Requires / conflicts / combined files.** Requires `stripe_webhooks`
   (codegen refuses the feature without it).
 
@@ -489,7 +522,7 @@ a fake store proves the handler's sequencing only.
 | ID | MUST hold | Proof |
 |---|---|---|
 | `payment/principal-from-gateway` | Every end-user operation (create customer, charge, top up, subscribe, read payment, subscription, balance or meter) takes the principal from the gateway-stamped identity: a request field naming another principal is refused, and an envelope that is present but empty, repeated or unreadable is refused, never taken for an internal call. Only a call without the envelope (the project's own code) names the user. | `TestActingFor`, `TestUserIDField_ReadsField2AmongOthers`, `TestCreatePayment_ASignedInCallerCannotChargeAnotherUser`, `TestCreateCustomerAndSubscribe_RefuseAnotherUser`, `TestGetMyPayment_OnlyTheOwnersPayment`, `TestGetMySubscription_OnlyTheOwnersSubscription`, `TestGetMyBalanceAndMeter_TheCallersOwn`, `TestGetMyReads_RequireASignedInCaller` (finding 1 fixed). **Unit (mock) only:** a live test would sign in two principals and assert each read and write of the other's is refused (see "How to prove it", item 1). |
-| `payment/privileged-rpcs-unexposed` | `RefundPayment`, `GrantCredit`, `SpendCredit`, `TopUpCredit`, `ReportUsage` and `CreatePlan` are absent from the REST preset. A project that exposes them on any transport must gate them with its own ACL. | none (manifest only) |
+| `payment/privileged-rpcs-unexposed` | `RefundPayment`, `GrantCredit`, `SpendCredit`, `TopUpCredit`, `ReportUsage`, `CreatePlan` and `ReconcileProvider` are absent from the REST preset. A project that exposes them on any transport must gate them with its own ACL. | none (manifest only) |
 
 #### Money and currency
 
@@ -508,7 +541,8 @@ a fake store proves the handler's sequencing only.
 | GrantCredit / SpendCredit | caller key (required) | — | `v2:sha256("credit", kind, user, key)` | principal × operation |
 | Top-up credit (grant, take-back, give-back) | provider payment id + reconciliation step | — | `v2:sha256("credit", "topup-step", user, "<id>#<step>")` | one write per step; earlier versions' `topup:<id>` grant and refund take-back rows are counted by `SumTopupCredit` |
 | ReportUsage | caller key (required) | — | `v2:sha256("usage", user, meter, period, key)` | principal × meter × period |
-| EnsureCustomer / UpsertPlan | none | none | — | (orphans possible) |
+| EnsureCustomer / UpsertPlan | none | none | — | (orphans possible; a customer's is recorded by `ReconcileProvider`) |
+| A payment `ReconcileProvider` records | — | — | `v2:sha256("charge", "reconciled", <provider payment id>)` | one per intent; a charge retried within the provider's window and replayed onto that intent is answered with the row |
 
 | ID | MUST hold | Proof |
 |---|---|---|
@@ -520,14 +554,14 @@ a fake store proves the handler's sequencing only.
 | ID | MUST hold | Proof |
 |---|---|---|
 | `payment/provider-first-then-row` | Every provider-backed create calls the provider first and writes the local row second. The provider is the source of truth for status; the local row is the source of truth for keys, ownership and plan terms. | none (structural) |
-| `payment/partial-write-recoverable` | A failure between the provider call and the local write is recovered by the caller's retry with the same key, or by webhook redelivery for an own object. Outside the provider's idempotency window, a refund or subscribe is recognised by the key in the provider object's metadata (finding 4 fixed, except for objects an earlier version made); a charge is not (no money moves: see the base tier's gap 2). | `TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment`, `TestFlow_Refund_FullAndLostResponse`, `TestFlow_Subscribe_RetryAfterLostResponse` (the committed-row case), `TestFlow_RefundWhoseLocalRecordFailed_RetriedAfterTheProviderForgotTheKey_RefundsOnce`, `TestFlow_SubscribeRetriedAfterTheProviderForgotTheKey_SubscribesOnce` (the failed-write case after the window) |
-| `payment/no-orphan-reconciler` | **Gap:** nothing reconciles provider objects that never got a local row once the provider stops redelivering (customers, prices, refunds, subscriptions, intents). There is no background job and no listing query against the provider. | n/a (a recorded gap: there is no reconciler to prove) |
+| `payment/partial-write-recoverable` | A failure between the provider call and the local write is recovered by the caller's retry with the same key, or by webhook redelivery for an own object, or — once the provider stops redelivering — by the project's next `ReconcileProvider` run. Outside the provider's idempotency window, a refund or subscribe is recognised by the key in the provider object's metadata (finding 4 fixed, except for objects an earlier version made); a charge is not (no money moves: see the base tier's gap 2). | `TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment`, `TestFlow_Refund_FullAndLostResponse`, `TestFlow_Subscribe_RetryAfterLostResponse` (the committed-row case), `TestFlow_RefundWhoseLocalRecordFailed_RetriedAfterTheProviderForgotTheKey_RefundsOnce`, `TestFlow_SubscribeRetriedAfterTheProviderForgotTheKey_SubscribesOnce` (the failed-write case after the window), `TestReconcile_OrphanPayment_RecordedWithItsStatus`, `TestReconcile_TopupWithoutItsRecord_GrantedOnce`, `TestReconcile_OrphanSubscription` (the reconciliation) |
+| `payment/no-orphan-reconciler` | **Closed.** `ReconcileProvider` (feature `stripe_webhooks`) walks the provider's customers, payment intents, refunds and subscriptions created since a given time and records, through the create calls' and the webhook's own paths, every object this installation made that has no local row, and every status a row lags; foreign objects are left alone. The plugin runs no job of its own: the project calls it (a scheduled job, an operator action), and no preset exposes it. Prices are not walked (see `stripe_webhooks` gap 6). As found: nothing reconciled provider objects that never got a local row once the provider stopped redelivering; there was no background job and no listing query against the provider. | `stripe_webhooks/reconcile-records-what-webhooks-missed`, `stripe_webhooks/reconcile-leaves-foreign-alone`, `stripe_webhooks/reconcile-idempotent`, `stripe_webhooks/reconcile-bounded` (their tests) |
 
 #### Secrets and configuration
 
 | ID | MUST hold | Proof |
 |---|---|---|
-| `payment/secrets-typed` | `provider_api_key` and `webhook_signing_secret` are `secret.String` (redacted in logs and traces, never a baked default) and revealed only into the driver and the verifier. The plugin logs only a failed provider call (`providerFailure`, and `RefundPayment` when a refused top-up refund's credit could not be given back: the driver's error, and the store's, server-side), which carries no secret's value. | `TestRegisterPlugin_WiresConfigIntoTheHandler` |
+| `payment/secrets-typed` | `provider_api_key` and `webhook_signing_secret` are `secret.String` (redacted in logs and traces, never a baked default) and revealed only into the driver and the verifier. The plugin logs only a failed provider call (`providerFailure`, and `RefundPayment` when a refused top-up refund's credit could not be given back: the driver's error, and the store's, server-side) and an object `ReconcileProvider` could not record (its kind, provider id and error), which carry no secret's value. | `TestRegisterPlugin_WiresConfigIntoTheHandler` |
 | `payment/live-key-only-to-provider` | With `provider_api_base` set, a live key (`sk_live_`, `rk_live_`) fails boot, so a live key is never sent to a mock or test root. | `TestResolveBackend_ProviderAPIBaseRefusesLiveKey` |
 | `payment/api-base-is-a-root` | `provider_api_base` must be an http(s) URL with a host and no credentials, query or fragment; the boot error never echoes credentials from it. | `TestResolveBackend_ProviderAPIBaseMustBeAURL`, `TestResolveBackend_AnUnparsableBaseIsNotEchoed`, `TestResolveBackend_ProviderAPIBase` |
 | `payment/provider-errors-not-echoed` | The caller sees the failure class and a generic message; the provider's error text, request URL and anything about the key stay server-side. | `TestProviderFailure_DoesNotEchoTheProvider`, `TestProviderFailure_PassesTheReasonCode`, `TestProviderFailure_MapsByClass`, `TestFlow_RefusedTopUpRefundWithAFailedUndo_KeepsTheProviderTextInside` (finding 8 fixed). |
@@ -571,9 +605,9 @@ No handler opens a transaction. Each local write is one generated mutation:
 | ID | MUST hold | Proof |
 |---|---|---|
 | `payment/no-provider-call-in-transaction` | No provider call is made while a database transaction or row lock is held. Holds by construction today: every provider call precedes a single-statement (or single-mutation) write. | none (structural) |
-| `payment/lookups-indexed` | Every lookup on a request or webhook path is served by a unique key or an index: `Customer.user_id`, `Customer.provider_customer_id`, `Payment.provider_payment_id`, `Payment.idempotency_key`, `Refund.provider_refund_id`, `Refund.idempotency_key`, `ProcessedWebhookEvent.provider_event_id`, `CreditBalance.user_id`, `CreditLedger.idempotency_key`, `CreditTopup.provider_payment_id`, `UsageRecord.idempotency_key`, `UsageMeter(user_id, meter, period)`, `Plan.slug`, `Subscription.provider_subscription_id`, `Dispute.provider_dispute_id`, `Refund.payment_id` (`SumRefundsForPayment`, on every refund). **Gap:** `Payment.customer_id` is unindexed; no query filters on it today, and any per-customer listing added later needs it. | none (schema only) |
+| `payment/lookups-indexed` | Every lookup on a request or webhook path is served by a unique key or an index: `Customer.user_id`, `Customer.provider_customer_id`, `Payment.provider_payment_id`, `Payment.idempotency_key`, `Refund.provider_refund_id`, `Refund.idempotency_key`, `ProcessedWebhookEvent.provider_event_id`, `CreditBalance.user_id`, `CreditLedger.idempotency_key`, `CreditTopup.provider_payment_id`, `UsageRecord.idempotency_key`, `UsageMeter(user_id, meter, period)`, `Plan.slug`, `Subscription.provider_subscription_id`, `Dispute.provider_dispute_id`, `Refund.payment_id` (`SumRefundsForPayment`, on every refund). `ReconcileProvider` reads `Customer.provider_customer_id` (unique) and, for an orphan subscription, `Plan.provider_price_id` (unindexed: the catalogue is small and the reconciliation is no request path). **Gap:** `Payment.customer_id` is unindexed; no query filters on it today, and any per-customer listing added later needs it. | none (schema only) |
 | `payment/reads-are-pure` | The four preset reads (`GetMy*`) write nothing: a balance or meter read is one storage lookup by the caller's key, a payment or subscription read is the caller's customer lookup plus one lookup by id. | `TestGetMyReads_AreOneOrTwoLookupsAndWriteNothing` (the handler's calls; that each lookup is one indexed statement is `payment/lookups-indexed`) |
-| `payment/unbounded-tables` | **Gap:** `ProcessedWebhookEvent` grows by one row per delivered event and nothing prunes it; the ledgers are append-only by design. | n/a (a recorded gap: nothing prunes, so nothing to prove) |
+| `payment/unbounded-tables` | **Decided.** `ProcessedWebhookEvent`, `CreditLedger`, `UsageRecord`, `Refund` and `Dispute` are audit logs and are never pruned: the plugin deletes no row from any table. Archiving at scale (partitioning, moving old rows to cold storage) is a deployment concern, outside the plugin. As found: `ProcessedWebhookEvent` grows by one row per delivered event and nothing prunes it; the ledgers are append-only by design. | n/a (by decision nothing prunes; that the plugin issues no `DELETE` is visible in its DQL) |
 
 ---
 

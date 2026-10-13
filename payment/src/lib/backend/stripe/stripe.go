@@ -71,7 +71,14 @@ func (b *Backend) EnsureCustomer(ctx context.Context, spec backend.CustomerSpec)
 		form.Set("email", spec.Email)
 	}
 	if spec.UserID != "" {
-		form.Set("metadata[user_id]", spec.UserID)
+		form.Set("metadata["+customerUserMeta+"]", spec.UserID)
+	}
+	// Marked like every object the plugin creates, so the provider
+	// reconciliation can tell this installation's customers from the rest
+	// of the account's.
+	if spec.Install != "" {
+		form.Set("metadata["+backend.OriginMetadataKey+"]", backend.OriginCustomer)
+		form.Set("metadata["+backend.InstallMetadataKey+"]", spec.Install)
 	}
 	var resp customerResp
 	if err := b.post(ctx, "/v1/customers", form, "", &resp); err != nil {
@@ -277,6 +284,133 @@ func (b *Backend) FindSubscription(ctx context.Context, providerCustomerID, idem
 		q.Set("starting_after", list.Data[len(list.Data)-1].ID)
 	}
 	return backend.SubscriptionResult{}, false, fmt.Errorf("stripe: /v1/subscriptions: more subscriptions on %s than this lookup walks", providerCustomerID)
+}
+
+// customerUserMeta is the customer metadata key carrying the principal.
+const customerUserMeta = "user_id"
+
+// ListCustomerPage lists one page of the account's customers.
+func (b *Backend) ListCustomerPage(ctx context.Context, q backend.ListQuery) ([]backend.CustomerObject, bool, error) {
+	var list customerList
+	if err := b.get(ctx, "/v1/customers", listParams(q, nil), &list); err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.CustomerObject, 0, len(list.Data))
+	for _, c := range list.Data {
+		if c.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/customers: a customer without an id")
+		}
+		out = append(out, backend.CustomerObject{
+			ProviderCustomerID: c.ID,
+			UserID:             c.Metadata[customerUserMeta],
+			Email:              c.Email,
+			Marks:              marks(c.Metadata),
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// ListPaymentPage lists one page of the account's PaymentIntents.
+func (b *Backend) ListPaymentPage(ctx context.Context, q backend.ListQuery) ([]backend.PaymentObject, bool, error) {
+	var list paymentIntentList
+	if err := b.get(ctx, "/v1/payment_intents", listParams(q, nil), &list); err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.PaymentObject, 0, len(list.Data))
+	for _, p := range list.Data {
+		if p.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/payment_intents: an intent without an id")
+		}
+		cur := strings.ToLower(p.Currency)
+		out = append(out, backend.PaymentObject{
+			ProviderPaymentID:  p.ID,
+			ProviderCustomerID: p.Customer,
+			Status:             p.Status,
+			Amount:             backend.Money{Amount: fromMinorUnits(p.Amount, cur), Currency: cur},
+			Description:        p.Description,
+			// A failed attempt leaves the intent requires_payment_method
+			// with the attempt's error, which a fresh intent has none of.
+			Failed: p.Status == "requires_payment_method" && len(p.LastPaymentError) > 0 && string(p.LastPaymentError) != "null",
+			Marks:  marks(p.Metadata),
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// ListRefundPage lists one page of the account's refunds, of every payment.
+func (b *Backend) ListRefundPage(ctx context.Context, q backend.ListQuery) ([]backend.ListedRefund, bool, error) {
+	var list refundList
+	if err := b.get(ctx, "/v1/refunds", listParams(q, nil), &list); err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.ListedRefund, 0, len(list.Data))
+	for _, r := range list.Data {
+		if r.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/refunds: a refund without an id")
+		}
+		out = append(out, backend.ListedRefund{
+			RefundResult: backend.RefundResult{
+				ProviderRefundID: r.ID,
+				Status:           r.Status,
+				Amount:           backend.Money{Amount: fromMinorUnits(r.Amount, r.Currency), Currency: r.Currency},
+				Key:              r.Metadata[refundKeyMeta],
+			},
+			ProviderPaymentID: r.PaymentIntent,
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// ListSubscriptionPage lists one page of the account's subscriptions, in any
+// status (the list leaves canceled ones out unless asked).
+func (b *Backend) ListSubscriptionPage(ctx context.Context, q backend.ListQuery) ([]backend.SubscriptionObject, bool, error) {
+	var list subscriptionList
+	if err := b.get(ctx, "/v1/subscriptions", listParams(q, url.Values{"status": {"all"}}), &list); err != nil {
+		return nil, false, err
+	}
+	out := make([]backend.SubscriptionObject, 0, len(list.Data))
+	for _, s := range list.Data {
+		if s.ID == "" {
+			return nil, false, fmt.Errorf("stripe: /v1/subscriptions: a subscription without an id")
+		}
+		out = append(out, backend.SubscriptionObject{
+			SubscriptionResult: backend.SubscriptionResult{
+				ProviderSubscriptionID: s.ID,
+				Status:                 s.Status,
+				CurrentPeriodEnd:       s.CurrentPeriodEnd,
+				ProviderPriceID:        s.priceID(),
+			},
+			ProviderCustomerID: s.Customer,
+			Marks:              marks(s.Metadata),
+		})
+	}
+	return out, list.HasMore, nil
+}
+
+// listParams is the query of one page of a list: created[gte], limit (1 to
+// 100, the provider's bounds) and starting_after, plus extra.
+func listParams(q backend.ListQuery, extra url.Values) url.Values {
+	v := url.Values{}
+	for k, vs := range extra {
+		v[k] = vs
+	}
+	if q.Since > 0 {
+		v.Set("created[gte]", strconv.FormatInt(q.Since, 10))
+	}
+	limit := q.Limit
+	if limit < 1 || limit > 100 {
+		limit = 100
+	}
+	v.Set("limit", strconv.Itoa(limit))
+	if q.After != "" {
+		v.Set("starting_after", q.After)
+	}
+	return v
+}
+
+// marks reads the plugin's marks from an object's metadata.
+func marks(md map[string]string) backend.Marks {
+	return backend.Marks{Origin: md[backend.OriginMetadataKey], Install: md[backend.InstallMetadataKey]}
 }
 
 // post issues a form-encoded POST to the Stripe API with bearer auth +

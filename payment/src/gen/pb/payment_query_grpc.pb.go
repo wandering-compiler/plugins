@@ -28,6 +28,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	PaymentQuery_GetCustomerByUserId_FullMethodName         = "/w17.contrib.payment.PaymentQuery/GetCustomerByUserId"
+	PaymentQuery_GetCustomerByProviderId_FullMethodName     = "/w17.contrib.payment.PaymentQuery/GetCustomerByProviderId"
 	PaymentQuery_GetPayment_FullMethodName                  = "/w17.contrib.payment.PaymentQuery/GetPayment"
 	PaymentQuery_GetPaymentByProviderId_FullMethodName      = "/w17.contrib.payment.PaymentQuery/GetPaymentByProviderId"
 	PaymentQuery_GetPaymentByIdempotencyKey_FullMethodName  = "/w17.contrib.payment.PaymentQuery/GetPaymentByIdempotencyKey"
@@ -43,6 +44,7 @@ const (
 	PaymentQuery_GetUsageMeter_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetUsageMeter"
 	PaymentQuery_GetUsageRecordByKey_FullMethodName         = "/w17.contrib.payment.PaymentQuery/GetUsageRecordByKey"
 	PaymentQuery_GetPlanBySlug_FullMethodName               = "/w17.contrib.payment.PaymentQuery/GetPlanBySlug"
+	PaymentQuery_GetPlanByProviderPriceId_FullMethodName    = "/w17.contrib.payment.PaymentQuery/GetPlanByProviderPriceId"
 	PaymentQuery_GetSubscription_FullMethodName             = "/w17.contrib.payment.PaymentQuery/GetSubscription"
 	PaymentQuery_GetSubscriptionByProviderId_FullMethodName = "/w17.contrib.payment.PaymentQuery/GetSubscriptionByProviderId"
 )
@@ -55,6 +57,10 @@ type PaymentQueryClient interface {
 	// principal (empty result = not yet a customer; the handler creates
 	// one on first charge).
 	GetCustomerByUserId(ctx context.Context, in *GetCustomerByUserIdReq, opts ...grpc.CallOption) (*GetCustomerByUserIdResp, error)
+	// GetCustomerByProviderId — the local link of a provider customer. Read by
+	// the provider reconciliation (ReconcileProvider), which holds only the
+	// provider's ids.
+	GetCustomerByProviderId(ctx context.Context, in *GetCustomerByProviderIdReq, opts ...grpc.CallOption) (*GetCustomerByProviderIdResp, error)
 	// GetPayment — fetch one Payment by primary key (the REST GET
 	// /payments/{id} surface).
 	GetPayment(ctx context.Context, in *GetPaymentReq, opts ...grpc.CallOption) (*GetPaymentResp, error)
@@ -128,6 +134,11 @@ type PaymentQueryClient interface {
 	// Subscribe handler reads plan_id + provider_price_id from it).
 	// Gated subscriptions.
 	GetPlanBySlug(ctx context.Context, in *GetPlanBySlugReq, opts ...grpc.CallOption) (*GetPlanBySlugResp, error)
+	// GetPlanByProviderPriceId — the plan whose provider price a subscription
+	// is on. Read by the provider reconciliation for a subscription whose local
+	// row never landed. Not indexed: the plan catalogue is small, and the
+	// reconciliation is no request path. Gated subscriptions.
+	GetPlanByProviderPriceId(ctx context.Context, in *GetPlanByProviderPriceIdReq, opts ...grpc.CallOption) (*GetPlanByProviderPriceIdResp, error)
 	// GetSubscription — fetch one subscription by id. Gated subscriptions.
 	GetSubscription(ctx context.Context, in *GetSubscriptionReq, opts ...grpc.CallOption) (*GetSubscriptionResp, error)
 	// GetSubscriptionByProviderId — fetch one subscription by the provider's
@@ -151,6 +162,16 @@ func (c *paymentQueryClient) GetCustomerByUserId(ctx context.Context, in *GetCus
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCustomerByUserIdResp)
 	err := c.cc.Invoke(ctx, PaymentQuery_GetCustomerByUserId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentQueryClient) GetCustomerByProviderId(ctx context.Context, in *GetCustomerByProviderIdReq, opts ...grpc.CallOption) (*GetCustomerByProviderIdResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCustomerByProviderIdResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetCustomerByProviderId_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -307,6 +328,16 @@ func (c *paymentQueryClient) GetPlanBySlug(ctx context.Context, in *GetPlanBySlu
 	return out, nil
 }
 
+func (c *paymentQueryClient) GetPlanByProviderPriceId(ctx context.Context, in *GetPlanByProviderPriceIdReq, opts ...grpc.CallOption) (*GetPlanByProviderPriceIdResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPlanByProviderPriceIdResp)
+	err := c.cc.Invoke(ctx, PaymentQuery_GetPlanByProviderPriceId_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *paymentQueryClient) GetSubscription(ctx context.Context, in *GetSubscriptionReq, opts ...grpc.CallOption) (*GetSubscriptionResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetSubscriptionResp)
@@ -335,6 +366,10 @@ type PaymentQueryServer interface {
 	// principal (empty result = not yet a customer; the handler creates
 	// one on first charge).
 	GetCustomerByUserId(context.Context, *GetCustomerByUserIdReq) (*GetCustomerByUserIdResp, error)
+	// GetCustomerByProviderId — the local link of a provider customer. Read by
+	// the provider reconciliation (ReconcileProvider), which holds only the
+	// provider's ids.
+	GetCustomerByProviderId(context.Context, *GetCustomerByProviderIdReq) (*GetCustomerByProviderIdResp, error)
 	// GetPayment — fetch one Payment by primary key (the REST GET
 	// /payments/{id} surface).
 	GetPayment(context.Context, *GetPaymentReq) (*GetPaymentResp, error)
@@ -408,6 +443,11 @@ type PaymentQueryServer interface {
 	// Subscribe handler reads plan_id + provider_price_id from it).
 	// Gated subscriptions.
 	GetPlanBySlug(context.Context, *GetPlanBySlugReq) (*GetPlanBySlugResp, error)
+	// GetPlanByProviderPriceId — the plan whose provider price a subscription
+	// is on. Read by the provider reconciliation for a subscription whose local
+	// row never landed. Not indexed: the plan catalogue is small, and the
+	// reconciliation is no request path. Gated subscriptions.
+	GetPlanByProviderPriceId(context.Context, *GetPlanByProviderPriceIdReq) (*GetPlanByProviderPriceIdResp, error)
 	// GetSubscription — fetch one subscription by id. Gated subscriptions.
 	GetSubscription(context.Context, *GetSubscriptionReq) (*GetSubscriptionResp, error)
 	// GetSubscriptionByProviderId — fetch one subscription by the provider's
@@ -428,6 +468,9 @@ type UnimplementedPaymentQueryServer struct{}
 
 func (UnimplementedPaymentQueryServer) GetCustomerByUserId(context.Context, *GetCustomerByUserIdReq) (*GetCustomerByUserIdResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCustomerByUserId not implemented")
+}
+func (UnimplementedPaymentQueryServer) GetCustomerByProviderId(context.Context, *GetCustomerByProviderIdReq) (*GetCustomerByProviderIdResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCustomerByProviderId not implemented")
 }
 func (UnimplementedPaymentQueryServer) GetPayment(context.Context, *GetPaymentReq) (*GetPaymentResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPayment not implemented")
@@ -474,6 +517,9 @@ func (UnimplementedPaymentQueryServer) GetUsageRecordByKey(context.Context, *Get
 func (UnimplementedPaymentQueryServer) GetPlanBySlug(context.Context, *GetPlanBySlugReq) (*GetPlanBySlugResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPlanBySlug not implemented")
 }
+func (UnimplementedPaymentQueryServer) GetPlanByProviderPriceId(context.Context, *GetPlanByProviderPriceIdReq) (*GetPlanByProviderPriceIdResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPlanByProviderPriceId not implemented")
+}
 func (UnimplementedPaymentQueryServer) GetSubscription(context.Context, *GetSubscriptionReq) (*GetSubscriptionResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSubscription not implemented")
 }
@@ -514,6 +560,24 @@ func _PaymentQuery_GetCustomerByUserId_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentQueryServer).GetCustomerByUserId(ctx, req.(*GetCustomerByUserIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentQuery_GetCustomerByProviderId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCustomerByProviderIdReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetCustomerByProviderId(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetCustomerByProviderId_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetCustomerByProviderId(ctx, req.(*GetCustomerByProviderIdReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -788,6 +852,24 @@ func _PaymentQuery_GetPlanBySlug_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentQuery_GetPlanByProviderPriceId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPlanByProviderPriceIdReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentQueryServer).GetPlanByProviderPriceId(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentQuery_GetPlanByProviderPriceId_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentQueryServer).GetPlanByProviderPriceId(ctx, req.(*GetPlanByProviderPriceIdReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PaymentQuery_GetSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetSubscriptionReq)
 	if err := dec(in); err != nil {
@@ -834,6 +916,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCustomerByUserId",
 			Handler:    _PaymentQuery_GetCustomerByUserId_Handler,
+		},
+		{
+			MethodName: "GetCustomerByProviderId",
+			Handler:    _PaymentQuery_GetCustomerByProviderId_Handler,
 		},
 		{
 			MethodName: "GetPayment",
@@ -894,6 +980,10 @@ var PaymentQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPlanBySlug",
 			Handler:    _PaymentQuery_GetPlanBySlug_Handler,
+		},
+		{
+			MethodName: "GetPlanByProviderPriceId",
+			Handler:    _PaymentQuery_GetPlanByProviderPriceId_Handler,
 		},
 		{
 			MethodName: "GetSubscription",

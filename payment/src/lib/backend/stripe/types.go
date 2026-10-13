@@ -1,5 +1,7 @@
 package stripe
 
+import "encoding/json"
+
 // This file is the single place documenting the Stripe API wire surface
 // the driver depends on — the JSON RESPONSE shapes it decodes and the
 // webhook envelope it parses. (Requests are form-encoded `url.Values`
@@ -16,6 +18,16 @@ type customerResp struct {
 	ID string `json:"id"`
 }
 
+// customerList ← GET /v1/customers
+type customerList struct {
+	Data []struct {
+		ID       string            `json:"id"`
+		Email    string            `json:"email"`
+		Metadata map[string]string `json:"metadata"`
+	} `json:"data"`
+	HasMore bool `json:"has_more"`
+}
+
 // paymentIntentResp ← POST /v1/payment_intents
 type paymentIntentResp struct {
 	ID           string `json:"id"`
@@ -23,13 +35,30 @@ type paymentIntentResp struct {
 	ClientSecret string `json:"client_secret"`
 }
 
+// paymentIntentList ← GET /v1/payment_intents
+type paymentIntentList struct {
+	Data []struct {
+		ID          string            `json:"id"`
+		Status      string            `json:"status"`
+		Amount      int64             `json:"amount"` // minor units
+		Currency    string            `json:"currency"`
+		Customer    string            `json:"customer"` // the id (not expanded)
+		Description string            `json:"description"`
+		Metadata    map[string]string `json:"metadata"`
+		// The last attempt's error; null when no attempt failed.
+		LastPaymentError json.RawMessage `json:"last_payment_error"`
+	} `json:"data"`
+	HasMore bool `json:"has_more"`
+}
+
 // refundResp ← POST /v1/refunds
 type refundResp struct {
-	ID       string            `json:"id"`
-	Status   string            `json:"status"`
-	Amount   int64             `json:"amount"`   // minor units
-	Currency string            `json:"currency"` // lowercase ISO-4217
-	Metadata map[string]string `json:"metadata"`
+	ID            string            `json:"id"`
+	Status        string            `json:"status"`
+	Amount        int64             `json:"amount"`   // minor units
+	Currency      string            `json:"currency"` // lowercase ISO-4217
+	Metadata      map[string]string `json:"metadata"`
+	PaymentIntent string            `json:"payment_intent"` // on a list item
 }
 
 // refundList ← GET /v1/refunds
@@ -46,6 +75,7 @@ type priceResp struct {
 // subscriptionResp ← POST /v1/subscriptions
 type subscriptionResp struct {
 	ID               string            `json:"id"`
+	Customer         string            `json:"customer"` // the id (not expanded)
 	Status           string            `json:"status"`
 	CurrentPeriodEnd int64             `json:"current_period_end"`
 	Metadata         map[string]string `json:"metadata"`

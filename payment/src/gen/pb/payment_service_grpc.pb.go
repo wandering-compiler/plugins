@@ -18,6 +18,9 @@
 //                       (internal: no ownership check, never REST-exposed)
 //   - GetMy*          → the signed-in caller's own rows (PaymentQuery reads
 //                       filtered to the caller's customer / user id)
+//   - ReconcileProvider → walk the provider's lists (backend.List*Page) and
+//                       bring the local rows in line through the webhook's
+//                       own paths (internal: never REST-exposed)
 //   - IngestStripe    → verify signature (metadata) + dedup
 //                       (MarkWebhookProcessed) + dispatch
 //                       MarkPaymentSucceeded / MarkPaymentFailed /
@@ -49,6 +52,7 @@ const (
 	PaymentService_RefundPayment_FullMethodName      = "/w17.contrib.payment.PaymentService/RefundPayment"
 	PaymentService_GetMyPayment_FullMethodName       = "/w17.contrib.payment.PaymentService/GetMyPayment"
 	PaymentService_IngestStripe_FullMethodName       = "/w17.contrib.payment.PaymentService/IngestStripe"
+	PaymentService_ReconcileProvider_FullMethodName  = "/w17.contrib.payment.PaymentService/ReconcileProvider"
 	PaymentService_GrantCredit_FullMethodName        = "/w17.contrib.payment.PaymentService/GrantCredit"
 	PaymentService_SpendCredit_FullMethodName        = "/w17.contrib.payment.PaymentService/SpendCredit"
 	PaymentService_TopUpCredit_FullMethodName        = "/w17.contrib.payment.PaymentService/TopUpCredit"
@@ -72,6 +76,12 @@ type PaymentServiceClient interface {
 	// IngestStripe — Stripe webhook ingestion. Gated stripe_webhooks; the
 	// handler body is in the feature-staged handlers/webhook_stripe.go.
 	IngestStripe(ctx context.Context, in *IngestStripeReq, opts ...grpc.CallOption) (*IngestStripeResp, error)
+	// ReconcileProvider — record provider objects the webhooks never brought
+	// in. Gated stripe_webhooks (an object is recognised as this
+	// installation's by the install mark, which derives from the webhook
+	// signing secret); the body is in handlers/reconcile_provider.go. Internal:
+	// the project's own code calls it.
+	ReconcileProvider(ctx context.Context, in *ReconcileProviderReq, opts ...grpc.CallOption) (*ReconcileProviderResp, error)
 	// Prepaid credit operations (gated prepaid; bodies in
 	// handlers/prepaid.go). GrantCredit / SpendCredit apply a signed
 	// ledger entry + materialized-balance update atomically; SpendCredit
@@ -150,6 +160,16 @@ func (c *paymentServiceClient) IngestStripe(ctx context.Context, in *IngestStrip
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(IngestStripeResp)
 	err := c.cc.Invoke(ctx, PaymentService_IngestStripe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentServiceClient) ReconcileProvider(ctx context.Context, in *ReconcileProviderReq, opts ...grpc.CallOption) (*ReconcileProviderResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReconcileProviderResp)
+	err := c.cc.Invoke(ctx, PaymentService_ReconcileProvider_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -258,6 +278,12 @@ type PaymentServiceServer interface {
 	// IngestStripe — Stripe webhook ingestion. Gated stripe_webhooks; the
 	// handler body is in the feature-staged handlers/webhook_stripe.go.
 	IngestStripe(context.Context, *IngestStripeReq) (*IngestStripeResp, error)
+	// ReconcileProvider — record provider objects the webhooks never brought
+	// in. Gated stripe_webhooks (an object is recognised as this
+	// installation's by the install mark, which derives from the webhook
+	// signing secret); the body is in handlers/reconcile_provider.go. Internal:
+	// the project's own code calls it.
+	ReconcileProvider(context.Context, *ReconcileProviderReq) (*ReconcileProviderResp, error)
 	// Prepaid credit operations (gated prepaid; bodies in
 	// handlers/prepaid.go). GrantCredit / SpendCredit apply a signed
 	// ledger entry + materialized-balance update atomically; SpendCredit
@@ -305,6 +331,9 @@ func (UnimplementedPaymentServiceServer) GetMyPayment(context.Context, *GetMyPay
 }
 func (UnimplementedPaymentServiceServer) IngestStripe(context.Context, *IngestStripeReq) (*IngestStripeResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method IngestStripe not implemented")
+}
+func (UnimplementedPaymentServiceServer) ReconcileProvider(context.Context, *ReconcileProviderReq) (*ReconcileProviderResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReconcileProvider not implemented")
 }
 func (UnimplementedPaymentServiceServer) GrantCredit(context.Context, *GrantCreditReq) (*CreditView, error) {
 	return nil, status.Error(codes.Unimplemented, "method GrantCredit not implemented")
@@ -439,6 +468,24 @@ func _PaymentService_IngestStripe_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PaymentServiceServer).IngestStripe(ctx, req.(*IngestStripeReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentService_ReconcileProvider_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReconcileProviderReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).ReconcileProvider(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_ReconcileProvider_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).ReconcileProvider(ctx, req.(*ReconcileProviderReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -631,6 +678,10 @@ var PaymentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "IngestStripe",
 			Handler:    _PaymentService_IngestStripe_Handler,
+		},
+		{
+			MethodName: "ReconcileProvider",
+			Handler:    _PaymentService_ReconcileProvider_Handler,
 		},
 		{
 			MethodName: "GrantCredit",

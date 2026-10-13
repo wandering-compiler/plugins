@@ -99,7 +99,7 @@ func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewC
 // the answer (the loser's provider customer is left unreferenced — the
 // provider offers no create-if-absent to avoid it).
 func (h *PaymentServiceHandler) createCustomer(ctx context.Context, userID, email string) (*pb.Customer, error) {
-	providerID, err := h.Backend.EnsureCustomer(ctx, backend.CustomerSpec{UserID: userID, Email: email})
+	providerID, err := h.Backend.EnsureCustomer(ctx, backend.CustomerSpec{UserID: userID, Email: email, Install: h.installID()})
 	if err != nil {
 		return nil, providerFailure(err)
 	}
@@ -232,7 +232,12 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 	if gerr != nil && !absent(gerr) {
 		return nil, "", gerr
 	}
-	if p := got.GetPayment(); p != nil && p.GetIdempotencyKey() == idemKey && p.GetCustomerId() == cust.GetId() {
+	// A row the provider reconciliation recorded for this intent carries its
+	// stand-in key (the intent does not hold the one it was created under):
+	// the provider replayed this very intent for this request's key, so the
+	// row is this request's too.
+	if p := got.GetPayment(); p != nil && p.GetCustomerId() == cust.GetId() &&
+		(p.GetIdempotencyKey() == idemKey || p.GetIdempotencyKey() == reconciledChargeKey(pr.ProviderPaymentID)) {
 		return p, pr.ClientSecret, nil
 	}
 	return nil, "", status.Error(codes.AlreadyExists, "idempotency_key already used for a different payment")
@@ -273,6 +278,26 @@ func (h *PaymentServiceHandler) chargeKey(ctx context.Context, cust *pb.Customer
 		}
 	}
 	return scopedKey("charge", origin, cust.GetUserId(), callerKey), nil
+}
+
+// reconciledChargeKey is the idempotency key of a Payment row the provider
+// reconciliation recorded for an intent whose own row never landed. The
+// intent does not carry the key it was created under (the provider holds it
+// for a day, and never shows it), and the column is unique and required; the
+// provider id is unique too, so the stand-in is. In the scoped-key namespace,
+// so no caller's key can name it.
+func reconciledChargeKey(providerPaymentID string) string {
+	return scopedKey("charge", "reconciled", providerPaymentID)
+}
+
+// customerByProviderID is the local link of a provider customer, nil when
+// there is none.
+func (h *PaymentServiceHandler) customerByProviderID(ctx context.Context, providerCustomerID string) (*pb.Customer, error) {
+	got, err := h.Query.GetCustomerByProviderId(ctx, &pb.GetCustomerByProviderIdReq{ProviderCustomerId: providerCustomerID})
+	if err != nil && !absent(err) {
+		return nil, err
+	}
+	return got.GetCustomer(), nil
 }
 
 // topupDescription is the description every version gave a top-up's payment.
