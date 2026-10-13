@@ -215,7 +215,12 @@ hold it. **Partly fixed** says what is still open.
   top-up grant run as for a delivery), a top-up also its `CreditTopup`;
   every refund of a local payment goes through `reconcileRefunds`; a marked
   subscription gets `CreateSubscription` or `MarkSubscriptionStatus` stamped
-  with the time of the read. It answers per-kind counts (created, updated,
+  with the PROVIDER's time of the read (the list answer's `Date`, the clock
+  its events carry; NULL on a create when absent, and no update then). A
+  transient list failure is retried (three times, within the caller's
+  deadline); a list that still fails ends the call with the counts so far,
+  `stopped` and a cursor at the failed page; a cursor whose object was
+  deleted continues from that object's creation time (`created[lte]`). It answers per-kind counts (created, updated,
   in sync, foreign, superseded, failed). The plugin schedules nothing. Table `Dispute` (`provider_dispute_id` unique,
   `payment_id` indexed, status enum, `provider_event_at`), queries
   `GetDisputeByProviderId`, `SumLostDisputesForPayment` (`LOST` only), mutations
@@ -224,7 +229,10 @@ hold it. **Partly fixed** says what is still open.
 - **Env knobs.** `webhook_signing_secret` (secret). It also derives the
   installation mark `w17_install = hex(HMAC-SHA256(secret, "w17-install-id"))[:16]`,
   written beside `w17_payment` (the origin) on every provider object the
-  plugin creates.
+  plugin creates. `previous_install_marks` (comma-separated, 16 lowercase hex
+  each, refused at boot otherwise) lists the marks earlier secrets gave: an
+  object carrying one is still this installation's (`markedHere`, for the
+  webhook and `ReconcileProvider` alike).
 - **Requires / conflicts / combined files.** None. Default on. `subscriptions`
   requires it, and `TopUpCredit` refuses without it.
 
@@ -250,8 +258,9 @@ hold it. **Partly fixed** says what is still open.
 | `stripe_webhooks/provider-deliveries-not-throttled` | Authentic deliveries MUST NOT spend the gateway's per-address budget; only failed ones MAY. | Failure & configuration | none (manifest only: `public_limit: failed_only`, enforced by the gateway; finding 7 fixed) |
 | `stripe_webhooks/reconcile-records-what-webhooks-missed` | `ReconcileProvider` MUST record every provider object this installation made (both marks match) that has no local row — a customer whose principal has no link, a payment intent (and a top-up's `CreditTopup`), a refund of a local payment, a subscription — and MUST bring a lagging row to the provider's status, through the same mutations and guards the create calls and the webhook use: a payment reaches `SUCCEEDED` by `MarkPaymentSucceeded` (one `PaymentSucceeded`), never by an insert at that status, and a caller's later retry of the charge is answered with the recorded row. | Failure & configuration | `TestReconcile_OrphanPayment_RecordedWithItsStatus`, `TestReconcile_FailedAndOpenIntents`, `TestReconcile_LaggingStatus_UpdatedThenInSync`, `TestReconcile_TopupWithoutItsRecord_GrantedOnce`, `TestReconcile_OrphanRefundOnTopup_TakesTheCreditOnce`, `TestReconcile_OrphanSubscription`, `TestReconcile_Customers`, `TestListPaymentPage_TellsAFailedAttemptFromAnOpenIntent`, `TestListSubscriptionPage_AllStatuses`, `TestEnsureCustomer_MarksTheCustomer`. **Unit (mock) only:** a live test would fail a local insert against a provider test account, run the reconciliation and assert the row, its status and one event on the bus. |
 | `stripe_webhooks/reconcile-leaves-foreign-alone` | An object without this installation's marks (unmarked, another installation's, a customer made before customers were marked) or a refund of a payment with no local row MUST be counted foreign and MUST NOT be written. A marked customer whose principal is linked to another customer MUST be counted superseded and the existing link kept. Nothing is deleted. | Security | `TestReconcile_ForeignObjectsAreLeftAlone`, `TestReconcile_Customers` |
-| `stripe_webhooks/reconcile-idempotent` | A rerun MUST change nothing, and a run concurrent with deliveries of the same events or with another run MUST produce each transition, event and credit grant once (the transition guards, the unique keys and the top-up's step keys arbitrate). A webhook event created before a run's read MUST NOT overwrite a subscription status the run recorded; one created after it MUST apply. | Consistency & concurrency | `TestReconcile_LaggingStatus_UpdatedThenInSync`, `TestReconcile_TopupWithoutItsRecord_GrantedOnce`, `TestReconcile_ConcurrentWithWebhooksAndItself_GrantsOnce`, `TestReconcile_OrphanSubscription`. **Unit (mock) only** for the guards (DQL). |
-| `stripe_webhooks/reconcile-bounded` | One call MUST examine at most `limit` objects (default 1000, at most 10000), in pages of at most 100, and answer a cursor that continues the same walk (its `since` travels with it); a walk MUST require `since`. A failure on one object MUST be counted and logged and MUST NOT stop the walk; a failed list MUST fail the call. | Performance | `TestReconcile_PagingLimitAndCursor`, `TestReconcile_Refusals`, `TestReconcile_OneFailureDoesNotStopTheWalk`, `TestListPages_SendTheBounds`, `TestListPages_RefuseAnObjectWithoutAnID` |
+| `stripe_webhooks/rotated-secret-keeps-own-objects` | Rotating `webhook_signing_secret` changes the installation mark, so an object made under the old one MUST read as foreign unless its mark is listed in `previous_install_marks`; a listed mark MUST count as this installation's for the webhook and the reconciliation, and a malformed one MUST fail boot. | Failure & configuration | `TestReconcile_ARotatedSecretKeepsItsObjectsThroughPreviousMarks`, `TestPreviousInstallMarks` |
+| `stripe_webhooks/reconcile-idempotent` | A rerun MUST change nothing, and a run concurrent with deliveries of the same events or with another run MUST produce each transition, event and credit grant once (the transition guards, the unique keys and the top-up's step keys arbitrate). A webhook event created before a run's read MUST NOT overwrite a subscription status the run recorded; one created after it MUST apply, both by the provider's clock (a local clock running ahead MUST NOT refuse a newer event). | Consistency & concurrency | `TestReconcile_LaggingStatus_UpdatedThenInSync`, `TestReconcile_TopupWithoutItsRecord_GrantedOnce`, `TestReconcile_ConcurrentWithWebhooksAndItself_GrantsOnce`, `TestReconcile_OrphanSubscription`, `TestReconcile_SubscriptionOrderedByTheProvidersClock`, `TestListSubscriptionPage_ReadsTheProvidersClock`. **Unit (mock) only** for the guards (DQL). |
+| `stripe_webhooks/reconcile-bounded` | One call MUST examine at most `limit` objects (default 1000, at most 10000), in pages of at most 100, and answer a cursor that continues the same walk (its `since` travels with it); a walk MUST require `since`. A failure on one object MUST be counted and logged and MUST NOT stop the walk. A transient list failure MUST be retried with bounded backoff that never waits past the caller's deadline; a list that still fails MUST end the call with the counts so far, `stopped` and a cursor at the failed page, never as an error that loses them; a cursor at an object deleted since MUST continue from its creation time. | Performance | `TestReconcile_PagingLimitAndCursor`, `TestReconcile_Refusals`, `TestReconcile_OneFailureDoesNotStopTheWalk`, `TestReconcile_AFailedListKeepsTheProgressAndTheCursor`, `TestReconcile_TransientListFailuresAreRetried`, `TestReconcile_RetriesHonourTheDeadline`, `TestReconcile_ACursorAtADeletedObjectRecovers`, `TestListPages_SendTheBounds`, `TestListPages_UntilAndCreated`, `TestListPages_ACursorAtAGoneObject`, `TestListPages_RefuseAnObjectWithoutAnID` |
 | `stripe_webhooks/hot-path-bounded` | One delivery MUST cost one HMAC, at most one guarded `UPDATE` and one primary-key lookup per object, the hook's bounded work, and one ledger insert. A refund event costs, besides, one provider listing of the payment's refunds (at most 20 pages) and per refund one unique-key lookup and at most one write. A forged delivery MUST cost one HMAC and nothing else. | Performance | none (structural) |
 
 **Gaps / suspected defects**
@@ -280,8 +289,9 @@ hold it. **Partly fixed** says what is still open.
    key, so a charge retried after the provider forgot its key is not matched
    to it (it never was matched without the row either).
 4. **Rotating the signing secret changes the installation mark.** An object
-   created under the old mark whose row has not landed is treated as
-   foreign and acknowledged. Documented: rotate while nothing is in flight.
+   created under the old mark reads as foreign — its webhook acknowledged,
+   and `ReconcileProvider` never touching it again — unless the old mark is
+   listed in `previous_install_marks`.
 5. **A replay inside the 300 s window is accepted** and re-runs the
    (guarded) reconciliation. Harmless by the guards, but nothing records the
    signed timestamp to refuse it outright.

@@ -216,6 +216,10 @@ type ListQuery struct {
 	// After continues the list after this object id, the last of the previous
 	// page; empty starts at the newest.
 	After string
+	// Until bounds the list to objects created at or before it (Unix
+	// seconds); 0 = no bound. How a walk continues when the object After
+	// names is gone (ErrListCursorGone): from that object's creation time.
+	Until int64
 	// Limit is the page size, 1 to 100.
 	Limit int
 }
@@ -235,6 +239,9 @@ type CustomerObject struct {
 	// metadata; Email its e-mail.
 	UserID string
 	Email  string
+	// Created is the object's creation time (Unix seconds), on every listed
+	// object.
+	Created int64
 	Marks
 }
 
@@ -249,7 +256,8 @@ type PaymentObject struct {
 	// Failed reports that the last attempt to pay failed: the provider
 	// keeps such a payment open for another attempt, under the same status
 	// a payment nobody has tried to pay yet has.
-	Failed bool
+	Failed  bool
+	Created int64
 	Marks
 }
 
@@ -258,6 +266,7 @@ type PaymentObject struct {
 type ListedRefund struct {
 	RefundResult
 	ProviderPaymentID string
+	Created           int64
 }
 
 // SubscriptionObject is a provider subscription as a list returns it, with
@@ -265,8 +274,19 @@ type ListedRefund struct {
 type SubscriptionObject struct {
 	SubscriptionResult
 	ProviderCustomerID string
+	Created            int64
+	// ReadAt is the provider's own clock when it answered the list (Unix
+	// seconds; 0 when it did not say). The provider stamps its webhook events
+	// on the same clock, so a status recorded from this read is ordered
+	// against them without trusting the local clock.
+	ReadAt int64
 	Marks
 }
+
+// ErrListCursorGone is a list page refused because the object ListQuery.After
+// names no longer exists (deleted at the provider). Continue with Until set
+// to that object's creation time instead.
+var ErrListCursorGone = errors.New("payment provider: the object a list continues after is gone")
 
 // Backend is a payment provider. Implementations are constructed with
 // their API credentials and are safe for concurrent use.

@@ -24,6 +24,7 @@ type customerList struct {
 		ID       string            `json:"id"`
 		Email    string            `json:"email"`
 		Metadata map[string]string `json:"metadata"`
+		Created  int64             `json:"created"`
 	} `json:"data"`
 	HasMore bool `json:"has_more"`
 }
@@ -45,6 +46,7 @@ type paymentIntentList struct {
 		Customer    string            `json:"customer"` // the id (not expanded)
 		Description string            `json:"description"`
 		Metadata    map[string]string `json:"metadata"`
+		Created     int64             `json:"created"`
 		// The last attempt's error; null when no attempt failed.
 		LastPaymentError json.RawMessage `json:"last_payment_error"`
 	} `json:"data"`
@@ -59,6 +61,7 @@ type refundResp struct {
 	Currency      string            `json:"currency"` // lowercase ISO-4217
 	Metadata      map[string]string `json:"metadata"`
 	PaymentIntent string            `json:"payment_intent"` // on a list item
+	Created       int64             `json:"created"`
 }
 
 // refundList ← GET /v1/refunds
@@ -76,6 +79,7 @@ type priceResp struct {
 type subscriptionResp struct {
 	ID               string            `json:"id"`
 	Customer         string            `json:"customer"` // the id (not expanded)
+	Created          int64             `json:"created"`
 	Status           string            `json:"status"`
 	CurrentPeriodEnd int64             `json:"current_period_end"`
 	Metadata         map[string]string `json:"metadata"`

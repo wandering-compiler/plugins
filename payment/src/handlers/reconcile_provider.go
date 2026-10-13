@@ -66,7 +66,7 @@ var reconcileKindNames = [...]string{"customers", "payments", "refunds", "subscr
 // the counts per kind and, when req.limit stopped the walk, the cursor the
 // next call continues from.
 func (h *PaymentServiceHandler) ReconcileProvider(ctx context.Context, req *pb.ReconcileProviderReq) (*pb.ReconcileProviderResp, error) {
-	since, kind, after, err := reconcileStart(req)
+	since, kind, at, err := reconcileStart(req)
 	if err != nil {
 		return nil, err
 	}
@@ -88,23 +88,37 @@ func (h *PaymentServiceHandler) ReconcileProvider(ctx context.Context, req *pb.R
 		Refunds: &pb.ReconcileCounts{}, Subscriptions: &pb.ReconcileCounts{},
 	}
 	left := limit
-	for ; kind < kindsDone; kind, after = kind+1, "" {
+	for ; kind < kindsDone; kind, at = kind+1, (reconcilePos{}) {
 		if kind == kindSubscriptions && reconcileSubscription == nil {
 			continue // the subscriptions feature is off: no rows to keep
 		}
 		for {
 			if left == 0 {
-				resp.NextCursor = reconcileCursor(since, kind, after)
+				resp.NextCursor = reconcileCursor(since, kind, at)
 				return resp, nil
 			}
-			q := backend.ListQuery{Since: since, After: after, Limit: min(left, reconcilePageSize)}
-			n, last, more, err := h.reconcilePage(ctx, kind, q, resp)
+			q := backend.ListQuery{Since: since, After: at.after, Limit: min(left, reconcilePageSize)}
+			n, last, err := h.reconcilePageRetrying(ctx, kind, q, resp)
+			if errors.Is(err, backend.ErrListCursorGone) {
+				// The object the walk stopped after was deleted, and the
+				// provider pages only after an object it still has. The list
+				// is newest first, so everything after it was created at or
+				// before it: continue from its creation time. Objects of that
+				// same second are examined again, which changes nothing.
+				q.After, q.Until = "", at.created
+				n, last, err = h.reconcilePageRetrying(ctx, kind, q, resp)
+			}
 			if err != nil {
-				return nil, providerFailure(err)
+				resp.NextCursor = reconcileCursor(since, kind, at)
+				resp.Stopped = reconcileStopped(kind, err)
+				slog.Warn("payment: provider reconciliation stopped", "kind", reconcileKindNames[kind], "err", err)
+				return resp, nil
 			}
 			left -= n
-			after = last
-			if !more || n == 0 {
+			if n > 0 {
+				at = last.reconcilePos
+			}
+			if !last.more || n == 0 {
 				break
 			}
 		}
@@ -112,13 +126,81 @@ func (h *PaymentServiceHandler) ReconcileProvider(ctx context.Context, req *pb.R
 	return resp, nil
 }
 
+// reconcilePos is where a walk is in one kind's list: after the object it
+// examined last, and that object's creation time (where it continues when the
+// object is gone).
+type reconcilePos struct {
+	after   string
+	created int64
+}
+
+// pageEnd is the last object of a page and whether more follow.
+type pageEnd struct {
+	reconcilePos
+	more bool
+}
+
+// reconcileBackoff is the wait before each retry of a list page that failed
+// transiently (a rate limit, a 5xx, a timeout): three retries, about five
+// seconds in all, and none that would pass the caller's deadline.
+var reconcileBackoff = []time.Duration{250 * time.Millisecond, time.Second, 4 * time.Second}
+
+// reconcilePageRetrying is reconcilePage, retrying a transient list failure.
+// Nothing of a page is applied before its list succeeded, so a retry repeats
+// nothing.
+func (h *PaymentServiceHandler) reconcilePageRetrying(ctx context.Context, kind reconcileKind, q backend.ListQuery, resp *pb.ReconcileProviderResp) (int, pageEnd, error) {
+	for attempt := 0; ; attempt++ {
+		n, last, err := h.reconcilePage(ctx, kind, q, resp)
+		if err == nil || !listRetryable(ctx, err) || attempt == len(reconcileBackoff) || !sleepWithin(ctx, reconcileBackoff[attempt]) {
+			return n, last, err
+		}
+	}
+}
+
+// listRetryable reports whether a failed list may succeed when asked again:
+// not a request the provider refused as wrong (a gone cursor among them), and
+// not one the caller has given up on.
+func listRetryable(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && !errors.Is(err, backend.ErrInvalidRequest) && !errors.Is(err, backend.ErrDeclined) &&
+		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// sleepWithin waits d, unless the caller's deadline would pass first or it
+// gives up meanwhile.
+func sleepWithin(ctx context.Context, d time.Duration) bool {
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) <= d {
+		return false
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// reconcileStopped says why a walk stopped, in a fixed sentence: the
+// provider's own error text stays in the log.
+func reconcileStopped(kind reconcileKind, err error) string {
+	why := "failed after retries"
+	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		why = "was cut short by the caller's deadline"
+	case errors.Is(err, backend.ErrInvalidRequest) || errors.Is(err, backend.ErrDeclined):
+		why = "was refused by the provider"
+	}
+	return "the provider's " + reconcileKindNames[kind] + " list " + why + "; call again later with next_cursor"
+}
+
 // reconcileStart reads where the walk starts: since (Unix seconds), and the
 // kind and object to continue after, from the cursor when there is one.
-func reconcileStart(req *pb.ReconcileProviderReq) (int64, reconcileKind, string, error) {
+func reconcileStart(req *pb.ReconcileProviderReq) (int64, reconcileKind, reconcilePos, error) {
 	var since int64
 	if req.GetSince() != nil {
 		if err := req.GetSince().CheckValid(); err != nil {
-			return 0, 0, "", invalidArg("since is not a valid time")
+			return 0, 0, reconcilePos{}, invalidArg("since is not a valid time")
 		}
 		since = req.GetSince().AsTime().Unix()
 	}
@@ -126,17 +208,17 @@ func reconcileStart(req *pb.ReconcileProviderReq) (int64, reconcileKind, string,
 		if req.GetSince() == nil {
 			// Unbounded, the first run would walk the account's whole
 			// history; the caller says how far back.
-			return 0, 0, "", invalidArg("since is required (the walk covers objects created at or after it)")
+			return 0, 0, reconcilePos{}, invalidArg("since is required (the walk covers objects created at or after it)")
 		}
-		return since, kindCustomers, "", nil
+		return since, kindCustomers, reconcilePos{}, nil
 	}
-	parts := strings.SplitN(req.GetCursor(), ":", 3)
-	if len(parts) != 3 {
-		return 0, 0, "", invalidArg("cursor is not one this call returned")
+	parts := strings.SplitN(req.GetCursor(), ":", 4)
+	if len(parts) != 4 {
+		return 0, 0, reconcilePos{}, invalidArg("cursor is not one this call returned")
 	}
 	cursorSince, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || cursorSince < 0 {
-		return 0, 0, "", invalidArg("cursor is not one this call returned")
+		return 0, 0, reconcilePos{}, invalidArg("cursor is not one this call returned")
 	}
 	kind := kindsDone
 	for k, name := range reconcileKindNames {
@@ -145,66 +227,73 @@ func reconcileStart(req *pb.ReconcileProviderReq) (int64, reconcileKind, string,
 		}
 	}
 	if kind == kindsDone {
-		return 0, 0, "", invalidArg("cursor is not one this call returned")
+		return 0, 0, reconcilePos{}, invalidArg("cursor is not one this call returned")
+	}
+	created, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || created < 0 {
+		return 0, 0, reconcilePos{}, invalidArg("cursor is not one this call returned")
 	}
 	if req.GetSince() != nil && since != cursorSince {
-		return 0, 0, "", invalidArg("since differs from the cursor's; send the cursor alone to continue its walk")
+		return 0, 0, reconcilePos{}, invalidArg("since differs from the cursor's; send the cursor alone to continue its walk")
 	}
-	return cursorSince, kind, parts[2], nil
+	return cursorSince, kind, reconcilePos{after: parts[3], created: created}, nil
 }
 
 // reconcileCursor is where a walk stopped: its since, the kind it was in and
-// the last object it examined. Opaque to the caller.
-func reconcileCursor(since int64, kind reconcileKind, after string) string {
-	return strconv.FormatInt(since, 10) + ":" + reconcileKindNames[kind] + ":" + after
+// the last object it examined, with that object's creation time. Opaque to
+// the caller.
+func reconcileCursor(since int64, kind reconcileKind, at reconcilePos) string {
+	return strconv.FormatInt(since, 10) + ":" + reconcileKindNames[kind] + ":" + strconv.FormatInt(at.created, 10) + ":" + at.after
 }
 
 // reconcilePage examines one page of a kind's list. It answers how many
-// objects the page held, the last one's id and whether more follow; err is a
-// failure to list. A failure on one object is counted, logged and passed by:
-// the next run sees the object again.
-func (h *PaymentServiceHandler) reconcilePage(ctx context.Context, kind reconcileKind, q backend.ListQuery, resp *pb.ReconcileProviderResp) (int, string, bool, error) {
-	readAt := time.Now()
+// objects the page held and where it ended; err is a failure to list, before
+// anything of the page was applied. A failure on one object is counted,
+// logged and passed by: the next run sees the object again.
+func (h *PaymentServiceHandler) reconcilePage(ctx context.Context, kind reconcileKind, q backend.ListQuery, resp *pb.ReconcileProviderResp) (int, pageEnd, error) {
+	end := func(id string, created int64, more bool) pageEnd {
+		return pageEnd{reconcilePos{after: id, created: created}, more}
+	}
 	switch kind {
 	case kindCustomers:
 		objs, more, err := h.Backend.ListCustomerPage(ctx, q)
 		if err != nil || len(objs) == 0 {
-			return 0, q.After, more, err
+			return 0, pageEnd{more: more}, err
 		}
 		for _, o := range objs {
 			out, err := h.reconcileCustomer(ctx, o)
 			tally(resp.GetCustomers(), kind, o.ProviderCustomerID, out, err)
 		}
-		return len(objs), objs[len(objs)-1].ProviderCustomerID, more, nil
+		return len(objs), end(objs[len(objs)-1].ProviderCustomerID, objs[len(objs)-1].Created, more), nil
 	case kindPayments:
 		objs, more, err := h.Backend.ListPaymentPage(ctx, q)
 		if err != nil || len(objs) == 0 {
-			return 0, q.After, more, err
+			return 0, pageEnd{more: more}, err
 		}
 		for _, o := range objs {
 			out, err := h.reconcilePayment(ctx, o)
 			tally(resp.GetPayments(), kind, o.ProviderPaymentID, out, err)
 		}
-		return len(objs), objs[len(objs)-1].ProviderPaymentID, more, nil
+		return len(objs), end(objs[len(objs)-1].ProviderPaymentID, objs[len(objs)-1].Created, more), nil
 	case kindRefunds:
 		objs, more, err := h.Backend.ListRefundPage(ctx, q)
 		if err != nil || len(objs) == 0 {
-			return 0, q.After, more, err
+			return 0, pageEnd{more: more}, err
 		}
 		h.reconcileRefundPage(ctx, objs, resp.GetRefunds())
-		return len(objs), objs[len(objs)-1].ProviderRefundID, more, nil
+		return len(objs), end(objs[len(objs)-1].ProviderRefundID, objs[len(objs)-1].Created, more), nil
 	case kindSubscriptions:
 		objs, more, err := h.Backend.ListSubscriptionPage(ctx, q)
 		if err != nil || len(objs) == 0 {
-			return 0, q.After, more, err
+			return 0, pageEnd{more: more}, err
 		}
 		for _, o := range objs {
-			out, err := reconcileSubscription(ctx, h, o, readAt)
+			out, err := reconcileSubscription(ctx, h, o)
 			tally(resp.GetSubscriptions(), kind, o.ProviderSubscriptionID, out, err)
 		}
-		return len(objs), objs[len(objs)-1].ProviderSubscriptionID, more, nil
+		return len(objs), end(objs[len(objs)-1].ProviderSubscriptionID, objs[len(objs)-1].Created, more), nil
 	}
-	return 0, "", false, nil
+	return 0, pageEnd{}, nil
 }
 
 // tally counts one object's outcome; a failure is logged with its cause, which

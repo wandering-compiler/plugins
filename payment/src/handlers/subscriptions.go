@@ -32,18 +32,24 @@ func init() {
 // the webhook gives it (MarkSubscriptionStatus, which emits
 // SubscriptionStatusChanged).
 //
-// Both writes carry readAt as the provider event time, so the webhook's
-// out-of-order guard holds across the two writers: an event created before
-// the read (a redelivery still in flight) cannot put an older status back,
-// and one created after it applies. A row that already holds a newer event,
-// or is CANCELED, refuses the update: in sync.
-func reconcileProviderSubscription(ctx context.Context, h *PaymentServiceHandler, sub backend.SubscriptionObject, readAt time.Time) (reconcileOutcome, error) {
+// Both writes carry the time of the read as the provider event time, so the
+// webhook's out-of-order guard holds across the two writers: an event created
+// before the read (a redelivery still in flight) cannot put an older status
+// back, and one created after it applies. The time is the PROVIDER's
+// (sub.ReadAt, its answer's Date), the clock it stamps its events with: a
+// local clock running ahead would refuse every newer event until the next
+// run. A row that already holds a newer event, or is CANCELED, refuses the
+// update: in sync.
+func reconcileProviderSubscription(ctx context.Context, h *PaymentServiceHandler, sub backend.SubscriptionObject) (reconcileOutcome, error) {
 	if sub.Origin != backend.OriginSubscription || !h.markedHere(sub.Marks) {
 		return reconcileForeign, nil
 	}
 	st := mapSubscriptionStatus(sub.Status)
 	end := unixToTimestamp(sub.CurrentPeriodEnd)
-	at := timestamppb.New(readAt)
+	var at *timestamppb.Timestamp // NULL without the provider's time: the next event wins
+	if sub.ReadAt > 0 {
+		at = timestamppb.New(time.Unix(sub.ReadAt, 0))
+	}
 	row, err := h.subscriptionByProviderID(ctx, sub.ProviderSubscriptionID)
 	if err != nil {
 		return reconcileFailed, err
@@ -88,6 +94,11 @@ func reconcileProviderSubscription(ctx context.Context, h *PaymentServiceHandler
 	}
 	if row.GetStatus() == st && sameInstant(row.GetCurrentPeriodEnd(), end) {
 		return reconcileInSync, nil
+	}
+	if at == nil {
+		// Unordered against the webhook's events, an update could put back
+		// a status a newer event already replaced.
+		return reconcileFailed, fmt.Errorf("subscription %s: the provider's answer carried no time to order the update by", sub.ProviderSubscriptionID)
 	}
 	_, err = h.Mutation.MarkSubscriptionStatus(ctx, &pb.MarkSubscriptionStatusReq{
 		ProviderSubscriptionId: sub.ProviderSubscriptionID,

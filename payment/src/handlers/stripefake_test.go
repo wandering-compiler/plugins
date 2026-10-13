@@ -60,7 +60,10 @@ type stripeFake struct {
 	customers    []fakeCustomer
 	created      map[string]int64 // object id → its created time (Unix seconds)
 	order        []string         // every object id, in creation order
-	listFail     map[string]int   // GET path → status the next list answers
+	listFail     map[string][]int // GET path → statuses the next lists answer, in turn
+	// dateOffset shifts the Date the account-wide lists answer with: the
+	// provider's clock, against the local one.
+	dateOffset time.Duration
 }
 
 // fakeEpoch is the created time of the fake's first object; each object is
@@ -108,7 +111,7 @@ func newStripeFake(t *testing.T) *stripeFake {
 		origins:  map[string]string{},
 		installs: map[string]string{},
 		created:  map[string]int64{},
-		listFail: map[string]int{},
+		listFail: map[string][]int{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -633,6 +636,15 @@ func (f *stripeFake) listAccount(w http.ResponseWriter, r *http.Request, objects
 	f.requests["GET "+r.URL.Path]++
 	q := r.URL.Query()
 	var gte int64
+	var lte int64
+	if v := q.Get("created[lte]"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		lte = n
+	}
 	if v := q.Get("created[gte]"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
@@ -654,7 +666,7 @@ func (f *stripeFake) listAccount(w http.ResponseWriter, r *http.Request, objects
 	var ids []string
 	for i := len(f.order) - 1; i >= 0; i-- { // newest first
 		id := f.order[i]
-		if _, ok := all[id]; ok && f.created[id] >= gte {
+		if _, ok := all[id]; ok && f.created[id] >= gte && (lte == 0 || f.created[id] <= lte) {
 			ids = append(ids, id)
 		}
 	}
@@ -666,8 +678,9 @@ func (f *stripeFake) listAccount(w http.ResponseWriter, r *http.Request, objects
 			}
 		}
 		if at < 0 {
-			st, body := stripeErr(w, http.StatusBadRequest, "invalid_request_error", "No such object: "+after)
-			w.WriteHeader(st)
+			body, _ := json.Marshal(map[string]any{"error": map[string]string{
+				"type": "invalid_request_error", "code": "resource_missing", "message": "No such object: " + after}})
+			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write(body)
 			return
 		}
@@ -685,28 +698,48 @@ func (f *stripeFake) listAccount(w http.ResponseWriter, r *http.Request, objects
 	}
 	body, _ := json.Marshal(map[string]any{"object": "list", "data": data, "has_more": more})
 	w.Header().Set("Content-Type", "application/json")
+	if f.dateOffset != 0 {
+		w.Header().Set("Date", time.Now().Add(f.dateOffset).UTC().Format(http.TimeFormat))
+	}
 	_, _ = w.Write(body)
 }
 
-// failList answers the next GET of path with status, once.
+// deleteObject removes an object from the account, as a deletion at the
+// provider does: lists no longer name it, and paging after it is refused.
+func (f *stripeFake) deleteObject(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, o := range f.order {
+		if o == id {
+			f.order = append(f.order[:i:i], f.order[i+1:]...)
+			return
+		}
+	}
+	f.t.Fatalf("deleteObject: no object %s", id)
+}
+
+// failList answers a GET of path with the next queued failure, if any.
 func (f *stripeFake) failList(w http.ResponseWriter, path string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	st, ok := f.listFail[path]
-	if !ok {
+	queue := f.listFail[path]
+	if len(queue) == 0 {
 		return false
 	}
-	delete(f.listFail, path)
+	st := queue[0]
+	f.listFail[path] = queue[1:]
+	f.requests["GET "+path]++
 	_, body := stripeErr(w, st, "api_error", "injected "+strconv.Itoa(st))
 	w.WriteHeader(st)
 	_, _ = w.Write(body)
 	return true
 }
 
-func (f *stripeFake) failNextList(path string, status int) {
+// failNextList makes the next lists of path answer these statuses, in turn.
+func (f *stripeFake) failNextList(path string, statuses ...int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.listFail[path] = status
+	f.listFail[path] = append(f.listFail[path], statuses...)
 }
 
 // setIntentStatus moves an intent the way the provider does once the customer

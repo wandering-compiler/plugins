@@ -33,6 +33,10 @@ type PaymentServiceHandler struct {
 	// DefaultCurrency (ISO-4217, lowercase) applies when a charge omits
 	// a currency.
 	DefaultCurrency string
+	// PreviousInstallMarks are the installation marks this installation
+	// wrote under earlier webhook signing secrets (previous_install_marks):
+	// objects carrying one are still its own (markedHere).
+	PreviousInstallMarks []string
 }
 
 // ValidateConfig fails loud at startup on a mis-wired handler so a

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -52,9 +53,18 @@ func (h *PaymentServiceHandler) madeHere(ev stripe.Event) bool {
 
 // markedHere reports whether an object's marks say THIS installation created
 // it (see madeHere). The provider reconciliation reads it too.
+//
+// The mark derives from the signing secret, so a rotated secret changes it,
+// and every object made before the rotation would read as foreign: its
+// pending webhook acknowledged, and the reconciliation never touching it
+// again. The marks the earlier secrets gave are configured as
+// previous_install_marks and still count.
 func (h *PaymentServiceHandler) markedHere(m backend.Marks) bool {
 	id := h.installID()
-	return m.Origin != "" && id != "" && m.Install == id
+	if m.Origin == "" || id == "" || m.Install == "" {
+		return false
+	}
+	return m.Install == id || slices.Contains(h.PreviousInstallMarks, m.Install)
 }
 
 // ── provider reconciliation hooks ───────────────────────────────────
@@ -81,9 +91,7 @@ const (
 var (
 	// reconcileSubscription — set by subscriptions.go; records one provider
 	// subscription (a local row for an orphan, the status of a lagging one).
-	// readAt is when the provider was read: a webhook event older than it
-	// must not overwrite what the read recorded.
-	reconcileSubscription func(ctx context.Context, h *PaymentServiceHandler, sub backend.SubscriptionObject, readAt time.Time) (reconcileOutcome, error)
+	reconcileSubscription func(ctx context.Context, h *PaymentServiceHandler, sub backend.SubscriptionObject) (reconcileOutcome, error)
 
 	// ensureTopupRecord — set by prepaid.go; records the CreditTopup of a
 	// top-up payment whose row never landed (TopUpCredit writes the Payment

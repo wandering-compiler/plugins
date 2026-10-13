@@ -143,7 +143,11 @@ message ReconcileCounts {
 
 // ReconcileProviderResp — the counts per kind (subscriptions stay zero
 // without the subscriptions feature), and `next_cursor`: empty when the walk
-// is complete, otherwise where the next call continues it.
+// is complete, otherwise where the next call continues it. `stopped` is set
+// when a provider list failed (after retries for a transient failure): the
+// counts are what the call did before it, and `next_cursor` resumes at the
+// page that failed — call again later, not at once. A list failure is
+// answered this way, never as an error, so a long walk keeps its progress.
 message ReconcileProviderResp {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
   ReconcileCounts customers     = 1;
@@ -151,6 +155,7 @@ message ReconcileProviderResp {
   ReconcileCounts refunds       = 3;
   ReconcileCounts subscriptions = 4;
   string          next_cursor   = 5;
+  string          stopped       = 6;
 }
 
 // ── prepaid feature: credit grant / spend / balance ─────────────────

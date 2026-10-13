@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sync"
@@ -375,8 +376,7 @@ func TestReconcile_PagingLimitAndCursor(t *testing.T) {
 }
 
 // Refusals: no since, a limit out of range, a cursor this call did not
-// return, a since beside a cursor that differs from it; and a list the
-// provider fails is an error, not a partial answer.
+// return, a since beside a cursor that differs from it, no installation id.
 func TestReconcile_Refusals(t *testing.T) {
 	r := newRig(t)
 	for name, req := range map[string]*pb.ReconcileProviderReq{
@@ -384,23 +384,21 @@ func TestReconcile_Refusals(t *testing.T) {
 		"negative limit":      {Since: fromTheStart, Limit: -1},
 		"limit above the cap": {Since: fromTheStart, Limit: reconcileMaxLimit + 1},
 		"malformed cursor":    {Cursor: "nonsense"},
-		"unknown kind":        {Cursor: "1700000000:invoices:x"},
-		"negative since":      {Cursor: "-1:payments:x"},
-		"since beside cursor": {Since: fromTheStart, Cursor: "1:payments:"},
+		"old cursor shape":    {Cursor: "1700000000:payments:x"},
+		"unknown kind":        {Cursor: "1700000000:invoices:0:x"},
+		"negative since":      {Cursor: "-1:payments:0:x"},
+		"bad created":         {Cursor: "1700000000:payments:y:x"},
+		"since beside cursor": {Since: fromTheStart, Cursor: "1:payments:0:"},
 	} {
 		_, err := r.h.ReconcileProvider(bg, req)
 		wantCode(t, err, codes.InvalidArgument, name)
 	}
-	if _, err := r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart, Cursor: fmt.Sprintf("%d:refunds:", fakeEpoch)}); err != nil {
+	if _, err := r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart, Cursor: fmt.Sprintf("%d:refunds:0:", fakeEpoch)}); err != nil {
 		t.Errorf("a cursor with its own since alongside: %v", err)
 	}
 
-	r.stripe.failNextList("/v1/payment_intents", http.StatusInternalServerError)
-	_, err := r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart})
-	wantCode(t, err, codes.Unavailable, "a failed list")
-
 	noSecret := &PaymentServiceHandler{Query: r.store, Mutation: r.store, Backend: r.stripe.backend()}
-	_, err = noSecret.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart})
+	_, err := noSecret.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart})
 	wantCode(t, err, codes.FailedPrecondition, "no installation id")
 }
 
@@ -415,4 +413,164 @@ func TestReconcile_OneFailureDoesNotStopTheWalk(t *testing.T) {
 
 	wantCounts(t, "payments", r.reconcileAll().GetPayments(), "c0 u1 s0 f0 x0 F1")
 	wantCounts(t, "the next run", r.reconcileAll().GetPayments(), "c0 u1 s1 f0 x0 F0")
+}
+
+// fastRetries makes the list retries instant for the test.
+func fastRetries(t *testing.T) {
+	t.Helper()
+	saved := reconcileBackoff
+	reconcileBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { reconcileBackoff = saved })
+}
+
+// A list the provider refuses ends the call with what it did so far, a
+// cursor at the page that failed and the reason — not an error that throws
+// the walk away. The next call resumes there.
+func TestReconcile_AFailedListKeepsTheProgressAndTheCursor(t *testing.T) {
+	r := newRig(t)
+	fastRetries(t)
+	for i := 0; i < 3; i++ {
+		p := r.charge(fmt.Sprintf("user-%d", i), "2.00", "k")
+		r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
+	}
+	r.stripe.failNextList("/v1/refunds", http.StatusBadRequest)
+
+	resp, err := r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart})
+	if err != nil {
+		t.Fatalf("a failed list answered an error, losing the progress: %v", err)
+	}
+	wantCounts(t, "payments before the failure", resp.GetPayments(), "c0 u3 s0 f0 x0 F0")
+	if resp.GetStopped() == "" || resp.GetNextCursor() != fmt.Sprintf("%d:refunds:0:", fakeEpoch) {
+		t.Fatalf("stopped=%q cursor=%q", resp.GetStopped(), resp.GetNextCursor())
+	}
+	if n := r.stripe.count("GET /v1/refunds"); n != 1 {
+		t.Errorf("a refused list was asked %d times, want once (it fails the same way every time)", n)
+	}
+	resp, err = r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Cursor: resp.GetNextCursor()})
+	if err != nil || resp.GetStopped() != "" || resp.GetNextCursor() != "" {
+		t.Fatalf("resumed: %+v, %v", resp, err)
+	}
+	wantCounts(t, "payments on resume", resp.GetPayments(), "c0 u0 s0 f0 x0 F0")
+}
+
+// A transient list failure (a rate limit, a 5xx) is retried with backoff; one
+// that outlasts the retries stops the walk with a cursor.
+func TestReconcile_TransientListFailuresAreRetried(t *testing.T) {
+	r := newRig(t)
+	fastRetries(t)
+	p := r.charge("user-a", "2.00", "k")
+	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
+
+	r.stripe.failNextList("/v1/payment_intents", http.StatusTooManyRequests, http.StatusServiceUnavailable)
+	resp, err := r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart})
+	if err != nil || resp.GetStopped() != "" {
+		t.Fatalf("two transient failures were not retried: %+v, %v", resp, err)
+	}
+	wantCounts(t, "payments", resp.GetPayments(), "c0 u1 s0 f0 x0 F0")
+	if n := r.stripe.count("GET /v1/payment_intents"); n != 3 {
+		t.Errorf("payment list asked %d times, want 3", n)
+	}
+
+	r.stripe.failNextList("/v1/payment_intents", 503, 503, 503, 503)
+	resp, err = r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart})
+	if err != nil || resp.GetStopped() == "" || resp.GetNextCursor() != fmt.Sprintf("%d:payments:0:", fakeEpoch) {
+		t.Fatalf("a failure past the retries: %+v, %v", resp, err)
+	}
+	if n := r.stripe.count("GET /v1/payment_intents"); n != 3+4 {
+		t.Errorf("payment list asked %d times, want 4 more (1 + 3 retries)", n-3)
+	}
+}
+
+// A retry never waits past the caller's deadline: the walk stops at once
+// with its cursor instead.
+func TestReconcile_RetriesHonourTheDeadline(t *testing.T) {
+	r := newRig(t)
+	saved := reconcileBackoff
+	reconcileBackoff = []time.Duration{time.Hour}
+	t.Cleanup(func() { reconcileBackoff = saved })
+	r.stripe.failNextList("/v1/customers", 503)
+
+	ctx, cancel := context.WithTimeout(bg, 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	resp, err := r.h.ReconcileProvider(ctx, &pb.ReconcileProviderReq{Since: fromTheStart})
+	if err != nil || resp.GetStopped() == "" || resp.GetNextCursor() == "" {
+		t.Fatalf("got %+v, %v", resp, err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("the call waited %v for a retry past its deadline", time.Since(start))
+	}
+}
+
+// The object a cursor continues after was deleted at the provider, which then
+// refuses to page after it: the walk continues from its creation time and
+// covers the rest of the list.
+func TestReconcile_ACursorAtADeletedObjectRecovers(t *testing.T) {
+	r := newRig(t)
+	for i := 0; i < 5; i++ {
+		if _, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: fmt.Sprintf("user-%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, err := r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Since: fromTheStart, Limit: 2})
+	if err != nil || resp.GetNextCursor() == "" {
+		t.Fatalf("first call: %+v, %v", resp, err)
+	}
+	wantCounts(t, "first call", resp.GetCustomers(), "c0 u0 s2 f0 x0 F0")
+	r.stripe.deleteObject(r.stripe.customers[3].id) // the second newest: where the cursor stopped
+
+	resp, err = r.h.ReconcileProvider(bg, &pb.ReconcileProviderReq{Cursor: resp.GetNextCursor()})
+	if err != nil || resp.GetStopped() != "" || resp.GetNextCursor() != "" {
+		t.Fatalf("resumed after a deleted object: %+v, %v", resp, err)
+	}
+	wantCounts(t, "the rest", resp.GetCustomers(), "c0 u0 s3 f0 x0 F0")
+}
+
+// The time a subscription's reconciliation is ordered by is the provider's
+// (its answer's Date), not the local clock: with the local clock an hour
+// ahead, a webhook event the provider created after the read still applies.
+func TestReconcile_SubscriptionOrderedByTheProvidersClock(t *testing.T) {
+	r := newRig(t)
+	r.stripe.dateOffset = -time.Hour // the provider's clock: an hour behind ours
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+		t.Fatal(err)
+	}
+	r.store.injectBefore("CreateSubscription", errTransient)
+	_, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "pro", IdempotencyKey: "s-1"})
+	wantCode(t, err, codes.Unavailable, "the subscribe whose row failed")
+	sid := r.stripe.subs[0].id
+	wantCounts(t, "subscriptions", r.reconcileAll().GetSubscriptions(), "c1 u0 s0 f0 x0 F0")
+
+	providerNow := time.Now().Add(-time.Hour)
+	for _, s := range r.store.subs {
+		if d := s.GetProviderEventAt().AsTime().Sub(providerNow); d < -5*time.Second || d > 5*time.Second {
+			t.Errorf("provider_event_at = %v, want the provider's time %v", s.GetProviderEventAt().AsTime(), providerNow)
+		}
+	}
+	deliverOK(t, r, withCreated(t, r.stripe.objectEvent("evt_next", "customer.subscription.updated", sid, map[string]any{"status": "past_due"}), providerNow.Add(time.Minute).Unix()))
+	for _, s := range r.store.subs {
+		if s.GetStatus() != pb.Subscription_PAST_DUE {
+			t.Errorf("a newer event was refused: %v", s.GetStatus())
+		}
+	}
+}
+
+// Rotating the signing secret changes the installation mark: the objects made
+// before it read as foreign — until the old mark is listed in
+// previous_install_marks.
+func TestReconcile_ARotatedSecretKeepsItsObjectsThroughPreviousMarks(t *testing.T) {
+	r := newRig(t)
+	p := r.charge("user-a", "5.00", "k")
+	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
+	r.h.WebhookSecret = "whsec_rotated"
+
+	resp := r.reconcileAll()
+	wantCounts(t, "after the rotation", resp.GetPayments(), "c0 u0 s0 f1 x0 F0")
+	wantPaymentStatus(t, r, p, pb.Payment_REQUIRES_ACTION)
+
+	r.h.PreviousInstallMarks = []string{backend.InstallID(testWebhookSecret)}
+	resp = r.reconcileAll()
+	wantCounts(t, "with the previous mark", resp.GetPayments(), "c0 u1 s0 f0 x0 F0")
+	wantCounts(t, "customers with the previous mark", resp.GetCustomers(), "c0 u0 s1 f0 x0 F0")
+	wantPaymentStatus(t, r, p, pb.Payment_SUCCEEDED)
 }

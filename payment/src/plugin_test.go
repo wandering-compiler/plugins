@@ -137,3 +137,22 @@ func TestResolveBackend_AnUnparsableBaseIsNotEchoed(t *testing.T) {
 		t.Errorf("the error repeats the credentials: %v", err)
 	}
 }
+
+func TestPreviousInstallMarks(t *testing.T) {
+	got, err := previousInstallMarks(" 0123456789abcdef, ,fedcba9876543210 ")
+	if err != nil || len(got) != 2 || got[0] != "0123456789abcdef" || got[1] != "fedcba9876543210" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if got, err := previousInstallMarks(""); err != nil || got != nil {
+		t.Errorf("empty: %v, %v", got, err)
+	}
+	for _, bad := range []string{"0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "whsec_secret_value"} {
+		if _, err := previousInstallMarks(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	cfg := &gen.EnvConfig{ProviderAPIKey: secret.New("sk_test"), WebhookSigningSecret: secret.New("whsec_test"), PreviousInstallMarks: "not-a-mark"}
+	if err := RegisterPlugin(cfg, &fakeRegistry{}, fakeClients{}); err == nil {
+		t.Error("RegisterPlugin booted with a malformed previous_install_marks")
+	}
+}

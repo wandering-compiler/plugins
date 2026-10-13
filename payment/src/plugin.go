@@ -42,6 +42,9 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		WebhookSecret:   cfg.WebhookSigningSecret.Reveal(),
 		DefaultCurrency: defaultCurrency(cfg),
 	}
+	if h.PreviousInstallMarks, err = previousInstallMarks(cfg.PreviousInstallMarks); err != nil {
+		return err
+	}
 	if err := handlers.ValidateConfig(h); err != nil {
 		return err
 	}
@@ -99,4 +102,23 @@ func defaultCurrency(cfg *gen.EnvConfig) string {
 		return c
 	}
 	return "usd"
+}
+
+// previousInstallMarks parses previous_install_marks: comma-separated marks of
+// 16 lowercase hex characters (backend.InstallID's shape). Anything else
+// fails boot: a mistyped mark would silently match nothing, and the objects
+// it was meant to keep would read as foreign.
+func previousInstallMarks(v string) ([]string, error) {
+	var out []string
+	for _, m := range strings.Split(v, ",") {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		if len(m) != 16 || strings.Trim(m, "0123456789abcdef") != "" {
+			return nil, fmt.Errorf("payment plugin: previous_install_marks: %q is not an installation mark (16 lowercase hex characters)", m)
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }

@@ -182,6 +182,7 @@ must be exact. Amounts cross the API as decimal strings (`"19.99"`).
 | `webhook_signing_secret` | **yes** while `stripe_webhooks` is on (the default); the bundle refuses to boot without it | webhook HMAC secret (`whsec_…`) |
 | `provider_api_base` | no | root of a Stripe-compatible API instead of `https://api.stripe.com` (e.g. the `stripemock` sandbox, `http://stripemock:12111`); empty = the real API; test keys only |
 | `default_currency` | no | ISO-4217 applied when a charge omits one |
+| `previous_install_marks` | no | comma-separated installation marks written under earlier signing secrets (see below); a malformed one fails boot |
 
 ## Prepaid credit wallet (feature `prepaid`)
 
@@ -339,9 +340,13 @@ req := &paymentpb.ReconcileProviderReq{Since: timestamppb.New(time.Now().Add(-96
 for {
 	resp, err := payments.ReconcileProvider(ctx, req)
 	if err != nil {
-		return err // a provider or store outage: the next run covers it
+		return err // an invalid request, or no installation id
 	}
 	log(resp) // counts per kind: created, updated, in_sync, foreign, superseded, failed
+	if resp.GetStopped() != "" {
+		saveForLater(resp.GetNextCursor()) // a provider list failed: resume later, not now
+		break
+	}
 	if resp.GetNextCursor() == "" {
 		break
 	}
@@ -352,6 +357,12 @@ for {
 - **`since`** is required; `limit` caps the objects one call examines
   (default 1000, at most 10000); `next_cursor` continues the walk (send it
   alone — it carries its `since`).
+- **A provider list that fails does not lose the walk.** A rate limit, a
+  5xx or a timeout is retried three times (about five seconds, never past
+  the call's deadline); a list that still fails, or that the provider
+  refuses, ends the call with the counts so far, `stopped` saying which list,
+  and `next_cursor` at the page that failed. A cursor whose object was since
+  deleted at the provider continues from that object's creation time.
 - **Suggested cadence:** hourly with `since` four days back (a little more
   than the provider's redelivery window, so a webhook still being retried is
   usually there first), and after any webhook outage once with `since` at the
@@ -361,6 +372,12 @@ for {
   by the next run; a count that stays above zero needs a look. `superseded`
   is a customer whose principal is already linked to another one (the loser
   of two concurrent first charges): harmless.
+- **Rotating `webhook_signing_secret` changes the installation mark**
+  (`w17_install` derives from it). Every object created before the rotation
+  then reads as foreign: the reconciliation never touches it again, and its
+  webhooks are acknowledged without effect. List the old mark — read it off
+  any older object's metadata in the provider's dashboard — in
+  `previous_install_marks` to keep those objects this installation's.
 - **Not covered:** provider prices (`CreatePlan` is locally authoritative; an
   orphan price is never referenced and moves no money), disputes (only the
   webhook records them), and customers created before this version (they

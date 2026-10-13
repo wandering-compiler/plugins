@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -167,5 +168,54 @@ func TestEnsureCustomer_MarksTheCustomer(t *testing.T) {
 	}
 	if form.Has("metadata[w17_payment]") || form.Has("metadata[w17_install]") {
 		t.Errorf("marked without an installation id: %v", form)
+	}
+}
+
+// created[lte] bounds a walk that continues from a creation time; every
+// listed object carries its own.
+func TestListPages_UntilAndCreated(t *testing.T) {
+	var got url.Values
+	srv := listServer(t, "/v1/refunds", `{"data":[{"id":"re_1","created":1700000123,"currency":"usd"}],"has_more":false}`, &got)
+	rs, _, err := testBackend(srv).ListRefundPage(context.Background(), backend.ListQuery{Until: 1700000200})
+	if err != nil || len(rs) != 1 {
+		t.Fatalf("got %+v err=%v", rs, err)
+	}
+	if got.Get("created[lte]") != "1700000200" {
+		t.Errorf("query = %v", got)
+	}
+	if rs[0].Created != 1700000123 {
+		t.Errorf("created = %d", rs[0].Created)
+	}
+}
+
+// Paging after an object the provider no longer has is ErrListCursorGone; the
+// same refusal without starting_after is not.
+func TestListPages_ACursorAtAGoneObject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"resource_missing","message":"No such customer: 'cus_9'"}}`))
+	}))
+	defer srv.Close()
+	b := testBackend(srv)
+	_, _, err := b.ListCustomerPage(context.Background(), backend.ListQuery{After: "cus_9"})
+	if !errors.Is(err, backend.ErrListCursorGone) || !errors.Is(err, backend.ErrInvalidRequest) {
+		t.Errorf("after a gone object: %v", err)
+	}
+	if _, _, err := b.ListCustomerPage(context.Background(), backend.ListQuery{}); errors.Is(err, backend.ErrListCursorGone) || err == nil {
+		t.Errorf("without a cursor: %v", err)
+	}
+}
+
+// A subscription list carries the provider's clock at the answer (its Date),
+// the clock its events are stamped with.
+func TestListSubscriptionPage_ReadsTheProvidersClock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Date", "Tue, 14 Nov 2023 22:13:20 GMT") // 1700000000
+		_, _ = w.Write([]byte(`{"data":[{"id":"sub_1","status":"active"}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	ss, _, err := testBackend(srv).ListSubscriptionPage(context.Background(), backend.ListQuery{})
+	if err != nil || len(ss) != 1 || ss[0].ReadAt != 1700000000 {
+		t.Fatalf("got %+v err=%v", ss, err)
 	}
 }

@@ -673,7 +673,11 @@ func (x *ReconcileCounts) GetFailed() int32 {
 
 // ReconcileProviderResp — the counts per kind (subscriptions stay zero
 // without the subscriptions feature), and `next_cursor`: empty when the walk
-// is complete, otherwise where the next call continues it.
+// is complete, otherwise where the next call continues it. `stopped` is set
+// when a provider list failed (after retries for a transient failure): the
+// counts are what the call did before it, and `next_cursor` resumes at the
+// page that failed — call again later, not at once. A list failure is
+// answered this way, never as an error, so a long walk keeps its progress.
 type ReconcileProviderResp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Customers     *ReconcileCounts       `protobuf:"bytes,1,opt,name=customers,proto3" json:"customers,omitempty"`
@@ -681,6 +685,7 @@ type ReconcileProviderResp struct {
 	Refunds       *ReconcileCounts       `protobuf:"bytes,3,opt,name=refunds,proto3" json:"refunds,omitempty"`
 	Subscriptions *ReconcileCounts       `protobuf:"bytes,4,opt,name=subscriptions,proto3" json:"subscriptions,omitempty"`
 	NextCursor    string                 `protobuf:"bytes,5,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
+	Stopped       string                 `protobuf:"bytes,6,opt,name=stopped,proto3" json:"stopped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -746,6 +751,13 @@ func (x *ReconcileProviderResp) GetSubscriptions() *ReconcileCounts {
 func (x *ReconcileProviderResp) GetNextCursor() string {
 	if x != nil {
 		return x.NextCursor
+	}
+	return ""
+}
+
+func (x *ReconcileProviderResp) GetStopped() string {
+	if x != nil {
+		return x.Stopped
 	}
 	return ""
 }
@@ -1707,14 +1719,15 @@ const file_business_payment_service_proto_rawDesc = "" +
 	"\n" +
 	"superseded\x18\x05 \x01(\x05R\n" +
 	"superseded\x12\x16\n" +
-	"\x06failed\x18\x06 \x01(\x05R\x06failed:\x13\xfa\xf4\x18\x0fstripe_webhooks\"\xdf\x02\n" +
+	"\x06failed\x18\x06 \x01(\x05R\x06failed:\x13\xfa\xf4\x18\x0fstripe_webhooks\"\xf9\x02\n" +
 	"\x15ReconcileProviderResp\x12B\n" +
 	"\tcustomers\x18\x01 \x01(\v2$.w17.contrib.payment.ReconcileCountsR\tcustomers\x12@\n" +
 	"\bpayments\x18\x02 \x01(\v2$.w17.contrib.payment.ReconcileCountsR\bpayments\x12>\n" +
 	"\arefunds\x18\x03 \x01(\v2$.w17.contrib.payment.ReconcileCountsR\arefunds\x12J\n" +
 	"\rsubscriptions\x18\x04 \x01(\v2$.w17.contrib.payment.ReconcileCountsR\rsubscriptions\x12\x1f\n" +
 	"\vnext_cursor\x18\x05 \x01(\tR\n" +
-	"nextCursor:\x13\xfa\xf4\x18\x0fstripe_webhooks\"L\n" +
+	"nextCursor\x12\x18\n" +
+	"\astopped\x18\x06 \x01(\tR\astopped:\x13\xfa\xf4\x18\x0fstripe_webhooks\"L\n" +
 	"\n" +
 	"CreditView\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x18\n" +
