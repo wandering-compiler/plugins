@@ -69,8 +69,8 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 		st, err := rc.ReserveTask(ctx, req, grpc.Header(&hdr))
 		if err == nil && !resowner.Confirmed(hdr) {
 			_, _ = rc.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: st.GetReservation()})
-			unbound = append(unbound, c.Relay.Name)
-			lastErr = fmt.Errorf("relay %q does not bind a reservation to its caller", c.Relay.Name)
+			unbound = append(unbound, c.Name)
+			lastErr = fmt.Errorf("relay %q does not bind a reservation to its caller", c.Name)
 			continue
 		}
 		if err == nil {
