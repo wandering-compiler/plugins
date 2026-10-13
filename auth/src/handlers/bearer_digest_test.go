@@ -117,21 +117,63 @@ func TestAuthenticate_AStoredDigestIsNotACredential(t *testing.T) {
 // path is held to it without being named here.
 func TestNoMintWritesTheLegacyTokenColumn(t *testing.T) {
 	src := readProto(t, filepath.Join("..", "..", "proto", "mutations", "auth_mutation.proto"))
-	inserts := regexp.MustCompile(`"INSERT INTO @module\.UserToken SET "[^R]*`).FindAllString(src, -1)
-	if len(inserts) < 2 {
+	const insert = "INSERT INTO @module.UserToken SET "
+	var mints []string
+	for _, m := range regexp.MustCompile(`(?m)^  rpc (\w+)\(`).FindAllStringSubmatch(src, -1) {
+		for _, stmt := range dqlStatements(mutationRPCBody(t, m[1])) {
+			if !strings.HasPrefix(stmt, insert) {
+				continue
+			}
+			mints = append(mints, m[1])
+			set := strings.TrimPrefix(stmt, insert)
+			if i := strings.Index(set, " RETURNING "); i >= 0 {
+				set = set[:i]
+			}
+			cols := map[string]bool{}
+			for _, a := range strings.Split(set, ",") {
+				a = strings.TrimSpace(a)
+				if strings.HasPrefix(a, "?feature(") {
+					a = strings.TrimSpace(a[strings.Index(a, ")")+1:])
+				}
+				col, _, ok := strings.Cut(a, "=")
+				if !ok {
+					t.Fatalf("%s: unparsable assignment %q in %q", m[1], a, stmt)
+				}
+				cols[strings.TrimSpace(col)] = true
+			}
+			if !cols["token_hash"] {
+				t.Errorf("%s does not write token_hash: %q", m[1], stmt)
+			}
+			if cols["token"] {
+				t.Errorf("%s writes the legacy plaintext column: %q", m[1], stmt)
+			}
+		}
+	}
+	if len(mints) < 2 {
 		// IssueToken and IssueApiToken (which the bot mint uses too): fewer
 		// means the scan broke, not that the mints went away.
-		t.Fatalf("found %d INSERTs into UserToken — the scan is broken", len(inserts))
+		t.Fatalf("found INSERTs into UserToken in %v only — the scan is broken", mints)
 	}
-	assignsLegacy := regexp.MustCompile(`(^|[^_a-z])token\s*=\s*:`)
-	for _, ins := range inserts {
-		if !strings.Contains(ins, "token_hash = :token_hash") {
-			t.Errorf("a mint does not write token_hash:\n%s", ins)
+}
+
+// dqlStatements returns each `dql:` of an rpc declaration as the one string
+// its adjacent literals concatenate to.
+func dqlStatements(body string) []string {
+	var out []string
+	lit := regexp.MustCompile(`^\s*"((?:[^"\\]|\\.)*)"`)
+	for _, part := range strings.Split(body, "dql:")[1:] {
+		var b strings.Builder
+		for {
+			m := lit.FindStringSubmatchIndex(part)
+			if m == nil {
+				break
+			}
+			b.WriteString(part[m[2]:m[3]])
+			part = part[m[1]:]
 		}
-		if assignsLegacy.MatchString(ins) {
-			t.Errorf("a mint writes the legacy plaintext column:\n%s", ins)
-		}
+		out = append(out, b.String())
 	}
+	return out
 }
 
 // --- what one authentication costs -----------------------------------------

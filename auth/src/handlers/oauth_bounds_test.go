@@ -27,6 +27,41 @@ func TestOAuthHTTPClient_TimesOutAfterFifteenSeconds(t *testing.T) {
 	}
 }
 
+// And the calls go through that client. With it swapped for one that gives up
+// after 50ms, a provider that never answers fails both the token exchange and
+// the userinfo fetch promptly; a call made through any other client would
+// wait for the provider instead.
+func TestOAuthOutbound_AHangingProviderTimesOut(t *testing.T) {
+	release := make(chan struct{})
+	hang := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		case <-time.After(3 * time.Second):
+		}
+	})
+	srv := httptest.NewServer(hang)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs first: lets srv.Close finish
+
+	saved := oauthHTTPClient
+	oauthHTTPClient = &http.Client{Timeout: 50 * time.Millisecond}
+	t.Cleanup(func() { oauthHTTPClient = saved })
+
+	h := &AuthServiceHandler{OAuthRedirectBase: "https://app.example"}
+	p := &pb.OAuthProvider{Name: "acme", ClientId: "cid", Secret: "csec", TokenUrl: srv.URL + "/token"}
+	start := time.Now()
+	if _, err := h.exchangeCode(context.Background(), p, "auth-code", "verifier"); err == nil {
+		t.Error("the token exchange against a hanging provider succeeded")
+	}
+	if _, err := h.fetchUserinfo(context.Background(), srv.URL+"/userinfo", "at-123"); err == nil {
+		t.Error("the userinfo fetch against a hanging provider succeeded")
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("two calls to a hanging provider took %v; the client's timeout is not what bounds them", took)
+	}
+}
+
 // padded returns a JSON object with the given fields and a filler string that
 // brings the body to n bytes. Truncated anywhere, it is no longer JSON.
 func padded(fields string, n int) string {
