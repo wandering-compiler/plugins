@@ -38,7 +38,7 @@ func newEnrolRig(t *testing.T) *enrolRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &enrolRig{ca: ca, codes: codes, reg: workeradmit.New(), now: time.Now()}
+	r := &enrolRig{ca: ca, codes: codes, reg: deliveredRegistry(), now: time.Now()}
 	r.e = &Enrollment{CA: ca, Codes: codes, Workers: r.reg, Lifetime: time.Hour, Now: func() time.Time { return r.now }}
 	return r
 }
@@ -222,7 +222,7 @@ func TestRenew_Refusals(t *testing.T) {
 // The interceptor applies a ban set that is THERE, including an empty one,
 // and leaves the registry alone when the header is absent.
 func TestBanInterceptors_ApplyOnlyWhatWasSent(t *testing.T) {
-	reg := workeradmit.New()
+	reg := deliveredRegistry()
 	unary, _ := BanInterceptors(reg)
 	call := func(md metadata.MD) {
 		ctx := metadata.NewIncomingContext(context.Background(), md)

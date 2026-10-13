@@ -16,7 +16,6 @@ import (
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/plugins/cluster/lib/relaycore"
 	"github.com/wandering-compiler/plugins/cluster/lib/tunnel"
-	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 // tunnelRig is the relay's TUNNEL listener on real TCP. clientAuth is what the
@@ -31,7 +30,12 @@ type tunnelRig struct {
 
 func serveTunnels(t *testing.T, clientAuth tls.ClientAuthType, plain bool) *tunnelRig {
 	t.Helper()
-	wr := serveWorkers(t)
+	return serveTunnelsWith(t, clientAuth, plain, serveWorkers(t))
+}
+
+// serveTunnelsWith is serveTunnels beside a worker rig the test built.
+func serveTunnelsWith(t *testing.T, clientAuth tls.ClientAuthType, plain bool, wr *workerRig) *tunnelRig {
+	t.Helper()
 	crt, err := tls.X509KeyPair(wr.relay.CertPEM, wr.relay.KeyPEM)
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +222,7 @@ func TestServeTunnels_NilOnErrorStillClosesARefusedTunnel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = raw.Close() }()
-	go func() { _ = ServeTunnels(raw, workeradmit.New(), NewBackends(), nil) }()
+	go func() { _ = ServeTunnels(raw, deliveredRegistry(), NewBackends(), nil) }()
 	c, err := net.Dial("tcp", raw.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +253,7 @@ func grantTicket(t *testing.T, pool *relaycore.Pool) string {
 // No ticket is Unauthenticated with the reason that tells the caller to ask
 // the control plane for one.
 func TestTicketPicker_NoTicketIsRefused(t *testing.T) {
-	pick := TicketPicker(poolWith(t, 1), NewBackends(), workeradmit.New())
+	pick := TicketPicker(poolWith(t, 1), NewBackends(), deliveredRegistry())
 	_, err := pickWith(pick, "")
 	wantRefusal(t, err, codes.Unauthenticated, refusal.TicketMissing)
 }
@@ -260,7 +264,7 @@ func TestTicketPicker_AnInventedOrSpentTicketIsRefused(t *testing.T) {
 	pool := poolWith(t, 2)
 	b := NewBackends()
 	attach(t, b, "w", 2, true)
-	pick := TicketPicker(pool, b, workeradmit.New())
+	pick := TicketPicker(pool, b, deliveredRegistry())
 
 	_, err := pickWith(pick, "invented")
 	wantRefusal(t, err, codes.PermissionDenied, refusal.TicketNotRedeemable)
@@ -279,7 +283,7 @@ func TestTicketPicker_AnInventedOrSpentTicketIsRefused(t *testing.T) {
 // back AT ONCE — otherwise every such call shrinks the relay until a restart.
 func TestTicketPicker_NoWorkerReturnsTheSlot(t *testing.T) {
 	pool := poolWith(t, 1)
-	pick := TicketPicker(pool, NewBackends(), workeradmit.New())
+	pick := TicketPicker(pool, NewBackends(), deliveredRegistry())
 	ticket := grantTicket(t, pool)
 	_, err := pickWith(pick, ticket)
 	wantRefusal(t, err, codes.Unavailable, refusal.NoWorker)
@@ -293,7 +297,7 @@ func TestTicketPicker_SkipsABannedWorker(t *testing.T) {
 	pool := poolWith(t, 1)
 	b := NewBackends()
 	attach(t, b, "w", 1, true)
-	reg := workeradmit.New()
+	reg := deliveredRegistry()
 	reg.SetBanned([]string{"w"})
 	pick := TicketPicker(pool, b, reg)
 	_, err := pickWith(pick, grantTicket(t, pool))

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/metadata"
 )
@@ -171,5 +172,77 @@ func TestKeepIn_KeepsANewVersionOfAnUnchangedSet(t *testing.T) {
 	again.SetBannedAt(nil, 20) // the lift at 20, delivered late
 	if again.Admitted("w1") {
 		t.Error("the saved version was stale: a set older than the applied one lifted the ban")
+	}
+}
+
+// A fresh registry knows no ban set, and says so: the relay must not read an
+// empty start as "nobody is banned". Any delivery, an empty set included,
+// is a set.
+func TestNew_HoldsNoBanSetUntilOneIsDelivered(t *testing.T) {
+	r := New()
+	if r.HoldsBanSet() {
+		t.Fatal("a fresh registry claims to hold a ban set")
+	}
+	if _, ok := r.LastDelivered(); ok {
+		t.Fatal("a fresh registry claims a delivery")
+	}
+	before := time.Now()
+	r.SetBannedAt(nil, 5)
+	if !r.HoldsBanSet() {
+		t.Error("an empty set that was delivered is not held")
+	}
+	if at, ok := r.LastDelivered(); !ok || at.Before(before) {
+		t.Errorf("LastDelivered = %v, %v after a delivery, want now", at, ok)
+	}
+}
+
+// An older set that is ignored still proves a control plane reached the
+// relay, and the set held is at least as new as the one it read.
+func TestSetBannedAt_AnIgnoredOlderSetStillCountsAsADelivery(t *testing.T) {
+	r := New()
+	r.SetBannedAt([]string{"w1"}, 20)
+	first, _ := r.LastDelivered()
+	time.Sleep(2 * time.Millisecond)
+	r.SetBannedAt(nil, 10)
+	if r.Admitted("w1") {
+		t.Fatal("the older set lifted the ban")
+	}
+	if at, _ := r.LastDelivered(); !at.After(first) {
+		t.Error("an ignored older set did not count as a delivery")
+	}
+}
+
+// After a restart the saved set is HELD — banned keys are refused at once —
+// but it is not a delivery: it says nothing about decisions taken while the
+// relay was down.
+func TestKeepIn_ASavedSetIsHeldButIsNotADelivery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bans.json")
+	r := New()
+	if err := r.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	r.SetBannedAt([]string{"w1"}, 42)
+
+	again := New()
+	if err := again.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	if !again.HoldsBanSet() || again.Admitted("w1") {
+		t.Fatal("the restarted registry does not hold the saved ban")
+	}
+	if _, ok := again.LastDelivered(); ok {
+		t.Error("a set loaded from disk counted as a delivery")
+	}
+}
+
+// No saved file (a relay that never received a set, or a directory from
+// before sets were saved) holds nothing.
+func TestKeepIn_AMissingFileHoldsNoSet(t *testing.T) {
+	r := New()
+	if err := r.KeepIn(filepath.Join(t.TempDir(), "bans.json")); err != nil {
+		t.Fatal(err)
+	}
+	if r.HoldsBanSet() {
+		t.Error("a missing file was read as an empty ban set")
 	}
 }

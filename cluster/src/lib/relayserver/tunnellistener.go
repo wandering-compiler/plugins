@@ -2,9 +2,11 @@ package relayserver
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -65,6 +67,11 @@ func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends,
 	// certificate is renewed every few weeks, the key — and so the ban — is not.
 	fp := identity.WorkerID(certs[0])
 
+	// Fail closed while no ban set is known, as Attach does: every key would
+	// read as admitted.
+	if !workers.HoldsBanSet() {
+		return fmt.Errorf("relay: tunnel from worker %s refused — no ban set received since this relay started", fp)
+	}
 	// Checked HERE and not only at Attach, because a ban can land between the
 	// two: a worker that attached a second before it was banned must not get
 	// a tunnel after.
@@ -82,6 +89,9 @@ func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends,
 		return fmt.Errorf("relay: turning the tunnel around: %w", err)
 	}
 	backends.Add(fp, conn)
+	// The handshake checked the certificate's validity once; the tunnel stops
+	// taking work when it runs out (Backends.ExpireAt).
+	backends.ExpireAt(fp, conn, chainNotAfter(tc.ConnectionState().VerifiedChains[0]))
 	// And again AFTER Add. A ban landing between the check above and Add
 	// found nothing to drop (Backends.DropWhere runs once, when the set
 	// arrives), and the tunnel would have stayed open for the banned worker.
@@ -91,4 +101,16 @@ func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends,
 		return fmt.Errorf("relay: worker %s was banned while its tunnel opened", fp)
 	}
 	return nil
+}
+
+// chainNotAfter is when a verified chain stops being valid: the earliest
+// NotAfter along it, so a CA that expires first ends the tunnel too.
+func chainNotAfter(chain []*x509.Certificate) time.Time {
+	var out time.Time
+	for _, c := range chain {
+		if out.IsZero() || c.NotAfter.Before(out) {
+			out = c.NotAfter
+		}
+	}
+	return out
 }

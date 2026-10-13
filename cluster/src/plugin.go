@@ -2,6 +2,7 @@
 package cluster
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"os"
@@ -45,14 +46,20 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	if dialTimeout <= 0 {
 		dialTimeout = 5 * time.Second
 	}
-	registry.RegisterClusterServiceServer(&handlers.ClusterServiceHandler{
+	h := &handlers.ClusterServiceHandler{
 		Relays:      handlers.NewRelayStore(clients.RelayQuery(), clients.RelayMutation()),
 		Workers:     handlers.NewWorkerStore(clients.WorkerQuery(), clients.WorkerMutation()),
 		DialTimeout: dialTimeout,
 		Dial: func(target, fingerprint string) (*grpc.ClientConn, error) {
 			return relaydial.Dial(dialCfg, target, fingerprint)
 		},
-	})
+	}
+	registry.RegisterClusterServiceServer(h)
+	// Every relay, enabled or not, is handed the ban set every few minutes:
+	// it refuses workers until it holds one after a restart, and refuses
+	// renewals when it has not been handed one recently. For the life of the
+	// process, like the server it belongs to.
+	go h.KeepBansDelivered(context.Background(), handlers.BanRedeliveryInterval)
 	return nil
 }
 

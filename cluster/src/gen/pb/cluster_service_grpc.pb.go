@@ -85,10 +85,11 @@ type ClusterServiceClient interface {
 	// carries (as every call does) and reports every worker it has met since it
 	// started. The project returns Unimplemented.
 	//
-	// A relay holds its ban set in memory and loses it on restart; being handed
-	// the complete set on every contact means it rehydrates itself with no
-	// recovery path to write — and since every placement begins with a contact,
-	// no work is placed on a restarted relay before it knows whom to refuse.
+	// A relay keeps the last set in its identity directory when it has one.
+	// Without a saved set it admits no worker (attach, tunnel and renewal are
+	// refused BAN_SET_UNKNOWN) until a control plane delivers one: on any call,
+	// when a decision is taken, and every few minutes to every registered
+	// relay, enabled or not.
 	ExchangeWorkers(ctx context.Context, in *ExchangeWorkersReq, opts ...grpc.CallOption) (*ExchangeWorkersResp, error)
 	// IssueRegistrationCode asks a relay for a one-time code a new worker
 	// enrols with. Answered by BOTH sides: the PROJECT resolves `ids` (one
@@ -104,8 +105,10 @@ type ClusterServiceClient interface {
 	// BanWorkers / UnbanWorkers are the admin's ban and unban: the decision on
 	// the selected workers, recorded with WHO took it — the signed-in caller,
 	// read from the verified principal, never from the request — and when.
-	// Answered by the PROJECT. A ban reaches the relays on the next call to
-	// each, and every placement makes one.
+	// Answered by the PROJECT. The new set is delivered to every registered
+	// relay at once, and again every few minutes to any it missed; a relay
+	// applying a ban closes the banned workers' tunnels, ending their running
+	// work (WORKER_LOST), and refuses their attach, tunnel and renewal.
 	BanWorkers(ctx context.Context, in *DecideWorkersActionReq, opts ...grpc.CallOption) (*DecideWorkersActionResp, error)
 	UnbanWorkers(ctx context.Context, in *DecideWorkersActionReq, opts ...grpc.CallOption) (*DecideWorkersActionResp, error)
 	// RelayStats is answered by a RELAY: what it is carrying right now. The
@@ -318,10 +321,11 @@ type ClusterServiceServer interface {
 	// carries (as every call does) and reports every worker it has met since it
 	// started. The project returns Unimplemented.
 	//
-	// A relay holds its ban set in memory and loses it on restart; being handed
-	// the complete set on every contact means it rehydrates itself with no
-	// recovery path to write — and since every placement begins with a contact,
-	// no work is placed on a restarted relay before it knows whom to refuse.
+	// A relay keeps the last set in its identity directory when it has one.
+	// Without a saved set it admits no worker (attach, tunnel and renewal are
+	// refused BAN_SET_UNKNOWN) until a control plane delivers one: on any call,
+	// when a decision is taken, and every few minutes to every registered
+	// relay, enabled or not.
 	ExchangeWorkers(context.Context, *ExchangeWorkersReq) (*ExchangeWorkersResp, error)
 	// IssueRegistrationCode asks a relay for a one-time code a new worker
 	// enrols with. Answered by BOTH sides: the PROJECT resolves `ids` (one
@@ -337,8 +341,10 @@ type ClusterServiceServer interface {
 	// BanWorkers / UnbanWorkers are the admin's ban and unban: the decision on
 	// the selected workers, recorded with WHO took it — the signed-in caller,
 	// read from the verified principal, never from the request — and when.
-	// Answered by the PROJECT. A ban reaches the relays on the next call to
-	// each, and every placement makes one.
+	// Answered by the PROJECT. The new set is delivered to every registered
+	// relay at once, and again every few minutes to any it missed; a relay
+	// applying a ban closes the banned workers' tunnels, ending their running
+	// work (WORKER_LOST), and refuses their attach, tunnel and renewal.
 	BanWorkers(context.Context, *DecideWorkersActionReq) (*DecideWorkersActionResp, error)
 	UnbanWorkers(context.Context, *DecideWorkersActionReq) (*DecideWorkersActionResp, error)
 	// RelayStats is answered by a RELAY: what it is carrying right now. The

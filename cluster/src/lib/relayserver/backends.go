@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -58,6 +59,11 @@ type Backends struct {
 	// this to the pool, so a worker attaching promotes whoever is queued
 	// instead of making them wait for the next arrival.
 	onCapacity func(int)
+
+	// expiryGrace is how long work already running on a tunnel whose
+	// certificate expired may go on before the tunnel is closed under it
+	// (see ExpireAt). Zero closes it at expiry.
+	expiryGrace time.Duration
 }
 
 // backend is one tunnel and the work booked on it. Counted per CONNECTION so
@@ -66,6 +72,13 @@ type backend struct {
 	conn     *grpc.ClientConn
 	gen      uint64
 	inflight int
+
+	// retiring: the certificate the tunnel was opened with has expired. It
+	// takes no new work and closes when its running work ends or the grace
+	// runs out (ExpireAt).
+	retiring bool
+	// timers fire on this tunnel's expiry and grace; stopped when it leaves.
+	timers []*time.Timer
 }
 
 // workerProfile is what a worker claimed about itself on its attach stream.
@@ -112,7 +125,10 @@ func (b *Backends) OnCapacityChange(f func(int)) {
 // socket that the work already running is travelling over.
 func (b *Backends) capacityLocked() int {
 	total := 0
-	for fp := range b.conns {
+	for fp, be := range b.conns {
+		if be.retiring {
+			continue
+		}
 		if pr, ok := b.profiles[fp]; ok && pr.ready {
 			total += int(pr.slots)
 		}
@@ -123,6 +139,11 @@ func (b *Backends) capacityLocked() int {
 // removeLocked drops a worker and reports whether anything changed. The single
 // place a tunnel leaves, so nothing can forget to republish the capacity.
 func (b *Backends) removeLocked(fingerprint string) {
+	if be, ok := b.conns[fingerprint]; ok {
+		for _, t := range be.timers {
+			t.Stop()
+		}
+	}
 	delete(b.conns, fingerprint)
 	for i, f := range b.order {
 		if f == fingerprint {
@@ -213,6 +234,9 @@ func (b *Backends) Add(fingerprint string, conn *grpc.ClientConn) uint64 {
 	var replaced *grpc.ClientConn
 	if old, ok := b.conns[fingerprint]; ok {
 		replaced = old.conn
+		for _, t := range old.timers {
+			t.Stop()
+		}
 	} else {
 		b.order = append(b.order, fingerprint)
 	}
@@ -286,6 +310,67 @@ func (b *Backends) watch(fingerprint string, conn *grpc.ClientConn, gen uint64) 
 	publish := b.publishLocked()
 	b.mu.Unlock()
 	_ = conn.Close() // outside b.mu — see Add
+	publish()
+}
+
+// SetExpiryGrace sets how long running work may finish on a tunnel whose
+// certificate expired; see ExpireAt. The relay wires its --drain-timeout.
+func (b *Backends) SetExpiryGrace(d time.Duration) {
+	b.mu.Lock()
+	b.expiryGrace = d
+	b.mu.Unlock()
+}
+
+// ExpireAt retires conn, fingerprint's tunnel, at notAfter — when the
+// certificate it was opened with stops being valid.
+//
+// The handshake checked the certificate once, and a tunnel can stay open for
+// longer than any certificate lasts, so without this an expired credential
+// kept a connected backend for as long as the worker held the socket. At
+// expiry the tunnel takes no new work at once and stops counting toward
+// capacity; the work already running on it may finish within the expiry grace,
+// after which the tunnel is closed and whatever is still running ends as
+// WORKER_LOST. A healthy worker has renewed long before and reconnects with
+// the new certificate when the old tunnel closes.
+//
+// Expiry is routine, so running work gets the grace; a ban is not, and
+// DropWhere cuts at once.
+func (b *Backends) ExpireAt(fingerprint string, conn *grpc.ClientConn, notAfter time.Time) {
+	b.mu.Lock()
+	be, ok := b.conns[fingerprint]
+	if !ok || be.conn != conn {
+		b.mu.Unlock()
+		return
+	}
+	be.timers = append(be.timers, time.AfterFunc(time.Until(notAfter), func() {
+		b.retire(fingerprint, conn)
+	}))
+	b.mu.Unlock()
+}
+
+// retire stops conn taking work, and closes it now if nothing runs on it or
+// after the grace if something does.
+func (b *Backends) retire(fingerprint string, conn *grpc.ClientConn) {
+	b.mu.Lock()
+	be, ok := b.conns[fingerprint]
+	if !ok || be.conn != conn || be.retiring {
+		b.mu.Unlock()
+		return
+	}
+	if be.inflight == 0 || b.expiryGrace <= 0 {
+		b.removeLocked(fingerprint)
+		publish := b.publishLocked()
+		b.mu.Unlock()
+		_ = conn.Close() // outside b.mu — see Add
+		publish()
+		return
+	}
+	be.retiring = true
+	be.timers = append(be.timers, time.AfterFunc(b.expiryGrace, func() {
+		b.RemoveConn(fingerprint, conn)
+	}))
+	publish := b.publishLocked()
+	b.mu.Unlock()
 	publish()
 }
 
@@ -369,12 +454,23 @@ func (b *Backends) Capacity() int {
 // it could take.
 func (b *Backends) release(fingerprint string, gen uint64) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	be, ok := b.conns[fingerprint]
 	if !ok || be.gen != gen || be.inflight == 0 {
+		b.mu.Unlock()
 		return
 	}
 	be.inflight--
+	if !be.retiring || be.inflight > 0 {
+		b.mu.Unlock()
+		return
+	}
+	// The last call on a tunnel whose certificate expired: nothing is left
+	// to wait for (ExpireAt).
+	b.removeLocked(fingerprint)
+	publish := b.publishLocked()
+	b.mu.Unlock()
+	_ = be.conn.Close() // outside b.mu — see Add
+	publish()
 }
 
 var errNoWorker = errors.New("no worker attached")
@@ -407,7 +503,7 @@ func (b *Backends) take(admitted func(string) bool) (*grpc.ClientConn, string, u
 		// than always resolving to the same one.
 		fp := b.order[(b.next+1+i)%len(b.order)]
 		pr, ok := b.profiles[fp]
-		if !ok || !pr.ready {
+		if !ok || !pr.ready || b.conns[fp].retiring {
 			continue
 		}
 		if admitted != nil && !admitted(fp) {

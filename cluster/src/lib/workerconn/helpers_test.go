@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/wandering-compiler/plugins/cluster/lib/identity"
+	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
 // enrolledDir is a worker identity directory as enrolment leaves it: a key,
@@ -47,4 +48,13 @@ func newCA(t *testing.T) *identity.CA {
 		t.Fatal(err)
 	}
 	return ca
+}
+
+// deliveredRegistry is a relay's admission state after a control plane has
+// delivered the (empty) ban set — what every relay holds in steady state. A
+// fresh workeradmit.New() admits nobody until then.
+func deliveredRegistry() *workeradmit.Registry {
+	r := workeradmit.New()
+	r.SetBanned(nil)
+	return r
 }

@@ -57,7 +57,7 @@ func serveAttachOn(t *testing.T, lifetime time.Duration, lis net.Listener) *atta
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &attachRig{relayFP: relayID.Fingerprint, ca: newCA(t), reg: workeradmit.New(), backends: relayserver.NewBackends()}
+	r := &attachRig{relayFP: relayID.Fingerprint, ca: newCA(t), reg: deliveredRegistry(), backends: relayserver.NewBackends()}
 	r.codes, err = regcode.New(time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)

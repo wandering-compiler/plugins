@@ -95,6 +95,19 @@ const (
 	// configuration cannot succeed, so a worker ends with the message instead
 	// of reconnecting forever. The registration code is not spent.
 	WorkerClaimInvalid = "WORKER_CLAIM_INVALID"
+
+	// BanSetUnknown — the relay holds no ban set yet: it started without a
+	// saved one and no control plane has called it since. Answered to a
+	// WORKER (attach, tunnel, renewal) instead of admitting a key that may be
+	// banned. Retryable: the relay learns the set from the control plane's
+	// next call, which arrives within minutes.
+	BanSetUnknown = "BAN_SET_UNKNOWN"
+
+	// BanSetStale — a renewal was refused because no control plane has
+	// delivered the ban set within the relay's --ban-set-max-age, so a ban
+	// taken meanwhile may be missing. Retryable, and harmless while it lasts:
+	// a worker renews well before its certificate expires.
+	BanSetStale = "BAN_SET_STALE"
 )
 
 // Reasons emitted by the CONTROL PLANE (the project's handlers).

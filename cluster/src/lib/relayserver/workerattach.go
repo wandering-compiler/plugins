@@ -111,6 +111,13 @@ func (s *WorkerServer) Attach(
 	// is still visible to an operator reading the registry — whatever it
 	// claims to be called.
 	s.Workers.Met(workeradmit.Worker{ID: id, Name: name, DeviceID: device})
+	// Fail closed while the relay knows no ban set: every key would read as
+	// admitted, a banned one included. Unavailable, not PermissionDenied, so
+	// the worker retries at its usual pace instead of backing off as banned.
+	if !s.Workers.HoldsBanSet() {
+		return refusal.New(codes.Unavailable, refusal.BanSetUnknown,
+			"relay: not admitting workers yet — this relay has not received the ban set since it started; retry shortly")
+	}
 	if !s.Workers.Admitted(id) {
 		// The message names the identity on purpose: a banned machine's
 		// operator is usually its owner, and "you were banned" without saying
