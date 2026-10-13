@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -38,6 +40,9 @@ type deviceMock struct {
 	revokedAt  *timestamppb.Timestamp
 	revokedErr error
 	revokeRead int
+	// a revocation that commits AFTER the sign-in read revokedAt: the value
+	// TrustDevice's guard sees (nil = none)
+	revokedLater *timestamppb.Timestamp
 }
 
 func (m *deviceMock) GetDeviceTrustRevokedAt(ctx context.Context, in *pb.GetDeviceTrustRevokedAtReq, _ ...grpc.CallOption) (*pb.GetDeviceTrustRevokedAtResp, error) {
@@ -70,7 +75,19 @@ func (m *deviceMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...
 	m.issuedWith = append(m.issuedWith, in)
 	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", UserId: in.GetUserId(), DeviceId: in.GetDeviceId()}}, nil
 }
+
+// TrustDevice mirrors its statement's guard, `NOT EXISTS (… u.device_trust_revoked_at
+// > :not_revoked_after)`: a revocation later than the cutoff matches no row
+// (NotFound, nothing written). A NULL on either side compares unknown, which
+// lets the write through — so a request carrying no cutoff is NOT guarded.
 func (m *deviceMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...grpc.CallOption) (*pb.TrustDeviceResp, error) {
+	current := m.revokedAt
+	if m.revokedLater != nil {
+		current = m.revokedLater
+	}
+	if cut := in.GetNotRevokedAfter(); current != nil && cut != nil && current.AsTime().After(cut.AsTime()) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
 	m.trusted = append(m.trusted, in)
 	return &pb.TrustDeviceResp{DeviceId: in.GetDeviceId()}, nil
 }
@@ -150,7 +167,8 @@ func TestResolveDeviceIdentity_FingerprintFallback(t *testing.T) {
 func TestResolveSignInDevice_NewDevice_Creates_Untrusted(t *testing.T) {
 	m := &deviceMock{getByIdent: map[string]*pb.Device{}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	id, trusted, err := resolveSignInDeviceImpl(ctxWithDeviceHeaders("u1", "phone-1", "UA", "9.9.9.9"), h, "u1")
+	dev, err := resolveSignInDeviceImpl(ctxWithDeviceHeaders("u1", "phone-1", "UA", "9.9.9.9"), h, "u1")
+	id, trusted := dev.id, dev.trusted
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -174,7 +192,8 @@ func TestResolveSignInDevice_ValidTrustToken_Trusted(t *testing.T) {
 		devKey("u1", "phone-1"): {Id: "dev-7", Identifier: "phone-1", TrustedAt: timestamppb.Now(), TrustTokenHash: hashDeviceTrustToken(tok)},
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	id, trusted, err := resolveSignInDeviceImpl(ctxWithDeviceTrust("u1", "phone-1", tok), h, "u1")
+	dev, err := resolveSignInDeviceImpl(ctxWithDeviceTrust("u1", "phone-1", tok), h, "u1")
+	id, trusted := dev.id, dev.trusted
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -194,7 +213,8 @@ func TestResolveSignInDevice_TrustedAtButNoToken_NotTrusted(t *testing.T) {
 		devKey("u1", "phone-1"): {Id: "dev-7", Identifier: "phone-1", TrustedAt: timestamppb.Now()}, // no TrustTokenHash
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	_, trusted, err := resolveSignInDeviceImpl(ctxWithDeviceHeaders("u1", "phone-1", "UA", "9.9.9.9"), h, "u1")
+	dev, err := resolveSignInDeviceImpl(ctxWithDeviceHeaders("u1", "phone-1", "UA", "9.9.9.9"), h, "u1")
+	trusted := dev.trusted
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -209,7 +229,8 @@ func TestResolveSignInDevice_WrongTrustToken_NotTrusted(t *testing.T) {
 		devKey("u1", "phone-1"): {Id: "dev-7", Identifier: "phone-1", TrustedAt: timestamppb.Now(), TrustTokenHash: hashDeviceTrustToken("the-real-token")},
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	_, trusted, err := resolveSignInDeviceImpl(ctxWithDeviceTrust("u1", "phone-1", "a-wrong-token"), h, "u1")
+	dev, err := resolveSignInDeviceImpl(ctxWithDeviceTrust("u1", "phone-1", "a-wrong-token"), h, "u1")
+	trusted := dev.trusted
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -223,7 +244,7 @@ func TestResolveSignInDevice_WrongTrustToken_NotTrusted(t *testing.T) {
 func TestIssueSessionWithDevice_IssuesMintsAndTrusts(t *testing.T) {
 	m := &deviceMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	tok, trustToken, err := issueSessionWithDevice(context.Background(), h, "u1", "dev-7", true)
+	tok, trustToken, err := issueSessionWithDevice(context.Background(), h, "u1", "dev-7", neverRevoked)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -253,12 +274,13 @@ func TestSignIn_DevicesSeams_WiredViaInit(t *testing.T) {
 	// init() in devices.go must have swapped both sign-in seams.
 	m := &deviceMock{getByIdent: map[string]*pb.Device{}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	id, trusted, err := resolveSignInDevice(ctxWithDeviceHeaders("u1", "d1", "UA", "1.1.1.1"), h, "u1")
+	dev, err := resolveSignInDevice(ctxWithDeviceHeaders("u1", "d1", "UA", "1.1.1.1"), h, "u1")
+	id, trusted := dev.id, dev.trusted
 	if err != nil || id == "" {
 		t.Fatalf("resolveSignInDevice seam not wired: id=%q err=%v", id, err)
 	}
 	_ = trusted
-	if _, _, err := issueSession(context.Background(), h, "u1", "d1", true); err != nil {
+	if _, _, err := issueSession(context.Background(), h, "u1", "d1", neverRevoked); err != nil {
 		t.Fatalf("issueSession seam not wired: %v", err)
 	}
 	if len(m.issuedWith) == 0 {
@@ -437,7 +459,7 @@ func TestResolveDeviceIdentity_PrefersTheForwardedUserAgent(t *testing.T) {
 func TestIssueSessionWithDevice_BindsWithoutTrustingWhenNotAllowed(t *testing.T) {
 	m := &deviceMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	tok, trustToken, err := issueSessionWithDevice(context.Background(), h, "u1", "dev-7", false)
+	tok, trustToken, err := issueSessionWithDevice(context.Background(), h, "u1", "dev-7", nil)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -528,7 +550,8 @@ func TestResolveSignInDevice_TrustRevokedByACredentialChange_NotTrusted(t *testi
 			revokedErr: c.readErr,
 		}
 		h := &AuthServiceHandler{Query: m, Mutation: m}
-		id, trusted, err := resolveSignInDeviceImpl(ctxWithDeviceTrust("u1", "phone-1", tok), h, "u1")
+		dev, err := resolveSignInDeviceImpl(ctxWithDeviceTrust("u1", "phone-1", tok), h, "u1")
+		id, trusted := dev.id, dev.trusted
 		if err != nil {
 			t.Fatalf("%s: resolve: %v", c.name, err)
 		}
@@ -601,5 +624,66 @@ func TestListDevices_TrustRevokedByACredentialChange_NotShownTrusted(t *testing.
 	m.revokedErr = status.Error(codes.Unavailable, "db down")
 	if _, err := h.ListDevices(ctxWithDeviceHeaders("u1", "phone-1", "UA", "1.1.1.1"), &pb.ListDevicesReq{}); status.Code(err) != codes.Unavailable {
 		t.Errorf("an unreadable revocation must fail the list, got %v", err)
+	}
+}
+
+// A sign-in that read the revocation stamp, and then lost the race to a
+// password change or a disable that committed before its TrustDevice, must not
+// write trust stamped after that revocation: the statement is guarded by the
+// stamp the sign-in observed. It still gets its session, without a trust token.
+func TestSignIn_ARevocationCommittedMidSignInIsNotOverwritten(t *testing.T) {
+	saved := signInMfaGate
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+		return nil, false, nil // the device is trusted: no factor asked for
+	}
+	t.Cleanup(func() { signInMfaGate = saved })
+
+	hashed, err := testPasswordSettings().Hash("pw-long-enough")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustPlain, trustHash, err := newDeviceTrustToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := timestamppb.New(time.Now().Add(-2 * time.Hour))
+	for _, c := range []struct {
+		name      string
+		revokedAt *timestamppb.Timestamp // what the sign-in read
+		later     *timestamppb.Timestamp // what commits before its TrustDevice
+		wantCut   *timestamppb.Timestamp
+		renewed   bool
+	}{
+		{"no revocation in flight", seen, nil, seen, true},
+		{"never revoked, then revoked in flight", nil, timestamppb.Now(), neverRevoked, false},
+		{"revoked before, then again in flight", seen, timestamppb.Now(), seen, false},
+	} {
+		dm := &deviceMock{
+			getByIdent:   map[string]*pb.Device{devKey("u1", "d1"): {Id: "dev-1", Identifier: "d1", TrustedAt: timestamppb.New(time.Now().Add(-time.Hour)), TrustTokenHash: trustHash}},
+			revokedAt:    c.revokedAt,
+			revokedLater: c.later,
+		}
+		m := signInDeviceMock{deviceMock: dm, user: &pb.User{Id: "u1", Email: "a@b.c", PasswordHash: hashed}}
+		h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
+		resp, err := h.SignIn(ctxWithDeviceTrust("", "d1", trustPlain), &pb.SignInReq{Email: "a@b.c", Password: "pw-long-enough"})
+		if err != nil || resp.GetToken() == "" {
+			t.Fatalf("%s: the sign-in itself must succeed: %v", c.name, err)
+		}
+		if renewed := len(dm.trusted) == 1 && resp.GetDeviceTrustToken() != ""; renewed != c.renewed {
+			t.Errorf("%s: renewed = %v (TrustDevice %+v, trust token %q), want %v", c.name, renewed, dm.trusted, resp.GetDeviceTrustToken(), c.renewed)
+		}
+		if c.renewed && !proto.Equal(dm.trusted[0].GetNotRevokedAfter(), c.wantCut) {
+			t.Errorf("%s: cutoff = %v, want the stamp the sign-in read (%v)", c.name, dm.trusted[0].GetNotRevokedAfter(), c.wantCut)
+		}
+	}
+}
+
+// The guard lives in the statement, so a revocation that commits between the
+// handler's read and the write is seen by the write itself.
+func TestTrustDevice_TheStatementIsGuardedByTheRevocation(t *testing.T) {
+	body := mutationRPCBody(t, "TrustDevice")
+	if !strings.Contains(body, `"AND NOT EXISTS (SELECT u.id FROM @module.User u "`) ||
+		!strings.Contains(body, `"WHERE u.id = :user_id AND u.device_trust_revoked_at > :not_revoked_after) "`) {
+		t.Errorf("TrustDevice is not guarded by the account's device-trust revocation:\n%s", body)
 	}
 }

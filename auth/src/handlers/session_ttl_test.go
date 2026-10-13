@@ -66,7 +66,7 @@ func TestSessionTokenExpiry_DefaultWhenUnset(t *testing.T) {
 func TestIssueSession_StampsExpiry(t *testing.T) {
 	m := &ttlMutationMock{}
 	h := &AuthServiceHandler{Mutation: m, SessionTokenTTLSeconds: 3600}
-	if _, _, err := issueSession(context.Background(), h, "user-1", "", true); err != nil {
+	if _, _, err := issueSession(context.Background(), h, "user-1", "", nil); err != nil {
 		t.Fatalf("issueSession: %v", err)
 	}
 	if !m.called {

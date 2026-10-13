@@ -72,7 +72,11 @@ func TestSignIn_RejectsDisabledAccount(t *testing.T) {
 // ?feature(devices): the column exists only with that feature.
 func TestDisableUsers_RevokesDeviceTrustInTheSameStatement(t *testing.T) {
 	body := mutationRPCBody(t, "DisableUsers")
-	leg := body[strings.Index(body, `name: "disable"`):strings.Index(body, `name: "main"`)]
+	from, to := strings.Index(body, `name: "disable"`), strings.Index(body, `name: "main"`)
+	if from < 0 || to < from {
+		t.Fatalf("DisableUsers has no `disable` leg before its `main` one:\n%s", body)
+	}
+	leg := body[from:to]
 	if !strings.Contains(leg, `"?feature(devices) device_trust_revoked_at = NOW() "`) {
 		t.Errorf("DisableUsers' disable leg does not revoke device trust behind ?feature(devices):\n%s", body)
 	}
