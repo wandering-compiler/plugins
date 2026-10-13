@@ -14,7 +14,9 @@ codegen stages the sources into its service bundles.
 generated pb. It changes through pull requests only. A release is a tag on a
 commit of `main`, `<plugin>/v<version>`, signed (RELEASING.md). `w17ctl` renders
 the plugin into its installable form when it installs it. Releases cut before
-this live on the `releases` branch, rendered, and stay installable.
+this live on the `releases` branch, rendered, and stay installable. A release
+tagged on `main` carries its signature in the tag, which w17ctl v0.1.0-rc.73 and
+newer verify; an older w17ctl installs it as unsigned.
 
 A consumer installs a tag:
 
