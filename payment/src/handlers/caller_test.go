@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -187,4 +188,84 @@ func TestGetMySubscription_OnlyTheOwnersSubscription(t *testing.T) {
 	q.subscription.CustomerId = "cust-b"
 	_, err = h.GetMySubscription(asCaller("user-a"), &pb.GetMySubscriptionReq{Id: "sub-1"})
 	wantCode(t, err, codes.NotFound, "another customer's subscription")
+}
+
+// The four preset reads write nothing and reach no provider: a balance or a
+// meter is one lookup by the caller's key, a payment or a subscription the
+// caller's customer plus one lookup by id. The store's call log holds every
+// read and write the handler made, so anything more shows up as a method here.
+func TestGetMyReads_AreOneOrTwoLookupsAndWriteNothing(t *testing.T) {
+	r := newRig(t)
+	pay := r.charge("user-a", "5.00", "")
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: "g"}); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if _, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "api", Period: "2026-10", Quantity: 2, IdempotencyKey: "u"}); err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	r.store.mu.Lock()
+	sub := &pb.Subscription{Id: "sub-a", CustomerId: pay.GetCustomerId(), Status: pb.Subscription_ACTIVE}
+	r.store.subs[sub.Id] = sub
+	r.store.mu.Unlock()
+
+	reads := []struct {
+		name string
+		read func() error
+		want map[string]int
+	}{
+		{"GetMyCreditBalance", func() error {
+			_, err := r.h.GetMyCreditBalance(asCaller("user-a"), &pb.GetMyCreditBalanceReq{})
+			return err
+		}, map[string]int{"GetCreditBalance": 1}},
+		{"GetMyUsageMeter", func() error {
+			_, err := r.h.GetMyUsageMeter(asCaller("user-a"), &pb.GetMyUsageMeterReq{Meter: "api", Period: "2026-10"})
+			return err
+		}, map[string]int{"GetUsageMeter": 1}},
+		{"GetMyPayment", func() error {
+			_, err := r.h.GetMyPayment(asCaller("user-a"), &pb.GetMyPaymentReq{Id: pay.GetId()})
+			return err
+		}, map[string]int{"GetCustomerByUserId": 1, "GetPayment": 1}},
+		{"GetMySubscription", func() error {
+			_, err := r.h.GetMySubscription(asCaller("user-a"), &pb.GetMySubscriptionReq{Id: sub.GetId()})
+			return err
+		}, map[string]int{"GetCustomerByUserId": 1, "GetSubscription": 1}},
+		// A caller with nothing yet: still the same lookups, and no row made.
+		{"GetMyCreditBalance (no wallet)", func() error {
+			_, err := r.h.GetMyCreditBalance(asCaller("user-new"), &pb.GetMyCreditBalanceReq{})
+			return err
+		}, map[string]int{"GetCreditBalance": 1}},
+		{"GetMyUsageMeter (no meter)", func() error {
+			_, err := r.h.GetMyUsageMeter(asCaller("user-new"), &pb.GetMyUsageMeterReq{Meter: "api", Period: "2026-10"})
+			return err
+		}, map[string]int{"GetUsageMeter": 1}},
+	}
+	providerCalls := func() int {
+		r.stripe.mu.Lock()
+		defer r.stripe.mu.Unlock()
+		n := 0
+		for _, c := range r.stripe.requests {
+			n += c
+		}
+		return n
+	}
+	for _, c := range reads {
+		before := r.store.callsSince(nil)
+		provider := providerCalls()
+		emitted := len(r.store.emitted)
+		if err := c.read(); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := r.store.callsSince(before); fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Errorf("%s made store calls %v, want only %v", c.name, got, c.want)
+		}
+		if n := providerCalls() - provider; n != 0 {
+			t.Errorf("%s reached the provider %d time(s)", c.name, n)
+		}
+		if len(r.store.emitted) != emitted {
+			t.Errorf("%s emitted %v", c.name, r.store.emitted[emitted:])
+		}
+	}
+	if r.store.count("customers") != 1 {
+		t.Errorf("customers = %d: a read created one", r.store.count("customers"))
+	}
 }

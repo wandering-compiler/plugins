@@ -142,3 +142,40 @@ func TestFlow_Usage_CallerKeyShapedLikeAScopedKey_IsNotAMatch(t *testing.T) {
 		t.Errorf("total = %d, want 6 — a report under a key equal to another's stored scoped key was taken for a retry", v.GetTotal())
 	}
 }
+
+// Usage and the prepaid wallet share no table: a report, its retry and a
+// report for a wallet that holds nothing leave the balance and the credit
+// ledger as they were. A project that bills usage from credit spends it
+// itself.
+func TestFlow_ReportUsage_NeverSpendsCredit(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "10", IdempotencyKey: "g"}); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	ledger, applies := r.store.count("ledger"), r.store.callCount("ApplyCredit")
+	for _, rep := range []*pb.ReportUsageReq{
+		{UserId: "user-a", Meter: "api", Period: "2026-10", Quantity: 7, IdempotencyKey: "u1"},
+		{UserId: "user-a", Meter: "api", Period: "2026-10", Quantity: 7, IdempotencyKey: "u1"}, // the retry
+		{UserId: "user-a", Meter: "gpu", Period: "2026-10", Quantity: 100000, IdempotencyKey: "u2"},
+		{UserId: "user-b", Meter: "api", Period: "2026-10", Quantity: 1, IdempotencyKey: "u3"}, // no wallet at all
+	} {
+		if _, err := r.h.ReportUsage(bg, rep); err != nil {
+			t.Fatalf("ReportUsage(%s/%s): %v", rep.GetUserId(), rep.GetMeter(), err)
+		}
+	}
+	if got := r.store.balance(t, "user-a"); got != "10.0000" {
+		t.Errorf("balance of user-a = %s, want 10.0000: usage spent credit", got)
+	}
+	if got := r.store.balance(t, "user-b"); got != "0.0000" {
+		t.Errorf("balance of user-b = %s, want 0.0000", got)
+	}
+	if n := r.store.count("ledger"); n != ledger {
+		t.Errorf("credit ledger %d → %d rows", ledger, n)
+	}
+	if n := r.store.callCount("ApplyCredit"); n != applies {
+		t.Errorf("ApplyCredit called %d time(s) by ReportUsage", n-applies)
+	}
+	if n := r.store.events("CreditApplied"); n != 1 {
+		t.Errorf("CreditApplied emitted %d times, want 1 (the grant)", n)
+	}
+}
