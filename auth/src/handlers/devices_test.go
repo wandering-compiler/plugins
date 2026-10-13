@@ -84,6 +84,8 @@ func TestListDevices_MarksTrustedAndCurrent(t *testing.T) {
 	m := &deviceMock{listResult: []*pb.Device{
 		{Id: "dev-cur", Thumbprint: testJKT, Label: "Phone", TrustedAt: timestamppb.Now()},
 		{Id: "dev-other", Thumbprint: otherJKT, Label: "Laptop"},
+		// legacy: recorded before binding, no key — history, not listed
+		{Id: "dev-legacy", Label: "Old browser", TrustedAt: timestamppb.Now()},
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	resp, err := h.ListDevices(ctxOnDevice(t, "u1", "s1", testJKT), &pb.ListDevicesReq{})

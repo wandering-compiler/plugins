@@ -47,6 +47,13 @@ func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevice
 	current := callerDeviceThumbprint(ctx)
 	out := make([]*pb.DeviceInfo, 0, len(resp.GetDevices()))
 	for _, d := range resp.GetDevices() {
+		if d.GetThumbprint() == "" {
+			// A legacy device (recorded before binding) is history: nothing
+			// can sign in with it, so it is not a device to manage. The
+			// statement already leaves it out; this keeps it out of the list
+			// whatever the store answers.
+			continue
+		}
 		out = append(out, &pb.DeviceInfo{
 			Id:         d.GetId(),
 			Label:      d.GetLabel(),

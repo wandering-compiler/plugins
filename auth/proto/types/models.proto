@@ -379,8 +379,16 @@ message Device {
   string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
   // RFC 7638 JWK thumbprint of the device's public key: base64url (no
-  // padding) of a SHA-256, always 43 characters.
-  string thumbprint  = 10 [(w17.field) = { type: CHAR, max_len: 43 }];
+  // padding) of a SHA-256, always 43 characters. NULL only on a LEGACY row —
+  // a device recorded before device binding, named by a client-chosen id
+  // and never by a key. Such rows are kept as history (nothing in the auth
+  // tables is deleted) and can never be used: no key matches them, so
+  // RegisterDevice never finds one, a token bound to one resolves with no
+  // thumbprint and is refused, and ListUserDevices leaves them out. The
+  // unique (user_id, thumbprint) index does not make NULLs collide (the
+  // default NULLS DISTINCT of every supported dialect), so any number of
+  // legacy rows coexist while live keys stay unique per user.
+  string thumbprint  = 10 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
   string label       = 4 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // UA-derived friendly name
   // IP-as-string (CHAR, not INET): the request may carry no client IP
   // (absent X-Forwarded-For), and an empty string is a valid CHAR but not a

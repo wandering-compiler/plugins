@@ -130,9 +130,10 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 		return signInDevice{}, err
 	}
 	dev := resp.GetDevice()
-	if dev.GetId() == "" {
-		// An UPSERT with RETURNING always answers a row; none is a store that
-		// did not do what was asked, and no token is bound to nothing.
+	if dev.GetId() == "" || dev.GetThumbprint() != thumbprint {
+		// An UPSERT with RETURNING always answers the row of this key; none,
+		// or a row of no key (a legacy device recorded before binding), is a
+		// store that did not do what was asked, and no token is bound to it.
 		return signInDevice{}, errDeviceNotRegistered
 	}
 	if dev.GetRevokedAt() != nil {

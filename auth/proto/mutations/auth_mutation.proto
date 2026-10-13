@@ -2096,9 +2096,12 @@ service AuthMutation {
   // statement, and say what it is: a mint binds its token to the returned
   // id, refuses a row with revoked_at set (DEVICE_REVOKED, for good), and
   // reads trusted_at for the new-device second factor. On a conflict the
-  // row's last_seen_at / label / ip are refreshed — on a revoked row too,
-  // where it records the last refused attempt with that key. No create-
-  // then-re-read race: the unique (user_id, thumbprint) index decides.
+  // row's last_seen_at / label / ip are refreshed — on a revoked row too, on
+  // purpose: a refused attempt from a revoked device is still recorded as
+  // seen (it never clears revoked_at). No create-then-re-read race: the
+  // unique (user_id, thumbprint) index decides. :thumbprint is never NULL
+  // (the request requires it), so a legacy row (NULL thumbprint) is never
+  // the conflict target.
   rpc RegisterDevice(RegisterDeviceReq) returns (RegisterDeviceResp) {
     option (w17.db.method) = {
       ops: {

@@ -2030,7 +2030,9 @@ service AuthQuery {
   }
 
   // ListUserDevices — the caller's live devices (management view), newest
-  // first; a revoked device is history, not a device to manage. The handler
+  // first; a revoked device, and a legacy one recorded before device binding
+  // (no thumbprint), is history, not a device to manage — both stay in the
+  // table, queryable. The handler
   // maps each row to DeviceInfo, deriving `trusted` (trusted_at later than
   // the account's trust revocation) + `current` (thumbprint matches the
   // device the caller's token is bound to). Gated devices.
@@ -2048,6 +2050,7 @@ service AuthQuery {
           "       d.last_seen_at AS last_seen_at, "
           "       d.created_at AS created_at "
           "FROM @module.Device d WHERE d.user_id = :user_id AND d.revoked_at IS NULL "
+          "AND d.thumbprint IS NOT NULL "
           "ORDER BY d.last_seen_at DESC"
       }
     };

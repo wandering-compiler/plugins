@@ -279,6 +279,12 @@ func TestMintDevice_AStoreThatAnswersNoRowBindsNothing(t *testing.T) {
 	if _, err := mintDevice(mintCtx(), h, "u1", testJKT); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("err = %v, want errDeviceNotRegistered", err)
 	}
+	// A legacy row (recorded before binding, no key) is never a device to
+	// bind to, whatever the store answers.
+	m.answer = &pb.Device{Id: "legacy-1", UserId: "u1"}
+	if _, err := mintDevice(mintCtx(), h, "u1", testJKT); !errors.Is(err, errDeviceNotRegistered) {
+		t.Fatalf("a legacy row: err = %v, want errDeviceNotRegistered", err)
+	}
 	if _, err := h.issueBoundToken(mintCtx(), "u1", "", h.sessionTokenExpiry()); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("an unbound mint: err = %v, want errDeviceNotRegistered", err)
 	}
@@ -287,10 +293,11 @@ func TestMintDevice_AStoreThatAnswersNoRowBindsNothing(t *testing.T) {
 type emptyRegisterStore struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
+	answer *pb.Device
 }
 
-func (emptyRegisterStore) RegisterDevice(context.Context, *pb.RegisterDeviceReq, ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
-	return &pb.RegisterDeviceResp{}, nil
+func (s *emptyRegisterStore) RegisterDevice(context.Context, *pb.RegisterDeviceReq, ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return &pb.RegisterDeviceResp{Device: s.answer}, nil
 }
 
 // Trust granted before the account's last revocation (a password change or a
@@ -845,5 +852,25 @@ func TestTruncate_CutsOnARuneBoundary(t *testing.T) {
 	}
 	if got := truncate("203.0.113.7, 10.0.0.1", 45); got != "203.0.113.7, 10.0.0.1" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// Nothing is deleted from the auth tables: devices recorded before binding
+// (no key) stay as history. The thumbprint is nullable for them, the unique
+// (user_id, thumbprint) index lets NULLs coexist (NULLS DISTINCT), and the
+// management list leaves them out while they stay queryable.
+func TestLegacyDevices_StayAsHistoryAndOutOfTheActiveList(t *testing.T) {
+	raw, err := os.ReadFile("../../proto/types/models.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `string thumbprint  = 10 [(w17.field) = { type: CHAR, max_len: 43, null: true }];`) {
+		t.Error("Device.thumbprint must be nullable, so legacy rows survive the migration")
+	}
+	if body := queryRPCBody(t, "ListUserDevices"); !strings.Contains(body, `"AND d.thumbprint IS NOT NULL "`) {
+		t.Errorf("ListUserDevices lists legacy devices:\n%s", body)
+	}
+	if body := mutationRPCBody(t, "RegisterDevice"); !strings.Contains(body, `"thumbprint = :thumbprint, "`) {
+		t.Errorf("RegisterDevice does not write the key:\n%s", body)
 	}
 }
