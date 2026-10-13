@@ -96,3 +96,25 @@ func TestRegisterPlugin_WiresHandlerAndShutdown(t *testing.T) {
 		t.Errorf("shutdown hook returned err: %v", err)
 	}
 }
+
+// An unknown password_hash_algo fails the boot. Falling back to a default
+// would store hashes under an algorithm the operator did not choose, and a
+// typo in the setting would go unnoticed until the next change of it. Every
+// supported spelling boots.
+func TestRegisterPlugin_UnknownPasswordHashAlgoFailsBoot(t *testing.T) {
+	for _, algo := range []string{"md5", "sha256", "Argon2id", "argon2"} {
+		reg := &fakeRegistry{}
+		err := auth.RegisterPlugin(&gen.EnvConfig{PasswordHashAlgo: algo}, reg, fakeClientSet{query: noopQuery{}, mutation: noopMutation{}})
+		if err == nil {
+			t.Errorf("password_hash_algo=%q booted", algo)
+		}
+		if reg.auth != nil {
+			t.Errorf("password_hash_algo=%q registered a handler before failing", algo)
+		}
+	}
+	for _, algo := range []string{"", "argon2id", "bcrypt", "scrypt", "pbkdf2", "pbkdf2-sha256"} {
+		if err := auth.RegisterPlugin(&gen.EnvConfig{PasswordHashAlgo: algo}, &fakeRegistry{}, fakeClientSet{query: noopQuery{}, mutation: noopMutation{}}); err != nil {
+			t.Errorf("password_hash_algo=%q refused: %v", algo, err)
+		}
+	}
+}

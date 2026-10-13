@@ -43,6 +43,8 @@ type deviceMock struct {
 	// a revocation that commits AFTER the sign-in read revokedAt: the value
 	// TrustDevice's guard sees (nil = none)
 	revokedLater *timestamppb.Timestamp
+	// trustErr fails TrustDevice the way an unavailable store does
+	trustErr error
 }
 
 func (m *deviceMock) GetDeviceTrustRevokedAt(ctx context.Context, in *pb.GetDeviceTrustRevokedAtReq, _ ...grpc.CallOption) (*pb.GetDeviceTrustRevokedAtResp, error) {
@@ -81,6 +83,9 @@ func (m *deviceMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...
 // (NotFound, nothing written). A NULL on either side compares unknown, which
 // lets the write through — so a request carrying no cutoff is NOT guarded.
 func (m *deviceMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...grpc.CallOption) (*pb.TrustDeviceResp, error) {
+	if m.trustErr != nil {
+		return nil, m.trustErr
+	}
 	current := m.revokedAt
 	if m.revokedLater != nil {
 		current = m.revokedLater
@@ -685,5 +690,42 @@ func TestTrustDevice_TheStatementIsGuardedByTheRevocation(t *testing.T) {
 	if !strings.Contains(body, `"AND NOT EXISTS (SELECT u.id FROM @module.User u "`) ||
 		!strings.Contains(body, `"WHERE u.id = :user_id AND u.device_trust_revoked_at > :not_revoked_after) "`) {
 		t.Errorf("TrustDevice is not guarded by the account's device-trust revocation:\n%s", body)
+	}
+}
+
+// Trust is best effort. A store that fails to record the trust token must not
+// fail the sign-in the session was already issued for: the person gets the
+// session, no trust token, and the device is challenged again next time — the
+// safe side.
+func TestSignIn_AFailedTrustWriteStillSignsIn(t *testing.T) {
+	saved := signInMfaGate
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+		return nil, false, nil // the device is trusted: no factor asked for
+	}
+	t.Cleanup(func() { signInMfaGate = saved })
+
+	hashed, err := testPasswordSettings().Hash("pw-long-enough")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustPlain, trustHash, err := newDeviceTrustToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dm := &deviceMock{
+		getByIdent: map[string]*pb.Device{devKey("u1", "d1"): {Id: "dev-1", Identifier: "d1", TrustedAt: timestamppb.Now(), TrustTokenHash: trustHash}},
+		trustErr:   status.Error(codes.Unavailable, "db down"),
+	}
+	m := signInDeviceMock{deviceMock: dm, user: &pb.User{Id: "u1", Email: "a@b.c", PasswordHash: hashed}}
+	h := &AuthServiceHandler{Query: m, Mutation: m, PasswordHash: testPasswordSettings()}
+	resp, err := h.SignIn(ctxWithDeviceTrust("", "d1", trustPlain), &pb.SignInReq{Email: "a@b.c", Password: "pw-long-enough"})
+	if err != nil {
+		t.Fatalf("a failed trust write failed the sign-in: %v", err)
+	}
+	if resp.GetToken() == "" || len(dm.issuedWith) != 1 || dm.issuedWith[0].GetTokenHash() != sha256Hex(resp.GetToken()) {
+		t.Fatalf("no session issued: %+v (IssueToken %+v)", resp, dm.issuedWith)
+	}
+	if resp.GetDeviceTrustToken() != "" {
+		t.Errorf("a trust token %q was handed out that the store never recorded", resp.GetDeviceTrustToken())
 	}
 }
