@@ -83,7 +83,7 @@ func TestReserveTask_AFullQueueFallsThroughThenNoRelay(t *testing.T) {
 			return dialB(target, fp)
 		},
 	}
-	if _, err := a.Reserve(); err != nil { // a's one place is taken
+	if _, err := a.Reserve(""); err != nil { // a's one place is taken
 		t.Fatal(err)
 	}
 	// Whichever relay the rotation tries first, the place lands on b.

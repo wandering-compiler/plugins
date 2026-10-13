@@ -1,0 +1,7 @@
+### The relay enforces whom a reservation belongs to
+
+The relay that holds a reservation records whom it was made for, so a reservation handle that leaks is useless to whoever finds it, even if they rewrite any part of it.
+
+- **The relay records the owner.** The control plane sends a hash of the reserving caller on every reservation call. The relay keeps it with the reservation and answers a poll or cancel under any other owner exactly like an id it never issued: `expired` (`RESERVATION_UNKNOWN`), or a cancel that succeeds and leaves the place. A stranger's poll neither keeps the reservation alive nor starts its claim window. The hash is a stable pseudonym per user, not a secret: it keeps user ids out of relay memory, not out of reach of the operator who runs the relays.
+- **Upgrade the relays together with the control plane.** A control plane at this version refuses a relay that does not confirm the binding: it gives that relay's place back and tries the next. If no relay takes the reservation, `ReserveTask` answers `NO_RELAY` and names every relay that must be upgraded. `ScheduleTask` is not affected. A relay at this version still serves an older control plane, unbound as before.
+- **Handles in flight across the upgrade do not survive it.** Reservations live in relay memory and last seconds without a poll, so a relay restart drops them anyway. A client polling across the deploy sees `expired` and reserves again.

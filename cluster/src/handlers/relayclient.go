@@ -50,19 +50,19 @@ func (c relayClient) IssueRegistrationCode(ctx context.Context, in *pb.IssueRegi
 	return out, c.cc.Invoke(ctx, relayService+"IssueRegistrationCode", in, out)
 }
 
-func (c relayClient) ReserveTask(ctx context.Context, in *pb.ReserveTaskReq) (*pb.ReservationState, error) {
+func (c relayClient) ReserveTask(ctx context.Context, in *pb.ReserveTaskReq, opts ...grpc.CallOption) (*pb.ReservationState, error) {
 	out := new(pb.ReservationState)
-	return out, c.cc.Invoke(ctx, relayService+"ReserveTask", in, out)
+	return out, c.cc.Invoke(ctx, relayService+"ReserveTask", in, out, opts...)
 }
 
-func (c relayClient) GetReservation(ctx context.Context, in *pb.GetReservationReq) (*pb.ReservationState, error) {
+func (c relayClient) GetReservation(ctx context.Context, in *pb.GetReservationReq, opts ...grpc.CallOption) (*pb.ReservationState, error) {
 	out := new(pb.ReservationState)
-	return out, c.cc.Invoke(ctx, relayService+"GetReservation", in, out)
+	return out, c.cc.Invoke(ctx, relayService+"GetReservation", in, out, opts...)
 }
 
-func (c relayClient) CancelReservation(ctx context.Context, in *pb.CancelReservationReq) (*pb.CancelReservationResp, error) {
+func (c relayClient) CancelReservation(ctx context.Context, in *pb.CancelReservationReq, opts ...grpc.CallOption) (*pb.CancelReservationResp, error) {
 	out := new(pb.CancelReservationResp)
-	return out, c.cc.Invoke(ctx, relayService+"CancelReservation", in, out)
+	return out, c.cc.Invoke(ctx, relayService+"CancelReservation", in, out, opts...)
 }
 
 func (c relayClient) ScheduleTask(ctx context.Context, in *pb.ScheduleTaskReq) (grpc.ServerStreamingClient[pb.ScheduleTaskEvent], error) {

@@ -163,7 +163,11 @@ message GetReservationReq {
   // (`x-w17-user`, user id at field 2), or — for a handle reserved with no
   // principal, as the project's own code — only from a call with none.
   // Anyone else reads it as expired (RESERVATION_UNKNOWN), and cancelling it
-  // succeeds without touching the place.
+  // succeeds without touching the place. The relay holding the place records
+  // whom it was reserved for and checks that on every poll and cancel, so
+  // rewriting any part of a leaked handle does not get around it. An
+  // `x-w17-user` that cannot be read, or that names no user, is refused
+  // (UNAUTHENTICATED).
   //
   // So poll from the identity you reserved under. Project code that reserves
   // while serving a user's request carries that user's principal, and a job
@@ -184,10 +188,11 @@ message ReservationState {
   //
   // From the PROJECT it is `<relay_id>.<relay_reservation_id>.<holder_tag>`:
   // it names the relay holding the place, so a poll reaching any console
-  // replica is routed without that replica remembering anything, and the tag
-  // binds it to the caller that reserved (see GetReservationReq). From a RELAY
-  // it is the bare reservation id — a relay has never been told its registry
-  // id.
+  // replica is routed without that replica remembering anything. It is bound
+  // to the caller that reserved (see GetReservationReq); the tag lets the
+  // project turn away another caller's poll without asking the relay. From a
+  // RELAY it is the bare reservation id — a relay has never been told its
+  // registry id.
   string reservation = 1 [(w17.field) = { type: SECRET, max_len: 160 }];
 
   oneof state {

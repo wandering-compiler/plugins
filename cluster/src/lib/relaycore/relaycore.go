@@ -24,6 +24,7 @@ package relaycore
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -70,6 +71,11 @@ var (
 // reservation is one place in the queue, and later the slot it was granted.
 type reservation struct {
 	id string
+
+	// owner is whom Reserve took the place for. A poll or cancel naming any
+	// other owner is answered as if the id were unknown (see Poll). Empty for a
+	// Wait, whose id is never handed out.
+	owner string
 
 	// changed is poked (never blocking) whenever this reservation's state
 	// moves: a new position, a grant, an eviction. Only Wait listens.
@@ -219,9 +225,10 @@ func randomID() string {
 // is room, queued with a position otherwise. The holder learns what happens
 // next by polling, and keeps the place only by polling.
 //
-// A reservation ID is a bearer credential like a ticket: it is 32 random
-// bytes, and whoever holds it can collect the grant.
-func (p *Pool) Reserve() (Reservation, error) {
+// A reservation ID is 32 random bytes, and it is bound to owner: only a Poll
+// or Cancel naming the same owner reaches it. The id alone is not enough to
+// collect the grant, so one that leaked is not a credential on its own.
+func (p *Pool) Reserve(owner string) (Reservation, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.draining {
@@ -231,6 +238,7 @@ func (p *Pool) Reserve() (Reservation, error) {
 	if err != nil {
 		return Reservation{}, err
 	}
+	r.owner = owner
 	r.abandon = time.AfterFunc(p.pollTimeout, func() { p.abandonReservation(r) })
 	st, err := p.pollLocked(r)
 	return Reservation{ID: r.id, State: st}, err
@@ -250,14 +258,27 @@ func (p *Pool) Reserve() (Reservation, error) {
 //
 // A repeated poll after that returns the SAME grant, so a client whose first
 // answer was lost in transit does not lose its slot to it.
-func (p *Pool) Poll(id string) (State, error) {
+//
+// A poll naming another owner than the one Reserve recorded is
+// ErrNoSuchReservation, exactly like an id never issued, and changes nothing:
+// it neither keeps the reservation alive nor starts the claim window.
+func (p *Pool) Poll(id, owner string) (State, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	r, ok := p.reservations[id]
+	r, ok := p.ownedLocked(id, owner)
 	if !ok {
 		return State{}, ErrNoSuchReservation
 	}
 	return p.pollLocked(r)
+}
+
+// ownedLocked finds a reservation by id, only for its owner.
+func (p *Pool) ownedLocked(id, owner string) (*reservation, bool) {
+	r, ok := p.reservations[id]
+	if !ok || subtle.ConstantTimeCompare([]byte(r.owner), []byte(owner)) != 1 {
+		return nil, false
+	}
+	return r, true
 }
 
 func (p *Pool) pollLocked(r *reservation) (State, error) {
@@ -289,11 +310,12 @@ func (p *Pool) pollLocked(r *reservation) (State, error) {
 
 // Cancel gives a reservation up: its queue place, or the slot it was granted
 // if the ticket has not been redeemed. Idempotent, and silent about ids it
-// does not know — the outcome the caller wants is already true.
-func (p *Pool) Cancel(id string) {
+// does not know — the outcome the caller wants is already true. An id owned
+// by someone else is one it does not know: nothing is cancelled.
+func (p *Pool) Cancel(id, owner string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if r, ok := p.reservations[id]; ok {
+	if r, ok := p.ownedLocked(id, owner); ok {
 		p.retireLocked(r)
 	}
 }
@@ -332,7 +354,7 @@ func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, err
 	}
 	reported := 0
 	for {
-		st, err := p.Poll(r.id)
+		st, err := p.Poll(r.id, r.owner)
 		switch {
 		case err != nil:
 			return Grant{}, err
@@ -345,7 +367,7 @@ func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, err
 			// position that stopped being true seconds later.
 			reported = st.Position
 			if err := onPosition(st.Position); err != nil {
-				p.Cancel(r.id)
+				p.Cancel(r.id, r.owner)
 				return Grant{}, err
 			}
 		}
@@ -356,7 +378,7 @@ func (p *Pool) Wait(ctx context.Context, onPosition func(int) error) (Grant, err
 			// whole reason the queue is held by a live connection and not by a
 			// row with a timeout somebody has to sweep. A grant that crossed
 			// the cancellation goes back too.
-			p.Cancel(r.id)
+			p.Cancel(r.id, r.owner)
 			return Grant{}, ctx.Err()
 		}
 	}

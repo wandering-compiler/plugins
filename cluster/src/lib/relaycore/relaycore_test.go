@@ -366,22 +366,22 @@ func TestReserve_TheQueueIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.SetCapacity(1)
-	if _, err := p.Reserve(); err != nil { // takes the slot, never queues
+	if _, err := p.Reserve(me); err != nil { // takes the slot, never queues
 		t.Fatal(err)
 	}
 	var waiting []Reservation
 	for i := 0; i < 2; i++ {
-		r, err := p.Reserve()
+		r, err := p.Reserve(me)
 		if err != nil {
 			t.Fatalf("waiter %d: %v", i, err)
 		}
 		waiting = append(waiting, r)
 	}
-	if _, err := p.Reserve(); !errors.Is(err, ErrQueueFull) {
+	if _, err := p.Reserve(me); !errors.Is(err, ErrQueueFull) {
 		t.Fatalf("third waiter: err = %v, want ErrQueueFull", err)
 	}
-	p.Cancel(waiting[0].ID)
-	if _, err := p.Reserve(); err != nil {
+	p.Cancel(waiting[0].ID, me)
+	if _, err := p.Reserve(me); err != nil {
 		t.Errorf("after a waiter left: %v, want a place", err)
 	}
 }
@@ -401,7 +401,7 @@ func TestWait_TheQueueIsBoundedAndAGrantFreesAPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := p.Reserve() // capacity 0: queued
+	r, err := p.Reserve(me) // capacity 0: queued
 	if err != nil || r.Position != 1 {
 		t.Fatalf("reserve = %+v, %v; want queued at 1", r, err)
 	}
@@ -409,13 +409,13 @@ func TestWait_TheQueueIsBoundedAndAGrantFreesAPlace(t *testing.T) {
 		t.Fatalf("Wait on a full queue: err = %v, want ErrQueueFull", err)
 	}
 	p.SetCapacity(1) // promotes the reservation
-	if st, err := p.Poll(r.ID); err != nil || st.Grant == nil {
+	if st, err := p.Poll(r.ID, me); err != nil || st.Grant == nil {
 		t.Fatalf("poll = %+v, %v; want the grant", st, err)
 	}
 	if got := p.Stats().Queued; got != 0 {
 		t.Fatalf("Queued = %d after the promotion, want 0", got)
 	}
-	if _, err := p.Reserve(); err != nil {
+	if _, err := p.Reserve(me); err != nil {
 		t.Errorf("after the only waiter was granted: %v, want a place", err)
 	}
 }

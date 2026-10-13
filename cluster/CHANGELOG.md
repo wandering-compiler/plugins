@@ -4,9 +4,11 @@
 
 ### A reservation handle works only for the caller it was handed to
 
-A reservation handle was an unguessable credential, but anyone holding it, for example one that leaked through a log or a client, could poll the reservation, collect its grant or cancel the place.
+A reservation handle was an unguessable credential, but anyone holding it, for example one that leaked through a log or a client, could poll the reservation, collect its grant or cancel the place. Now only the caller that reserved can.
 
-- **The handle gains a third part:** a hash of the signed-in caller (read from the gateway envelope, field 2) and the rest of the handle. The control plane still stores nothing. It recomputes the hash on every call. A call whose envelope is present but unreadable is refused (`Unauthenticated`) instead of being treated as a call with no principal.
+- **Who the caller is:** the signed-in user (read from the gateway envelope, field 2), or, for a call with no envelope, the project's own code. The two never mix: a handle reserved by project code works only for calls with no principal, and one reserved by a user only for that user. An envelope that is present but unreadable, or names no user, is refused (`Unauthenticated`) instead of being treated as a call with no principal.
+- **The relay holding the place enforces it** (see "The relay enforces whom a reservation belongs to"). The control plane still stores nothing.
+- **The handle gains a third part:** a tag computed from the caller and the rest of the handle, which lets the control plane turn away another caller's handle without contacting the relay. The tag is not what keeps a leaked handle from working; the relay's check is.
 - **Poll from the identity you reserved under.** Project code that reserves while serving a user's request carries that user's principal, so a job that later polls without it sees the place as gone. Reserve from a context without the user's principal when something else will poll.
 - **Another caller's handle answers like a reservation the relay forgot.** A poll reads it as expired (`RESERVATION_UNKNOWN`), and a cancel succeeds without touching the place, so the answer does not confirm the handle was real.
 - **Handles minted by an earlier version** (two parts) are refused as malformed. Reservations are short-lived, so one in flight across the upgrade has to be made again.
