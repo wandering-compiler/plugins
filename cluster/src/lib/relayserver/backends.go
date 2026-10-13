@@ -518,6 +518,19 @@ func (b *Backends) Count() int {
 	return len(b.conns)
 }
 
+// Retiring reports how many tunnels take no new work but still carry calls:
+// replaced by a newer tunnel from the same worker, or past their
+// certificate's expiry. For an operator reading a screen, and for tests.
+func (b *Backends) Retiring() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, list := range b.retired {
+		n += len(list)
+	}
+	return n
+}
+
 // Capacity is what the attached, ready workers add up to.
 func (b *Backends) Capacity() int {
 	b.mu.Lock()

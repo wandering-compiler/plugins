@@ -69,6 +69,7 @@ type rig struct {
 	relayFP    string
 	ca         *identity.CA
 	workerDir  string
+	workerCtx  context.Context
 }
 
 // rigOptions bend standUp for the tests that need a different wire.
@@ -191,7 +192,7 @@ func standUpWith(t *testing.T, o rigOptions) *rig {
 	return &rig{pool: pool, workers: workers, backends: backends,
 		proxyAddr: proxyLis.Addr().String(), work: work,
 		workerFP: workerFP, stopWorker: cancel,
-		tunnelAddr: tunLis.Addr().String(), relayFP: relayID.Fingerprint, ca: ca, workerDir: workerDir}
+		tunnelAddr: tunLis.Addr().String(), relayFP: relayID.Fingerprint, ca: ca, workerDir: workerDir, workerCtx: ctx}
 }
 
 func callThroughProxy(t *testing.T, r *rig, ticket string) (*pb.CheckWorkersResp, error) {
@@ -469,17 +470,17 @@ func TestTunnel_ARenewedWorkerKeepsServingAcrossTheOldExpiry(t *testing.T) {
 	}
 }
 
-// ServeTunnel owns the tunnels a renewal retired. When its current tunnel
-// drops while an older one is still finishing a call, it returns only once
-// that call is done and the relay has closed the old tunnel, instead of
-// returning at once and leaving the old server running unowned.
-func TestServeTunnel_WaitsForItsRetiredTunnelsWork(t *testing.T) {
+// When the current tunnel drops while a tunnel retired by a renewal is still
+// finishing a call, ServeTunnel returns at once so the worker redials, and the
+// retired tunnel goes on serving its call until the relay closes it. The
+// worker is back in the capacity while the old call is still running.
+func TestServeTunnel_ADroppedTunnelIsRedialledWhileARetiredOneFinishes(t *testing.T) {
 	work := &fakeWork{hold: make(chan struct{})}
-	var bh *forwarder
+	var fw *forwarder
 	done := make(chan error, 1)
 	r := standUpWith(t, rigOptions{
 		retry: 20 * time.Millisecond, grace: time.Minute, work: work, tunnelDone: done,
-		via: func(addr string) string { bh = newForwarder(t, addr); return bh.addr() },
+		via: func(addr string) string { fw = newForwarder(t, addr); return fw.addr() },
 	})
 	grant, err := r.pool.Wait(t.Context(), nil)
 	if err != nil {
@@ -491,33 +492,34 @@ func TestServeTunnel_WaitsForItsRetiredTunnelsWork(t *testing.T) {
 		_, err := client.CheckWorkers(ctx, &pb.CheckWorkersReq{})
 		running <- err
 	}()
-	for deadline := time.Now().Add(5 * time.Second); r.pool.Stats().InUse == 0; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the call never started")
-		}
-	}
+	waitFor(t, "the call to start", func() bool { return r.pool.Stats().InUse == 1 })
 
 	reissue(t, r.ca, r.workerDir, time.Hour)
-	tunnels := func() int {
-		bh.mu.Lock()
-		defer bh.mu.Unlock()
-		return len(bh.conns) / 2
-	}
-	for deadline := time.Now().Add(5 * time.Second); tunnels() < 2; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the worker never opened a tunnel with its renewed certificate")
-		}
-	}
-	bh.mu.Lock()
-	_ = bh.conns[2].Close() // the current tunnel drops
-	_ = bh.conns[3].Close()
-	bh.mu.Unlock()
+	// The relay has the renewal's tunnel as current and the first one retired.
+	waitFor(t, "the relay to retire the first tunnel", func() bool { return r.backends.Retiring() == 1 })
+	fw.cut(1) // the current tunnel drops
 
 	select {
-	case err := <-done:
-		t.Fatalf("ServeTunnel returned (%v) with its retired tunnel still running a call", err)
-	case <-time.After(300 * time.Millisecond):
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeTunnel did not return when its current tunnel dropped")
 	}
+	waitFor(t, "the dropped tunnel to leave", func() bool { return r.backends.Count() == 0 })
+
+	// The worker's loop dials again at once.
+	again := make(chan error, 1)
+	go func() {
+		again <- ServeTunnel(r.workerCtx, Config{
+			TunnelAddress: fw.addr(), RelayFingerprint: r.relayFP, IdentityDir: r.workerDir,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) })
+	}()
+	waitFor(t, "a new tunnel while the old call runs", func() bool { return r.backends.Capacity() == 2 })
+	select {
+	case err := <-running:
+		t.Fatalf("the call on the retired tunnel ended early: %v", err)
+	default:
+	}
+
 	close(work.hold)
 	select {
 	case err := <-running:
@@ -527,10 +529,15 @@ func TestServeTunnel_WaitsForItsRetiredTunnelsWork(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the call on the retired tunnel never returned")
 	}
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("ServeTunnel did not return once its retired tunnel's work was done")
+	waitFor(t, "the retired tunnel to close with its call", func() bool { return r.backends.Retiring() == 0 })
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
 	}
 }
 
@@ -580,6 +587,14 @@ func newForwarder(t *testing.T, target string) *forwarder {
 }
 
 func (f *forwarder) addr() string { return f.lis.Addr().String() }
+
+// cut closes the i-th tunnel's sockets (in the order they were accepted).
+func (f *forwarder) cut(i int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_ = f.conns[2*i].Close()
+	_ = f.conns[2*i+1].Close()
+}
 
 func (f *forwarder) pipe(dst, src net.Conn) {
 	_, _ = io.Copy(dst, src)

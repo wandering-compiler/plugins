@@ -27,8 +27,10 @@ import (
 // `register` is called once per tunnel.
 //
 // It returns when ctx ends (stopping every tunnel it serves gracefully), or
-// when the CURRENT connection drops and every retired tunnel has finished; a
-// worker loops on it with a backoff, dialling a fresh tunnel each time.
+// as soon as the CURRENT connection drops; a worker loops on it with a
+// backoff, dialling a fresh tunnel each time. A tunnel a renewal retired is
+// not waited for: it keeps serving its running calls until the relay closes
+// it, or until ctx ends.
 //
 // A tunnel carries the certificate it was opened with, and the relay retires
 // it when that certificate expires. So when the certificate on disk is
@@ -57,48 +59,44 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 	if err != nil {
 		return err
 	}
-	// The retired tunnels are this call's for as long as it runs: finished
-	// ones are dropped, and none outlives the return.
+	// A retired tunnel is tied to ctx, the worker's lifetime, and not to this
+	// call: when the current tunnel drops, this returns at once so the caller
+	// redials, while the retired one goes on finishing its calls until the
+	// relay closes it. ctx ending stops it gracefully.
 	var retired []*servedTunnel
-	prune := func() {
-		live := retired[:0]
-		for _, t := range retired {
-			if !t.finished() {
-				live = append(live, t)
+	retire := func(t *servedTunnel) {
+		retired = append(retired, t)
+		go func() {
+			select {
+			case <-ctx.Done():
+				// GracefulStop, not Stop: work already running on the
+				// tunnel is somebody's job, and the relay has no way to
+				// re-place it.
+				t.srv.GracefulStop()
+			case <-t.ended:
 			}
-		}
-		retired = live
-	}
-	stop := func(ts []*servedTunnel) {
-		// GracefulStop, not Stop: work already running on these tunnels is
-		// somebody's job, and the relay has no way to re-place it.
-		for _, t := range ts {
-			t.srv.GracefulStop()
-		}
+		}()
 	}
 	tick := time.NewTicker(cfg.retry())
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			stop(append(retired, cur))
+			cur.srv.GracefulStop()
+			for _, t := range retired {
+				<-t.ended // stopped gracefully by its own watcher
+			}
 			return ctx.Err()
 		case <-cur.ended:
-			// The current tunnel is gone. A retired one is still finishing
-			// calls the relay will close it after; wait for them, or for
-			// ctx, rather than return and leave them unowned.
-			for _, t := range retired {
-				select {
-				case <-t.ended:
-				case <-ctx.Done():
-					prune()
-					stop(retired)
-					return ctx.Err()
-				}
-			}
 			return cur.err
 		case <-tick.C:
-			prune()
+			live := retired[:0]
+			for _, t := range retired {
+				if !t.finished() {
+					live = append(live, t)
+				}
+			}
+			retired = live
 			leaf, err := certificateUsable(cfg)
 			if err != nil || bytes.Equal(leaf.Raw, cur.certRaw) {
 				continue
@@ -107,7 +105,7 @@ func ServeTunnel(ctx context.Context, cfg Config, register func(*grpc.Server), o
 			if err != nil {
 				continue // keep the old tunnel; try again on the next tick
 			}
-			retired = append(retired, cur)
+			retire(cur)
 			cur = next
 		}
 	}
