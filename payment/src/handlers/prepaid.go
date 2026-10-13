@@ -389,8 +389,11 @@ func (h *PaymentServiceHandler) settleTopup(ctx context.Context, payment *pb.Pay
 			return nil
 		}
 		userID := topup.GetUserId()
-		// The step first: everything read after it is at least as new as the
-		// step before it.
+		// The step before the target and the ledger: those reads are at
+		// least as new as the step before it. The top-up's owed amount was
+		// read above, before the step, so under contention it can be one
+		// step stale; the worst case is one extra zero-delta ledger row,
+		// which the next pass absorbs.
 		step, err := h.nextTopupStep(ctx, userID, pid, topup.GetReconciledStep())
 		if err != nil {
 			return err
