@@ -132,6 +132,17 @@ message UpgradeTokenHashReq {
   string token_hash   = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
 }
 message UpgradeTokenHashResp {}
+
+// TouchTokenLastUsed stamps last_used_at on a token Authenticate just
+// accepted, unless it was stamped after :cutoff. See the rpc.
+message TouchTokenLastUsedReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string                    token_id = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp cutoff   = 2 [(w17.field) = { type: DATETIME }];
+}
+message TouchTokenLastUsedResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+}
 // DeleteToken returns the deleted row's identifiers for the
 // caller's response. Consumers that don't need the IDs ignore the
 // response (or pin a `_ = resp` discard). (TokenRevoked is emitted
@@ -1383,8 +1394,27 @@ service AuthMutation {
   // app-side via the CRYPTO_RANDOM default — request
   // doesn't carry the token value; codegen preamble generates
   // it before SQL emit.
+  //
+  // The first op sweeps the user's EXPIRED SESSION tokens in the same
+  // transaction as the mint. Every session mint runs through this rpc
+  // (SignIn, SignUp, ConfirmSignUp, VerifyMfa, the OAuth exchange, CliToken),
+  // so expired sessions stop accumulating with no scheduler: each sign-in
+  // clears what the person's previous sessions left behind, bounded by one
+  // user's rows. Never-expiring rows (NULL) and live ones do not match
+  // `expires_at <= NOW()`. API and bot tokens are spared by the token_type
+  // operand, gated because the column exists only with `api_token` (without
+  // it every token is a session). An expired row is kept until this point on
+  // purpose: Authenticate reads it to answer SESSION_EXPIRED instead of
+  // "invalid credentials", and by the next sign-in the person has acted on it.
   rpc IssueToken(IssueTokenReq) returns (IssueTokenResp) {
     option (w17.db.method) = {
+      ops: {
+        name: "sweep"
+        dql:
+          "DELETE FROM @module.UserToken "
+          "WHERE user_id = :user_id AND expires_at <= NOW() "
+          "AND ?feature(api_token) token_type = 1"
+      }
       ops: {
         name: "main"
         dql:
@@ -1449,6 +1479,27 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:  "UPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :legacy_token AND token_hash IS NULL"
+      }
+    };
+  }
+
+  // TouchTokenLastUsed — record that a token was just presented, at most
+  // once a minute per token. The window is enforced HERE, in the WHERE: a
+  // burst of concurrent requests on one token all pass the handler's
+  // pre-check (it reads last_used_at off the lookup), and only the first
+  // UPDATE to commit still matches — the rest match nothing and write
+  // nothing. :cutoff is NOW minus the window, computed by the caller (the
+  // DQL has no interval arithmetic). No RETURNING: a throttled touch matches
+  // no row, and that is no failure. Gated api_token (last_used_at is its
+  // column).
+  rpc TouchTokenLastUsed(TouchTokenLastUsedReq) returns (TouchTokenLastUsedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET last_used_at = NOW() "
+          "WHERE id = :token_id AND (last_used_at IS NULL OR last_used_at < :cutoff)"
       }
     };
   }

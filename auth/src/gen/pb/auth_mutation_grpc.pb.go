@@ -33,6 +33,7 @@ const (
 	AuthMutation_IssueToken_FullMethodName                     = "/w17.contrib.auth.AuthMutation/IssueToken"
 	AuthMutation_DeleteToken_FullMethodName                    = "/w17.contrib.auth.AuthMutation/DeleteToken"
 	AuthMutation_UpgradeTokenHash_FullMethodName               = "/w17.contrib.auth.AuthMutation/UpgradeTokenHash"
+	AuthMutation_TouchTokenLastUsed_FullMethodName             = "/w17.contrib.auth.AuthMutation/TouchTokenLastUsed"
 	AuthMutation_DeleteSessionToken_FullMethodName             = "/w17.contrib.auth.AuthMutation/DeleteSessionToken"
 	AuthMutation_IssueApiToken_FullMethodName                  = "/w17.contrib.auth.AuthMutation/IssueApiToken"
 	AuthMutation_AddTokenPermission_FullMethodName             = "/w17.contrib.auth.AuthMutation/AddTokenPermission"
@@ -144,6 +145,18 @@ type AuthMutationClient interface {
 	// app-side via the CRYPTO_RANDOM default — request
 	// doesn't carry the token value; codegen preamble generates
 	// it before SQL emit.
+	//
+	// The first op sweeps the user's EXPIRED SESSION tokens in the same
+	// transaction as the mint. Every session mint runs through this rpc
+	// (SignIn, SignUp, ConfirmSignUp, VerifyMfa, the OAuth exchange, CliToken),
+	// so expired sessions stop accumulating with no scheduler: each sign-in
+	// clears what the person's previous sessions left behind, bounded by one
+	// user's rows. Never-expiring rows (NULL) and live ones do not match
+	// `expires_at <= NOW()`. API and bot tokens are spared by the token_type
+	// operand, gated because the column exists only with `api_token` (without
+	// it every token is a session). An expired row is kept until this point on
+	// purpose: Authenticate reads it to answer SESSION_EXPIRED instead of
+	// "invalid credentials", and by the next sign-in the person has acted on it.
 	IssueToken(ctx context.Context, in *IssueTokenReq, opts ...grpc.CallOption) (*IssueTokenResp, error)
 	// DeleteToken — DELETE matching token. Idempotent: no-such-
 	// token returns OK with an empty response (RowsAffected = 0
@@ -171,6 +184,16 @@ type AuthMutationClient interface {
 	// NULL, so a second run, or a race with another request presenting the
 	// same token, changes nothing.
 	UpgradeTokenHash(ctx context.Context, in *UpgradeTokenHashReq, opts ...grpc.CallOption) (*UpgradeTokenHashResp, error)
+	// TouchTokenLastUsed — record that a token was just presented, at most
+	// once a minute per token. The window is enforced HERE, in the WHERE: a
+	// burst of concurrent requests on one token all pass the handler's
+	// pre-check (it reads last_used_at off the lookup), and only the first
+	// UPDATE to commit still matches — the rest match nothing and write
+	// nothing. :cutoff is NOW minus the window, computed by the caller (the
+	// DQL has no interval arithmetic). No RETURNING: a throttled touch matches
+	// no row, and that is no failure. Gated api_token (last_used_at is its
+	// column).
+	TouchTokenLastUsed(ctx context.Context, in *TouchTokenLastUsedReq, opts ...grpc.CallOption) (*TouchTokenLastUsedResp, error)
 	// DeleteSessionToken — base-tier logout primitive (gated
 	// authenticate_turnkey). Delete-by-id, OWNERSHIP guarded (id AND
 	// user_id) so a caller revokes only their own token. This is the SOLE
@@ -625,6 +648,16 @@ func (c *authMutationClient) UpgradeTokenHash(ctx context.Context, in *UpgradeTo
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpgradeTokenHashResp)
 	err := c.cc.Invoke(ctx, AuthMutation_UpgradeTokenHash_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authMutationClient) TouchTokenLastUsed(ctx context.Context, in *TouchTokenLastUsedReq, opts ...grpc.CallOption) (*TouchTokenLastUsedResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TouchTokenLastUsedResp)
+	err := c.cc.Invoke(ctx, AuthMutation_TouchTokenLastUsed_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1451,6 +1484,18 @@ type AuthMutationServer interface {
 	// app-side via the CRYPTO_RANDOM default — request
 	// doesn't carry the token value; codegen preamble generates
 	// it before SQL emit.
+	//
+	// The first op sweeps the user's EXPIRED SESSION tokens in the same
+	// transaction as the mint. Every session mint runs through this rpc
+	// (SignIn, SignUp, ConfirmSignUp, VerifyMfa, the OAuth exchange, CliToken),
+	// so expired sessions stop accumulating with no scheduler: each sign-in
+	// clears what the person's previous sessions left behind, bounded by one
+	// user's rows. Never-expiring rows (NULL) and live ones do not match
+	// `expires_at <= NOW()`. API and bot tokens are spared by the token_type
+	// operand, gated because the column exists only with `api_token` (without
+	// it every token is a session). An expired row is kept until this point on
+	// purpose: Authenticate reads it to answer SESSION_EXPIRED instead of
+	// "invalid credentials", and by the next sign-in the person has acted on it.
 	IssueToken(context.Context, *IssueTokenReq) (*IssueTokenResp, error)
 	// DeleteToken — DELETE matching token. Idempotent: no-such-
 	// token returns OK with an empty response (RowsAffected = 0
@@ -1478,6 +1523,16 @@ type AuthMutationServer interface {
 	// NULL, so a second run, or a race with another request presenting the
 	// same token, changes nothing.
 	UpgradeTokenHash(context.Context, *UpgradeTokenHashReq) (*UpgradeTokenHashResp, error)
+	// TouchTokenLastUsed — record that a token was just presented, at most
+	// once a minute per token. The window is enforced HERE, in the WHERE: a
+	// burst of concurrent requests on one token all pass the handler's
+	// pre-check (it reads last_used_at off the lookup), and only the first
+	// UPDATE to commit still matches — the rest match nothing and write
+	// nothing. :cutoff is NOW minus the window, computed by the caller (the
+	// DQL has no interval arithmetic). No RETURNING: a throttled touch matches
+	// no row, and that is no failure. Gated api_token (last_used_at is its
+	// column).
+	TouchTokenLastUsed(context.Context, *TouchTokenLastUsedReq) (*TouchTokenLastUsedResp, error)
 	// DeleteSessionToken — base-tier logout primitive (gated
 	// authenticate_turnkey). Delete-by-id, OWNERSHIP guarded (id AND
 	// user_id) so a caller revokes only their own token. This is the SOLE
@@ -1902,6 +1957,9 @@ func (UnimplementedAuthMutationServer) DeleteToken(context.Context, *DeleteToken
 func (UnimplementedAuthMutationServer) UpgradeTokenHash(context.Context, *UpgradeTokenHashReq) (*UpgradeTokenHashResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpgradeTokenHash not implemented")
 }
+func (UnimplementedAuthMutationServer) TouchTokenLastUsed(context.Context, *TouchTokenLastUsedReq) (*TouchTokenLastUsedResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method TouchTokenLastUsed not implemented")
+}
 func (UnimplementedAuthMutationServer) DeleteSessionToken(context.Context, *DeleteSessionTokenReq) (*DeleteSessionTokenResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSessionToken not implemented")
 }
@@ -2245,6 +2303,24 @@ func _AuthMutation_UpgradeTokenHash_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthMutationServer).UpgradeTokenHash(ctx, req.(*UpgradeTokenHashReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthMutation_TouchTokenLastUsed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TouchTokenLastUsedReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthMutationServer).TouchTokenLastUsed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthMutation_TouchTokenLastUsed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthMutationServer).TouchTokenLastUsed(ctx, req.(*TouchTokenLastUsedReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3697,6 +3773,10 @@ var AuthMutation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpgradeTokenHash",
 			Handler:    _AuthMutation_UpgradeTokenHash_Handler,
+		},
+		{
+			MethodName: "TouchTokenLastUsed",
+			Handler:    _AuthMutation_TouchTokenLastUsed_Handler,
 		},
 		{
 			MethodName: "DeleteSessionToken",

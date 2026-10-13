@@ -33,6 +33,7 @@ const (
 	AuthQuery_GetUserByEmail_FullMethodName                = "/w17.contrib.auth.AuthQuery/GetUserByEmail"
 	AuthQuery_GetUserByToken_FullMethodName                = "/w17.contrib.auth.AuthQuery/GetUserByToken"
 	AuthQuery_GetUserPermissions_FullMethodName            = "/w17.contrib.auth.AuthQuery/GetUserPermissions"
+	AuthQuery_GetExpiredToken_FullMethodName               = "/w17.contrib.auth.AuthQuery/GetExpiredToken"
 	AuthQuery_GetUserByTokenWithPermissions_FullMethodName = "/w17.contrib.auth.AuthQuery/GetUserByTokenWithPermissions"
 	AuthQuery_GetUserRoleGrants_FullMethodName             = "/w17.contrib.auth.AuthQuery/GetUserRoleGrants"
 	AuthQuery_ListRoleGrants_FullMethodName                = "/w17.contrib.auth.AuthQuery/ListRoleGrants"
@@ -52,6 +53,7 @@ const (
 	AuthQuery_ListRoles_FullMethodName                     = "/w17.contrib.auth.AuthQuery/ListRoles"
 	AuthQuery_GetRole_FullMethodName                       = "/w17.contrib.auth.AuthQuery/GetRole"
 	AuthQuery_GetTokenWithType_FullMethodName              = "/w17.contrib.auth.AuthQuery/GetTokenWithType"
+	AuthQuery_GetExpiredTokenWithType_FullMethodName       = "/w17.contrib.auth.AuthQuery/GetExpiredTokenWithType"
 	AuthQuery_GetUserRolePermissionsByRealm_FullMethodName = "/w17.contrib.auth.AuthQuery/GetUserRolePermissionsByRealm"
 	AuthQuery_GetTokenPermissionSubset_FullMethodName      = "/w17.contrib.auth.AuthQuery/GetTokenPermissionSubset"
 	AuthQuery_ListApiTokensByUser_FullMethodName           = "/w17.contrib.auth.AuthQuery/ListApiTokensByUser"
@@ -110,6 +112,11 @@ type AuthQueryClient interface {
 	// `array_agg(DISTINCT …)` isn't expressible — the DQL has no
 	// aggregate-DISTINCT — and matches GetUserByTokenWithPermissions).
 	GetUserPermissions(ctx context.Context, in *GetUserPermissionsReq, opts ...grpc.CallOption) (*GetUserPermissionsResp, error)
+	// GetExpiredToken — see the request. Matches the same two keys as the live
+	// lookup (hash, or the legacy clear token) and only rows that HAVE expired:
+	// `expires_at <= NOW()` never matches a NULL (never-expiring) row. Read
+	// only — an expired row is never moved to the hash or otherwise touched.
+	GetExpiredToken(ctx context.Context, in *GetExpiredTokenReq, opts ...grpc.CallOption) (*GetExpiredTokenResp, error)
 	// GetUserByTokenWithPermissions — the canonical auth-backend
 	// lookup. ONE round-trip resolves the bearer token into the
 	// User row + the deduped permission IDs the user holds.
@@ -304,6 +311,11 @@ type AuthQueryClient interface {
 	// kind (SESSION/API). The api_token Authenticate path calls this
 	// first to branch on the credential class. Gated api_token.
 	GetTokenWithType(ctx context.Context, in *GetTokenWithTypeReq, opts ...grpc.CallOption) (*GetTokenWithTypeResp, error)
+	// GetExpiredTokenWithType — see the request. The realm-aware twin of
+	// GetExpiredToken: same keys, expired rows only, plus the kind so the
+	// refusal can say "sign in again" to a session and "create a new token" to
+	// an API token. Read only.
+	GetExpiredTokenWithType(ctx context.Context, in *GetExpiredTokenWithTypeReq, opts ...grpc.CallOption) (*GetExpiredTokenWithTypeResp, error)
 	// GetUserRolePermissionsByRealm — distinct permission IDs the user
 	// holds through roles of the given realm (token_type). The realm
 	// filter (Role.token_type = :token_type) is why a session token and
@@ -600,6 +612,16 @@ func (c *authQueryClient) GetUserPermissions(ctx context.Context, in *GetUserPer
 	return out, nil
 }
 
+func (c *authQueryClient) GetExpiredToken(ctx context.Context, in *GetExpiredTokenReq, opts ...grpc.CallOption) (*GetExpiredTokenResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetExpiredTokenResp)
+	err := c.cc.Invoke(ctx, AuthQuery_GetExpiredToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authQueryClient) GetUserByTokenWithPermissions(ctx context.Context, in *GetUserByTokenWithPermissionsReq, opts ...grpc.CallOption) (*GetUserByTokenWithPermissionsResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetUserByTokenWithPermissionsResp)
@@ -784,6 +806,16 @@ func (c *authQueryClient) GetTokenWithType(ctx context.Context, in *GetTokenWith
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetTokenWithTypeResp)
 	err := c.cc.Invoke(ctx, AuthQuery_GetTokenWithType_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authQueryClient) GetExpiredTokenWithType(ctx context.Context, in *GetExpiredTokenWithTypeReq, opts ...grpc.CallOption) (*GetExpiredTokenWithTypeResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetExpiredTokenWithTypeResp)
+	err := c.cc.Invoke(ctx, AuthQuery_GetExpiredTokenWithType_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1179,6 +1211,11 @@ type AuthQueryServer interface {
 	// `array_agg(DISTINCT …)` isn't expressible — the DQL has no
 	// aggregate-DISTINCT — and matches GetUserByTokenWithPermissions).
 	GetUserPermissions(context.Context, *GetUserPermissionsReq) (*GetUserPermissionsResp, error)
+	// GetExpiredToken — see the request. Matches the same two keys as the live
+	// lookup (hash, or the legacy clear token) and only rows that HAVE expired:
+	// `expires_at <= NOW()` never matches a NULL (never-expiring) row. Read
+	// only — an expired row is never moved to the hash or otherwise touched.
+	GetExpiredToken(context.Context, *GetExpiredTokenReq) (*GetExpiredTokenResp, error)
 	// GetUserByTokenWithPermissions — the canonical auth-backend
 	// lookup. ONE round-trip resolves the bearer token into the
 	// User row + the deduped permission IDs the user holds.
@@ -1373,6 +1410,11 @@ type AuthQueryServer interface {
 	// kind (SESSION/API). The api_token Authenticate path calls this
 	// first to branch on the credential class. Gated api_token.
 	GetTokenWithType(context.Context, *GetTokenWithTypeReq) (*GetTokenWithTypeResp, error)
+	// GetExpiredTokenWithType — see the request. The realm-aware twin of
+	// GetExpiredToken: same keys, expired rows only, plus the kind so the
+	// refusal can say "sign in again" to a session and "create a new token" to
+	// an API token. Read only.
+	GetExpiredTokenWithType(context.Context, *GetExpiredTokenWithTypeReq) (*GetExpiredTokenWithTypeResp, error)
 	// GetUserRolePermissionsByRealm — distinct permission IDs the user
 	// holds through roles of the given realm (token_type). The realm
 	// filter (Role.token_type = :token_type) is why a session token and
@@ -1647,6 +1689,9 @@ func (UnimplementedAuthQueryServer) GetUserByToken(context.Context, *GetUserByTo
 func (UnimplementedAuthQueryServer) GetUserPermissions(context.Context, *GetUserPermissionsReq) (*GetUserPermissionsResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetUserPermissions not implemented")
 }
+func (UnimplementedAuthQueryServer) GetExpiredToken(context.Context, *GetExpiredTokenReq) (*GetExpiredTokenResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetExpiredToken not implemented")
+}
 func (UnimplementedAuthQueryServer) GetUserByTokenWithPermissions(context.Context, *GetUserByTokenWithPermissionsReq) (*GetUserByTokenWithPermissionsResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetUserByTokenWithPermissions not implemented")
 }
@@ -1703,6 +1748,9 @@ func (UnimplementedAuthQueryServer) GetRole(context.Context, *GetRoleReq) (*Role
 }
 func (UnimplementedAuthQueryServer) GetTokenWithType(context.Context, *GetTokenWithTypeReq) (*GetTokenWithTypeResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTokenWithType not implemented")
+}
+func (UnimplementedAuthQueryServer) GetExpiredTokenWithType(context.Context, *GetExpiredTokenWithTypeReq) (*GetExpiredTokenWithTypeResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetExpiredTokenWithType not implemented")
 }
 func (UnimplementedAuthQueryServer) GetUserRolePermissionsByRealm(context.Context, *GetUserRolePermissionsByRealmReq) (*GetUserRolePermissionsByRealmResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetUserRolePermissionsByRealm not implemented")
@@ -1885,6 +1933,24 @@ func _AuthQuery_GetUserPermissions_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthQueryServer).GetUserPermissions(ctx, req.(*GetUserPermissionsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthQuery_GetExpiredToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetExpiredTokenReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthQueryServer).GetExpiredToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthQuery_GetExpiredToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthQueryServer).GetExpiredToken(ctx, req.(*GetExpiredTokenReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2227,6 +2293,24 @@ func _AuthQuery_GetTokenWithType_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthQueryServer).GetTokenWithType(ctx, req.(*GetTokenWithTypeReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthQuery_GetExpiredTokenWithType_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetExpiredTokenWithTypeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthQueryServer).GetExpiredTokenWithType(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthQuery_GetExpiredTokenWithType_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthQueryServer).GetExpiredTokenWithType(ctx, req.(*GetExpiredTokenWithTypeReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2917,6 +3001,10 @@ var AuthQuery_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AuthQuery_GetUserPermissions_Handler,
 		},
 		{
+			MethodName: "GetExpiredToken",
+			Handler:    _AuthQuery_GetExpiredToken_Handler,
+		},
+		{
 			MethodName: "GetUserByTokenWithPermissions",
 			Handler:    _AuthQuery_GetUserByTokenWithPermissions_Handler,
 		},
@@ -2991,6 +3079,10 @@ var AuthQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTokenWithType",
 			Handler:    _AuthQuery_GetTokenWithType_Handler,
+		},
+		{
+			MethodName: "GetExpiredTokenWithType",
+			Handler:    _AuthQuery_GetExpiredTokenWithType_Handler,
 		},
 		{
 			MethodName: "GetUserRolePermissionsByRealm",
