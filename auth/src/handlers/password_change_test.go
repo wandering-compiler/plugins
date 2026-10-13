@@ -288,3 +288,62 @@ func mutationRPCBody(t *testing.T, rpc string) string {
 	}
 	return src[i : i+end]
 }
+
+// The new hash is derived BEFORE the transaction opens: a deliberately slow
+// derivation inside it would hold the row lock the compare-and-swap takes for
+// as long as the hash runs. Observed through a hash that fails (an empty
+// password is refused by the hasher): a derivation inside the transaction
+// would have begun one first and rolled it back.
+func TestChangePassword_HashesBeforeTheTransactionOpens(t *testing.T) {
+	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
+	tx := &recordingDistTx{}
+	h.DistTx, h.Connection = tx, "main"
+
+	if _, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+		CurrentPassword: "correct-horse-battery-staple",
+		NewPassword:     "",
+	}); err == nil {
+		t.Fatal("an empty new password was accepted")
+	}
+	if len(tx.begun) != 0 || m.casCalls != 0 {
+		t.Fatalf("a failed derivation opened a transaction (%s) or wrote (%d) — the hash ran inside it", tx.settled(), m.casCalls)
+	}
+
+	// The control: a derivation that succeeds goes on to one committed
+	// transaction, so the assertion above is not met by a handler that never
+	// opens one.
+	if _, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{
+		CurrentPassword: "correct-horse-battery-staple",
+		NewPassword:     "a-different-long-password",
+	}); err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+	if tx.settled() != "committed" || len(tx.begun) != 1 {
+		t.Fatalf("the change ran in %d transaction(s), %s; want one, committed", len(tx.begun), tx.settled())
+	}
+}
+
+// The current password is the whole proof: a change asks for no second-factor
+// step-up, also for an account with an authenticator. The request carries no
+// field for a code, and the handler reads nothing of the second factor —
+// passwordChangeMock serves no two_factor query, so a read of one panics.
+// Documented behaviour: a session that knows the password can rotate it.
+func TestChangePassword_AsksForNoSecondFactor(t *testing.T) {
+	fields := (&pb.ChangePasswordReq{}).ProtoReflect().Descriptor().Fields()
+	var names []string
+	for i := 0; i < fields.Len(); i++ {
+		names = append(names, string(fields.Get(i).Name()))
+	}
+	if strings.Join(names, ",") != "current_password,new_password" {
+		t.Errorf("ChangePasswordReq fields = %v, want current_password and new_password only", names)
+	}
+
+	h, _ := newPasswordChangeHandler(t, "correct-horse-battery-staple")
+	h.TwoFactorTOTP = true
+	if _, err := h.ChangePassword(ctxWithEnvelope(t, "u1", "11111111-1111-4111-8111-111111111111"), &pb.ChangePasswordReq{
+		CurrentPassword: "correct-horse-battery-staple",
+		NewPassword:     "a-different-long-password",
+	}); err != nil {
+		t.Fatalf("ChangePassword with the current password alone: %v", err)
+	}
+}
