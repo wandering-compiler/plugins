@@ -35,6 +35,9 @@ func (s *Server) ReserveTask(ctx context.Context, _ *pb.ReserveTaskReq) (*pb.Res
 	if errors.Is(err, relaycore.ErrQueueFull) {
 		return nil, refusal.New(codes.ResourceExhausted, refusal.QueueFull, "relay: the queue is full — place elsewhere or retry later")
 	}
+	if errors.Is(err, relaycore.ErrOwnerQueueFull) {
+		return nil, callerQueueFull()
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "relay: reserving: %v", err)
 	}
@@ -99,4 +102,10 @@ func (s *Server) expired(id, reason string) *pb.ReservationState {
 		State:       &pb.ReservationState_Expired{Expired: &pb.ReservationExpired{Reason: reason}},
 		PollAfterMs: s.pollAfterMs(),
 	}
+}
+
+// callerQueueFull is the refusal for a caller at its share of the queue.
+func callerQueueFull() error {
+	return refusal.New(codes.ResourceExhausted, refusal.CallerQueueFull,
+		"relay: this caller already holds its share of the queue — wait for the places it holds, or cancel some")
 }

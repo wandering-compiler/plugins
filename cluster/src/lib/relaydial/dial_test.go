@@ -330,3 +330,29 @@ func TestPinnedConnectionVerifier_HoldsOnAResumedSession(t *testing.T) {
 		t.Fatal("the refused connection was not a resumption — the test proves nothing about the resumed path")
 	}
 }
+
+// One connection's handshakes resume each other — gRPC reconnects with the
+// same configuration — while a configuration for another dial (another pin)
+// shares nothing with it.
+func TestClientTLS_ResumesWithinOneConnectionOnly(t *testing.T) {
+	relayID, client := newPair(t, "relay-a"), newPair(t, "control-plane")
+	addr := echoServer(t, relayID)
+	cfg := Config{ClientCertPEM: client.certPEM, ClientKeyPEM: client.keyPEM}
+	one, err := ClientTLS(cfg, addr, relayID.fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed, err := connect(t, addr, one); err != nil || resumed {
+		t.Fatalf("first handshake: resumed=%v err=%v, want a full one", resumed, err)
+	}
+	if resumed, err := connect(t, addr, one); err != nil || !resumed {
+		t.Errorf("a reconnect of the same connection: resumed=%v err=%v, want resumed", resumed, err)
+	}
+	other, err := ClientTLS(cfg, addr, relayID.fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed, err := connect(t, addr, other); err != nil || resumed {
+		t.Errorf("another dial: resumed=%v err=%v, want its own full handshake", resumed, err)
+	}
+}

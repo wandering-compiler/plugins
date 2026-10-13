@@ -53,6 +53,13 @@ const (
 	// plane never sees this reason; a caller told it directly retries later.
 	QueueFull = "QUEUE_FULL"
 
+	// CallerQueueFull — this caller already holds its share of the relay's
+	// queue (--max-queue-per-caller), while others may still queue. A control
+	// plane falls through to another relay, and answers this reason itself
+	// when every relay that answered refused it: the caller is told to wait
+	// for the places it already holds, not that the pool is down.
+	CallerQueueFull = "CALLER_QUEUE_FULL"
+
 	// RelayMisconfigured — the relay is running without something it needs to
 	// answer at all (its advertised work address, a wired registry). An
 	// operator fixes it; a control plane falls through to another relay.
@@ -108,6 +115,13 @@ const (
 	// taken meanwhile may be missing. Retryable, and harmless while it lasts:
 	// a worker renews well before its certificate expires.
 	BanSetStale = "BAN_SET_STALE"
+
+	// BanSetNeeded — a control plane named a ban-set version newer than the
+	// one this relay holds and did not send the set. Answered to a CONTROL
+	// PLANE, before the call runs, and never to a caller: the control plane
+	// sends the call again with the complete set. It sends the version alone
+	// only to a relay that confirmed holding it (workeradmit.BannedHeldHeader).
+	BanSetNeeded = "BAN_SET_NEEDED"
 )
 
 // Reasons emitted by the CONTROL PLANE (the project's handlers).

@@ -24,6 +24,9 @@ type WorkerStore interface {
 	// Banned is the complete ban set and its version (see
 	// workeradmit.BannedVersionHeader).
 	Banned(ctx context.Context) ([]string, int64, error)
+	// BanVersion is the ban set's version alone: one indexed MAX, read to
+	// tell whether a cached set is still current without reading the set.
+	BanVersion(ctx context.Context) (int64, error)
 	// Record is idempotent by fingerprint and must NOT reset a decision: a
 	// banned worker keeps being reported by its relay, and returning it to
 	// enrolled on every sweep would make a ban mean nothing.
@@ -36,8 +39,9 @@ type WorkerStore interface {
 	Decide(ctx context.Context, ids []string, ban bool, by string) error
 }
 
-// withBans puts the complete ban set on ctx, for every relay call made under
-// it.
+// withBans puts the ban set on ctx, for every relay call made under it: the
+// complete set to a relay that does not hold its version yet, the version
+// alone to one that does (relayConn.outgoing).
 //
 // EVERY call, not a sync now and then: a relay holds bans in memory only, so
 // one that restarted would let a banned but CA-valid worker attach until the
@@ -70,7 +74,7 @@ func (h *ClusterServiceHandler) withBansFrom(
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the ban set: %v", err)
 	}
-	return workeradmit.WithBansAt(ctx, bans, version), nil
+	return withBanSet(ctx, bans, version), nil
 }
 
 // CheckWorkers contacts every enabled relay and records every worker it has
@@ -187,11 +191,11 @@ type rejectedWorker struct {
 // workers the registry refused for their own data, how many it tried to
 // record, and why the relay failed, if it did.
 func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) ([]rejectedWorker, int, error) {
-	conn, err := h.dialReady(ctx, r)
+	conn, err := h.acquire(ctx, r)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() { _ = conn.Close() }()
+	defer h.release(conn)
 
 	resp, err := newRelayClient(conn).ExchangeWorkers(ctx, &pb.ExchangeWorkersReq{})
 	if err != nil {
@@ -404,12 +408,12 @@ func (h *ClusterServiceHandler) IssueRegistrationCode(
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster: cannot read the relay registry: %v", err)
 	}
-	conn, err := h.dialReady(ctx, r)
+	conn, err := h.acquire(ctx, r)
 	if err != nil {
 		h.note(ctx, r, err)
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", r.Name, err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer h.release(conn)
 	resp, err := newRelayClient(conn).IssueRegistrationCode(ctx, &pb.IssueRegistrationCodeReq{})
 	if err != nil {
 		return nil, err

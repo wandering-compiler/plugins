@@ -119,6 +119,10 @@ const banReadAttempts = 3
 
 var errBanSetUnsettled = errors.New("the ban set changed during every read; try again")
 
+func (s workerRegistry) BanVersion(ctx context.Context) (int64, error) {
+	return s.banVersion(ctx)
+}
+
 func (s workerRegistry) banVersion(ctx context.Context) (int64, error) {
 	v, err := s.q.BanSetVersion(ctx, &pb.BanSetVersionReq{})
 	if err != nil {

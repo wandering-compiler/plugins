@@ -57,6 +57,24 @@ type Config struct {
 // verification on would reject every self-signed relay before this code ever
 // ran.
 func Dial(cfg Config, target, want string) (*grpc.ClientConn, error) {
+	tlsCfg, err := ClientTLS(cfg, target, want)
+	if err != nil {
+		return nil, err
+	}
+	// Keepalive like every other hop (tunnel.ClientKeepalive); the relay's
+	// management server accepts these pings.
+	return grpc.NewClient(target, tunnel.ClientKeepalive(), grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+}
+
+// ClientTLS is the TLS configuration Dial uses for one relay: the client
+// identity, the pin on both verification hooks, and a session cache.
+//
+// The session cache is this configuration's own, so it is shared by every
+// handshake of ONE connection — gRPC reconnects a dropped connection with the
+// same configuration, and a reconnect then resumes the session instead of
+// paying a full handshake — and never by a connection pinned to anything
+// else. A resumed session is still held to the pin (PinnedConnectionVerifier).
+func ClientTLS(cfg Config, target, want string) (*tls.Config, error) {
 	want = strings.ToLower(strings.TrimSpace(want))
 	if want == "" {
 		// Refused rather than defaulted to "trust anything": an empty pin is a
@@ -68,8 +86,7 @@ func Dial(cfg Config, target, want string) (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relaydial: client identity: %w", err)
 	}
-
-	tlsCfg := &tls.Config{
+	return &tls.Config{
 		Certificates: []tls.Certificate{crt},
 		MinVersion:   tls.VersionTLS13,
 		// #nosec G402 -- deliberate: a relay may be self-signed, so the CHAIN
@@ -78,11 +95,13 @@ func Dial(cfg Config, target, want string) (*grpc.ClientConn, error) {
 		InsecureSkipVerify:    true,
 		VerifyPeerCertificate: PinnedVerifier(target, want),
 		VerifyConnection:      PinnedConnectionVerifier(target, want),
-	}
-	// Keepalive like every other hop (tunnel.ClientKeepalive); the relay's
-	// management server accepts these pings.
-	return grpc.NewClient(target, tunnel.ClientKeepalive(), grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+		ClientSessionCache:    tls.NewLRUClientSessionCache(sessionsPerConn),
+	}, nil
 }
+
+// sessionsPerConn is how many session tickets one connection's cache keeps.
+// One address, so a handful covers the tickets a TLS 1.3 server issues.
+const sessionsPerConn = 4
 
 // PinnedVerifier is the identity check, named so it can be exercised without
 // standing up a TLS handshake — the alternative is a test that proves the

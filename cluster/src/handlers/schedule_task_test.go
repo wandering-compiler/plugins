@@ -117,6 +117,15 @@ func (s *store) RecordFailed(_ context.Context, id, msg string) error {
 	return nil
 }
 
+// settle waits for the observed state queued by placements and polls to be
+// written (observe never waits for it).
+func settle(t *testing.T, h *ClusterServiceHandler) {
+	t.Helper()
+	if err := h.waitObserved(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // collect drives the handler and gathers what the CALLER would see.
 //
 // Guarded: the end-to-end tests read it while the handler is still running in
@@ -223,6 +232,7 @@ func TestScheduleTask_FallsThroughAnUnreachableRelay(t *testing.T) {
 	if got := c.seen()[0].GetGranted().GetRelay(); got != "b-live" {
 		t.Errorf("granted by %q, want b-live", got)
 	}
+	settle(t, h)
 	if len(st.failed) != 1 || !strings.Contains(st.failed[0], "dead:") {
 		t.Errorf("the dead relay was not recorded as failed: %v", st.failed)
 	}

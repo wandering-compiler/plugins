@@ -72,6 +72,7 @@ type config struct {
 	capacity       int
 	maxWorkerSlots int
 	maxQueue       int
+	maxQueueCaller int
 	ticketTTL      time.Duration
 	drainTimeout   time.Duration
 	pollInterval   time.Duration
@@ -171,6 +172,9 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 		"the most slots one worker may announce; a higher count is held to this")
 	fs.IntVar(&cfg.maxQueue, "max-queue", envInt("max-queue", "RELAY_MAX_QUEUE", relaycore.DefaultMaxQueue),
 		"the most callers that may wait for a slot at once; more are refused (QUEUE_FULL) so the control plane places elsewhere")
+	fs.IntVar(&cfg.maxQueueCaller, "max-queue-per-caller", envInt("max-queue-per-caller", "RELAY_MAX_QUEUE_PER_CALLER", 0),
+		"the most places ONE caller (as the control plane names it) may hold in the queue; more are refused "+
+			"(CALLER_QUEUE_FULL); 0 means half of --max-queue")
 	fs.IntVar(&cfg.capacity, "capacity", envInt("capacity", "RELAY_CAPACITY", 0),
 		"OPTIONAL ceiling on concurrent tasks; 0 means whatever the attached workers add up to")
 	fs.DurationVar(&cfg.ticketTTL, "ticket-ttl", envDuration("ticket-ttl", "RELAY_TICKET_TTL", 30*time.Second),
@@ -216,6 +220,11 @@ func parseConfig(args []string, out io.Writer) (config, error) {
 		// Named by both spellings: the value may have come from either, and
 		// every other refusal here names the variable an operator would grep.
 		errs = append(errs, fmt.Errorf("--max-queue (RELAY_MAX_QUEUE) must be at least 1, got %d", cfg.maxQueue))
+	}
+	if cfg.maxQueueCaller < 0 || (cfg.maxQueue >= 1 && cfg.maxQueueCaller > cfg.maxQueue) {
+		errs = append(errs, fmt.Errorf(
+			"--max-queue-per-caller (RELAY_MAX_QUEUE_PER_CALLER) must be between 0 (half of --max-queue) and --max-queue (%d), got %d",
+			cfg.maxQueue, cfg.maxQueueCaller))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return config{}, err
@@ -283,7 +292,7 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 		// poll, or obedient clients lose their place to jitter.
 		return fmt.Errorf("--poll-timeout (%s) must be at least twice --poll-interval (%s)", cfg.pollTimeout, cfg.pollInterval)
 	}
-	pool, err := relaycore.New(relaycore.Options{Capacity: cfg.capacity, TicketTTL: cfg.ticketTTL, PollTimeout: cfg.pollTimeout, MaxQueue: cfg.maxQueue})
+	pool, err := relaycore.New(relaycore.Options{Capacity: cfg.capacity, TicketTTL: cfg.ticketTTL, PollTimeout: cfg.pollTimeout, MaxQueue: cfg.maxQueue, MaxQueuePerOwner: cfg.maxQueueCaller})
 	if err != nil {
 		return err
 	}
