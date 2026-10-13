@@ -33,9 +33,14 @@ const Header = "w17-cluster-reservation-owner"
 // recorded under the owner Header carried.
 const BoundHeader = "w17-cluster-reservation-owner-bound"
 
-// With returns ctx carrying owner to a relay.
+// With returns ctx carrying owner, and only owner, to a relay. It REPLACES any
+// owner already on ctx: the relay reads the first value, so an appended one
+// could lose to whatever was there before.
 func With(ctx context.Context, owner string) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, Header, owner)
+	md, _ := metadata.FromOutgoingContext(ctx)
+	md = md.Copy()
+	md.Set(Header, owner)
+	return metadata.NewOutgoingContext(ctx, md)
 }
 
 // From reads the owner a control plane sent; "" when it sent none.

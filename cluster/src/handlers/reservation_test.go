@@ -400,7 +400,25 @@ func TestReserveTask_ARelayThatDoesNotBindIsSkipped(t *testing.T) {
 
 	h, _ = pool(t, map[string]*scripted{"a": {unbound: true}}, "a")
 	_, err = h.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
-	if refusal.ReasonOf(err) != refusal.NoRelay || !strings.Contains(err.Error(), "does not bind") {
-		t.Errorf("only an old relay: %v, want %s naming the binding", err, refusal.NoRelay)
+	if refusal.ReasonOf(err) != refusal.NoRelay || !strings.Contains(err.Error(), "upgrade them") {
+		t.Errorf("only an old relay: %v, want %s naming the upgrade", err, refusal.NoRelay)
+	}
+}
+
+// An old relay followed by one that refuses for another reason: the answer
+// still names the old relay and the upgrade, not only the last refusal.
+func TestReserveTask_AnOldRelayIsNamedBehindALaterRefusal(t *testing.T) {
+	full := &scripted{stats: loaded, reserve: func(context.Context) (*pb.ReservationState, error) {
+		return nil, refusal.New(codes.ResourceExhausted, refusal.QueueFull, "relay: the queue is full")
+	}}
+	h, _ := pool(t, map[string]*scripted{"a": {unbound: true}, "b": full}, "a", "b")
+	_, err := h.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	if refusal.ReasonOf(err) != refusal.NoRelay {
+		t.Fatalf("err = %v, want %s", err, refusal.NoRelay)
+	}
+	for _, want := range []string{`relay(s) relay-a do not bind`, "upgrade them", "queue is full"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to say %q", err, want)
+		}
 	}
 }

@@ -62,13 +62,15 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 	ctx = resowner.With(ctx, ownerOf(holder))
 
 	var lastErr error
+	var unbound []string
 	for _, c := range cands.list {
 		var hdr metadata.MD
 		rc := newRelayClient(c.conn)
 		st, err := rc.ReserveTask(ctx, req, grpc.Header(&hdr))
 		if err == nil && !resowner.Confirmed(hdr) {
 			_, _ = rc.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: st.GetReservation()})
-			lastErr = fmt.Errorf("relay %q does not bind a reservation to its caller — upgrade it to this plugin's version", c.Relay.Name)
+			unbound = append(unbound, c.Relay.Name)
+			lastErr = fmt.Errorf("relay %q does not bind a reservation to its caller", c.Relay.Name)
 			continue
 		}
 		if err == nil {
@@ -88,9 +90,17 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 		}
 		lastErr = err
 	}
+	// An old relay is named whatever failed after it: it is the one cause
+	// an operator can fix, and the last error would hide it behind, say, a
+	// full queue on the next relay.
+	upgrade := ""
+	if len(unbound) > 0 {
+		upgrade = fmt.Sprintf("; relay(s) %s do not bind a reservation to its caller — upgrade them to this plugin's version",
+			strings.Join(unbound, ", "))
+	}
 	return nil, refusal.New(codes.Unavailable, refusal.NoRelay, fmt.Sprintf(
-		"cluster: no registered relay could take a reservation (%d enabled, %d placeable); last error: %v",
-		cands.enabled, len(cands.list), lastErr))
+		"cluster: no registered relay could take a reservation (%d enabled, %d placeable)%s; last error: %v",
+		cands.enabled, len(cands.list), upgrade, lastErr))
 }
 
 // GetReservation polls the relay the handle names.
@@ -229,9 +239,14 @@ func holderOf(ctx context.Context) (string, error) {
 }
 
 // ownerOf is the value the relay records a reservation under for holder
-// (resowner.Header). A hash, so a relay never learns who its callers are; it
-// only compares. Never empty: the empty owner is a control plane from before
-// owners existed.
+// (resowner.Header). A hash, so a relay does not see user ids in the clear —
+// but an unkeyed one: it is a stable pseudonym, the same for one user on every
+// reservation and every relay, and `internal` hashes alike in every project.
+// A relay can link a user's reservations, and anyone who can guess a user id
+// can confirm it. That is acceptable because relays are run by the operator
+// that runs the control plane; the hash keeps ids out of relay memory and
+// logs, it does not hide them from a relay. Never empty: the empty owner is a
+// control plane from before owners existed.
 func ownerOf(holder string) string {
 	sum := sha256.Sum256([]byte("cluster-reservation-owner\x00" + holder))
 	return hex.EncodeToString(sum[:])
