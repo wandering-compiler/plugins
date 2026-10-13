@@ -74,6 +74,7 @@ type mfaMock struct {
 	ops            []string // ordered log of the writes issuance performs
 
 	// recorded
+	trustedDevice    *pb.TrustDeviceReq
 	createdChallenge *pb.CreateMfaChallengeReq
 	confirmedTotp    bool
 	deletedTotp      bool
@@ -252,6 +253,7 @@ func (m *mfaMock) CreateDevice(ctx context.Context, in *pb.CreateDeviceReq, _ ..
 	return &pb.CreateDeviceResp{Device: &pb.Device{Id: "dev-1", Identifier: in.GetIdentifier()}}, nil
 }
 func (m *mfaMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...grpc.CallOption) (*pb.TrustDeviceResp, error) {
+	m.trustedDevice = in
 	return &pb.TrustDeviceResp{DeviceId: in.GetDeviceId()}, nil
 }
 func (m *mfaMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
@@ -898,4 +900,28 @@ func nextCode(t *testing.T, secret string) string {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// The trust VerifyMfa grants holds only if the account's device trust was not
+// revoked since the challenge was raised: the password the SignIn checked may
+// be one a password change replaced while the code was being typed. So the
+// write is guarded by the challenge's creation, not by anything read later.
+func TestVerifyMfa_TrustIsGuardedFromTheChallengeOn(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	h.TwoFactorTOTP = false
+	ctx := ctxWithCaller("u1")
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false); !challenged {
+		t.Fatal("expected challenge")
+	}
+	m.chCreatedAt = timestamppb.New(time.Now().Add(-time.Minute))
+	if _, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: m.createdChallenge.GetCode()}); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if m.trustedDevice == nil {
+		t.Fatal("VerifyMfa did not trust the device")
+	}
+	if got := m.trustedDevice.GetNotRevokedAfter(); !got.AsTime().Equal(m.chCreatedAt.AsTime()) {
+		t.Errorf("trust cutoff = %v, want the challenge's creation %v", got, m.chCreatedAt)
+	}
 }

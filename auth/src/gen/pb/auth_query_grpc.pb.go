@@ -71,6 +71,7 @@ const (
 	AuthQuery_LockUserForIssuance_FullMethodName           = "/w17.contrib.auth.AuthQuery/LockUserForIssuance"
 	AuthQuery_CountRecentMfaChallenges_FullMethodName      = "/w17.contrib.auth.AuthQuery/CountRecentMfaChallenges"
 	AuthQuery_GetDeviceByIdentifier_FullMethodName         = "/w17.contrib.auth.AuthQuery/GetDeviceByIdentifier"
+	AuthQuery_GetDeviceTrustRevokedAt_FullMethodName       = "/w17.contrib.auth.AuthQuery/GetDeviceTrustRevokedAt"
 	AuthQuery_ListUserDevices_FullMethodName               = "/w17.contrib.auth.AuthQuery/ListUserDevices"
 	AuthQuery_ListUserOrgs_FullMethodName                  = "/w17.contrib.auth.AuthQuery/ListUserOrgs"
 	AuthQuery_ListUserOrgGrants_FullMethodName             = "/w17.contrib.auth.AuthQuery/ListUserOrgGrants"
@@ -406,6 +407,11 @@ type AuthQueryClient interface {
 	// expected "first sight of this device" signal: the handler treats
 	// any error as absent and falls through to CreateDevice. Gated devices.
 	GetDeviceByIdentifier(ctx context.Context, in *GetDeviceByIdentifierReq, opts ...grpc.CallOption) (*GetDeviceByIdentifierResp, error)
+	// GetDeviceTrustRevokedAt — when the account's device trust was last
+	// revoked (a password change or a disable stamps it). The sign-in resolver
+	// and ListDevices count a device as trusted only when its trusted_at is
+	// later. Gated devices.
+	GetDeviceTrustRevokedAt(ctx context.Context, in *GetDeviceTrustRevokedAtReq, opts ...grpc.CallOption) (*GetDeviceTrustRevokedAtResp, error)
 	// ListUserDevices — the caller's devices (management view), newest
 	// first. The handler maps each row to DeviceInfo, deriving `trusted`
 	// (trusted_at present) + `current` (identifier matches the calling
@@ -974,6 +980,16 @@ func (c *authQueryClient) GetDeviceByIdentifier(ctx context.Context, in *GetDevi
 	return out, nil
 }
 
+func (c *authQueryClient) GetDeviceTrustRevokedAt(ctx context.Context, in *GetDeviceTrustRevokedAtReq, opts ...grpc.CallOption) (*GetDeviceTrustRevokedAtResp, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetDeviceTrustRevokedAtResp)
+	err := c.cc.Invoke(ctx, AuthQuery_GetDeviceTrustRevokedAt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authQueryClient) ListUserDevices(ctx context.Context, in *ListUserDevicesReq, opts ...grpc.CallOption) (*ListUserDevicesResp, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListUserDevicesResp)
@@ -1460,6 +1476,11 @@ type AuthQueryServer interface {
 	// expected "first sight of this device" signal: the handler treats
 	// any error as absent and falls through to CreateDevice. Gated devices.
 	GetDeviceByIdentifier(context.Context, *GetDeviceByIdentifierReq) (*GetDeviceByIdentifierResp, error)
+	// GetDeviceTrustRevokedAt — when the account's device trust was last
+	// revoked (a password change or a disable stamps it). The sign-in resolver
+	// and ListDevices count a device as trusted only when its trusted_at is
+	// later. Gated devices.
+	GetDeviceTrustRevokedAt(context.Context, *GetDeviceTrustRevokedAtReq) (*GetDeviceTrustRevokedAtResp, error)
 	// ListUserDevices — the caller's devices (management view), newest
 	// first. The handler maps each row to DeviceInfo, deriving `trusted`
 	// (trusted_at present) + `current` (identifier matches the calling
@@ -1739,6 +1760,9 @@ func (UnimplementedAuthQueryServer) CountRecentMfaChallenges(context.Context, *C
 }
 func (UnimplementedAuthQueryServer) GetDeviceByIdentifier(context.Context, *GetDeviceByIdentifierReq) (*GetDeviceByIdentifierResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDeviceByIdentifier not implemented")
+}
+func (UnimplementedAuthQueryServer) GetDeviceTrustRevokedAt(context.Context, *GetDeviceTrustRevokedAtReq) (*GetDeviceTrustRevokedAtResp, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetDeviceTrustRevokedAt not implemented")
 }
 func (UnimplementedAuthQueryServer) ListUserDevices(context.Context, *ListUserDevicesReq) (*ListUserDevicesResp, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListUserDevices not implemented")
@@ -2549,6 +2573,24 @@ func _AuthQuery_GetDeviceByIdentifier_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthQuery_GetDeviceTrustRevokedAt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDeviceTrustRevokedAtReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthQueryServer).GetDeviceTrustRevokedAt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthQuery_GetDeviceTrustRevokedAt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthQueryServer).GetDeviceTrustRevokedAt(ctx, req.(*GetDeviceTrustRevokedAtReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthQuery_ListUserDevices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListUserDevicesReq)
 	if err := dec(in); err != nil {
@@ -3025,6 +3067,10 @@ var AuthQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetDeviceByIdentifier",
 			Handler:    _AuthQuery_GetDeviceByIdentifier_Handler,
+		},
+		{
+			MethodName: "GetDeviceTrustRevokedAt",
+			Handler:    _AuthQuery_GetDeviceTrustRevokedAt_Handler,
 		},
 		{
 			MethodName: "ListUserDevices",

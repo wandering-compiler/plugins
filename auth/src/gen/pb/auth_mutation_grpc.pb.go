@@ -302,7 +302,10 @@ type AuthMutationClient interface {
 	// TrustDevice — mark the (user, identifier) device trusted +
 	// refresh last_seen. Called when a login (or VerifyMfa) for the
 	// device completes; the trusted_at it stamps is the signal
-	// `two_factor` new-device mode reads to skip the challenge.
+	// `two_factor` new-device mode reads to skip the challenge. Matches no
+	// row when the account's device trust was revoked after
+	// :not_revoked_after (see the request): the sign-in then gets its
+	// session but no trust.
 	TrustDevice(ctx context.Context, in *TrustDeviceReq, opts ...grpc.CallOption) (*TrustDeviceResp, error)
 	// TouchDevice — refresh last_seen (+ ip) without trusting. Used
 	// when a new-device sign-in raises a 2FA challenge: the device is
@@ -1606,7 +1609,10 @@ type AuthMutationServer interface {
 	// TrustDevice — mark the (user, identifier) device trusted +
 	// refresh last_seen. Called when a login (or VerifyMfa) for the
 	// device completes; the trusted_at it stamps is the signal
-	// `two_factor` new-device mode reads to skip the challenge.
+	// `two_factor` new-device mode reads to skip the challenge. Matches no
+	// row when the account's device trust was revoked after
+	// :not_revoked_after (see the request): the sign-in then gets its
+	// session but no trust.
 	TrustDevice(context.Context, *TrustDeviceReq) (*TrustDeviceResp, error)
 	// TouchDevice — refresh last_seen (+ ip) without trusting. Used
 	// when a new-device sign-in raises a 2FA challenge: the device is

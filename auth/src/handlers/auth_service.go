@@ -513,13 +513,22 @@ var markEmailConfirmed = func(_ context.Context, _ *AuthServiceHandler, _ string
 	return nil
 }
 
+// signInDevice is what resolveSignInDevice found: the device's id, whether it
+// is trusted, and — for a trusted one — the cutoff a renewal of that trust must
+// hold against (see issueSession's trustCutoff).
+type signInDevice struct {
+	id          string
+	trusted     bool
+	trustCutoff *timestamppb.Timestamp
+}
+
 // resolveSignInDevice resolves the device this sign-in belongs to.
 // Default (no `devices`): no device tracking — empty id, and
 // "trusted" reported true so any 2FA new-device check (which itself
 // requires `devices`) is a non-issue. handlers/devices.go overrides
 // via init() with header/fingerprint resolution + upsert.
-var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userID string) (deviceID string, trusted bool, err error) {
-	return "", true, nil
+var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userID string) (signInDevice, error) {
+	return signInDevice{trusted: true}, nil
 }
 
 // inviteVerifiedEmailGate refuses an acceptance from an account whose address
@@ -666,12 +675,16 @@ var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.Us
 // + store the device-trust token. Shared by SignIn, OAuth, and (under
 // two_factor) VerifyMfa so they all honour device binding.
 //
-// trustDevice says whether this sign-in may make the device trusted. Only a
-// sign-in that passed the plugin's second factor, or was not asked for one,
-// may: a trusted device skips the second factor later (two_factor_scope=
-// new_devices), so trust earned by a sign-in that skipped it — OAuth — would
-// carry that skip over to password sign-ins from the same device.
-var issueSession = func(ctx context.Context, h *AuthServiceHandler, userID, deviceID string, trustDevice bool) (token, trustToken string, err error) {
+// trustCutoff says whether this sign-in may make the device trusted: nil means
+// it may not. Only a sign-in that passed the plugin's second factor, or was not
+// asked for one, may: a trusted device skips the second factor later
+// (two_factor_scope=new_devices), so trust earned by a sign-in that skipped it
+// — OAuth — would carry that skip over to password sign-ins from the same
+// device. A non-nil cutoff is the instant the sign-in's checks are good for:
+// the trust is written only if the account's device trust (a password change,
+// a disable) was not revoked after it, so a revocation that commits while the
+// sign-in is in flight is not undone by it.
+var issueSession = func(ctx context.Context, h *AuthServiceHandler, userID, deviceID string, trustCutoff *timestamppb.Timestamp) (token, trustToken string, err error) {
 	token, hash, err := newBearerToken()
 	if err != nil {
 		return "", "", err
@@ -886,10 +899,11 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 
 	// Resolve the device (devices feature; no-op otherwise) so the 2FA
 	// gate can make its new-device decision and the token can be bound.
-	deviceID, trusted, err := resolveSignInDevice(ctx, h, user.GetId())
+	dev, err := resolveSignInDevice(ctx, h, user.GetId())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	deviceID, trusted := dev.id, dev.trusted
 
 	// Second-factor gate (two_factor feature; no-op otherwise). When it
 	// raises a challenge it returns the mfa_required response and we
@@ -906,7 +920,11 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	// pass. Granting trust on the password alone would let every device that
 	// ever signed in skip the factor once `two_factor_scope=new_devices` is
 	// switched on. A device earns trust by passing VerifyMfa.
-	token, trustToken, err := issueSession(ctx, h, user.GetId(), deviceID, trusted)
+	var trustCutoff *timestamppb.Timestamp
+	if trusted {
+		trustCutoff = dev.trustCutoff
+	}
+	token, trustToken, err := issueSession(ctx, h, user.GetId(), deviceID, trustCutoff)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}

@@ -617,14 +617,18 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 
 	// Re-resolve the device from THIS request (same device as the SignIn
 	// that raised the challenge) so issueSession trusts it under `devices`.
-	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
+	dev, err := resolveSignInDevice(ctx, h, userID)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, err
 	}
-	token, trustToken, err := issueSession(ctx, h, userID, deviceID, true)
+	// The trust this completion grants holds only if the account's device
+	// trust was not revoked since the challenge was raised: the password the
+	// SignIn checked may be the one a password change just replaced. A
+	// challenge read without its creation time trusts nothing.
+	token, trustToken, err := issueSession(ctx, h, userID, dev.id, ch.GetCreatedAt())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}

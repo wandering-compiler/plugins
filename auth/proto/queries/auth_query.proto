@@ -582,6 +582,17 @@ message GetDeviceByIdentifierResp {
   Device device = 1;
 }
 
+// GetDeviceTrustRevokedAt reads User.device_trust_revoked_at: a device
+// trusted at or before it is no longer trusted. Gated `devices`.
+message GetDeviceTrustRevokedAtReq {
+  option (w17.contrib.plugin_feature) = "devices";
+  string user_id = 1;
+}
+message GetDeviceTrustRevokedAtResp {
+  option (w17.contrib.plugin_feature) = "devices";
+  google.protobuf.Timestamp device_trust_revoked_at = 1;
+}
+
 message ListUserDevicesReq {
   option (w17.contrib.plugin_feature) = "devices";
   string user_id = 1;
@@ -1952,6 +1963,20 @@ service AuthQuery {
           "       d.created_at AS device.created_at, "
           "       d.trust_token_hash AS device.trust_token_hash "
           "FROM @module.Device d WHERE d.user_id = :user_id AND d.identifier = :identifier"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "devices";
+  }
+
+  // GetDeviceTrustRevokedAt — when the account's device trust was last
+  // revoked (a password change or a disable stamps it). The sign-in resolver
+  // and ListDevices count a device as trusted only when its trusted_at is
+  // later. Gated devices.
+  rpc GetDeviceTrustRevokedAt(GetDeviceTrustRevokedAtReq) returns (GetDeviceTrustRevokedAtResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT u.device_trust_revoked_at AS device_trust_revoked_at FROM @module.User u WHERE u.id = :user_id"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "devices";

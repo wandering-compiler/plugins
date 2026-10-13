@@ -719,6 +719,16 @@ message TrustDeviceReq {
   // SHA-256 hex of the freshly-minted device-trust token stored on
   // the row; the client must present the matching plaintext to be trusted.
   string trust_token_hash = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  // The trust is written only while the account's device trust has not been
+  // revoked AFTER this instant (User.device_trust_revoked_at): for a SignIn
+  // renewing trust, the revocation stamp it read while resolving the device
+  // (after the password check); for VerifyMfa, the creation of the challenge
+  // it answered (also after SignIn's password check). The epoch when the
+  // account was never revoked. A password change or a disable that commits
+  // after that instant then wins, instead of being overwritten by a
+  // trusted_at stamped after it; one committing between the password check
+  // and that instant is not caught (SPEC, devices gap 6).
+  google.protobuf.Timestamp not_revoked_after = 4 [(w17.field) = { type: DATETIME }];
 }
 message TrustDeviceResp {
   option (w17.contrib.plugin_feature) = "devices";
@@ -2089,7 +2099,10 @@ service AuthMutation {
   // TrustDevice — mark the (user, identifier) device trusted +
   // refresh last_seen. Called when a login (or VerifyMfa) for the
   // device completes; the trusted_at it stamps is the signal
-  // `two_factor` new-device mode reads to skip the challenge.
+  // `two_factor` new-device mode reads to skip the challenge. Matches no
+  // row when the account's device trust was revoked after
+  // :not_revoked_after (see the request): the sign-in then gets its
+  // session but no trust.
   rpc TrustDevice(TrustDeviceReq) returns (TrustDeviceResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
@@ -2101,6 +2114,8 @@ service AuthMutation {
           "last_seen_at = NOW(), "
           "trust_token_hash = :trust_token_hash "
           "WHERE id = :device_id AND user_id = :user_id "
+          "AND NOT EXISTS (SELECT u.id FROM @module.User u "
+          "WHERE u.id = :user_id AND u.device_trust_revoked_at > :not_revoked_after) "
           "RETURNING id AS device_id"
       }
     };
@@ -2361,7 +2376,11 @@ service AuthMutation {
       ops: [
         {
           name: "disable"
-          dql:  "UPDATE @module.User SET disabled_at = NOW() "
+          // With `devices`, the account's device trust ends too: a device
+          // trusted before the disable must pass the second factor again
+          // once the account is re-enabled (User.device_trust_revoked_at).
+          dql:  "UPDATE @module.User SET disabled_at = NOW(), "
+                "?feature(devices) device_trust_revoked_at = NOW() "
                 "WHERE id IN (:ids) AND disabled_at IS NULL"
         },
         {
@@ -2615,7 +2634,12 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.User SET "
-          "password_hash = :password_hash "
+          "password_hash = :password_hash, "
+          // With `devices`, a change also ends the trust of every device of
+          // the account, the caller's own included: whoever held the old
+          // password may have signed in from a device that is trusted now.
+          // In this statement, so the two cannot come apart.
+          "?feature(devices) device_trust_revoked_at = NOW() "
           "WHERE id = :user_id AND password_hash = :current_hash "
           "RETURNING id AS user_id"
       }

@@ -92,8 +92,8 @@ func (s *roundTripStore) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq
 func pinConsoleActivation(t *testing.T) {
 	t.Helper()
 	origDevice := resolveSignInDevice
-	resolveSignInDevice = func(context.Context, *AuthServiceHandler, string) (string, bool, error) {
-		return "", true, nil
+	resolveSignInDevice = func(context.Context, *AuthServiceHandler, string) (signInDevice, error) {
+		return signInDevice{trusted: true}, nil
 	}
 	t.Cleanup(func() { resolveSignInDevice = origDevice })
 

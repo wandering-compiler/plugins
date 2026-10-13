@@ -266,14 +266,14 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 		return nil, oauthRefusal(err)
 	}
-	deviceID, _, err := resolveSignInDevice(ctx, h, userID)
+	dev, err := resolveSignInDevice(ctx, h, userID)
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}
 	// Bound to the device, never trusting it: this sign-in skipped the
 	// plugin's second factor, and a trusted device skips it later for a
 	// password sign-in too.
-	token, trustToken, err := issueSession(ctx, h, userID, deviceID, false)
+	token, trustToken, err := issueSession(ctx, h, userID, dev.id, nil)
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}
