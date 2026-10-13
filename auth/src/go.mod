@@ -38,11 +38,11 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
 )
 
 require (
 	github.com/wandering-compiler/sdk/go v0.0.0-20260922225050-410f0d2303c1
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d
 	google.golang.org/protobuf v1.36.11
 	rsc.io/qr v0.2.0
 )

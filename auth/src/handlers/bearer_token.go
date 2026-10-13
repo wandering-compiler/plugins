@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"context"
+	"sort"
 	"time"
 
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/protoadapt"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
@@ -76,21 +78,57 @@ func sessionExpired(ctx context.Context, expiresAt time.Time, kind pb.TokenType)
 		dev, msgid = "API token expired; create a new token", MsgAPITokenExpired
 	}
 	st := status.New(codes.Unauthenticated, dev)
-	with, err := st.WithDetails(
-		protoadapt.MessageV1Of(&w17pb.ErrorDetail{
-			Code:    CodeSessionExpired,
-			Message: i18n.T(ctx, msgid, map[string]string{"date": expiresAt.Format("2006-01-02 15:04 UTC")}),
-		}),
-		protoadapt.MessageV1Of(&errdetails.ErrorInfo{
-			Reason:   CodeSessionExpired,
-			Domain:   ErrorDomain,
-			Metadata: map[string]string{"expires_at": expiresAt.Format(time.RFC3339)},
-		}),
-	)
+	with, err := st.WithDetails(protoadapt.MessageV1Of(&w17pb.ErrorDetail{
+		Code:    CodeSessionExpired,
+		Message: i18n.T(ctx, msgid, map[string]string{"date": expiresAt.Format("2006-01-02 15:04 UTC")}),
+	}))
 	if err != nil {
-		// coverage-exempt: WithDetails only fails if a detail cannot marshal,
-		// and both are static well-typed protos.
+		// coverage-exempt: WithDetails only fails if the detail cannot
+		// marshal, and ErrorDetail is a static well-typed proto.
 		return &statusError{st: st}
 	}
-	return &statusError{st: with}
+	sp := with.Proto()
+	sp.Details = append(sp.Details, errorInfoAny(CodeSessionExpired, ErrorDomain,
+		map[string]string{"expires_at": expiresAt.Format(time.RFC3339)}))
+	return &statusError{st: status.FromProto(sp)}
+}
+
+// errorInfoTypeURL is the Any type URL of google.rpc.ErrorInfo.
+const errorInfoTypeURL = "type.googleapis.com/google.rpc.ErrorInfo"
+
+// errorInfoAny encodes a google.rpc.ErrorInfo by hand, in its wire form, as
+// an Any status detail.
+//
+// By hand because the generated type cannot be imported here: this package
+// is copied into the consumer's storage module, whose go.mod does not require
+// the genproto module that holds errdetails, so importing it fails the
+// consumer's build ("imported from implicitly required module"). The message
+// is three fields and frozen, so the encoding is short:
+//
+//	1 reason   string
+//	2 domain   string
+//	3 metadata map<string,string> = repeated entry { 1 key, 2 value }
+//
+// Map entries are written in key order, so the bytes are deterministic.
+func errorInfoAny(reason, domain string, metadata map[string]string) *anypb.Any {
+	var b []byte
+	b = protowire.AppendTag(b, 1, protowire.BytesType)
+	b = protowire.AppendString(b, reason)
+	b = protowire.AppendTag(b, 2, protowire.BytesType)
+	b = protowire.AppendString(b, domain)
+	keys := make([]string, 0, len(metadata))
+	for k := range metadata {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		var entry []byte
+		entry = protowire.AppendTag(entry, 1, protowire.BytesType)
+		entry = protowire.AppendString(entry, k)
+		entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+		entry = protowire.AppendString(entry, metadata[k])
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, entry)
+	}
+	return &anypb.Any{TypeUrl: errorInfoTypeURL, Value: b}
 }

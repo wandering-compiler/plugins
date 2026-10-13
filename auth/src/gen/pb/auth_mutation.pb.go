@@ -558,9 +558,11 @@ func (*UpgradeTokenHashResp) Descriptor() ([]byte, []int) {
 // TouchTokenLastUsed stamps last_used_at on a token Authenticate just
 // accepted, unless it was stamped after :cutoff. See the rpc.
 type TouchTokenLastUsedReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TokenId       string                 `protobuf:"bytes,1,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
-	Cutoff        *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=cutoff,proto3" json:"cutoff,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	TokenId string                 `protobuf:"bytes,1,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`
+	Cutoff  *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=cutoff,proto3" json:"cutoff,omitempty"`
+	// The stamp, from the same clock as cutoff (see the rpc).
+	UsedAt        *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=used_at,json=usedAt,proto3" json:"used_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -605,6 +607,13 @@ func (x *TouchTokenLastUsedReq) GetTokenId() string {
 func (x *TouchTokenLastUsedReq) GetCutoff() *timestamppb.Timestamp {
 	if x != nil {
 		return x.Cutoff
+	}
+	return nil
+}
+
+func (x *TouchTokenLastUsedReq) GetUsedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UsedAt
 	}
 	return nil
 }
@@ -8984,10 +8993,11 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\flegacy_token\x18\x01 \x01(\tR\vlegacyToken\x12'\n" +
 	"\n" +
 	"token_hash\x18\x02 \x01(\tB\b\xca\xf3\x18\x04\b\x01@@R\ttokenHash\"\x16\n" +
-	"\x14UpgradeTokenHashResp\"\x85\x01\n" +
+	"\x14UpgradeTokenHashResp\"\xc2\x01\n" +
 	"\x15TouchTokenLastUsedReq\x12!\n" +
 	"\btoken_id\x18\x01 \x01(\tB\x06\xca\xf3\x18\x02\b\x03R\atokenId\x12:\n" +
-	"\x06cutoff\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\x06cutoff:\r\xfa\xf4\x18\tapi_token\"'\n" +
+	"\x06cutoff\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\x06cutoff\x12;\n" +
+	"\aused_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\x06\xca\xf3\x18\x02\b\x16R\x06usedAt:\r\xfa\xf4\x18\tapi_token\"'\n" +
 	"\x16TouchTokenLastUsedResp:\r\xfa\xf4\x18\tapi_token\"E\n" +
 	"\x0fDeleteTokenResp\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\tR\atokenId\x12\x17\n" +
@@ -9534,7 +9544,7 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"org_invite\"B\n" +
 	"\x13DeleteOrgInviteResp\x12\x1b\n" +
 	"\tinvite_id\x18\x01 \x01(\tR\binviteId:\x0e\xfa\xf4\x18\n" +
-	"org_invite2\xd8\xf6\x01\n" +
+	"org_invite2\xdb\xf6\x01\n" +
 	"\fAuthMutation\x12\xd8\x02\n" +
 	"\rCreateBotUser\x12\".w17.contrib.auth.CreateBotUserReq\x1a#.w17.contrib.auth.CreateBotUserResp\"\xfd\x01\xf2\xf3\x18\xe5\x01B\xe2\x01\n" +
 	"\x04main\x12\xd9\x01INSERT INTO @module.User SET email = :email, password_hash = '!', kind = 1, ?feature(tenant_scope) tenant_id = :tenant_id RETURNING id AS user.id,           email AS user.email,           created_at AS user.created_at\x8a\xf5\x18\x0fservice_account\x12\xe5\x03\n" +
@@ -9563,9 +9573,9 @@ const file_mutations_auth_mutation_proto_rawDesc = "" +
 	"\vDeleteToken\x12 .w17.contrib.auth.DeleteTokenReq\x1a!.w17.contrib.auth.DeleteTokenResp\"\x86\x01\xf2\xf3\x18\x81\x01B\x7f\n" +
 	"\x04main\x12wDELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :legacy_token RETURNING id AS token_id, user_id\x12\xe9\x01\n" +
 	"\x10UpgradeTokenHash\x12%.w17.contrib.auth.UpgradeTokenHashReq\x1a&.w17.contrib.auth.UpgradeTokenHashResp\"\x85\x01\xf2\xf3\x18\x80\x01B~\n" +
-	"\x04main\x12vUPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :legacy_token AND token_hash IS NULL\x12\x82\x02\n" +
-	"\x12TouchTokenLastUsed\x12'.w17.contrib.auth.TouchTokenLastUsedReq\x1a(.w17.contrib.auth.TouchTokenLastUsedResp\"\x98\x01\xf2\xf3\x18\x86\x01B\x83\x01\n" +
-	"\x04main\x12{UPDATE @module.UserToken SET last_used_at = NOW() WHERE id = :token_id AND (last_used_at IS NULL OR last_used_at < :cutoff)\x8a\xf5\x18\tapi_token\x12\xcd\x02\n" +
+	"\x04main\x12vUPDATE @module.UserToken SET token_hash = :token_hash, token = NULL WHERE token = :legacy_token AND token_hash IS NULL\x12\x85\x02\n" +
+	"\x12TouchTokenLastUsed\x12'.w17.contrib.auth.TouchTokenLastUsedReq\x1a(.w17.contrib.auth.TouchTokenLastUsedResp\"\x9b\x01\xf2\xf3\x18\x89\x01B\x86\x01\n" +
+	"\x04main\x12~UPDATE @module.UserToken SET last_used_at = :used_at WHERE id = :token_id AND (last_used_at IS NULL OR last_used_at < :cutoff)\x8a\xf5\x18\tapi_token\x12\xcd\x02\n" +
 	"\x12DeleteSessionToken\x12'.w17.contrib.auth.DeleteSessionTokenReq\x1a(.w17.contrib.auth.DeleteSessionTokenResp\"\xe3\x01\x9a\xbd\x18N\n" +
 	"\fTokenRevoked\x12>\n" +
 	"\x1e\n" +
@@ -10173,213 +10183,214 @@ var file_mutations_auth_mutation_proto_depIdxs = []int32{
 	171, // 2: w17.contrib.auth.IssueTokenReq.expires_at:type_name -> google.protobuf.Timestamp
 	172, // 3: w17.contrib.auth.IssueTokenResp.token:type_name -> w17.contrib.auth.UserToken
 	171, // 4: w17.contrib.auth.TouchTokenLastUsedReq.cutoff:type_name -> google.protobuf.Timestamp
-	173, // 5: w17.contrib.auth.DeleteSessionTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
-	173, // 6: w17.contrib.auth.IssueApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
-	171, // 7: w17.contrib.auth.IssueApiTokenReq.expires_at:type_name -> google.protobuf.Timestamp
-	172, // 8: w17.contrib.auth.IssueApiTokenResp.token:type_name -> w17.contrib.auth.UserToken
-	174, // 9: w17.contrib.auth.AddTokenPermissionResp.token_permission:type_name -> w17.contrib.auth.TokenPermission
-	173, // 10: w17.contrib.auth.DeleteApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
-	175, // 11: w17.contrib.auth.CreateOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
-	176, // 12: w17.contrib.auth.CreateTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
-	171, // 13: w17.contrib.auth.LockStepUpReq.until:type_name -> google.protobuf.Timestamp
-	171, // 14: w17.contrib.auth.CreateMfaChallengeReq.expires_at:type_name -> google.protobuf.Timestamp
-	177, // 15: w17.contrib.auth.CreateMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
-	171, // 16: w17.contrib.auth.CreatePendingSignUpReq.expires_at:type_name -> google.protobuf.Timestamp
-	178, // 17: w17.contrib.auth.CreatePendingSignUpResp.pending:type_name -> w17.contrib.auth.PendingSignUp
-	171, // 18: w17.contrib.auth.CreatePasswordResetTokenReq.expires_at:type_name -> google.protobuf.Timestamp
-	179, // 19: w17.contrib.auth.CreatePasswordResetTokenResp.token:type_name -> w17.contrib.auth.PasswordResetToken
-	171, // 20: w17.contrib.auth.CreateEmailVerificationTokenReq.expires_at:type_name -> google.protobuf.Timestamp
-	180, // 21: w17.contrib.auth.CreateEmailVerificationTokenResp.token:type_name -> w17.contrib.auth.EmailVerificationToken
-	181, // 22: w17.contrib.auth.CreateDeviceResp.device:type_name -> w17.contrib.auth.Device
-	171, // 23: w17.contrib.auth.TrustDeviceReq.not_revoked_after:type_name -> google.protobuf.Timestamp
-	182, // 24: w17.contrib.auth.CreateRoleResp.role:type_name -> w17.contrib.auth.Role
-	183, // 25: w17.contrib.auth.AssignRoleToUserResp.user_role:type_name -> w17.contrib.auth.UserRole
-	184, // 26: w17.contrib.auth.AddPermissionToRoleResp.role_permission:type_name -> w17.contrib.auth.RolePermission
-	185, // 27: w17.contrib.auth.RegisterAuthClientResp.client:type_name -> w17.contrib.auth.AuthClient
-	171, // 28: w17.contrib.auth.CreateOAuthLoginCodeReq.expires_at:type_name -> google.protobuf.Timestamp
-	171, // 29: w17.contrib.auth.CreateCliAuthCodeReq.expires_at:type_name -> google.protobuf.Timestamp
-	171, // 30: w17.contrib.auth.CreateCliAuthCodeReq.session_expires_at:type_name -> google.protobuf.Timestamp
-	186, // 31: w17.contrib.auth.CreateCliAuthCodeResp.code:type_name -> w17.contrib.auth.CliAuthCode
-	171, // 32: w17.contrib.auth.ConsumeCliAuthCodeResp.session_expires_at:type_name -> google.protobuf.Timestamp
-	187, // 33: w17.contrib.auth.CreateOrganizationResp.organization:type_name -> w17.contrib.auth.Organization
-	188, // 34: w17.contrib.auth.AddOrgMembershipResp.membership:type_name -> w17.contrib.auth.OrgMembership
-	171, // 35: w17.contrib.auth.CreateOrgInviteReq.expires_at:type_name -> google.protobuf.Timestamp
-	189, // 36: w17.contrib.auth.CreateOrgInviteResp.invite:type_name -> w17.contrib.auth.OrgInvite
-	0,   // 37: w17.contrib.auth.AuthMutation.CreateBotUser:input_type -> w17.contrib.auth.CreateBotUserReq
-	2,   // 38: w17.contrib.auth.AuthMutation.CreateUser:input_type -> w17.contrib.auth.CreateUserReq
-	4,   // 39: w17.contrib.auth.AuthMutation.IssueToken:input_type -> w17.contrib.auth.IssueTokenReq
-	6,   // 40: w17.contrib.auth.AuthMutation.DeleteToken:input_type -> w17.contrib.auth.DeleteTokenReq
-	7,   // 41: w17.contrib.auth.AuthMutation.UpgradeTokenHash:input_type -> w17.contrib.auth.UpgradeTokenHashReq
-	9,   // 42: w17.contrib.auth.AuthMutation.TouchTokenLastUsed:input_type -> w17.contrib.auth.TouchTokenLastUsedReq
-	12,  // 43: w17.contrib.auth.AuthMutation.DeleteSessionToken:input_type -> w17.contrib.auth.DeleteSessionTokenReq
-	14,  // 44: w17.contrib.auth.AuthMutation.IssueApiToken:input_type -> w17.contrib.auth.IssueApiTokenReq
-	16,  // 45: w17.contrib.auth.AuthMutation.AddTokenPermission:input_type -> w17.contrib.auth.AddTokenPermissionReq
-	18,  // 46: w17.contrib.auth.AuthMutation.DeleteApiToken:input_type -> w17.contrib.auth.DeleteApiTokenReq
-	20,  // 47: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:input_type -> w17.contrib.auth.DeleteTokenPermissionsReq
-	22,  // 48: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:input_type -> w17.contrib.auth.CreateOAuthIdentityReq
-	24,  // 49: w17.contrib.auth.AuthMutation.CreateTotpSecret:input_type -> w17.contrib.auth.CreateTotpSecretReq
-	26,  // 50: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:input_type -> w17.contrib.auth.ConfirmTotpSecretReq
-	28,  // 51: w17.contrib.auth.AuthMutation.UpsertOAuthProvider:input_type -> w17.contrib.auth.UpsertOAuthProviderReq
-	30,  // 52: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:input_type -> w17.contrib.auth.MoveOAuthProviderSecretReq
-	32,  // 53: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:input_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretReq
-	34,  // 54: w17.contrib.auth.AuthMutation.MoveTotpSeed:input_type -> w17.contrib.auth.MoveTotpSeedReq
-	36,  // 55: w17.contrib.auth.AuthMutation.ClaimTotpStep:input_type -> w17.contrib.auth.ClaimTotpStepReq
-	38,  // 56: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:input_type -> w17.contrib.auth.RecordStepUpAttemptReq
-	40,  // 57: w17.contrib.auth.AuthMutation.LockStepUp:input_type -> w17.contrib.auth.LockStepUpReq
-	42,  // 58: w17.contrib.auth.AuthMutation.ResetStepUp:input_type -> w17.contrib.auth.ResetStepUpReq
-	44,  // 59: w17.contrib.auth.AuthMutation.CreateRecoveryCode:input_type -> w17.contrib.auth.CreateRecoveryCodeReq
-	46,  // 60: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:input_type -> w17.contrib.auth.DeleteRecoveryCodesReq
-	48,  // 61: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:input_type -> w17.contrib.auth.ConsumeRecoveryCodeReq
-	50,  // 62: w17.contrib.auth.AuthMutation.DeleteTotpSecret:input_type -> w17.contrib.auth.DeleteTotpSecretReq
-	52,  // 63: w17.contrib.auth.AuthMutation.CreateMfaChallenge:input_type -> w17.contrib.auth.CreateMfaChallengeReq
-	60,  // 64: w17.contrib.auth.AuthMutation.CreatePendingSignUp:input_type -> w17.contrib.auth.CreatePendingSignUpReq
-	62,  // 65: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:input_type -> w17.contrib.auth.RecordPendingSignUpAttemptReq
-	64,  // 66: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:input_type -> w17.contrib.auth.ClaimPendingSignUpReq
-	66,  // 67: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:input_type -> w17.contrib.auth.DeletePendingSignUpsForEmailReq
-	68,  // 68: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:input_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsReq
-	56,  // 69: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:input_type -> w17.contrib.auth.ConsumeMfaChallengeReq
-	58,  // 70: w17.contrib.auth.AuthMutation.RecordMfaAttempt:input_type -> w17.contrib.auth.RecordMfaAttemptReq
-	54,  // 71: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:input_type -> w17.contrib.auth.SupersedePendingMfaChallengesReq
-	92,  // 72: w17.contrib.auth.AuthMutation.CreateDevice:input_type -> w17.contrib.auth.CreateDeviceReq
-	94,  // 73: w17.contrib.auth.AuthMutation.TrustDevice:input_type -> w17.contrib.auth.TrustDeviceReq
-	96,  // 74: w17.contrib.auth.AuthMutation.TouchDevice:input_type -> w17.contrib.auth.TouchDeviceReq
-	102, // 75: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:input_type -> w17.contrib.auth.DeleteUndevicedSessionsReq
-	98,  // 76: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:input_type -> w17.contrib.auth.DeleteDeviceTokensReq
-	100, // 77: w17.contrib.auth.AuthMutation.DeleteDevice:input_type -> w17.contrib.auth.DeleteDeviceReq
-	104, // 78: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:input_type -> w17.contrib.auth.DeleteAllUserTokensReq
-	106, // 79: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:input_type -> w17.contrib.auth.DeleteAllUserDevicesReq
-	108, // 80: w17.contrib.auth.AuthMutation.CreateRole:input_type -> w17.contrib.auth.CreateRoleReq
-	112, // 81: w17.contrib.auth.AuthMutation.UpdateRole:input_type -> w17.contrib.auth.UpdateRoleReq
-	110, // 82: w17.contrib.auth.AuthMutation.DeleteRole:input_type -> w17.contrib.auth.DeleteRoleReq
-	116, // 83: w17.contrib.auth.AuthMutation.UpdateUser:input_type -> w17.contrib.auth.UpdateUserReq
-	114, // 84: w17.contrib.auth.AuthMutation.DeleteUser:input_type -> w17.contrib.auth.DeleteUserReq
-	118, // 85: w17.contrib.auth.AuthMutation.DisableUsers:input_type -> w17.contrib.auth.DisableUsersReq
-	120, // 86: w17.contrib.auth.AuthMutation.EnableUsers:input_type -> w17.contrib.auth.EnableUsersReq
-	122, // 87: w17.contrib.auth.AuthMutation.AssignRoleToUser:input_type -> w17.contrib.auth.AssignRoleToUserReq
-	124, // 88: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:input_type -> w17.contrib.auth.RevokeRoleFromUserReq
-	126, // 89: w17.contrib.auth.AuthMutation.AddPermissionToRole:input_type -> w17.contrib.auth.AddPermissionToRoleReq
-	128, // 90: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:input_type -> w17.contrib.auth.RemovePermissionFromRoleReq
-	70,  // 91: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:input_type -> w17.contrib.auth.CreatePasswordResetTokenReq
-	74,  // 92: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:input_type -> w17.contrib.auth.ConsumePasswordResetTokenReq
-	72,  // 93: w17.contrib.auth.AuthMutation.SpendPasswordResetTokens:input_type -> w17.contrib.auth.SpendPasswordResetTokensReq
-	76,  // 94: w17.contrib.auth.AuthMutation.UpdateUserPassword:input_type -> w17.contrib.auth.UpdateUserPasswordReq
-	78,  // 95: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:input_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedReq
-	82,  // 96: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:input_type -> w17.contrib.auth.DeleteUserSessionsForResetReq
-	80,  // 97: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:input_type -> w17.contrib.auth.DeleteOtherSessionTokensReq
-	84,  // 98: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:input_type -> w17.contrib.auth.CreateEmailVerificationTokenReq
-	86,  // 99: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:input_type -> w17.contrib.auth.ConsumeEmailVerificationTokenReq
-	90,  // 100: w17.contrib.auth.AuthMutation.MarkEmailVerified:input_type -> w17.contrib.auth.MarkEmailVerifiedReq
-	88,  // 101: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:input_type -> w17.contrib.auth.MarkEmailDerivedFromInviteReq
-	130, // 102: w17.contrib.auth.AuthMutation.RegisterAuthClient:input_type -> w17.contrib.auth.RegisterAuthClientReq
-	132, // 103: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:input_type -> w17.contrib.auth.SetAuthClientEnabledReq
-	134, // 104: w17.contrib.auth.AuthMutation.DeleteAuthClient:input_type -> w17.contrib.auth.DeleteAuthClientReq
-	136, // 105: w17.contrib.auth.AuthMutation.ClaimBootstrapAdmin:input_type -> w17.contrib.auth.ClaimBootstrapAdminReq
-	138, // 106: w17.contrib.auth.AuthMutation.CreateOAuthLoginCode:input_type -> w17.contrib.auth.CreateOAuthLoginCodeReq
-	140, // 107: w17.contrib.auth.AuthMutation.ConsumeOAuthLoginCode:input_type -> w17.contrib.auth.ConsumeOAuthLoginCodeReq
-	142, // 108: w17.contrib.auth.AuthMutation.CreateCliAuthCode:input_type -> w17.contrib.auth.CreateCliAuthCodeReq
-	144, // 109: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:input_type -> w17.contrib.auth.ConsumeCliAuthCodeReq
-	146, // 110: w17.contrib.auth.AuthMutation.CreateOrganization:input_type -> w17.contrib.auth.CreateOrganizationReq
-	148, // 111: w17.contrib.auth.AuthMutation.AddOrgMembership:input_type -> w17.contrib.auth.AddOrgMembershipReq
-	154, // 112: w17.contrib.auth.AuthMutation.UpdateOrganization:input_type -> w17.contrib.auth.UpdateOrganizationReq
-	150, // 113: w17.contrib.auth.AuthMutation.DeleteOrganization:input_type -> w17.contrib.auth.DeleteOrganizationReq
-	156, // 114: w17.contrib.auth.AuthMutation.UpdateOrgMembership:input_type -> w17.contrib.auth.UpdateOrgMembershipReq
-	152, // 115: w17.contrib.auth.AuthMutation.DeleteOrgMembership:input_type -> w17.contrib.auth.DeleteOrgMembershipReq
-	158, // 116: w17.contrib.auth.AuthMutation.RevokeUserToken:input_type -> w17.contrib.auth.RevokeUserTokenReq
-	160, // 117: w17.contrib.auth.AuthMutation.CreateOrgInvite:input_type -> w17.contrib.auth.CreateOrgInviteReq
-	164, // 118: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:input_type -> w17.contrib.auth.BindOpenOrgInviteReq
-	166, // 119: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:input_type -> w17.contrib.auth.ConsumeOrgInviteByTokenReq
-	162, // 120: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:input_type -> w17.contrib.auth.ClearExpiredOrgInviteReq
-	168, // 121: w17.contrib.auth.AuthMutation.DeleteOrgInvite:input_type -> w17.contrib.auth.DeleteOrgInviteReq
-	1,   // 122: w17.contrib.auth.AuthMutation.CreateBotUser:output_type -> w17.contrib.auth.CreateBotUserResp
-	3,   // 123: w17.contrib.auth.AuthMutation.CreateUser:output_type -> w17.contrib.auth.CreateUserResp
-	5,   // 124: w17.contrib.auth.AuthMutation.IssueToken:output_type -> w17.contrib.auth.IssueTokenResp
-	11,  // 125: w17.contrib.auth.AuthMutation.DeleteToken:output_type -> w17.contrib.auth.DeleteTokenResp
-	8,   // 126: w17.contrib.auth.AuthMutation.UpgradeTokenHash:output_type -> w17.contrib.auth.UpgradeTokenHashResp
-	10,  // 127: w17.contrib.auth.AuthMutation.TouchTokenLastUsed:output_type -> w17.contrib.auth.TouchTokenLastUsedResp
-	13,  // 128: w17.contrib.auth.AuthMutation.DeleteSessionToken:output_type -> w17.contrib.auth.DeleteSessionTokenResp
-	15,  // 129: w17.contrib.auth.AuthMutation.IssueApiToken:output_type -> w17.contrib.auth.IssueApiTokenResp
-	17,  // 130: w17.contrib.auth.AuthMutation.AddTokenPermission:output_type -> w17.contrib.auth.AddTokenPermissionResp
-	19,  // 131: w17.contrib.auth.AuthMutation.DeleteApiToken:output_type -> w17.contrib.auth.DeleteApiTokenResp
-	21,  // 132: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:output_type -> w17.contrib.auth.DeleteTokenPermissionsResp
-	23,  // 133: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:output_type -> w17.contrib.auth.CreateOAuthIdentityResp
-	25,  // 134: w17.contrib.auth.AuthMutation.CreateTotpSecret:output_type -> w17.contrib.auth.CreateTotpSecretResp
-	27,  // 135: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:output_type -> w17.contrib.auth.ConfirmTotpSecretResp
-	29,  // 136: w17.contrib.auth.AuthMutation.UpsertOAuthProvider:output_type -> w17.contrib.auth.UpsertOAuthProviderResp
-	31,  // 137: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:output_type -> w17.contrib.auth.MoveOAuthProviderSecretResp
-	33,  // 138: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:output_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretResp
-	35,  // 139: w17.contrib.auth.AuthMutation.MoveTotpSeed:output_type -> w17.contrib.auth.MoveTotpSeedResp
-	37,  // 140: w17.contrib.auth.AuthMutation.ClaimTotpStep:output_type -> w17.contrib.auth.ClaimTotpStepResp
-	39,  // 141: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:output_type -> w17.contrib.auth.RecordStepUpAttemptResp
-	41,  // 142: w17.contrib.auth.AuthMutation.LockStepUp:output_type -> w17.contrib.auth.LockStepUpResp
-	43,  // 143: w17.contrib.auth.AuthMutation.ResetStepUp:output_type -> w17.contrib.auth.ResetStepUpResp
-	45,  // 144: w17.contrib.auth.AuthMutation.CreateRecoveryCode:output_type -> w17.contrib.auth.CreateRecoveryCodeResp
-	47,  // 145: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:output_type -> w17.contrib.auth.DeleteRecoveryCodesResp
-	49,  // 146: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:output_type -> w17.contrib.auth.ConsumeRecoveryCodeResp
-	51,  // 147: w17.contrib.auth.AuthMutation.DeleteTotpSecret:output_type -> w17.contrib.auth.DeleteTotpSecretResp
-	53,  // 148: w17.contrib.auth.AuthMutation.CreateMfaChallenge:output_type -> w17.contrib.auth.CreateMfaChallengeResp
-	61,  // 149: w17.contrib.auth.AuthMutation.CreatePendingSignUp:output_type -> w17.contrib.auth.CreatePendingSignUpResp
-	63,  // 150: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:output_type -> w17.contrib.auth.RecordPendingSignUpAttemptResp
-	65,  // 151: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:output_type -> w17.contrib.auth.ClaimPendingSignUpResp
-	67,  // 152: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:output_type -> w17.contrib.auth.DeletePendingSignUpsForEmailResp
-	69,  // 153: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:output_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsResp
-	57,  // 154: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:output_type -> w17.contrib.auth.ConsumeMfaChallengeResp
-	59,  // 155: w17.contrib.auth.AuthMutation.RecordMfaAttempt:output_type -> w17.contrib.auth.RecordMfaAttemptResp
-	55,  // 156: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:output_type -> w17.contrib.auth.SupersedePendingMfaChallengesResp
-	93,  // 157: w17.contrib.auth.AuthMutation.CreateDevice:output_type -> w17.contrib.auth.CreateDeviceResp
-	95,  // 158: w17.contrib.auth.AuthMutation.TrustDevice:output_type -> w17.contrib.auth.TrustDeviceResp
-	97,  // 159: w17.contrib.auth.AuthMutation.TouchDevice:output_type -> w17.contrib.auth.TouchDeviceResp
-	103, // 160: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:output_type -> w17.contrib.auth.DeleteUndevicedSessionsResp
-	99,  // 161: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:output_type -> w17.contrib.auth.DeleteDeviceTokensResp
-	101, // 162: w17.contrib.auth.AuthMutation.DeleteDevice:output_type -> w17.contrib.auth.DeleteDeviceResp
-	105, // 163: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:output_type -> w17.contrib.auth.DeleteAllUserTokensResp
-	107, // 164: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:output_type -> w17.contrib.auth.DeleteAllUserDevicesResp
-	109, // 165: w17.contrib.auth.AuthMutation.CreateRole:output_type -> w17.contrib.auth.CreateRoleResp
-	113, // 166: w17.contrib.auth.AuthMutation.UpdateRole:output_type -> w17.contrib.auth.UpdateRoleResp
-	111, // 167: w17.contrib.auth.AuthMutation.DeleteRole:output_type -> w17.contrib.auth.DeleteRoleResp
-	117, // 168: w17.contrib.auth.AuthMutation.UpdateUser:output_type -> w17.contrib.auth.UpdateUserResp
-	115, // 169: w17.contrib.auth.AuthMutation.DeleteUser:output_type -> w17.contrib.auth.DeleteUserResp
-	119, // 170: w17.contrib.auth.AuthMutation.DisableUsers:output_type -> w17.contrib.auth.DisableUsersResp
-	121, // 171: w17.contrib.auth.AuthMutation.EnableUsers:output_type -> w17.contrib.auth.EnableUsersResp
-	123, // 172: w17.contrib.auth.AuthMutation.AssignRoleToUser:output_type -> w17.contrib.auth.AssignRoleToUserResp
-	125, // 173: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:output_type -> w17.contrib.auth.RevokeRoleFromUserResp
-	127, // 174: w17.contrib.auth.AuthMutation.AddPermissionToRole:output_type -> w17.contrib.auth.AddPermissionToRoleResp
-	129, // 175: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:output_type -> w17.contrib.auth.RemovePermissionFromRoleResp
-	71,  // 176: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:output_type -> w17.contrib.auth.CreatePasswordResetTokenResp
-	75,  // 177: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:output_type -> w17.contrib.auth.ConsumePasswordResetTokenResp
-	73,  // 178: w17.contrib.auth.AuthMutation.SpendPasswordResetTokens:output_type -> w17.contrib.auth.SpendPasswordResetTokensResp
-	77,  // 179: w17.contrib.auth.AuthMutation.UpdateUserPassword:output_type -> w17.contrib.auth.UpdateUserPasswordResp
-	79,  // 180: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:output_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedResp
-	83,  // 181: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:output_type -> w17.contrib.auth.DeleteUserSessionsForResetResp
-	81,  // 182: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:output_type -> w17.contrib.auth.DeleteOtherSessionTokensResp
-	85,  // 183: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:output_type -> w17.contrib.auth.CreateEmailVerificationTokenResp
-	87,  // 184: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:output_type -> w17.contrib.auth.ConsumeEmailVerificationTokenResp
-	91,  // 185: w17.contrib.auth.AuthMutation.MarkEmailVerified:output_type -> w17.contrib.auth.MarkEmailVerifiedResp
-	89,  // 186: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:output_type -> w17.contrib.auth.MarkEmailDerivedFromInviteResp
-	131, // 187: w17.contrib.auth.AuthMutation.RegisterAuthClient:output_type -> w17.contrib.auth.RegisterAuthClientResp
-	133, // 188: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:output_type -> w17.contrib.auth.SetAuthClientEnabledResp
-	135, // 189: w17.contrib.auth.AuthMutation.DeleteAuthClient:output_type -> w17.contrib.auth.DeleteAuthClientResp
-	137, // 190: w17.contrib.auth.AuthMutation.ClaimBootstrapAdmin:output_type -> w17.contrib.auth.ClaimBootstrapAdminResp
-	139, // 191: w17.contrib.auth.AuthMutation.CreateOAuthLoginCode:output_type -> w17.contrib.auth.CreateOAuthLoginCodeResp
-	141, // 192: w17.contrib.auth.AuthMutation.ConsumeOAuthLoginCode:output_type -> w17.contrib.auth.ConsumeOAuthLoginCodeResp
-	143, // 193: w17.contrib.auth.AuthMutation.CreateCliAuthCode:output_type -> w17.contrib.auth.CreateCliAuthCodeResp
-	145, // 194: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:output_type -> w17.contrib.auth.ConsumeCliAuthCodeResp
-	147, // 195: w17.contrib.auth.AuthMutation.CreateOrganization:output_type -> w17.contrib.auth.CreateOrganizationResp
-	149, // 196: w17.contrib.auth.AuthMutation.AddOrgMembership:output_type -> w17.contrib.auth.AddOrgMembershipResp
-	155, // 197: w17.contrib.auth.AuthMutation.UpdateOrganization:output_type -> w17.contrib.auth.UpdateOrganizationResp
-	151, // 198: w17.contrib.auth.AuthMutation.DeleteOrganization:output_type -> w17.contrib.auth.DeleteOrganizationResp
-	157, // 199: w17.contrib.auth.AuthMutation.UpdateOrgMembership:output_type -> w17.contrib.auth.UpdateOrgMembershipResp
-	153, // 200: w17.contrib.auth.AuthMutation.DeleteOrgMembership:output_type -> w17.contrib.auth.DeleteOrgMembershipResp
-	159, // 201: w17.contrib.auth.AuthMutation.RevokeUserToken:output_type -> w17.contrib.auth.RevokeUserTokenResp
-	161, // 202: w17.contrib.auth.AuthMutation.CreateOrgInvite:output_type -> w17.contrib.auth.CreateOrgInviteResp
-	165, // 203: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:output_type -> w17.contrib.auth.BindOpenOrgInviteResp
-	167, // 204: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:output_type -> w17.contrib.auth.ConsumeOrgInviteByTokenResp
-	163, // 205: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:output_type -> w17.contrib.auth.ClearExpiredOrgInviteResp
-	169, // 206: w17.contrib.auth.AuthMutation.DeleteOrgInvite:output_type -> w17.contrib.auth.DeleteOrgInviteResp
-	122, // [122:207] is the sub-list for method output_type
-	37,  // [37:122] is the sub-list for method input_type
-	37,  // [37:37] is the sub-list for extension type_name
-	37,  // [37:37] is the sub-list for extension extendee
-	0,   // [0:37] is the sub-list for field type_name
+	171, // 5: w17.contrib.auth.TouchTokenLastUsedReq.used_at:type_name -> google.protobuf.Timestamp
+	173, // 6: w17.contrib.auth.DeleteSessionTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
+	173, // 7: w17.contrib.auth.IssueApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
+	171, // 8: w17.contrib.auth.IssueApiTokenReq.expires_at:type_name -> google.protobuf.Timestamp
+	172, // 9: w17.contrib.auth.IssueApiTokenResp.token:type_name -> w17.contrib.auth.UserToken
+	174, // 10: w17.contrib.auth.AddTokenPermissionResp.token_permission:type_name -> w17.contrib.auth.TokenPermission
+	173, // 11: w17.contrib.auth.DeleteApiTokenReq.token_type:type_name -> w17.contrib.auth.TokenType
+	175, // 12: w17.contrib.auth.CreateOAuthIdentityResp.identity:type_name -> w17.contrib.auth.OAuthIdentity
+	176, // 13: w17.contrib.auth.CreateTotpSecretResp.secret:type_name -> w17.contrib.auth.UserTotpSecret
+	171, // 14: w17.contrib.auth.LockStepUpReq.until:type_name -> google.protobuf.Timestamp
+	171, // 15: w17.contrib.auth.CreateMfaChallengeReq.expires_at:type_name -> google.protobuf.Timestamp
+	177, // 16: w17.contrib.auth.CreateMfaChallengeResp.challenge:type_name -> w17.contrib.auth.MfaChallenge
+	171, // 17: w17.contrib.auth.CreatePendingSignUpReq.expires_at:type_name -> google.protobuf.Timestamp
+	178, // 18: w17.contrib.auth.CreatePendingSignUpResp.pending:type_name -> w17.contrib.auth.PendingSignUp
+	171, // 19: w17.contrib.auth.CreatePasswordResetTokenReq.expires_at:type_name -> google.protobuf.Timestamp
+	179, // 20: w17.contrib.auth.CreatePasswordResetTokenResp.token:type_name -> w17.contrib.auth.PasswordResetToken
+	171, // 21: w17.contrib.auth.CreateEmailVerificationTokenReq.expires_at:type_name -> google.protobuf.Timestamp
+	180, // 22: w17.contrib.auth.CreateEmailVerificationTokenResp.token:type_name -> w17.contrib.auth.EmailVerificationToken
+	181, // 23: w17.contrib.auth.CreateDeviceResp.device:type_name -> w17.contrib.auth.Device
+	171, // 24: w17.contrib.auth.TrustDeviceReq.not_revoked_after:type_name -> google.protobuf.Timestamp
+	182, // 25: w17.contrib.auth.CreateRoleResp.role:type_name -> w17.contrib.auth.Role
+	183, // 26: w17.contrib.auth.AssignRoleToUserResp.user_role:type_name -> w17.contrib.auth.UserRole
+	184, // 27: w17.contrib.auth.AddPermissionToRoleResp.role_permission:type_name -> w17.contrib.auth.RolePermission
+	185, // 28: w17.contrib.auth.RegisterAuthClientResp.client:type_name -> w17.contrib.auth.AuthClient
+	171, // 29: w17.contrib.auth.CreateOAuthLoginCodeReq.expires_at:type_name -> google.protobuf.Timestamp
+	171, // 30: w17.contrib.auth.CreateCliAuthCodeReq.expires_at:type_name -> google.protobuf.Timestamp
+	171, // 31: w17.contrib.auth.CreateCliAuthCodeReq.session_expires_at:type_name -> google.protobuf.Timestamp
+	186, // 32: w17.contrib.auth.CreateCliAuthCodeResp.code:type_name -> w17.contrib.auth.CliAuthCode
+	171, // 33: w17.contrib.auth.ConsumeCliAuthCodeResp.session_expires_at:type_name -> google.protobuf.Timestamp
+	187, // 34: w17.contrib.auth.CreateOrganizationResp.organization:type_name -> w17.contrib.auth.Organization
+	188, // 35: w17.contrib.auth.AddOrgMembershipResp.membership:type_name -> w17.contrib.auth.OrgMembership
+	171, // 36: w17.contrib.auth.CreateOrgInviteReq.expires_at:type_name -> google.protobuf.Timestamp
+	189, // 37: w17.contrib.auth.CreateOrgInviteResp.invite:type_name -> w17.contrib.auth.OrgInvite
+	0,   // 38: w17.contrib.auth.AuthMutation.CreateBotUser:input_type -> w17.contrib.auth.CreateBotUserReq
+	2,   // 39: w17.contrib.auth.AuthMutation.CreateUser:input_type -> w17.contrib.auth.CreateUserReq
+	4,   // 40: w17.contrib.auth.AuthMutation.IssueToken:input_type -> w17.contrib.auth.IssueTokenReq
+	6,   // 41: w17.contrib.auth.AuthMutation.DeleteToken:input_type -> w17.contrib.auth.DeleteTokenReq
+	7,   // 42: w17.contrib.auth.AuthMutation.UpgradeTokenHash:input_type -> w17.contrib.auth.UpgradeTokenHashReq
+	9,   // 43: w17.contrib.auth.AuthMutation.TouchTokenLastUsed:input_type -> w17.contrib.auth.TouchTokenLastUsedReq
+	12,  // 44: w17.contrib.auth.AuthMutation.DeleteSessionToken:input_type -> w17.contrib.auth.DeleteSessionTokenReq
+	14,  // 45: w17.contrib.auth.AuthMutation.IssueApiToken:input_type -> w17.contrib.auth.IssueApiTokenReq
+	16,  // 46: w17.contrib.auth.AuthMutation.AddTokenPermission:input_type -> w17.contrib.auth.AddTokenPermissionReq
+	18,  // 47: w17.contrib.auth.AuthMutation.DeleteApiToken:input_type -> w17.contrib.auth.DeleteApiTokenReq
+	20,  // 48: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:input_type -> w17.contrib.auth.DeleteTokenPermissionsReq
+	22,  // 49: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:input_type -> w17.contrib.auth.CreateOAuthIdentityReq
+	24,  // 50: w17.contrib.auth.AuthMutation.CreateTotpSecret:input_type -> w17.contrib.auth.CreateTotpSecretReq
+	26,  // 51: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:input_type -> w17.contrib.auth.ConfirmTotpSecretReq
+	28,  // 52: w17.contrib.auth.AuthMutation.UpsertOAuthProvider:input_type -> w17.contrib.auth.UpsertOAuthProviderReq
+	30,  // 53: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:input_type -> w17.contrib.auth.MoveOAuthProviderSecretReq
+	32,  // 54: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:input_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretReq
+	34,  // 55: w17.contrib.auth.AuthMutation.MoveTotpSeed:input_type -> w17.contrib.auth.MoveTotpSeedReq
+	36,  // 56: w17.contrib.auth.AuthMutation.ClaimTotpStep:input_type -> w17.contrib.auth.ClaimTotpStepReq
+	38,  // 57: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:input_type -> w17.contrib.auth.RecordStepUpAttemptReq
+	40,  // 58: w17.contrib.auth.AuthMutation.LockStepUp:input_type -> w17.contrib.auth.LockStepUpReq
+	42,  // 59: w17.contrib.auth.AuthMutation.ResetStepUp:input_type -> w17.contrib.auth.ResetStepUpReq
+	44,  // 60: w17.contrib.auth.AuthMutation.CreateRecoveryCode:input_type -> w17.contrib.auth.CreateRecoveryCodeReq
+	46,  // 61: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:input_type -> w17.contrib.auth.DeleteRecoveryCodesReq
+	48,  // 62: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:input_type -> w17.contrib.auth.ConsumeRecoveryCodeReq
+	50,  // 63: w17.contrib.auth.AuthMutation.DeleteTotpSecret:input_type -> w17.contrib.auth.DeleteTotpSecretReq
+	52,  // 64: w17.contrib.auth.AuthMutation.CreateMfaChallenge:input_type -> w17.contrib.auth.CreateMfaChallengeReq
+	60,  // 65: w17.contrib.auth.AuthMutation.CreatePendingSignUp:input_type -> w17.contrib.auth.CreatePendingSignUpReq
+	62,  // 66: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:input_type -> w17.contrib.auth.RecordPendingSignUpAttemptReq
+	64,  // 67: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:input_type -> w17.contrib.auth.ClaimPendingSignUpReq
+	66,  // 68: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:input_type -> w17.contrib.auth.DeletePendingSignUpsForEmailReq
+	68,  // 69: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:input_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsReq
+	56,  // 70: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:input_type -> w17.contrib.auth.ConsumeMfaChallengeReq
+	58,  // 71: w17.contrib.auth.AuthMutation.RecordMfaAttempt:input_type -> w17.contrib.auth.RecordMfaAttemptReq
+	54,  // 72: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:input_type -> w17.contrib.auth.SupersedePendingMfaChallengesReq
+	92,  // 73: w17.contrib.auth.AuthMutation.CreateDevice:input_type -> w17.contrib.auth.CreateDeviceReq
+	94,  // 74: w17.contrib.auth.AuthMutation.TrustDevice:input_type -> w17.contrib.auth.TrustDeviceReq
+	96,  // 75: w17.contrib.auth.AuthMutation.TouchDevice:input_type -> w17.contrib.auth.TouchDeviceReq
+	102, // 76: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:input_type -> w17.contrib.auth.DeleteUndevicedSessionsReq
+	98,  // 77: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:input_type -> w17.contrib.auth.DeleteDeviceTokensReq
+	100, // 78: w17.contrib.auth.AuthMutation.DeleteDevice:input_type -> w17.contrib.auth.DeleteDeviceReq
+	104, // 79: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:input_type -> w17.contrib.auth.DeleteAllUserTokensReq
+	106, // 80: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:input_type -> w17.contrib.auth.DeleteAllUserDevicesReq
+	108, // 81: w17.contrib.auth.AuthMutation.CreateRole:input_type -> w17.contrib.auth.CreateRoleReq
+	112, // 82: w17.contrib.auth.AuthMutation.UpdateRole:input_type -> w17.contrib.auth.UpdateRoleReq
+	110, // 83: w17.contrib.auth.AuthMutation.DeleteRole:input_type -> w17.contrib.auth.DeleteRoleReq
+	116, // 84: w17.contrib.auth.AuthMutation.UpdateUser:input_type -> w17.contrib.auth.UpdateUserReq
+	114, // 85: w17.contrib.auth.AuthMutation.DeleteUser:input_type -> w17.contrib.auth.DeleteUserReq
+	118, // 86: w17.contrib.auth.AuthMutation.DisableUsers:input_type -> w17.contrib.auth.DisableUsersReq
+	120, // 87: w17.contrib.auth.AuthMutation.EnableUsers:input_type -> w17.contrib.auth.EnableUsersReq
+	122, // 88: w17.contrib.auth.AuthMutation.AssignRoleToUser:input_type -> w17.contrib.auth.AssignRoleToUserReq
+	124, // 89: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:input_type -> w17.contrib.auth.RevokeRoleFromUserReq
+	126, // 90: w17.contrib.auth.AuthMutation.AddPermissionToRole:input_type -> w17.contrib.auth.AddPermissionToRoleReq
+	128, // 91: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:input_type -> w17.contrib.auth.RemovePermissionFromRoleReq
+	70,  // 92: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:input_type -> w17.contrib.auth.CreatePasswordResetTokenReq
+	74,  // 93: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:input_type -> w17.contrib.auth.ConsumePasswordResetTokenReq
+	72,  // 94: w17.contrib.auth.AuthMutation.SpendPasswordResetTokens:input_type -> w17.contrib.auth.SpendPasswordResetTokensReq
+	76,  // 95: w17.contrib.auth.AuthMutation.UpdateUserPassword:input_type -> w17.contrib.auth.UpdateUserPasswordReq
+	78,  // 96: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:input_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedReq
+	82,  // 97: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:input_type -> w17.contrib.auth.DeleteUserSessionsForResetReq
+	80,  // 98: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:input_type -> w17.contrib.auth.DeleteOtherSessionTokensReq
+	84,  // 99: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:input_type -> w17.contrib.auth.CreateEmailVerificationTokenReq
+	86,  // 100: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:input_type -> w17.contrib.auth.ConsumeEmailVerificationTokenReq
+	90,  // 101: w17.contrib.auth.AuthMutation.MarkEmailVerified:input_type -> w17.contrib.auth.MarkEmailVerifiedReq
+	88,  // 102: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:input_type -> w17.contrib.auth.MarkEmailDerivedFromInviteReq
+	130, // 103: w17.contrib.auth.AuthMutation.RegisterAuthClient:input_type -> w17.contrib.auth.RegisterAuthClientReq
+	132, // 104: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:input_type -> w17.contrib.auth.SetAuthClientEnabledReq
+	134, // 105: w17.contrib.auth.AuthMutation.DeleteAuthClient:input_type -> w17.contrib.auth.DeleteAuthClientReq
+	136, // 106: w17.contrib.auth.AuthMutation.ClaimBootstrapAdmin:input_type -> w17.contrib.auth.ClaimBootstrapAdminReq
+	138, // 107: w17.contrib.auth.AuthMutation.CreateOAuthLoginCode:input_type -> w17.contrib.auth.CreateOAuthLoginCodeReq
+	140, // 108: w17.contrib.auth.AuthMutation.ConsumeOAuthLoginCode:input_type -> w17.contrib.auth.ConsumeOAuthLoginCodeReq
+	142, // 109: w17.contrib.auth.AuthMutation.CreateCliAuthCode:input_type -> w17.contrib.auth.CreateCliAuthCodeReq
+	144, // 110: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:input_type -> w17.contrib.auth.ConsumeCliAuthCodeReq
+	146, // 111: w17.contrib.auth.AuthMutation.CreateOrganization:input_type -> w17.contrib.auth.CreateOrganizationReq
+	148, // 112: w17.contrib.auth.AuthMutation.AddOrgMembership:input_type -> w17.contrib.auth.AddOrgMembershipReq
+	154, // 113: w17.contrib.auth.AuthMutation.UpdateOrganization:input_type -> w17.contrib.auth.UpdateOrganizationReq
+	150, // 114: w17.contrib.auth.AuthMutation.DeleteOrganization:input_type -> w17.contrib.auth.DeleteOrganizationReq
+	156, // 115: w17.contrib.auth.AuthMutation.UpdateOrgMembership:input_type -> w17.contrib.auth.UpdateOrgMembershipReq
+	152, // 116: w17.contrib.auth.AuthMutation.DeleteOrgMembership:input_type -> w17.contrib.auth.DeleteOrgMembershipReq
+	158, // 117: w17.contrib.auth.AuthMutation.RevokeUserToken:input_type -> w17.contrib.auth.RevokeUserTokenReq
+	160, // 118: w17.contrib.auth.AuthMutation.CreateOrgInvite:input_type -> w17.contrib.auth.CreateOrgInviteReq
+	164, // 119: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:input_type -> w17.contrib.auth.BindOpenOrgInviteReq
+	166, // 120: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:input_type -> w17.contrib.auth.ConsumeOrgInviteByTokenReq
+	162, // 121: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:input_type -> w17.contrib.auth.ClearExpiredOrgInviteReq
+	168, // 122: w17.contrib.auth.AuthMutation.DeleteOrgInvite:input_type -> w17.contrib.auth.DeleteOrgInviteReq
+	1,   // 123: w17.contrib.auth.AuthMutation.CreateBotUser:output_type -> w17.contrib.auth.CreateBotUserResp
+	3,   // 124: w17.contrib.auth.AuthMutation.CreateUser:output_type -> w17.contrib.auth.CreateUserResp
+	5,   // 125: w17.contrib.auth.AuthMutation.IssueToken:output_type -> w17.contrib.auth.IssueTokenResp
+	11,  // 126: w17.contrib.auth.AuthMutation.DeleteToken:output_type -> w17.contrib.auth.DeleteTokenResp
+	8,   // 127: w17.contrib.auth.AuthMutation.UpgradeTokenHash:output_type -> w17.contrib.auth.UpgradeTokenHashResp
+	10,  // 128: w17.contrib.auth.AuthMutation.TouchTokenLastUsed:output_type -> w17.contrib.auth.TouchTokenLastUsedResp
+	13,  // 129: w17.contrib.auth.AuthMutation.DeleteSessionToken:output_type -> w17.contrib.auth.DeleteSessionTokenResp
+	15,  // 130: w17.contrib.auth.AuthMutation.IssueApiToken:output_type -> w17.contrib.auth.IssueApiTokenResp
+	17,  // 131: w17.contrib.auth.AuthMutation.AddTokenPermission:output_type -> w17.contrib.auth.AddTokenPermissionResp
+	19,  // 132: w17.contrib.auth.AuthMutation.DeleteApiToken:output_type -> w17.contrib.auth.DeleteApiTokenResp
+	21,  // 133: w17.contrib.auth.AuthMutation.DeleteTokenPermissions:output_type -> w17.contrib.auth.DeleteTokenPermissionsResp
+	23,  // 134: w17.contrib.auth.AuthMutation.CreateOAuthIdentity:output_type -> w17.contrib.auth.CreateOAuthIdentityResp
+	25,  // 135: w17.contrib.auth.AuthMutation.CreateTotpSecret:output_type -> w17.contrib.auth.CreateTotpSecretResp
+	27,  // 136: w17.contrib.auth.AuthMutation.ConfirmTotpSecret:output_type -> w17.contrib.auth.ConfirmTotpSecretResp
+	29,  // 137: w17.contrib.auth.AuthMutation.UpsertOAuthProvider:output_type -> w17.contrib.auth.UpsertOAuthProviderResp
+	31,  // 138: w17.contrib.auth.AuthMutation.MoveOAuthProviderSecret:output_type -> w17.contrib.auth.MoveOAuthProviderSecretResp
+	33,  // 139: w17.contrib.auth.AuthMutation.ClearOAuthProviderLegacySecret:output_type -> w17.contrib.auth.ClearOAuthProviderLegacySecretResp
+	35,  // 140: w17.contrib.auth.AuthMutation.MoveTotpSeed:output_type -> w17.contrib.auth.MoveTotpSeedResp
+	37,  // 141: w17.contrib.auth.AuthMutation.ClaimTotpStep:output_type -> w17.contrib.auth.ClaimTotpStepResp
+	39,  // 142: w17.contrib.auth.AuthMutation.RecordStepUpAttempt:output_type -> w17.contrib.auth.RecordStepUpAttemptResp
+	41,  // 143: w17.contrib.auth.AuthMutation.LockStepUp:output_type -> w17.contrib.auth.LockStepUpResp
+	43,  // 144: w17.contrib.auth.AuthMutation.ResetStepUp:output_type -> w17.contrib.auth.ResetStepUpResp
+	45,  // 145: w17.contrib.auth.AuthMutation.CreateRecoveryCode:output_type -> w17.contrib.auth.CreateRecoveryCodeResp
+	47,  // 146: w17.contrib.auth.AuthMutation.DeleteRecoveryCodes:output_type -> w17.contrib.auth.DeleteRecoveryCodesResp
+	49,  // 147: w17.contrib.auth.AuthMutation.ConsumeRecoveryCode:output_type -> w17.contrib.auth.ConsumeRecoveryCodeResp
+	51,  // 148: w17.contrib.auth.AuthMutation.DeleteTotpSecret:output_type -> w17.contrib.auth.DeleteTotpSecretResp
+	53,  // 149: w17.contrib.auth.AuthMutation.CreateMfaChallenge:output_type -> w17.contrib.auth.CreateMfaChallengeResp
+	61,  // 150: w17.contrib.auth.AuthMutation.CreatePendingSignUp:output_type -> w17.contrib.auth.CreatePendingSignUpResp
+	63,  // 151: w17.contrib.auth.AuthMutation.RecordPendingSignUpAttempt:output_type -> w17.contrib.auth.RecordPendingSignUpAttemptResp
+	65,  // 152: w17.contrib.auth.AuthMutation.ClaimPendingSignUp:output_type -> w17.contrib.auth.ClaimPendingSignUpResp
+	67,  // 153: w17.contrib.auth.AuthMutation.DeletePendingSignUpsForEmail:output_type -> w17.contrib.auth.DeletePendingSignUpsForEmailResp
+	69,  // 154: w17.contrib.auth.AuthMutation.PurgeExpiredPendingSignUps:output_type -> w17.contrib.auth.PurgeExpiredPendingSignUpsResp
+	57,  // 155: w17.contrib.auth.AuthMutation.ConsumeMfaChallenge:output_type -> w17.contrib.auth.ConsumeMfaChallengeResp
+	59,  // 156: w17.contrib.auth.AuthMutation.RecordMfaAttempt:output_type -> w17.contrib.auth.RecordMfaAttemptResp
+	55,  // 157: w17.contrib.auth.AuthMutation.SupersedePendingMfaChallenges:output_type -> w17.contrib.auth.SupersedePendingMfaChallengesResp
+	93,  // 158: w17.contrib.auth.AuthMutation.CreateDevice:output_type -> w17.contrib.auth.CreateDeviceResp
+	95,  // 159: w17.contrib.auth.AuthMutation.TrustDevice:output_type -> w17.contrib.auth.TrustDeviceResp
+	97,  // 160: w17.contrib.auth.AuthMutation.TouchDevice:output_type -> w17.contrib.auth.TouchDeviceResp
+	103, // 161: w17.contrib.auth.AuthMutation.DeleteUndevicedSessions:output_type -> w17.contrib.auth.DeleteUndevicedSessionsResp
+	99,  // 162: w17.contrib.auth.AuthMutation.DeleteDeviceTokens:output_type -> w17.contrib.auth.DeleteDeviceTokensResp
+	101, // 163: w17.contrib.auth.AuthMutation.DeleteDevice:output_type -> w17.contrib.auth.DeleteDeviceResp
+	105, // 164: w17.contrib.auth.AuthMutation.DeleteAllUserTokens:output_type -> w17.contrib.auth.DeleteAllUserTokensResp
+	107, // 165: w17.contrib.auth.AuthMutation.DeleteAllUserDevices:output_type -> w17.contrib.auth.DeleteAllUserDevicesResp
+	109, // 166: w17.contrib.auth.AuthMutation.CreateRole:output_type -> w17.contrib.auth.CreateRoleResp
+	113, // 167: w17.contrib.auth.AuthMutation.UpdateRole:output_type -> w17.contrib.auth.UpdateRoleResp
+	111, // 168: w17.contrib.auth.AuthMutation.DeleteRole:output_type -> w17.contrib.auth.DeleteRoleResp
+	117, // 169: w17.contrib.auth.AuthMutation.UpdateUser:output_type -> w17.contrib.auth.UpdateUserResp
+	115, // 170: w17.contrib.auth.AuthMutation.DeleteUser:output_type -> w17.contrib.auth.DeleteUserResp
+	119, // 171: w17.contrib.auth.AuthMutation.DisableUsers:output_type -> w17.contrib.auth.DisableUsersResp
+	121, // 172: w17.contrib.auth.AuthMutation.EnableUsers:output_type -> w17.contrib.auth.EnableUsersResp
+	123, // 173: w17.contrib.auth.AuthMutation.AssignRoleToUser:output_type -> w17.contrib.auth.AssignRoleToUserResp
+	125, // 174: w17.contrib.auth.AuthMutation.RevokeRoleFromUser:output_type -> w17.contrib.auth.RevokeRoleFromUserResp
+	127, // 175: w17.contrib.auth.AuthMutation.AddPermissionToRole:output_type -> w17.contrib.auth.AddPermissionToRoleResp
+	129, // 176: w17.contrib.auth.AuthMutation.RemovePermissionFromRole:output_type -> w17.contrib.auth.RemovePermissionFromRoleResp
+	71,  // 177: w17.contrib.auth.AuthMutation.CreatePasswordResetToken:output_type -> w17.contrib.auth.CreatePasswordResetTokenResp
+	75,  // 178: w17.contrib.auth.AuthMutation.ConsumePasswordResetToken:output_type -> w17.contrib.auth.ConsumePasswordResetTokenResp
+	73,  // 179: w17.contrib.auth.AuthMutation.SpendPasswordResetTokens:output_type -> w17.contrib.auth.SpendPasswordResetTokensResp
+	77,  // 180: w17.contrib.auth.AuthMutation.UpdateUserPassword:output_type -> w17.contrib.auth.UpdateUserPasswordResp
+	79,  // 181: w17.contrib.auth.AuthMutation.UpdateUserPasswordIfUnchanged:output_type -> w17.contrib.auth.UpdateUserPasswordIfUnchangedResp
+	83,  // 182: w17.contrib.auth.AuthMutation.DeleteUserSessionsForReset:output_type -> w17.contrib.auth.DeleteUserSessionsForResetResp
+	81,  // 183: w17.contrib.auth.AuthMutation.DeleteOtherSessionTokens:output_type -> w17.contrib.auth.DeleteOtherSessionTokensResp
+	85,  // 184: w17.contrib.auth.AuthMutation.CreateEmailVerificationToken:output_type -> w17.contrib.auth.CreateEmailVerificationTokenResp
+	87,  // 185: w17.contrib.auth.AuthMutation.ConsumeEmailVerificationToken:output_type -> w17.contrib.auth.ConsumeEmailVerificationTokenResp
+	91,  // 186: w17.contrib.auth.AuthMutation.MarkEmailVerified:output_type -> w17.contrib.auth.MarkEmailVerifiedResp
+	89,  // 187: w17.contrib.auth.AuthMutation.MarkEmailDerivedFromInvite:output_type -> w17.contrib.auth.MarkEmailDerivedFromInviteResp
+	131, // 188: w17.contrib.auth.AuthMutation.RegisterAuthClient:output_type -> w17.contrib.auth.RegisterAuthClientResp
+	133, // 189: w17.contrib.auth.AuthMutation.SetAuthClientEnabled:output_type -> w17.contrib.auth.SetAuthClientEnabledResp
+	135, // 190: w17.contrib.auth.AuthMutation.DeleteAuthClient:output_type -> w17.contrib.auth.DeleteAuthClientResp
+	137, // 191: w17.contrib.auth.AuthMutation.ClaimBootstrapAdmin:output_type -> w17.contrib.auth.ClaimBootstrapAdminResp
+	139, // 192: w17.contrib.auth.AuthMutation.CreateOAuthLoginCode:output_type -> w17.contrib.auth.CreateOAuthLoginCodeResp
+	141, // 193: w17.contrib.auth.AuthMutation.ConsumeOAuthLoginCode:output_type -> w17.contrib.auth.ConsumeOAuthLoginCodeResp
+	143, // 194: w17.contrib.auth.AuthMutation.CreateCliAuthCode:output_type -> w17.contrib.auth.CreateCliAuthCodeResp
+	145, // 195: w17.contrib.auth.AuthMutation.ConsumeCliAuthCode:output_type -> w17.contrib.auth.ConsumeCliAuthCodeResp
+	147, // 196: w17.contrib.auth.AuthMutation.CreateOrganization:output_type -> w17.contrib.auth.CreateOrganizationResp
+	149, // 197: w17.contrib.auth.AuthMutation.AddOrgMembership:output_type -> w17.contrib.auth.AddOrgMembershipResp
+	155, // 198: w17.contrib.auth.AuthMutation.UpdateOrganization:output_type -> w17.contrib.auth.UpdateOrganizationResp
+	151, // 199: w17.contrib.auth.AuthMutation.DeleteOrganization:output_type -> w17.contrib.auth.DeleteOrganizationResp
+	157, // 200: w17.contrib.auth.AuthMutation.UpdateOrgMembership:output_type -> w17.contrib.auth.UpdateOrgMembershipResp
+	153, // 201: w17.contrib.auth.AuthMutation.DeleteOrgMembership:output_type -> w17.contrib.auth.DeleteOrgMembershipResp
+	159, // 202: w17.contrib.auth.AuthMutation.RevokeUserToken:output_type -> w17.contrib.auth.RevokeUserTokenResp
+	161, // 203: w17.contrib.auth.AuthMutation.CreateOrgInvite:output_type -> w17.contrib.auth.CreateOrgInviteResp
+	165, // 204: w17.contrib.auth.AuthMutation.BindOpenOrgInvite:output_type -> w17.contrib.auth.BindOpenOrgInviteResp
+	167, // 205: w17.contrib.auth.AuthMutation.ConsumeOrgInviteByToken:output_type -> w17.contrib.auth.ConsumeOrgInviteByTokenResp
+	163, // 206: w17.contrib.auth.AuthMutation.ClearExpiredOrgInvite:output_type -> w17.contrib.auth.ClearExpiredOrgInviteResp
+	169, // 207: w17.contrib.auth.AuthMutation.DeleteOrgInvite:output_type -> w17.contrib.auth.DeleteOrgInviteResp
+	123, // [123:208] is the sub-list for method output_type
+	38,  // [38:123] is the sub-list for method input_type
+	38,  // [38:38] is the sub-list for extension type_name
+	38,  // [38:38] is the sub-list for extension extendee
+	0,   // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_mutations_auth_mutation_proto_init() }

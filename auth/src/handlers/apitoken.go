@@ -61,8 +61,11 @@ func touchTokenLastUsed(ctx context.Context, h *AuthServiceHandler, p *authPrinc
 	if last := p.lastUsedAt; last != nil && now.Sub(last.AsTime()) < tokenUseWindow {
 		return
 	}
+	// Stamp and cutoff from ONE clock, this one: the pre-check above reads
+	// a value this function wrote, so app/database skew never enters it.
 	_, _ = h.Mutation.TouchTokenLastUsed(ctx, &pb.TouchTokenLastUsedReq{
 		TokenId: p.usedTokenID,
+		UsedAt:  timestamppb.New(now),
 		Cutoff:  timestamppb.New(now.Add(-tokenUseWindow)),
 	})
 }

@@ -139,6 +139,8 @@ message TouchTokenLastUsedReq {
   option (w17.contrib.plugin_feature) = "api_token";
   string                    token_id = 1 [(w17.field) = { type: UUID }];
   google.protobuf.Timestamp cutoff   = 2 [(w17.field) = { type: DATETIME }];
+  // The stamp, from the same clock as cutoff (see the rpc).
+  google.protobuf.Timestamp used_at  = 3 [(w17.field) = { type: DATETIME }];
 }
 message TouchTokenLastUsedResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -1488,8 +1490,12 @@ service AuthMutation {
   // burst of concurrent requests on one token all pass the handler's
   // pre-check (it reads last_used_at off the lookup), and only the first
   // UPDATE to commit still matches — the rest match nothing and write
-  // nothing. :cutoff is NOW minus the window, computed by the caller (the
-  // DQL has no interval arithmetic). No RETURNING: a throttled touch matches
+  // nothing. The stamp (:used_at) and :cutoff (used_at minus the window)
+  // both come from the caller's clock: the DQL has no interval arithmetic,
+  // and comparing an app-clock cutoff against a database-NOW() stamp would
+  // let app/DB skew shrink the window to nothing (every request writing).
+  // One clock keeps the window a minute; instances that disagree shift it
+  // by their skew at most. No RETURNING: a throttled touch matches
   // no row, and that is no failure. Gated api_token (last_used_at is its
   // column).
   rpc TouchTokenLastUsed(TouchTokenLastUsedReq) returns (TouchTokenLastUsedResp) {
@@ -1498,7 +1504,7 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.UserToken SET last_used_at = NOW() "
+          "UPDATE @module.UserToken SET last_used_at = :used_at "
           "WHERE id = :token_id AND (last_used_at IS NULL OR last_used_at < :cutoff)"
       }
     };

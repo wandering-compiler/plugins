@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -116,22 +116,105 @@ func bareAuthenticate(t *testing.T, h *AuthServiceHandler, token string) (*pb.Au
 	return h.Authenticate(context.Background(), &pb.AuthReq{Headers: map[string]string{"authorization": "Bearer " + token}})
 }
 
+// errorInfo is google.rpc.ErrorInfo as a client decodes it. Decoded with
+// protowire rather than errdetails: these tests also run from the released
+// form, which must not need the genproto module the handlers avoid.
+type errorInfo struct {
+	Reason, Domain string
+	Metadata       map[string]string
+}
+
+// Nil-safe like generated getters, so a missing detail fails an assertion
+// instead of panicking the test binary.
+func (e *errorInfo) GetReason() string {
+	if e == nil {
+		return ""
+	}
+	return e.Reason
+}
+
+func (e *errorInfo) GetDomain() string {
+	if e == nil {
+		return ""
+	}
+	return e.Domain
+}
+
+func (e *errorInfo) GetMetadata() map[string]string {
+	if e == nil {
+		return nil
+	}
+	return e.Metadata
+}
+
+// decodeErrorInfo parses google.rpc.ErrorInfo's wire form, failing the test
+// on anything a real ErrorInfo decoder would reject or that the encoder
+// should not have written.
+func decodeErrorInfo(t *testing.T, b []byte) *errorInfo {
+	t.Helper()
+	out := &errorInfo{Metadata: map[string]string{}}
+	strField := func(b []byte) (protowire.Number, string, []byte) {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 || typ != protowire.BytesType {
+			t.Fatalf("ErrorInfo: bad tag (n=%d, type=%v)", n, typ)
+		}
+		v, m := protowire.ConsumeBytes(b[n:])
+		if m < 0 {
+			t.Fatal("ErrorInfo: truncated field")
+		}
+		return num, string(v), b[n+m:]
+	}
+	for len(b) > 0 {
+		num, v, rest := strField(b)
+		b = rest
+		switch num {
+		case 1:
+			out.Reason = v
+		case 2:
+			out.Domain = v
+		case 3:
+			var key, val string
+			for e := []byte(v); len(e) > 0; {
+				n, ev, r := strField(e)
+				e = r
+				switch n {
+				case 1:
+					key = ev
+				case 2:
+					val = ev
+				default:
+					t.Fatalf("ErrorInfo metadata entry: unexpected field %d", n)
+				}
+			}
+			out.Metadata[key] = val
+		default:
+			t.Fatalf("ErrorInfo: unexpected field %d", num)
+		}
+	}
+	return out
+}
+
 // expiryDetails pulls the two details SESSION_EXPIRED carries off a wire
 // status.
-func expiryDetails(t *testing.T, err error) (*status.Status, *w17pb.ErrorDetail, *errdetails.ErrorInfo) {
+func expiryDetails(t *testing.T, err error) (*status.Status, *w17pb.ErrorDetail, *errorInfo) {
 	t.Helper()
 	st, ok := status.FromError(err)
 	if !ok {
 		t.Fatalf("not a status error: %v", err)
 	}
 	var ed *w17pb.ErrorDetail
-	var info *errdetails.ErrorInfo
-	for _, d := range st.Details() {
-		switch v := d.(type) {
-		case *w17pb.ErrorDetail:
-			ed = v
-		case *errdetails.ErrorInfo:
-			info = v
+	var info *errorInfo
+	for _, a := range st.Proto().GetDetails() {
+		switch {
+		case a.MessageIs(&w17pb.ErrorDetail{}):
+			ed = &w17pb.ErrorDetail{}
+			if err := a.UnmarshalTo(ed); err != nil {
+				t.Fatalf("ErrorDetail: %v", err)
+			}
+		case a.GetTypeUrl() == "type.googleapis.com/google.rpc.ErrorInfo":
+			info = decodeErrorInfo(t, a.GetValue())
+		default:
+			t.Errorf("unexpected detail %s", a.GetTypeUrl())
 		}
 	}
 	return st, ed, info
@@ -297,6 +380,10 @@ func TestAuthenticate_TouchesLastUsedAtThrottled(t *testing.T) {
 			if got.GetTokenId() != "tok-1" {
 				t.Errorf("touched %q, want the resolved row tok-1 (an API token's id too)", got.GetTokenId())
 			}
+			// One clock: the cutoff is exactly the stamp minus the window.
+			if d := got.GetUsedAt().AsTime().Sub(got.GetCutoff().AsTime()); d != tokenUseWindow {
+				t.Errorf("used_at - cutoff = %v, want exactly %v", d, tokenUseWindow)
+			}
 			cutoff := got.GetCutoff().AsTime()
 			if d := before.Sub(cutoff); d < tokenUseWindow-time.Second || d > tokenUseWindow+5*time.Second {
 				t.Errorf("cutoff is %v before now, want ~%v", d, tokenUseWindow)
@@ -357,7 +444,7 @@ func TestSessionExpiryStatements(t *testing.T) {
 	// The touch is throttled IN the statement, so concurrent requests that all
 	// passed the handler's pre-check still write once.
 	touch := methodDQL(t, mutations, "rpc TouchTokenLastUsed(")
-	if !strings.Contains(touch, "SET last_used_at = NOW() ") ||
+	if !strings.Contains(touch, "SET last_used_at = :used_at ") ||
 		!strings.Contains(touch, "WHERE id = :token_id AND (last_used_at IS NULL OR last_used_at < :cutoff)") {
 		t.Errorf("TouchTokenLastUsed is not throttled in SQL:\n%s", touch)
 	}
@@ -400,5 +487,29 @@ func TestSessionExpired_StatesUTC(t *testing.T) {
 	}
 	if !strings.Contains(ed.GetMessage(), "2026-09-01 08:30 UTC") {
 		t.Errorf("message = %q, want the UTC time", ed.GetMessage())
+	}
+}
+
+// The hand-encoded ErrorInfo round-trips every field, several metadata
+// entries included, and encodes the same bytes every time.
+func TestErrorInfoAny_WireForm(t *testing.T) {
+	md := map[string]string{"expires_at": "2026-09-01T08:30:00Z", "b": "2", "a": ""}
+	a := errorInfoAny("R", "d.example", md)
+	if a.GetTypeUrl() != "type.googleapis.com/google.rpc.ErrorInfo" {
+		t.Errorf("type url = %q", a.GetTypeUrl())
+	}
+	got := decodeErrorInfo(t, a.GetValue())
+	if got.Reason != "R" || got.Domain != "d.example" || len(got.Metadata) != 3 {
+		t.Fatalf("decoded %+v", got)
+	}
+	for k, v := range md {
+		if got.Metadata[k] != v {
+			t.Errorf("metadata[%q] = %q, want %q", k, got.Metadata[k], v)
+		}
+	}
+	for i := 0; i < 20; i++ {
+		if string(errorInfoAny("R", "d.example", md).GetValue()) != string(a.GetValue()) {
+			t.Fatal("encoding is not deterministic")
+		}
 	}
 }

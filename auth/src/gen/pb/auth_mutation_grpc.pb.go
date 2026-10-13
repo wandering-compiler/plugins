@@ -189,8 +189,12 @@ type AuthMutationClient interface {
 	// burst of concurrent requests on one token all pass the handler's
 	// pre-check (it reads last_used_at off the lookup), and only the first
 	// UPDATE to commit still matches — the rest match nothing and write
-	// nothing. :cutoff is NOW minus the window, computed by the caller (the
-	// DQL has no interval arithmetic). No RETURNING: a throttled touch matches
+	// nothing. The stamp (:used_at) and :cutoff (used_at minus the window)
+	// both come from the caller's clock: the DQL has no interval arithmetic,
+	// and comparing an app-clock cutoff against a database-NOW() stamp would
+	// let app/DB skew shrink the window to nothing (every request writing).
+	// One clock keeps the window a minute; instances that disagree shift it
+	// by their skew at most. No RETURNING: a throttled touch matches
 	// no row, and that is no failure. Gated api_token (last_used_at is its
 	// column).
 	TouchTokenLastUsed(ctx context.Context, in *TouchTokenLastUsedReq, opts ...grpc.CallOption) (*TouchTokenLastUsedResp, error)
@@ -1528,8 +1532,12 @@ type AuthMutationServer interface {
 	// burst of concurrent requests on one token all pass the handler's
 	// pre-check (it reads last_used_at off the lookup), and only the first
 	// UPDATE to commit still matches — the rest match nothing and write
-	// nothing. :cutoff is NOW minus the window, computed by the caller (the
-	// DQL has no interval arithmetic). No RETURNING: a throttled touch matches
+	// nothing. The stamp (:used_at) and :cutoff (used_at minus the window)
+	// both come from the caller's clock: the DQL has no interval arithmetic,
+	// and comparing an app-clock cutoff against a database-NOW() stamp would
+	// let app/DB skew shrink the window to nothing (every request writing).
+	// One clock keeps the window a minute; instances that disagree shift it
+	// by their skew at most. No RETURNING: a throttled touch matches
 	// no row, and that is no failure. Gated api_token (last_used_at is its
 	// column).
 	TouchTokenLastUsed(context.Context, *TouchTokenLastUsedReq) (*TouchTokenLastUsedResp, error)
