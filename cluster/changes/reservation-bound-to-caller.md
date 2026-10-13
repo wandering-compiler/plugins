@@ -1,0 +1,8 @@
+### The relay enforces whom a reservation belongs to
+
+The holder tag added to the reservation handle could be computed by anyone holding the handle, so a leaked handle re-tagged for its new holder still collected the grant or cancelled the place. The binding now lives where the reservation does.
+
+- **The relay records the owner.** The control plane sends a hash of the reserving caller (the signed-in user, or "internal" for a call with no principal) on every reservation call. The relay keeps it with the reservation and answers a poll or cancel under any other owner exactly like an id it never issued: `expired` (`RESERVATION_UNKNOWN`), or a cancel that succeeds and leaves the place. A stranger's poll neither keeps the reservation alive nor starts its claim window. The handle format is unchanged.
+- **Signed-in and internal callers are kept apart.** A handle reserved by project code works only for calls with no principal, and one reserved by a user only for that user. An `x-w17-user` envelope that names no user is now refused (`Unauthenticated`), like one that cannot be read.
+- **Upgrade the relays together with the control plane.** A control plane at this version refuses a relay that does not confirm the binding: it gives that relay's place back and tries the next, and with only such relays `ReserveTask` answers `NO_RELAY` saying the relay must be upgraded. `ScheduleTask` is not affected. A relay at this version still serves an older control plane, unbound as before.
+- **Handles in flight across the upgrade do not survive it.** Reservations live in relay memory and last seconds without a poll, so a relay restart already drops them, and the holder tag changed. A client polling across the deploy sees `expired` and reserves again.

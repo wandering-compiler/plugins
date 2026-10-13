@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// me is the owner the tests reserve under.
+const me = "owner-acme"
+
 func newPolledPool(t *testing.T, capacity int, ttl, pollTimeout time.Duration) *Pool {
 	t.Helper()
 	p, err := New(Options{TicketTTL: ttl, PollTimeout: pollTimeout})
@@ -32,7 +35,7 @@ func occupy(t *testing.T, p *Pool, n int) {
 
 func mustPoll(t *testing.T, p *Pool, id string) State {
 	t.Helper()
-	st, err := p.Poll(id)
+	st, err := p.Poll(id, me)
 	if err != nil {
 		t.Fatalf("Poll(%s): %v", id, err)
 	}
@@ -42,7 +45,7 @@ func mustPoll(t *testing.T, p *Pool, id string) State {
 // Room available: the reservation IS the grant, and it is redeemable.
 func TestReserve_GrantsAtOnceWhenThereIsRoom(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, time.Minute)
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +56,7 @@ func TestReserve_GrantsAtOnceWhenThereIsRoom(t *testing.T) {
 		t.Fatalf("the granted ticket is not redeemable: %v", err)
 	}
 	// Redeemed is done: the reservation has nothing left to report.
-	if _, err := p.Poll(r.ID); !errors.Is(err, ErrNoSuchReservation) {
+	if _, err := p.Poll(r.ID, me); !errors.Is(err, ErrNoSuchReservation) {
 		t.Errorf("polling a redeemed reservation: %v, want ErrNoSuchReservation", err)
 	}
 }
@@ -64,11 +67,11 @@ func TestReserve_QueuesAndPollReportsPositionThenGrant(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, time.Minute)
 	occupy(t, p, 1)
 
-	first, err := p.Reserve()
+	first, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := p.Reserve()
+	second, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,12 +96,12 @@ func TestReserve_QueuesAndPollReportsPositionThenGrant(t *testing.T) {
 func TestPoll_AnUnpolledReservationIsAbandoned(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, 60*time.Millisecond)
 	occupy(t, p, 1)
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return p.Stats().Queued == 0 })
-	if _, err := p.Poll(r.ID); !errors.Is(err, ErrNoSuchReservation) {
+	if _, err := p.Poll(r.ID, me); !errors.Is(err, ErrNoSuchReservation) {
 		t.Errorf("polling an abandoned reservation: %v, want ErrNoSuchReservation", err)
 	}
 }
@@ -107,7 +110,7 @@ func TestPoll_AnUnpolledReservationIsAbandoned(t *testing.T) {
 func TestPoll_KeepsAReservationAlive(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, 60*time.Millisecond)
 	occupy(t, p, 1)
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestPoll_KeepsAReservationAlive(t *testing.T) {
 func TestPoll_TheClaimWindowStartsWhenTheGrantIsFirstReturned(t *testing.T) {
 	p := newPolledPool(t, 1, 80*time.Millisecond, time.Minute)
 	occupy(t, p, 1)
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,12 +160,12 @@ func TestPoll_TheClaimWindowStartsWhenTheGrantIsFirstReturned(t *testing.T) {
 // back and the reservation is gone.
 func TestPoll_AReturnedGrantExpiresUnclaimed(t *testing.T) {
 	p := newPolledPool(t, 1, 50*time.Millisecond, time.Minute)
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil || r.Grant == nil {
 		t.Fatalf("setup: %+v %v", r, err)
 	}
 	waitFor(t, func() bool { return p.Stats().Held() == 0 })
-	if _, err := p.Poll(r.ID); !errors.Is(err, ErrNoSuchReservation) {
+	if _, err := p.Poll(r.ID, me); !errors.Is(err, ErrNoSuchReservation) {
 		t.Errorf("polling after the claim window passed: %v, want ErrNoSuchReservation", err)
 	}
 }
@@ -172,14 +175,14 @@ func TestPoll_AReturnedGrantExpiresUnclaimed(t *testing.T) {
 func TestPoll_AnUnseenGrantIsReturnedWhenItsClientStopsPolling(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, 60*time.Millisecond)
 	occupy(t, p, 1)
-	if _, err := p.Reserve(); err != nil {
+	if _, err := p.Reserve(me); err != nil {
 		t.Fatal(err)
 	}
 	p.Done() // granted to a client that is never heard from again
 	waitFor(t, func() bool { return p.Stats().Held() == 0 })
 
 	// The slot is free again: a new caller gets it at once.
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil || r.Grant == nil {
 		t.Fatalf("the abandoned grant's slot did not come back: %+v %v", r, err)
 	}
@@ -188,24 +191,88 @@ func TestPoll_AnUnseenGrantIsReturnedWhenItsClientStopsPolling(t *testing.T) {
 // Cancel gives the place back — queued or granted — and is idempotent.
 func TestCancel_ReleasesTheSlotOrThePlace(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, time.Minute)
-	granted, err := p.Reserve()
+	granted, err := p.Reserve(me)
 	if err != nil || granted.Grant == nil {
 		t.Fatalf("setup: %+v %v", granted, err)
 	}
-	queued, err := p.Reserve()
+	queued, err := p.Reserve(me)
 	if err != nil || queued.Position != 1 {
 		t.Fatalf("setup: %+v %v", queued, err)
 	}
 
-	p.Cancel(granted.ID)
+	p.Cancel(granted.ID, me)
 	if st := mustPoll(t, p, queued.ID); st.Grant == nil {
 		t.Fatalf("cancelling a granted reservation did not free its slot for the next: %+v", st)
 	}
-	p.Cancel(queued.ID)
-	p.Cancel(queued.ID)
-	p.Cancel("never-existed")
+	p.Cancel(queued.ID, me)
+	p.Cancel(queued.ID, me)
+	p.Cancel("never-existed", me)
 	if st := p.Stats(); st.Held() != 0 || st.Queued != 0 {
 		t.Errorf("stats after cancelling everything = %+v, want nothing held or queued", st)
+	}
+}
+
+// The id alone reaches nothing: a poll or cancel under another owner, or under
+// none, is answered like an id never issued and leaves the place untouched.
+func TestReserve_OnlyItsOwnerReachesTheReservation(t *testing.T) {
+	p := newPolledPool(t, 1, time.Minute, time.Minute)
+	r, err := p.Reserve(me)
+	if err != nil || r.Grant == nil {
+		t.Fatalf("setup: %+v %v", r, err)
+	}
+	for _, other := range []string{"owner-other", ""} {
+		if _, err := p.Poll(r.ID, other); !errors.Is(err, ErrNoSuchReservation) {
+			t.Errorf("Poll as %q: %v, want ErrNoSuchReservation", other, err)
+		}
+		p.Cancel(r.ID, other)
+	}
+	if held := p.Stats().Held(); held != 1 {
+		t.Fatalf("held = %d after strangers cancelled, want the owner's slot still held", held)
+	}
+	if st := mustPoll(t, p, r.ID); st.Grant == nil || st.Grant.Ticket != r.Grant.Ticket {
+		t.Errorf("the owner's poll = %+v, want its grant", st)
+	}
+	p.Cancel(r.ID, me)
+	if held := p.Stats().Held(); held != 0 {
+		t.Errorf("held = %d after the owner cancelled", held)
+	}
+}
+
+// A stranger's poll is not the owner's presence: it neither keeps a queued
+// place alive…
+func TestPoll_AStrangersPollDoesNotKeepAReservationAlive(t *testing.T) {
+	p := newPolledPool(t, 1, time.Minute, 60*time.Millisecond)
+	occupy(t, p, 1)
+	r, err := p.Reserve(me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); {
+		_, _ = p.Poll(r.ID, "owner-other")
+		time.Sleep(15 * time.Millisecond)
+	}
+	if st := p.Stats(); st.Queued != 0 {
+		t.Errorf("queued = %d: a stranger's polls kept the owner's abandoned place", st.Queued)
+	}
+}
+
+// …nor starts the claim window of a grant the owner has not seen.
+func TestPoll_AStrangersPollDoesNotStartTheClaimWindow(t *testing.T) {
+	p := newPolledPool(t, 1, 80*time.Millisecond, time.Minute)
+	occupy(t, p, 1)
+	r, err := p.Reserve(me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Done() // granted, unseen
+	_, _ = p.Poll(r.ID, "owner-other")
+	time.Sleep(200 * time.Millisecond)
+	st := mustPoll(t, p, r.ID)
+	if st.Grant == nil {
+		t.Fatalf("the grant is gone: a stranger's poll started its window (%+v)", st)
+	}
+	if left := time.Until(st.Grant.ExpiresAt); left < 40*time.Millisecond {
+		t.Errorf("the ticket has %s left on the owner's first sight", left)
 	}
 }
 
@@ -215,18 +282,18 @@ func TestCancel_ReleasesTheSlotOrThePlace(t *testing.T) {
 func TestDrain_AQueuedReservationIsToldToPlaceAgain(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, time.Minute)
 	occupy(t, p, 1)
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.Drain()
-	if _, err := p.Poll(r.ID); !errors.Is(err, ErrDraining) {
+	if _, err := p.Poll(r.ID, me); !errors.Is(err, ErrDraining) {
 		t.Fatalf("polling a drained-out reservation: %v, want ErrDraining", err)
 	}
-	if _, err := p.Poll(r.ID); !errors.Is(err, ErrNoSuchReservation) {
+	if _, err := p.Poll(r.ID, me); !errors.Is(err, ErrNoSuchReservation) {
 		t.Errorf("the place-again answer was not one-shot: %v", err)
 	}
-	if _, err := p.Reserve(); !errors.Is(err, ErrDraining) {
+	if _, err := p.Reserve(me); !errors.Is(err, ErrDraining) {
 		t.Errorf("a draining relay accepted a reservation: %v", err)
 	}
 }
@@ -236,7 +303,7 @@ func TestDrain_AQueuedReservationIsToldToPlaceAgain(t *testing.T) {
 func TestDrain_AGrantedReservationKeepsItsGrant(t *testing.T) {
 	p := newPolledPool(t, 1, time.Minute, time.Minute)
 	occupy(t, p, 1)
-	r, err := p.Reserve()
+	r, err := p.Reserve(me)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -17,6 +18,7 @@ import (
 
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
+	"github.com/wandering-compiler/plugins/cluster/lib/resowner"
 )
 
 // handleSep joins a relay's registry id, its own reservation id and the
@@ -30,8 +32,19 @@ const handleSep = "."
 //
 // The handle is `<relay_id>.<relay_reservation_id>.<holder_tag>`. Naming the
 // relay in it is what keeps the control plane stateless: any replica can route
-// the poll, and none has to remember where anything was placed. The tag binds
-// it to the caller reserving now (see holderTag).
+// the poll, and none has to remember where anything was placed.
+//
+// The handle is bound to the caller reserving now in two places. The RELAY
+// records the place under the caller's owner value (ownerOf) and answers a
+// poll or cancel under any other as if the id were unknown: that is the
+// binding, and it needs no secret, because the relay holds the reservation
+// anyway. The tag (holderTag) only turns a handle presented by the wrong
+// caller away before a relay is dialled; anyone can compute it, so it is not
+// what keeps a leaked handle from working.
+//
+// A relay that does not confirm the binding (resowner.BoundHeader) is older
+// than this control plane and would let any holder of the handle collect the
+// place. Its reservation is cancelled and the next relay is tried.
 func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.ReserveTaskReq) (*pb.ReservationState, error) {
 	ctx, err := h.withBans(ctx)
 	if err != nil {
@@ -46,10 +59,18 @@ func (h *ClusterServiceHandler) ReserveTask(ctx context.Context, req *pb.Reserve
 		return nil, err
 	}
 	defer cands.close()
+	ctx = resowner.With(ctx, ownerOf(holder))
 
 	var lastErr error
 	for _, c := range cands.list {
-		st, err := newRelayClient(c.conn).ReserveTask(ctx, req)
+		var hdr metadata.MD
+		rc := newRelayClient(c.conn)
+		st, err := rc.ReserveTask(ctx, req, grpc.Header(&hdr))
+		if err == nil && !resowner.Confirmed(hdr) {
+			_, _ = rc.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: st.GetReservation()})
+			lastErr = fmt.Errorf("relay %q does not bind a reservation to its caller — upgrade it to this plugin's version", c.Relay.Name)
+			continue
+		}
 		if err == nil {
 			return stampReservation(st, c.Relay, holder), nil
 		}
@@ -106,6 +127,7 @@ func (h *ClusterServiceHandler) GetReservation(ctx context.Context, req *pb.GetR
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
 	defer func() { _ = conn.Close() }()
+	ctx = resowner.With(ctx, ownerOf(holder))
 	st, err := newRelayClient(conn).GetReservation(ctx, &pb.GetReservationReq{Reservation: local})
 	if err != nil {
 		return nil, err
@@ -137,6 +159,7 @@ func (h *ClusterServiceHandler) CancelReservation(ctx context.Context, req *pb.C
 		return nil, status.Errorf(codes.Unavailable, "cluster: relay %q is not reachable: %v", relay.Name, err)
 	}
 	defer func() { _ = conn.Close() }()
+	ctx = resowner.With(ctx, ownerOf(holder))
 	return newRelayClient(conn).CancelReservation(ctx, &pb.CancelReservationReq{Reservation: local})
 }
 
@@ -169,32 +192,57 @@ func (h *ClusterServiceHandler) resolveHandle(ctx context.Context, handle, holde
 // under (principal's own constant is unexported).
 const envelopeKey = "x-w17-user"
 
-// holderOf is the caller a reservation is bound to: the signed-in user's id
-// (pb.Caller, envelope field 2), or "" for a call that carries no principal —
-// the project's own code, or an unauthenticated surface. An envelope that is
-// present but cannot be read is refused rather than read as "no principal":
-// that would hand every such caller the one identity they all share, and a
+// Holders: a signed-in caller is userHolder plus its user id, a call with no
+// principal is internalHolder. The prefix keeps the two kinds apart: no user
+// id makes a signed-in caller the internal one, or the reverse.
+const (
+	internalHolder = "internal"
+	userHolder     = "user:"
+)
+
+// holderOf is the caller a reservation is bound to: the signed-in user
+// (pb.Caller, envelope field 2), or internalHolder for a call that carries no
+// principal — the project's own code, or an unauthenticated surface. So a
+// handle reserved by project code works only for project code, and one
+// reserved by a user only for that user.
+//
+// An envelope that is present but cannot be read, or that names no user, is
+// refused rather than read as "no principal" or as one shared empty user:
+// either would hand every such caller one identity they all share, and a
 // leaked handle would work for all of them.
 func holderOf(ctx context.Context) (string, error) {
 	var who pb.Caller
 	err := principal.Envelope(ctx, &who)
 	if err == nil {
-		return who.GetUserId(), nil
+		if who.GetUserId() == "" {
+			return "", status.Error(codes.Unauthenticated,
+				"cluster: the caller's principal names no user, so a reservation cannot be bound to it")
+		}
+		return userHolder + who.GetUserId(), nil
 	}
 	md, _ := metadata.FromIncomingContext(ctx)
 	if v := md.Get(envelopeKey); len(v) == 0 || v[0] == "" {
-		return "", nil
+		return internalHolder, nil
 	}
 	return "", status.Error(codes.Unauthenticated,
 		"cluster: the caller's principal cannot be read, so a reservation cannot be bound to it")
 }
 
-// holderTag binds a reservation to the caller that made it: a hash of the
-// holder (holderOf), the relay's registry id and its reservation id — the
-// whole handle, so no part of it can be swapped under a valid tag. The handle
-// is already an unguessable credential; the tag keeps a handle that leaked to
-// someone else from collecting or cancelling the place, without the control
-// plane storing anything — the caller is read again on every call.
+// ownerOf is the value the relay records a reservation under for holder
+// (resowner.Header). A hash, so a relay never learns who its callers are; it
+// only compares. Never empty: the empty owner is a control plane from before
+// owners existed.
+func ownerOf(holder string) string {
+	sum := sha256.Sum256([]byte("cluster-reservation-owner\x00" + holder))
+	return hex.EncodeToString(sum[:])
+}
+
+// holderTag is a hash of the holder (holderOf), the relay's registry id and
+// its reservation id. It lets the control plane turn away a handle presented
+// by another caller without dialling the relay. It is NOT the binding: every
+// input but the holder is in the handle, so whoever holds a leaked handle can
+// compute the tag for themselves. The relay's owner check is what refuses
+// them (see ReserveTask).
 func holderTag(holder, relayID, local string) string {
 	sum := sha256.Sum256([]byte("cluster-reservation\x00" + holder + "\x00" + relayID + "\x00" + local))
 	return hex.EncodeToString(sum[:16])

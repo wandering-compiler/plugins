@@ -219,7 +219,7 @@ func TestReserveTask_NoPlaceableRelayIsNoRelay(t *testing.T) {
 // handleFor is the handle ReserveTask would hand a caller with no signed-in
 // principal (the project's own code) for this relay and reservation.
 func handleFor(relayID, local string) string {
-	return relayID + handleSep + local + handleSep + holderTag("", relayID, local)
+	return relayID + handleSep + local + handleSep + holderTag(internalHolder, relayID, local)
 }
 
 // A handle works only for the caller it was handed to: another signed-in
@@ -259,7 +259,7 @@ func TestReservationHandle_TagCoversTheRelay(t *testing.T) {
 	}
 	parts := strings.Split(st.GetReservation(), handleSep)
 	parts[0] = "99999999-9999-9999-9999-999999999999"
-	if holderTag("", parts[0], parts[1]) == parts[2] {
+	if holderTag(internalHolder, parts[0], parts[1]) == parts[2] {
 		t.Fatal("the tag does not depend on the relay")
 	}
 }
@@ -277,5 +277,130 @@ func TestReservationHandle_AnUnreadableEnvelopeIsRefused(t *testing.T) {
 	}
 	if _, err := h.CancelReservation(ctx, &pb.CancelReservationReq{Reservation: handleFor("id-a", "r1")}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("cancel: %v, want Unauthenticated", err)
+	}
+}
+
+// forge rewrites a handle's tag for another holder, which anyone holding the
+// handle can do: every other input of the tag is in the handle.
+func forge(handle, holder string) string {
+	parts := strings.Split(handle, handleSep)
+	return parts[0] + handleSep + parts[1] + handleSep + holderTag(holder, parts[0], parts[1])
+}
+
+// The tag is not the binding: a leaked handle re-tagged for whoever holds it
+// passes the control plane's check, and the RELAY still refuses it. Polled it
+// reads as expired, cancelled it leaves the place to its owner.
+func TestReservationHandle_AReTaggedHandleIsRefusedByTheRelay(t *testing.T) {
+	h, a, _ := twoRelays(t, 1, 0)
+	alice := signedIn("alice")
+	st, err := h.ReserveTask(alice, &pb.ReserveTaskReq{})
+	if err != nil || st.GetGranted() == nil {
+		t.Fatalf("reserve: %v, %v", st, err)
+	}
+	for name, c := range map[string]struct {
+		ctx    context.Context
+		holder string
+	}{
+		"another user": {signedIn("bob"), userHolder + "bob"},
+		"no principal": {context.Background(), internalHolder},
+	} {
+		forged := forge(st.GetReservation(), c.holder)
+		got, err := h.GetReservation(c.ctx, &pb.GetReservationReq{Reservation: forged})
+		if err != nil || got.GetExpired().GetReason() != refusal.ReservationUnknown {
+			t.Errorf("%s's poll with a re-tagged handle = %v, %v; want expired as unknown", name, got, err)
+		}
+		if got.GetGranted() != nil {
+			t.Fatalf("%s collected the owner's grant with a re-tagged handle", name)
+		}
+		if _, err := h.CancelReservation(c.ctx, &pb.CancelReservationReq{Reservation: forged}); err != nil {
+			t.Fatalf("%s's cancel: %v", name, err)
+		}
+	}
+	if held := a.Stats().Held(); held != 1 {
+		t.Fatalf("held = %d: a re-tagged handle cancelled the owner's place", held)
+	}
+	got, err := h.GetReservation(alice, &pb.GetReservationReq{Reservation: st.GetReservation()})
+	if err != nil || got.GetGranted().GetTicket() != st.GetGranted().GetTicket() {
+		t.Fatalf("the owner's poll = %v, %v; want its grant", got, err)
+	}
+	if _, err := h.CancelReservation(alice, &pb.CancelReservationReq{Reservation: st.GetReservation()}); err != nil {
+		t.Fatal(err)
+	}
+	if held := a.Stats().Held(); held != 0 {
+		t.Errorf("held = %d after the owner cancelled", held)
+	}
+}
+
+// A handle reserved by project code (no principal) is project code's: a
+// signed-in caller cannot use it, with its own tag or re-tagged — and project
+// code can.
+func TestReservationHandle_AnInternalHandleIsNotASignedInCallers(t *testing.T) {
+	h, a, _ := twoRelays(t, 1, 0)
+	st, err := h.ReserveTask(context.Background(), &pb.ReserveTaskReq{})
+	if err != nil || st.GetGranted() == nil {
+		t.Fatalf("reserve: %v, %v", st, err)
+	}
+	bob := signedIn("bob")
+	for _, handle := range []string{st.GetReservation(), forge(st.GetReservation(), userHolder+"bob")} {
+		got, err := h.GetReservation(bob, &pb.GetReservationReq{Reservation: handle})
+		if err != nil || got.GetExpired().GetReason() != refusal.ReservationUnknown {
+			t.Errorf("a signed-in poll of an internal handle = %v, %v; want expired as unknown", got, err)
+		}
+		if _, err := h.CancelReservation(bob, &pb.CancelReservationReq{Reservation: handle}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if held := a.Stats().Held(); held != 1 {
+		t.Fatalf("held = %d: a signed-in caller cancelled an internal reservation", held)
+	}
+	if got, err := h.GetReservation(context.Background(), &pb.GetReservationReq{Reservation: st.GetReservation()}); err != nil || got.GetGranted() == nil {
+		t.Errorf("project code's own poll = %v, %v; want its grant", got, err)
+	}
+}
+
+// A user whose id happens to be "internal" is still a user: the holder kinds
+// do not collide.
+func TestReservationHandle_HolderKindsDoNotCollide(t *testing.T) {
+	h, _, _ := twoRelays(t, 1, 0)
+	st, err := h.ReserveTask(context.Background(), &pb.ReserveTaskReq{})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	got, err := h.GetReservation(signedIn(internalHolder), &pb.GetReservationReq{Reservation: st.GetReservation()})
+	if err != nil || got.GetExpired() == nil {
+		t.Errorf("a user named %q polled an internal handle: %v, %v", internalHolder, got, err)
+	}
+}
+
+// An envelope that reads but names no user is refused: every such caller
+// would otherwise share one identity, and one leaked handle would serve all.
+func TestReservationHandle_AnEnvelopeWithNoUserIsRefused(t *testing.T) {
+	h, _, _ := twoRelays(t, 1, 0)
+	if _, err := h.ReserveTask(signedIn(""), &pb.ReserveTaskReq{}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("reserve: %v, want Unauthenticated", err)
+	}
+	if _, err := h.GetReservation(signedIn(""), &pb.GetReservationReq{Reservation: handleFor("id-a", "r1")}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("poll: %v, want Unauthenticated", err)
+	}
+}
+
+// A relay older than owners would let anyone holding the handle collect the
+// place. Its reservation is given back and the next relay takes it; with no
+// other relay the answer is NO_RELAY, saying why.
+func TestReserveTask_ARelayThatDoesNotBindIsSkipped(t *testing.T) {
+	old := &scripted{unbound: true}
+	h, _ := pool(t, map[string]*scripted{"a": old, "b": {stats: loaded}}, "a", "b")
+	st, err := h.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	if err != nil || !strings.HasPrefix(st.GetReservation(), "id-b.") {
+		t.Fatalf("ReserveTask = %v, %v; want it placed on b", st, err)
+	}
+	if old.reserves.Load() != 1 || old.cancels.Load() != 1 {
+		t.Errorf("the old relay: %d reserves, %d cancels; want its place given back", old.reserves.Load(), old.cancels.Load())
+	}
+
+	h, _ = pool(t, map[string]*scripted{"a": {unbound: true}}, "a")
+	_, err = h.ReserveTask(t.Context(), &pb.ReserveTaskReq{})
+	if refusal.ReasonOf(err) != refusal.NoRelay || !strings.Contains(err.Error(), "does not bind") {
+		t.Errorf("only an old relay: %v, want %s naming the binding", err, refusal.NoRelay)
 	}
 }

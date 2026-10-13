@@ -18,6 +18,7 @@ import (
 	pb "github.com/wandering-compiler/plugins/cluster/gen/pb"
 	"github.com/wandering-compiler/plugins/cluster/lib/refusal"
 	"github.com/wandering-compiler/plugins/cluster/lib/relaydial"
+	"github.com/wandering-compiler/plugins/cluster/lib/resowner"
 	"github.com/wandering-compiler/plugins/cluster/lib/workeradmit"
 )
 
@@ -33,6 +34,10 @@ type scripted struct {
 	issue    func() (*pb.IssueRegistrationCodeResp, error)
 	exchange func() (*pb.ExchangeWorkersResp, error)
 
+	// unbound is a relay from before reservation owners: it ignores the
+	// owner and never confirms a binding.
+	unbound bool
+
 	reserves, drains, cancels atomic.Int32
 }
 
@@ -45,6 +50,11 @@ func (s *scripted) RelayStats(context.Context, *pb.RelayStatsReq) (*pb.RelayStat
 
 func (s *scripted) ReserveTask(ctx context.Context, _ *pb.ReserveTaskReq) (*pb.ReservationState, error) {
 	s.reserves.Add(1)
+	if !s.unbound {
+		if err := resowner.Confirm(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if s.reserve != nil {
 		return s.reserve(ctx)
 	}
