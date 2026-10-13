@@ -281,28 +281,35 @@ func TestBackends_ADeadTunnelLeavesTheCapacity(t *testing.T) {
 	t.Errorf("the capacity sink ended at %v — a dead tunnel did not publish", last())
 }
 
-// A call still unwinding on a REPLACED tunnel must not give back a slot booked
-// on the replacement, or the new connection can be overfilled past what the
-// machine said it can take.
+// A call still unwinding on a REPLACED tunnel gives back its own slot once,
+// and never one booked on the replacement, or the new connection could be
+// overfilled past what the machine said it can take.
 func TestBackends_AStaleReleaseDoesNotFreeTheNewTunnel(t *testing.T) {
 	b := NewBackends()
-	attach(t, b, "w", 1, true)
+	attach(t, b, "w", 2, true)
 	_, _, oldGen, err := b.take(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The worker reconnects: a new tunnel, a fresh booking count.
+	// The worker reconnects: a new tunnel; the old call still runs.
 	b.Add("w", conn(t))
 	if _, _, _, err := b.take(nil); err != nil {
 		t.Fatalf("the replacement tunnel took no work: %v", err)
 	}
-
-	// Now the OLD call finishes.
-	b.release("w", oldGen)
-
 	if _, _, _, err := b.take(nil); err == nil {
-		t.Error("a release from the dead tunnel freed a slot on the live one — " +
+		t.Fatal("the machine took a third call on two slots")
+	}
+
+	// Now the OLD call finishes: its slot is the machine's again.
+	b.release("w", oldGen)
+	if _, _, _, err := b.take(nil); err != nil {
+		t.Fatalf("the old call's slot did not come back: %v", err)
+	}
+	// A second release of the same old call frees nothing.
+	b.release("w", oldGen)
+	if _, _, _, err := b.take(nil); err == nil {
+		t.Error("a repeated release from the old tunnel freed a slot on the live one — " +
 			"the replacement is now carrying more than its declared capacity")
 	}
 }

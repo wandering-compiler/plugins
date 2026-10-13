@@ -41,6 +41,30 @@ func enrolledDir(t *testing.T, ca *identity.CA, lifetime time.Duration) (dir, wo
 	return dir, identity.WorkerID(leaf)
 }
 
+// reissue renews the certificate in dir for the same key, as Renew would.
+func reissue(t *testing.T, ca *identity.CA, dir string, lifetime time.Duration) {
+	t.Helper()
+	keyPEM, err := identity.LoadOrCreateWorkerKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := identity.CSRFor(keyPEM, "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := identity.ParseCSR(csrDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, err := ca.IssueClientCert(csr.PublicKey, "w", lifetime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.SaveWorkerCertificate(dir, certPEM); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newCA(t *testing.T) *identity.CA {
 	t.Helper()
 	ca, err := identity.LoadOrCreateCA(t.TempDir())

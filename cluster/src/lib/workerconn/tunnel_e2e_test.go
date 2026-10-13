@@ -3,7 +3,9 @@ package workerconn
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +31,9 @@ import (
 type fakeWork struct {
 	pb.UnimplementedClusterServiceServer
 	seenTicket []string
+	// hold, if set, keeps CheckWorkers running until it is closed: work
+	// that is still in flight when something happens to its tunnel.
+	hold chan struct{}
 }
 
 // ReserveTask echoes the label back as the reservation, which makes it a
@@ -39,6 +44,13 @@ func (f *fakeWork) ReserveTask(_ context.Context, req *pb.ReserveTaskReq) (*pb.R
 }
 
 func (f *fakeWork) CheckWorkers(ctx context.Context, _ *pb.CheckWorkersReq) (*pb.CheckWorkersResp, error) {
+	if f.hold != nil {
+		select {
+		case <-f.hold:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	md, _ := metadata.FromIncomingContext(ctx)
 	f.seenTicket = md.Get(relayserver.TicketHeader)
 	return &pb.CheckWorkersResp{Discovered: 42}, nil
@@ -56,6 +68,8 @@ type rig struct {
 	tunnelAddr string
 	relayFP    string
 	ca         *identity.CA
+	workerDir  string
+	workerCtx  context.Context
 }
 
 // rigOptions bend standUp for the tests that need a different wire.
@@ -69,6 +83,13 @@ type rigOptions struct {
 	workerServe []grpc.ServerOption
 	// tunnelDone receives what ServeTunnel returned.
 	tunnelDone chan error
+	// lifetime of the worker's certificate (default an hour); retry is the
+	// worker's RetryInterval, which paces its check for a renewed one;
+	// grace is the relay's expiry grace; work replaces the worker's service.
+	lifetime time.Duration
+	retry    time.Duration
+	grace    time.Duration
+	work     *fakeWork
 }
 
 // standUp builds a whole relay: a TLS tunnel listener, a schema-blind proxy in
@@ -85,7 +106,11 @@ func standUpWith(t *testing.T, o rigOptions) *rig {
 		t.Fatal(err)
 	}
 	ca := newCA(t)
-	workerDir, workerFP := enrolledDir(t, ca, time.Hour)
+	lifetime := o.lifetime
+	if lifetime == 0 {
+		lifetime = time.Hour
+	}
+	workerDir, workerFP := enrolledDir(t, ca, lifetime)
 	crt, err := tls.X509KeyPair(relayID.CertPEM, relayID.KeyPEM)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +122,7 @@ func standUpWith(t *testing.T, o rigOptions) *rig {
 	}
 	workers := deliveredRegistry() // nobody banned
 	backends := relayserver.NewBackends()
+	backends.SetExpiryGrace(o.grace)
 	// The wiring a real relay has: capacity comes from the attached fleet.
 	backends.OnCapacityChange(pool.SetCapacity)
 	// This rig runs the TUNNEL only, not the attach stream, so nothing here
@@ -134,7 +160,10 @@ func standUpWith(t *testing.T, o rigOptions) *rig {
 	t.Cleanup(proxy.Stop)
 
 	// The worker: dials the tunnel and serves on it.
-	work := &fakeWork{}
+	work := o.work
+	if work == nil {
+		work = &fakeWork{}
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	tunnelAddr := tunLis.Addr().String()
@@ -146,6 +175,7 @@ func standUpWith(t *testing.T, o rigOptions) *rig {
 			TunnelAddress:    tunnelAddr,
 			RelayFingerprint: relayID.Fingerprint,
 			IdentityDir:      workerDir,
+			RetryInterval:    o.retry,
 		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) }, o.workerServe...)
 		if o.tunnelDone != nil {
 			o.tunnelDone <- err
@@ -162,7 +192,7 @@ func standUpWith(t *testing.T, o rigOptions) *rig {
 	return &rig{pool: pool, workers: workers, backends: backends,
 		proxyAddr: proxyLis.Addr().String(), work: work,
 		workerFP: workerFP, stopWorker: cancel,
-		tunnelAddr: tunLis.Addr().String(), relayFP: relayID.Fingerprint, ca: ca}
+		tunnelAddr: tunLis.Addr().String(), relayFP: relayID.Fingerprint, ca: ca, workerDir: workerDir, workerCtx: ctx}
 }
 
 func callThroughProxy(t *testing.T, r *rig, ticket string) (*pb.CheckWorkersResp, error) {
@@ -378,4 +408,265 @@ func TestTunnel_OnlyThisRelaysUnbannedWorkersBecomeBackends(t *testing.T) {
 		t.Fatalf("%d backends, want only the rig's own worker — a foreign or banned "+
 			"certificate opened a tunnel", n)
 	}
+}
+
+// A worker that renews keeps serving across its old certificate's expiry. It
+// opens a tunnel with the new certificate; the relay sends new work there and
+// lets the call already running on the old tunnel finish where it is. Before,
+// the old tunnel was the only one: at its certificate's expiry the worker left
+// the capacity, and the relay closed the tunnel under its running work.
+func TestTunnel_ARenewedWorkerKeepsServingAcrossTheOldExpiry(t *testing.T) {
+	work := &fakeWork{hold: make(chan struct{})}
+	r := standUpWith(t, rigOptions{lifetime: 3 * time.Second, retry: 20 * time.Millisecond, grace: time.Minute, work: work})
+	_, leaf, err := identity.LoadWorkerCertificate(r.workerDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, client := proxyClient(t, r, grant.Ticket)
+	running := make(chan error, 1)
+	go func() {
+		_, err := client.CheckWorkers(ctx, &pb.CheckWorkersReq{})
+		running <- err
+	}()
+	for deadline := time.Now().Add(5 * time.Second); r.pool.Stats().InUse == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the call never started")
+		}
+	}
+
+	reissue(t, r.ca, r.workerDir, time.Hour)
+	time.Sleep(time.Until(leaf.NotAfter.Add(500 * time.Millisecond)))
+	if c := r.backends.Capacity(); c != 2 {
+		t.Errorf("capacity %d after the old certificate expired, want the renewed tunnel's 2", c)
+	}
+	select {
+	case err := <-running:
+		t.Fatalf("the call on the old tunnel ended before it was done: %v", err)
+	default:
+	}
+
+	close(work.hold)
+	select {
+	case err := <-running:
+		if err != nil {
+			t.Errorf("the call that ran across the renewal failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call that ran across the renewal never returned")
+	}
+	wctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	next, err := r.pool.Wait(wctx, nil)
+	if err != nil {
+		t.Fatalf("no slot for new work after the old expiry: %v", err)
+	}
+	if resp, err := callThroughProxy(t, r, next.Ticket); err != nil || resp.GetDiscovered() != 42 {
+		t.Errorf("new work after the old expiry: %v, %v; want the worker's answer", resp, err)
+	}
+}
+
+// When the current tunnel drops while a tunnel retired by a renewal is still
+// finishing a call, ServeTunnel returns at once so the worker redials, and the
+// retired tunnel goes on serving its call until the relay closes it. The
+// worker is back in the capacity while the old call is still running.
+func TestServeTunnel_ADroppedTunnelIsRedialledWhileARetiredOneFinishes(t *testing.T) {
+	work := &fakeWork{hold: make(chan struct{})}
+	var fw *forwarder
+	done := make(chan error, 1)
+	r := standUpWith(t, rigOptions{
+		retry: 20 * time.Millisecond, grace: time.Minute, work: work, tunnelDone: done,
+		via: func(addr string) string { fw = newForwarder(t, addr); return fw.addr() },
+	})
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, client := proxyClient(t, r, grant.Ticket)
+	running := make(chan error, 1)
+	go func() {
+		_, err := client.CheckWorkers(ctx, &pb.CheckWorkersReq{})
+		running <- err
+	}()
+	waitFor(t, "the call to start", func() bool { return r.pool.Stats().InUse == 1 })
+
+	reissue(t, r.ca, r.workerDir, time.Hour)
+	// The relay has the renewal's tunnel as current and the first one retired.
+	waitFor(t, "the relay to retire the first tunnel", func() bool { return r.backends.Retiring() == 1 })
+	fw.cut(1) // the current tunnel drops
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeTunnel did not return when its current tunnel dropped")
+	}
+	waitFor(t, "the dropped tunnel to leave", func() bool { return r.backends.Count() == 0 })
+
+	// The worker's loop dials again at once.
+	again := make(chan error, 1)
+	go func() {
+		again <- ServeTunnel(r.workerCtx, Config{
+			TunnelAddress: fw.addr(), RelayFingerprint: r.relayFP, IdentityDir: r.workerDir,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) })
+	}()
+	waitFor(t, "a new tunnel while the old call runs", func() bool { return r.backends.Capacity() == 2 })
+	select {
+	case err := <-running:
+		t.Fatalf("the call on the retired tunnel ended early: %v", err)
+	default:
+	}
+
+	close(work.hold)
+	select {
+	case err := <-running:
+		if err != nil {
+			t.Errorf("the call on the retired tunnel failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call on the retired tunnel never returned")
+	}
+	waitFor(t, "the retired tunnel to close with its call", func() bool { return r.backends.Retiring() == 0 })
+}
+
+// A tunnel retired in an EARLIER ServeTunnel call still belongs to the
+// worker: when ctx ends, the latest call returns only after the call running
+// on that tunnel has completed, so the worker's loop cannot exit (and the
+// process with it) under that call.
+func TestServeTunnel_CancellationWaitsForAnEarlierCallsRetiredTunnel(t *testing.T) {
+	work := &fakeWork{hold: make(chan struct{})}
+	var fw *forwarder
+	done := make(chan error, 1)
+	r := standUpWith(t, rigOptions{
+		retry: 20 * time.Millisecond, grace: time.Minute, work: work, tunnelDone: done,
+		via: func(addr string) string { fw = newForwarder(t, addr); return fw.addr() },
+	})
+	grant, err := r.pool.Wait(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, client := proxyClient(t, r, grant.Ticket)
+	running := make(chan error, 1)
+	go func() {
+		_, err := client.CheckWorkers(ctx, &pb.CheckWorkersReq{})
+		running <- err
+	}()
+	waitFor(t, "the call to start", func() bool { return r.pool.Stats().InUse == 1 })
+	reissue(t, r.ca, r.workerDir, time.Hour)
+	waitFor(t, "the relay to retire the first tunnel", func() bool { return r.backends.Retiring() == 1 })
+	fw.cut(1)
+	select {
+	case <-done: // the first call returned; its retired tunnel still runs the call
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first ServeTunnel did not return when its current tunnel dropped")
+	}
+
+	waitFor(t, "the dropped tunnel to leave", func() bool { return r.backends.Count() == 0 })
+	second := make(chan error, 1)
+	go func() {
+		second <- ServeTunnel(r.workerCtx, Config{
+			TunnelAddress: fw.addr(), RelayFingerprint: r.relayFP, IdentityDir: r.workerDir,
+		}, func(s *grpc.Server) { pb.RegisterClusterServiceServer(s, work) })
+	}()
+	waitFor(t, "the second call's tunnel", func() bool { return r.backends.Count() == 1 })
+
+	r.stopWorker()
+	select {
+	case err := <-second:
+		t.Fatalf("the second ServeTunnel returned (%v) while the first call's retired tunnel still ran a call", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(work.hold)
+	select {
+	case err := <-second:
+		if err != context.Canceled {
+			t.Errorf("the second ServeTunnel returned %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second ServeTunnel never returned after the retired call completed")
+	}
+	// The worker's server finished the call before its reply crosses the
+	// relay back to the caller, so the caller's answer is awaited, not
+	// assumed. It must be the answer, not a cut.
+	select {
+	case err := <-running:
+		if err != nil {
+			t.Errorf("the call on the retired tunnel failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call on the retired tunnel never returned")
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+// forwarder relays TCP between the worker and the relay, one pair of sockets
+// per tunnel, and closes both ends when either does — so the worker sees the
+// relay closing a tunnel, and a test can cut one tunnel by its index.
+type forwarder struct {
+	lis   net.Listener
+	mu    sync.Mutex
+	conns []net.Conn // worker side, relay side; two per tunnel
+}
+
+func newForwarder(t *testing.T, target string) *forwarder {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &forwarder{lis: lis}
+	t.Cleanup(func() {
+		_ = lis.Close()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, c := range f.conns {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			in, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			out, err := net.Dial("tcp", target)
+			if err != nil {
+				_ = in.Close()
+				continue
+			}
+			f.mu.Lock()
+			f.conns = append(f.conns, in, out)
+			f.mu.Unlock()
+			go f.pipe(in, out)
+			go f.pipe(out, in)
+		}
+	}()
+	return f
+}
+
+func (f *forwarder) addr() string { return f.lis.Addr().String() }
+
+// cut closes the i-th tunnel's sockets (in the order they were accepted).
+func (f *forwarder) cut(i int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_ = f.conns[2*i].Close()
+	_ = f.conns[2*i+1].Close()
+}
+
+func (f *forwarder) pipe(dst, src net.Conn) {
+	_, _ = io.Copy(dst, src)
+	_ = dst.Close()
+	_ = src.Close()
 }

@@ -252,7 +252,7 @@ func TestBackends_AnOldTunnelsExpiryLeavesItsReplacement(t *testing.T) {
 	b.ExpireAt("w", old, time.Now().Add(20*time.Millisecond))
 	b.Add("w", conn(t))
 	time.Sleep(100 * time.Millisecond)
-	b.retire("w", old) // a timer that fired as the replacement arrived
+	b.expire("w", old) // a timer that fired as the replacement arrived
 	if n, c := b.Count(), b.Capacity(); n != 1 || c != 2 {
 		t.Errorf("Count = %d, Capacity = %d, want the replacement kept with its 2 slots", n, c)
 	}
@@ -266,4 +266,165 @@ func TestChainNotAfter_IsTheEarliestInTheChain(t *testing.T) {
 	if got := chainNotAfter([]*x509.Certificate{leaf, ca}); !got.Equal(ca.NotAfter) {
 		t.Errorf("chainNotAfter = %v, want the CA's %v", got, ca.NotAfter)
 	}
+}
+
+// --- a newer tunnel from the same key ---
+
+// A worker that renewed opens a second tunnel while work runs on the first:
+// new work goes to the new one, the old one finishes its call undisturbed and
+// closes with it. An idle old tunnel closes at once.
+func TestBackends_ANewerTunnelTakesNewWorkAndTheOldOneFinishesItsOwn(t *testing.T) {
+	b := NewBackends()
+	pool := poolWith(t, 2)
+	oldSrv := tunnelTo(t, b, "w")
+	defer oldSrv.Stop()
+	pick := TicketPicker(pool, b, nil)
+	running, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSrv := tunnelTo(t, b, "w")
+	defer newSrv.Stop()
+	b.SetProfile("w", b.NewAttachment(), 2, true) // room for a second call on the machine
+	fresh, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatalf("new work with a newer tunnel attached: %v", err)
+	}
+	if fresh.Conn == running.Conn {
+		t.Fatal("new work went to the replaced tunnel")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if st := running.Conn.GetState(); st == connectivity.Shutdown {
+		t.Fatal("the replaced tunnel was closed under its running call")
+	}
+	if n := b.Count(); n != 1 {
+		t.Errorf("Count = %d, want one worker", n)
+	}
+	running.Release()
+	eventually(t, "the replaced tunnel closes with its last call", func() bool {
+		return running.Conn.GetState() == connectivity.Shutdown
+	})
+	if st := fresh.Conn.GetState(); st == connectivity.Shutdown {
+		t.Error("the old tunnel's close took the new one with it")
+	}
+	fresh.Release()
+
+	idle := fresh.Conn
+	third := tunnelTo(t, b, "w")
+	defer third.Stop()
+	eventually(t, "an idle replaced tunnel closes at once", func() bool { return idle.GetState() == connectivity.Shutdown })
+}
+
+// A ban while a renewed worker holds two tunnels closes both at once, the
+// one still finishing old work included.
+func TestBackends_ABanDuringTheOverlapClosesBothTunnels(t *testing.T) {
+	b := NewBackends()
+	b.SetExpiryGrace(time.Minute)
+	pool := poolWith(t, 2)
+	oldSrv := tunnelTo(t, b, "w")
+	defer oldSrv.Stop()
+	pick := TicketPicker(pool, b, nil)
+	running, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSrv := tunnelTo(t, b, "w")
+	defer newSrv.Stop()
+	b.SetProfile("w", b.NewAttachment(), 2, true) // room for a second call on the machine
+	fresh, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.DropWhere(func(fp string) bool { return fp == "w" })
+	eventually(t, "both tunnels close", func() bool {
+		return running.Conn.GetState() == connectivity.Shutdown && fresh.Conn.GetState() == connectivity.Shutdown
+	})
+	running.Release()
+	fresh.Release()
+	if st := pool.Stats(); st.Held() != 0 {
+		t.Errorf("pool = %+v, want both cut calls' slots back", st)
+	}
+}
+
+// A replaced tunnel still running work at its own certificate's expiry gets
+// the grace, then closes; the new tunnel is untouched.
+func TestBackends_AReplacedTunnelStillEndsWithItsCertificate(t *testing.T) {
+	b := NewBackends()
+	b.SetExpiryGrace(50 * time.Millisecond)
+	pool := poolWith(t, 2)
+	oldSrv := tunnelTo(t, b, "w")
+	defer oldSrv.Stop()
+	pick := TicketPicker(pool, b, nil)
+	running, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.ExpireAt("w", running.Conn, time.Now().Add(100*time.Millisecond))
+	newSrv := tunnelTo(t, b, "w")
+	defer newSrv.Stop()
+	eventually(t, "the replaced tunnel closes after its expiry and grace", func() bool {
+		return running.Conn.GetState() == connectivity.Shutdown
+	})
+	if n, c := b.Count(), b.Capacity(); n != 1 || c != 1 {
+		t.Errorf("Count = %d, Capacity = %d, want the new tunnel kept", n, c)
+	}
+	running.Release()
+}
+
+// A worker's slots are the machine's, counted across both its tunnels: one
+// that renewed with every slot busy on its old tunnel takes no new work on
+// the new one until a call there ends, and the other worker gets the work.
+func TestBackends_ARenewedWorkersOldCallsStillCountAgainstItsSlots(t *testing.T) {
+	b := NewBackends()
+	pool := poolWith(t, 10)
+	pick := TicketPicker(pool, b, nil)
+	oldSrv := tunnelTo(t, b, "renewed")
+	defer oldSrv.Stop()
+	b.SetProfile("renewed", b.NewAttachment(), 4, true)
+	var running []tunnel.Backend
+	for i := 0; i < 4; i++ {
+		be, err := pickWith(pick, grantTicket(t, pool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		running = append(running, be)
+	}
+	newSrv := tunnelTo(t, b, "renewed") // the renewal's tunnel
+	defer newSrv.Stop()
+	b.SetProfile("renewed", b.NewAttachment(), 4, true)
+	otherSrv := tunnelTo(t, b, "other")
+	defer otherSrv.Stop()
+	b.SetProfile("other", b.NewAttachment(), 2, true)
+	otherConn := currentConn(b, "other")
+
+	for i := 0; i < 2; i++ {
+		be, err := pickWith(pick, grantTicket(t, pool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if be.Conn != otherConn {
+			t.Fatalf("call %d went to the renewed worker with all 4 slots busy on its old tunnel", i)
+		}
+	}
+	if _, err := pickWith(pick, grantTicket(t, pool)); refusal.ReasonOf(err) != refusal.NoWorker {
+		t.Fatalf("with every slot of both machines busy: %v, want %s", err, refusal.NoWorker)
+	}
+	running[0].Release()
+	be, err := pickWith(pick, grantTicket(t, pool))
+	if err != nil {
+		t.Fatalf("after one old call ended: %v, want the renewed worker's freed slot", err)
+	}
+	if be.Conn == otherConn || be.Conn == running[0].Conn {
+		t.Error("the freed slot was not taken on the renewed worker's new tunnel")
+	}
+}
+
+// currentConn is the tunnel a worker's new work goes to.
+func currentConn(b *Backends, fp string) *grpc.ClientConn {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if be, ok := b.conns[fp]; ok {
+		return be.conn
+	}
+	return nil
 }

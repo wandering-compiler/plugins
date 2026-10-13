@@ -57,9 +57,23 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	registry.RegisterClusterServiceServer(h)
 	// Every relay, enabled or not, is handed the ban set every few minutes:
 	// it refuses workers until it holds one after a restart, and refuses
-	// renewals when it has not been handed one recently. For the life of the
-	// process, like the server it belongs to.
-	go h.KeepBansDelivered(context.Background(), handlers.BanRedeliveryInterval)
+	// renewals when it has not been handed one recently. Stopped at the
+	// bundle's shutdown, which waits for a delivery under way to finish.
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.KeepBansDelivered(ctx, handlers.BanRedeliveryInterval)
+	}()
+	registry.RegisterShutdown(func(sctx context.Context) error {
+		stop()
+		select {
+		case <-done:
+			return nil
+		case <-sctx.Done():
+			return sctx.Err()
+		}
+	})
 	return nil
 }
 
