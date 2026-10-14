@@ -40,9 +40,21 @@ jobs:
           echo "list=$list" >> "$GITHUB_OUTPUT"
           echo "plugins: $list"
 
+  # src/gen is generated, never committed: `make gen` writes it before anything
+  # compiles, with the pinned w17ctl, which asks the console. That needs the
+  # W17_TOKEN secret, which a fork's pull request does not receive; there this
+  # job fails at the generate step like adoption does, and a maintainer brings
+  # the branch in.
   plugin:
     needs: plugins
     runs-on: ubuntu-latest
+    env:
+      W17_TOKEN: ${{ secrets.W17_TOKEN }}
+      # A w17ctl built by `go install` has no console address compiled in.
+      W17_CONSOLE_ADDR: grpcs://api.w17.app:50051
+      # The checks below compile against the src/gen the generate step wrote;
+      # without this each make target would ask the console again.
+      SKIP_GEN: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -58,8 +70,10 @@ jobs:
           cache-dependency-path: |
             ${{ matrix.plugin }}/src/go.sum
             tools/golangci-version
-      - name: install the pinned w17ctl (the render the checks use)
+      - name: install the pinned w17ctl (generates src/gen, renders the release form)
         run: tools/w17ctl.sh
+      - name: generate src/gen (pb, contract, feature constants)
+        run: make gen PLUGIN=${{ matrix.plugin }}
       - name: gofmt
         run: make fmt PLUGIN=${{ matrix.plugin }}
       - name: vet
@@ -88,8 +102,8 @@ jobs:
             echo
             echo "**total (hand-written code):** $(go tool cover -func=cover.own.out | tail -1 | awk '{print $NF}')"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: committed pb matches its proto
-        run: make check-gen-pb PLUGIN=${{ matrix.plugin }}
+      - name: committed pb outside src/gen matches its proto
+        run: make check-committed-pb PLUGIN=${{ matrix.plugin }}
       - name: the release form renders
         run: make check-render PLUGIN=${{ matrix.plugin }}
       - name: the tests pass from the release form

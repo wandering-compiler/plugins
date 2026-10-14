@@ -14,8 +14,10 @@ import (
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
 )
 
-// fake DI surface — non-nil typed clients so ValidateConfig passes.
-type fakeClients struct{}
+// fake DI surface — non-nil typed clients so ValidateConfig passes. The rest
+// of the generated gen.ClientSet is embedded as nil: the plugin does not call
+// it, and a call would panic.
+type fakeClients struct{ gen.ClientSet }
 
 func (fakeClients) PaymentQuery() pb.PaymentQueryClient {
 	return struct{ pb.PaymentQueryClient }{}

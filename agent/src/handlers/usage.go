@@ -86,10 +86,12 @@ func (noopUsageSink) Close(context.Context) {}
 // An init() with no caller to protect it is a thing this codebase has been
 // bitten by — a move deletes it and nothing says so. That is what
 // VerifyUsageWiring below is for.
-var newUsageSink = func(gen.ClientSet) UsageSink { return noopUsageSink{} }
+var newUsageSink = func(clients any) UsageSink { return noopUsageSink{} }
 
-// NewUsageSink builds the sink for this activation.
-func NewUsageSink(clients gen.ClientSet) UsageSink { return newUsageSink(clients) }
+// NewUsageSink builds the sink for this activation. It takes the client set as
+// `any`, like NewLimiter: the one method it needs exists only in an activation
+// with usage_persistence on, so it asserts rather than requires it.
+func NewUsageSink(clients any) UsageSink { return newUsageSink(clients) }
 
 // VerifyUsageWiring refuses to boot when the activation says usage persistence
 // is ON and no real sink got wired.

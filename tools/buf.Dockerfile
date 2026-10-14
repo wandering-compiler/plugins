@@ -1,10 +1,12 @@
-# buf + the two Go protoc plugins, for tools/gen-pb.sh. Build: `make buf-image`.
+# buf + the two Go protoc plugins, for the committed pb that a directory with
+# its own buf.gen.yaml generates (`make check-committed-pb`). Build: `make
+# buf-image`. A plugin's src/gen is not this image's business: `make gen` asks
+# the console.
 #
 # The plugins are LOCAL binaries (not `remote:` BSR plugins, which would hit the
 # anonymous rate limit), pinned to exactly what the committed pb headers declare
 # (protoc-gen-go v1.36.11 / protoc-gen-go-grpc v1.6.2), so a regeneration matches
-# the console's in-process generator byte for byte. Bump them together with the
-# w17 SDK's generator, or the output churns.
+# byte for byte. Bump them together with the committed pb, or the output churns.
 
 FROM golang:1.26-alpine AS plugins
 ENV CGO_ENABLED=0

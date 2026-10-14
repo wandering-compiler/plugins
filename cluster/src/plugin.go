@@ -19,8 +19,10 @@ import (
 
 // RegisterPlugin wires the control plane's half of the cluster.
 //
-// The signature is fixed by the v4 bundle codegen and is checked by nothing in
-// this module — see the warning in gen/interfaces.go. Three arguments.
+// The signature is fixed by the v4 bundle codegen. The gen types are generated
+// (`make gen`) from plugin.yaml and the protos, the same way a consumer's
+// staging generates them, so a build here compiles against the shape a
+// consumer's bundle hands over.
 func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.ClientSet) error {
 	if cfg == nil {
 		cfg = &gen.EnvConfig{}
