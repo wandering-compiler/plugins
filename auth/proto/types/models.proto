@@ -988,8 +988,9 @@ enum RolePermissionChangeKind {
 // revives a removed one (see RolePermission), so the row alone shows only the
 // latest state; this table keeps every change. Written in the same statement
 // list (one transaction) as the change itself, never updated, never deleted.
-// The platform's role seed writes RolePermission directly and is not logged
-// here.
+// The platform's role seed writes RolePermission directly: with this table
+// present it logs its own changes here (changed_by NULL), each in the same
+// statement as the change; a role seed older than that logs nothing.
 //
 // permission_id is a plain number, not CHECK-constrained to the deployed
 // catalogue like RolePermission's: a log row must survive a permission that
