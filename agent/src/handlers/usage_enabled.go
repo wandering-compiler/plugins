@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 
-	gen "github.com/wandering-compiler/plugins/agent/gen"
 	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
 	"github.com/wandering-compiler/plugins/agent/lib/usage"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -20,12 +19,11 @@ import (
 // handlers/usage.go refuses to boot when the activation says the feature is
 // on and the sink is still the no-op.
 func init() {
-	newUsageSink = func(clients gen.ClientSet) UsageSink {
-		// The bundle's ClientSet gains UsageMutation() only when this feature
-		// is active, so the author-side ClientSet interface cannot require it
-		// — a plugin compiled with the feature off would stop satisfying its
-		// own contract. Asserting here is safe precisely because this file is
-		// staged only in the activation that has the method.
+	newUsageSink = func(clients any) UsageSink {
+		// The generated ClientSet has UsageMutation() only when this feature
+		// is active — the usage tables exist only then — so the signature
+		// cannot require it. Asserting here is safe precisely because this
+		// file is staged only in the activation that has the method.
 		uc, ok := clients.(interface {
 			UsageMutation() pb.UsageMutationClient
 		})

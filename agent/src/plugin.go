@@ -31,9 +31,10 @@ const defaultMaxOutputTokens = 4096
 
 // RegisterPlugin wires the AgentService handler.
 //
-// `clients` is unused: this plugin owns no tables and calls nothing in the
-// consuming project. It is in the signature because the v4 contract puts it
-// there for every plugin — see gen.ClientSet.
+// `clients` is the generated gen.ClientSet. Only the usage_persistence feature
+// uses it (the usage sink and the limiter); they assert the usage clients
+// rather than require them, because an activation with the feature off has no
+// usage tables and so no usage clients.
 //
 // Every configuration error is returned HERE rather than tolerated, so a
 // misconfigured bundle fails at boot instead of on the first user's request.

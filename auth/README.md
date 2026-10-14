@@ -17,7 +17,7 @@ auth/
 │   └── events/
 ├── sandboxes/fakeidp/  ← dev-only fake OIDC provider for exercising `oauth`
 └── src/                ← module github.com/wandering-compiler/plugins/auth
-    ├── gen/pb/         ← committed pb for the local dev/test loop (see below)
+    ├── gen/            ← GENERATED (`make gen`), never committed (see below)
     ├── handlers/       ← authored Go business handlers
     └── lib/            ← helpers the handlers share
 ```
@@ -68,20 +68,19 @@ Behaviour that is deliberate, and easy to build against wrongly.
 **Errors**
 - **The sentence for a person is in `details[0].message`.** The envelope's top-level `message` is the generic sentence for the code: for `EMAIL_TAKEN` it reads "Another change reached this first. Please try again." A client must render the detail.
 
-## Regenerating the committed `src/gen/pb`
+## Generating `src/gen`
 
-The `src/gen/pb/*.pb.go` stubs exist only for this plugin's local
-dev/test loop (`go test ./src/...`); the project codegen generates
-its own per-activation pb at staging time and never uses them.
-Regenerate them after editing any `proto/` file with:
+`src/gen` is generated and never committed: the pb, the contract
+`RegisterPlugin` takes (`EnvConfig`, `ClientSet`, `HandlerRegistry`) and the
+feature constants. After cloning, and after editing `plugin.yaml` or any
+`proto/` file:
 
 ```
-w17ctl plugin gen-pb plugins/auth
+make gen PLUGIN=auth        # or: w17ctl plugin gen auth
 ```
 
-It reads `go_module` from `plugin.yaml` and drives the same `bufrun`
-pipeline as the project codegen — output is byte-stable across runs.
-It needs a reachable CONSOLE: the vocabulary is resolved server-side,
-the way every other compile is. (It used to say "from the w17ctl
-binary's embedded copy"; that embed is gone.)
-(This replaces the old hand-rolled `regen-pb.sh`.)
+It needs a reachable console (a w17ctl login): the vocabulary is resolved
+server-side, the way every other compile is. A consumer's staging generates
+the same package for each activation, so nothing here is published.
+`EnvConfig` takes its fields from the `env:` block of `plugin.yaml` — each
+entry's `description:` there is its documentation.

@@ -58,7 +58,9 @@ func TestRegisterPlugin_NilConfigFailsLoud(t *testing.T) {
 	}
 }
 
-type nilClients struct{}
+// nilClients returns nil storage clients; the rest of gen.ClientSet is embedded
+// as nil, since the plugin does not call it.
+type nilClients struct{ gen.ClientSet }
 
 func (nilClients) PaymentQuery() pb.PaymentQueryClient       { return nil }
 func (nilClients) PaymentMutation() pb.PaymentMutationClient { return nil }

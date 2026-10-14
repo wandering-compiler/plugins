@@ -3,3 +3,6 @@ test.out
 # A release's signature travels in its tag; a plugin.sig left by a local
 # `w17ctl plugin sign` must never be committed (tools/release.sh refuses it).
 /*/plugin.sig
+# A plugin's src/gen is generated — pb, contract and feature constants — by
+# `make gen` (`w17ctl plugin gen`). Nobody edits it and it is never committed.
+/*/src/gen/

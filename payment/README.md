@@ -175,6 +175,10 @@ must be exact. Amounts cross the API as decimal strings (`"19.99"`).
 
 ## Configuration (`env`)
 
+Each entry's full text is its `description:` in `plugin.yaml`; the generated
+`gen.EnvConfig` carries it as the field's comment. Secret entries arrive as
+`secret.String`, revealed once, when `RegisterPlugin` builds the backend.
+
 | env | secret | purpose |
 |---|---|---|
 | `payment_provider` | no | driver; v1: `stripe` (default) |
@@ -437,12 +441,16 @@ there is no compile coupling when a feature is absent):
   (the standalone slices prove handler logic + the Stripe driver; the
   multi-op / UPSERT / CHECK DQL validates at project codegen).
 
-## Regenerating the committed `src/gen/pb`
+## Generating `src/gen`
 
-The `src/gen/pb/*.pb.go` stubs are author-only (the local `go test`
-loop); the project codegen generates its own per-activation pb. After
-editing any `proto/` file:
+`src/gen` is generated and never committed: the pb, the contract
+`RegisterPlugin` takes (`EnvConfig`, `ClientSet`, `HandlerRegistry`) and the
+feature constants. After cloning, and after editing `plugin.yaml` or any
+`proto/` file:
 
 ```
-w17ctl plugin gen-pb plugins/payment
+make gen PLUGIN=payment     # or: w17ctl plugin gen payment
 ```
+
+It needs a reachable console (a w17ctl login). A consumer's staging generates
+the same package for each activation, so nothing here is published.

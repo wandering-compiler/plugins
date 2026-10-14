@@ -101,7 +101,13 @@ func (q workerQuery) FingerprintsByState(_ context.Context, in *pb.FingerprintsB
 	return &pb.FingerprintsByStateResp{Fingerprints: q.t.banned}, nil
 }
 
-type clientSet struct{ t *tables }
+// clientSet implements the four table clients the plugin calls. The rest of
+// the generated gen.ClientSet is embedded as nil: a call to it panics, which
+// is the point — the plugin does not use it.
+type clientSet struct {
+	gen.ClientSet
+	t *tables
+}
 
 func (c clientSet) RelayQuery() pb.RelayQueryClient       { return relayQuery{t: c.t} }
 func (c clientSet) RelayMutation() pb.RelayMutationClient { return relayMutation{t: c.t} }
@@ -210,7 +216,7 @@ func TestRegisterPlugin_TheRegisteredHandlerReachesAPinnedRelay(t *testing.T) {
 		banned: []string{"bad-worker-fp"},
 	}
 	reg := &registry{}
-	err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath, DialTimeoutSeconds: 3}, reg, clientSet{tb})
+	err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath, DialTimeoutSeconds: 3}, reg, clientSet{t: tb})
 	if err != nil {
 		t.Fatalf("RegisterPlugin: %v", err)
 	}
@@ -254,7 +260,7 @@ func TestRegisterPlugin_AnotherIdentityIsRefusedByTheRelay(t *testing.T) {
 	boot := func(cert, key string) *handlers.ClusterServiceHandler {
 		t.Helper()
 		reg := &registry{}
-		if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: cert, ClientKeyPath: key, DialTimeoutSeconds: 2}, reg, clientSet{tb}); err != nil {
+		if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: cert, ClientKeyPath: key, DialTimeoutSeconds: 2}, reg, clientSet{t: tb}); err != nil {
 			t.Fatal(err)
 		}
 		return reg.impl.(*handlers.ClusterServiceHandler)
@@ -298,7 +304,7 @@ func TestRegisterPlugin_DialTimeoutDefaults(t *testing.T) {
 	certPath, keyPath, _ := identityFiles(t, "console")
 	for _, secs := range []int{0, -4} {
 		reg := &registry{}
-		if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath, DialTimeoutSeconds: secs}, reg, clientSet{&tables{}}); err != nil {
+		if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath, DialTimeoutSeconds: secs}, reg, clientSet{t: &tables{}}); err != nil {
 			t.Fatal(err)
 		}
 		if got := reg.impl.(*handlers.ClusterServiceHandler).DialTimeout; got != 5*time.Second {
@@ -346,7 +352,7 @@ func TestRegisterPlugin_RefusesAnUnusableConfiguration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := &registry{}
-			err := RegisterPlugin(tc.cfg, reg, clientSet{&tables{}})
+			err := RegisterPlugin(tc.cfg, reg, clientSet{t: &tables{}})
 			if err == nil {
 				t.Fatal("an unusable configuration booted")
 			}
@@ -366,7 +372,7 @@ func TestRegisterPlugin_RefusesAnUnusableConfiguration(t *testing.T) {
 func TestRegisterPlugin_NeedsARegistryAndClients(t *testing.T) {
 	certPath, keyPath, _ := identityFiles(t, "console")
 	cfg := &gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath}
-	if err := RegisterPlugin(cfg, nil, clientSet{&tables{}}); err == nil {
+	if err := RegisterPlugin(cfg, nil, clientSet{t: &tables{}}); err == nil {
 		t.Error("RegisterPlugin accepted a nil registry")
 	}
 	if err := RegisterPlugin(cfg, &registry{}, nil); err == nil {
@@ -379,7 +385,7 @@ func TestRegisterPlugin_NeedsARegistryAndClients(t *testing.T) {
 func TestRegisterPlugin_TheBanDeliveryStopsAtShutdown(t *testing.T) {
 	certPath, keyPath, _ := identityFiles(t, "console")
 	reg := &registry{}
-	if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath}, reg, clientSet{&tables{}}); err != nil {
+	if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath}, reg, clientSet{t: &tables{}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(reg.shutdowns) != 1 {
