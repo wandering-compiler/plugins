@@ -63,22 +63,20 @@ type endedToken struct {
 	deviceRevokedAt *timestamppb.Timestamp
 }
 
-// endedAt is when the token stopped being valid: the earlier of its revocation
-// and an expiry already past, nil when it has done neither (the lookup should
-// not have returned it). A token revoked after it had expired ended at its
-// expiry; one revoked before its expiry ended when it was revoked.
-func (t endedToken) endedAt(now time.Time) *timestamppb.Timestamp {
-	var expired *timestamppb.Timestamp
-	if t.expiresAt != nil && !t.expiresAt.AsTime().After(now) {
-		expired = t.expiresAt
-	}
+// endedAt is when the token stopped being valid. The probe already decided
+// that it HAS ended — by the database's NOW() — so this never asks the
+// application's clock again (a skewed one would turn an expired token into the
+// plain refusal): not revoked, it ended at its expiry; revoked, at whichever
+// came first, its expiry or its revocation. nil only for a row that is neither
+// (the probe should not have returned it).
+func (t endedToken) endedAt() *timestamppb.Timestamp {
 	switch {
 	case t.revokedAt == nil:
-		return expired
-	case expired == nil || t.revokedAt.AsTime().Before(expired.AsTime()):
-		return t.revokedAt
+		return t.expiresAt
+	case t.expiresAt != nil && t.expiresAt.AsTime().Before(t.revokedAt.AsTime()):
+		return t.expiresAt
 	default:
-		return expired
+		return t.revokedAt
 	}
 }
 
@@ -103,7 +101,7 @@ func expiredTokenRefusal(lookupErr error, lookupEnded func() (endedToken, error)
 	if err != nil {
 		return lookupErr
 	}
-	ended := tok.endedAt(time.Now())
+	ended := tok.endedAt()
 	if ended == nil {
 		return lookupErr
 	}

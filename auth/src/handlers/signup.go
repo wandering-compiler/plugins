@@ -74,6 +74,11 @@ var signUpConfirmation func(ctx context.Context, h *AuthServiceHandler, req *pb.
 // The invite gate it calls first lives in auth_service.go, because a
 // second surface creates accounts too — see signupInviteGate.
 func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb.SignUpResp, error) {
+	// The erased-account domain first: it is refused whoever asks, so the
+	// answer says nothing about any account.
+	if err := refuseReservedEmail(ctx, req.GetEmail()); err != nil {
+		return nil, err
+	}
 	// BEFORE the hash, and before any write. Argon2id is deliberately
 	// expensive, so hashing first would let an uninvited caller spend the
 	// server's CPU on every attempt — and a refusal that costs the

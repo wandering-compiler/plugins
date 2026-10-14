@@ -332,6 +332,9 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 	if req.GetEmail() == "" {
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
+	if err := refuseReservedEmail(ctx, req.GetEmail()); err != nil {
+		return nil, err
+	}
 	if req.GetRoleId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "role_id is required — a bot with no role holds a token that does nothing")
 	}

@@ -131,6 +131,18 @@ const (
 	// whoever holds the code mailed to that address.
 	CodeEmailTaken = "EMAIL_TAKEN"
 
+	// CodeEmailInvalid: an address no account may be given. Today that is the
+	// domain erased accounts are re-addressed to (erasedEmailDomain): an
+	// account holding `erased-<id>@erased.invalid` before the account with
+	// that id is erased would block its erasure for good (the address is
+	// unique).
+	CodeEmailInvalid = "EMAIL_INVALID"
+
+	// CodeClientRevoked: registering a (client_id, redirect_uri) pair whose
+	// registration was revoked. A revoked registration is history and is not
+	// reused; the operator registers the callback under another client_id.
+	CodeClientRevoked = "CLIENT_REVOKED"
+
 	// CodeRoleAboveCaller: a role the caller tried to hand out (an invitation,
 	// a grant) carries permissions the caller does not hold. Reached only by a
 	// caller already allowed to grant at all, so it names a rule they can act
@@ -289,6 +301,10 @@ const (
 	// account round the registration form instead of to sign-in.
 	MsgEmailTaken = "An account with this address already exists. Sign in instead."
 
+	MsgEmailInvalid = "This email address cannot be used. Use another address."
+
+	MsgClientRevoked = "This callback was registered under this client ID and revoked. Register it under a new client ID."
+
 	MsgRoleAboveCaller = "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
 
 	// Minting for a machine account whose role the operator could not grant —
@@ -355,6 +371,26 @@ func isEmailTaken(err error) bool {
 		}
 	}
 	return false
+}
+
+// erasedEmailDomain is the domain an erased account's address is replaced
+// with (erasedAddress, `user_admin`). `.invalid` is reserved (RFC 2606), so no
+// real mailbox is in it; refuseReservedEmail keeps every other path from
+// writing it.
+const erasedEmailDomain = "erased.invalid"
+
+// refuseReservedEmail refuses an address in erasedEmailDomain, at every path
+// that gives an account an address (SignUp, ConfirmSignUp, the OAuth account
+// creation, the admin's UpdateAccount, CreateBot). Only an erasure writes one:
+// an account that held `erased-<id>@erased.invalid` first would make the
+// erasure of account <id> fail on the unique address for good.
+func refuseReservedEmail(ctx context.Context, email string) error {
+	if strings.HasSuffix(normalizeEmail(email), "@"+erasedEmailDomain) {
+		return refusal(ctx, codes.InvalidArgument,
+			"the "+erasedEmailDomain+" domain is reserved for erased accounts",
+			CodeEmailInvalid, "email", MsgEmailInvalid, nil)
+	}
+	return nil
 }
 
 // emailTaken is the refusal for registering an address that has an account.

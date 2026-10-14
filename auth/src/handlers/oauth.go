@@ -607,6 +607,10 @@ func (h *AuthServiceHandler) findOAuthAccount(ctx context.Context, providerID, s
 // invitation and the identity link commit together.
 func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID, subject, email string, emailVerified bool, inviteToken string) (string, error) {
 	email = normalizeEmail(email)
+	// A provider may assert any address, the erased-account domain included.
+	if err := refuseReservedEmail(ctx, email); err != nil {
+		return "", err
+	}
 	if err := signUpAllowlistGate(h, email); err != nil {
 		return "", err
 	}

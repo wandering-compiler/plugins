@@ -65,8 +65,14 @@ func init() {
 // erased address name the account's placeholder instead
 // (EraseOrgInviteAddress), so a pending one can no longer be accepted and an
 // accepted one keeps its record without the address. The rows stay.
+//
+// Invitations store the address normalised; an account's address may not be
+// (an admin edit writes it as given), so it is normalised here before the
+// comparison. Skipped when the account already holds its placeholder (a
+// retried erasure): there is no old address left to look for.
 func eraseInviteAddress(ctx context.Context, h *AuthServiceHandler, _, email, placeholder string) error {
-	if email == "" {
+	email = normalizeEmail(email)
+	if email == "" || email == normalizeEmail(placeholder) {
 		return nil
 	}
 	_, err := h.Mutation.EraseOrgInviteAddress(ctx, &pb.EraseOrgInviteAddressReq{Email: email, Placeholder: placeholder})

@@ -243,6 +243,10 @@ func TestEraseStatements(t *testing.T) {
 	}
 	for name, wants := range map[string][]string{
 		"EraseOAuthData": {
+			// The codes of the sign-in that created the account carry no
+			// user_id: found by the identity they carry, while it still does.
+			"UPDATE @module.OAuthLoginCode c SET consumed_at = NOW() WHERE c.user_id IS NULL AND c.consumed_at IS NULL AND EXISTS (SELECT i.id FROM @module.OAuthIdentity i WHERE i.user_id = :user_id AND i.provider_id = c.provider_id AND i.external_id = c.external_id)",
+			"UPDATE @module.OAuthLoginCode c SET email = \\'\\', external_id = \\'\\' WHERE c.user_id IS NULL AND EXISTS (SELECT i.id FROM @module.OAuthIdentity i WHERE i.user_id = :user_id AND i.provider_id = c.provider_id AND i.external_id = c.external_id)",
 			"UPDATE @module.OAuthIdentity SET external_id = id, email = \\'\\' WHERE user_id = :user_id",
 			"UPDATE @module.OAuthLoginCode SET consumed_at = NOW() WHERE user_id = :user_id AND consumed_at IS NULL",
 		},
@@ -263,6 +267,12 @@ func TestEraseStatements(t *testing.T) {
 		if strings.Contains(body, "DELETE") || strings.Contains(body, "RETURNING") {
 			t.Errorf("%s deletes, or fails on an account with nothing to erase (RETURNING):\n%s", name, body)
 		}
+	}
+	// The unlinked codes are matched by the identity's subject, so they must
+	// be erased BEFORE the identities' subject is replaced.
+	oauth := m["EraseOAuthData"]
+	if a, b := strings.Index(oauth, `name: "unlinked_codes"`), strings.Index(oauth, `name: "main"`); a < 0 || b < a {
+		t.Errorf("EraseOAuthData rewrites the identities before erasing the codes found through them:\n%s", oauth)
 	}
 	if erasedAddress("u1") != "erased-u1@erased.invalid" {
 		t.Errorf("placeholder = %q", erasedAddress("u1"))
@@ -288,9 +298,14 @@ func TestAuthClientStatements(t *testing.T) {
 	if !strings.Contains(m["RevokeAuthClient"], "UPDATE @module.AuthClient SET revoked_at = NOW(), enabled = FALSE WHERE id = :id AND revoked_at IS NULL") {
 		t.Errorf("RevokeAuthClient is not a guarded UPDATE:\n%s", m["RevokeAuthClient"])
 	}
+	// The unique index stays FULL: a partial one is refused on MySQL, and
+	// client_id is the operator's choice, so a revoked pair stays taken and
+	// RegisterClient says so (TestRegisterClient_ARevokedPairIsRefusedClearly).
 	models := authProtos(t)["types/models.proto"]
-	if !strings.Contains(models, `where: "revoked_at IS NULL" }`) {
-		t.Error("the AuthClient (client_id, redirect_uri) unique index is not partial on live rows, so a revoked registration blocks registering the pair again")
+	i := strings.Index(models, "message AuthClient {")
+	block := models[i : i+strings.Index(models[i:], "\n}\n")]
+	if !strings.Contains(block, `{ unique: true, fields: [{ name: "client_id" }, { name: "redirect_uri" }] }`) || strings.Contains(block, "where:") {
+		t.Errorf("the AuthClient (client_id, redirect_uri) unique index is not the full one:\n%s", block)
 	}
 }
 
@@ -303,7 +318,7 @@ func TestAdminPagesEraseAndRevokeNeverDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := string(raw)
-	for _, banned := range []string{"AuthMutation.DeleteUser", "delete: AuthMutation.RevokeUserToken", "AuthService.DeleteClient"} {
+	for _, banned := range []string{"AuthMutation.DeleteUser", "delete: AuthMutation.RevokeUserToken", "AuthService.DeleteClient", "update: AuthMutation.UpdateUser"} {
 		if strings.Contains(manifest, banned) {
 			t.Errorf("plugin.yaml still binds %s", banned)
 		}

@@ -847,7 +847,8 @@ func TestEraseUsers_TheAddressCanSignUpAgain(t *testing.T) {
 	}
 }
 
-// A second erase changes nothing and is no error — read first (erased_at), and
+// A second erase changes nothing and is no error: EraseUser is not run again
+// (erased_at is read first), the erasers run again and find nothing left, and
 // the statement's own guard settles a race (NotFound is done).
 func TestEraseUsers_IsIdempotent(t *testing.T) {
 	s := aliceStore()
@@ -857,28 +858,23 @@ func TestEraseUsers_IsIdempotent(t *testing.T) {
 		t.Fatalf("erase: %v", err)
 	}
 	before := *s.users["u1"]
-	erasedBefore := len(s.erased)
-	if _, err := h.EraseUsers(sessionCallerCtx("admin2", "t-admin2"), &pb.EraseUsersReq{Ids: []string{"u1"}}); err != nil {
+	counted := &countingErase{revocationStore: s}
+	ch := &AuthServiceHandler{Query: counted, Mutation: counted}
+	if _, err := ch.EraseUsers(sessionCallerCtx("admin2", "t-admin2"), &pb.EraseUsersReq{Ids: []string{"u1"}}); err != nil {
 		t.Fatalf("a second erase failed: %v", err)
 	}
 	after := s.users["u1"]
-	if !proto.Equal(after.erasedAt, before.erasedAt) || after.email != before.email || len(s.erased) != erasedBefore {
-		t.Errorf("a second erase changed the account: %+v, was %+v", after, before)
+	if !proto.Equal(after.erasedAt, before.erasedAt) || after.email != before.email || counted.eraseUserCalls != 0 {
+		t.Errorf("a second erase changed the account or ran EraseUser again (%d): %+v, was %+v", counted.eraseUserCalls, after, before)
 	}
 	assertRevoked(t, s, "t-session", "admin", pb.RevokeReason_REVOKE_REASON_USER_ERASED)
 
 	// The race: the read saw a live account, the statement found it erased.
-	if err := h.eraseUser(ctx, "u1", "admin"); err != nil {
-		t.Fatalf("the guarded statement's NotFound surfaced: %v", err)
-	}
 	s.users["u1"].erasedAt = nil // as the read would have seen it
 	raced := &racedErase{revocationStore: s}
 	rh := &AuthServiceHandler{Query: raced, Mutation: raced}
 	if err := rh.eraseUser(ctx, "u1", "admin"); err != nil {
 		t.Fatalf("an erasure that lost the race failed: %v", err)
-	}
-	if raced.erasersRan {
-		t.Error("the feature erasers ran for an erasure that lost the race")
 	}
 
 	if _, err := h.EraseUsers(ctx, &pb.EraseUsersReq{}); status.Code(err) != codes.InvalidArgument {
@@ -886,20 +882,23 @@ func TestEraseUsers_IsIdempotent(t *testing.T) {
 	}
 }
 
+// countingErase counts EraseUser calls.
+type countingErase struct {
+	*revocationStore
+	eraseUserCalls int
+}
+
+func (c *countingErase) EraseUser(ctx context.Context, in *pb.EraseUserReq, o ...grpc.CallOption) (*pb.EraseUserResp, error) {
+	c.eraseUserCalls++
+	return c.revocationStore.EraseUser(ctx, in, o...)
+}
+
 // racedErase answers EraseUser as the statement does when another operator
 // erased the account between the read and the write.
-type racedErase struct {
-	*revocationStore
-	erasersRan bool
-}
+type racedErase struct{ *revocationStore }
 
 func (r *racedErase) EraseUser(context.Context, *pb.EraseUserReq, ...grpc.CallOption) (*pb.EraseUserResp, error) {
 	return nil, notFound()
-}
-
-func (r *racedErase) EraseOAuthData(ctx context.Context, in *pb.EraseOAuthDataReq, o ...grpc.CallOption) (*pb.EraseOAuthDataResp, error) {
-	r.erasersRan = true
-	return r.revocationStore.EraseOAuthData(ctx, in, o...)
 }
 
 // Erasure in a transaction: one per account, committed; a failing eraser rolls

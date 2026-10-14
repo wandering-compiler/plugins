@@ -3323,9 +3323,29 @@ service AuthMutation {
   // provider sends — the person can sign in through the provider again and
   // gets a new account, and nothing resolves to the erased one. Login codes
   // of the account are spent and their identity copy blanked.
+  //
+  // That includes the codes of the sign-in that CREATED the account: such a
+  // code is written with user_id NULL (the account did not exist yet) and
+  // nothing back-fills it, so it is found by the identity it carries — the
+  // (provider_id, external_id) of one of the account's identities. That op
+  // runs first, while the identities still hold the subject.
   rpc EraseOAuthData(EraseOAuthDataReq) returns (EraseOAuthDataResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
     option (w17.db.method) = {
+      ops: {
+        name: "unlinked_codes_spent"
+        dql:
+          "UPDATE @module.OAuthLoginCode c SET consumed_at = NOW() "
+          "WHERE c.user_id IS NULL AND c.consumed_at IS NULL AND EXISTS (SELECT i.id FROM @module.OAuthIdentity i "
+          "WHERE i.user_id = :user_id AND i.provider_id = c.provider_id AND i.external_id = c.external_id)"
+      }
+      ops: {
+        name: "unlinked_codes"
+        dql:
+          "UPDATE @module.OAuthLoginCode c SET email = \'\', external_id = \'\' "
+          "WHERE c.user_id IS NULL AND EXISTS (SELECT i.id FROM @module.OAuthIdentity i "
+          "WHERE i.user_id = :user_id AND i.provider_id = c.provider_id AND i.external_id = c.external_id)"
+      }
       ops: {
         name: "codes_spent"
         dql:  "UPDATE @module.OAuthLoginCode SET consumed_at = NOW() WHERE user_id = :user_id AND consumed_at IS NULL"

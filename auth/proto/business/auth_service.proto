@@ -956,6 +956,13 @@ service AuthService {
   // transaction per account, the operator recorded as revoked_by on every
   // token it ends. An account already erased is skipped. Refuses an empty id
   // list (the admin's "apply to all rows" sends one). Gated user_admin.
+  // UpdateAccount — the admin Users page's detail `update` (email only),
+  // through AuthMutation.UpdateUser, refusing the erased-account domain
+  // (EMAIL_INVALID): an account holding an erasure's placeholder first would
+  // block that erasure for good. Gated user_admin.
+  rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
   rpc EraseUsers(EraseUsersReq) returns (EraseUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
@@ -1345,6 +1352,19 @@ message EraseUsersReq {
   repeated string ids = 1;
 }
 message EraseUsersResp { option (w17.contrib.plugin_feature) = "user_admin"; }
+// UpdateAccountReq / Resp — the shape of AuthMutation.UpdateUser's, which it
+// calls: `user_id` is the row the admin URL names, `email` the one editable
+// field.
+message UpdateAccountReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string email   = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message UpdateAccountResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+  string email   = 2;
+}
 message RevokeSessionsReq {
   option (w17.contrib.plugin_feature) = "user_admin";
   repeated string ids = 1;

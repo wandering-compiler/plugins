@@ -1027,20 +1027,17 @@ message TokenPermission {
 //
 // A registration is never deleted: revoking one sets `revoked_at`, and the row
 // stays as the record of what was trusted and when. A revoked row is refused by
-// every resolver and cannot be re-enabled; registering the same pair again
-// writes a new row (with a new secret).
+// every resolver and cannot be re-enabled, and its (client_id, redirect_uri)
+// pair stays taken: client_id is the operator's choice, so registering the
+// callback again means choosing a new client_id (RegisterClient refuses the
+// old pair with CLIENT_REVOKED rather than reviving it).
 //
 // Without it, a flow that works on loopback cannot be deployed behind any
 // other callback.
 message AuthClient {
   option (w17.db.table) = {
     indexes: [
-      // One LIVE registration per (client_id, redirect_uri). Partial, because a
-      // revoked row stays and must not block registering the pair again — the
-      // OrgInvite shape. PG + SQLite only, the support surface this plugin's
-      // other `where:` indexes already assume.
-      { unique: true, fields: [{ name: "client_id" }, { name: "redirect_uri" }],
-        where: "revoked_at IS NULL" }
+      { unique: true, fields: [{ name: "client_id" }, { name: "redirect_uri" }] }
     ]
   };
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -1075,7 +1072,9 @@ message AuthClient {
   // revoked_at — when the registration was revoked (AuthMutation.RevokeAuthClient);
   // NULL = live. Set once, never cleared. A revoked row is refused by
   // GetRegisteredRedirect and GetAuthClientSecret exactly as an unregistered
-  // one, and SetAuthClientEnabled leaves it alone, so it cannot come back.
+  // one, and SetAuthClientEnabled leaves it alone, so it cannot come back. Its
+  // pair stays taken (the unique index is not partial: that is refused on
+  // MySQL), so a re-registration uses a new client_id.
   google.protobuf.Timestamp revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
 }
 

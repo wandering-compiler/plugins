@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -444,9 +446,32 @@ func (h *AuthServiceHandler) RegisterClient(ctx context.Context, req *pb.Registe
 		ClientSecret: hashed,
 	})
 	if err != nil {
+		if status.Code(err) == codes.AlreadyExists && h.pairWasRevoked(ctx, req.GetClientId(), req.GetRedirectUri()) {
+			return nil, refusal(ctx, codes.FailedPrecondition,
+				"this (client_id, redirect_uri) was registered and revoked; a revoked registration is kept as history and not reused — register the callback under a new client_id",
+				CodeClientRevoked, "client_id", MsgClientRevoked, nil)
+		}
 		return nil, err
 	}
 	return &pb.RegisterClientResp{Client: resp.GetClient(), ClientSecret: secret}, nil
+}
+
+// pairWasRevoked reports whether the (client_id, redirect_uri) a registration
+// collided with is a REVOKED registration. Read only after the collision, to
+// say why: a revoked row keeps its pair (the unique index is not partial), so
+// the operator is told to choose a new client_id instead of the generic
+// AlreadyExists. A failed read answers false, leaving the original error.
+func (h *AuthServiceHandler) pairWasRevoked(ctx context.Context, clientID, redirectURI string) bool {
+	list, err := h.Query.ListAuthClients(ctx, &pb.ListAuthClientsReq{})
+	if err != nil {
+		return false
+	}
+	for _, c := range list.GetClients() {
+		if c.GetClientId() == clientID && c.GetRedirectUri() == redirectURI && c.GetRevokedAt() != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ListClients returns every registration, enabled or not, revoked or not —

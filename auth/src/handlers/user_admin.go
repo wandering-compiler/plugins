@@ -36,9 +36,30 @@ func init() {
 // erasedAddress is the placeholder an erased account's address becomes:
 // unique (the id is), non-routable (`.invalid` is reserved, RFC 2606), and a
 // valid address, so the EMAIL column's checks hold. Replacing the address is
-// what frees it: the person can sign up again with it.
+// what frees it: the person can sign up again with it. No other path may write
+// an address in this domain (refuseReservedEmail), so nothing can hold the
+// placeholder before the erasure needs it.
 func erasedAddress(userID string) string {
-	return "erased-" + userID + "@erased.invalid"
+	return "erased-" + userID + "@" + erasedEmailDomain
+}
+
+// UpdateAccount is the admin Users page's detail `update`: the email only,
+// through AuthMutation.UpdateUser, after refusing the erased-account domain —
+// an account given `erased-<id>@erased.invalid` would block the erasure of
+// account <id> for good. The page binds this method rather than the mutation
+// so the refusal cannot be skipped from the admin.
+func (h *AuthServiceHandler) UpdateAccount(ctx context.Context, req *pb.UpdateAccountReq) (*pb.UpdateAccountResp, error) {
+	if _, err := callerUserID(ctx); err != nil {
+		return nil, Unauthenticated(err)
+	}
+	if err := refuseReservedEmail(ctx, req.GetEmail()); err != nil {
+		return nil, err
+	}
+	resp, err := h.Mutation.UpdateUser(ctx, &pb.UpdateUserReq{UserId: req.GetUserId(), Email: req.GetEmail()})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.UpdateAccountResp{UserId: resp.GetUserId(), Email: resp.GetEmail()}, nil
 }
 
 // errEmptySelection refuses an admin action with no ids. The admin's "apply to
@@ -68,22 +89,25 @@ func (h *AuthServiceHandler) EraseUsers(ctx context.Context, req *pb.EraseUsersR
 	return &pb.EraseUsersResp{}, nil
 }
 
-// eraseUser erases one account: AuthMutation.EraseUser over the base tables
-// (the row pseudonymised in place, the account disabled, its tokens and
-// devices revoked), then every feature's eraser over the tables it owns, and
-// the account's reset links spent — one unit of work, so an erasure is never
-// half done. An account already erased is left as it is (idempotent): its
-// erased_at is read first, and the statement's own `erased_at IS NULL` guard
-// settles a race between two operators.
+// eraseUser erases one account: every feature's eraser over the tables it
+// owns and the account's reset links FIRST, then AuthMutation.EraseUser over
+// the base tables (the row pseudonymised in place, the account disabled, its
+// tokens and devices revoked). With a transaction coordinator that is one unit
+// of work. Without one each statement commits on its own, and the order is
+// what makes a retry complete a failed erasure: every eraser is an idempotent
+// UPDATE, and EraseUser — the step that stamps erased_at and replaces the
+// address the invitation eraser looks for — runs last, so an erasure that
+// failed part-way is not yet marked erased and the next attempt does all of it
+// again. An account already erased skips EraseUser alone and still runs the
+// erasers, which change nothing that is already erased and finish anything an
+// earlier attempt left; EraseUser's own `erased_at IS NULL` guard settles a
+// race between two operators (NotFound is done).
 func (h *AuthServiceHandler) eraseUser(ctx context.Context, userID, operator string) error {
 	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
 	if err != nil {
 		return err
 	}
 	user := got.GetUser()
-	if user.GetErasedAt() != nil {
-		return nil
-	}
 	email, placeholder := user.GetEmail(), erasedAddress(userID)
 
 	var tx *distx.TxHandle
@@ -98,15 +122,6 @@ func (h *AuthServiceHandler) eraseUser(ctx context.Context, userID, operator str
 			_ = tx.Rollback(ctx)
 		}
 	}
-	if _, err := h.Mutation.EraseUser(txCtx, &pb.EraseUserReq{
-		UserId:    userID,
-		Email:     placeholder,
-		RevokedBy: operator,
-	}); err != nil {
-		rollback()
-		// Erased by somebody else since the read: done, not a failure.
-		return notFoundOK(err)
-	}
 	for _, erase := range erasers {
 		if err := erase(txCtx, h, userID, email, placeholder); err != nil {
 			rollback()
@@ -117,6 +132,17 @@ func (h *AuthServiceHandler) eraseUser(ctx context.Context, userID, operator str
 	if err := spendResetLinks(txCtx, h, userID); err != nil {
 		rollback()
 		return err
+	}
+	if user.GetErasedAt() == nil {
+		if _, err := h.Mutation.EraseUser(txCtx, &pb.EraseUserReq{
+			UserId:    userID,
+			Email:     placeholder,
+			RevokedBy: operator,
+		}); notFoundOK(err) != nil {
+			rollback()
+			return err
+		}
+		// NotFound: erased by somebody else since the read — done.
 	}
 	if tx != nil {
 		return tx.Commit(ctx)

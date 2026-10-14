@@ -289,6 +289,11 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 		// Claimed by a concurrent confirmation between the check and here.
 		return nil, errSignUpConfirmInvalid
 	}
+	// SignUp refuses the address already; a registration parked before it did
+	// is refused here, and the transaction leaves it unclaimed.
+	if err := refuseReservedEmail(txCtx, claimed.GetEmail()); err != nil {
+		return nil, err
+	}
 	userID, err := confirmCreateUser(txCtx, h, claimed)
 	if err != nil {
 		if isEmailTaken(err) {
