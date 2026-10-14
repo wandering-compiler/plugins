@@ -49,6 +49,13 @@ type keyStore struct {
 	bot    *pb.User
 	// a machine account's ListMachineKeys failure
 	keysErr error
+	// sessions: token id → the device that approved it (a CLI session's
+	// browser), as GetSessionApprover reads UserToken.approved_by_device_id
+	approvers map[string]string
+}
+
+func (s *keyStore) GetSessionApprover(_ context.Context, in *pb.GetSessionApproverReq, _ ...grpc.CallOption) (*pb.GetSessionApproverResp, error) {
+	return &pb.GetSessionApproverResp{ApprovedByDeviceId: s.approvers[in.GetTokenId()]}, nil
 }
 
 func newKeyStore() *keyStore {
@@ -709,5 +716,147 @@ func TestCreateApiToken_RefusesANonCanonicalSpellingOfTheKey(t *testing.T) {
 	wantKeyRefusal(t, err, codes.InvalidArgument, CodeDeviceKeyInvalid)
 	if len(s.registered) != 0 || len(s.minted) != 0 {
 		t.Fatalf("a respelled signed-in key passed as a new program key: registered %v, minted %v", s.registered, s.minted)
+	}
+}
+
+// ── round 2 ─────────────────────────────────────────────────────────────
+
+// cliSessionCtx is a request from a CLI session (token id sid) of uid, proved
+// with the CLI's own key jkt.
+func cliSessionCtx(uid, sid, jkt string) context.Context {
+	raw, err := proto.Marshal(&pb.AuthResp{UserId: uid, SessionTokenId: sid, DeviceId: jkt})
+	if err != nil {
+		panic(err)
+	}
+	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		scopeUserIDKey, uid, "x-w17-scope-tenant_id", "tenant-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
+}
+
+// The chain: a stolen browser session D approves the thief's CLI key C, and
+// the CLI session creates an API token bound to the thief's program key.
+// The token records the ROOT approver D, not C — so revoking D (the admin
+// Devices page, or the owner's RevokeDevice) ends the CLI session AND the API
+// token. Recorded as C, the token would survive D's revocation, and C is
+// never revoked by it.
+func TestCreateApiToken_FromACLISessionRecordsTheRootApprover(t *testing.T) {
+	ks := newKeyStore()
+	browser := ks.put("u1", testJKT, &pb.Device{})
+	cli := ks.put("u1", otherJKT, &pb.Device{})
+	ks.approvers = map[string]string{"t-cli": browser.GetId()}
+	h := &AuthServiceHandler{Query: ks, Mutation: ks}
+	if _, err := h.CreateApiToken(cliSessionCtx("u1", "t-cli", otherJKT), &pb.CreateApiTokenReq{Name: "thief", PublicKey: ed25519JWK}); err != nil {
+		t.Fatal(err)
+	}
+	minted := ks.minted[0]
+	if minted.GetApprovedByDeviceId() != browser.GetId() || minted.GetApprovedByDeviceId() == cli.GetId() {
+		t.Fatalf("approver = %q, want the root (browser %s), not the CLI %s", minted.GetApprovedByDeviceId(), browser.GetId(), cli.GetId())
+	}
+	// The immediate creator stays visible on the event.
+	if minted.GetThumbprint() != otherJKT || minted.GetKeyThumbprint() != ed25519JKT || minted.GetCreatedBy() != "u1" {
+		t.Errorf("event fields = %q / %q / %q", minted.GetThumbprint(), minted.GetKeyThumbprint(), minted.GetCreatedBy())
+	}
+
+	// Revoking the root device D ends the chain, admin and owner alike.
+	for name, revoke := range map[string]func(h *AuthServiceHandler) error{
+		"admin": func(h *AuthServiceHandler) error {
+			_, err := h.RevokeDevices(adminCtx(), &pb.RevokeDevicesReq{Ids: []string{"d1"}})
+			return err
+		},
+		"owner": func(h *AuthServiceHandler) error {
+			_, err := h.RevokeDevice(ctxOnDevice(t, "u1", "t-other", otherJKT), &pb.RevokeDeviceReq{DeviceId: "d1"})
+			return err
+		},
+	} {
+		rs := devicesAdminStore()
+		cliApprovedBy(rs, "t-cli", "u1", "d1")
+		rs.addDevice("prog-thief", "u1", ed25519JKT).apiKey = true
+		// The token as CreateApiToken stamped it above: its approver mapped
+		// into this store — the browser is "d1" here; any other approver
+		// (the CLI's device) maps to none, and the token would survive.
+		rs.addToken("t-api-thief", "u1", "thief-bearer", "prog-thief", pb.TokenType_TOKEN_TYPE_API).approvedBy = map[string]string{browser.GetId(): "d1"}[minted.GetApprovedByDeviceId()]
+		if err := revoke(&AuthServiceHandler{Query: rs, Mutation: rs}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		assertRevoked(t, rs, "t-cli", map[string]string{"admin": "admin", "owner": "u1"}[name], pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+		assertRevoked(t, rs, "t-api-thief", map[string]string{"admin": "admin", "owner": "u1"}[name], pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	}
+}
+
+// The same root rule for a machine account's token issued from a CLI session.
+func TestIssueBotToken_FromACLISessionRecordsTheRootApprover(t *testing.T) {
+	withoutOrgs(t)
+	ks := newKeyStore()
+	laptop := ks.put("op-1", testJKT, &pb.Device{})
+	ks.put("op-1", otherJKT, &pb.Device{})
+	ks.approvers = map[string]string{"t-cli": laptop.GetId()}
+	h := &AuthServiceHandler{Query: ks, Mutation: ks}
+	if _, err := h.IssueBotToken(cliSessionCtx("op-1", "t-cli", otherJKT), &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: p256JWK}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ks.minted[0]; got.GetApprovedByDeviceId() != laptop.GetId() || got.GetCreatedBy() != "op-1" || got.GetUserId() != "bot-1" {
+		t.Fatalf("minted %+v, want approved by the operator's root device %s, created by op-1", got, laptop.GetId())
+	}
+}
+
+// A device its owner already revoked with RevokeOtherDevices — which spares
+// API tokens — can still be revoked on the admin Devices page to end the API
+// tokens it created; the device's own tokens and row keep their first
+// revocation, and no transaction is opened.
+func TestRevokeDevices_ARevokedDeviceStillEndsTheAPITokensItCreated(t *testing.T) {
+	s := devicesAdminStore()
+	apiTokenCreatedBy(s, "t-api-d1", "u1", "d1")
+	tx := &recordingDistTx{}
+	h := &AuthServiceHandler{Query: s, Mutation: s, DistTx: tx, Connection: "main"}
+	if _, err := h.RevokeOtherDevices(ctxOnDevice(t, "u1", "t-other", otherJKT), &pb.RevokeOtherDevicesReq{}); err != nil {
+		t.Fatal(err)
+	}
+	assertLive(t, s, "t-api-d1")
+	first := proto.Clone(s.devices["d1"].revokedAt)
+	if _, err := h.RevokeDevices(adminCtx(), &pb.RevokeDevicesReq{Ids: []string{"d1"}}); err != nil {
+		t.Fatal(err)
+	}
+	assertRevoked(t, s, "t-api-d1", "admin", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	if !proto.Equal(s.devices["d1"].revokedAt, first) || s.tokens["t-session"].revokedBy != "u1" {
+		t.Error("the first revocation of the device or its session was rewritten")
+	}
+	if len(tx.begun) != 0 {
+		t.Errorf("a transaction was opened: %v", tx.begun)
+	}
+}
+
+// ApiTokenCreated: emitted by IssueApiToken with the token, its owner, the
+// creating device (device_id, the static rule every device-carrying event
+// follows), the program key's thumbprint, the name and the creator — and no
+// secret: no token, hash or key member.
+func TestApiTokenCreated_TheEvent(t *testing.T) {
+	events := readProto(t, "../../proto/events/auth_events.proto")
+	msg := regexp.MustCompile(`(?s)message ApiTokenCreated \{(.*?)\n\}`).FindStringSubmatch(events)
+	if msg == nil {
+		t.Fatal("no ApiTokenCreated event")
+	}
+	for _, f := range []string{"token_id", "user_id", "device_id", "key_thumbprint", "name", "created_by"} {
+		if !regexp.MustCompile(`\bstring\s+` + f + `\s*=`).MatchString(msg[1]) {
+			t.Errorf("ApiTokenCreated has no %s", f)
+		}
+	}
+	for _, secret := range []string{"token_hash", "public_key", "jwk", "string token "} {
+		if strings.Contains(msg[1], secret) {
+			t.Errorf("ApiTokenCreated carries %q", secret)
+		}
+	}
+	body := mutationRPCBody(t, "IssueApiToken")
+	for _, want := range []string{`event: "ApiTokenCreated"`, `"$request.key_thumbprint"`, `"$request.created_by"`, `"$response.token.id"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("IssueApiToken's emit lacks %s:\n%s", want, body)
+		}
+	}
+	// The values the handler hands the emit.
+	ks := newKeyStore()
+	h := &AuthServiceHandler{Query: ks, Mutation: ks}
+	if _, err := h.CreateApiToken(operatorCtx("u1", testJKT), &pb.CreateApiTokenReq{Name: "ci", PublicKey: p256JWK}); err != nil {
+		t.Fatal(err)
+	}
+	if m := ks.minted[0]; m.GetThumbprint() != testJKT || m.GetKeyThumbprint() != p256JKT || m.GetCreatedBy() != "u1" {
+		t.Errorf("emit inputs = %q / %q / %q", m.GetThumbprint(), m.GetKeyThumbprint(), m.GetCreatedBy())
 	}
 }

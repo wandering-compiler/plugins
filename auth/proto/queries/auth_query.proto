@@ -488,6 +488,20 @@ message GetUserDeviceByThumbprintResp {
   string device_id = 1;
 }
 
+// GetSessionApprover — the device that approved the caller's own session
+// (UserToken.approved_by_device_id: a CLI session's approving browser), so a
+// token the session creates records that ROOT approver and ends when it is
+// revoked. A session approved by nothing answers NULL (empty).
+message GetSessionApproverReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+}
+message GetSessionApproverResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string approved_by_device_id = 1 [(w17.field) = { type: UUID, null: true }];
+}
+
 // LockMachineAccount takes a row lock on the machine account for the rest of
 // the caller's transaction, so two IssueBotToken calls for ONE account
 // serialise: each reads the account's key (ListMachineKeys) and registers
@@ -2020,6 +2034,21 @@ service AuthQuery {
           "SELECT d.id AS device_id "
           "FROM @module.Device d "
           "WHERE d.user_id = :user_id AND d.thumbprint = :thumbprint AND d.revoked_at IS NULL"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // GetSessionApprover — the caller's session's approver; see the request.
+  // Gated api_token.
+  rpc GetSessionApprover(GetSessionApproverReq) returns (GetSessionApproverResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.approved_by_device_id AS approved_by_device_id "
+          "FROM @module.UserToken t "
+          "WHERE t.id = :token_id AND t.user_id = :user_id"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "api_token";

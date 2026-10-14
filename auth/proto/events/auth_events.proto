@@ -98,6 +98,36 @@ message UserTokenRevoked {
   string device_id = 2;
 }
 
+// ApiTokenCreated — emitted on AuthMutation.IssueApiToken after the token
+// commits: a person's API token (CreateApiToken) or a machine account's
+// (IssueBotToken). Audit and notification hook ("a new API token was created
+// on your account"). No secret: never the token, its hash or a key — only the
+// key's thumbprint.
+message ApiTokenCreated {
+  option (w17.event) = { channel: "events", topic: "auth.api_token.created" };
+  option (w17.contrib.plugin_feature) = "api_token";
+
+  string                    token_id   = 1;
+  // The token's owner: the person, or the machine account.
+  string                    user_id    = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // device_id — the key thumbprint of the device that CREATED it (the value
+  // AuthResp.device_id and principal.DeviceID carry for the creating
+  // request): the browser, or the CLI session's own key when a CLI created
+  // it. Empty when the request carried no device. The token records the
+  // ROOT approver instead (UserToken.approved_by_device_id: for a CLI
+  // session, the browser that approved the CLI), so this is where the
+  // immediate creator stays visible.
+  string                    device_id  = 4;
+  // key_thumbprint — the thumbprint of the PROGRAM's key the token is bound
+  // to (the device id Authenticate answers for its requests).
+  string                    key_thumbprint = 5;
+  string                    name       = 6;
+  // created_by — the account that created it: the owner itself for
+  // CreateApiToken, the operator for IssueBotToken.
+  string                    created_by = 7;
+}
+
 // TokenIssued — emitted on AuthMutation.IssueToken after the
 // UserToken row commits. Subscribers might rate-limit token
 // issuance, populate a per-user session count, fan out to a

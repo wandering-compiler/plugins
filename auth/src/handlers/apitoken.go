@@ -339,15 +339,36 @@ func (h *AuthServiceHandler) registerKeyDevice(txCtx context.Context, a *signInA
 	return signInDevice{id: dev.GetId(), thumbprint: key.Thumbprint}, nil
 }
 
-// approverDevice is the Device row of the caller's own device — the key its
-// request was proved with — recorded on the token as the device that
-// approved it (UserToken.approved_by_device_id). "" when the request carries
-// no device (project code calling the handler directly) or the pair has no
-// live row; an outage fails the mint.
+// approverDevice is the ROOT approver recorded on the token
+// (UserToken.approved_by_device_id): the device whose revocation must end it.
+//
+//   - When the caller's session was itself approved by another device — a CLI
+//     session, approved by a browser (cli_login) — it is THAT device. A stolen
+//     browser session can approve the thief's CLI key and create API tokens
+//     from the CLI session; revoking the browser ends the CLI session, and must
+//     end those tokens too, which it does only if they name the browser. The
+//     immediate creator (the CLI's key) stays visible as ApiTokenCreated's
+//     device_id.
+//   - Otherwise the Device row of the caller's own device — the key its
+//     request was proved with.
+//
+// "" when the request carries no device (project code calling the handler
+// directly) or the pair has no live row; an outage fails the mint. One level
+// is enough: a CLI session's approver is the session that approved it at
+// CliAuthorize, recorded the same way.
 func (h *AuthServiceHandler) approverDevice(txCtx context.Context, callerID string) (string, error) {
 	jkt := requestThumbprint(txCtx)
 	if jkt == "" {
 		return "", nil
+	}
+	if sid := callerSessionTokenID(txCtx); sid != "" {
+		root, err := h.Query.GetSessionApprover(txCtx, &pb.GetSessionApproverReq{TokenId: sid, UserId: callerID})
+		if err != nil && status.Code(err) != codes.NotFound {
+			return "", err
+		}
+		if id := root.GetApprovedByDeviceId(); id != "" {
+			return id, nil
+		}
 	}
 	resp, err := h.Query.GetUserDeviceByThumbprint(txCtx, &pb.GetUserDeviceByThumbprintReq{UserId: callerID, Thumbprint: jkt})
 	if status.Code(err) == codes.NotFound {
@@ -378,6 +399,8 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAtt
 	if err != nil {
 		return "", "", err
 	}
+	// ApiTokenCreated's creator: the account calling, "" for project code.
+	creator, _ := callerUserID(txCtx)
 	issued, err := h.Mutation.IssueApiToken(txCtx, &pb.IssueApiTokenReq{
 		UserId:             userID,
 		Name:               name,
@@ -386,6 +409,10 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAtt
 		TokenHash:          hash,
 		DeviceId:           dev.id,
 		ApprovedByDeviceId: approvedBy,
+
+		Thumbprint:    requestThumbprint(txCtx),
+		KeyThumbprint: dev.thumbprint,
+		CreatedBy:     creator,
 	})
 	if err != nil {
 		return "", "", err

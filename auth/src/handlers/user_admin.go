@@ -206,9 +206,19 @@ func (h *AuthServiceHandler) RevokeDevices(ctx context.Context, req *pb.RevokeDe
 			}
 			return nil, err
 		}
-		if dev.GetId() != id || dev.GetRevokedAt() != nil {
-			// Not the row asked for (an answer that names another row is no
-			// answer), or already revoked: nothing to do.
+		if dev.GetId() != id {
+			// Not the row asked for: an answer that names another row is no
+			// answer.
+			continue
+		}
+		if dev.GetRevokedAt() != nil {
+			// Already revoked — by its owner's RevokeOtherDevices, say, which
+			// spares API tokens. Its tokens and its row stay as the first
+			// revocation left them; only the API tokens it created are ended
+			// now, which is why an operator revokes it again. Idempotent.
+			if err := endApprovedAPITokens(ctx, h, dev.GetUser(), id, operator); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		userID := dev.GetUser()

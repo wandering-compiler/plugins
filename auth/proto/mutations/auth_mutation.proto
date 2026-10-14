@@ -192,10 +192,17 @@ message IssueApiTokenReq {
   // row of the public key the request named (RegisterDevice). REQUIRED, as on
   // IssueTokenReq: no API token is minted unbound.
   string    device_id  = 6 [(w17.field) = { type: UUID }];
-  // The Device row of the caller that created the token
-  // (UserToken.approved_by_device_id); empty (NULL) when the caller's request
-  // was bound to none.
+  // The ROOT approver of the token (UserToken.approved_by_device_id): the
+  // Device row of the creating caller's device, or — when the caller is a
+  // session that was itself approved by another device (a CLI session) —
+  // that session's approver. Empty (NULL) when the request was bound to none.
   string    approved_by_device_id = 7 [(w17.field) = { type: UUID, null: true }];
+  // event-only (no w17.field: not persisted, not validated), for
+  // ApiTokenCreated: the creating device's key thumbprint (device_id), the
+  // program key's thumbprint, and the creating account.
+  string    thumbprint     = 8;
+  string    key_thumbprint = 9;
+  string    created_by     = 10;
 }
 message IssueApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -1772,6 +1779,20 @@ service AuthMutation {
           "          expires_at AS token.expires_at, "
           "          device_id AS token.device_id, "
           "          approved_by_device_id AS token.approved_by_device_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "ApiTokenCreated"
+      payload: {
+        fields: [
+          { key: "token_id",       value: "$response.token.id" },
+          { key: "user_id",        value: "$response.token.user_id" },
+          { key: "created_at",     value: "$response.token.created_at" },
+          { key: "name",           value: "$response.token.name" },
+          { key: "key_thumbprint", value: "$request.key_thumbprint" },
+          { key: "created_by",     value: "$request.created_by" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
