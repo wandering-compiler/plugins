@@ -870,7 +870,7 @@ presets:
           - name: revoke
             source: AuthService.RevokeDevices
             label: "Revoke"
-            confirm: "Revoke the selected devices? Every session on them ends at once, and their keys can never sign in to these accounts again."
+            confirm: "Revoke the selected devices? Every session on them, and every CLI session they approved, ends at once, and their keys can never sign in to these accounts again."
             target: both
 
 # Dev-only sandbox services this plugin brings for testing / manual

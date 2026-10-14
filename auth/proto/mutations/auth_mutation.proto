@@ -816,6 +816,11 @@ message RevokeDeviceTokensReq {
   // Who revoked: the device's owner for the self-service calls, the operator
   // for the admin Devices page.
   string revoked_by = 3 [(w17.field) = { type: UUID }];
+  // The one token the "approved" op keeps: the caller's own session for
+  // RevokeOtherDevices ("everywhere but here" — the caller may be a CLI
+  // session the revoked device approved); the nil UUID (keeps none) for
+  // every other caller.
+  string keep_token_id = 4 [(w17.field) = { type: UUID }];
 }
 message RevokeDeviceTokensResp {
 }
@@ -2468,14 +2473,21 @@ service AuthMutation {
   // the CLI's own key, so the first op does not match them. Without it, a
   // stolen browser session could approve the thief's own CLI key, and
   // revoking the stolen device would leave that CLI session alive for its
-  // whole lifetime. Same reason, same actor, same ownership predicate.
+  // whole lifetime. Same reason, same actor, same ownership predicate; it
+  // spares :keep_token_id, the caller's own session when RevokeOtherDevices
+  // comes from a CLI session the revoked browser approved.
+  //
+  // Ending the approving browser SESSION (Logout, the admin Sessions revoke)
+  // does not end the CLI sessions it approved, on purpose: a CLI session is
+  // ended by revoking the approving DEVICE or by revoking the CLI session
+  // itself.
   rpc RevokeDeviceTokens(RevokeDeviceTokensReq) returns (RevokeDeviceTokensResp) {
     option (w17.db.method) = {
       ops: {
         name: "approved"
         dql:
           "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
-          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND revoked_at IS NULL"
+          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND id <> :keep_token_id AND revoked_at IS NULL"
       }
       ops: {
         name: "main"

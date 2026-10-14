@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -280,6 +282,46 @@ func TestCliLogin_RecordsTheApproversDeviceAndBindsTheCLIsOwn(t *testing.T) {
 	}
 }
 
+// A code approved by a browser device that is revoked before the CLI redeems
+// it mints nothing: the opaque refusal, recorded as REFUSED. A failed read of
+// the approver refuses too. A live approver mints (above).
+func TestCliToken_RefusesACodeWhoseApproverWasRevoked(t *testing.T) {
+	for name, arrange := range map[string]func(m *cliMock){
+		"revoked":     func(m *cliMock) { m.approverRevoked = map[string]bool{"dev-browser": true} },
+		"read fails":  func(m *cliMock) { m.approverErr = status.Error(codes.Unavailable, "db down") },
+		"no such row": func(m *cliMock) { m.approverErr = status.Error(codes.NotFound, "no rows") },
+	} {
+		m := newCliMock()
+		m.sessionDevice = "dev-browser"
+		h := newCliHandler(m)
+		log := keepHistory(h)
+		verifier := validVerifier()
+		authz, err := h.CliAuthorize(cliCtx("user-1"), &pb.CliAuthorizeReq{CodeChallenge: pkceChallenge(verifier), RedirectUri: "http://127.0.0.1:54123/cb"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		arrange(m)
+		_, err = h.CliToken(withJKT(context.Background(), otherJKT), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier})
+		if err == nil {
+			t.Fatalf("%s: a code of a revoked approver minted a session", name)
+		}
+		if m.issuedReq != nil {
+			t.Errorf("%s: a session was issued", name)
+		}
+		want := status.Code(err)
+		if name == "read fails" {
+			if want != codes.Unavailable {
+				t.Errorf("%s: an outage answered %v", name, err)
+			}
+		} else if want != codes.Unauthenticated || len(status.Convert(err).Details()) != 0 {
+			t.Errorf("%s: answered %v, want the opaque refusal", name, err)
+		}
+		if name == "revoked" && (len(log.rows) != 1 || log.rows[0].GetOutcome() != pb.SignInOutcome_SIGN_IN_OUTCOME_REFUSED) {
+			t.Errorf("%s: history %v, want one REFUSED row", name, log.rows)
+		}
+	}
+}
+
 // The statements carry the new columns: the session's public flag and
 // approver, the challenge's and the history's public flag, the code's
 // approver from the approving session's row.
@@ -295,6 +337,7 @@ func TestPublicComputerAndApproverStatements(t *testing.T) {
 		{"ConsumeCliAuthCode", m["ConsumeCliAuthCode"], `session_expires_at, approved_by_device_id`},
 		{"GetMfaChallenge", q["GetMfaChallenge"], `c.public_computer AS challenge.public_computer`},
 		{"GetLiveSessionExpiry", q["GetLiveSessionExpiry"], `t.device_id AS device_id`},
+		{"GetCliApproverRevocation", q["GetCliApproverRevocation"], `SELECT d.id AS device_id, d.revoked_at AS revoked_at FROM @module.Device d WHERE d.id = :device_id`},
 		{"GetSignInEvent", q["GetSignInEvent"], `e.public_computer AS public_computer`},
 		{"ListUserSignInEvents", q["ListUserSignInEvents"], `e.public_computer AS public_computer`},
 	} {

@@ -170,6 +170,11 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 	return out, nil
 }
 
+// noTokenKept is the keep_token_id that keeps none (the column is a UUID, so
+// the empty string would not bind). Base tier: the devices calls and the admin
+// Devices page both pass it to RevokeDeviceTokens.
+const noTokenKept = "00000000-0000-0000-0000-000000000000"
+
 // sessionGrant is what a mint records on the session beside its device:
 // whether it is a public-computer session, and — for a CLI session — the
 // Device row of the browser session that approved it.

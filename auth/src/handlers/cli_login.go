@@ -50,6 +50,9 @@ var (
 	// The session approving the login is no longer live — revoked, expired,
 	// or not the caller's. An approval it cannot back is no approval.
 	errCliSessionNotLive = errors.New("cli auth: the approving session is not live")
+	// The device that approved the code was revoked during the code's life:
+	// the approval it gave is withdrawn with it.
+	errCliApproverRevoked = errors.New("cli auth: the approving device was revoked")
 )
 
 // init adds the outcomes of CliToken's refusals to the sign-in history.
@@ -216,6 +219,9 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 			return nil, err
 		}
 	}
+	if err := h.refuseRevokedApprover(ctx, consumed.GetApprovedByDeviceId()); err != nil {
+		return nil, err
+	}
 	account, err := refuseUnsignableAccount(ctx, h, userID)
 	attempt.account = account
 	if err != nil {
@@ -241,6 +247,32 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 		return nil, Unauthenticated(err)
 	}
 	return &pb.CliTokenResp{Token: token, UserId: userID}, nil
+}
+
+// refuseRevokedApprover refuses a code whose approving device was revoked
+// after it approved the code (the code lives 60 s, a revocation can land in
+// between): revoking a device ends the CLI sessions it approved, and one it
+// had approved but not yet minted must not be minted after it. The opaque
+// refusal of every other code failure; the history records REFUSED (not
+// DEVICE_REVOKED, which names the key signing the request — the CLI's own key
+// is not revoked). A read that does not answer refuses too, and a code with no
+// approver (approved by a session bound to no device, or minted before the
+// column) has nothing to check.
+func (h *AuthServiceHandler) refuseRevokedApprover(ctx context.Context, deviceID string) error {
+	if deviceID == "" {
+		return nil
+	}
+	got, err := h.Query.GetCliApproverRevocation(ctx, &pb.GetCliApproverRevocationReq{DeviceId: deviceID})
+	if err != nil {
+		if notFoundOK(err) == nil {
+			return Unauthenticated(errCliApproverRevoked)
+		}
+		return Unauthenticated(err)
+	}
+	if got.GetDeviceId() != deviceID || got.GetRevokedAt() != nil {
+		return Unauthenticated(errCliApproverRevoked)
+	}
+	return nil
 }
 
 // approvingSession reads the session approving a CLI login — the caller's

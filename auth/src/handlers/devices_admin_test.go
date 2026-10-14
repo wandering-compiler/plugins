@@ -129,6 +129,27 @@ func TestRevokeDevice_EndsTheCLISessionsTheDeviceApproved(t *testing.T) {
 	assertRevoked(t, s, "t-cli-d2", "u1", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
 }
 
+// "Everywhere but here" from a CLI session: the caller is a CLI session
+// approved by alice's browser. RevokeOtherDevices revokes the browser (and the
+// other devices) and the browser's sessions, but NOT the caller's own CLI
+// session, which the browser approved.
+func TestRevokeOtherDevices_FromACLISessionKeepsTheCaller(t *testing.T) {
+	s := devicesAdminStore()
+	cliApprovedBy(s, "t-cli", "u1", "d1")
+	cliApprovedBy(s, "t-cli-2", "u1", "d1") // another CLI the browser approved
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	ctx := ctxOnDevice(t, "u1", "t-cli", "cli-key-t-cli")
+	if _, err := h.RevokeOtherDevices(ctx, &pb.RevokeOtherDevicesReq{}); err != nil {
+		t.Fatalf("revoke others: %v", err)
+	}
+	if s.devices["d1"].revokedAt == nil || s.devices["dev-t-cli"].revokedAt != nil {
+		t.Fatalf("revoked the wrong devices: browser %v, caller's CLI %v", s.devices["d1"].revokedAt, s.devices["dev-t-cli"].revokedAt)
+	}
+	assertRevoked(t, s, "t-session", "u1", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	assertRevoked(t, s, "t-cli-2", "u1", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	assertLive(t, s, "t-cli")
+}
+
 // A device already revoked is left as it is: its first revocation — time,
 // actor, reason — stands, and no transaction is even opened for it. Unknown
 // ids are done, not an error; an empty selection (the admin's "all rows") is
@@ -312,7 +333,7 @@ func TestDevicesAdminStatements(t *testing.T) {
 	// Both ops of RevokeDeviceTokens: the device's own tokens, and the CLI
 	// sessions it approved — same reason, actor and account.
 	for _, want := range []string{
-		`UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 WHERE user_id = :user_id AND approved_by_device_id = :device_id AND revoked_at IS NULL`,
+		`UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 WHERE user_id = :user_id AND approved_by_device_id = :device_id AND id <> :keep_token_id AND revoked_at IS NULL`,
 		`UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 WHERE user_id = :user_id AND device_id = :device_id AND revoked_at IS NULL`,
 	} {
 		if !strings.Contains(m["RevokeDeviceTokens"], want) {

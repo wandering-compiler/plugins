@@ -213,7 +213,7 @@ func (h *AuthServiceHandler) RevokeDevices(ctx context.Context, req *pb.RevokeDe
 		}
 		userID := dev.GetUser()
 		if err := h.inTx(ctx, func(txCtx context.Context) error {
-			if _, err := h.Mutation.RevokeDeviceTokens(txCtx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: id, RevokedBy: operator}); notFoundOK(err) != nil {
+			if _, err := h.Mutation.RevokeDeviceTokens(txCtx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: id, RevokedBy: operator, KeepTokenId: noTokenKept}); notFoundOK(err) != nil {
 				return err
 			}
 			// NotFound: revoked by someone else since the read — done.

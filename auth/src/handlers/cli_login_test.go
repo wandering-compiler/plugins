@@ -48,6 +48,10 @@ type cliMock struct {
 	// sessionDevice is the Device row every approving session is bound to
 	// (GetLiveSessionExpiry's device_id); "" = none.
 	sessionDevice string
+	// approverRevoked: GetCliApproverRevocation answers these devices
+	// revoked; approverErr fails the read.
+	approverRevoked map[string]bool
+	approverErr     error
 
 	// sessions mirrors the live UserToken rows GetLiveSessionExpiry reads,
 	// keyed on the exact (token_id, user_id) pair its WHERE matches; a nil
@@ -118,6 +122,19 @@ func (m *cliMock) GetLiveSessionExpiry(ctx context.Context, in *pb.GetLiveSessio
 	resp := &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId(), DeviceId: m.sessionDevice}
 	if exp != nil {
 		resp.ExpiresAt = timestamppb.New(*exp)
+	}
+	return resp, nil
+}
+
+// GetCliApproverRevocation reads the approving Device row (any id is a live
+// device unless marked revoked).
+func (m *cliMock) GetCliApproverRevocation(_ context.Context, in *pb.GetCliApproverRevocationReq, _ ...grpc.CallOption) (*pb.GetCliApproverRevocationResp, error) {
+	if m.approverErr != nil {
+		return nil, m.approverErr
+	}
+	resp := &pb.GetCliApproverRevocationResp{DeviceId: in.GetDeviceId()}
+	if m.approverRevoked[in.GetDeviceId()] {
+		resp.RevokedAt = timestamppb.Now()
 	}
 	return resp, nil
 }

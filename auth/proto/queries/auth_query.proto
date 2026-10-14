@@ -525,6 +525,20 @@ message GetLiveSessionExpiryReq {
   string token_id = 1 [(w17.field) = { type: UUID }];
   string user_id  = 2 [(w17.field) = { type: UUID }];
 }
+// GetCliApproverRevocation — whether the device that approved a CLI code
+// has been revoked since (cli_login). CliToken refuses a code whose approver
+// was revoked during the code's short life.
+message GetCliApproverRevocationReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string device_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetCliApproverRevocationResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  // Echoed so the handler can tell "found, live" from "no row".
+  string device_id = 1;
+  google.protobuf.Timestamp revoked_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
 message GetLiveSessionExpiryResp {
   option (w17.contrib.plugin_feature) = "cli_login";
   // Echoed so the handler can tell "found, never expires" (NULL expires_at)
@@ -2080,6 +2094,18 @@ service AuthQuery {
   // from the handler instead — requireSessionCaller runs first, and the
   // envelope carries a session_token_id only for a session-realm token, so
   // the id this query is asked about is always a session's.
+  // GetCliApproverRevocation — the approving device's revoked_at, read by
+  // CliToken for a code that names one. Gated cli_login.
+  rpc GetCliApproverRevocation(GetCliApproverRevocationReq) returns (GetCliApproverRevocationResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT d.id AS device_id, d.revoked_at AS revoked_at FROM @module.Device d WHERE d.id = :device_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+
   rpc GetLiveSessionExpiry(GetLiveSessionExpiryReq) returns (GetLiveSessionExpiryResp) {
     option (w17.db.method) = {
       ops: {
