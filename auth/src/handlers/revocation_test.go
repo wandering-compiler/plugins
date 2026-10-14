@@ -368,8 +368,9 @@ func (s *revocationStore) EnableUsers(_ context.Context, in *pb.EnableUsersReq, 
 	return &pb.EnableUsersResp{}, nil
 }
 
-// EraseUser: the five ops, the last guarded on erased_at IS NULL.
-func (s *revocationStore) EraseUser(_ context.Context, in *pb.EraseUserReq, _ ...grpc.CallOption) (*pb.EraseUserResp, error) {
+// BeginUserErasure: tokens, devices, device details, disable, then the
+// unusable password and the end of device trust. Idempotent.
+func (s *revocationStore) BeginUserErasure(_ context.Context, in *pb.BeginUserErasureReq, _ ...grpc.CallOption) (*pb.BeginUserErasureResp, error) {
 	for _, t := range s.tokens {
 		if t.userID == in.GetUserId() {
 			revoke(t, in.GetRevokedBy(), pb.RevokeReason_REVOKE_REASON_USER_ERASED)
@@ -390,10 +391,17 @@ func (s *revocationStore) EraseUser(_ context.Context, in *pb.EraseUserReq, _ ..
 	if u.disabledAt == nil {
 		u.disabledAt = now()
 	}
-	if u.erasedAt != nil {
+	u.hash, u.trustRevokedAtCol = "!", now()
+	return &pb.BeginUserErasureResp{UserId: u.id}, nil
+}
+
+// EraseUser: the address and erased_at, guarded on erased_at IS NULL.
+func (s *revocationStore) EraseUser(_ context.Context, in *pb.EraseUserReq, _ ...grpc.CallOption) (*pb.EraseUserResp, error) {
+	u := s.users[in.GetUserId()]
+	if u == nil || u.erasedAt != nil {
 		return nil, notFound()
 	}
-	u.email, u.hash, u.erasedAt, u.trustRevokedAtCol = in.GetEmail(), "!", now(), now()
+	u.email, u.erasedAt = in.GetEmail(), now()
 	return &pb.EraseUserResp{UserId: u.id}, nil
 }
 
@@ -413,7 +421,7 @@ func (s *revocationStore) SpendEmailVerificationTokens(_ context.Context, in *pb
 }
 
 func (s *revocationStore) EraseOrgInviteAddress(_ context.Context, in *pb.EraseOrgInviteAddressReq, _ ...grpc.CallOption) (*pb.EraseOrgInviteAddressResp, error) {
-	s.erased = append(s.erased, "org_invite:"+in.GetEmail()+"->"+in.GetPlaceholder())
+	s.erased = append(s.erased, "org_invite:"+in.GetEmail())
 	return &pb.EraseOrgInviteAddressResp{}, nil
 }
 
@@ -773,7 +781,7 @@ func TestEraseUsers_PseudonymisesAndKeepsEveryRow(t *testing.T) {
 		}
 	}
 	want := []string{
-		"email_verification:u1", "oauth:u1", "org_invite:alice@example.com->erased-u1@erased.invalid",
+		"email_verification:u1", "oauth:u1", "org_invite:alice@example.com",
 		"password_reset:u1", "two_factor:u1",
 	}
 	got := append([]string(nil), s.erased...)

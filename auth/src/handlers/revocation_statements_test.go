@@ -162,7 +162,7 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 		"RevokeAllUserTokens":      {pb.RevokeReason_REVOKE_REASON_ALL_TOKENS_REVOKED, ":user_id"},
 		"RevokeUserToken":          {pb.RevokeReason_REVOKE_REASON_ADMIN_REVOKED, ":revoked_by"},
 		"DisableUsers":             {pb.RevokeReason_REVOKE_REASON_USER_DISABLED, ""},
-		"EraseUser":                {pb.RevokeReason_REVOKE_REASON_USER_ERASED, ":revoked_by"},
+		"BeginUserErasure":         {pb.RevokeReason_REVOKE_REASON_USER_ERASED, ":revoked_by"},
 	}
 	setRe := regexp.MustCompile(`UPDATE @module\.UserToken SET revoked_at = NOW\(\), (?:revoked_by = (:\w+), )?revoke_reason = (\d+) WHERE ([^"]*)"`)
 	seen := map[string]bool{}
@@ -220,15 +220,27 @@ func TestIssueToken_SweepsNothing(t *testing.T) {
 // turn the account back into a usable one.
 func TestEraseStatements(t *testing.T) {
 	m := rpcBodies(dqlText(authProtos(t)["mutations/auth_mutation.proto"]))
-	erase := m["EraseUser"]
+	// The first step ends access and leaves the address alone.
+	begin := m["BeginUserErasure"]
 	for _, want := range []string{
 		"UPDATE @module.Device SET revoked_at = NOW() WHERE user_id = :user_id AND revoked_at IS NULL",
 		`UPDATE @module.Device SET label = \'\', ip = \'\' WHERE user_id = :user_id`,
 		"UPDATE @module.User SET disabled_at = NOW() WHERE id = :user_id AND disabled_at IS NULL",
-		"email = :email, ",
 		`password_hash = \'!\', `,
+		"device_trust_revoked_at = NOW() ",
+	} {
+		if !strings.Contains(begin, want) {
+			t.Errorf("BeginUserErasure lacks %q:\n%s", want, begin)
+		}
+	}
+	if strings.Contains(begin, "email") || strings.Contains(begin, "erased_at") {
+		t.Errorf("BeginUserErasure touches the address or erased_at — that is the last step's:\n%s", begin)
+	}
+	// The last step replaces the address and stamps erased_at, once.
+	erase := m["EraseUser"]
+	for _, want := range []string{
+		"email = :email, ",
 		"erased_at = NOW(), ",
-		"device_trust_revoked_at = NOW(), ",
 		"WHERE id = :user_id AND erased_at IS NULL RETURNING id AS user_id",
 	} {
 		if !strings.Contains(erase, want) {
@@ -256,7 +268,12 @@ func TestEraseStatements(t *testing.T) {
 			"UPDATE @module.MfaChallenge SET consumed_at = NOW() WHERE user_id = :user_id AND consumed_at IS NULL",
 		},
 		"SpendEmailVerificationTokens": {"UPDATE @module.EmailVerificationToken SET consumed_at = NOW() WHERE user_id = :user_id AND consumed_at IS NULL"},
-		"EraseOrgInviteAddress":        {"UPDATE @module.OrgInvite SET email = :placeholder WHERE email = :email"},
+		// NULL, never a placeholder (the pending-invite partial index), and a
+		// pending invitation ended first: NULL on a live one would make it OPEN.
+		"EraseOrgInviteAddress": {
+			"UPDATE @module.OrgInvite SET email = NULL, expires_at = NOW() WHERE email = :email AND accepted_at IS NULL AND expires_at > NOW()",
+			"UPDATE @module.OrgInvite SET email = NULL WHERE email = :email",
+		},
 	} {
 		body := m[name]
 		for _, want := range wants {

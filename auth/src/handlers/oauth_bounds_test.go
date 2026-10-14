@@ -185,17 +185,20 @@ func TestOAuthCallback_AnIdentityWhoseAccountWasDeletedCannotSignIn(t *testing.T
 	}
 }
 
-// EraseUser updates the account's tokens, devices and User row — the base
-// tables — and deletes nothing. The feature-owned tables are the erasers'
-// (AuthService.EraseUsers), not this statement set's.
+// BeginUserErasure and EraseUser update the account's tokens, devices and User
+// row — the base tables — and delete nothing. The feature-owned tables are the
+// erasers' (AuthService.EraseUsers), not these statement sets'.
 func TestEraseUser_TouchesTheBaseTablesOnly(t *testing.T) {
-	body := mutationRPCBody(t, "EraseUser")
-	tables := moduleTables(body)
-	if strings.Join(tables, ",") != "UserToken,Device,Device,User,User" {
-		t.Errorf("EraseUser touches %v, want UserToken, Device (x2), User (x2):\n%s", tables, body)
+	begin := mutationRPCBody(t, "BeginUserErasure")
+	if tables := moduleTables(begin); strings.Join(tables, ",") != "UserToken,Device,Device,User,User" {
+		t.Errorf("BeginUserErasure touches %v, want UserToken, Device (x2), User (x2):\n%s", tables, begin)
 	}
-	if strings.Contains(body, "DELETE") {
-		t.Errorf("EraseUser deletes:\n%s", body)
+	body := mutationRPCBody(t, "EraseUser")
+	if tables := moduleTables(body); strings.Join(tables, ",") != "User" {
+		t.Errorf("EraseUser touches %v, want User:\n%s", tables, body)
+	}
+	if strings.Contains(body+begin, "DELETE") {
+		t.Errorf("an erasure step deletes:\n%s\n%s", begin, body)
 	}
 	if !strings.Contains(body, `event: "UserErased"`) {
 		t.Errorf("EraseUser emits no UserErased:\n%s", body)

@@ -62,9 +62,9 @@ func init() {
 }
 
 // eraseInviteAddress is org_invite's eraser: the invitations addressed to the
-// erased address name the account's placeholder instead
-// (EraseOrgInviteAddress), so a pending one can no longer be accepted and an
-// accepted one keeps its record without the address. The rows stay.
+// erased address lose it — email NULL, and a pending one ended
+// (EraseOrgInviteAddress) — so none can be accepted and an accepted one keeps
+// its record without the address. The rows stay.
 //
 // Invitations store the address normalised; an account's address may not be
 // (an admin edit writes it as given), so it is normalised here before the
@@ -75,7 +75,7 @@ func eraseInviteAddress(ctx context.Context, h *AuthServiceHandler, _, email, pl
 	if email == "" || email == normalizeEmail(placeholder) {
 		return nil
 	}
-	_, err := h.Mutation.EraseOrgInviteAddress(ctx, &pb.EraseOrgInviteAddressReq{Email: email, Placeholder: placeholder})
+	_, err := h.Mutation.EraseOrgInviteAddress(ctx, &pb.EraseOrgInviteAddressReq{Email: email})
 	return err
 }
 

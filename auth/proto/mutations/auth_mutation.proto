@@ -804,12 +804,24 @@ message UpdateRoleResp {
 }
 
 // --- user_admin feature: turnkey admin user management ---
-// EraseUser is the base-table half of erasing an account (GDPR): it
-// pseudonymises the User row in place and revokes everything that row
-// holds, in one statement set — see the rpc. Nothing is deleted. The
-// feature-owned rows (OAuth identities, the authenticator, reset and
-// verification links, invitations) are handled by AuthService.EraseUsers,
-// which calls this and the per-feature erasers in one transaction.
+// Erasing an account (GDPR) is three steps, run by AuthService.EraseUsers in
+// this order (one transaction with a coordinator; without one, a retry
+// completes a failed erasure): BeginUserErasure ends the account's access —
+// disabled, password unusable, every token and device revoked — and leaves its
+// address alone; the per-feature erasers blank or spend the feature-owned
+// rows; EraseUser replaces the address and stamps erased_at. Nothing is
+// deleted. Access ends FIRST so that an erasure stopped part-way never leaves
+// a usable account with half of its data gone.
+message BeginUserErasureReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  // The operator who erased it, stamped as revoked_by on every token it ends.
+  string revoked_by = 2 [(w17.field) = { type: UUID }];
+}
+message BeginUserErasureResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+}
 // DisableUsers / EnableUsers are the Users page's bulk `actions` — the
 // AdminAction wire contract requires a `repeated string ids` request.
 message EraseUserReq {
@@ -819,8 +831,9 @@ message EraseUserReq {
   // composed by the handler. Unique because the id is, non-routable (.invalid,
   // RFC 2606), and it frees the old address for a new sign-up.
   string email = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
-  // The operator who erased it, stamped as revoked_by on every token it ends.
-  string revoked_by = 3 [(w17.field) = { type: UUID }];
+  // 3 = revoked_by: the tokens are revoked by BeginUserErasure now.
+  reserved 3;
+  reserved "revoked_by";
 }
 message EraseUserResp {
   option (w17.contrib.plugin_feature) = "user_admin";
@@ -887,9 +900,10 @@ message SpendEmailVerificationTokensResp {
 message EraseOrgInviteAddressReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   // The address being erased (as stored: normalized).
-  string email       = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
-  // The account's placeholder (EraseUserReq.email).
-  string placeholder = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // 2 = placeholder: the address is cleared (NULL), not re-addressed.
+  reserved 2;
+  reserved "placeholder";
 }
 message EraseOrgInviteAddressResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -1013,6 +1027,18 @@ message RegisterAuthClientReq {
 message RegisterAuthClientResp {
   option (w17.contrib.plugin_feature) = "cli_login";
   AuthClient client = 1;
+}
+
+message RotateAuthClientSecretReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id            = 1 [(w17.field) = { type: UUID }];
+  // The new secret's argon2id hash (the handler hashes; the plaintext is
+  // returned to the operator once and never stored).
+  string client_secret = 2 [(w17.field) = { type: PASSWORD }];
+}
+message RotateAuthClientSecretResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1;
 }
 
 message SetAuthClientEnabledReq {
@@ -2373,8 +2399,9 @@ service AuthMutation {
     };
   }
 
-  // EraseUser — erase one account (GDPR) WITHOUT deleting anything: one
-  // unit of work over the base tables, the response from the last op.
+  // BeginUserErasure — the first step of an erasure: end the account's
+  // access, leaving its address alone. Idempotent, so a retried erasure runs
+  // it again harmlessly; the response comes from the last op.
   //
   //   tokens   every token of the account is revoked, reason USER_ERASED,
   //            the operator as revoked_by (first revocation stands);
@@ -2382,19 +2409,12 @@ service AuthMutation {
   //            label / ip (the user agent and address it was seen from)
   //            are blanked;
   //   disable  the account is disabled (an earlier disable's time stands);
-  //   main     the User row is pseudonymised in place: the address becomes
-  //            the handler's placeholder, the password hash the unusable
-  //            `!` (no password verifies against it — CreateBotUser's
-  //            sentinel), the email proof is cleared, device trust ends,
-  //            and erased_at is stamped. Guarded on `erased_at IS NULL`:
-  //            a second erase matches no row (NotFound) and changes nothing.
+  //   main     the password hash becomes the unusable `!` (no password
+  //            verifies against it — CreateBotUser's sentinel) and device
+  //            trust ends.
   //
-  // Feature-owned personal data (OAuth identities, the authenticator,
-  // reset / verification links, invitations) is not reachable from a
-  // statement gated user_admin; AuthService.EraseUsers erases it through
-  // the per-feature mutations in the same transaction. Emits UserErased.
   // Gated user_admin.
-  rpc EraseUser(EraseUserReq) returns (EraseUserResp) {
+  rpc BeginUserErasure(BeginUserErasureReq) returns (BeginUserErasureResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
       ops: {
@@ -2419,10 +2439,30 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.User SET "
-          "email = :email, "
           "password_hash = \'!\', "
+          "device_trust_revoked_at = NOW() "
+          "WHERE id = :user_id "
+          "RETURNING id AS user_id"
+      }
+    };
+  }
+
+  // EraseUser — the last step of an erasure (BeginUserErasure and the
+  // feature erasers have run): the User row is pseudonymised in place — the
+  // address becomes the handler's placeholder, the email proof is cleared,
+  // and erased_at is stamped. Guarded on `erased_at IS NULL`: a second erase
+  // matches no row (NotFound) and changes nothing. Last because it replaces
+  // the address the invitation eraser looks for, and because erased_at is
+  // what a retry reads to skip it. Emits UserErased. Gated user_admin.
+  rpc EraseUser(EraseUserReq) returns (EraseUserResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "email = :email, "
           "erased_at = NOW(), "
-          "device_trust_revoked_at = NOW(), "
           "?feature(email_verification) email_verified_at = NULL "
           "WHERE id = :user_id AND erased_at IS NULL "
           "RETURNING id AS user_id"
@@ -2897,6 +2937,21 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.AuthClient SET enabled = :enabled "
+          "WHERE id = :id AND revoked_at IS NULL RETURNING id AS id"
+      }
+    };
+  }
+
+  // RotateAuthClientSecret — replace the secret of a LIVE registration. A
+  // revoked one matches no row (NotFound): its secret stays as it was, and it
+  // is refused anyway.
+  rpc RotateAuthClientSecret(RotateAuthClientSecretReq) returns (RotateAuthClientSecretResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.AuthClient SET client_secret = :client_secret "
           "WHERE id = :id AND revoked_at IS NULL RETURNING id AS id"
       }
     };
@@ -3397,18 +3452,29 @@ service AuthMutation {
   }
 
   // EraseOrgInviteAddress — every invitation addressed to the erased
-  // address, pending or accepted, now names the placeholder: a pending one
-  // can no longer be accepted (it matches no account's address), an
-  // accepted one keeps the record of the membership without the address.
-  // The one-pending-per-(org, email) index holds: the placeholder is unique
-  // to the account, and the old address had at most one pending invitation
-  // per organization.
+  // address loses it: email becomes NULL, pending or accepted. NULL, not a
+  // placeholder, because the one-pending-per-(org, email) partial index
+  // would make a placeholder collide (an organization that re-invited the
+  // address between two attempts of a retried erasure), and NULL never
+  // collides.
+  //
+  // But NULL on a PENDING invitation means OPEN — whoever holds the link
+  // picks an address — so a pending one is ended first: its expires_at is
+  // set to NOW(), and every path that binds or accepts an invitation
+  // requires `expires_at > NOW()`. An accepted one keeps the record of the
+  // membership without the address.
   rpc EraseOrgInviteAddress(EraseOrgInviteAddressReq) returns (EraseOrgInviteAddressResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {
       ops: {
+        name: "pending"
+        dql:
+          "UPDATE @module.OrgInvite SET email = NULL, expires_at = NOW() "
+          "WHERE email = :email AND accepted_at IS NULL AND expires_at > NOW()"
+      }
+      ops: {
         name: "main"
-        dql:  "UPDATE @module.OrgInvite SET email = :placeholder WHERE email = :email"
+        dql:  "UPDATE @module.OrgInvite SET email = NULL WHERE email = :email"
       }
     };
   }

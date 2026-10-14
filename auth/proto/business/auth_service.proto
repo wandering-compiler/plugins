@@ -950,12 +950,15 @@ service AuthService {
   rpc RevokeClient(RevokeClientReq) returns (RevokeClientResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
-  // EraseUsers — the admin Users (and ServiceAccounts) page's `erase` action:
-  // erase each account (GDPR) without deleting anything — AuthMutation.EraseUser
-  // over the base tables and the per-feature erasers over the rest, in one
-  // transaction per account, the operator recorded as revoked_by on every
-  // token it ends. An account already erased is skipped. Refuses an empty id
-  // list (the admin's "apply to all rows" sends one). Gated user_admin.
+  // RotateClientSecret replaces a LIVE registration's secret and returns the
+  // new one once — how a client that lost its secret keeps its client_id now
+  // that revoking keeps the row (and its pair) instead of deleting it. A
+  // revoked or unknown registration is refused (NotFound). Same gating as
+  // RegisterClient: a signed-in session, and the project's ACL. Gated
+  // cli_login.
+  rpc RotateClientSecret(RotateClientSecretReq) returns (RotateClientSecretResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
   // UpdateAccount — the admin Users page's detail `update` (email only),
   // through AuthMutation.UpdateUser, refusing the erased-account domain
   // (EMAIL_INVALID): an account holding an erasure's placeholder first would
@@ -963,6 +966,16 @@ service AuthService {
   rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
+  // EraseUsers — the admin Users (and ServiceAccounts) page's `erase` action:
+  // erase each account (GDPR) without deleting anything, in three steps —
+  // AuthMutation.BeginUserErasure (access ends: disabled, password unusable,
+  // every token and device revoked, the operator recorded as revoked_by),
+  // then the per-feature erasers, then AuthMutation.EraseUser (the address
+  // becomes the placeholder, erased_at is stamped). One transaction per
+  // account with a transaction coordinator; without one, a partial run leaves
+  // the account without access and running the erasure again completes it.
+  // An account already erased skips only EraseUser. Refuses an empty id list
+  // (the admin's "apply to all rows" sends one). Gated user_admin.
   rpc EraseUsers(EraseUsersReq) returns (EraseUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
@@ -1322,9 +1335,10 @@ message RegisterClientResp {
   // response that happens to carry the model.
   AuthClient client = 1;
   // client_secret — the PLAINTEXT, and the only time it exists outside the
-  // client. Stored hashed, never recoverable: a client that loses it is
-  // re-registered rather than reminded. Same single-delivery contract as a
-  // password-reset token.
+  // client. Stored hashed, never recoverable: a client that loses it gets a
+  // NEW one from RotateClientSecret (same client_id, same callback) rather
+  // than being reminded. Same single-delivery contract as a password-reset
+  // token.
   string client_secret = 2;
 }
 message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
@@ -1338,6 +1352,19 @@ message SetClientEnabledReq {
   bool   enabled = 2;
 }
 message SetClientEnabledResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+// RotateClientSecretReq — the registration (one (client_id, redirect_uri)
+// row) whose secret is replaced. Its client_id stays: it is baked into the
+// clients that use it.
+message RotateClientSecretReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RotateClientSecretResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  // The new PLAINTEXT, handed out once, like RegisterClientResp.client_secret.
+  // The old secret stops working when this commits.
+  string client_secret = 1;
+}
 message RevokeClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id = 1 [(w17.field) = { type: UUID }];

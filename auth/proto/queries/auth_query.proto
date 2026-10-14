@@ -505,6 +505,21 @@ message GetAuthClientSecretResp {
 // so the session CliToken mints can inherit it. Keyed on the token id the
 // gateway envelope carries AND the caller's user id, and on live rows only: a
 // session revoked or expired by the time it approves is no approval at all.
+// GetAuthClientRevocation — whether the registration of one
+// (client_id, redirect_uri) pair is revoked, live or not. Read by
+// RegisterClient only after a collision, to say a revoked pair stays taken.
+message GetAuthClientRevocationReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string client_id    = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string redirect_uri = 2 [(w17.field) = { type: URL, max_len: 2048 }];
+}
+message GetAuthClientRevocationResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1;
+  // NULL = live.
+  google.protobuf.Timestamp revoked_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
 message GetLiveSessionExpiryReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string token_id = 1 [(w17.field) = { type: UUID }];
@@ -1845,6 +1860,21 @@ service AuthQuery {
           "       c.created_at AS created_at, "
           "       c.revoked_at AS revoked_at "
           "FROM @module.AuthClient c ORDER BY c.client_id, c.redirect_uri"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+
+  // GetAuthClientRevocation — see the request. Keyed on the unique pair, so
+  // it reads one row (there is at most one: the index is not partial).
+  rpc GetAuthClientRevocation(GetAuthClientRevocationReq) returns (GetAuthClientRevocationResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS id, c.revoked_at AS revoked_at "
+          "FROM @module.AuthClient c "
+          "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "cli_login";

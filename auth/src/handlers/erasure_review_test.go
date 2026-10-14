@@ -102,7 +102,7 @@ func TestEraseUsers_TheInvitationEraserNormalisesTheAddress(t *testing.T) {
 	if _, err := h.EraseUsers(sessionCallerCtx("admin", "t-admin"), &pb.EraseUsersReq{Ids: []string{"u1"}}); err != nil {
 		t.Fatalf("erase: %v", err)
 	}
-	want := "org_invite:alice@example.com->erased-u1@erased.invalid"
+	want := "org_invite:alice@example.com"
 	if !containsPrefix(s.erased, want) {
 		t.Errorf("invitation eraser ran %v, want %s", s.erased, want)
 	}
@@ -226,8 +226,14 @@ func (r *registerCollision) RegisterAuthClient(context.Context, *pb.RegisterAuth
 	return nil, status.Error(codes.AlreadyExists, "duplicate key")
 }
 
-func (r *registerCollision) ListAuthClients(context.Context, *pb.ListAuthClientsReq, ...grpc.CallOption) (*pb.ListAuthClientsResp, error) {
-	return &pb.ListAuthClientsResp{Clients: r.clients}, nil
+// GetAuthClientRevocation answers by the unique pair, as the query does.
+func (r *registerCollision) GetAuthClientRevocation(_ context.Context, in *pb.GetAuthClientRevocationReq, _ ...grpc.CallOption) (*pb.GetAuthClientRevocationResp, error) {
+	for _, c := range r.clients {
+		if c.GetClientId() == in.GetClientId() && c.GetRedirectUri() == in.GetRedirectUri() {
+			return &pb.GetAuthClientRevocationResp{Id: c.GetId(), RevokedAt: c.GetRevokedAt()}, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "no rows")
 }
 
 // The unique (client_id, redirect_uri) index is full, so a revoked pair stays
@@ -281,5 +287,111 @@ func TestEndedAt(t *testing.T) {
 		if got := tc.tok.endedAt(); fmt.Sprint(got) != fmt.Sprint(tc.want) {
 			t.Errorf("%s: endedAt = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// ── an erasure stopped part-way leaves no usable account ───────────────────
+
+// Access ends FIRST. An erasure that fails after it — and that nobody
+// retries — leaves the account disabled, its password unusable and every
+// token and device revoked, its address still in place for the retry. It
+// used to run the erasers first: a failure then left a usable account (a
+// password sign-in, live sessions) with its authenticator already wiped.
+func TestEraseUsers_APartialErasureLeavesNoUsableAccount(t *testing.T) {
+	f := &flakyEraser{revocationStore: aliceStore(), failures: 1}
+	hash, err := testPasswordSettings().Hash("alice-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.users["u1"].hash = hash
+	h := &AuthServiceHandler{Query: f, Mutation: f, PasswordHash: testPasswordSettings()} // no DistTx
+	prev := signInDummyVerify
+	signInDummyVerify = func(*AuthServiceHandler, string) {}
+	t.Cleanup(func() { signInDummyVerify = prev })
+
+	if _, err := h.EraseUsers(sessionCallerCtx("admin", "t-admin"), &pb.EraseUsersReq{Ids: []string{"u1"}}); err == nil {
+		t.Fatal("a failed eraser was reported as an erasure")
+	}
+	u := f.users["u1"]
+	if u.disabledAt == nil || u.hash != "!" || u.erasedAt != nil || u.email != "alice@example.com" {
+		t.Errorf("after a partial erasure the account is %+v, want disabled, password unusable, not yet erased, address kept", u)
+	}
+	for _, id := range []string{"t-session", "t-other", "t-api"} {
+		assertRevoked(t, f.revocationStore, id, "admin", pb.RevokeReason_REVOKE_REASON_USER_ERASED)
+	}
+	for _, d := range f.devices {
+		if d.revokedAt == nil {
+			t.Errorf("device %s is live after a partial erasure", d.id)
+		}
+	}
+	if _, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: "alice@example.com", Password: "alice-password"}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("a password sign-in after a partial erasure: %v, want refused", err)
+	}
+	if err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("the account gates passed a partially erased account: %v", err)
+	}
+}
+
+// ── rotating a registered client's secret ──────────────────────────────────
+
+type secretRegistry struct {
+	pb.AuthQueryClient
+	pb.AuthMutationClient
+	rows map[string]*clientRow
+	hash map[string]string // id -> stored secret hash
+}
+
+// RotateAuthClientSecret: id AND revoked_at IS NULL.
+func (r *secretRegistry) RotateAuthClientSecret(_ context.Context, in *pb.RotateAuthClientSecretReq, _ ...grpc.CallOption) (*pb.RotateAuthClientSecretResp, error) {
+	c := r.rows[in.GetId()]
+	if c == nil || c.revokedAt != nil {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	r.hash[c.id] = in.GetClientSecret()
+	return &pb.RotateAuthClientSecretResp{Id: c.id}, nil
+}
+
+// A client that lost its secret keeps its client_id: the live registration
+// gets a new secret, returned once, stored only hashed, and the old one stops
+// verifying. A revoked registration is refused and keeps what it had; an API
+// token cannot rotate (the secret is a credential).
+func TestRotateClientSecret_KeepsTheClientIDAndRefusesARevokedOne(t *testing.T) {
+	ps := testPasswordSettings()
+	old, err := ps.Hash("old-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &secretRegistry{
+		rows: map[string]*clientRow{
+			"c1": {id: "c1", clientID: "app", redirect: "https://app.example.com/cb", enabled: true},
+			"c2": {id: "c2", clientID: "app", redirect: "https://old.example.com/cb", revokedAt: timestamppb.Now()},
+		},
+		hash: map[string]string{"c1": old, "c2": old},
+	}
+	h := &AuthServiceHandler{Query: r, Mutation: r, PasswordHash: ps}
+	ctx := sessionCallerCtx("admin", "t-admin")
+
+	resp, err := h.RotateClientSecret(ctx, &pb.RotateClientSecretReq{Id: "c1"})
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if resp.GetClientSecret() == "" || r.hash["c1"] == resp.GetClientSecret() {
+		t.Fatalf("the new secret is missing or stored in the clear: %q / %q", resp.GetClientSecret(), r.hash["c1"])
+	}
+	if ok, _, _ := ps.VerifyAndRotate(r.hash["c1"], resp.GetClientSecret(), nil); !ok {
+		t.Error("the stored hash does not verify the secret handed out")
+	}
+	if ok, _, _ := ps.VerifyAndRotate(r.hash["c1"], "old-secret", nil); ok {
+		t.Error("the old secret still verifies after a rotation")
+	}
+
+	if _, err := h.RotateClientSecret(ctx, &pb.RotateClientSecretReq{Id: "c2"}); status.Code(err) != codes.NotFound {
+		t.Errorf("rotating a revoked registration: %v, want NotFound", err)
+	}
+	if r.hash["c2"] != old {
+		t.Error("a revoked registration's secret was replaced")
+	}
+	if _, err := h.RotateClientSecret(sessionCallerCtx("admin", ""), &pb.RotateClientSecretReq{Id: "c1"}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("an API-token caller rotated a client secret: %v", err)
 	}
 }

@@ -429,8 +429,9 @@ func (h *AuthServiceHandler) RegisterClient(ctx context.Context, req *pb.Registe
 	}
 	// Registering IS becoming a confidential client: the secret is minted
 	// here, hashed before it is stored, and handed back exactly once. There
-	// is no endpoint that returns it again — a client that loses it is
-	// re-registered, the same contract a password-reset token has.
+	// is no endpoint that returns it again — a client that loses it gets a new
+	// one from RotateClientSecret, keeping its client_id, the same contract a
+	// password-reset token has.
 	secret, err := randomURLToken()
 	if err != nil {
 		return nil, err
@@ -460,18 +461,41 @@ func (h *AuthServiceHandler) RegisterClient(ctx context.Context, req *pb.Registe
 // collided with is a REVOKED registration. Read only after the collision, to
 // say why: a revoked row keeps its pair (the unique index is not partial), so
 // the operator is told to choose a new client_id instead of the generic
-// AlreadyExists. A failed read answers false, leaving the original error.
+// AlreadyExists. One row, by the unique pair. A failed read answers false,
+// leaving the original error.
 func (h *AuthServiceHandler) pairWasRevoked(ctx context.Context, clientID, redirectURI string) bool {
-	list, err := h.Query.ListAuthClients(ctx, &pb.ListAuthClientsReq{})
+	got, err := h.Query.GetAuthClientRevocation(ctx, &pb.GetAuthClientRevocationReq{ClientId: clientID, RedirectUri: redirectURI})
+	return err == nil && got.GetRevokedAt() != nil
+}
+
+// RotateClientSecret replaces a live registration's secret and hands the new
+// one back once. It is how a client that lost its secret keeps its client_id
+// — revoking keeps the row and its (client_id, redirect_uri) taken — and the
+// old secret stops working when it commits. Gated as RegisterClient is: a
+// person with a session (the new secret is a credential), then the project's
+// ACL. A revoked or unknown registration matches no row: NotFound.
+func (h *AuthServiceHandler) RotateClientSecret(ctx context.Context, req *pb.RotateClientSecretReq) (*pb.RotateClientSecretResp, error) {
+	if _, err := callerUserID(ctx); err != nil {
+		return nil, Unauthenticated(err)
+	}
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
+	secret, err := randomURLToken()
 	if err != nil {
-		return false
+		return nil, err
 	}
-	for _, c := range list.GetClients() {
-		if c.GetClientId() == clientID && c.GetRedirectUri() == redirectURI && c.GetRevokedAt() != nil {
-			return true
+	hashed, err := h.PasswordHash.Hash(secret)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := h.Mutation.RotateAuthClientSecret(ctx, &pb.RotateAuthClientSecretReq{Id: req.GetId(), ClientSecret: hashed}); err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, status.Error(codes.NotFound, "no live registration with this id: it is unknown or revoked, and a revoked registration keeps the secret it had")
 		}
+		return nil, err
 	}
-	return false
+	return &pb.RotateClientSecretResp{ClientSecret: secret}, nil
 }
 
 // ListClients returns every registration, enabled or not, revoked or not —
