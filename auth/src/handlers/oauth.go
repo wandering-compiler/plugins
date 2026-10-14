@@ -33,6 +33,20 @@ import (
 // is authored Go rather than DQL. Every failure maps to opaque
 // Unauthenticated (anti-enumeration, like SignIn).
 
+// init adds this feature's share of an erasure.
+func init() {
+	erasers = append(erasers, eraseOAuthData)
+}
+
+// eraseOAuthData is oauth's eraser: the account's identities lose their
+// asserted email and their provider subject (replaced by the row's own id, so
+// nothing a provider sends resolves to the erased account any more), and its
+// login codes are spent and blanked (EraseOAuthData). The rows stay.
+func eraseOAuthData(ctx context.Context, h *AuthServiceHandler, userID, _, _ string) error {
+	_, err := h.Mutation.EraseOAuthData(ctx, &pb.EraseOAuthDataReq{UserId: userID})
+	return err
+}
+
 // oauthHTTPClient performs the outbound token-exchange + userinfo calls.
 // A package var (not a handler field) so tests can point it at a fake IdP
 // without threading config; the per-provider URLs come from the row.

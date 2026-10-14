@@ -449,8 +449,9 @@ func (h *AuthServiceHandler) RegisterClient(ctx context.Context, req *pb.Registe
 	return &pb.RegisterClientResp{Client: resp.GetClient(), ClientSecret: secret}, nil
 }
 
-// ListClients returns every registration, enabled or not — an operator
-// auditing what may receive a code needs to see the disabled rows too.
+// ListClients returns every registration, enabled or not, revoked or not —
+// an operator auditing what may receive a code needs to see the disabled and
+// revoked rows too.
 func (h *AuthServiceHandler) ListClients(ctx context.Context, _ *pb.ListClientsReq) (*pb.ListClientsResp, error) {
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
@@ -480,15 +481,19 @@ func (h *AuthServiceHandler) SetClientEnabled(ctx context.Context, req *pb.SetCl
 	return &pb.SetClientEnabledResp{}, nil
 }
 
-// DeleteClient removes a registration outright.
-func (h *AuthServiceHandler) DeleteClient(ctx context.Context, req *pb.DeleteClientReq) (*pb.DeleteClientResp, error) {
+// RevokeClient ends a registration for good: AuthClient.revoked_at is
+// stamped and the row stays, as the record of what was trusted. Every
+// resolver refuses it from then on, SetClientEnabled cannot restore it, and
+// the pair can be registered again (a new row with a new secret). Revoking a
+// revoked or unknown registration matches no row, which is done.
+func (h *AuthServiceHandler) RevokeClient(ctx context.Context, req *pb.RevokeClientReq) (*pb.RevokeClientResp, error) {
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if _, err := h.Mutation.DeleteAuthClient(ctx, &pb.DeleteAuthClientReq{Id: req.GetId()}); notFoundOK(err) != nil {
+	if _, err := h.Mutation.RevokeAuthClient(ctx, &pb.RevokeAuthClientReq{Id: req.GetId()}); notFoundOK(err) != nil {
 		return nil, err
 	}
-	return &pb.DeleteClientResp{}, nil
+	return &pb.RevokeClientResp{}, nil
 }
 
 var (

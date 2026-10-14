@@ -7,7 +7,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
@@ -91,13 +90,19 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 	if err != nil {
 		// Expired API tokens answer SESSION_EXPIRED too: the holder knows the
 		// token, and its expiry is all the refusal adds.
-		return nil, expiredTokenRefusal(err, func() (*timestamppb.Timestamp, pb.TokenType, string, error) {
+		return nil, expiredTokenRefusal(err, func() (endedToken, error) {
 			exp, err := h.Query.GetExpiredTokenWithType(ctx, &pb.GetExpiredTokenWithTypeReq{LegacyToken: token, TokenHash: hash})
-			return exp.GetExpiresAt(), exp.GetTokenType(), exp.GetDeviceThumbprint(), err
+			return endedToken{
+				expiresAt:       exp.GetExpiresAt(),
+				revokedAt:       exp.GetRevokedAt(),
+				kind:            exp.GetTokenType(),
+				thumbprint:      exp.GetDeviceThumbprint(),
+				deviceRevokedAt: exp.GetDeviceRevokedAt(),
+			}, err
 		})
 	}
 	// Same rule as the session path: a disabled account authenticates with no
-	// token, including one minted after the disable deleted the rest.
+	// token, including one minted after the disable revoked the rest.
 	if err := signInDisabledGate(tok.GetUser()); err != nil {
 		return nil, err
 	}
@@ -134,8 +139,8 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		}
 	}
 	// Only a SESSION token is stamped as the caller's session_token_id. Two
-	// things read it. Logout deletes whatever id the envelope carries, and
-	// DeleteSessionToken's DQL drops the token_type filter (the column is
+	// things read it. Logout revokes whatever id the envelope carries, and
+	// RevokeSessionToken's DQL drops the token_type filter (the column is
 	// api_token-gated), so an API token's id there would let Logout revoke it
 	// (it is removed only via RevokeApiToken). requireSessionCaller reads
 	// "non-empty" as "this caller is a session" and lets it mint credentials,
@@ -299,48 +304,25 @@ func (h *AuthServiceHandler) ListApiTokens(ctx context.Context, req *pb.ListApiT
 	return &pb.ListApiTokensResp{Tokens: resp.GetTokens()}, nil
 }
 
-// RevokeApiToken deletes one of the calling user's API tokens + its
-// permission-subset rows. The token delete is ownership + realm guarded
-// (id AND user_id AND token_type=API), so a caller can't revoke another
-// user's token or a session token. Subset cleanup runs only AFTER an
-// owned token was actually deleted — never on a token the caller doesn't
-// own. Idempotent (revoking an absent token is a no-op).
+// RevokeApiToken revokes one of the calling user's API tokens: the row stays,
+// with revoked_at, reason API_TOKEN_REVOKED and the caller as revoked_by, and
+// every lookup refuses it from then on. The revoke is ownership + realm
+// guarded (id AND user_id AND token_type=API), so a caller can't revoke
+// another user's token or a session token. Its TokenPermission subset rows
+// stay too: they narrow a token that is refused anyway, and they record what
+// it was allowed to do. Idempotent — revoking a token that is already revoked,
+// unknown or not the caller's matches no row (NotFound) and is no error.
 func (h *AuthServiceHandler) RevokeApiToken(ctx context.Context, req *pb.RevokeApiTokenReq) (*pb.RevokeApiTokenResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	del, err := h.Mutation.DeleteApiToken(ctx, &pb.DeleteApiTokenReq{
+	if _, err := h.Mutation.MarkApiTokenRevoked(ctx, &pb.MarkApiTokenRevokedReq{
 		TokenId:   req.GetTokenId(),
 		UserId:    userID,
 		TokenType: pb.TokenType_TOKEN_TYPE_API,
-	})
-	if err != nil {
+	}); notFoundOK(err) != nil {
 		return nil, err
-	}
-	if del.GetTokenId() == "" {
-		// Nothing deleted — not the caller's, or not an API token. Don't
-		// touch the subset rows (they may belong to someone else's token).
-		return &pb.RevokeApiTokenResp{}, nil
-	}
-	// A token with NO subset rows has nothing to clean up, and that is the
-	// COMMON case — CreateApiToken leaves the subset empty unless the caller
-	// narrows it, and a machine account's token carries its rights through a
-	// ROLE rather than a per-token subset.
-	//
-	// The cleanup's DELETE fills its response from RETURNING, so matching no
-	// row is a mutation that produced no result — NotFound. Propagating that
-	// turned every such revoke into a 404 while the token was ALREADY DELETED
-	// one statement earlier: the caller reads "no such token", retries, gets
-	// 404 again, and concludes the token is still live. Found by running
-	// examples/plugin-surfaces against a database.
-	//
-	// Only NotFound is swallowed. Any other failure still fails the call — a
-	// subset that could not be removed is a credential narrower than it looks.
-	if _, err := h.Mutation.DeleteTokenPermissions(ctx, &pb.DeleteTokenPermissionsReq{TokenId: req.GetTokenId()}); err != nil {
-		if status.Code(err) != codes.NotFound {
-			return nil, err
-		}
 	}
 	return &pb.RevokeApiTokenResp{}, nil
 }

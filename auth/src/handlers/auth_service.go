@@ -384,12 +384,18 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{LegacyToken: token, TokenHash: hash})
 	if err != nil {
 		// With api_token off every token is a session.
-		return nil, expiredTokenRefusal(err, func() (*timestamppb.Timestamp, pb.TokenType, string, error) {
+		return nil, expiredTokenRefusal(err, func() (endedToken, error) {
 			exp, err := h.Query.GetExpiredToken(ctx, &pb.GetExpiredTokenReq{LegacyToken: token, TokenHash: hash})
-			return exp.GetExpiresAt(), pb.TokenType_TOKEN_TYPE_SESSION, exp.GetDeviceThumbprint(), err
+			return endedToken{
+				expiresAt:       exp.GetExpiresAt(),
+				revokedAt:       exp.GetRevokedAt(),
+				kind:            pb.TokenType_TOKEN_TYPE_SESSION,
+				thumbprint:      exp.GetDeviceThumbprint(),
+				deviceRevokedAt: exp.GetDeviceRevokedAt(),
+			}, err
 		})
 	}
-	// A disabled account's tokens are deleted when it is disabled, but one
+	// A disabled account's tokens are revoked when it is disabled, but one
 	// minted after that (a sign-in racing the disable) must not work either.
 	if err := signInDisabledGate(resp.GetUser()); err != nil {
 		return nil, err
@@ -448,6 +454,20 @@ type signupRoles struct {
 // whose file (handlers/reset.go) installs the real one via init(), so
 // `password_change` without `password_reset` stages nothing it cannot build.
 var spendResetLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error { return nil }
+
+// eraser erases one feature's share of an account's personal data, inside the
+// erasure's transaction (AuthService.EraseUsers, `user_admin`): email is the
+// address being erased (as stored), placeholder the one replacing it. Nothing
+// it runs deletes a row.
+type eraser func(ctx context.Context, h *AuthServiceHandler, userID, email, placeholder string) error
+
+// erasers are the feature-owned halves of an erasure. Each feature whose
+// tables hold personal data (oauth, two_factor, email_verification,
+// org_invite) appends its own from its file's init(), so the list holds
+// exactly the tables this activation has; password_reset's share is
+// spendResetLinks above. Declared here, always compiled, because the features
+// that append and the one that runs them (user_admin) stage independently.
+var erasers []eraser
 
 // SignIn seams — always-present default behaviours opt-in feature
 // files override via init(), mirroring resolvePrincipal /
@@ -1122,11 +1142,12 @@ var whoAmIEnrich = func(ctx context.Context, h *AuthServiceHandler, userID strin
 // Logout revokes the caller's CURRENT session token — the base-tier
 // counterpart to SignIn, available without the `devices` feature. It
 // reads the authenticated principal (user_id) plus the session_token_id
-// the gateway threaded in the auth envelope and deletes exactly that one
-// SESSION token via DeleteSessionToken (ownership guarded in the mutation:
-// id AND user_id). The raw bearer never reaches here — only the resolved
-// session token id does, so it's always a session token (the DQL drops the
-// token_type filter — that column is api_token-gated).
+// the gateway threaded in the auth envelope and revokes exactly that one
+// SESSION token via RevokeSessionToken (ownership guarded in the mutation:
+// id AND user_id; reason LOGOUT, the caller as revoked_by). The row stays.
+// The raw bearer never reaches here — only the resolved session token id
+// does, so it's always a session token (the DQL drops the token_type
+// filter — that column is api_token-gated).
 //
 // Idempotent about the SESSION, not about the caller: a token that was already
 // revoked still gets a clean success, because "this session is already gone" is
@@ -1152,7 +1173,7 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 		// An empty id means Logout does not know WHICH session to end. That is
 		// not idempotence — idempotence is "this session is already gone, so
 		// there is nothing to do", and the handler below says so by treating a
-		// zero-row delete as success. This is "I was not told which one", and
+		// zero-row revoke as success. This is "I was not told which one", and
 		// answering OK to that is a claim that is not true.
 		//
 		// What an OK would cost: a facade wrapping Logout whose VerifyRes
@@ -1174,12 +1195,12 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 				"or the auth envelope reaching this handler is missing AuthResp.session_token_id (field 4), "+
 				"which a hand-written facade VerifyRes must carry for logout to revoke anything")
 	}
-	if _, err := h.Mutation.DeleteSessionToken(ctx, &pb.DeleteSessionTokenReq{
+	if _, err := h.Mutation.RevokeSessionToken(ctx, &pb.RevokeSessionTokenReq{
 		TokenId:   tokenID,
 		UserId:    userID,
 		TokenType: pb.TokenType_TOKEN_TYPE_SESSION,
 	}); err != nil {
-		// Already-gone token (zero rows → NotFound) is an idempotent
+		// Already-revoked token (zero rows → NotFound) is an idempotent
 		// logout success; anything else propagates.
 		if e := notFoundOK(err); e != nil {
 			return nil, e
@@ -1188,11 +1209,11 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 	return &pb.LogoutResp{}, nil
 }
 
-// notFoundOK turns a storage NotFound into success. The DELETE primitives
+// notFoundOK turns a storage NotFound into success. The write primitives
 // RETURNING a row map zero matched rows to NotFound (single-row scan →
-// sql.ErrNoRows), but deleting something already gone — revoking a stale
-// device, clearing a TOTP secret that was never enrolled — is a no-op, not
-// an error. Lives here (always-compiled) so both handlers/devices.go and
+// sql.ErrNoRows), but revoking something already revoked — a stale device,
+// a token signed out twice — or clearing a TOTP secret that was never
+// enrolled is a no-op, not an error. Lives here (always-compiled) so both handlers/devices.go and
 // handlers/mfa.go use it without a cross-feature dependency.
 func notFoundOK(err error) error {
 	if status.Code(err) == codes.NotFound {

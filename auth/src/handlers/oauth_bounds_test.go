@@ -151,9 +151,9 @@ func TestOAuthExchange_IsNotChallengedForTheSecondFactor(t *testing.T) {
 
 // --- user_admin × oauth ------------------------------------------------------
 
-// deletedOwnerMock is oauthMock after DeleteUser: the identity row survived
-// (DeleteUser purges tokens and the User row only), the account it names is
-// gone.
+// deletedOwnerMock is oauthMock with an identity whose account row is
+// missing: nothing deletes a User any more (erasure pseudonymises it), but a
+// deployment can hold such rows from before, or from a hand-written delete.
 type deletedOwnerMock struct{ *oauthMock }
 
 func (deletedOwnerMock) GetUserById(context.Context, *pb.GetUserByIdReq, ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
@@ -185,17 +185,20 @@ func TestOAuthCallback_AnIdentityWhoseAccountWasDeletedCannotSignIn(t *testing.T
 	}
 }
 
-// DeleteUser removes the account's tokens and the User row, and nothing a
-// feature owns: the rows of OAuthIdentity, UserRole, OrgMembership, Device and
-// UserTotpSecret outlive it, for the UserDeleted consumer to clean up.
-func TestDeleteUser_PurgesTokensAndTheUserOnly(t *testing.T) {
-	body := mutationRPCBody(t, "DeleteUser")
+// EraseUser updates the account's tokens, devices and User row — the base
+// tables — and deletes nothing. The feature-owned tables are the erasers'
+// (AuthService.EraseUsers), not this statement set's.
+func TestEraseUser_TouchesTheBaseTablesOnly(t *testing.T) {
+	body := mutationRPCBody(t, "EraseUser")
 	tables := moduleTables(body)
-	if strings.Join(tables, ",") != "UserToken,User" {
-		t.Errorf("DeleteUser touches %v, want UserToken then User:\n%s", tables, body)
+	if strings.Join(tables, ",") != "UserToken,Device,Device,User,User" {
+		t.Errorf("EraseUser touches %v, want UserToken, Device (x2), User (x2):\n%s", tables, body)
 	}
-	if !strings.Contains(body, `event: "UserDeleted"`) {
-		t.Errorf("DeleteUser emits no UserDeleted for downstream cleanup:\n%s", body)
+	if strings.Contains(body, "DELETE") {
+		t.Errorf("EraseUser deletes:\n%s", body)
+	}
+	if !strings.Contains(body, `event: "UserErased"`) {
+		t.Errorf("EraseUser emits no UserErased:\n%s", body)
 	}
 }
 

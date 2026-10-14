@@ -76,9 +76,19 @@ var errMfaChallengeBudget = &wireError{
 	msg:  "too many verification codes requested for this account — wait a few minutes and sign in again",
 }
 
-// init wires the two_factor sign-in gate on package load.
+// init wires the two_factor sign-in gate on package load, and this feature's
+// share of an erasure.
 func init() {
 	signInMfaGate = mfaSignInGate
+	erasers = append(erasers, eraseTwoFactorData)
+}
+
+// eraseTwoFactorData is two_factor's eraser: the authenticator's seed is
+// cleared, unused recovery codes spent and pending challenges consumed
+// (EraseTwoFactorData). The rows stay.
+func eraseTwoFactorData(ctx context.Context, h *AuthServiceHandler, userID, _, _ string) error {
+	_, err := h.Mutation.EraseTwoFactorData(ctx, &pb.EraseTwoFactorDataReq{UserId: userID})
+	return err
 }
 
 // enrolmentAllowed refuses an enrolment this deployment does not offer.

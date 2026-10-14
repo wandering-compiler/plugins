@@ -4,8 +4,8 @@ syntax = "proto3";
 //
 // Three notifications fire post-mutation: user creation, token
 // issuance, token revocation. Token rotation is consumer-composed
-// (GetUserByToken → DeleteToken → IssueToken) and fires the
-// IssueToken event + the DeleteToken event independently.
+// (GetUserByToken → RevokeToken → IssueToken) and fires only the
+// IssueToken event (RevokeToken emits nothing; see it).
 //
 // Channel reference uses the plugin-internal alias `events`;
 // activation maps the alias to a real project channel. Plugin authors don't bake in a real channel name —
@@ -38,17 +38,16 @@ message UserCreated {
   google.protobuf.Timestamp created_at = 3;
 }
 
-// UserDeleted — emitted on AuthMutation.DeleteUser after the account +
-// its tokens are purged. The plugin cascades only the base tables it
-// can name unconditionally (UserToken); a subscriber cleans up the
-// feature-owned rows keyed on user_id that the delete method can't
-// reference across feature combinations — UserRole (rbac), devices,
-// OAuthIdentity (oauth), UserTotpSecret (two_factor). No-FK schema, so
-// this is the sanctioned cleanup seam. Gated user_admin.
-message UserDeleted {
+// UserErased — emitted on AuthMutation.EraseUser once an account has been
+// erased (GDPR): its row pseudonymised in place, its tokens and devices
+// revoked. Nothing was deleted, in this plugin or by it. A subscriber holding
+// the person's data under this user_id (a profile, a mailing list, a billing
+// contact) erases its own copy here. Carries only the id: the address is gone,
+// and an event is no place to keep it. Gated user_admin.
+message UserErased {
   option (w17.event) = {
     channel: "events"
-    topic:   "auth.user.deleted"
+    topic:   "auth.user.erased"
   };
   option (w17.contrib.plugin_feature) = "user_admin";
 
@@ -71,7 +70,8 @@ message UserUpdated {
 }
 
 // UserTokenRevoked — emitted on AuthMutation.RevokeUserToken (the admin
-// Sessions page delete) after the UserToken row is gone. Subscribers can
+// Sessions page revoke) once the token is revoked (the row stays, with
+// revoked_at set). Subscribers can
 // audit forced logouts or drop the token from any hot session cache.
 // Distinct from the base-tier TokenRevoked (auth.token.revoked, the live
 // self-logout path): the eventbus allows only one emit site per event,
@@ -101,11 +101,11 @@ message TokenIssued {
   google.protobuf.Timestamp issued_at = 3;
 }
 
-// TokenRevoked — emitted on AuthMutation.DeleteSessionToken (the live
+// TokenRevoked — emitted on AuthMutation.RevokeSessionToken (the live
 // logout path; the eventbus allows one emit site per event and the
-// uncalled DeleteToken primitive no longer emits). Idempotent upstream
-// → the event fires only when an actual row DELETE occurred; a
-// no-such-token logout doesn't emit (emit is gated on
+// uncalled RevokeToken primitive does not emit). Idempotent upstream
+// → the event fires only when a live token was actually revoked; a
+// logout of an already revoked token doesn't emit (emit is gated on
 // RowsAffected > 0 via the storage codegen's per-mutation conditional
 // emit path).
 message TokenRevoked {
@@ -113,7 +113,7 @@ message TokenRevoked {
     channel: "events"
     topic:   "auth.token.revoked"
   };
-  // Gated in step with its ONLY emit site. DeleteSessionToken is the
+  // Gated in step with its ONLY emit site. RevokeSessionToken is the
   // base-tier logout primitive and carries `authenticate_turnkey`, so an
   // activation without that feature has no logout path in the plugin —
   // and used to be left declaring an event nothing could ever fire, with

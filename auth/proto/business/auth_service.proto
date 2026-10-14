@@ -281,7 +281,8 @@ message WhoAmIResp {
 // LogoutReq / LogoutResp — revoke the CURRENT session (base-tier, no
 // `devices` feature). No body: the handler reads the authenticated
 // principal (user_id) + the resolved session_token_id from the gateway's
-// auth envelope and deletes exactly that one SESSION token. Idempotent —
+// auth envelope and revokes exactly that one SESSION token (the row
+// stays, with revoked_at). Idempotent —
 // a logout against an already-revoked / expired session still succeeds.
 // "Log out everywhere / other devices" is the `devices` feature's job
 // (RevokeAllDevices); this revokes only the bearer that made the call.
@@ -912,8 +913,8 @@ service AuthService {
   }
   // Logout — revoke the caller's CURRENT session token (base-tier, no
   // `devices` feature). Reads user_id + session_token_id from the gateway
-  // auth envelope and deletes that one SESSION token via
-  // AuthMutation.DeleteSessionToken. Idempotent.
+  // auth envelope and revokes that one SESSION token via
+  // AuthMutation.RevokeSessionToken (the row stays). Idempotent.
   rpc Logout(LogoutReq) returns (LogoutResp) {
     option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
   }
@@ -929,7 +930,7 @@ service AuthService {
   rpc CreateApiToken(CreateApiTokenReq) returns (CreateApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
-  // RegisterClient / ListClients / SetClientEnabled / DeleteClient — the
+  // RegisterClient / ListClients / SetClientEnabled / RevokeClient — the
   // operator's registry of non-loopback redirect targets for the
   // authorization-code flow. Admin-only, bearer-authenticated: writing one
   // down is the act that makes a redirect trustworthy, so it belongs to a
@@ -944,8 +945,26 @@ service AuthService {
   rpc SetClientEnabled(SetClientEnabledReq) returns (SetClientEnabledResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
-  rpc DeleteClient(DeleteClientReq) returns (DeleteClientResp) {
+  // RevokeClient ends a registration for good (AuthClient.revoked_at); the
+  // row stays. It was DeleteClient, which removed it.
+  rpc RevokeClient(RevokeClientReq) returns (RevokeClientResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+  // EraseUsers — the admin Users (and ServiceAccounts) page's `erase` action:
+  // erase each account (GDPR) without deleting anything — AuthMutation.EraseUser
+  // over the base tables and the per-feature erasers over the rest, in one
+  // transaction per account, the operator recorded as revoked_by on every
+  // token it ends. An account already erased is skipped. Refuses an empty id
+  // list (the admin's "apply to all rows" sends one). Gated user_admin.
+  rpc EraseUsers(EraseUsersReq) returns (EraseUsersResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // RevokeSessions — the admin Sessions page's `revoke` action: revoke each
+  // token (AuthMutation.RevokeUserToken), the operator recorded as
+  // revoked_by. A token already revoked keeps its first revocation and is
+  // not an error. Refuses an empty id list. Gated user_admin.
+  rpc RevokeSessions(RevokeSessionsReq) returns (RevokeSessionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
   // CreateBot — provision a machine account AND give it its role, in one
   // call. Gated service_account.
@@ -977,7 +996,8 @@ service AuthService {
   rpc ListApiTokens(ListApiTokensReq) returns (ListApiTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
-  // RevokeApiToken — delete the caller's own API token + its subset rows.
+  // RevokeApiToken — revoke the caller's own API token (revoked_at; the
+  // row and its subset rows stay).
   rpc RevokeApiToken(RevokeApiTokenReq) returns (RevokeApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
@@ -1025,7 +1045,7 @@ service AuthService {
 
   // ── devices management — list + log out one/others/all ──────
   // ListDevices — the caller's devices (mgmt view, derived trusted /
-  // current). RevokeDevice — revoke one device for good (delete its
+  // current). RevokeDevice — revoke one device for good (revoke its
   // tokens, stamp Device.revoked_at; its key can never sign in again).
   // RevokeOtherDevices — revoke every device but the caller's.
   // RevokeAllDevices — revoke every device, the caller's included.
@@ -1311,11 +1331,25 @@ message SetClientEnabledReq {
   bool   enabled = 2;
 }
 message SetClientEnabledResp { option (w17.contrib.plugin_feature) = "cli_login"; }
-message DeleteClientReq {
+message RevokeClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id = 1 [(w17.field) = { type: UUID }];
 }
-message DeleteClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+message RevokeClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+
+// The admin action wire contract: a `repeated string ids` selection (the
+// model's UUID primary keys). Responses are empty — the admin shows success
+// or failure.
+message EraseUsersReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated string ids = 1;
+}
+message EraseUsersResp { option (w17.contrib.plugin_feature) = "user_admin"; }
+message RevokeSessionsReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated string ids = 1;
+}
+message RevokeSessionsResp { option (w17.contrib.plugin_feature) = "user_admin"; }
 
 message CliTokenReq {
   option (w17.contrib.plugin_feature) = "cli_login";

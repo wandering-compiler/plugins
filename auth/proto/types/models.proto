@@ -128,8 +128,9 @@ message User {
   // SignIn and every other path that issues a token refuse it, and
   // Authenticate refuses every token it already has, session or API,
   // for as long as it stays disabled (handlers/user_admin.go overrides
-  // the signInDisabledGate seam). DisableUsers also deletes the tokens;
-  // the check on every request covers one minted after it. Set /
+  // the signInDisabledGate seam). DisableUsers also revokes the tokens
+  // (USER_DISABLED); the check on every request covers one minted after
+  // it. Set /
   // cleared by AuthMutation.DisableUsers / EnableUsers from the admin
   // Users page. Field-gated `user_admin`: absent entirely when the
   // feature is off, so the always-compiled SignIn handler must reach
@@ -177,6 +178,60 @@ message User {
   google.protobuf.Timestamp device_trust_revoked_at = 10 [
     (w17.field) = { type: DATETIME, null: true }
   ];
+
+  // erased_at — when this account was ERASED on request (GDPR): NULL = never.
+  // Erasure is not a delete. The row stays, with its history, and its personal
+  // data is replaced in place: the email becomes `erased-<id>@erased.invalid`
+  // (unique, non-routable, and it frees the old address for a new sign-up),
+  // the password hash becomes the unusable `!`, and the account is disabled,
+  // its tokens and devices revoked. Set once by AuthMutation.EraseUser, never
+  // cleared: EnableUsers and UpdateUser leave an erased account alone, so it
+  // cannot be turned back into a usable one. Field-gated `user_admin`, like
+  // disabled_at: the erase action belongs to the admin Users page.
+  google.protobuf.Timestamp erased_at = 11 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "user_admin"
+  ];
+}
+
+// RevokeReason — why a UserToken stopped being valid before its expiry. The
+// first revocation wins: every revoking statement is guarded on
+// `revoked_at IS NULL`, so a later one never rewrites the time, the reason or
+// who did it.
+//
+// Values are explicit and never reused; a token revoked by a path added later
+// gets a new number. NONE (0) is the stored value of every live token, which is
+// why it is a real value (`zero_is_value`) rather than the proto3 sentinel.
+// Prefixed because proto enum values share the package's scope.
+enum RevokeReason {
+  // Not revoked.
+  REVOKE_REASON_NONE = 0;
+  // The holder signed out (Logout).
+  REVOKE_REASON_LOGOUT = 1;
+  // The owner revoked their own API token (RevokeApiToken).
+  REVOKE_REASON_API_TOKEN_REVOKED = 2;
+  // A password change signed the account out of its other sessions.
+  REVOKE_REASON_PASSWORD_CHANGED = 3;
+  // A password reset ended every token of the account.
+  REVOKE_REASON_PASSWORD_RESET = 4;
+  // The device the token is bound to was revoked (RevokeDevice and the
+  // revoke-others / revoke-all calls).
+  REVOKE_REASON_DEVICE_REVOKED = 5;
+  // A session bound to no device (minted before device binding), ended by
+  // RevokeOtherDevices / RevokeAllDevices.
+  REVOKE_REASON_UNBOUND_SESSION = 6;
+  // An operator revoked it from the admin Sessions page.
+  REVOKE_REASON_ADMIN_REVOKED = 7;
+  // The account was disabled (DisableUsers).
+  REVOKE_REASON_USER_DISABLED = 8;
+  // The account was erased (EraseUser).
+  REVOKE_REASON_USER_ERASED = 9;
+  // Project code revoked it through the low-level AuthMutation.RevokeToken
+  // (by the token itself, e.g. while rotating it).
+  REVOKE_REASON_TOKEN_REVOKED = 10;
+  // Project code revoked every token of the account through
+  // AuthMutation.RevokeAllUserTokens.
+  REVOKE_REASON_ALL_TOKENS_REVOKED = 11;
 }
 
 // AccountKind separates people from machines.
@@ -237,8 +292,11 @@ message Tenant {
 
 // UserToken — bearer-token record. Project clients trade an
 // (email, password) sign-in for a long-lived token they send
-// on subsequent requests. v1: tokens are immortal until
-// explicitly revoked or rotated.
+// on subsequent requests. A token ends when it expires or is
+// revoked, and in both cases the row STAYS: revoking sets
+// revoked_at (+ revoked_by, revoke_reason), and nothing deletes a
+// token, so the table is the history of every credential the
+// account ever held.
 //
 // v1 LIMITATION — no DB-level FK constraint on `user_id`. The
 // FK target table name is `<registered_as>_user`, but plugin
@@ -345,6 +403,28 @@ message UserToken {
     unique: true
     null: true
   }];
+
+  // revoked_at — when the token was revoked; NULL = not revoked. BASE-TIER,
+  // like expires_at: revocation applies to every token. Every revoking
+  // statement is an UPDATE guarded on `revoked_at IS NULL`, so the first
+  // revocation's time, reason and actor stand and a later one changes
+  // nothing. Every token lookup refuses a revoked token exactly as it refuses
+  // an expired one (`revoked_at IS NULL` beside the expiry predicate), and the
+  // miss-path lookup reads the row so the key's holder hears SESSION_EXPIRED
+  // (or DEVICE_REVOKED) as for an expired token, and anyone else the opaque
+  // refusal. Never cleared: a revoked token is not revived.
+  google.protobuf.Timestamp revoked_at = 12 [(w17.field) = { type: DATETIME, null: true }];
+
+  // revoked_by — the account that revoked it: the holder for a logout, a
+  // password change or a device revocation, the operator for an admin
+  // revocation or erasure. NULL when the system did it (a password reset, a
+  // disable, the low-level RevokeToken primitive). No DB-level FK (the
+  // activation-rename caveat in the message header).
+  string revoked_by = 13 [(w17.field) = { type: UUID, null: true }];
+
+  // revoke_reason — why (RevokeReason). NONE on a live token. Written in the
+  // same statement as revoked_at, so the two never disagree.
+  RevokeReason revoke_reason = 14 [(w17.field) = { type: ENUM, zero_is_value: true, default_int: 0 }];
 }
 
 // Device — one (user, device key) pair. Base tier: every session is bound
@@ -945,12 +1025,22 @@ message TokenPermission {
 // the hot path of an auth check, to hold one label — and `enabled` is per row
 // so an operator can retire a single callback without touching the others.
 //
+// A registration is never deleted: revoking one sets `revoked_at`, and the row
+// stays as the record of what was trusted and when. A revoked row is refused by
+// every resolver and cannot be re-enabled; registering the same pair again
+// writes a new row (with a new secret).
+//
 // Without it, a flow that works on loopback cannot be deployed behind any
 // other callback.
 message AuthClient {
   option (w17.db.table) = {
     indexes: [
-      { unique: true, fields: [{ name: "client_id" }, { name: "redirect_uri" }] }
+      // One LIVE registration per (client_id, redirect_uri). Partial, because a
+      // revoked row stays and must not block registering the pair again — the
+      // OrgInvite shape. PG + SQLite only, the support surface this plugin's
+      // other `where:` indexes already assume.
+      { unique: true, fields: [{ name: "client_id" }, { name: "redirect_uri" }],
+        where: "revoked_at IS NULL" }
     ]
   };
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -982,6 +1072,11 @@ message AuthClient {
   // standing between a registration and a delivered code.
   string client_secret = 7 [(w17.field) = { type: PASSWORD }];
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // revoked_at — when the registration was revoked (AuthMutation.RevokeAuthClient);
+  // NULL = live. Set once, never cleared. A revoked row is refused by
+  // GetRegisteredRedirect and GetAuthClientSecret exactly as an unregistered
+  // one, and SetAuthClientEnabled leaves it alone, so it cannot come back.
+  google.protobuf.Timestamp revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // BootstrapClaim — the one row that says the bootstrap administrator has

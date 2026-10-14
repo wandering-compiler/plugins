@@ -263,7 +263,7 @@ features:
     go_files:
       - handlers/org_invite.go
   - name: password_change
-    description: "Authenticated password change — the signed-in principal supplies its current password and a new one. Distinct from `password_reset`, which is the FORGOTTEN-password flow and needs a mail channel to deliver a token; this one needs no channel at all, because the proof is the current password. A deployment that cannot send mail can still let people rotate their own credentials. Adds the ChangePassword business RPC over AuthMutation.UpdateUserPasswordIfUnchanged, and AuthMutation.DeleteOtherSessionTokens, which signs the person out of every other session in the same unit of work (API tokens are kept). With `password_reset` staged too, the change also spends every live reset link of the account in that unit of work. Off by default."
+    description: "Authenticated password change — the signed-in principal supplies its current password and a new one. Distinct from `password_reset`, which is the FORGOTTEN-password flow and needs a mail channel to deliver a token; this one needs no channel at all, because the proof is the current password. A deployment that cannot send mail can still let people rotate their own credentials. Adds the ChangePassword business RPC over AuthMutation.UpdateUserPasswordIfUnchanged, and AuthMutation.RevokeOtherSessionTokens, which signs the person out of every other session in the same unit of work (API tokens are kept; the sessions are revoked, not deleted). With `password_reset` staged too, the change also spends every live reset link of the account in that unit of work. Off by default."
     default: false
     go_files:
       - handlers/password_change.go
@@ -290,7 +290,7 @@ features:
       # active feature is staged once.
       - handlers/role_ceiling.go
   - name: user_admin
-    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / delete of accounts. Adds a nullable User.disabled_at column (SignIn rejects a disabled account before issuing a token, and DisableUsers deletes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated), AuthMutation.DeleteUser (hard-delete + token purge in one tx, emits UserDeleted for downstream cleanup of feature-owned rows), and AuthMutation.DisableUsers / EnableUsers (bulk). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateUser + delete DeleteUser; bulk actions Disable/Enable). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
+    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, and a Sessions page to review and revoke tokens. Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated), AuthMutation.EraseUser + the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays, its address becomes a placeholder, its password unusable, the account disabled, its tokens and devices revoked and the personal data in the other features' tables blanked or spent, in one transaction; emits UserErased), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateUser; actions Disable / Enable / Erase) and the Sessions page (revoked tokens listed as revoked). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
     default: false
     go_files:
       - handlers/user_admin.go
@@ -494,7 +494,7 @@ presets:
           - { ref: AuthService.RegisterClient,   method: POST,   path: "",            feature: cli_login }
           - { ref: AuthService.ListClients,      method: GET,    path: "",            feature: cli_login }
           - { ref: AuthService.SetClientEnabled, method: PATCH,  path: "/{id}",       feature: cli_login }
-          - { ref: AuthService.DeleteClient,     method: DELETE, path: "/{id}",       feature: cli_login }
+          - { ref: AuthService.RevokeClient,     method: DELETE, path: "/{id}",       feature: cli_login }
       # Multi-org membership — the caller lists their OWN orgs, bearer-
       # authenticated. Gated org_membership.
       - prefix: /auth/orgs
@@ -606,26 +606,27 @@ presets:
       # Turnkey Django-style Users management. Gated user_admin — opt in
       # on the realm whose admin manages end-user accounts (typically a
       # staff/admin realm). List + editable detail (email only — never
-      # surfaces password_hash); delete hard-removes the account; the disable /
-      # enable bulk actions flip User.disabled_at (SignIn rejects a
-      # disabled account). A hand-written page named "Users" overrides
-      # this.
+      # surfaces password_hash); the disable / enable bulk actions flip
+      # User.disabled_at (SignIn rejects a disabled account). No `delete`:
+      # nothing in the auth tables is deleted. The `erase` action is the
+      # GDPR request — the row stays, pseudonymised (AuthService.EraseUsers).
+      # A hand-written page named "Users" overrides this.
       - name: Users
         model: User
         feature: user_admin
         list:
           source: AuthQuery.ListUsers
-          columns: [email, disabled_at, created_at]
+          columns: [email, disabled_at, erased_at, created_at]
           detail_link_column: email
         detail:
           read: AuthQuery.GetUser
           update: AuthMutation.UpdateUser
-          delete: AuthMutation.DeleteUser
           # email is the only column UpdateUser writes. disabled_at
           # stays readonly — it belongs to the disable/enable actions
-          # below — and password_hash is never surfaced at all.
+          # below, erased_at to the erase action — and password_hash is
+          # never surfaced at all.
           fields: [email]
-          readonly_fields: [id, disabled_at, created_at]
+          readonly_fields: [id, disabled_at, erased_at, created_at]
         actions:
           - name: disable
             source: AuthMutation.DisableUsers
@@ -635,8 +636,14 @@ presets:
           - name: enable
             source: AuthMutation.EnableUsers
             label: "Enable"
-            confirm: "Re-enable the selected accounts?"
+            confirm: "Re-enable the selected accounts? An erased account stays disabled."
             target: both
+          # One account at a time (detail only): erasure cannot be undone.
+          - name: erase
+            source: AuthService.EraseUsers
+            label: "Erase"
+            confirm: "Erase this account? Its address, password and device details are replaced for good, it is disabled and every session and device is revoked. The record stays, without personal data. This cannot be undone."
+            target: detail
       # Machine accounts. Gated service_account.
       #
       # Its own page rather than a `kind` column on Users: `User.kind` is
@@ -655,7 +662,8 @@ presets:
       # the bare CreateBotUser, and under tenant_scope it also needs a tenant
       # an admin form has no way to supply.
       #
-      # Deleting one revokes it: the tokens hang off the user row.
+      # Erasing one revokes it: every token of the account is revoked, and the
+      # record stays.
       #
       # ⚠️ The page named `AuthQuery.ListBots` and `AuthMutation.CreateBot`,
       # neither of which exists, and its name was not CamelCase — it had never
@@ -670,8 +678,7 @@ presets:
           detail_link_column: email
         detail:
           read: AuthQuery.GetUser
-          delete: AuthMutation.DeleteUser
-          readonly_fields: [id, disabled_at, created_at]
+          readonly_fields: [id, disabled_at, erased_at, created_at]
         actions:
           - name: disable
             source: AuthMutation.DisableUsers
@@ -683,6 +690,11 @@ presets:
             label: "Enable"
             confirm: "Re-enable the selected machine accounts?"
             target: both
+          - name: erase
+            source: AuthService.EraseUsers
+            label: "Erase"
+            confirm: "Erase this machine account? It is disabled for good and every token it holds is revoked. The record stays. This cannot be undone."
+            target: detail
       # Turnkey Organizations management. Gated org_membership. The
       # tables are plugin-owned, so a project can't author these pages
       # itself. View + edit + delete (list catalogue, inspect an org,
@@ -747,8 +759,11 @@ presets:
           readonly_fields: [id, user_id, org_id, created_at]
       # Turnkey session/token review. Gated user_admin. Lists every
       # UserToken across users (NEVER the secret token value) so an
-      # operator can review + revoke sessions; delete = revoke that
-      # token (force-logout). The list projects the session owner's email
+      # operator can review + revoke sessions. Revoked tokens stay listed,
+      # with when and why; the `revoke` action revokes the selection
+      # (force-logout) through AuthService.RevokeSessions, which records the
+      # operator — a token already revoked is left as it is. No `delete`:
+      # nothing in the auth tables is deleted. The list projects the session owner's email
       # (ListUserTokens → UserTokenAdminRow, ADMIN-FK) so an operator sees
       # "alice@x.com", never a bare user UUID: `owner` (email) is the
       # clickable handle onto this session's own detail; `user` links to
@@ -769,11 +784,18 @@ presets:
             - { name: user, ref: { page: Users } }
             - created_at
             - expires_at
+            - revoked_at
+            - revoke_reason
           detail_link_column: owner
         detail:
           read: AuthQuery.GetUserToken
-          delete: AuthMutation.RevokeUserToken
-          readonly_fields: [id, user_id, created_at, expires_at]
+          readonly_fields: [id, user_id, created_at, expires_at, revoked_at, revoked_by, revoke_reason]
+        actions:
+          - name: revoke
+            source: AuthService.RevokeSessions
+            label: "Revoke"
+            confirm: "Revoke the selected sessions? Whoever holds them is signed out at once."
+            target: both
 
 # Dev-only sandbox services this plugin brings for testing / manual
 # trial. Each is wired into the consuming project's tool-owned

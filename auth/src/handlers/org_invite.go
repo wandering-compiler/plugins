@@ -58,6 +58,19 @@ const defaultOrgInviteTTLHours = 24 * 7 // 7 days
 func init() {
 	signupInviteGate = requirePendingInvite
 	signupClaimInvite = claimOpenInvite
+	erasers = append(erasers, eraseInviteAddress)
+}
+
+// eraseInviteAddress is org_invite's eraser: the invitations addressed to the
+// erased address name the account's placeholder instead
+// (EraseOrgInviteAddress), so a pending one can no longer be accepted and an
+// accepted one keeps its record without the address. The rows stay.
+func eraseInviteAddress(ctx context.Context, h *AuthServiceHandler, _, email, placeholder string) error {
+	if email == "" {
+		return nil
+	}
+	_, err := h.Mutation.EraseOrgInviteAddress(ctx, &pb.EraseOrgInviteAddressReq{Email: email, Placeholder: placeholder})
+	return err
 }
 
 // claimOpenInvite binds an OPEN invitation to the address registering

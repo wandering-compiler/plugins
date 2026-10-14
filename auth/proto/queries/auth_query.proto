@@ -41,15 +41,24 @@ message GetUserByTokenResp {
 }
 
 // GetExpiredToken — the miss-path lookup of the default (single-realm)
-// Authenticate: the presented token is a row that EXISTS and is past its
-// expires_at. Run only after the live lookup found nothing, so a valid token
-// never pays for it. See GetExpiredTokenWithType for the api_token twin.
+// Authenticate: the presented token is a row that EXISTS and has ENDED —
+// past its expires_at, or revoked. Run only after the live lookup found
+// nothing, so a valid token never pays for it. A revoked token is answered
+// exactly as an expired one (the earlier of the two instants is when it
+// ended). See GetExpiredTokenWithType for the api_token twin.
 message GetExpiredTokenReq  { string legacy_token = 1; string token_hash = 2; }
 message GetExpiredTokenResp {
-  google.protobuf.Timestamp expires_at = 1 [(w17.field) = { type: DATETIME }];
+  // NULL for a never-expiring token that was revoked.
+  google.protobuf.Timestamp expires_at = 1 [(w17.field) = { type: DATETIME, null: true }];
   // The key the expired token is bound to ('' for none): SESSION_EXPIRED is
   // said only to a request whose proof is by that key.
   string device_thumbprint = 2;
+  // When the token was revoked; NULL = not revoked (it expired).
+  google.protobuf.Timestamp revoked_at = 3 [(w17.field) = { type: DATETIME, null: true }];
+  // When the device it is bound to was revoked; NULL = live (or bound to
+  // none). The key's holder then hears DEVICE_REVOKED, as a live token of a
+  // revoked device answers.
+  google.protobuf.Timestamp device_revoked_at = 4 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 message GetUserPermissionsReq {
@@ -389,7 +398,7 @@ message GetTokenWithTypeResp {
 
 // GetExpiredTokenWithType — the lookup Authenticate runs only after
 // GetTokenWithType found nothing: is the presented token a row that EXISTS
-// and is past its expires_at? Tells "your session expired" (sign in again)
+// and is past its expires_at, or revoked? Tells "your session expired" (sign in again)
 // apart from "no such token". The caller already holds the token, so the
 // expiry and the kind are nothing it could not have known. Gated api_token.
 message GetExpiredTokenWithTypeReq {
@@ -400,10 +409,12 @@ message GetExpiredTokenWithTypeReq {
 }
 message GetExpiredTokenWithTypeResp {
   option (w17.contrib.plugin_feature) = "api_token";
-  google.protobuf.Timestamp expires_at = 1 [(w17.field) = { type: DATETIME }];
+  // See GetExpiredTokenResp for every field.
+  google.protobuf.Timestamp expires_at = 1 [(w17.field) = { type: DATETIME, null: true }];
   TokenType                 token_type = 2;
-  // See GetExpiredTokenResp.
   string device_thumbprint = 3;
+  google.protobuf.Timestamp revoked_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp device_revoked_at = 5 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 message GetUserRolePermissionsByRealmReq {
@@ -433,7 +444,9 @@ message GetTokenPermissionSubsetResp {
 
 // ApiTokenInfo — one API token's management view: id + label + audit
 // timestamps, NEVER the secret token string. ListApiTokensByUser
-// returns these for the token-management UI. api_token-gated.
+// returns these for the token-management UI. A revoked token is listed
+// too (nothing is deleted), with revoked_at and revoke_reason set, so the
+// UI shows it as revoked rather than losing it. api_token-gated.
 message ApiTokenInfo {
   option (w17.contrib.plugin_feature) = "api_token";
   string                    id           = 1 [(w17.field) = { type: UUID }];
@@ -441,6 +454,9 @@ message ApiTokenInfo {
   google.protobuf.Timestamp last_used_at = 3;
   google.protobuf.Timestamp expires_at   = 4;
   google.protobuf.Timestamp created_at   = 5;
+  // NULL = live.
+  google.protobuf.Timestamp revoked_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
+  RevokeReason              revoke_reason = 7;
 }
 message ListApiTokensByUserReq {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -909,7 +925,9 @@ message GetOrgMembershipReq {
 // these GLOBAL list + get back the admin Sessions page (review + revoke
 // tokens across every user). The projection NEVER includes the secret
 // `token` column — only the base-tier id / user_id / created_at /
-// expires_at. Gated user_admin (the same realm that manages accounts).
+// expires_at and the revocation (revoked_at / revoke_reason, and
+// revoked_by on the detail): a revoked token stays listed, shown as
+// revoked. Gated user_admin (the same realm that manages accounts).
 
 message ListUserTokensReq {
   option (w17.contrib.plugin_feature) = "user_admin";
@@ -946,6 +964,10 @@ message UserTokenAdminRow {
   // of the sortable set (a keyset seek on a NULL key silently drops rows).
   // A read-projection row is not the model, so nothing else carries this.
   google.protobuf.Timestamp expires_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  // When it was revoked (NULL = live, so declared null for the same scan
+  // and sort reasons as expires_at) and why.
+  google.protobuf.Timestamp revoked_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  RevokeReason revoke_reason = 8;
 }
 
 message ListUserTokensResp {
@@ -1104,7 +1126,7 @@ service AuthQuery {
           "       ?feature(service_account) u.kind AS user.kind, "
           "       u.created_at AS user.created_at, "
           "       COALESCE(t.token_hash, '') AS stored_token_hash "
-          "FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
       }
     };
   }
@@ -1136,19 +1158,22 @@ service AuthQuery {
   }
 
   // GetExpiredToken — see the request. Matches the same two keys as the live
-  // lookup (hash, or the legacy clear token) and only rows that HAVE expired:
-  // `expires_at <= NOW()` never matches a NULL (never-expiring) row. Read
-  // only — an expired row is never moved to the hash or otherwise touched.
+  // lookup (hash, or the legacy clear token) and only rows that have ENDED:
+  // expired (`expires_at <= NOW()` never matches a NULL, never-expiring row)
+  // or revoked — exactly the rows the live lookup's two predicates refuse.
+  // Read only — an ended row is never moved to the hash or otherwise touched.
   rpc GetExpiredToken(GetExpiredTokenReq) returns (GetExpiredTokenResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
           "SELECT t.expires_at AS expires_at, "
-          "       COALESCE(d.thumbprint, '') AS device_thumbprint "
+          "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
+          "       t.revoked_at AS revoked_at, "
+          "       d.revoked_at AS device_revoked_at "
           "FROM @module.UserToken t "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
-          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND t.expires_at <= NOW()"
+          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at <= NOW() OR t.revoked_at IS NOT NULL)"
       }
     };
   }
@@ -1204,7 +1229,7 @@ service AuthQuery {
           "FROM @module.User u "
           "JOIN @module.UserToken t ON t.user_id = u.id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
-          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1276,7 +1301,8 @@ service AuthQuery {
         dql:
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
-          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "       u.disabled_at AS disabled_at, u.erased_at AS erased_at, "
+          "       u.created_at AS created_at "
           "FROM @module.User u ORDER BY u.created_at DESC, u.id DESC"
       }
     };
@@ -1333,7 +1359,8 @@ service AuthQuery {
         dql:
           "SELECT u.id AS id, u.email AS email, "
           "       u.kind AS kind, "
-          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "       u.disabled_at AS disabled_at, u.erased_at AS erased_at, "
+          "       u.created_at AS created_at "
           "FROM @module.User u "
           "WHERE u.kind = 1 "
           "ORDER BY u.created_at DESC, u.id DESC"
@@ -1426,7 +1453,8 @@ service AuthQuery {
         dql:
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
-          "       u.disabled_at AS disabled_at, u.created_at AS created_at "
+          "       u.disabled_at AS disabled_at, u.erased_at AS erased_at, "
+          "       u.created_at AS created_at "
           "FROM @module.User u WHERE u.id = :user_id"
       }
     };
@@ -1626,14 +1654,14 @@ service AuthQuery {
           "       t.mcp_only AS mcp_only "
           "FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
-          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
 
   // GetExpiredTokenWithType — see the request. The realm-aware twin of
-  // GetExpiredToken: same keys, expired rows only, plus the kind so the
+  // GetExpiredToken: same keys, ended (expired or revoked) rows only, plus the kind so the
   // refusal can say "sign in again" to a session and "create a new token" to
   // an API token. Read only.
   rpc GetExpiredTokenWithType(GetExpiredTokenWithTypeReq) returns (GetExpiredTokenWithTypeResp) {
@@ -1643,10 +1671,12 @@ service AuthQuery {
         dql:
           "SELECT t.expires_at AS expires_at, "
           "       t.token_type AS token_type, "
-          "       COALESCE(d.thumbprint, '') AS device_thumbprint "
+          "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
+          "       t.revoked_at AS revoked_at, "
+          "       d.revoked_at AS device_revoked_at "
           "FROM @module.UserToken t "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
-          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND t.expires_at <= NOW()"
+          "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at <= NOW() OR t.revoked_at IS NOT NULL)"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "api_token";
@@ -1694,7 +1724,9 @@ service AuthQuery {
 
   // ListApiTokensByUser — the caller's API tokens (management view, no
   // secret token string). Filtered to token_type = :token_type (handler
-  // stamps API). Newest first. Gated api_token.
+  // stamps API). Revoked tokens are listed, with revoked_at and
+  // revoke_reason, so the owner sees them revoked. Newest first. Gated
+  // api_token.
   rpc ListApiTokensByUser(ListApiTokensByUserReq) returns (ListApiTokensByUserResp) {
     option (w17.db.method) = {
       ops: {
@@ -1713,7 +1745,9 @@ service AuthQuery {
           "       t.name AS name, "
           "       t.last_used_at AS last_used_at, "
           "       t.expires_at AS expires_at, "
-          "       t.created_at AS created_at "
+          "       t.created_at AS created_at, "
+          "       t.revoked_at AS revoked_at, "
+          "       t.revoke_reason AS revoke_reason "
           "FROM @module.UserToken t "
           "WHERE t.user_id = :user_id AND t.token_type = :token_type "
           "ORDER BY t.created_at DESC"
@@ -1790,13 +1824,14 @@ service AuthQuery {
           "       c.enabled AS client.enabled, "
           "       c.created_at AS client.created_at "
           "FROM @module.AuthClient c "
-          "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri AND c.enabled = TRUE"
+          "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri AND c.enabled = TRUE AND c.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
 
-  // ListAuthClients — the operator's view of what is registered. Admin-only.
+  // ListAuthClients — the operator's view of what is registered, revoked
+  // registrations included (with revoked_at). Admin-only.
   rpc ListAuthClients(ListAuthClientsReq) returns (ListAuthClientsResp) {
     option (w17.db.method) = {
       ops: {
@@ -1807,7 +1842,8 @@ service AuthQuery {
           "       c.name AS name, "
           "       c.redirect_uri AS redirect_uri, "
           "       c.enabled AS enabled, "
-          "       c.created_at AS created_at "
+          "       c.created_at AS created_at, "
+          "       c.revoked_at AS revoked_at "
           "FROM @module.AuthClient c ORDER BY c.client_id, c.redirect_uri"
       }
     };
@@ -1827,7 +1863,9 @@ service AuthQuery {
           "SELECT c.client_secret AS client_secret, "
           "       c.enabled AS enabled "
           "FROM @module.AuthClient c "
-          "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri"
+          // Live rows only: a revoked registration is refused like an unknown
+          // one, and the pair may have revoked rows beside the live one.
+          "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri AND c.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
@@ -1852,7 +1890,7 @@ service AuthQuery {
           "       t.expires_at AS expires_at "
           "FROM @module.UserToken t "
           "WHERE t.id = :token_id AND t.user_id = :user_id "
-          "AND (t.expires_at IS NULL OR t.expires_at > NOW())"
+          "AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
@@ -1929,6 +1967,9 @@ service AuthQuery {
           // the OAuth callback and the CLI exchange issued sessions to an
           // account disabled after its password step.
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          // erased_at (`user_admin`): EraseUsers reads it to make a second
+          // erase a no-op.
+          "       ?feature(user_admin) u.erased_at AS user.erased_at, "
           // tenant_id (`tenant_scope`): IssueBotToken holds the target to the
           // operator's tenant (service_account_tenant.go) through this read.
           "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
@@ -2318,12 +2359,14 @@ service AuthQuery {
   // declares no title so the cell reads "User" with the id in its
   // tooltip), so the list shows a name + a labelled link instead of a
   // bare user UUID. The projection NEVER includes the secret `token`
-  // column — only base-tier id / user_id / created_at / expires_at (so
-  // it stays valid whether or not api_token / devices add their columns).
-  // LEFT JOIN + COALESCE so an orphan token (its user hard-deleted — there
-  // is no DB-level FK) still lists with an empty owner instead of erroring
-  // the whole page (converting a NULL join into a Go string is a scan
-  // error). Gated user_admin.
+  // column — only base-tier id / user_id / created_at / expires_at and the
+  // revocation (so it stays valid whether or not api_token / devices add
+  // their columns). Revoked tokens are listed, shown as revoked.
+  // LEFT JOIN + COALESCE so an orphan token (its user row missing — there
+  // is no DB-level FK, and rows from before erasure replaced deletion may
+  // exist) still lists with an empty owner instead of erroring the whole
+  // page (converting a NULL join into a Go string is a scan error). Gated
+  // user_admin.
   rpc ListUserTokens(ListUserTokensReq) returns (ListUserTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
@@ -2331,7 +2374,8 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT t.id AS id, COALESCE(u.email, '') AS owner, t.user_id AS user, "
-          "       t.created_at AS created_at, t.expires_at AS expires_at "
+          "       t.created_at AS created_at, t.expires_at AS expires_at, "
+          "       t.revoked_at AS revoked_at, t.revoke_reason AS revoke_reason "
           "FROM @module.UserToken t "
           "LEFT JOIN @module.User u ON u.id = t.user_id "
           "ORDER BY t.created_at DESC, t.id DESC"
@@ -2350,7 +2394,9 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT t.id AS id, t.user_id AS user_id, "
-          "       t.created_at AS created_at, t.expires_at AS expires_at "
+          "       t.created_at AS created_at, t.expires_at AS expires_at, "
+          "       t.revoked_at AS revoked_at, t.revoked_by AS revoked_by, "
+          "       t.revoke_reason AS revoke_reason "
           "FROM @module.UserToken t WHERE t.id = :id"
       }
     };

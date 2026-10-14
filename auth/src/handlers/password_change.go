@@ -31,7 +31,7 @@ import (
 // that the caller has not proven they may know.
 var errCurrentPasswordWrong = errors.New("current password does not match")
 
-// nilUUID names no token: DeleteOtherSessionTokens keeps none when the caller
+// nilUUID names no token: RevokeOtherSessionTokens keeps none when the caller
 // holds no session (an API-token bearer). The column is a uuid, so an empty
 // string would not compare — it would fail to bind.
 const nilUUID = "00000000-0000-0000-0000-000000000000"
@@ -41,10 +41,11 @@ const nilUUID = "00000000-0000-0000-0000-000000000000"
 //
 // Bearer tokens do not derive from the password, so without the sweep they
 // kept working: changing a password after a session leaked did not evict
-// whoever held it. The sweep is DeleteOtherSessionTokens, a primitive this
-// feature owns — not DeleteUserSessionsForReset (`password_reset`) or
-// DeleteAllUserTokens (`devices`), which would make this feature depend on
-// one of them. API tokens are kept; see below.
+// whoever held it. The sweep is RevokeOtherSessionTokens, a primitive this
+// feature owns — not RevokeTokensForReset (`password_reset`) or
+// RevokeAllUserTokens (`devices`), which would make this feature depend on
+// one of them. The sessions are revoked (reason PASSWORD_CHANGED, the caller
+// as revoked_by), not deleted. API tokens are kept; see below.
 func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
@@ -129,7 +130,7 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 	if keep == "" {
 		keep = nilUUID
 	}
-	if _, err := h.Mutation.DeleteOtherSessionTokens(txCtx, &pb.DeleteOtherSessionTokensReq{
+	if _, err := h.Mutation.RevokeOtherSessionTokens(txCtx, &pb.RevokeOtherSessionTokensReq{
 		UserId:      userID,
 		KeepTokenId: keep,
 	}); err != nil {
