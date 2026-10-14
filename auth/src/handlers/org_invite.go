@@ -59,6 +59,17 @@ func init() {
 	signupInviteGate = requirePendingInvite
 	signupClaimInvite = claimOpenInvite
 	erasers = append(erasers, eraseInviteAddress)
+	orgRemovalCascades = append(orgRemovalCascades, closeInvitesOfOrg)
+}
+
+// closeInvitesOfOrg is org_invite's share of deleting an organization
+// (RemoveOrganization): its pending invitations are closed, by the account
+// deleting it, so none can be accepted into an organization that is gone. The
+// rows stay. Every invitation statement also requires a live organization,
+// for a deletion that did not come through RemoveOrganization.
+func closeInvitesOfOrg(ctx context.Context, h *AuthServiceHandler, orgID, by string) error {
+	_, err := h.Mutation.CloseOrgInvitesOfOrg(ctx, &pb.CloseOrgInvitesOfOrgReq{OrgId: orgID, ClosedBy: by})
+	return err
 }
 
 // eraseInviteAddress is org_invite's eraser: the invitations addressed to the

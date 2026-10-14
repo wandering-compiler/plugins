@@ -719,7 +719,9 @@ presets:
         detail:
           read: AuthQuery.GetOrganization
           update: AuthMutation.UpdateOrganization
-          delete: AuthMutation.DeleteOrganization
+          # Through the Service method: it also closes the organization's
+          # pending invitations (org_invite), which the mutation cannot name.
+          delete: AuthService.RemoveOrganization
           fields: [slug, name, kind]
           readonly_fields: [id, created_at]
       # Turnkey OrgMemberships management (the user↔org link table).

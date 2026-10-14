@@ -120,7 +120,7 @@ func TestEveryFormerDeleteIsAGuardedStateChange(t *testing.T) {
 		// rbac
 		"DeleteRole": {
 			"UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE role_id = :role_id AND revoked_at IS NULL",
-			"UPDATE @module.Role SET deleted_at = NOW(), ended_key = id, preset_key = NULL WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS role_id",
+			"UPDATE @module.Role SET deleted_at = NOW(), ended_key = id WHERE id = :role_id AND deleted_at IS NULL AND preset_key IS NULL RETURNING id AS role_id",
 		},
 		"RevokeRoleFromUser": {"UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :revoked_by, ended_key = id WHERE user_id = :user_id AND role_id = :role_id AND ?feature(org_membership) org_id IS NOT DISTINCT FROM :org_id AND revoked_at IS NULL RETURNING user_id, role_id, ?feature(org_membership) org_id"},
 		"RemovePermissionFromRole": {
@@ -152,6 +152,7 @@ func TestEveryFormerDeleteIsAGuardedStateChange(t *testing.T) {
 		// org_invite
 		"CloseExpiredOrgInvite": {"UPDATE @module.OrgInvite SET closed_at = NOW() WHERE org_id = :org_id AND email = :email AND accepted_at IS NULL AND closed_at IS NULL AND expires_at <= NOW() RETURNING id"},
 		"CloseOrgInvite":        {"UPDATE @module.OrgInvite SET closed_at = NOW(), closed_by = :closed_by WHERE id = :invite_id AND org_id = :org_id AND accepted_at IS NULL AND closed_at IS NULL RETURNING id AS invite_id"},
+		"CloseOrgInvitesOfOrg":  {"UPDATE @module.OrgInvite SET closed_at = NOW(), closed_by = :closed_by WHERE org_id = :org_id AND accepted_at IS NULL AND closed_at IS NULL"},
 	} {
 		body, ok := m[name]
 		if !ok {
@@ -193,8 +194,8 @@ func TestEveryWriteThatUsesARowSkipsAnEndedOne(t *testing.T) {
 		"RecordStepUpAttempt":        "AND revoked_at IS NULL",
 		"ConsumeRecoveryCode":        "AND used_at IS NULL AND revoked_at IS NULL",
 		"RecordPendingSignUpAttempt": "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW()",
-		"BindOpenOrgInvite":          "AND accepted_at IS NULL AND closed_at IS NULL AND expires_at > NOW()",
-		"ConsumeOrgInviteByToken":    "WHERE token_hash = :token_hash AND accepted_at IS NULL AND closed_at IS NULL AND expires_at > NOW()",
+		"BindOpenOrgInvite":          "WHERE i.token_hash = :token_hash AND i.email IS NULL AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL)",
+		"ConsumeOrgInviteByToken":    "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL)",
 		"UpdateRole":                 "WHERE id = :role_id AND deleted_at IS NULL",
 		"UpdateOrganization":         "WHERE id = :id AND deleted_at IS NULL",
 	} {
@@ -349,6 +350,8 @@ type orgTables struct {
 	memberships []*memRow
 	grants      []*grantRow
 	invites     []*inviteRow
+	deletedOrgs map[string]bool
+	ops         []string
 	next        int
 }
 
@@ -471,7 +474,7 @@ func (o *orgTables) UpdateOrgMembership(_ context.Context, in *pb.UpdateOrgMembe
 
 func (o *orgTables) pendingByToken(hash string) *inviteRow {
 	for _, i := range o.invites {
-		if i.tokenHash == hash && i.acceptedAt == nil && i.closedAt == nil && i.expiresAt.After(time.Now()) {
+		if i.tokenHash == hash && i.acceptedAt == nil && i.closedAt == nil && i.expiresAt.After(time.Now()) && !o.deletedOrgs[i.orgID] {
 			return i
 		}
 	}
@@ -672,5 +675,140 @@ func TestInviteToOrg_ClosesALapsedInvitationAndKeepsIt(t *testing.T) {
 	}
 	if len(o.invites) != 2 || o.invites[0].closedAt == nil || o.invites[0].closedBy != "" || o.invites[1].closedAt != nil {
 		t.Fatalf("want the lapsed row kept closed by nobody and a live new one: %+v %+v", o.invites[0], o.invites[1])
+	}
+}
+
+// The guards that keep a role write from changing nothing, or the wrong
+// thing: a preset role is not DeleteRole's to retire (the role seed owns its
+// row and id), a deleted or unknown role takes no grant and no permission, and
+// a permission the role already carries is refused rather than logged and
+// announced again. Each guard is an op AHEAD of the writes, so a refusal
+// writes nothing.
+func TestRoleWritesRefuseADeletedRoleAndAPresetAndANoOp(t *testing.T) {
+	m := rpcBodies(dqlText(authProtos(t)["mutations/auth_mutation.proto"]))
+	roleGuard := []string{
+		`dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.deleted_at IS NULL"`,
+		"code:       ON_EMPTY_NOT_FOUND",
+		`error_code: "ROLE_NOT_FOUND"`,
+	}
+	for name, guards := range map[string][][]string{
+		"DeleteRole": {{
+			`dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.preset_key IS NOT NULL"`,
+			"code:       ON_PRESENT_FAILED_PRECONDITION",
+			`error_code: "PRESET_ROLE_NOT_DELETABLE"`,
+		}},
+		"AssignRoleToUser": {roleGuard},
+		"AddPermissionToRole": {roleGuard, {
+			`dql:  "SELECT rp.id AS id FROM @module.RolePermission rp WHERE rp.role_id = :role_id AND rp.permission_id = :permission_id AND rp.removed_at IS NULL"`,
+			"code:       ON_PRESENT_ALREADY_EXISTS",
+			`error_code: "PERMISSION_ALREADY_GRANTED"`,
+		}},
+	} {
+		body := m[name]
+		firstWrite := len(body)
+		for _, w := range []string{"UPDATE @module.", "INSERT INTO @module.", "UPSERT INTO @module."} {
+			if i := strings.Index(body, w); i >= 0 && i < firstWrite {
+				firstWrite = i
+			}
+		}
+		for _, g := range guards {
+			at := strings.Index(body, g[0])
+			if at < 0 {
+				t.Errorf("%s lacks the guard %s:\n%s", name, g[0], body)
+				continue
+			}
+			if at > firstWrite {
+				t.Errorf("%s runs the guard %s after a write", name, g[0])
+			}
+			for _, want := range g[1:] {
+				if !strings.Contains(body[at:], want) {
+					t.Errorf("%s: the guard %s does not answer %s", name, g[0], want)
+				}
+			}
+		}
+	}
+	// The preset row is left as the seed wrote it.
+	if strings.Contains(m["DeleteRole"], "preset_key = NULL") {
+		t.Errorf("DeleteRole still releases preset_key — the next seed would collide with the kept row on its id:\n%s", m["DeleteRole"])
+	}
+	// A deleted role's grants are not the member's org roles.
+	q := rpcBodies(dqlText(authProtos(t)["queries/auth_query.proto"]))
+	if !strings.Contains(q["ListUserOrgGrants"], "JOIN @module.Role r ON r.id = ur.role_id") || !strings.Contains(q["ListUserOrgGrants"], "r.deleted_at IS NULL") {
+		t.Errorf("ListUserOrgGrants counts grants of deleted roles:\n%s", q["ListUserOrgGrants"])
+	}
+	// An invitation of a deleted organization is not pending.
+	if !strings.Contains(q["GetPendingOrgInviteByToken"], "JOIN @module.Organization o ON o.id = i.org_id") || !strings.Contains(q["GetPendingOrgInviteByToken"], "o.deleted_at IS NULL") {
+		t.Errorf("GetPendingOrgInviteByToken reads an invitation of a deleted organization:\n%s", q["GetPendingOrgInviteByToken"])
+	}
+	// The admin page deletes an organization through the service method that
+	// closes its invitations.
+	raw, err := os.ReadFile(filepath.Join("..", "..", "plugin.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "delete: AuthMutation.DeleteOrganization") || !strings.Contains(string(raw), "delete: AuthService.RemoveOrganization") {
+		t.Error("the Organizations page does not delete through AuthService.RemoveOrganization")
+	}
+}
+
+func (o *orgTables) CloseOrgInvitesOfOrg(_ context.Context, in *pb.CloseOrgInvitesOfOrgReq, _ ...grpc.CallOption) (*pb.CloseOrgInvitesOfOrgResp, error) {
+	o.ops = append(o.ops, "close-invites")
+	for _, i := range o.invites {
+		if i.orgID == in.GetOrgId() && i.acceptedAt == nil && i.closedAt == nil {
+			i.closedAt, i.closedBy = timestamppb.Now(), in.GetClosedBy()
+		}
+	}
+	return &pb.CloseOrgInvitesOfOrgResp{}, nil
+}
+
+// DeleteOrganization: memberships removed, org grants revoked, the org stamped.
+func (o *orgTables) DeleteOrganization(_ context.Context, in *pb.DeleteOrganizationReq, _ ...grpc.CallOption) (*pb.DeleteOrganizationResp, error) {
+	o.ops = append(o.ops, "delete-org")
+	if o.deletedOrgs[in.GetId()] {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	for _, m := range o.memberships {
+		if m.orgID == in.GetId() && m.removedAt == nil {
+			m.removedAt, m.endedKey = timestamppb.Now(), m.id
+		}
+	}
+	for _, g := range o.grants {
+		if g.orgID == in.GetId() && g.revokedAt == nil {
+			g.revokedAt, g.endedKey = timestamppb.Now(), g.id
+		}
+	}
+	if o.deletedOrgs == nil {
+		o.deletedOrgs = map[string]bool{}
+	}
+	o.deletedOrgs[in.GetId()] = true
+	return &pb.DeleteOrganizationResp{OrgId: in.GetId()}, nil
+}
+
+// org_invite/withdrawal-is-a-state: deleting an organization through the
+// admin page's service method closes its pending invitations first, by the
+// caller, in the same unit of work; their links accept nothing afterwards.
+func TestRemoveOrganization_ClosesItsInvitationsAndTheLinksAreDead(t *testing.T) {
+	o := newOrgTables()
+	h := &AuthServiceHandler{Query: o, Mutation: o}
+	inv, err := h.InviteToOrg(adminInOrg(), &pb.InviteToOrgReq{Email: "member@example.com", Role: "org-worker"})
+	if err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	o.ops = nil
+	resp, err := h.RemoveOrganization(adminInOrg(), &pb.RemoveOrganizationReq{Id: "org-1"})
+	if err != nil || resp.GetOrgId() != "org-1" {
+		t.Fatalf("remove: %v %v", resp, err)
+	}
+	if strings.Join(o.ops, ",") != "close-invites,delete-org" {
+		t.Errorf("ran %v — the invitations must be closed before the organization is deleted", o.ops)
+	}
+	if row := o.invites[0]; row.closedAt == nil || row.closedBy != "u1" {
+		t.Fatalf("the invitation is not kept as closed by the caller: %+v", row)
+	}
+	if _, err := h.AcceptOrgInvite(ctxWithCaller("u2"), &pb.AcceptOrgInviteReq{Token: inv.GetToken()}); err == nil || err.Error() != errInviteInvalid.Error() {
+		t.Fatalf("an invitation of a deleted organization: %v, want the opaque invalid-invitation refusal", err)
+	}
+	if len(o.memberships) != 0 {
+		t.Fatal("an invitation of a deleted organization made a membership")
 	}
 }

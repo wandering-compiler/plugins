@@ -2180,7 +2180,8 @@ service AuthQuery {
         dql:
           "SELECT ROWS_TO_ARRAY(ur.role_id) AS role_ids "
           "FROM @module.UserRole ur "
-          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id AND ur.revoked_at IS NULL"
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id AND ur.revoked_at IS NULL AND r.deleted_at IS NULL"
       }
     };
   }
@@ -2498,7 +2499,8 @@ service AuthQuery {
           "       i.email AS email, "
           "       i.metadata AS metadata "
           "FROM @module.OrgInvite i "
-          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
+          "JOIN @module.Organization o ON o.id = i.org_id "
+          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
           "LIMIT 1"
       }
     };

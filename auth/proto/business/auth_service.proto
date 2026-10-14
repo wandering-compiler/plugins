@@ -682,6 +682,19 @@ message RemoveOrgMembershipResp {
   string membership_id = 1;
 }
 
+// RemoveOrganization — delete an organization (the admin Organizations
+// page's delete): its pending invitations are closed (with org_invite
+// staged), then AuthMutation.DeleteOrganization ends its memberships and org
+// grants and stamps it deleted, in one transaction. Nothing is deleted.
+message RemoveOrganizationReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RemoveOrganizationResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string org_id = 1;
+}
+
 message ListOrgMembersReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   // org — the organization's slug, as the REST path names it
@@ -1156,6 +1169,14 @@ service AuthService {
   // RemoveOrgMembership — the delete twin: the caller must cover every role
   // the member holds in that organization, which the removal revokes.
   rpc RemoveOrgMembership(RemoveOrgMembershipReq) returns (RemoveOrgMembershipResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+  }
+
+  // RemoveOrganization — the Organizations page's delete: closes the
+  // organization's pending invitations (org_invite) and deletes it
+  // (AuthMutation.DeleteOrganization) in one transaction, the caller recorded
+  // as who closed them.
+  rpc RemoveOrganization(RemoveOrganizationReq) returns (RemoveOrganizationResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
   }
 

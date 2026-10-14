@@ -194,9 +194,9 @@ message UserRoleRevoked {
   string org_id  = 3 [(w17.contrib.plugin_feature_field) = "org_membership"];
 }
 
-// RolePermissionAdded — emitted on every AuthMutation.AddPermissionToRole
-// that answers, including one that revived a removed pair and one that found
-// the permission already granted (the call is idempotent).
+// RolePermissionAdded — emitted when AuthMutation.AddPermissionToRole grants
+// a permission: a new pair, or a removed one revived. Not for a refusal (a
+// deleted role, a permission the role already carries): nothing changed.
 message RolePermissionAdded {
   option (w17.event) = { channel: "events", topic: "auth.role_permission.added" };
   option (w17.contrib.plugin_feature) = "rbac";

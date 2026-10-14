@@ -1381,6 +1381,18 @@ message ConsumeOrgInviteByTokenResp {
   string role_snapshot = 5;
 }
 
+// CloseOrgInvitesOfOrg — the invitations of an organization being deleted
+// (AuthService.RemoveOrganization).
+message CloseOrgInvitesOfOrgReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string org_id    = 1 [(w17.field) = { type: UUID }];
+  // closed_by — the account deleting the organization. Empty = NULL.
+  string closed_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message CloseOrgInvitesOfOrgResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
+}
+
 // CloseOrgInvite — withdraw a pending invitation. Was DeleteOrgInvite.
 message CloseOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -2422,19 +2434,39 @@ service AuthMutation {
   //           so no reader counts it — it used to be the caller's job to
   //           clean them up, and a grant left behind kept granting through
   //           GetUserPermissions;
-  //   main    the role is stamped deleted_at; ended_key takes its id, which
-  //           frees its name for a new role, and preset_key is cleared, so
-  //           the next role seed recreates a deleted preset as a new row
-  //           (as it did when the row was deleted).
+  //   preset  a PRESET role (preset_key set: seeded from the project's
+  //           `(w17.acl_roles)` declarations) is refused with
+  //           FAILED_PRECONDITION / PRESET_ROLE_NOT_DELETABLE before anything
+  //           is written. The role seed owns it: it upserts the row on
+  //           preset_key with its own deterministic id, so a retired preset
+  //           would either be revived by the next seed or — with its key
+  //           released — collide with it on the id and fail every build.
+  //           Remove a preset from the declarations instead;
+  //   grants  every live grant of the role is revoked (revoked_at, ended_key),
+  //           so no reader counts it — it used to be the caller's job to
+  //           clean them up, and a grant left behind kept granting through
+  //           GetUserPermissions;
+  //   main    the role is stamped deleted_at, and ended_key takes its id,
+  //           which frees its name for a new role.
   //
   // Its RolePermission rows stay as they are, the record of what it granted;
   // no reader joins them past a deleted role. Guarded on `deleted_at IS
-  // NULL`: deleting a deleted role matches nothing (NotFound), as deleting a
-  // missing one did. revoked_by stays NULL: the admin page binds this
-  // mutation directly, and a statement cannot name its caller.
+  // NULL`: deleting a deleted role (or a missing one) matches nothing
+  // (NotFound), as deleting a missing one did. revoked_by stays NULL: the
+  // admin page binds this mutation directly, and a statement cannot name its
+  // caller.
   rpc DeleteRole(DeleteRoleReq) returns (DeleteRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
+      ops: {
+        name: "preset"
+        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.preset_key IS NOT NULL"
+        on_present: {
+          code:       ON_PRESENT_FAILED_PRECONDITION
+          error_code: "PRESET_ROLE_NOT_DELETABLE"
+          message:    "This role is declared by the project and cannot be deleted here. Remove it from the project's role declarations instead."
+        }
+      }
       ops: {
         name: "grants"
         dql:  "UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE role_id = :role_id AND revoked_at IS NULL"
@@ -2442,8 +2474,8 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.Role SET deleted_at = NOW(), ended_key = id, preset_key = NULL "
-          "WHERE id = :role_id AND deleted_at IS NULL "
+          "UPDATE @module.Role SET deleted_at = NOW(), ended_key = id "
+          "WHERE id = :role_id AND deleted_at IS NULL AND preset_key IS NULL "
           "RETURNING id AS role_id"
       }
     };
@@ -2632,10 +2664,22 @@ service AuthMutation {
   // role. A live duplicate (same user, role and org, ended_key '') is refused
   // by the unique index with AlreadyExists; a REVOKED grant does not block it
   // (its ended_key is its own id), so a grant revoked earlier is given again
-  // as a new row and the revoked one stays as history.
+  // as a new row and the revoked one stays as history. A deleted (or
+  // unknown) role is refused with NOT_FOUND / ROLE_NOT_FOUND before the
+  // write: a grant of a deleted role would grant nothing, yet still be listed
+  // among the member's org roles.
   rpc AssignRoleToUser(AssignRoleToUserReq) returns (AssignRoleToUserResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
+      ops: {
+        name: "role"
+        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.deleted_at IS NULL"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "ROLE_NOT_FOUND"
+          message:    "That role does not exist, or it was deleted."
+        }
+      }
       ops: {
         name: "main"
         dql:
@@ -2702,13 +2746,34 @@ service AuthMutation {
   // AddPermissionToRole — grant a permission to a role. RolePermission keeps
   // one row per (role, permission) — the unique index is the role seed's
   // conflict target — so the write is an UPSERT on that pair: a new pair is
-  // inserted, a REMOVED one is revived (removed_at / removed_by cleared), and
-  // a pair already granted is left as it is and answered (adding a
-  // permission a role holds is no longer AlreadyExists). The change is
-  // appended to RolePermissionChange first, in the same transaction.
+  // inserted, a REMOVED one is revived (removed_at / removed_by cleared).
+  // Two guards run first, so only a real change is logged and announced: a
+  // deleted (or unknown) role is refused with NOT_FOUND / ROLE_NOT_FOUND, and
+  // a permission the role already carries with ALREADY_EXISTS /
+  // PERMISSION_ALREADY_GRANTED (as the INSERT's unique index refused it
+  // before). Then the change is appended to RolePermissionChange and the pair
+  // written, in the same transaction; RolePermissionAdded fires only then.
   rpc AddPermissionToRole(AddPermissionToRoleReq) returns (AddPermissionToRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
+      ops: {
+        name: "role"
+        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.deleted_at IS NULL"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "ROLE_NOT_FOUND"
+          message:    "That role does not exist, or it was deleted."
+        }
+      }
+      ops: {
+        name: "granted"
+        dql:  "SELECT rp.id AS id FROM @module.RolePermission rp WHERE rp.role_id = :role_id AND rp.permission_id = :permission_id AND rp.removed_at IS NULL"
+        on_present: {
+          code:       ON_PRESENT_ALREADY_EXISTS
+          error_code: "PERMISSION_ALREADY_GRANTED"
+          message:    "The role already carries that permission."
+        }
+      }
       ops: {
         name: "log"
         dql:
@@ -3327,9 +3392,13 @@ service AuthMutation {
   //
   // Every organization reader reads live rows only, so the org disappears
   // from every list and lookup, cannot be selected, and its owner_id grants
-  // nothing. Its invitations are not touched here (org_invite is a feature
-  // of its own): the invitation readers skip a deleted organization's, and
-  // an accepted one would write a membership nothing reads. Guarded on
+  // nothing. Its invitations are not touched here — org_invite is a feature
+  // of its own, and a statement cannot name a table its activation may not
+  // have — so AuthService.RemoveOrganization (which the admin page binds)
+  // closes them first, in the same transaction (CloseOrgInvitesOfOrg); and
+  // every statement that reads, binds or accepts an invitation requires its
+  // organization to be live, so one called directly leaves none usable either.
+  // Guarded on
   // `deleted_at IS NULL`: a second delete matches nothing (NotFound), as it
   // did. removed_by / revoked_by stay NULL: the admin page binds this
   // mutation directly. Emits OrganizationDeleted for downstream per-org
@@ -3701,8 +3770,9 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.OrgInvite SET email = :email "
-          "WHERE token_hash = :token_hash AND email IS NULL AND accepted_at IS NULL AND closed_at IS NULL AND expires_at > NOW()"
+          "UPDATE @module.OrgInvite i SET email = :email "
+          "WHERE i.token_hash = :token_hash AND i.email IS NULL AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
+          "AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL)"
       }
     };
   }
@@ -3726,9 +3796,10 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.OrgInvite SET "
+          "UPDATE @module.OrgInvite i SET "
           "accepted_at = NOW() "
-          "WHERE token_hash = :token_hash AND accepted_at IS NULL AND closed_at IS NULL AND expires_at > NOW() "
+          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
+          "AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL) "
           "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot"
       }
     };
@@ -3781,6 +3852,22 @@ service AuthMutation {
           "WHERE org_id = :org_id AND email = :email "
           "AND accepted_at IS NULL AND closed_at IS NULL AND expires_at <= NOW() "
           "RETURNING id"
+      }
+    };
+  }
+
+  // CloseOrgInvitesOfOrg — close every pending invitation of an organization
+  // being deleted (AuthService.RemoveOrganization runs it before
+  // DeleteOrganization, in one transaction). No RETURNING: an organization
+  // with none is not an error.
+  rpc CloseOrgInvitesOfOrg(CloseOrgInvitesOfOrgReq) returns (CloseOrgInvitesOfOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgInvite SET closed_at = NOW(), closed_by = :closed_by "
+          "WHERE org_id = :org_id AND accepted_at IS NULL AND closed_at IS NULL"
       }
     };
   }
