@@ -818,6 +818,7 @@ presets:
             - method
             - outcome
             - ip
+            - thumbprint
             - created_at
           detail_link_column: account
         detail:

@@ -901,12 +901,17 @@ func TestEnrollTotp_BothWritesGoThroughOneSeam(t *testing.T) {
 	if !strings.Contains(fn, "replaceTotpSecret(") {
 		t.Error("EnrollTotp no longer goes through replaceTotpSecret — nothing holds the pair together")
 	}
-	if !strings.Contains(fn, "h.inMfaTx(") {
+	if !strings.Contains(fn, "h.inTx(") {
 		t.Error("EnrollTotp opens no transaction — the seam exists but nothing wraps it")
 	}
-	j := strings.Index(body, "func (h *AuthServiceHandler) inMfaTx(")
-	if j < 0 || !strings.Contains(body[j:j+strings.Index(body[j:], "\n}\n")], "distx.Begin(") {
-		t.Error("inMfaTx begins no distributed transaction")
+	helper, err := os.ReadFile("signin_history.go")
+	if err != nil {
+		t.Fatalf("read signin_history.go: %v", err)
+	}
+	hb := string(helper)
+	j := strings.Index(hb, "func (h *AuthServiceHandler) inTx(")
+	if j < 0 || !strings.Contains(hb[j:j+strings.Index(hb[j:], "\n}\n")], "distx.Begin(") {
+		t.Error("inTx begins no distributed transaction")
 	}
 }
 

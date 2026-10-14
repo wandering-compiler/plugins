@@ -229,7 +229,9 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	}
 	token, err := h.mintSession(ctx, attempt, userID, dev, expiresAt)
 	if err != nil {
-		return nil, err
+		// Classified like every other refusal here: an outage is reported as
+		// one, and no storage text reaches the CLI.
+		return nil, Unauthenticated(err)
 	}
 	return &pb.CliTokenResp{Token: token, UserId: userID}, nil
 }

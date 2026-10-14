@@ -1024,7 +1024,7 @@ message ListSignInEventsReq {
 //   - user    — the raw user_id, linked to the Users page by the page's
 //               AdminColumnRef; NULL when the attempt reached no account
 //               (declared null so the row scans it).
-// The device key, the user agent and the device row are on the detail.
+// The user agent and the Device row are on the detail.
 // Gated user_admin.
 message SignInEventAdminRow {
   option (w17.contrib.plugin_feature) = "user_admin";
@@ -1035,6 +1035,10 @@ message SignInEventAdminRow {
   SignInOutcome outcome = 5;
   string ip      = 6;
   google.protobuf.Timestamp created_at = 7;
+  // The proof's key thumbprint — the value events and AuthResp call
+  // device_id — so an operator can match a row to an event. NULL without a
+  // proof.
+  string thumbprint = 8 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
 }
 
 message ListSignInEventsResp {
@@ -1175,6 +1179,9 @@ service AuthQuery {
           "       u.created_at AS user.created_at, "
           "       ?feature(service_account) u.kind AS user.kind, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          // erased_at (`user_admin`): the sign-in history writes an attempt
+          // at an erased account without the client's address and agent.
+          "       ?feature(user_admin) u.erased_at AS user.erased_at, "
           // email_verified_at (`email_verification`): read by the OAuth
           // local-account check, which refuses to link a provider identity to
           // an existing password account unless that address is verified.
@@ -2508,7 +2515,7 @@ service AuthQuery {
         dql:
           "SELECT e.id AS id, COALESCE(u.email, e.address) AS account, e.user_id AS user, "
           "       e.method AS method, e.outcome AS outcome, e.ip AS ip, "
-          "       e.created_at AS created_at "
+          "       e.created_at AS created_at, e.thumbprint AS thumbprint "
           "FROM @module.SignInEvent e "
           "LEFT JOIN @module.User u ON u.id = e.user_id "
           "ORDER BY e.created_at DESC, e.id DESC"

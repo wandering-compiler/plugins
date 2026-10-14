@@ -321,15 +321,18 @@ var neverRevoked = timestamppb.New(time.Unix(0, 0))
 
 // deviceLabel is the display half of a device: a friendly label (the
 // browser's user agent) and the client address (first X-Forwarded-For hop).
-// Neither identifies the device; both are cut to their columns on a rune
-// boundary, so a long multi-byte header never becomes invalid UTF-8.
+// Neither identifies the device; both are made valid UTF-8 and cut to their
+// columns on a rune boundary, so no header becomes invalid UTF-8 at rest.
 func deviceLabel(ctx context.Context) (label, ip string) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	ua := firstMeta(md, forwardedUserAgentMetadataKey)
 	if ua == "" {
 		ua = firstMeta(md, userAgentMetadataKey)
 	}
-	return truncate(ua, maxLabelLen), truncate(firstHop(firstMeta(md, clientIPMetadataKey)), maxIPLen)
+	// Valid UTF-8 first: a header may carry any bytes, and the columns (and
+	// the sign-in history's) are text.
+	return truncate(strings.ToValidUTF8(ua, ""), maxLabelLen),
+		truncate(strings.ToValidUTF8(firstHop(firstMeta(md, clientIPMetadataKey)), ""), maxIPLen)
 }
 
 // firstMeta returns the first value for a metadata key, or "".

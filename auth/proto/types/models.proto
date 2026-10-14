@@ -578,7 +578,9 @@ enum SignInOutcome {
 // A successful sign-in writes its row in the transaction that mints the
 // session, so a session never exists without its history row; a refusal
 // writes it on its own, and a failure to write it is logged and does not
-// change the refusal the caller gets.
+// change the refusal the caller gets. An attempt at an account erased
+// before it is written without the client's address and user agent, and
+// with the account's placeholder address.
 //
 //   user_id     the account the attempt reached; NULL when it reached none
 //               (an unknown address, or a refusal before any account was
@@ -587,13 +589,15 @@ enum SignInOutcome {
 //               the typed address of a password sign-in or registration,
 //               the provider's address of an OAuth one; blank when the path
 //               names none (VerifyMfa, CliToken).
-//   device_id   the Device the attempt registered or found (the
-//               UserToken.device_id of the session it issued); NULL when it
-//               got that far no further (a wrong password registers no
-//               device).
+//   device_id   the Device ROW's UUID the attempt registered or found (as
+//               UserToken.device_id is, for the session it issued); NULL
+//               when it got no further (a wrong password registers no
+//               device). NOT the device_id of events and AuthResp: that
+//               one is the key thumbprint, the column below.
 //   thumbprint  the key that signed the request's proof (the gateway's
 //               x-w17-dpop-jkt), even with no Device row; NULL without a
-//               proof.
+//               proof. This is the id the events and AuthResp.device_id
+//               carry, so it is the column to match them on.
 //   ip, user_agent  the client address (first X-Forwarded-For hop) and user
 //               agent, as Device.ip / Device.label take them. Display only.
 //

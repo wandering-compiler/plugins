@@ -142,7 +142,7 @@ func (h *AuthServiceHandler) GenerateRecoveryCodes(ctx context.Context, req *pb.
 		return nil, err
 	}
 	var out []string
-	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+	if err := h.inTx(ctx, func(txCtx context.Context) error {
 		var err error
 		out, err = h.replaceRecoveryCodes(txCtx, userID)
 		return err

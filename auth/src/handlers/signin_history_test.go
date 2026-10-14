@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -33,6 +35,8 @@ type historyLog struct {
 	// err fails every write; errInTx only a write inside a transaction.
 	err     error
 	errInTx error
+	// block stalls every write until its context ends (a hung store).
+	block bool
 }
 
 // historyMutation keeps the history in front of any test store.
@@ -45,6 +49,14 @@ func (historyMutation) keepsSignInHistory() {}
 
 func (m historyMutation) RecordSignInEvent(ctx context.Context, in *pb.RecordSignInEventReq, _ ...grpc.CallOption) (*pb.RecordSignInEventResp, error) {
 	tx := outgoingTxID(ctx)
+	if m.log.block {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+			return nil, errors.New("the write was never cut short")
+		}
+	}
 	if m.log.err != nil {
 		return nil, m.log.err
 	}
@@ -952,5 +964,191 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 	}
 	if emits != 9 {
 		t.Errorf("%d emits of a device-carrying event, want 9 (one per event)", emits)
+	}
+}
+
+// ── review round 1 ────────────────────────────────────────────
+
+// A stalled history store holds a refusal no longer than
+// signInHistoryTimeout: the write runs on a context cut off from the
+// caller's cancellation but not unbounded. Both halves of the
+// anti-enumeration pair wait the same bound.
+func TestSignInHistory_AStalledStoreDoesNotHoldTheRefusal(t *testing.T) {
+	saved := signInHistoryTimeout
+	signInHistoryTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { signInHistoryTimeout = saved })
+	savedDummy := signInDummyVerify
+	signInDummyVerify = func(*AuthServiceHandler, string) {}
+	t.Cleanup(func() { signInDummyVerify = savedDummy })
+	noSecondFactor(t)
+	for _, email := range []string{"u1@example.com", "nobody@example.com"} {
+		_, h := newSignInStore(t, "u1")
+		keepHistory(h).block = true
+		start := time.Now()
+		_, err := h.SignIn(historyCtx(testJKT), &pb.SignInReq{Email: email, Password: "wrong"})
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("%s: the refusal took %v behind a stalled history store, want about %v", email, took, signInHistoryTimeout)
+		}
+		if status.Code(err) != codes.Unauthenticated || detailOf(t, err).GetCode() != CodeInvalidCredentials {
+			t.Errorf("%s: %v, want the invalid-credentials refusal", email, err)
+		}
+	}
+}
+
+// erasedCli is the CLI store with user-1 erased after its code was issued:
+// disabled, its address the placeholder.
+type erasedCli struct{ *cliMock }
+
+func (erasedCli) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	return &pb.GetUserByIdResp{User: &pb.User{
+		Id: in.GetUserId(), Email: erasedAddress(in.GetUserId()),
+		DisabledAt: timestamppb.Now(), ErasedAt: timestamppb.Now(),
+	}}, nil
+}
+
+// An attempt at an account erased before it — a code issued before the
+// erasure, the placeholder typed at SignIn — is recorded as the erasure left
+// the account's other rows: the placeholder address, no client address, no
+// user agent.
+func TestSignInHistory_AnAttemptAtAnErasedAccountIsPseudonymised(t *testing.T) {
+	m := newCliMock()
+	verifier := validVerifier()
+	authz, err := newCliHandler(m).CliAuthorize(cliCtx("user-1"), &pb.CliAuthorizeReq{CodeChallenge: pkceChallenge(verifier), RedirectUri: "http://127.0.0.1:54123/cb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &AuthServiceHandler{Query: erasedCli{m}, Mutation: m, PasswordHash: testPasswordSettings()}
+	log := keepHistory(h)
+	if _, err := h.CliToken(historyCtx(testJKT), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier}); err == nil {
+		t.Fatal("an erased account got a CLI session")
+	}
+	if len(log.rows) != 1 {
+		t.Fatalf("%d rows, want one", len(log.rows))
+	}
+	r := log.rows[0]
+	if r.GetUserId() != "user-1" || r.GetAddress() != "erased-user-1@erased.invalid" || r.GetIp() != "" || r.GetUserAgent() != "" ||
+		r.GetOutcome() != pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED {
+		t.Errorf("row = %+v, want user-1's placeholder, no client address or agent, ACCOUNT_DISABLED", r)
+	}
+
+	// SignIn by the placeholder: the account read is SignIn's own.
+	s := aliceStore()
+	s.addUser("admin", "ops@example.com")
+	he := eraseHandler(s)
+	if _, err := he.EraseUsers(sessionCallerCtx("admin", "t-admin"), &pb.EraseUsersReq{Ids: []string{"u1"}}); err != nil {
+		t.Fatal(err)
+	}
+	s.signIns = nil
+	savedDummy := signInDummyVerify
+	signInDummyVerify = func(*AuthServiceHandler, string) {}
+	t.Cleanup(func() { signInDummyVerify = savedDummy })
+	if _, err := he.SignIn(historyCtx(testJKT), &pb.SignInReq{Email: "erased-u1@erased.invalid", Password: "x"}); err == nil {
+		t.Fatal("the placeholder signed in")
+	}
+	if len(s.signIns) != 1 || s.signIns[0].GetUserId() != "u1" || s.signIns[0].GetIp() != "" || s.signIns[0].GetUserAgent() != "" {
+		t.Errorf("rows = %v, want one for u1 without the client address or agent", s.signIns)
+	}
+}
+
+// mfaOutage fails the challenge read or the attempt claim with an outage.
+type mfaOutage struct {
+	*mfaMock
+	readErr, claimErr error
+}
+
+func (m mfaOutage) GetMfaChallenge(ctx context.Context, in *pb.GetMfaChallengeReq, o ...grpc.CallOption) (*pb.GetMfaChallengeResp, error) {
+	if m.readErr != nil {
+		return nil, m.readErr
+	}
+	return m.mfaMock.GetMfaChallenge(ctx, in, o...)
+}
+
+func (m mfaOutage) RecordMfaAttempt(ctx context.Context, in *pb.RecordMfaAttemptReq, o ...grpc.CallOption) (*pb.RecordMfaAttemptResp, error) {
+	if m.claimErr != nil {
+		return nil, m.claimErr
+	}
+	return m.mfaMock.RecordMfaAttempt(ctx, in, o...)
+}
+
+// VerifyMfa records an outage of the challenge read or of the attempt claim
+// as ERROR, and a missing challenge as WRONG_CODE; the caller hears the same
+// opaque refusal for all of them.
+func TestSignInHistory_VerifyMfaTellsAnOutageFromAWrongCode(t *testing.T) {
+	var answers []error
+	for _, c := range []struct {
+		name            string
+		readErr, claimE error
+		want            pb.SignInOutcome
+	}{
+		{"read outage", status.Error(codes.Unavailable, "down"), nil, pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
+		{"no challenge", status.Error(codes.NotFound, "no rows"), nil, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		{"claim outage", nil, status.Error(codes.Unavailable, "down"), pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
+		{"claim matched nothing", nil, status.Error(codes.NotFound, "no rows"), pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+	} {
+		m := &mfaMock{chUserID: "u1", chThumb: testJKT, chCreatedAt: timestamppb.Now()}
+		o := mfaOutage{mfaMock: m, readErr: c.readErr, claimErr: c.claimE}
+		h := newMfaHandler(m)
+		h.Query, h.Mutation = o, o
+		log := keepHistory(h)
+		_, err := h.VerifyMfa(historyCtx(testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"})
+		answers = append(answers, err)
+		if len(log.rows) != 1 || log.rows[0].GetOutcome() != c.want {
+			t.Errorf("%s: rows %v, want one %v", c.name, log.rows, c.want)
+		}
+	}
+	for _, a := range answers[1:] {
+		sameAnswer(t, "the four refusals", a, answers[0])
+	}
+}
+
+// A CLI exchange whose mint fails reports it like every other refusal of
+// the path: no storage text reaches the CLI.
+func TestCliToken_AFailedMintLeaksNoStorageText(t *testing.T) {
+	m := newCliMock()
+	h := newCliHandler(m)
+	verifier := validVerifier()
+	authz, err := h.CliAuthorize(cliCtx("user-1"), &pb.CliAuthorizeReq{CodeChallenge: pkceChallenge(verifier), RedirectUri: "http://127.0.0.1:54123/cb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.issueErr = status.Error(codes.InvalidArgument, `pq: duplicate key value violates unique constraint "w17auth_usertoken_token_hash_key"`)
+	_, err = h.CliToken(mintCtx(), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier})
+	if err == nil || strings.Contains(status.Convert(err).Message(), "pq:") || status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("failed mint answered %v, want the opaque refusal", err)
+	}
+}
+
+// Headers and an address may carry any bytes; the row (and the Device
+// label) holds valid UTF-8.
+func TestSignInHistory_InvalidUTF8IsNotStored(t *testing.T) {
+	noSecondFactor(t)
+	savedDummy := signInDummyVerify
+	signInDummyVerify = func(*AuthServiceHandler, string) {}
+	t.Cleanup(func() { signInDummyVerify = savedDummy })
+	m, h := newSignInStore(t, "u1")
+	log := keepHistory(h)
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		dpopJKTKey, testJKT,
+		forwardedUserAgentMetadataKey, "Firefox\xff/130",
+		clientIPMetadataKey, "203.0.113.9\xfe"))
+	if _, err := h.SignIn(ctx, &pb.SignInReq{Email: "u1@example.com", Password: devicePassword}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = h.SignIn(ctx, &pb.SignInReq{Email: "n\xffbody@example.com", Password: "x"})
+	if len(log.rows) != 2 {
+		t.Fatalf("%d rows, want 2", len(log.rows))
+	}
+	for _, r := range log.rows {
+		for _, v := range []string{r.GetAddress(), r.GetIp(), r.GetUserAgent()} {
+			if !utf8.ValidString(v) {
+				t.Errorf("row stores invalid UTF-8 %q", v)
+			}
+		}
+	}
+	if r := log.rows[0]; r.GetUserAgent() != "Firefox/130" || r.GetIp() != "203.0.113.9" {
+		t.Errorf("row client = %q / %q, want the valid part kept", r.GetUserAgent(), r.GetIp())
+	}
+	if len(m.registered) != 1 || !utf8.ValidString(m.registered[0].GetLabel()) || !utf8.ValidString(m.registered[0].GetIp()) {
+		t.Errorf("RegisterDevice = %+v, want valid UTF-8", m.registered)
 	}
 }

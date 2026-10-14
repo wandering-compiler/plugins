@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/auth/lib/qrsvg"
@@ -407,7 +408,7 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	// deleted, and they are locked out of the thing that was protecting them
 	// — by an operation whose entire purpose was to move it to a new phone.
 	// Same distx shape AcceptOrgInvite uses.
-	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+	if err := h.inTx(ctx, func(txCtx context.Context) error {
 		return h.replaceTotpSecret(txCtx, userID, secret)
 	}); err != nil {
 		return nil, err
@@ -423,23 +424,6 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 		return nil, err
 	}
 	return &pb.EnrollTotpResp{Secret: secret, OtpauthUri: uri, QrSvg: svg}, nil
-}
-
-// inMfaTx runs fn in one distributed transaction when the bundle has a
-// coordinator (always, in a generated bundle), plainly otherwise.
-func (h *AuthServiceHandler) inMfaTx(ctx context.Context, fn func(txCtx context.Context) error) error {
-	if h.DistTx == nil {
-		return fn(ctx)
-	}
-	tx, txCtx, err := distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection})
-	if err != nil {
-		return err
-	}
-	if err := fn(txCtx); err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	return tx.Commit(ctx)
 }
 
 // ConfirmTotp verifies the first code against the pending secret and, on
@@ -481,7 +465,7 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	// protects the account with no way back from a lost phone is one support
 	// ticket away from an account takeover by social engineering.
 	var codes []string
-	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+	if err := h.inTx(ctx, func(txCtx context.Context) error {
 		if _, err := h.Mutation.ConfirmTotpSecret(txCtx, &pb.ConfirmTotpSecretReq{UserId: userID, Thumbprint: requestThumbprint(ctx)}); err != nil {
 			return err
 		}
@@ -526,7 +510,7 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	// The recovery codes go with the authenticator they stand in for: kept,
 	// they would be a second factor nothing asks for — until the next
 	// enrolment, when they would quietly work again.
-	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+	if err := h.inTx(ctx, func(txCtx context.Context) error {
 		if _, err := h.Mutation.RevokeTotpSecret(txCtx, &pb.RevokeTotpSecretReq{UserId: userID, Thumbprint: requestThumbprint(ctx)}); notFoundOK(err) != nil {
 			return err
 		}
@@ -597,6 +581,11 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	}
 	resp, err := h.Query.GetMfaChallenge(ctx, &pb.GetMfaChallengeReq{ChallengeId: req.GetChallengeId()})
 	if err != nil || resp.GetChallenge() == nil {
+		// The caller hears an invalid challenge either way; the history
+		// tells an outage from an unknown challenge.
+		if err != nil && status.Code(err) != codes.NotFound {
+			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 	ch := resp.GetChallenge()
@@ -629,6 +618,9 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		// otherwise the store being unreachable is itself the bypass. This is
 		// a change in direction: the increment used to sit on the failure path
 		// where its error could be discarded harmlessly.
+		if status.Code(attErr) != codes.NotFound {
+			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 	// Zero is unambiguous HERE, and only here: a matched row always comes

@@ -31,6 +31,8 @@ func init() {
 		}
 		return nil
 	}
+	// An attempt at an erased account is recorded pseudonymised.
+	signInAccountErased = func(user *pb.User) bool { return user.GetErasedAt() != nil }
 }
 
 // erasedAddress is the placeholder an erased account's address becomes:

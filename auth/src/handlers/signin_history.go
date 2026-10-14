@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -27,7 +29,8 @@ import (
 // personal columns of a row, EraseSignInEvents).
 //
 // Each path opens an attempt FIRST (beginSignIn) and closes it in a defer
-// (endSignIn), so no return can skip the row and none can write two:
+// (endSignIn), so no return can skip the row and none can write two (a
+// panic writes none: the request did not end in an answer):
 //
 //   - a SUCCESS writes its row inside the transaction that mints the session
 //     (recordSignInOK, through mintSession or the path's own transaction), so
@@ -39,7 +42,18 @@ import (
 //     write is logged and changes nothing the caller gets: the history is the
 //     operator's record, never part of the answer, and both branches of the
 //     anti-enumeration pair (an unknown address, a wrong password) write one
-//     row each, so the write adds no timing difference between them.
+//     row each, so the write adds no timing difference between them. The
+//     write is bounded (signInHistoryTimeout), so a stalled store cannot
+//     hold a refusal past it.
+//
+// One edge writes two rows: a coordinator that applied the commit and then
+// failed to acknowledge it leaves the OK row committed, and the defer, seeing
+// the error, writes an ERROR row as well.
+//
+// An attempt at an ERASED account (a challenge, an OAuth or CLI code issued
+// before the erasure, or the placeholder address typed at SignIn) is written
+// pseudonymised, as the erasure left the account's other rows: the account's
+// placeholder as the address, no client address, no user agent.
 //
 // The outcome is what the path set explicitly (an unknown address, a parked
 // second factor, an exhausted attempt budget), or else read off the error the
@@ -57,7 +71,20 @@ type signInAttempt struct {
 	thumbprint string
 	ip         string
 	userAgent  string
+	// account is the row of userID when the path read it with erased_at
+	// (SignIn's lookup); otherwise endSignIn reads it if it needs to.
+	account *pb.User
 }
+
+// signInHistoryTimeout bounds the write of a refusal's row (and the account
+// read before it): the refusal waits for it, and a stalled store must not
+// hold the answer longer than this. A variable for the tests.
+var signInHistoryTimeout = 2 * time.Second
+
+// signInAccountErased reports whether an account was erased. nil when
+// `user_admin` is not staged: without it no account is ever erased, and no
+// read is spent to find out. handlers/user_admin.go installs it.
+var signInAccountErased func(user *pb.User) bool
 
 // maxAddressLen is SignInEvent.address CHAR(320), the longest address the
 // User table takes.
@@ -78,9 +105,9 @@ func beginSignIn(ctx context.Context, method pb.SignInMethod) *signInAttempt {
 }
 
 // named records the address the attempt named, normalised as SignIn looks it
-// up, cut to the column on a rune boundary.
+// up, as valid UTF-8, cut to the column on a rune boundary.
 func (a *signInAttempt) named(address string) {
-	a.address = truncate(normalizeEmail(address), maxAddressLen)
+	a.address = truncate(strings.ToValidUTF8(normalizeEmail(address), ""), maxAddressLen)
 }
 
 // row is the RecordSignInEvent request for this attempt ending in outcome.
@@ -129,10 +156,36 @@ func (h *AuthServiceHandler) endSignIn(ctx context.Context, a *signInAttempt, er
 		}
 		outcome = signInOutcome(err)
 	}
-	ctx = context.WithoutCancel(ctx)
-	if werr := writeSignInEvent(ctx, h, a.row(outcome)); werr != nil {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signInHistoryTimeout)
+	defer cancel()
+	row := a.row(outcome)
+	h.pseudonymiseErased(ctx, a, row)
+	if werr := writeSignInEvent(ctx, h, row); werr != nil {
 		slog.WarnContext(ctx, "auth: sign-in history row not written",
 			"method", a.method.String(), "outcome", outcome.String(), "err", werr)
+	}
+}
+
+// pseudonymiseErased rewrites a refusal's row for an account erased before
+// the attempt: the address becomes the account's placeholder (an erased
+// account's address IS its placeholder), the client address and user agent
+// are dropped — what the erasure did to the account's earlier rows. The
+// account is the path's own read when it has one with erased_at, else read
+// here; a read that fails leaves the row as it is (it cannot tell).
+func (h *AuthServiceHandler) pseudonymiseErased(ctx context.Context, a *signInAttempt, row *pb.RecordSignInEventReq) {
+	if signInAccountErased == nil || row.GetUserId() == "" {
+		return
+	}
+	user := a.account
+	if user.GetId() != row.GetUserId() {
+		got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: row.GetUserId()})
+		if err != nil {
+			return
+		}
+		user = got.GetUser()
+	}
+	if signInAccountErased(user) {
+		row.Address, row.Ip, row.UserAgent = truncate(user.GetEmail(), maxAddressLen), "", ""
 	}
 }
 
@@ -157,7 +210,8 @@ func (h *AuthServiceHandler) mintSession(ctx context.Context, a *signInAttempt, 
 }
 
 // inTx runs fn in one distributed transaction when the bundle has a
-// coordinator, plainly otherwise; fn's error rolls it back.
+// coordinator (always, in a generated bundle), plainly otherwise; fn's error
+// rolls it back. Shared by the mint paths and the two_factor writes.
 func (h *AuthServiceHandler) inTx(ctx context.Context, fn func(txCtx context.Context) error) error {
 	if h.DistTx == nil {
 		return fn(ctx)

@@ -954,7 +954,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 		return nil, UnauthenticatedSignIn(err)
 	}
 	user := userResp.GetUser()
-	attempt.userID = user.GetId()
+	attempt.userID, attempt.account = user.GetId(), user
 
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), nil)
 	if !ok {
