@@ -290,7 +290,7 @@ features:
       # active feature is staged once.
       - handlers/role_ceiling.go
   - name: user_admin
-    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, and a Sessions page to review and revoke tokens. Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser and the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserErased), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount; actions Disable / Enable / Erase) and the Sessions page (revoked tokens listed as revoked). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
+    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, a Sessions page to review and revoke tokens, and a SignIns page with the sign-in history (every attempt, failures included; read-only, paged). Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser and the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserErased), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount; actions Disable / Enable / Erase) and the Sessions page (revoked tokens listed as revoked). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
     default: false
     go_files:
       - handlers/user_admin.go
@@ -364,6 +364,7 @@ presets:
           # authenticated). Base-tier — no `devices` feature needed;
           # "log out everywhere" stays the devices group's job.
           - { ref: AuthService.Logout, method: POST, path: /logout,                        feature: authenticate_turnkey }
+          - { ref: AuthService.ListMySignInEvents, method: GET, path: /sign-ins,           feature: authenticate_turnkey }
       # API/MCP token management — the caller manages their OWN tokens,
       # authenticated by their browser-session bearer (no exclude_auth).
       # Gated api_token: the whole group drops when the feature is off.
@@ -806,6 +807,22 @@ presets:
             label: "Revoke"
             confirm: "Revoke the selected sessions? Whoever holds them is signed out at once."
             target: both
+      - name: SignIns
+        model: SignInEvent
+        feature: user_admin
+        list:
+          source: AuthQuery.ListSignInEvents
+          columns:
+            - account
+            - { name: user, ref: { page: Users } }
+            - method
+            - outcome
+            - ip
+            - created_at
+          detail_link_column: account
+        detail:
+          read: AuthQuery.GetSignInEvent
+          readonly_fields: [id, created_at, user_id, address, method, outcome, device_id, thumbprint, ip, user_agent]
 
 # Dev-only sandbox services this plugin brings for testing / manual
 # trial. Each is wired into the consuming project's tool-owned

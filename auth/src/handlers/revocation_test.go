@@ -64,6 +64,10 @@ type revocationStore struct {
 	// RevokeUserToken / RevokeSessionToken calls that matched a row — the
 	// ones whose event fires.
 	emitted []string
+
+	// The SignInEvent table: RecordSignInEvent appends, EraseSignInEvents
+	// rewrites the personal columns as its statement does.
+	signIns []*pb.SignInEvent
 }
 
 func newRevocationStore() *revocationStore {
@@ -430,6 +434,27 @@ func (s *revocationStore) ErasePendingSignUpAddress(_ context.Context, in *pb.Er
 	return &pb.ErasePendingSignUpAddressResp{}, nil
 }
 
+func (s *revocationStore) keepsSignInHistory() {}
+
+func (s *revocationStore) RecordSignInEvent(_ context.Context, in *pb.RecordSignInEventReq, _ ...grpc.CallOption) (*pb.RecordSignInEventResp, error) {
+	row := signInEventOf(in)
+	row.Id = fmt.Sprintf("sie-%d", len(s.signIns)+1)
+	s.signIns = append(s.signIns, row)
+	return &pb.RecordSignInEventResp{Id: row.Id}, nil
+}
+
+// EraseSignInEvents: user_id = :user_id OR (user_id IS NULL AND address =
+// :email) → address = :placeholder, ip = ”, user_agent = ”.
+func (s *revocationStore) EraseSignInEvents(_ context.Context, in *pb.EraseSignInEventsReq, _ ...grpc.CallOption) (*pb.EraseSignInEventsResp, error) {
+	for _, r := range s.signIns {
+		if r.GetUserId() == in.GetUserId() || (r.GetUserId() == "" && r.GetAddress() == in.GetEmail()) {
+			r.Address, r.Ip, r.UserAgent = in.GetPlaceholder(), "", ""
+		}
+	}
+	s.erased = append(s.erased, "sign_in_history:"+in.GetUserId()+":"+in.GetEmail()+">"+in.GetPlaceholder())
+	return &pb.EraseSignInEventsResp{}, nil
+}
+
 func (s *revocationStore) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
 	for hash, uid := range s.resetTokens {
 		if uid == in.GetUserId() {
@@ -787,7 +812,8 @@ func TestEraseUsers_PseudonymisesAndKeepsEveryRow(t *testing.T) {
 	}
 	want := []string{
 		"email_verification:u1", "oauth:u1", "org_invite:alice@example.com",
-		"password_reset:u1", "sign_up_confirmation:alice@example.com>erased-u1@erased.invalid", "two_factor:u1",
+		"password_reset:u1", "sign_in_history:u1:alice@example.com>erased-u1@erased.invalid",
+		"sign_up_confirmation:alice@example.com>erased-u1@erased.invalid", "two_factor:u1",
 	}
 	got := append([]string(nil), s.erased...)
 	sort.Strings(got)

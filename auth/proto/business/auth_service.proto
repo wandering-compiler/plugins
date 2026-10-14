@@ -293,6 +293,20 @@ message LogoutResp {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
 }
 
+// ListMySignInEvents — the caller's own sign-in history: every attempt that
+// reached their account, newest first, the latest 100, failures included
+// (a wrong password, a refused device). Attempts that named their address
+// while it had no account are not theirs to read and are not listed.
+// Authenticated; the account is the caller's (the gateway envelope), never a
+// request field.
+message ListMySignInEventsReq {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+}
+message ListMySignInEventsResp {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+  repeated SignInEvent events = 1;
+}
+
 // ── api_token: token-management business surface ────────────
 // Authenticated by the caller's SESSION bearer (you manage your
 // API tokens from the browser). The handler reads the principal
@@ -929,6 +943,11 @@ service AuthService {
   // auth envelope and revokes that one SESSION token via
   // AuthMutation.RevokeSessionToken (the row stays). Idempotent.
   rpc Logout(LogoutReq) returns (LogoutResp) {
+    option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
+  }
+  // ListMySignInEvents — the caller's own sign-in history (see the
+  // request). Reads AuthQuery.ListUserSignInEvents for the envelope's user.
+  rpc ListMySignInEvents(ListMySignInEventsReq) returns (ListMySignInEventsResp) {
     option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
   }
 

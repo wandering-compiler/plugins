@@ -97,8 +97,9 @@ func (h *AuthServiceHandler) EraseUsers(ctx context.Context, req *pb.EraseUsersR
 //  1. BeginUserErasure ends the account's access — disabled, password
 //     unusable, every token and device revoked — and leaves its address
 //     alone;
-//  2. every feature's eraser blanks or spends the rows it owns, and the
-//     account's reset links are spent;
+//  2. every feature's eraser blanks or spends the rows it owns, the
+//     account's reset links are spent, and its sign-in history is
+//     pseudonymised;
 //  3. EraseUser replaces the address with the placeholder and stamps
 //     erased_at.
 //
@@ -149,6 +150,17 @@ func (h *AuthServiceHandler) eraseUser(ctx context.Context, userID, operator str
 		rollback()
 		return err
 	}
+	// The sign-in history (base tier, so not one of the feature erasers):
+	// the account's rows, and the rows that named its address without
+	// reaching an account, lose the address, client address and user agent.
+	if _, err := h.Mutation.EraseSignInEvents(txCtx, &pb.EraseSignInEventsReq{
+		UserId:      userID,
+		Email:       truncate(normalizeEmail(email), maxAddressLen),
+		Placeholder: placeholder,
+	}); err != nil {
+		rollback()
+		return err
+	}
 	if user.GetErasedAt() == nil {
 		if _, err := h.Mutation.EraseUser(txCtx, &pb.EraseUserReq{UserId: userID, Email: placeholder}); notFoundOK(err) != nil {
 			rollback()
@@ -176,7 +188,7 @@ func (h *AuthServiceHandler) RevokeSessions(ctx context.Context, req *pb.RevokeS
 		return nil, errEmptySelection
 	}
 	for _, id := range req.GetIds() {
-		if _, err := h.Mutation.RevokeUserToken(ctx, &pb.RevokeUserTokenReq{Id: id, RevokedBy: operator}); notFoundOK(err) != nil {
+		if _, err := h.Mutation.RevokeUserToken(ctx, &pb.RevokeUserTokenReq{Id: id, RevokedBy: operator, Thumbprint: requestThumbprint(ctx)}); notFoundOK(err) != nil {
 			return nil, err
 		}
 	}

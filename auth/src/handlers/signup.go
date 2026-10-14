@@ -73,7 +73,18 @@ var signUpConfirmation func(ctx context.Context, h *AuthServiceHandler, req *pb.
 //
 // The invite gate it calls first lives in auth_service.go, because a
 // second surface creates accounts too — see signupInviteGate.
-func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb.SignUpResp, error) {
+//
+// A SignUp that issues a session is a sign-in: every attempt appends one
+// SignInEvent (method SIGN_UP), the gate refusals too; the success row is
+// written in the registration's transaction. Under `sign_up_confirmation`
+// SignUp signs nobody in and records nothing — ConfirmSignUp does.
+func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *pb.SignUpResp, err error) {
+	var attempt *signInAttempt
+	if signUpConfirmation == nil {
+		attempt = beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_SIGN_UP)
+		attempt.named(req.GetEmail())
+		defer func() { h.endSignIn(ctx, attempt, err) }()
+	}
 	// The erased-account domain first: it is refused whoever asks, so the
 	// answer says nothing about any account.
 	if err := refuseReservedEmail(ctx, req.GetEmail()); err != nil {
@@ -127,7 +138,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 		}
 	}
 
-	resp, err := h.signUpTx(txCtx, req, hashed, roles, thumbprint)
+	resp, err := h.signUpTx(txCtx, req, hashed, roles, thumbprint, attempt)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -144,9 +155,10 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (*pb
 
 // signUpTx runs SignUp's write side against txCtx (carrying the distx w17-tx-id
 // when a transaction is open): create the user, link its turnkey roles,
-// register the device, mint the session token bound to it. Every storage call
-// uses txCtx so all of them join the one transaction.
-func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles, thumbprint string) (*pb.SignUpResp, error) {
+// register the device, mint the session token bound to it, and write the
+// attempt's success row. Every storage call uses txCtx so all of them join
+// the one transaction.
+func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles, thumbprint string, attempt *signInAttempt) (*pb.SignUpResp, error) {
 	if signupCreateUser == nil {
 		// Neither create path staged — see the seam's declaration. This
 		// is a bundle-composition fault, not something a caller did, so
@@ -179,8 +191,11 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 	if err != nil {
 		return nil, err
 	}
-	token, err := h.issueBoundToken(txCtx, userID, dev.id, h.sessionTokenExpiry())
+	token, err := h.issueBoundToken(txCtx, userID, dev, h.sessionTokenExpiry())
 	if err != nil {
+		return nil, err
+	}
+	if err := h.recordSignInOK(txCtx, attempt, userID, dev); err != nil {
 		return nil, err
 	}
 	return &pb.SignUpResp{

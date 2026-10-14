@@ -101,6 +101,10 @@ message IssueTokenReq {
   // sha256(token), hex: the handler mints the token, stores only this, and
   // returns the token to the caller itself (it is never read back).
   string token_hash = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the bound device, TokenIssued's device_id — the value
+  // Authenticate later answers as AuthResp.device_id for this token.
+  string thumbprint = 5;
 }
 message IssueTokenResp { UserToken token = 1; }
 
@@ -151,6 +155,9 @@ message RevokeSessionTokenReq {
   string    token_id   = 1 [(w17.field) = { type: UUID }];
   string    user_id    = 2 [(w17.field) = { type: UUID }];
   TokenType token_type = 3;
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string    thumbprint = 4;
 }
 message RevokeSessionTokenResp {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
@@ -231,6 +238,9 @@ message CreateTotpSecretReq {
   string user_id = 1 [(w17.field) = { type: UUID }];
   reserved 2; // `secret`, the secretbox blob — see UserTotpSecret
   string seed    = 3 [(w17.field) = { type: CRYPTED_SECRET }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 4;
 }
 message CreateTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -240,6 +250,9 @@ message CreateTotpSecretResp {
 message ConfirmTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 2;
 }
 message ConfirmTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -395,6 +408,9 @@ message ConsumeRecoveryCodeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 3;
 }
 message ConsumeRecoveryCodeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -407,6 +423,9 @@ message ConsumeRecoveryCodeResp {
 message RevokeTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 2;
 }
 message RevokeTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -453,6 +472,10 @@ message SupersedePendingMfaChallengesResp {
 message ConsumeMfaChallengeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string challenge_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint VerifyMfa was signed with — the challenged one, which it has
+  // checked — MfaVerified's device_id.
+  string thumbprint = 2;
 }
 message ConsumeMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -714,6 +737,45 @@ message RegisterDeviceReq {
 }
 message RegisterDeviceResp {
   Device device = 1;
+}
+
+// ── sign-in history (base tier) ────────────────────────────────
+
+// RecordSignInEventReq — one SignInEvent row. Every field is what the mint
+// path knows when the attempt ends; an empty nullable one is written NULL.
+message RecordSignInEventReq {
+  // The account the attempt reached; empty (NULL) when it reached none.
+  string user_id    = 1 [(w17.field) = { type: UUID, null: true }];
+  // The address the attempt named, normalised; may be blank, and need not be
+  // a valid address (it is what was typed).
+  string address    = 2 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  // The Device row; empty (NULL) when the attempt registered none.
+  string device_id  = 3 [(w17.field) = { type: UUID, null: true }];
+  // The proof's key thumbprint; empty (NULL) without a proof.
+  string thumbprint = 4 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  string ip         = 5 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  string user_agent = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  SignInMethod  method  = 7 [(w17.field) = { type: ENUM }];
+  SignInOutcome outcome = 8 [(w17.field) = { type: ENUM }];
+}
+message RecordSignInEventResp {
+  string id = 1;
+}
+
+// EraseSignInEventsReq — the erasure's share of the sign-in history
+// (user_admin): the account's rows, and the rows that reached no account but
+// named its address, take the placeholder address and lose their client
+// address and user agent.
+message EraseSignInEventsReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id     = 1 [(w17.field) = { type: UUID }];
+  // The address being erased, normalised (what SignIn would have recorded).
+  string email       = 2 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  // What the rows carry instead — the account's erasure placeholder.
+  string placeholder = 3 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message EraseSignInEventsResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
 }
 
 message TrustDeviceReq {
@@ -1289,6 +1351,9 @@ message RevokeUserTokenReq {
   option (w17.contrib.plugin_feature) = "user_admin";
   string id = 1 [(w17.field) = { type: UUID }];
   string revoked_by = 2 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the operator's device, UserTokenRevoked's device_id.
+  string thumbprint = 3;
 }
 message RevokeUserTokenResp {
   option (w17.contrib.plugin_feature) = "user_admin";
@@ -1503,7 +1568,8 @@ service AuthMutation {
         fields: [
           { key: "token_id",  value: "$response.token.id" },
           { key: "user_id",   value: "$response.token.user_id" },
-          { key: "issued_at", value: "$response.token.created_at" }
+          { key: "issued_at", value: "$response.token.created_at" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
@@ -1615,7 +1681,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "token_id", value: "$response.token_id" },
-          { key: "user_id",  value: "$response.user_id" }
+          { key: "user_id",  value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
@@ -1748,7 +1815,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "user_id",     value: "$response.secret.user_id" },
-          { key: "enrolled_at", value: "$response.secret.created_at" }
+          { key: "enrolled_at", value: "$response.secret.created_at" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
@@ -1771,7 +1839,10 @@ service AuthMutation {
     option (w17.event_emit) = {
       event: "TotpConfirmed"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -1976,7 +2047,10 @@ service AuthMutation {
     option (w17.event_emit) = {
       event: "RecoveryCodeUsed"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -2002,7 +2076,10 @@ service AuthMutation {
     option (w17.event_emit) = {
       event: "TotpDisabled"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -2040,7 +2117,8 @@ service AuthMutation {
           { key: "totp_enrolled", value: "$request.totp_enrolled" },
           { key: "email",         value: "$request.email" },
           { key: "code",          value: "$request.code" },
-          { key: "expires_at",    value: "$request.expires_at" }
+          { key: "expires_at",    value: "$request.expires_at" },
+          { key: "device_id",     value: "$request.thumbprint" }
         ]
       }
     };
@@ -2173,7 +2251,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "challenge_id", value: "$response.challenge_id" },
-          { key: "user_id",      value: "$response.user_id" }
+          { key: "user_id",      value: "$response.user_id" },
+          { key: "device_id",    value: "$request.thumbprint" }
         ]
       }
     };
@@ -2263,6 +2342,48 @@ service AuthMutation {
           "          last_seen_at AS device.last_seen_at, "
           "          created_at AS device.created_at, "
           "          revoked_at AS device.revoked_at"
+      }
+    };
+  }
+
+  // RecordSignInEvent — append one row to the sign-in history. The only
+  // statement that writes SignInEvent but the erasure's (EraseSignInEvents):
+  // the table is append-only. A successful mint calls it inside the
+  // transaction that issues the session; a refusal calls it on its own.
+  rpc RecordSignInEvent(RecordSignInEventReq) returns (RecordSignInEventResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.SignInEvent SET "
+          "user_id = :user_id, "
+          "address = :address, "
+          "device_id = :device_id, "
+          "thumbprint = :thumbprint, "
+          "ip = :ip, "
+          "user_agent = :user_agent, "
+          "method = :method, "
+          "outcome = :outcome "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EraseSignInEvents — an erasure's share of the sign-in history: every row
+  // of the account, and every row that reached no account but named the
+  // erased address, take the placeholder address; their client address and
+  // user agent are blanked. The rows stay (method, outcome, time, device key
+  // and the account link are not personal data). The ONE update of the
+  // append-only table. No RETURNING: an account without history is not an
+  // error. Gated user_admin.
+  rpc EraseSignInEvents(EraseSignInEventsReq) returns (EraseSignInEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.SignInEvent SET address = :placeholder, ip = \'\', user_agent = \'\' "
+          "WHERE user_id = :user_id OR (user_id IS NULL AND address = :email)"
       }
     };
   }
@@ -3584,7 +3705,8 @@ service AuthMutation {
       event: "UserTokenRevoked"
       payload: {
         fields: [
-          { key: "token_id", value: "$response.token_id" }
+          { key: "token_id",  value: "$response.token_id" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };

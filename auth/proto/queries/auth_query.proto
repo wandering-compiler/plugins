@@ -1004,6 +1004,63 @@ message GetUserTokenReq {
   string id = 1;
 }
 
+// ── sign-in history reads ─────────────────────────────────────
+//
+// ListSignInEvents / GetSignInEvent back the admin Sign-ins page (user_admin,
+// the realm that manages accounts); ListUserSignInEvents backs the signed-in
+// person's own history (AuthService.ListMySignInEvents). Read-only: the
+// table is append-only (SignInEvent).
+
+message ListSignInEventsReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+}
+
+// SignInEventAdminRow — the Sign-ins list projection (ADMIN-FK), like
+// UserTokenAdminRow: not a table, a read-only DTO the ListSignInEvents DQL
+// joins User into.
+//   - account — who the attempt was about, as a person reads it: the
+//               account's current address, or the address typed when the
+//               attempt reached no account; the row's link to its detail.
+//   - user    — the raw user_id, linked to the Users page by the page's
+//               AdminColumnRef; NULL when the attempt reached no account
+//               (declared null so the row scans it).
+// The device key, the user agent and the device row are on the detail.
+// Gated user_admin.
+message SignInEventAdminRow {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id      = 1 [(w17.field) = { type: UUID }];
+  string account = 2;
+  string user    = 3 [(w17.field) = { type: UUID, null: true }];
+  SignInMethod  method  = 4;
+  SignInOutcome outcome = 5;
+  string ip      = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListSignInEventsResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated SignInEventAdminRow events = 1;
+
+  // Cursor-paged (admin-only), like ListUserTokens: the history grows with
+  // every attempt, failures included, so an unpaged list would load it
+  // whole.
+  w17.Paging paging = 2;
+}
+
+message GetSignInEventReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id = 1;
+}
+
+message ListUserSignInEventsReq {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListUserSignInEventsResp {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+  repeated SignInEvent events = 1;
+}
+
 // AuthQuery — read-only DB lookups.
 //
 // `GetUserByEmail` is the canonical "I have credentials" entry
@@ -2434,6 +2491,66 @@ service AuthQuery {
           "       t.revoked_at AS revoked_at, t.revoked_by AS revoked_by, "
           "       t.revoke_reason AS revoke_reason "
           "FROM @module.UserToken t WHERE t.id = :id"
+      }
+    };
+  }
+
+  // ListSignInEvents — the sign-in history for the admin Sign-ins page,
+  // newest first, cursor-paged on (created_at, id). LEFT JOIN User: an
+  // attempt that reached no account has no user, and shows the address it
+  // named instead. Every outcome is listed, failures included. Gated
+  // user_admin.
+  rpc ListSignInEvents(ListSignInEventsReq) returns (ListSignInEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT e.id AS id, COALESCE(u.email, e.address) AS account, e.user_id AS user, "
+          "       e.method AS method, e.outcome AS outcome, e.ip AS ip, "
+          "       e.created_at AS created_at "
+          "FROM @module.SignInEvent e "
+          "LEFT JOIN @module.User u ON u.id = e.user_id "
+          "ORDER BY e.created_at DESC, e.id DESC"
+      }
+    };
+  }
+
+  // GetSignInEvent — one attempt for the admin Sign-ins detail view, every
+  // column. Gated user_admin.
+  rpc GetSignInEvent(GetSignInEventReq) returns (SignInEvent) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT e.id AS id, e.created_at AS created_at, e.user_id AS user_id, "
+          "       e.address AS address, e.device_id AS device_id, "
+          "       e.thumbprint AS thumbprint, e.ip AS ip, e.user_agent AS user_agent, "
+          "       e.method AS method, e.outcome AS outcome "
+          "FROM @module.SignInEvent e WHERE e.id = :id"
+      }
+    };
+  }
+
+  // ListUserSignInEvents — one account's own sign-in history, newest first,
+  // the latest 100 (AuthService.ListMySignInEvents, which passes the
+  // caller's id). Served by the (user_id, created_at) index. Gated
+  // authenticate_turnkey, the feature that knows the caller.
+  rpc ListUserSignInEvents(ListUserSignInEventsReq) returns (ListUserSignInEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT e.id AS id, e.created_at AS created_at, "
+          "       e.user_id AS user_id, e.address AS address, "
+          "       e.device_id AS device_id, e.thumbprint AS thumbprint, "
+          "       e.ip AS ip, e.user_agent AS user_agent, "
+          "       e.method AS method, e.outcome AS outcome "
+          "FROM @module.SignInEvent e WHERE e.user_id = :user_id "
+          "ORDER BY e.created_at DESC, e.id DESC "
+          "LIMIT 100"
       }
     };
   }

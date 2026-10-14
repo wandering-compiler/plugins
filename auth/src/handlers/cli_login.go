@@ -52,6 +52,16 @@ var (
 	errCliSessionNotLive = errors.New("cli auth: the approving session is not live")
 )
 
+// init adds the outcomes of CliToken's refusals to the sign-in history.
+func init() {
+	signInOutcomeRules = append(signInOutcomeRules,
+		outcomeRule{errCliVerifierInvalid, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		outcomeRule{errCliCodeInvalid, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		outcomeRule{errCliRedirectMismatch, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		outcomeRule{errCliClientAuthFailed, pb.SignInOutcome_SIGN_IN_OUTCOME_CLIENT_REFUSED},
+	)
+}
+
 // CliAuthorize mints a single-use authorization code for the
 // bearer-authenticated principal, bound to the CLI's PKCE challenge. The
 // caller (the browser, carrying the user's web session) is resolved from
@@ -118,7 +128,12 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 // against a live code), then verifies the verifier hashes to the bound
 // challenge, then mints the CLI bearer. Unauthenticated — the CLI has no
 // token yet; every failure is the same opaque Unauthenticated.
-func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) (*pb.CliTokenResp, error) {
+func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) (_ *pb.CliTokenResp, err error) {
+	// Every exchange appends one SignInEvent (method CLI), the refusals too;
+	// the success row is written with the session.
+	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_CLI)
+	defer func() { h.endSignIn(ctx, attempt, err) }()
+
 	// The CLI's own device key, before the code is spent: the session is
 	// bound to the key of the CLI that redeems the code, never to the
 	// browser that approved it, and a CLI that cannot sign must not burn the
@@ -148,6 +163,7 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 		return nil, Unauthenticated(err)
 	}
 	userID := consumed.GetUserId()
+	attempt.userID = userID
 	if userID == "" {
 		// Zero rows matched the live-code WHERE → unknown / expired / used.
 		return nil, Unauthenticated(errCliCodeInvalid)
@@ -207,10 +223,11 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 		return nil, Unauthenticated(errCliSessionNotLive)
 	}
 	dev, err := mintDevice(ctx, h, userID, thumbprint)
+	attempt.deviceID = dev.id
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	token, err := h.issueBoundToken(ctx, userID, dev.id, expiresAt)
+	token, err := h.mintSession(ctx, attempt, userID, dev, expiresAt)
 	if err != nil {
 		return nil, err
 	}

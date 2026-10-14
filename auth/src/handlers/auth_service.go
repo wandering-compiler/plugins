@@ -924,7 +924,14 @@ func (h *AuthServiceHandler) presentedToken(raw string) (token string, viaDPoP b
 // failed rehash doesn't invalidate the auth) — discarded here
 // since the plugin doesn't yet have an UpdateUserPasswordHash
 // mutation to apply the new hash anyway.
-func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb.SignInResp, error) {
+//
+// Every attempt appends one SignInEvent (method PASSWORD), the refusals too
+// (signin_history.go); the row changes nothing the caller gets.
+func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *pb.SignInResp, err error) {
+	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_PASSWORD)
+	attempt.named(req.GetEmail())
+	defer func() { h.endSignIn(ctx, attempt, err) }()
+
 	// The device key first: without a proof there is no token to issue, and
 	// refusing before the lookup costs nothing and says nothing about the
 	// address.
@@ -934,6 +941,9 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	}
 	userResp, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: normalizeEmail(req.GetEmail())})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_UNKNOWN_ACCOUNT
+		}
 		// Anti-enumeration: a missing account must cost the same as a wrong
 		// password. Without this, GetUserByEmail returns fast (no argon2) for a
 		// non-existent user but the found path pays the ~argon2 derivation — a
@@ -944,6 +954,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 		return nil, UnauthenticatedSignIn(err)
 	}
 	user := userResp.GetUser()
+	attempt.userID = user.GetId()
 
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), nil)
 	if !ok {
@@ -969,17 +980,18 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	// make its new-device decision (and bind the challenge to this key). A revoked device is refused here, after
 	// the password: only someone who knows it learns the device's state.
 	dev, err := mintDevice(ctx, h, user.GetId(), thumbprint)
+	attempt.deviceID = dev.id
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	deviceID, trusted := dev.id, dev.trusted
 
 	// Second-factor gate (two_factor feature; no-op otherwise). When it
 	// raises a challenge it returns the mfa_required response and we
 	// stop here WITHOUT issuing a token — VerifyMfa completes the login.
-	if resp, challenged, gErr := signInMfaGate(ctx, h, user, thumbprint, trusted); gErr != nil {
+	if resp, challenged, gErr := signInMfaGate(ctx, h, user, thumbprint, dev.trusted); gErr != nil {
 		return nil, Unauthenticated(gErr)
 	} else if challenged {
+		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_MFA_REQUIRED
 		return resp, nil
 	}
 
@@ -990,10 +1002,10 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	// ever signed in skip the factor once `two_factor_scope=new_devices` is
 	// switched on. A device earns trust by passing VerifyMfa.
 	var trustCutoff *timestamppb.Timestamp
-	if trusted {
+	if dev.trusted {
 		trustCutoff = dev.trustCutoff
 	}
-	token, err := issueSession(ctx, h, user.GetId(), deviceID, trustCutoff)
+	token, err := issueSession(ctx, h, attempt, user.GetId(), dev, trustCutoff)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -1196,9 +1208,10 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 				"which a hand-written facade VerifyRes must carry for logout to revoke anything")
 	}
 	if _, err := h.Mutation.RevokeSessionToken(ctx, &pb.RevokeSessionTokenReq{
-		TokenId:   tokenID,
-		UserId:    userID,
-		TokenType: pb.TokenType_TOKEN_TYPE_SESSION,
+		TokenId:    tokenID,
+		UserId:     userID,
+		TokenType:  pb.TokenType_TOKEN_TYPE_SESSION,
+		Thumbprint: requestThumbprint(ctx),
 	}); err != nil {
 		// Already-revoked token (zero rows → NotFound) is an idempotent
 		// logout success; anything else propagates.

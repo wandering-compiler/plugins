@@ -33,9 +33,16 @@ import (
 // is authored Go rather than DQL. Every failure maps to opaque
 // Unauthenticated (anti-enumeration, like SignIn).
 
-// init adds this feature's share of an erasure.
+// init adds this feature's share of an erasure, and the outcomes of its
+// refusals in the sign-in history.
 func init() {
 	erasers = append(erasers, eraseOAuthData)
+	signInOutcomeRules = append(signInOutcomeRules,
+		outcomeRule{errOAuthCodeInvalid, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		outcomeRule{errOAuthVerifierInvalid, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		outcomeRule{errOAuthLocalUnverified, pb.SignInOutcome_SIGN_IN_OUTCOME_UNVERIFIED_EMAIL},
+		outcomeRule{errOAuthEmailUnverified, pb.SignInOutcome_SIGN_IN_OUTCOME_UNVERIFIED_EMAIL},
+	)
 }
 
 // eraseOAuthData is oauth's eraser: the account's identities lose their
@@ -222,7 +229,12 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 // issues the session. The consume is a conditional UPDATE, so a code works
 // once; it is spent before the verifier is compared, so a wrong verifier
 // burns it rather than leaving it open to guesses.
-func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExchangeReq) (*pb.OAuthExchangeResp, error) {
+func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExchangeReq) (_ *pb.OAuthExchangeResp, err error) {
+	// Every exchange appends one SignInEvent (method OAUTH), the refusals
+	// too; the success row is written with the session.
+	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_OAUTH)
+	defer func() { h.endSignIn(ctx, attempt, err) }()
+
 	// The device key before the code is spent: a client that cannot sign
 	// must not burn a single-use code on a session it could never be given.
 	thumbprint, err := mintThumbprint(ctx)
@@ -241,6 +253,10 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if consumed.GetCodeChallenge() == "" {
 		return nil, oauthRefusal(errOAuthCodeInvalid)
 	}
+	// The code names the account (or the identity) it was issued for: a
+	// refusal from here on is an attempt at that sign-in.
+	attempt.named(consumed.GetEmail())
+	attempt.userID = consumed.GetUserId()
 	if !verifyChallengeDigest(req.GetCodeVerifier(), consumed.GetCodeChallenge()) {
 		return nil, oauthRefusal(errOAuthVerifierInvalid)
 	}
@@ -263,6 +279,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 		if err != nil {
 			return nil, oauthRefusal(err)
 		}
+		attempt.userID = userID
 		if userID == "" {
 			// This is the sign-up, and the invitation (if any) comes with
 			// this request.
@@ -279,6 +296,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 				// classified like the rest, never sent raw.
 				return nil, oauthRefusal(err)
 			}
+			attempt.userID = userID
 		}
 	}
 	// The account may have changed since the callback; and the device is the
@@ -287,13 +305,14 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 		return nil, oauthRefusal(err)
 	}
 	dev, err := mintDevice(ctx, h, userID, thumbprint)
+	attempt.deviceID = dev.id
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}
 	// Bound to the device, never trusting it: this sign-in skipped the
 	// plugin's second factor, and a trusted device skips it later for a
 	// password sign-in too.
-	token, err := issueSession(ctx, h, userID, dev.id, nil)
+	token, err := issueSession(ctx, h, attempt, userID, dev, nil)
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}

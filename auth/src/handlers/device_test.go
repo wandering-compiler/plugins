@@ -285,7 +285,7 @@ func TestMintDevice_AStoreThatAnswersNoRowBindsNothing(t *testing.T) {
 	if _, err := mintDevice(mintCtx(), h, "u1", testJKT); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("a legacy row: err = %v, want errDeviceNotRegistered", err)
 	}
-	if _, err := h.issueBoundToken(mintCtx(), "u1", "", h.sessionTokenExpiry()); !errors.Is(err, errDeviceNotRegistered) {
+	if _, err := h.issueBoundToken(mintCtx(), "u1", signInDevice{thumbprint: testJKT}, h.sessionTokenExpiry()); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("an unbound mint: err = %v, want errDeviceNotRegistered", err)
 	}
 }
@@ -347,7 +347,7 @@ func TestIssueSession_BindsAndTrustsOnlyWithACutoff(t *testing.T) {
 	} {
 		m := newDeviceStore()
 		h := &AuthServiceHandler{Query: m, Mutation: m}
-		tok, err := issueSession(context.Background(), h, "u1", "dev-7", c.cutoff)
+		tok, err := issueSession(context.Background(), h, beginSignIn(context.Background(), pb.SignInMethod_SIGN_IN_METHOD_PASSWORD), "u1", signInDevice{id: "dev-7", thumbprint: testJKT}, c.cutoff)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}

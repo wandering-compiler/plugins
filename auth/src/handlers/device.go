@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/lib/principal"
+
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
@@ -104,11 +106,12 @@ func mintThumbprint(ctx context.Context) (string, error) {
 	return jkt, nil
 }
 
-// signInDevice is what mintDevice found: the device's id, whether it is
-// trusted, and — for a trusted one — the cutoff a renewal of that trust must
-// hold against (see issueSession's trustCutoff).
+// signInDevice is what mintDevice found: the device's id and key
+// thumbprint, whether it is trusted, and — for a trusted one — the cutoff a
+// renewal of that trust must hold against (see issueSession's trustCutoff).
 type signInDevice struct {
 	id          string
+	thumbprint  string
 	trusted     bool
 	trustCutoff *timestamppb.Timestamp
 }
@@ -128,6 +131,9 @@ type signInDevice struct {
 // challenge, never a skipped one). A trusted device comes back with the
 // revocation stamp it was judged against as its trust cutoff: renewing the
 // trust must not outlive a revocation that commits after this read.
+//
+// A revoked device comes back with its id beside the refusal, for the
+// sign-in history (no token is ever bound to it).
 func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint string) (signInDevice, error) {
 	label, ip := deviceLabel(ctx)
 	resp, err := h.Mutation.RegisterDevice(ctx, &pb.RegisterDeviceReq{
@@ -147,9 +153,9 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 		return signInDevice{}, errDeviceNotRegistered
 	}
 	if dev.GetRevokedAt() != nil {
-		return signInDevice{}, deviceRevoked(ctx)
+		return signInDevice{id: dev.GetId(), thumbprint: thumbprint}, deviceRevoked(ctx)
 	}
-	out := signInDevice{id: dev.GetId()}
+	out := signInDevice{id: dev.GetId(), thumbprint: thumbprint}
 	if dev.GetTrustedAt() == nil {
 		return out, nil
 	}
@@ -164,12 +170,13 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 	return out, nil
 }
 
-// issueBoundToken mints a session token bound to deviceID, expiring at
+// issueBoundToken mints a session token bound to dev, expiring at
 // expiresAt, and returns the token the caller is handed once. The ONE place a
 // session row is written, so there is no path that mints one unbound:
-// IssueToken's request requires the device as well.
-func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID, deviceID string, expiresAt *timestamppb.Timestamp) (string, error) {
-	if deviceID == "" {
+// IssueToken's request requires the device as well. The device's key
+// thumbprint goes to TokenIssued as its device_id.
+func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID string, dev signInDevice, expiresAt *timestamppb.Timestamp) (string, error) {
+	if dev.id == "" {
 		return "", errDeviceNotRegistered
 	}
 	token, hash, err := newBearerToken()
@@ -177,10 +184,11 @@ func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID, device
 		return "", err
 	}
 	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
-		UserId:    userID,
-		DeviceId:  deviceID,
-		ExpiresAt: expiresAt,
-		TokenHash: hash,
+		UserId:     userID,
+		DeviceId:   dev.id,
+		ExpiresAt:  expiresAt,
+		TokenHash:  hash,
+		Thumbprint: dev.thumbprint,
 	}); err != nil {
 		return "", err
 	}
@@ -188,7 +196,8 @@ func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID, device
 }
 
 // issueSession mints the session bearer for an authenticated principal,
-// bound to the device mintDevice registered, with the session lifetime.
+// bound to the device mintDevice registered, with the session lifetime, and
+// writes the attempt's success row with it (mintSession: one transaction).
 // Shared by SignIn, VerifyMfa and the OAuth exchange.
 //
 // trustCutoff says whether this sign-in may make the device trusted: nil means
@@ -203,19 +212,38 @@ func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID, device
 //
 // Trust is best effort: a failed TrustDevice leaves the device untrusted (it
 // is challenged again next time) and does not fail the session just issued.
-func issueSession(ctx context.Context, h *AuthServiceHandler, userID, deviceID string, trustCutoff *timestamppb.Timestamp) (string, error) {
-	token, err := h.issueBoundToken(ctx, userID, deviceID, h.sessionTokenExpiry())
+// It is written after the session's transaction commits, so a failed trust
+// statement cannot abort that transaction.
+func issueSession(ctx context.Context, h *AuthServiceHandler, a *signInAttempt, userID string, dev signInDevice, trustCutoff *timestamppb.Timestamp) (string, error) {
+	token, err := h.mintSession(ctx, a, userID, dev, h.sessionTokenExpiry())
 	if err != nil {
 		return "", err
 	}
 	if trustCutoff != nil {
 		_, _ = h.Mutation.TrustDevice(ctx, &pb.TrustDeviceReq{
 			UserId:          userID,
-			DeviceId:        deviceID,
+			DeviceId:        dev.id,
 			NotRevokedAfter: trustCutoff,
 		})
 	}
 	return token, nil
+}
+
+// requestThumbprint is the key thumbprint of the device the current request
+// comes from, for the device_id of the events it causes: on an authenticated
+// request the envelope's device (Authenticate matched the proof to the
+// token's binding), on a mint request the proof's key. Empty when there is
+// neither (project code calling a handler directly).
+func requestThumbprint(ctx context.Context) string {
+	var ar pb.AuthResp
+	if err := principal.Envelope(ctx, &ar); err == nil && ar.GetDeviceId() != "" {
+		return ar.GetDeviceId()
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	if jkt := firstMeta(md, dpopJKTKey); validThumbprint(jkt) {
+		return jkt
+	}
+	return ""
 }
 
 // checkTokenBinding is Authenticate's device check for a request that proved

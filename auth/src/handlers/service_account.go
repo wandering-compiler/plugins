@@ -45,6 +45,8 @@ func init() {
 		}
 		return nil
 	}
+	signInOutcomeRules = append(signInOutcomeRules,
+		outcomeRule{errAuthnBotNoPassword, pb.SignInOutcome_SIGN_IN_OUTCOME_MACHINE_ACCOUNT})
 }
 
 // errNotABotAccount is the refusal for minting a token against a person.

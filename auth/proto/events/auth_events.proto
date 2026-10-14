@@ -15,6 +15,14 @@ syntax = "proto3";
 // Every id field on every event is a UUID (string carrier) —
 // mirrors the plugin's UUID-native identifier strategy
 // (types/models.proto §"Identifier strategy").
+//
+// device_id is the exception: on the token, sign-in and MFA events it is the
+// key thumbprint of the device that caused the event (RFC 7638, 43
+// characters) — the value AuthResp.device_id and principal.DeviceID carry,
+// so a subscriber can match it against the device of any request — not the
+// Device row's UUID. Each emit fills it from its request's event-only
+// `thumbprint`. The sign-in attempts themselves are not events: they are the
+// SignInEvent rows (types/models.proto).
 
 package w17.contrib.auth;
 
@@ -84,6 +92,10 @@ message UserTokenRevoked {
   option (w17.contrib.plugin_feature) = "user_admin";
 
   string token_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the operator's device,
+  // not the revoked token's.
+  string device_id = 2;
 }
 
 // TokenIssued — emitted on AuthMutation.IssueToken after the
@@ -99,6 +111,10 @@ message TokenIssued {
   string                    token_id  = 1;
   string                    user_id   = 2;
   google.protobuf.Timestamp issued_at = 3;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the device the token
+  // is bound to, which signed the sign-in.
+  string                    device_id = 4;
 }
 
 // TokenRevoked — emitted on AuthMutation.RevokeSessionToken (the live
@@ -126,6 +142,10 @@ message TokenRevoked {
 
   string token_id = 1;
   string user_id  = 2;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the device that
+  // signed out.
+  string device_id = 3;
 }
 
 // RBAC lifecycle — fired by the eight mutations on the
@@ -245,6 +265,10 @@ message MfaChallengeRequested {
   string                    email         = 4; // delivery hint
   string                    code          = 5; // plugin-generates mode only; blank otherwise
   google.protobuf.Timestamp expires_at    = 6;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the device that passed
+  // the password and must complete the sign-in.
+  string                    device_id     = 7;
 }
 
 // MfaVerified — emitted by ConsumeMfaChallenge on a successful second
@@ -254,6 +278,9 @@ message MfaVerified {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id      = 1;
   string challenge_id = 2;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id    = 3;
 }
 
 // TotpEnrolled / TotpConfirmed / TotpDisabled — authenticator lifecycle
@@ -263,12 +290,18 @@ message TotpEnrolled {
   option (w17.contrib.plugin_feature) = "two_factor";
   string                    user_id     = 1;
   google.protobuf.Timestamp enrolled_at = 2;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string                    device_id   = 3;
 }
 
 message TotpConfirmed {
   option (w17.event) = { channel: "events", topic: "auth.totp.confirmed" };
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id = 2;
 }
 
 // TotpDisabled — emitted on AuthMutation.RevokeTotpSecret: the authenticator
@@ -278,6 +311,9 @@ message TotpDisabled {
   option (w17.event) = { channel: "events", topic: "auth.totp.disabled" };
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id = 2;
 }
 
 // RecoveryCodeUsed — a recovery code was spent (sign-in, or the step-up of
@@ -287,6 +323,9 @@ message RecoveryCodeUsed {
   option (w17.event) = { channel: "events", topic: "auth.mfa.recovery_code_used" };
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id = 2;
 }
 
 // password_reset lifecycle — emitted by CreatePasswordResetToken when a

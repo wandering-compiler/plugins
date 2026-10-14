@@ -491,6 +491,137 @@ message Device {
   google.protobuf.Timestamp revoked_at   = 11 [(w17.field) = { type: DATETIME, null: true }];
 }
 
+// SignInMethod — which mint path a SignInEvent records. Values are explicit
+// and never reused; a mint path added later gets a new number. Prefixed
+// because proto enum values share the package's scope.
+enum SignInMethod {
+  SIGN_IN_METHOD_UNSPECIFIED = 0;
+  // SignIn: an address and a password (the admin's sign-in included).
+  SIGN_IN_METHOD_PASSWORD = 1;
+  // VerifyMfa: the second step of a password sign-in (two_factor).
+  SIGN_IN_METHOD_MFA = 2;
+  // SignUp when it issues a session (sign_up_turnkey without
+  // sign_up_confirmation). A parked registration signs nobody in and is not
+  // recorded; its ConfirmSignUp is.
+  SIGN_IN_METHOD_SIGN_UP = 3;
+  // ConfirmSignUp (sign_up_confirmation).
+  SIGN_IN_METHOD_SIGN_UP_CONFIRM = 4;
+  // OAuthExchange: the page redeems the provider's login code (oauth).
+  SIGN_IN_METHOD_OAUTH = 5;
+  // CliToken: a CLI redeems the code a signed-in browser approved
+  // (cli_login).
+  SIGN_IN_METHOD_CLI = 6;
+}
+
+// SignInOutcome — how a sign-in attempt ended. One value per refusal the mint
+// paths make; what the caller was told is unchanged (most of these reach the
+// wire as the same opaque refusal — the history is the operator's, never the
+// caller's). Values are explicit and never reused.
+enum SignInOutcome {
+  SIGN_IN_OUTCOME_UNSPECIFIED = 0;
+  // A session was issued.
+  SIGN_IN_OUTCOME_OK = 1;
+  // The password was right and a second factor was asked for (SignIn
+  // answered mfa_required). VerifyMfa records how it ended.
+  SIGN_IN_OUTCOME_MFA_REQUIRED = 2;
+  // No account has the address (user_id NULL).
+  SIGN_IN_OUTCOME_UNKNOWN_ACCOUNT = 3;
+  // The account exists; the password was wrong.
+  SIGN_IN_OUTCOME_WRONG_PASSWORD = 4;
+  // The account is disabled (or erased).
+  SIGN_IN_OUTCOME_ACCOUNT_DISABLED = 5;
+  // A machine account (service_account) tried a password sign-in.
+  SIGN_IN_OUTCOME_MACHINE_ACCOUNT = 6;
+  // The request proved no device key (DEVICE_PROOF_REQUIRED).
+  SIGN_IN_OUTCOME_DEVICE_PROOF_REQUIRED = 7;
+  // The device key was revoked for this account (DEVICE_REVOKED).
+  SIGN_IN_OUTCOME_DEVICE_REVOKED = 8;
+  // A single-use code was wrong, unknown, expired or spent: the second
+  // factor's code, a sign-up confirmation code, an OAuth login code or its
+  // verifier, a CLI code, its verifier or its redirect.
+  SIGN_IN_OUTCOME_WRONG_CODE = 9;
+  // The code's attempt budget was spent (an MFA challenge, a pending
+  // sign-up).
+  SIGN_IN_OUTCOME_TOO_MANY_ATTEMPTS = 10;
+  // VerifyMfa signed by another key than the challenged sign-in.
+  SIGN_IN_OUTCOME_OTHER_DEVICE = 11;
+  // Too many second-factor challenges for the account in the window.
+  SIGN_IN_OUTCOME_RATE_LIMITED = 12;
+  // A registration named an address that has an account (EMAIL_TAKEN).
+  SIGN_IN_OUTCOME_EMAIL_TAKEN = 13;
+  // A registration refused by a sign-up gate: the reserved domain, the
+  // allowlist, invite-only, an invitation for another address, an unknown
+  // tenant.
+  SIGN_IN_OUTCOME_SIGN_UP_REFUSED = 14;
+  // OAuth refused to link an identity: the account or the provider has not
+  // verified the address.
+  SIGN_IN_OUTCOME_UNVERIFIED_EMAIL = 15;
+  // A registered CLI-login client failed its authentication or is revoked.
+  SIGN_IN_OUTCOME_CLIENT_REFUSED = 16;
+  // The service failed (a store or coordinator outage, an unexpected
+  // error): the caller was told so, or refused.
+  SIGN_IN_OUTCOME_ERROR = 17;
+  // Any other refusal (for example a CLI exchange after the approving
+  // session ended).
+  SIGN_IN_OUTCOME_REFUSED = 18;
+}
+
+// SignInEvent — the sign-in history: one row per sign-in attempt on every
+// mint path (SignInMethod above), whatever its outcome, failures included.
+// Base tier.
+//
+// APPEND-ONLY. A row is written once (RecordSignInEvent) and never updated
+// or deleted, with one exception: an erasure (user_admin's EraseUsers)
+// pseudonymises the personal columns of the erased account's rows — address,
+// ip and user_agent — in place (EraseSignInEvents), and the row stays.
+//
+// A successful sign-in writes its row in the transaction that mints the
+// session, so a session never exists without its history row; a refusal
+// writes it on its own, and a failure to write it is logged and does not
+// change the refusal the caller gets.
+//
+//   user_id     the account the attempt reached; NULL when it reached none
+//               (an unknown address, or a refusal before any account was
+//               looked up).
+//   address     what the attempt named, normalised (trimmed, lower-case):
+//               the typed address of a password sign-in or registration,
+//               the provider's address of an OAuth one; blank when the path
+//               names none (VerifyMfa, CliToken).
+//   device_id   the Device the attempt registered or found (the
+//               UserToken.device_id of the session it issued); NULL when it
+//               got that far no further (a wrong password registers no
+//               device).
+//   thumbprint  the key that signed the request's proof (the gateway's
+//               x-w17-dpop-jkt), even with no Device row; NULL without a
+//               proof.
+//   ip, user_agent  the client address (first X-Forwarded-For hop) and user
+//               agent, as Device.ip / Device.label take them. Display only.
+//
+// No DB-level FK on user_id / device_id (the activation-rename caveat, see
+// UserToken).
+message SignInEvent {
+  option (w17.db.table) = {
+    indexes: [
+      { fields: [{ name: "user_id" }, { name: "created_at" }] },
+      { fields: [{ name: "address" }, { name: "created_at" }] }
+    ]
+  };
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  google.protobuf.Timestamp created_at = 2 [
+    (w17.field) = { type: DATETIME, default_auto: NOW, immutable: true },
+    (w17.db.column) = { index: true }
+  ];
+  string user_id    = 3 [(w17.field) = { type: UUID, null: true }];
+  string address    = 4 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  string device_id  = 5 [(w17.field) = { type: UUID, null: true }];
+  string thumbprint = 6 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  string ip         = 7 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  string user_agent = 8 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  SignInMethod  method  = 9 [(w17.field) = { type: ENUM }];
+  SignInOutcome outcome = 10 [(w17.field) = { type: ENUM }];
+}
+
 // OAuthProvider — an admin-configured OAuth2/OIDC server, behind `oauth`.
 // Generic by design: provider differences (GitHub isn't OIDC) are captured
 // by userinfo_url + the *_path mapping columns, never per-provider code.
