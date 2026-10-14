@@ -233,6 +233,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	// Every exchange appends one SignInEvent (method OAUTH), the refusals
 	// too; the success row is written with the session.
 	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_OAUTH)
+	attempt.publicComputer = req.GetPublicComputer()
 	defer func() { h.endSignIn(ctx, attempt, err) }()
 
 	// The device key before the code is spent: a client that cannot sign
@@ -318,7 +319,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}
-	return &pb.OAuthExchangeResp{UserId: userID, Token: token}, nil
+	return &pb.OAuthExchangeResp{UserId: userID, Token: token, PublicComputer: attempt.publicComputer}, nil
 }
 
 // loadEnabledProvider resolves a provider by slug and enforces `enabled`.

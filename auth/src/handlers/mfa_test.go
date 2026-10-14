@@ -72,6 +72,8 @@ type mfaMock struct {
 	chCreatedAt *timestamppb.Timestamp
 	chConsumed  bool
 	chAttempts  int64 // failed-attempt counter
+	chPublic    bool  // the challenged sign-in asked for a public-computer session
+	issuedReq   *pb.IssueTokenReq
 
 	userEmail string
 
@@ -124,7 +126,7 @@ func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ 
 func (m *mfaMock) GetMfaChallenge(ctx context.Context, in *pb.GetMfaChallengeReq, _ ...grpc.CallOption) (*pb.GetMfaChallengeResp, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ch := &pb.MfaChallenge{Id: in.GetChallengeId(), UserId: m.chUserID, CodeHash: m.chCodeHash, CreatedAt: m.chCreatedAt, Attempts: m.chAttempts, Thumbprint: m.chThumb}
+	ch := &pb.MfaChallenge{Id: in.GetChallengeId(), UserId: m.chUserID, CodeHash: m.chCodeHash, CreatedAt: m.chCreatedAt, Attempts: m.chAttempts, Thumbprint: m.chThumb, PublicComputer: m.chPublic}
 	if m.chConsumed {
 		ch.ConsumedAt = timestamppb.Now()
 	}
@@ -250,6 +252,7 @@ func (m *mfaMock) CreateMfaChallenge(ctx context.Context, in *pb.CreateMfaChalle
 	m.createdChallenge = in
 	m.chUserID = in.GetUserId()
 	m.chThumb = in.GetThumbprint()
+	m.chPublic = in.GetPublicComputer()
 	m.chCodeHash = in.GetCodeHash()
 	m.chCreatedAt = timestamppb.Now()
 	m.chConsumed = false
@@ -293,7 +296,7 @@ func (m *mfaMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...g
 	return &pb.TrustDeviceResp{DeviceId: in.GetDeviceId()}, nil
 }
 func (m *mfaMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
-	m.issuedHash, m.issuedDevice = in.GetTokenHash(), in.GetDeviceId()
+	m.issuedHash, m.issuedDevice, m.issuedReq = in.GetTokenHash(), in.GetDeviceId(), in
 	return &pb.IssueTokenResp{Token: &pb.UserToken{}}, nil
 }
 
@@ -320,7 +323,7 @@ func newMfaHandler(m *mfaMock) *AuthServiceHandler {
 func TestMfaGate_AllLogins_NoTotp_GeneratesCode(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
-	resp, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false)
+	resp, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false)
 	if err != nil || !challenged {
 		t.Fatalf("all_logins must challenge: challenged=%v err=%v", challenged, err)
 	}
@@ -342,7 +345,7 @@ func TestMfaGate_NewDevices_SkipsTrusted(t *testing.T) {
 	m := &mfaMock{}
 	h := newMfaHandler(m)
 	h.TwoFactorScope = scopeNewDevices
-	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", true)
+	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", true, false)
 	if err != nil {
 		t.Fatalf("gate: %v", err)
 	}
@@ -355,7 +358,7 @@ func TestMfaGate_NewDevices_ChallengesUntrusted(t *testing.T) {
 	m := &mfaMock{}
 	h := newMfaHandler(m)
 	h.TwoFactorScope = scopeNewDevices
-	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", false)
+	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", false, false)
 	if err != nil || !challenged {
 		t.Errorf("new_devices must challenge an untrusted device: challenged=%v err=%v", challenged, err)
 	}
@@ -364,7 +367,7 @@ func TestMfaGate_NewDevices_ChallengesUntrusted(t *testing.T) {
 func TestMfaGate_TotpEnrolled_NoCode(t *testing.T) {
 	m := &mfaMock{totpSeed: "x", totpConfirmed: true} // confirmed authenticator
 	h := newMfaHandler(m)
-	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, testJKT, false)
+	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, testJKT, false, false)
 	if err != nil || !challenged {
 		t.Fatalf("must challenge: %v", err)
 	}
@@ -397,7 +400,7 @@ func TestEnrollConfirmVerify_TotpRoundTrip(t *testing.T) {
 		t.Error("confirm should mark the secret confirmed")
 	}
 	// Now a sign-in challenge + VerifyMfa with a TOTP code.
-	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false)
+	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false)
 	if !challenged {
 		t.Fatal("expected challenge")
 	}
@@ -416,7 +419,7 @@ func TestVerifyMfa_EventCodePath(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false // event path even though we could enroll
 	ctx := ctxWithCaller("u1")
-	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false)
+	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false)
 	if !challenged {
 		t.Fatal("expected challenge")
 	}
@@ -444,7 +447,7 @@ func TestVerifyMfa_OnlyTheChallengedKeyCompletesTheSignIn(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
 	ctx := ctxWithCaller("u1")
-	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false); !challenged {
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
 		t.Fatal("expected challenge")
 	}
 	if m.createdChallenge.GetThumbprint() != testJKT {
@@ -468,7 +471,7 @@ func TestVerifyMfa_WrongCode_Unauthenticated(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
 	ctx := ctxWithCaller("u1")
-	_, _, _ = signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false)
+	_, _, _ = signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false)
 	if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"}); err == nil {
 		t.Error("a wrong code must fail VerifyMfa")
 	}
@@ -726,7 +729,7 @@ func TestMfaGate_ReadFailure_RefusesRatherThanSkipTheChallenge(t *testing.T) {
 	h := newMfaHandler(m)
 	m.totpReadErr = status.Error(codes.Unavailable, "enrolment store down")
 
-	_, _, err := mfaSignInGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false)
+	_, _, err := mfaSignInGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false, false)
 	if err == nil {
 		t.Error("a failed enrolment read must not let sign-in proceed on one factor")
 	}
@@ -922,7 +925,7 @@ func TestVerifyMfa_ADisabledAccountGetsNoSession(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
 	ctx := ctxWithCaller("u1")
-	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false); !challenged {
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
 		t.Fatal("expected challenge")
 	}
 	m.disabled = true
@@ -973,7 +976,7 @@ func TestVerifyMfa_TrustIsGuardedFromTheChallengeOn(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
 	ctx := ctxWithCaller("u1")
-	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false); !challenged {
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
 		t.Fatal("expected challenge")
 	}
 	m.chCreatedAt = timestamppb.New(time.Now().Add(-time.Minute))

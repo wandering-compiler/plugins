@@ -177,7 +177,7 @@ func noSecondFactor(t *testing.T) *[]bool {
 	t.Helper()
 	saved := signInMfaGate
 	var seen []bool
-	signInMfaGate = func(_ context.Context, _ *AuthServiceHandler, _ *pb.User, _ string, trusted bool) (*pb.SignInResp, bool, error) {
+	signInMfaGate = func(_ context.Context, _ *AuthServiceHandler, _ *pb.User, _ string, trusted, _ bool) (*pb.SignInResp, bool, error) {
 		seen = append(seen, trusted)
 		return nil, false, nil
 	}
@@ -285,7 +285,7 @@ func TestMintDevice_AStoreThatAnswersNoRowBindsNothing(t *testing.T) {
 	if _, err := mintDevice(mintCtx(), h, "u1", testJKT); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("a legacy row: err = %v, want errDeviceNotRegistered", err)
 	}
-	if _, err := h.issueBoundToken(mintCtx(), "u1", signInDevice{thumbprint: testJKT}, h.sessionTokenExpiry()); !errors.Is(err, errDeviceNotRegistered) {
+	if _, err := h.issueBoundToken(mintCtx(), "u1", signInDevice{thumbprint: testJKT}, h.sessionTokenExpiry(), sessionGrant{}); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("an unbound mint: err = %v, want errDeviceNotRegistered", err)
 	}
 }
@@ -842,7 +842,7 @@ func TestTrustDevice_TheStatementIsGuardedByTheRevocations(t *testing.T) {
 // Every session row is written with its device, and both token lookups read
 // the binding with the token, so the check costs no round trip.
 func TestTokenStatements_CarryTheBinding(t *testing.T) {
-	if body := mutationRPCBody(t, "IssueToken"); !strings.Contains(body, `"device_id = :device_id "`) || strings.Contains(body, "feature(devices)") {
+	if body := mutationRPCBody(t, "IssueToken"); !strings.Contains(body, `"device_id = :device_id, "`) || strings.Contains(body, "feature(devices)") {
 		t.Errorf("IssueToken does not always write the device:\n%s", body)
 	}
 	for _, rpc := range []string{"GetUserByTokenWithPermissions", "GetTokenWithType"} {
@@ -978,7 +978,7 @@ func TestExpiryAndChallengeStatements_CarryTheKey(t *testing.T) {
 			t.Errorf("%s does not read the binding:\n%s", rpc, body)
 		}
 	}
-	if body := mutationRPCBody(t, "CreateMfaChallenge"); !strings.Contains(body, `"thumbprint = :thumbprint "`) {
+	if body := mutationRPCBody(t, "CreateMfaChallenge"); !strings.Contains(body, `"thumbprint = :thumbprint, "`) {
 		t.Errorf("CreateMfaChallenge does not record the key:\n%s", body)
 	}
 	if body := queryRPCBody(t, "GetMfaChallenge"); !strings.Contains(body, `COALESCE(c.thumbprint, '') AS challenge.thumbprint`) {

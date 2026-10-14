@@ -303,11 +303,11 @@ func (s *revocationStore) RevokeTokensForReset(_ context.Context, in *pb.RevokeT
 	return &pb.RevokeTokensForResetResp{}, nil
 }
 
-// RevokeDeviceTokens: user_id AND device_id; by = user_id.
+// RevokeDeviceTokens: user_id AND device_id; by = :revoked_by.
 func (s *revocationStore) RevokeDeviceTokens(_ context.Context, in *pb.RevokeDeviceTokensReq, _ ...grpc.CallOption) (*pb.RevokeDeviceTokensResp, error) {
 	for _, t := range s.tokens {
 		if t.userID == in.GetUserId() && t.deviceID == in.GetDeviceId() {
-			revoke(t, in.GetUserId(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+			revoke(t, in.GetRevokedBy(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
 		}
 	}
 	return &pb.RevokeDeviceTokensResp{}, nil

@@ -100,7 +100,7 @@ func (s *roundTripStore) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq
 func pinConsoleActivation(t *testing.T) {
 	t.Helper()
 	origMfa := signInMfaGate
-	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool, bool) (*pb.SignInResp, bool, error) {
 		return nil, false, nil
 	}
 	t.Cleanup(func() { signInMfaGate = origMfa })

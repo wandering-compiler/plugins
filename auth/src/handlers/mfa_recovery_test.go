@@ -129,13 +129,13 @@ func TestVerifyMfa_ARecoveryCodeSignsInOnce(t *testing.T) {
 	ctx := ctxWithCaller("u1")
 	_, rc := enrolled(t, h, ctx)
 	typed := strings.ToUpper(strings.ReplaceAll(rc[0], "-", " "))
-	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false); !ch {
+	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false); !ch {
 		t.Fatal("expected challenge")
 	}
 	if v, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: typed}); err != nil || v.GetToken() == "" {
 		t.Fatalf("a recovery code did not sign in: %v", err)
 	}
-	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false); !ch {
+	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false); !ch {
 		t.Fatal("expected challenge")
 	}
 	if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: rc[0]}); err == nil {

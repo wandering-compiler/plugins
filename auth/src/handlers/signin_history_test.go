@@ -92,6 +92,7 @@ func signInEventOf(in *pb.RecordSignInEventReq) *pb.SignInEvent {
 		CreatedAt: timestamppb.Now(), UserId: in.GetUserId(), Address: in.GetAddress(),
 		DeviceId: in.GetDeviceId(), Thumbprint: in.GetThumbprint(), Ip: in.GetIp(),
 		UserAgent: in.GetUserAgent(), Method: in.GetMethod(), Outcome: in.GetOutcome(),
+		PublicComputer: in.GetPublicComputer(),
 	}
 }
 
@@ -175,7 +176,7 @@ func TestSignInHistory_SignIn_EveryOutcomeWritesOneRow(t *testing.T) {
 	}
 	setMfa := func(t *testing.T, resp *pb.SignInResp, challenged bool, err error) {
 		saved := signInMfaGate
-		signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+		signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool, bool) (*pb.SignInResp, bool, error) {
 			return resp, challenged, err
 		}
 		t.Cleanup(func() { signInMfaGate = saved })
@@ -467,7 +468,7 @@ func TestSignInHistory_VerifyMfa(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
-	if _, challenged, _ := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false); !challenged {
+	if _, challenged, _ := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
 		t.Fatal("expected a challenge")
 	}
 	code := m.createdChallenge.GetCode()
@@ -860,7 +861,7 @@ func TestEventsCarryTheDevice(t *testing.T) {
 	// MfaChallengeRequested, RecoveryCodeUsed, MfaVerified, TokenIssued: all
 	// the device that signed the sign-in.
 	c.thumbs = map[string][]string{}
-	if _, challenged, err := mfaSignInGate(mintCtx(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false); err != nil || !challenged {
+	if _, challenged, err := mfaSignInGate(mintCtx(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); err != nil || !challenged {
 		t.Fatalf("challenge: %v", err)
 	}
 	if _, err := h.VerifyMfa(mintCtx(), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: rc[0]}); err != nil {

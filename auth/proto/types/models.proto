@@ -425,6 +425,24 @@ message UserToken {
   // revoke_reason — why (RevokeReason). NONE on a live token. Written in the
   // same statement as revoked_at, so the two never disagree.
   RevokeReason revoke_reason = 14 [(w17.field) = { type: ENUM, zero_is_value: true, default_int: 0 }];
+
+  // public_computer — the session was signed in with "this is a public
+  // computer" (SignIn, VerifyMfa through its challenge, OAuthExchange,
+  // SignUp, ConfirmSignUp): it got the public session lifetime
+  // (public_session_ttl_seconds) and its device was not made trusted. Shown
+  // on the admin Sessions page; the client keeps such a token in session
+  // storage only. FALSE for every other token. Base tier.
+  bool public_computer = 15 [(w17.field) = { default_auto: FALSE }];
+
+  // approved_by_device_id — for a CLI session (cli_login's CliToken), the
+  // Device row of the browser session that APPROVED the login (CliAuthorize).
+  // The session itself is bound to the CLI's own key (device_id); the
+  // approving browser is a different device and is recorded here, so an
+  // operator can see "this CLI session was approved from device X". NULL on
+  // every other token, and on a CLI session whose approving session was bound
+  // to no device. Base tier, like mcp_only: one mint path sets it. No
+  // DB-level FK (the activation-rename caveat in the message header).
+  string approved_by_device_id = 16 [(w17.field) = { type: UUID, null: true }];
 }
 
 // Device — one (user, device key) pair. Base tier: every session is bound
@@ -624,6 +642,10 @@ message SignInEvent {
   string user_agent = 8 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   SignInMethod  method  = 9 [(w17.field) = { type: ENUM }];
   SignInOutcome outcome = 10 [(w17.field) = { type: ENUM }];
+  // The attempt asked for a public-computer session (SignIn, OAuthExchange,
+  // SignUp, ConfirmSignUp; VerifyMfa takes it from its challenge). Recorded
+  // whatever the outcome.
+  bool public_computer = 11 [(w17.field) = { default_auto: FALSE }];
 }
 
 // OAuthProvider — an admin-configured OAuth2/OIDC server, behind `oauth`.
@@ -816,6 +838,12 @@ message MfaChallenge {
   // grants land on the key that was challenged. NULL only on a challenge
   // raised before device binding (refused, like any other key).
   string thumbprint  = 7 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  // public_computer — the challenged SignIn asked for a public-computer
+  // session. VerifyMfa completes the sign-in the SignIn started, so it takes
+  // the choice from here and never from its own request: the session gets the
+  // public lifetime and the device is not trusted, even though the second
+  // factor passed.
+  bool public_computer = 8 [(w17.field) = { default_auto: FALSE }];
 }
 
 // PendingSignUp — a registration that has not yet proved its address
@@ -1439,6 +1467,12 @@ message CliAuthCode {
   // NULL when the approving session never expires (and on a code minted
   // before this column existed); CliToken then uses the normal session TTL.
   google.protobuf.Timestamp session_expires_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  // approved_by_device_id — the Device row the approving browser session is
+  // bound to (read with its expiry by CliAuthorize). CliToken copies it onto
+  // the CLI session as UserToken.approved_by_device_id; the CLI session is
+  // bound to the CLI's own key, never to this one. NULL when the approving
+  // session is bound to no device, and on a code minted before this column.
+  string approved_by_device_id = 11 [(w17.field) = { type: UUID, null: true }];
 }
 
 // Organization is a GitHub-style org — a membership boundary an identity

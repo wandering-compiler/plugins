@@ -105,6 +105,11 @@ message IssueTokenReq {
   // thumbprint of the bound device, TokenIssued's device_id — the value
   // Authenticate later answers as AuthResp.device_id for this token.
   string thumbprint = 5;
+  // A public-computer session (UserToken.public_computer).
+  bool public_computer = 6;
+  // The Device row of the browser session that approved a CLI login
+  // (UserToken.approved_by_device_id); empty (NULL) for every other mint.
+  string approved_by_device_id = 7 [(w17.field) = { type: UUID, null: true }];
 }
 message IssueTokenResp { UserToken token = 1; }
 
@@ -452,6 +457,8 @@ message CreateMfaChallengeReq {
   // The key that signed the sign-in raising the challenge; VerifyMfa must
   // be signed by the same one.
   string thumbprint = 7 [(w17.field) = { type: CHAR, max_len: 43 }];
+  // The sign-in asked for a public-computer session; VerifyMfa honours it.
+  bool public_computer = 8;
 }
 message CreateMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -757,6 +764,8 @@ message RecordSignInEventReq {
   string user_agent = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   SignInMethod  method  = 7 [(w17.field) = { type: ENUM }];
   SignInOutcome outcome = 8 [(w17.field) = { type: ENUM }];
+  // The attempt asked for a public-computer session.
+  bool public_computer = 9;
 }
 message RecordSignInEventResp {
   string id = 1;
@@ -798,22 +807,24 @@ message TrustDeviceResp {
   string device_id = 1;
 }
 
+// RevokeDeviceTokensReq / MarkDeviceRevokedReq — base tier: both the
+// `devices` self-service calls and the `user_admin` Devices page revoke a
+// device with them, and an rpc carries one gate.
 message RevokeDeviceTokensReq {
-  option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
+  // Who revoked: the device's owner for the self-service calls, the operator
+  // for the admin Devices page.
+  string revoked_by = 3 [(w17.field) = { type: UUID }];
 }
 message RevokeDeviceTokensResp {
-  option (w17.contrib.plugin_feature) = "devices";
 }
 
 message MarkDeviceRevokedReq {
-  option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
 }
 message MarkDeviceRevokedResp {
-  option (w17.contrib.plugin_feature) = "devices";
   string device_id = 1;
 }
 
@@ -1206,6 +1217,9 @@ message CreateCliAuthCodeReq {
   // caller's UserToken row (GetLiveSessionExpiry). Absent = that session
   // never expires. See CliAuthCode.session_expires_at.
   google.protobuf.Timestamp session_expires_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  // The Device row the approving session is bound to (read with its expiry).
+  // See CliAuthCode.approved_by_device_id. Empty (NULL) when it has none.
+  string approved_by_device_id = 8 [(w17.field) = { type: UUID, null: true }];
 }
 message CreateCliAuthCodeResp {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -1235,6 +1249,9 @@ message ConsumeCliAuthCodeResp {
   // NULL (unset) = that session never expires, or the code predates the
   // column — the normal session TTL applies. Declared so a SQL NULL scans.
   google.protobuf.Timestamp session_expires_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  // The approving session's device; CliToken records it on the CLI session.
+  // NULL (empty) when it had none. Declared so a SQL NULL scans.
+  string approved_by_device_id = 6 [(w17.field) = { type: UUID, null: true }];
 }
 
 // ── org_membership mutation request/response messages ───────
@@ -1555,10 +1572,14 @@ service AuthMutation {
           "user_id = :user_id, "
           "token_hash = :token_hash, "
           "expires_at = :expires_at, "
-          "device_id = :device_id "
+          "device_id = :device_id, "
+          "public_computer = :public_computer, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
           "          device_id AS token.device_id, "
+          "          public_computer AS token.public_computer, "
+          "          approved_by_device_id AS token.approved_by_device_id, "
           "          created_at AS token.created_at"
       }
     };
@@ -2100,7 +2121,8 @@ service AuthMutation {
           "INSERT INTO @module.MfaChallenge SET "
           "user_id = :user_id, "
           "code_hash = :code_hash, "
-          "thumbprint = :thumbprint "
+          "thumbprint = :thumbprint, "
+          "public_computer = :public_computer "
           "RETURNING id AS challenge.id, "
           "          user_id AS challenge.user_id, "
           "          code_hash AS challenge.code_hash, "
@@ -2305,7 +2327,8 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
   // device identity mutations — the device every mint binds to
   // (base) + the revoke primitives the device-mgmt RPCs compose
-  // (gated `devices`).
+  // (RevokeDeviceTokens / MarkDeviceRevoked base, shared by `devices`
+  // and the `user_admin` Devices page; the rest gated `devices`).
   // ────────────────────────────────────────────────────────────
 
 
@@ -2363,7 +2386,8 @@ service AuthMutation {
           "ip = :ip, "
           "user_agent = :user_agent, "
           "method = :method, "
-          "outcome = :outcome "
+          "outcome = :outcome, "
+          "public_computer = :public_computer "
           "RETURNING id AS id"
       }
     };
@@ -2412,9 +2436,11 @@ service AuthMutation {
   }
 
   // RevokeDeviceTokens — revoke every token a device holds (the "log out
-  // this device" primitive), reason DEVICE_REVOKED, the caller as the actor.
-  // Ownership-guarded by user_id so a caller can't end another user's
-  // sessions. Idempotent. RevokeUndevicedSessions — revoke the user's
+  // this device" primitive), reason DEVICE_REVOKED, :revoked_by as the actor
+  // (the owner for the devices calls, the operator for the admin Devices
+  // page). Ownership-guarded by user_id so a caller can't end another user's
+  // sessions. Base tier, like MarkDeviceRevoked: `devices` and `user_admin`
+  // both compose them. Idempotent. RevokeUndevicedSessions — revoke the user's
   // session tokens that carry no device: rows minted before device binding,
   // which Authenticate already refuses (unbound), so this records their end
   // rather than causes it (reason UNBOUND_SESSION). Tokens bound to a legacy
@@ -2437,12 +2463,11 @@ service AuthMutation {
   }
 
   rpc RevokeDeviceTokens(RevokeDeviceTokensReq) returns (RevokeDeviceTokensResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 5 "
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
           "WHERE user_id = :user_id AND device_id = :device_id AND revoked_at IS NULL"
       }
     };
@@ -2457,7 +2482,6 @@ service AuthMutation {
   // stands. Zero rows (already revoked, or not the caller's) → NotFound,
   // which the handler treats as done.
   rpc MarkDeviceRevoked(MarkDeviceRevokedReq) returns (MarkDeviceRevokedResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
@@ -3360,7 +3384,8 @@ service AuthMutation {
           "redirect_uri = :redirect_uri, "
           "client_id = :client_id, "
           "expires_at = :expires_at, "
-          "session_expires_at = :session_expires_at "
+          "session_expires_at = :session_expires_at, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS code.id, "
           "          user_id AS code.user_id, "
           "          code_hash AS code.code_hash, "
@@ -3385,7 +3410,7 @@ service AuthMutation {
           "UPDATE @module.CliAuthCode SET "
           "consumed_at = NOW() "
           "WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() "
-          "RETURNING user_id, code_challenge, redirect_uri, client_id, session_expires_at"
+          "RETURNING user_id, code_challenge, redirect_uri, client_id, session_expires_at, approved_by_device_id"
       }
     };
   }

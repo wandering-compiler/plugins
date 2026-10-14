@@ -50,6 +50,10 @@ env:
     type: int
     default: "2592000"
     description: "Absolute lifetime (seconds) of a browser session bearer token, stamped into UserToken.expires_at at mint time (SignIn / SignUp / VerifyMfa). Default 2592000 = 30 days. The token-validation queries reject an expired token (expires_at > NOW()), so a leaked session token stops working after the TTL even without an explicit logout (OWASP session-timeout baseline). <= 0 falls back to the 30-day default. API tokens have their own lifetime (api_token_default_ttl_hours)."
+  - name: public_session_ttl_seconds
+    type: int
+    default: "28800"
+    description: "Absolute lifetime (seconds) of a session signed in with \"this is a public computer\" (public_computer on SignIn, OAuthExchange, SignUp, ConfirmSignUp; VerifyMfa takes it from the challenge). Default 28800 = 8 hours. Such a session's device is never made trusted, and the client keeps its token in session storage only. Must not be longer than session_token_ttl_seconds: a longer value fails the boot. <= 0 falls back to the 8-hour default (still capped at the session lifetime)."
   - name: api_token_default_ttl_hours
     type: int
     default: "2160"
@@ -290,7 +294,7 @@ features:
       # active feature is staged once.
       - handlers/role_ceiling.go
   - name: user_admin
-    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, a Sessions page to review and revoke tokens, and a SignIns page with the sign-in history (every attempt, failures included; read-only, paged). Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser and the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserErased), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount; actions Disable / Enable / Erase) and the Sessions page (revoked tokens listed as revoked). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
+    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, a Sessions page to review and revoke tokens, and a SignIns page with the sign-in history (every attempt, failures included; read-only, paged). Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser and the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserErased), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount; actions Disable / Enable / Erase) the Sessions page (revoked tokens listed as revoked; each session's device, whether it is a public-computer session, and for a CLI session the device that approved it) and the Devices page (every device of every account — label, key thumbprint, first and last seen, whether its trust stands, revoked or not; AuthQuery.ListAllDevices + GetDevice; the Revoke action, AuthService.RevokeDevices, revokes a device for good and every token bound to it, recording the operator). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
     default: false
     go_files:
       - handlers/user_admin.go
@@ -790,17 +794,25 @@ presets:
           # to the column header — the cell reads "User" and its tooltip
           # carries the user id. Users is gated by the same user_admin
           # feature, so it always co-exists with this page (no dangling ref).
+          #
+          # device → the Devices page, the cell reading as the device's label
+          # (its browser). Devices is gated by the same user_admin feature.
           columns:
             - owner
             - { name: user, ref: { page: Users } }
+            - { name: device, ref: { title: device_label, page: Devices } }
+            - thumbprint
+            - public_computer
             - created_at
             - expires_at
             - revoked_at
             - revoke_reason
           detail_link_column: owner
         detail:
+          # UserTokenAdminDetail: the token, its device and — for a CLI
+          # session — the device of the browser session that approved it.
           read: AuthQuery.GetUserToken
-          readonly_fields: [id, user_id, created_at, expires_at, revoked_at, revoked_by, revoke_reason]
+          readonly_fields: [id, user_id, created_at, expires_at, revoked_at, revoked_by, revoke_reason, public_computer, device_id, device_label, device_thumbprint, approved_by_device_id, approver_label, approver_thumbprint]
         actions:
           - name: revoke
             source: AuthService.RevokeSessions
@@ -823,7 +835,43 @@ presets:
           detail_link_column: account
         detail:
           read: AuthQuery.GetSignInEvent
-          readonly_fields: [id, created_at, user_id, address, method, outcome, device_id, thumbprint, ip, user_agent]
+          readonly_fields: [id, created_at, user_id, address, method, outcome, device_id, thumbprint, ip, user_agent, public_computer]
+      # Turnkey device review. Gated user_admin. Every Device row of every
+      # account — revoked and legacy (keyless, recorded before device binding)
+      # ones included: nothing in the auth tables is deleted. A legacy row
+      # shows no thumbprint and can never be used. The list projects the
+      # account's address (ListAllDevices → DeviceAdminRow, ADMIN-FK) and
+      # whether the device's trust still stands (`trusted`: trusted_at later
+      # than the account's device-trust revocation, and not revoked). The
+      # `revoke` action revokes the selection for good through
+      # AuthService.RevokeDevices: the device and every token bound to it, the
+      # operator recorded; a revoked device is left as it is. No `delete`. A
+      # hand-written page named "Devices" overrides this.
+      - name: Devices
+        model: Device
+        feature: user_admin
+        list:
+          source: AuthQuery.ListAllDevices
+          columns:
+            - owner
+            - { name: user, ref: { page: Users } }
+            - label
+            - thumbprint
+            - ip
+            - created_at
+            - last_seen_at
+            - trusted
+            - revoked_at
+          detail_link_column: owner
+        detail:
+          read: AuthQuery.GetDevice
+          readonly_fields: [id, owner, user, label, thumbprint, ip, created_at, last_seen_at, trusted_at, trust_revoked_at, trusted, revoked_at]
+        actions:
+          - name: revoke
+            source: AuthService.RevokeDevices
+            label: "Revoke"
+            confirm: "Revoke the selected devices? Every session on them ends at once, and their keys can never sign in to these accounts again."
+            target: both
 
 # Dev-only sandbox services this plugin brings for testing / manual
 # trial. Each is wired into the consuming project's tool-owned

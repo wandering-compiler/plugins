@@ -83,7 +83,7 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 	if err := h.checkRedirectAllowed(ctx, req.GetClientId(), req.GetRedirectUri()); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	sessionExpiresAt, err := h.approvingSessionExpiry(ctx, userID)
+	approving, err := h.approvingSession(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,10 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 		ExpiresAt: timestamppb.New(time.Now().Add(defaultCliAuthCodeTTL)),
 		// The session CliToken mints inherits this, so the CLI login ends
 		// when the browser session that approved it does.
-		SessionExpiresAt: sessionExpiresAt,
+		SessionExpiresAt: approving.GetExpiresAt(),
+		// The approving browser's device, recorded on the CLI session as its
+		// approver. The CLI session itself is bound to the CLI's own key.
+		ApprovedByDeviceId: approving.GetDeviceId(),
 	}); err != nil {
 		return nil, err
 	}
@@ -229,7 +232,9 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	token, err := h.mintSession(ctx, attempt, userID, dev, expiresAt)
+	// Bound to the CLI's key (dev); the browser that approved the login is
+	// recorded beside it as the approver.
+	token, err := h.mintSession(ctx, attempt, userID, dev, expiresAt, consumed.GetApprovedByDeviceId())
 	if err != nil {
 		// Classified like every other refusal here: an outage is reported as
 		// one, and no storage text reaches the CLI.
@@ -238,15 +243,16 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	return &pb.CliTokenResp{Token: token, UserId: userID}, nil
 }
 
-// approvingSessionExpiry reads the expiry of the session approving a CLI
-// login: the caller's own session token, named by the gateway envelope.
-// nil means that session never expires.
+// approvingSession reads the session approving a CLI login — the caller's
+// own session token, named by the gateway envelope: its expiry (nil: it never
+// expires) and the Device row it is bound to (the approver recorded on the
+// CLI session).
 //
 // A session that is no longer there refuses the approval rather than
 // degrading to "no cap": a missing row read as "never expires" would hand a
 // revoked session a fresh full-lifetime one, which is the renewal this exists
 // to stop. A read that did not answer refuses too.
-func (h *AuthServiceHandler) approvingSessionExpiry(ctx context.Context, userID string) (*timestamppb.Timestamp, error) {
+func (h *AuthServiceHandler) approvingSession(ctx context.Context, userID string) (*pb.GetLiveSessionExpiryResp, error) {
 	tokenID := callerSessionTokenID(ctx)
 	if tokenID == "" {
 		// requireSessionCaller has already refused this; kept so the
@@ -268,7 +274,7 @@ func (h *AuthServiceHandler) approvingSessionExpiry(ctx context.Context, userID 
 	if resp.GetTokenId() != tokenID {
 		return nil, Unauthenticated(errCliSessionNotLive)
 	}
-	return resp.GetExpiresAt(), nil
+	return resp, nil
 }
 
 // cliSessionExpiry is the expiry of the session CliToken mints: the normal

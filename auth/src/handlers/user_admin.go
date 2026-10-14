@@ -176,6 +176,58 @@ func (h *AuthServiceHandler) eraseUser(ctx context.Context, userID, operator str
 	return nil
 }
 
+// RevokeDevices revokes each selected device for good — the admin Devices
+// page's `revoke` action: every token bound to it is revoked (reason
+// DEVICE_REVOKED, the operator as revoked_by) and the Device row is stamped
+// revoked, in one transaction per device when the bundle has a coordinator,
+// so a device is never left revoked with live sessions or the other way
+// round. The key can never sign in to that account again (DEVICE_REVOKED).
+// The statements are the ones the `devices` self-service calls use, guarded
+// by the device's own account read here first.
+//
+// A device already revoked is left as it is (its first revocation stands, and
+// its tokens were revoked with it); an unknown id is done, not an error, as
+// for RevokeSessions. A LEGACY device (no key, recorded before device
+// binding) can never be used, but revoking one is allowed and records the
+// operator's decision like any other: it is the same two statements.
+func (h *AuthServiceHandler) RevokeDevices(ctx context.Context, req *pb.RevokeDevicesReq) (*pb.RevokeDevicesResp, error) {
+	operator, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	if len(req.GetIds()) == 0 {
+		return nil, errEmptySelection
+	}
+	for _, id := range req.GetIds() {
+		dev, err := h.Query.GetDevice(ctx, &pb.GetDeviceReq{Id: id})
+		if err != nil {
+			if notFoundOK(err) == nil {
+				continue
+			}
+			return nil, err
+		}
+		if dev.GetId() != id || dev.GetRevokedAt() != nil {
+			// Not the row asked for (an answer that names another row is no
+			// answer), or already revoked: nothing to do.
+			continue
+		}
+		userID := dev.GetUser()
+		if err := h.inTx(ctx, func(txCtx context.Context) error {
+			if _, err := h.Mutation.RevokeDeviceTokens(txCtx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: id, RevokedBy: operator}); notFoundOK(err) != nil {
+				return err
+			}
+			// NotFound: revoked by someone else since the read — done.
+			if _, err := h.Mutation.MarkDeviceRevoked(txCtx, &pb.MarkDeviceRevokedReq{UserId: userID, DeviceId: id}); notFoundOK(err) != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return &pb.RevokeDevicesResp{}, nil
+}
+
 // RevokeSessions revokes each selected token — the admin Sessions page's
 // `revoke` action. The operator is recorded as revoked_by, the reason is
 // ADMIN_REVOKED, and the rows stay (the page lists them as revoked). A token

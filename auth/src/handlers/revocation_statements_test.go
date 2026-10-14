@@ -157,7 +157,7 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 		"MarkApiTokenRevoked":      {pb.RevokeReason_REVOKE_REASON_API_TOKEN_REVOKED, ":user_id"},
 		"RevokeOtherSessionTokens": {pb.RevokeReason_REVOKE_REASON_PASSWORD_CHANGED, ":user_id"},
 		"RevokeTokensForReset":     {pb.RevokeReason_REVOKE_REASON_PASSWORD_RESET, ""},
-		"RevokeDeviceTokens":       {pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED, ":user_id"},
+		"RevokeDeviceTokens":       {pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED, ":revoked_by"},
 		"RevokeUndevicedSessions":  {pb.RevokeReason_REVOKE_REASON_UNBOUND_SESSION, ":user_id"},
 		"RevokeAllUserTokens":      {pb.RevokeReason_REVOKE_REASON_ALL_TOKENS_REVOKED, ":user_id"},
 		"RevokeUserToken":          {pb.RevokeReason_REVOKE_REASON_ADMIN_REVOKED, ":revoked_by"},

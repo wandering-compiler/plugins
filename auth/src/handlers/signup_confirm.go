@@ -249,6 +249,7 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 // refusals too; the success row is written in the transaction above.
 func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmSignUpReq) (_ *pb.ConfirmSignUpResp, err error) {
 	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_SIGN_UP_CONFIRM)
+	attempt.publicComputer = req.GetPublicComputer()
 	defer func() { h.endSignIn(ctx, attempt, err) }()
 
 	// The device key before the attempt is counted: a client that cannot
@@ -347,7 +348,10 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 	if err != nil {
 		return nil, err
 	}
-	token, err := h.issueBoundToken(txCtx, userID, dev, h.sessionTokenExpiry())
+	// The confirming request is the mint, so its public-computer choice
+	// decides the session, not the parked registration's.
+	public := attempt.publicComputer
+	token, err := h.issueBoundToken(txCtx, userID, dev, h.sessionExpiry(public), sessionGrant{public: public})
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +359,8 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 		return nil, err
 	}
 	return &pb.ConfirmSignUpResp{
-		UserId: userID,
-		Token:  token,
+		UserId:         userID,
+		Token:          token,
+		PublicComputer: public,
 	}, nil
 }

@@ -83,6 +83,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 	if signUpConfirmation == nil {
 		attempt = beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_SIGN_UP)
 		attempt.named(req.GetEmail())
+		attempt.publicComputer = req.GetPublicComputer()
 		defer func() { h.endSignIn(ctx, attempt, err) }()
 	}
 	// The erased-account domain first: it is refused whoever asks, so the
@@ -186,12 +187,14 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 	}
 	// A new account's device is new and untrusted: the registration passed
 	// no second factor. Stamp the absolute session TTL like SignIn
-	// (issueSession): a SignUp-minted bearer expires too.
+	// (issueSession): a SignUp-minted bearer expires too — sooner on a public
+	// computer.
 	dev, err := mintDevice(txCtx, h, userID, thumbprint)
 	if err != nil {
 		return nil, err
 	}
-	token, err := h.issueBoundToken(txCtx, userID, dev, h.sessionTokenExpiry())
+	public := attempt.publicComputer
+	token, err := h.issueBoundToken(txCtx, userID, dev, h.sessionExpiry(public), sessionGrant{public: public})
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +202,8 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 		return nil, err
 	}
 	return &pb.SignUpResp{
-		UserId: userID,
-		Token:  token,
+		UserId:         userID,
+		Token:          token,
+		PublicComputer: public,
 	}, nil
 }

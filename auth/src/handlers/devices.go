@@ -170,7 +170,7 @@ func revokeUndevicedSessions(ctx context.Context, h *AuthServiceHandler, userID,
 // through the token's binding). An already revoked device matches no row
 // (NotFound), which is done, not a failure.
 func revokeOneDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID string) error {
-	if _, err := h.Mutation.RevokeDeviceTokens(ctx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: deviceID}); notFoundOK(err) != nil {
+	if _, err := h.Mutation.RevokeDeviceTokens(ctx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: deviceID, RevokedBy: userID}); notFoundOK(err) != nil {
 		return err
 	}
 	if _, err := h.Mutation.MarkDeviceRevoked(ctx, &pb.MarkDeviceRevokedReq{UserId: userID, DeviceId: deviceID}); notFoundOK(err) != nil {

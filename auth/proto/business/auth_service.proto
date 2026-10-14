@@ -154,6 +154,13 @@ message SignInReq {
   option (w17.contrib.plugin_feature) = "sign_in_turnkey";
   string email    = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
   string password = 2 [(w17.field) = { type: PASSWORD }];
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response. With two_factor the challenge carries it to VerifyMfa.
+  bool public_computer = 3;
 }
 message SignInResp {
   option (w17.contrib.plugin_feature) = "sign_in_turnkey";
@@ -174,6 +181,10 @@ message SignInResp {
   // now, so there is nothing to replay.
   reserved 5;
   reserved "device_trust_token";
+
+  // public_computer — echoes the request's choice on a response that carries
+  // a token: the client keeps a public-computer token in session storage only.
+  bool public_computer = 6;
 }
 
 // SignUpReq / SignUpResp — canonical register-and-issue-token
@@ -210,6 +221,14 @@ message SignUpReq {
     (w17.field) = { type: SLUG, max_len: 100, null: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response. Ignored under sign_up_confirmation, where SignUp issues no
+  // session: ConfirmSignUp takes its own.
+  bool public_computer = 5;
 }
 message SignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_turnkey";
@@ -220,6 +239,8 @@ message SignUpResp {
   // ConfirmSignUp takes together with the code mailed to the address.
   bool   confirmation_required = 3 [(w17.contrib.plugin_feature_field) = "sign_up_confirmation"];
   string pending_id            = 4 [(w17.contrib.plugin_feature_field) = "sign_up_confirmation"];
+  // Echoes the request's public_computer when a session was issued.
+  bool   public_computer       = 5;
 }
 
 // ConfirmSignUp — the second step of a `sign_up_confirmation` registration:
@@ -228,11 +249,19 @@ message ConfirmSignUpReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string pending_id = 1 [(w17.field) = { type: UUID }];
   string code       = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response.
+  bool public_computer = 3;
 }
 message ConfirmSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string token   = 2;
+  bool   public_computer = 3;
 }
 
 // WhoAmIReq / WhoAmIResp — current-principal probe. The FE calls
@@ -493,6 +522,16 @@ message OAuthExchangeReq {
   // only here, in the page's own request, never through a URL or the
   // provider.
   string invite_token  = 3;
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response. Taken here, at the exchange, and not at
+  // OAuthAuthorizeURL: the exchange is the mint, made by the same page that
+  // started the flow, and nothing about the choice needs to travel through
+  // the provider. An OAuth sign-in never trusts the device anyway.
+  bool public_computer = 4;
 }
 message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -501,6 +540,7 @@ message OAuthExchangeResp {
   // 3 = device_trust_token (see SignInResp).
   reserved 3;
   reserved "device_trust_token";
+  bool   public_computer = 4;
 }
 
 // ── two_factor: enrollment + challenge verification surface ──
@@ -596,6 +636,9 @@ message VerifyMfaResp {
   // the device the request's key names; nothing is handed back for it.
   reserved 3;
   reserved "device_trust_token";
+  // The challenged SignIn's public_computer, which this completion honoured
+  // (VerifyMfa takes it from the challenge, never from its own request).
+  bool   public_computer = 4;
 }
 
 // ── devices: device/session management business surface ─────
@@ -1018,6 +1061,16 @@ service AuthService {
   rpc RevokeSessions(RevokeSessionsReq) returns (RevokeSessionsResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
+  // RevokeDevices — the admin Devices page's `revoke` action: revoke each
+  // device for good and every token bound to it (reason DEVICE_REVOKED, the
+  // operator recorded as revoked_by), in one transaction per device
+  // (AuthMutation.RevokeDeviceTokens + MarkDeviceRevoked). The key can never
+  // sign in to that account again (DEVICE_REVOKED). A device already revoked
+  // is left as it is; an unknown id is not an error. Refuses an empty id
+  // list. Gated user_admin.
+  rpc RevokeDevices(RevokeDevicesReq) returns (RevokeDevicesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
   // CreateBot — provision a machine account AND give it its role, in one
   // call. Gated service_account.
   rpc CreateBot(CreateBotReq) returns (CreateBotResp) {
@@ -1437,6 +1490,11 @@ message RevokeSessionsReq {
   repeated string ids = 1;
 }
 message RevokeSessionsResp { option (w17.contrib.plugin_feature) = "user_admin"; }
+message RevokeDevicesReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated string ids = 1;
+}
+message RevokeDevicesResp { option (w17.contrib.plugin_feature) = "user_admin"; }
 
 message CliTokenReq {
   option (w17.contrib.plugin_feature) = "cli_login";

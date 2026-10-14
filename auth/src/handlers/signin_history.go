@@ -71,6 +71,10 @@ type signInAttempt struct {
 	thumbprint string
 	ip         string
 	userAgent  string
+	// publicComputer: the attempt asked for a public-computer session. The
+	// mint paths read it for the session's lifetime and trust, and the row
+	// records it whatever the outcome.
+	publicComputer bool
 	// account is the row of userID when the path read it with erased_at
 	// (SignIn's lookup); otherwise endSignIn reads it if it needs to.
 	account *pb.User
@@ -123,6 +127,8 @@ func (a *signInAttempt) row(outcome pb.SignInOutcome) *pb.RecordSignInEventReq {
 		UserAgent:  a.userAgent,
 		Method:     a.method,
 		Outcome:    outcome,
+
+		PublicComputer: a.publicComputer,
 	}
 }
 
@@ -204,12 +210,14 @@ func (h *AuthServiceHandler) pseudonymiseErased(ctx context.Context, a *signInAt
 // attempt's success row, in ONE transaction when the bundle has a
 // coordinator (a generated bundle always has; a hand-built test handler
 // runs the two calls in order). The token is returned only once both are
-// written.
-func (h *AuthServiceHandler) mintSession(ctx context.Context, a *signInAttempt, userID string, dev signInDevice, expiresAt *timestamppb.Timestamp) (string, error) {
+// written. The session records the attempt's public-computer choice and
+// approvedBy, the Device row of the session that approved a CLI login ("" for
+// every other path).
+func (h *AuthServiceHandler) mintSession(ctx context.Context, a *signInAttempt, userID string, dev signInDevice, expiresAt *timestamppb.Timestamp, approvedBy string) (string, error) {
 	var token string
 	err := h.inTx(ctx, func(txCtx context.Context) error {
 		var err error
-		if token, err = h.issueBoundToken(txCtx, userID, dev, expiresAt); err != nil {
+		if token, err = h.issueBoundToken(txCtx, userID, dev, expiresAt, sessionGrant{public: a.publicComputer, approvedBy: approvedBy}); err != nil {
 			return err
 		}
 		return h.recordSignInOK(txCtx, a, userID, dev)
