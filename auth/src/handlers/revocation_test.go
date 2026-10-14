@@ -854,7 +854,7 @@ func TestEraseUsers_TheAccountCannotSignInAnyMore(t *testing.T) {
 	// Every path that issues a session to an existing account by id — the
 	// second sign-in step, the OAuth exchange, the CLI exchange — runs
 	// refuseUnsignableAccount, and an erased account is disabled for good.
-	if err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
+	if _, err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("an erased account passed the account gates: %v", err)
 	}
 	if _, err := s.EnableUsers(context.Background(), &pb.EnableUsersReq{Ids: []string{"u1"}}); err != nil {
@@ -863,7 +863,7 @@ func TestEraseUsers_TheAccountCannotSignInAnyMore(t *testing.T) {
 	if s.users["u1"].disabledAt == nil {
 		t.Fatal("EnableUsers re-enabled an erased account")
 	}
-	if err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
+	if _, err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("after EnableUsers an erased account passed the account gates: %v", err)
 	}
 }

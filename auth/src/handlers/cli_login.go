@@ -213,7 +213,9 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 			return nil, err
 		}
 	}
-	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+	account, err := refuseUnsignableAccount(ctx, h, userID)
+	attempt.account = account
+	if err != nil {
 		return nil, err
 	}
 	expiresAt := cliSessionExpiry(h.sessionTokenExpiry(), consumed.GetSessionExpiresAt())

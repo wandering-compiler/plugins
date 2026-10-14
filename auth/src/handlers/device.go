@@ -331,9 +331,13 @@ func deviceLabel(ctx context.Context) (label, ip string) {
 	}
 	// Valid UTF-8 first: a header may carry any bytes, and the columns (and
 	// the sign-in history's) are text.
-	return truncate(strings.ToValidUTF8(ua, ""), maxLabelLen),
-		truncate(strings.ToValidUTF8(firstHop(firstMeta(md, clientIPMetadataKey)), ""), maxIPLen)
+	return truncate(strings.ToValidUTF8(ua, invalidUTF8), maxLabelLen),
+		truncate(strings.ToValidUTF8(firstHop(firstMeta(md, clientIPMetadataKey)), invalidUTF8), maxIPLen)
 }
+
+// invalidUTF8 replaces a byte that is not UTF-8 in a value kept as text: the
+// replacement character, so the byte stays visible as a bad one.
+const invalidUTF8 = "\uFFFD"
 
 // firstMeta returns the first value for a metadata key, or "".
 func firstMeta(md metadata.MD, key string) string {

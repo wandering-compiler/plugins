@@ -60,6 +60,9 @@ func (m historyMutation) RecordSignInEvent(ctx context.Context, in *pb.RecordSig
 	if m.log.err != nil {
 		return nil, m.log.err
 	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if tx != "" && m.log.errInTx != nil {
 		return nil, m.log.errInTx
 	}
@@ -588,6 +591,9 @@ func TestSignInOutcome_ReadsTheRefusal(t *testing.T) {
 		{Unauthenticated(errCliSessionNotLive), pb.SignInOutcome_SIGN_IN_OUTCOME_REFUSED},
 		{Unauthenticated(status.Error(codes.Unavailable, "down")), pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
 		{errors.New("unexpected"), pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
+		// An outage the opaque refusal does not call one on the wire.
+		{Unauthenticated(status.Error(codes.Unknown, "driver: bad connection")), pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
+		{UnauthenticatedSignIn(status.Error(codes.Unknown, "driver: bad connection")), pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
 	} {
 		if got := signInOutcome(c.err); got != c.want {
 			t.Errorf("signInOutcome(%v) = %v, want %v", c.err, got, c.want)
@@ -996,10 +1002,14 @@ func TestSignInHistory_AStalledStoreDoesNotHoldTheRefusal(t *testing.T) {
 }
 
 // erasedCli is the CLI store with user-1 erased after its code was issued:
-// disabled, its address the placeholder.
-type erasedCli struct{ *cliMock }
+// disabled, its address the placeholder. It counts the account reads.
+type erasedCli struct {
+	*cliMock
+	reads *int
+}
 
-func (erasedCli) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+func (e erasedCli) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	*e.reads++
 	return &pb.GetUserByIdResp{User: &pb.User{
 		Id: in.GetUserId(), Email: erasedAddress(in.GetUserId()),
 		DisabledAt: timestamppb.Now(), ErasedAt: timestamppb.Now(),
@@ -1017,7 +1027,8 @@ func TestSignInHistory_AnAttemptAtAnErasedAccountIsPseudonymised(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &AuthServiceHandler{Query: erasedCli{m}, Mutation: m, PasswordHash: testPasswordSettings()}
+	var reads int
+	h := &AuthServiceHandler{Query: erasedCli{m, &reads}, Mutation: m, PasswordHash: testPasswordSettings()}
 	log := keepHistory(h)
 	if _, err := h.CliToken(historyCtx(testJKT), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier}); err == nil {
 		t.Fatal("an erased account got a CLI session")
@@ -1029,6 +1040,9 @@ func TestSignInHistory_AnAttemptAtAnErasedAccountIsPseudonymised(t *testing.T) {
 	if r.GetUserId() != "user-1" || r.GetAddress() != "erased-user-1@erased.invalid" || r.GetIp() != "" || r.GetUserAgent() != "" ||
 		r.GetOutcome() != pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED {
 		t.Errorf("row = %+v, want user-1's placeholder, no client address or agent, ACCOUNT_DISABLED", r)
+	}
+	if reads != 1 {
+		t.Errorf("the account was read %d times, want once: the history reuses the account gate's read", reads)
 	}
 
 	// SignIn by the placeholder: the account read is SignIn's own.
@@ -1145,10 +1159,63 @@ func TestSignInHistory_InvalidUTF8IsNotStored(t *testing.T) {
 			}
 		}
 	}
-	if r := log.rows[0]; r.GetUserAgent() != "Firefox/130" || r.GetIp() != "203.0.113.9" {
-		t.Errorf("row client = %q / %q, want the valid part kept", r.GetUserAgent(), r.GetIp())
+	if r := log.rows[0]; r.GetUserAgent() != "Firefox\uFFFD/130" || r.GetIp() != "203.0.113.9\uFFFD" {
+		t.Errorf("row client = %q / %q, want each bad byte shown as U+FFFD, not dropped", r.GetUserAgent(), r.GetIp())
+	}
+	// A bad byte never vanishes from an address: dropped, it would turn
+	// what was typed into somebody's real address on the admin list.
+	if got := log.rows[1].GetAddress(); got != "n\uFFFDbody@example.com" {
+		t.Errorf("address = %q, want the bad byte as U+FFFD", got)
 	}
 	if len(m.registered) != 1 || !utf8.ValidString(m.registered[0].GetLabel()) || !utf8.ValidString(m.registered[0].GetIp()) {
 		t.Errorf("RegisterDevice = %+v, want valid UTF-8", m.registered)
+	}
+}
+
+// mfaSlowAccount is the VerifyMfa store whose account read stalls until its
+// context ends, or fails at once.
+type mfaSlowAccount struct {
+	*mfaMock
+	fail bool
+}
+
+func (m mfaSlowAccount) GetUserById(ctx context.Context, _ *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	if m.fail {
+		return nil, status.Error(codes.Unavailable, "down")
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(3 * time.Second):
+		return nil, errors.New("the read was never cut short")
+	}
+}
+
+// The erased-account read has a budget of its own: a stalled read does not
+// starve the write, and the row is still written. A read that fails (or
+// stalls) cannot tell whether the account was erased, so the row keeps no
+// client address and no user agent.
+func TestSignInHistory_TheAccountReadNeitherStarvesTheWriteNorLeaks(t *testing.T) {
+	saved := signInHistoryTimeout
+	signInHistoryTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { signInHistoryTimeout = saved })
+	for _, fail := range []bool{false, true} {
+		m := &mfaMock{chUserID: "u1", chThumb: testJKT, chCreatedAt: timestamppb.Now(), chConsumed: true}
+		h := newMfaHandler(m)
+		h.Query = mfaSlowAccount{mfaMock: m, fail: fail}
+		log := keepHistory(h)
+		start := time.Now()
+		if _, err := h.VerifyMfa(historyCtx(testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"}); err == nil {
+			t.Fatal("a consumed challenge passed")
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("fail=%v: the refusal took %v", fail, took)
+		}
+		if len(log.rows) != 1 {
+			t.Fatalf("fail=%v: %d rows, want the row written after the read gave up", fail, len(log.rows))
+		}
+		if r := log.rows[0]; r.GetUserId() != "u1" || r.GetIp() != "" || r.GetUserAgent() != "" {
+			t.Errorf("fail=%v: row = %+v, want u1's row without the client address or agent", fail, r)
+		}
 	}
 }

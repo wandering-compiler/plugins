@@ -657,7 +657,9 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 
-	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+	account, err := refuseUnsignableAccount(ctx, h, userID)
+	attempt.account = account
+	if err != nil {
 		return nil, err
 	}
 	// The device is the key that signed THIS request — the challenged one: the

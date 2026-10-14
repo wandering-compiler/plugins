@@ -105,9 +105,11 @@ func beginSignIn(ctx context.Context, method pb.SignInMethod) *signInAttempt {
 }
 
 // named records the address the attempt named, normalised as SignIn looks it
-// up, as valid UTF-8, cut to the column on a rune boundary.
+// up, as valid UTF-8 (a bad byte becomes U+FFFD, never nothing: dropping it
+// could turn a typed `victim\xff@example.com` into a real address on the
+// admin list), cut to the column on a rune boundary.
 func (a *signInAttempt) named(address string) {
-	a.address = truncate(strings.ToValidUTF8(normalizeEmail(address), ""), maxAddressLen)
+	a.address = truncate(strings.ToValidUTF8(normalizeEmail(address), invalidUTF8), maxAddressLen)
 }
 
 // row is the RecordSignInEvent request for this attempt ending in outcome.
@@ -156,10 +158,16 @@ func (h *AuthServiceHandler) endSignIn(ctx context.Context, a *signInAttempt, er
 		}
 		outcome = signInOutcome(err)
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signInHistoryTimeout)
-	defer cancel()
+	base := context.WithoutCancel(ctx)
 	row := a.row(outcome)
-	h.pseudonymiseErased(ctx, a, row)
+	// The account read has a budget of its own, so a slow read cannot
+	// starve the write; the write then gets the full bound. Together at most
+	// 1.25 × signInHistoryTimeout.
+	readCtx, cancelRead := context.WithTimeout(base, signInHistoryTimeout/4)
+	h.pseudonymiseErased(readCtx, a, row)
+	cancelRead()
+	ctx, cancel := context.WithTimeout(base, signInHistoryTimeout)
+	defer cancel()
 	if werr := writeSignInEvent(ctx, h, row); werr != nil {
 		slog.WarnContext(ctx, "auth: sign-in history row not written",
 			"method", a.method.String(), "outcome", outcome.String(), "err", werr)
@@ -171,7 +179,9 @@ func (h *AuthServiceHandler) endSignIn(ctx context.Context, a *signInAttempt, er
 // account's address IS its placeholder), the client address and user agent
 // are dropped — what the erasure did to the account's earlier rows. The
 // account is the path's own read when it has one with erased_at, else read
-// here; a read that fails leaves the row as it is (it cannot tell).
+// here. A read that fails cannot tell, and errs on the private side: the
+// client address and user agent are dropped, the address kept (an erasure
+// rewrites the account's rows by user_id anyway).
 func (h *AuthServiceHandler) pseudonymiseErased(ctx context.Context, a *signInAttempt, row *pb.RecordSignInEventReq) {
 	if signInAccountErased == nil || row.GetUserId() == "" {
 		return
@@ -180,6 +190,7 @@ func (h *AuthServiceHandler) pseudonymiseErased(ctx context.Context, a *signInAt
 	if user.GetId() != row.GetUserId() {
 		got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: row.GetUserId()})
 		if err != nil {
+			row.Ip, row.UserAgent = "", ""
 			return
 		}
 		user = got.GetUser()
@@ -280,12 +291,31 @@ func signInOutcome(err error) pb.SignInOutcome {
 			}
 		}
 	}
+	// The opaque refusal can wrap an outage the wire does not call one
+	// (Unknown, for instance): the cause decides.
+	var ae *authnError
+	if errors.As(err, &ae) {
+		if cst, ok := status.FromError(ae.cause); ok && outageCode(cst.Code()) {
+			return pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
+	}
 	switch st.Code() {
 	case codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument,
 		codes.NotFound, codes.AlreadyExists, codes.FailedPrecondition:
 		return pb.SignInOutcome_SIGN_IN_OUTCOME_REFUSED
 	}
 	return pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+}
+
+// outageCode reports a status code that describes the service, not the
+// credential.
+func outageCode(c codes.Code) bool {
+	switch c {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted,
+		codes.Aborted, codes.Internal, codes.Unknown:
+		return true
+	}
+	return false
 }
 
 // ListMySignInEvents returns the caller's own sign-in history: the attempts

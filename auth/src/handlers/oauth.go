@@ -194,7 +194,7 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 		return nil, oauthRefusal(err)
 	}
 	if userID != "" {
-		if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+		if _, err := refuseUnsignableAccount(ctx, h, userID); err != nil {
 			return nil, oauthRefusal(err)
 		}
 	}
@@ -301,7 +301,9 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	}
 	// The account may have changed since the callback; and the device is the
 	// one making THIS request — the page, not the provider's redirect.
-	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
+	account, err := refuseUnsignableAccount(ctx, h, userID)
+	attempt.account = account
+	if err != nil {
 		return nil, oauthRefusal(err)
 	}
 	dev, err := mintDevice(ctx, h, userID, thumbprint)

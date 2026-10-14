@@ -1061,18 +1061,23 @@ var signInBotGate = func(user *pb.User) error { return nil }
 // may have changed since: SignIn refused a disabled account, but a challenge
 // opened before the disable would still issue a session. Refused with the
 // opaque Unauthenticated, as SignIn is.
-func refuseUnsignableAccount(ctx context.Context, h *AuthServiceHandler, userID string) error {
+//
+// It returns the account it read (nil when the read failed), refused or not:
+// the sign-in history uses it to tell an erased account without reading it
+// again.
+func refuseUnsignableAccount(ctx context.Context, h *AuthServiceHandler, userID string) (*pb.User, error) {
 	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
 	if err != nil {
-		return Unauthenticated(err)
+		return nil, Unauthenticated(err)
 	}
-	if err := signInDisabledGate(got.GetUser()); err != nil {
-		return Unauthenticated(err)
+	user := got.GetUser()
+	if err := signInDisabledGate(user); err != nil {
+		return user, Unauthenticated(err)
 	}
-	if err := signInBotGate(got.GetUser()); err != nil {
-		return Unauthenticated(err)
+	if err := signInBotGate(user); err != nil {
+		return user, Unauthenticated(err)
 	}
-	return nil
+	return user, nil
 }
 
 // normalizeEmail canonicalises an email for both storage and lookup: trim +

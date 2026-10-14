@@ -328,7 +328,7 @@ func TestEraseUsers_APartialErasureLeavesNoUsableAccount(t *testing.T) {
 	if _, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: "alice@example.com", Password: "alice-password"}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("a password sign-in after a partial erasure: %v, want refused", err)
 	}
-	if err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
+	if _, err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("the account gates passed a partially erased account: %v", err)
 	}
 }
