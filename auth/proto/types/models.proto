@@ -444,9 +444,16 @@ message UserToken {
   // The token itself is bound to the CLI's, the program's or the machine
   // account's own key (device_id); the authorizing device is a different one
   // and is recorded here, so an operator can see "approved from device X".
-  // Revoking that device revokes the tokens it approved of the same owner
-  // (RevokeDeviceTokens' "approved" op): a stolen session could otherwise
-  // approve a key of the thief's that outlives the revocation. NULL on every
+  // Revoking that device revokes the tokens it approved of the same owner: a
+  // stolen session could otherwise approve a key of the thief's that outlives
+  // the revocation. CLI sessions end with every revocation of the device
+  // (RevokeDeviceTokens' "approved" op); API tokens when that ONE device is
+  // revoked on purpose — the owner's RevokeDevice, the admin Devices revoke
+  // (RevokeApprovedApiTokens) — and not by RevokeOtherDevices /
+  // RevokeAllDevices, which spare API tokens. A machine account's token is
+  // owned by the machine account, not the operator, so revoking the
+  // operator's device leaves it (it is bound to the account's one key; revoke
+  // the account's device to end it). NULL on every
   // other token, and when the authorizing request was bound to no device. Base
   // tier. No DB-level FK (the activation-rename caveat in the message header).
   string approved_by_device_id = 16 [(w17.field) = { type: UUID, null: true }];
@@ -521,8 +528,8 @@ message Device {
   // a signed-in client's key is never taken for an API token, and the
   // owner's device management (`devices`: ListDevices, RevokeOtherDevices,
   // RevokeAllDevices) lists and revokes signed-in devices only — an API
-  // token ends by RevokeApiToken, or by revoking its device on the admin
-  // Devices page. Base tier.
+  // token ends by RevokeApiToken, by revoking its device on the admin
+  // Devices page, or by revoking the one device that created it. Base tier.
   bool api_key = 12 [(w17.field) = { default_auto: FALSE }];
 }
 

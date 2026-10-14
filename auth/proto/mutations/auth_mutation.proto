@@ -835,6 +835,21 @@ message RevokeDeviceTokensReq {
 message RevokeDeviceTokensResp {
 }
 
+// RevokeApprovedApiTokens — the owner's API tokens one device created
+// (UserToken.approved_by_device_id). Run beside RevokeDeviceTokens when ONE
+// device is revoked explicitly (the owner's RevokeDevice, the admin Devices
+// revoke); see the rpc. token_type is handler-stamped (API).
+message RevokeApprovedApiTokensReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string    user_id    = 1 [(w17.field) = { type: UUID }];
+  string    device_id  = 2 [(w17.field) = { type: UUID }];
+  string    revoked_by = 3 [(w17.field) = { type: UUID }];
+  TokenType token_type = 4;
+}
+message RevokeApprovedApiTokensResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+}
+
 message MarkDeviceRevokedReq {
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
@@ -1800,6 +1815,28 @@ service AuthMutation {
     };
   }
 
+  // RevokeApprovedApiTokens — revoke (reason DEVICE_REVOKED, the caller as
+  // revoked_by) the owner's live API tokens the device CREATED
+  // (approved_by_device_id). A stolen browser session can create an API token
+  // bound to the thief's own key; revoking that device explicitly must end
+  // it, as it ends the CLI sessions the device approved. Called only when ONE
+  // device is revoked on purpose (RevokeDevice, the admin RevokeDevices) —
+  // never by RevokeOtherDevices / RevokeAllDevices, which spare API tokens
+  // (devices/revoke-all-spares-api-tokens). Owner-guarded like
+  // RevokeDeviceTokens, first revocation stands, no RETURNING. Gated
+  // api_token.
+  rpc RevokeApprovedApiTokens(RevokeApprovedApiTokensReq) returns (RevokeApprovedApiTokensResp) {
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
+          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND token_type = :token_type AND revoked_at IS NULL"
+      }
+    };
+  }
+
   // ────────────────────────────────────────────────────────────
   // oauth mutation — link a User to an external IdP subject.
   // ────────────────────────────────────────────────────────────
@@ -2494,9 +2531,10 @@ service AuthMutation {
   // stolen browser session could approve the thief's own CLI key, and
   // revoking the stolen device would leave that CLI session alive for its
   // whole lifetime. SESSION tokens only: an API token records the device that
-  // created it in the same column (as audit), and an API token is ended by
-  // RevokeApiToken or by revoking its own program key's device, never by
-  // revoking the browser it was created from (devices/revoke-all-spares-api-tokens). Same reason, same actor, same ownership predicate; it
+  // created it in the same column, and the API tokens a device created are
+  // ended only when that ONE device is revoked on purpose
+  // (RevokeApprovedApiTokens, beside this) — RevokeOtherDevices and
+  // RevokeAllDevices spare API tokens (devices/revoke-all-spares-api-tokens). Same reason, same actor, same ownership predicate; it
   // spares :keep_token_id, the caller's own session when RevokeOtherDevices
   // comes from a CLI session the revoked browser approved.
   //

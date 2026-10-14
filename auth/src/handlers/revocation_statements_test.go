@@ -158,6 +158,7 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 		"RevokeOtherSessionTokens": {pb.RevokeReason_REVOKE_REASON_PASSWORD_CHANGED, ":user_id"},
 		"RevokeTokensForReset":     {pb.RevokeReason_REVOKE_REASON_PASSWORD_RESET, ""},
 		"RevokeDeviceTokens":       {pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED, ":revoked_by"},
+		"RevokeApprovedApiTokens":  {pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED, ":revoked_by"},
 		"RevokeUndevicedSessions":  {pb.RevokeReason_REVOKE_REASON_UNBOUND_SESSION, ":user_id"},
 		"RevokeAllUserTokens":      {pb.RevokeReason_REVOKE_REASON_ALL_TOKENS_REVOKED, ":user_id"},
 		"RevokeUserToken":          {pb.RevokeReason_REVOKE_REASON_ADMIN_REVOKED, ":revoked_by"},
@@ -197,10 +198,15 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 			t.Errorf("%s no longer revokes a token through an UPDATE", name)
 		}
 	}
-	// No reason is stamped twice for different paths... except none: each
-	// reason names one cause.
+	// No reason is stamped twice for different paths: each reason names one
+	// cause. RevokeApprovedApiTokens is not another path — it runs beside
+	// RevokeDeviceTokens in the same device revocation, for the API tokens
+	// the device created — so it shares its reason.
 	reasons := map[pb.RevokeReason]string{}
 	for name, w := range paths {
+		if name == "RevokeApprovedApiTokens" {
+			continue
+		}
 		if other, dup := reasons[w.reason]; dup {
 			t.Errorf("%s and %s share reason %v", name, other, w.reason)
 		}

@@ -598,3 +598,116 @@ func TestNoLogCallTakesTheKey(t *testing.T) {
 		}
 	}
 }
+
+// ── round 1 ─────────────────────────────────────────────────────────────
+
+// apiTokenCreatedBy adds to s a person's API token bound to a program's key
+// of its own and created from the device approver.
+func apiTokenCreatedBy(s *revocationStore, id, userID, approver string) {
+	s.addDevice("prog-"+id, userID, "prog-key-"+id).apiKey = true
+	s.addToken(id, userID, id+"-bearer", "prog-"+id, pb.TokenType_TOKEN_TYPE_API).approvedBy = approver
+}
+
+// A stolen browser session can create an API token bound to the thief's own
+// key. Revoking THAT device on purpose — the operator on the admin Devices
+// page, or the owner's RevokeDevice — ends the API tokens it created, as it
+// ends the CLI sessions it approved; tokens another device created stay.
+func TestRevokingOneDevice_EndsTheAPITokensItCreated(t *testing.T) {
+	s := devicesAdminStore()
+	apiTokenCreatedBy(s, "t-api-d1", "u1", "d1")
+	apiTokenCreatedBy(s, "t-api-d2", "u1", "d2")
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	if _, err := h.RevokeDevices(adminCtx(), &pb.RevokeDevicesReq{Ids: []string{"d1"}}); err != nil {
+		t.Fatal(err)
+	}
+	assertRevoked(t, s, "t-api-d1", "admin", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	assertLive(t, s, "t-api-d2")
+
+	s = devicesAdminStore()
+	apiTokenCreatedBy(s, "t-api-d1", "u1", "d1")
+	apiTokenCreatedBy(s, "t-api-d2", "u1", "d2")
+	h = &AuthServiceHandler{Query: s, Mutation: s}
+	if _, err := h.RevokeDevice(ctxOnDevice(t, "u1", "t-other", otherJKT), &pb.RevokeDeviceReq{DeviceId: "d1"}); err != nil {
+		t.Fatal(err)
+	}
+	assertRevoked(t, s, "t-api-d1", "u1", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	assertLive(t, s, "t-api-d2")
+}
+
+// …while "sign out everywhere (else)" keeps sparing API tokens
+// (devices/revoke-all-spares-api-tokens): neither their program keys nor the
+// devices that created them end them there.
+func TestRevokeOtherAndAllDevices_SpareTheAPITokensTheDevicesCreated(t *testing.T) {
+	for name, revoke := range map[string]func(h *AuthServiceHandler, ctx context.Context) error{
+		"others": func(h *AuthServiceHandler, ctx context.Context) error {
+			_, err := h.RevokeOtherDevices(ctx, &pb.RevokeOtherDevicesReq{})
+			return err
+		},
+		"all": func(h *AuthServiceHandler, ctx context.Context) error {
+			_, err := h.RevokeAllDevices(ctx, &pb.RevokeAllDevicesReq{})
+			return err
+		},
+	} {
+		s := aliceStore()
+		apiTokenCreatedBy(s, "t-api-d1", "u1", "d1")
+		h := &AuthServiceHandler{Query: s, Mutation: s}
+		if err := revoke(h, ctxOnDevice(t, "u1", "t-other", otherJKT)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if s.devices["d1"].revokedAt == nil {
+			t.Fatalf("%s: the creating device was not revoked — the case is not exercised", name)
+		}
+		assertLive(t, s, "t-api-d1")
+		if s.devices["prog-t-api-d1"].revokedAt != nil {
+			t.Errorf("%s: the program's key was revoked", name)
+		}
+	}
+}
+
+// The statement: owner-guarded, by the creating device, the token type the
+// handler stamps — never every token of the user.
+func TestRevokeApprovedApiTokens_TheStatement(t *testing.T) {
+	body := mutationRPCBody(t, "RevokeApprovedApiTokens")
+	if !strings.Contains(body, `"WHERE user_id = :user_id AND approved_by_device_id = :device_id AND token_type = :token_type AND revoked_at IS NULL"`) ||
+		!strings.Contains(body, `revoke_reason = 5 `) {
+		t.Errorf("RevokeApprovedApiTokens is not the guarded update:\n%s", body)
+	}
+}
+
+// An API token cannot mint a machine token: IssueBotToken needs a signed-in
+// session, as CreateApiToken does — the machine account's own token, or an
+// operator's API token on a role that may call it, is refused and mints
+// nothing.
+func TestIssueBotToken_AnAPITokenCallerIsRefused(t *testing.T) {
+	withoutOrgs(t)
+	s := newKeyStore()
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	raw, err := proto.Marshal(&pb.AuthResp{UserId: "op-1", DeviceId: testJKT})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		scopeUserIDKey, "op-1", "x-w17-scope-tenant_id", "tenant-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
+	_, err = h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: p256JWK})
+	if status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
+		t.Fatalf("err = %v, want PermissionDenied/%s", err, CodeSessionRequired)
+	}
+	if len(s.minted) != 0 || len(s.registered) != 0 {
+		t.Fatalf("minted %v, registered %v", s.minted, s.registered)
+	}
+}
+
+// A coordinate spelled with a CR or LF inside decodes to the same key under
+// encoding/base64, which skips them, but would hash to another thumbprint
+// than the key's: refused, for the request's whole path.
+func TestCreateApiToken_RefusesANonCanonicalSpellingOfTheKey(t *testing.T) {
+	s := newKeyStore()
+	s.put("u1", p256JKT, &pb.Device{})
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	jwk := strings.Replace(p256JWK, `"x":"l8tFrhx`, `"x":"l8tF\nrhx`, 1)
+	_, err := h.CreateApiToken(operatorCtx("u1", ""), &pb.CreateApiTokenReq{Name: "ci", PublicKey: jwk})
+	wantKeyRefusal(t, err, codes.InvalidArgument, CodeDeviceKeyInvalid)
+	if len(s.registered) != 0 || len(s.minted) != 0 {
+		t.Fatalf("a respelled signed-in key passed as a new program key: registered %v, minted %v", s.registered, s.minted)
+	}
+}

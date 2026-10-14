@@ -177,14 +177,26 @@ func shown(s string) string {
 }
 
 // coordinate decodes a 32-byte coordinate in canonical base64url without
-// padding: Strict refuses non-zero trailing bits, so one value has exactly
-// one spelling and therefore one thumbprint.
+// padding, and refuses any other spelling of it: the thumbprint hashes the
+// string as sent, so one value must have exactly one spelling. Strict refuses
+// non-zero trailing bits, but every decoder of the encoding/base64 package
+// skips CR and LF — a "\n" inside x would decode to the same key and hash to
+// another thumbprint (one go-jose never computes, so the token would be dead
+// and the key-kind and one-key checks would see a different key). Hence the
+// round trip.
 func coordinate(name, s string) ([]byte, error) {
 	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
-	if err != nil || len(b) != 32 {
-		return nil, fmt.Errorf("%w: %s is not 32 bytes of base64url", ErrMalformed, name)
+	if err != nil || len(b) != 32 || base64.RawURLEncoding.EncodeToString(b) != s {
+		return nil, fmt.Errorf("%w: %s is not 32 bytes of canonical base64url", ErrMalformed, name)
 	}
 	return b, nil
+}
+
+// isNull reports a JSON null: encoding/json decodes it into a string, a bool
+// or a slice without an error, so an optional member that is null would pass
+// as absent.
+func isNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func requiredString(m map[string]json.RawMessage, key string) (string, error) {
@@ -207,7 +219,7 @@ func optionalAlg(m map[string]json.RawMessage, algs ...string) error {
 		return nil
 	}
 	var s string
-	if json.Unmarshal(raw, &s) != nil {
+	if isNull(raw) || json.Unmarshal(raw, &s) != nil {
 		return fmt.Errorf("%w: alg is not a string", ErrMalformed)
 	}
 	for _, a := range algs {
@@ -223,7 +235,7 @@ func optionalAlg(m map[string]json.RawMessage, algs ...string) error {
 func optionalMetadata(m map[string]json.RawMessage) error {
 	if raw, ok := m["use"]; ok {
 		var s string
-		if json.Unmarshal(raw, &s) != nil {
+		if isNull(raw) || json.Unmarshal(raw, &s) != nil {
 			return fmt.Errorf("%w: use is not a string", ErrMalformed)
 		}
 		if s != "sig" {
@@ -232,7 +244,7 @@ func optionalMetadata(m map[string]json.RawMessage) error {
 	}
 	if raw, ok := m["key_ops"]; ok {
 		var ops []string
-		if json.Unmarshal(raw, &ops) != nil {
+		if isNull(raw) || json.Unmarshal(raw, &ops) != nil {
 			return fmt.Errorf("%w: key_ops is not a list of strings", ErrMalformed)
 		}
 		for _, op := range ops {
@@ -243,13 +255,13 @@ func optionalMetadata(m map[string]json.RawMessage) error {
 	}
 	if raw, ok := m["kid"]; ok {
 		var s string
-		if json.Unmarshal(raw, &s) != nil {
+		if isNull(raw) || json.Unmarshal(raw, &s) != nil {
 			return fmt.Errorf("%w: kid is not a string", ErrMalformed)
 		}
 	}
 	if raw, ok := m["ext"]; ok {
 		var b bool
-		if json.Unmarshal(raw, &b) != nil {
+		if isNull(raw) || json.Unmarshal(raw, &b) != nil {
 			return fmt.Errorf("%w: ext is not a boolean", ErrMalformed)
 		}
 	}

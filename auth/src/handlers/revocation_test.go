@@ -44,6 +44,7 @@ type tokenRow struct {
 type deviceRow struct {
 	id, userID, thumb, label, ip string
 	revokedAt                    *timestamppb.Timestamp
+	apiKey                       bool // a program's key (Device.api_key)
 }
 
 type userRow struct {
@@ -233,11 +234,12 @@ func (s *revocationStore) GetUserByEmail(_ context.Context, in *pb.GetUserByEmai
 	return nil, notFound()
 }
 
-// ListUserDevices: `revoked_at IS NULL AND thumbprint IS NOT NULL`.
+// ListUserDevices: `revoked_at IS NULL AND thumbprint IS NOT NULL AND
+// api_key = FALSE`.
 func (s *revocationStore) ListUserDevices(_ context.Context, in *pb.ListUserDevicesReq, _ ...grpc.CallOption) (*pb.ListUserDevicesResp, error) {
 	var out []*pb.Device
 	for _, d := range s.devices {
-		if d.userID == in.GetUserId() && d.revokedAt == nil && d.thumb != "" {
+		if d.userID == in.GetUserId() && d.revokedAt == nil && d.thumb != "" && !d.apiKey {
 			out = append(out, &pb.Device{Id: d.id, UserId: d.userID, Thumbprint: d.thumb})
 		}
 	}
@@ -311,12 +313,24 @@ func (s *revocationStore) RevokeTokensForReset(_ context.Context, in *pb.RevokeT
 // by = :revoked_by.
 func (s *revocationStore) RevokeDeviceTokens(_ context.Context, in *pb.RevokeDeviceTokensReq, _ ...grpc.CallOption) (*pb.RevokeDeviceTokensResp, error) {
 	for _, t := range s.tokens {
-		approved := t.approvedBy == in.GetDeviceId() && t.id != in.GetKeepTokenId()
+		// The "approved" op: session tokens only (token_type = 1).
+		approved := t.approvedBy == in.GetDeviceId() && t.id != in.GetKeepTokenId() && t.kind == pb.TokenType_TOKEN_TYPE_SESSION
 		if t.userID == in.GetUserId() && (t.deviceID == in.GetDeviceId() || approved) {
 			revoke(t, in.GetRevokedBy(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
 		}
 	}
 	return &pb.RevokeDeviceTokensResp{}, nil
+}
+
+// RevokeApprovedApiTokens: user_id AND approved_by_device_id AND token_type
+// AND revoked_at IS NULL; by = revoked_by.
+func (s *revocationStore) RevokeApprovedApiTokens(_ context.Context, in *pb.RevokeApprovedApiTokensReq, _ ...grpc.CallOption) (*pb.RevokeApprovedApiTokensResp, error) {
+	for _, t := range s.tokens {
+		if t.userID == in.GetUserId() && t.approvedBy == in.GetDeviceId() && t.kind == in.GetTokenType() {
+			revoke(t, in.GetRevokedBy(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+		}
+	}
+	return &pb.RevokeApprovedApiTokensResp{}, nil
 }
 
 // RevokeUndevicedSessions: user_id AND device_id IS NULL AND id <> keep AND

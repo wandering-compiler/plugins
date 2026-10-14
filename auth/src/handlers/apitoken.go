@@ -30,6 +30,20 @@ import (
 func init() {
 	resolvePrincipal = resolvePrincipalRealmAware
 	recordTokenUse = touchTokenLastUsed
+	revokeApprovedAPITokens = revokeAPITokensOfDevice
+}
+
+// revokeAPITokensOfDevice revokes the owner's live API tokens the device
+// created — a stolen browser session could have created one bound to the
+// thief's own key. Revoking nothing is no failure.
+func revokeAPITokensOfDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error {
+	_, err := h.Mutation.RevokeApprovedApiTokens(ctx, &pb.RevokeApprovedApiTokensReq{
+		UserId:    userID,
+		DeviceId:  deviceID,
+		RevokedBy: revokedBy,
+		TokenType: pb.TokenType_TOKEN_TYPE_API,
+	})
+	return notFoundOK(err)
 }
 
 // tokenUseWindow is how often, at most, a token's last_used_at is written.

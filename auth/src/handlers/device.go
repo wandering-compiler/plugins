@@ -178,6 +178,21 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 	return out, nil
 }
 
+// revokeApprovedAPITokens revokes the owner's API tokens the device created
+// (UserToken.approved_by_device_id), on ctx. Installed by apitoken.go: nil
+// without api_token, where no API token exists. Called only when ONE device
+// is revoked on purpose (the owner's RevokeDevice, the admin RevokeDevices);
+// RevokeOtherDevices and RevokeAllDevices spare API tokens.
+var revokeApprovedAPITokens func(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error
+
+// endApprovedAPITokens runs revokeApprovedAPITokens when it is installed.
+func endApprovedAPITokens(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error {
+	if revokeApprovedAPITokens == nil {
+		return nil
+	}
+	return revokeApprovedAPITokens(ctx, h, userID, deviceID, revokedBy)
+}
+
 // noTokenKept is the keep_token_id that keeps none (the column is a UUID, so
 // the empty string would not bind). Base tier: the devices calls and the admin
 // Devices page both pass it to RevokeDeviceTokens.

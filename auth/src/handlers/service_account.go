@@ -95,6 +95,13 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	}
 	attempt := beginKeyedMint(ctx, pb.SignInMethod_SIGN_IN_METHOD_BOT_TOKEN)
 	defer func() { h.endSignIn(ctx, attempt, err) }()
+	// A credential is minted only by a signed-in person, as CreateApiToken
+	// and CliAuthorize require: an API token — the bot's own, or an
+	// operator's on an API-realm role that may call this — must not mint
+	// further machine tokens (api_token/derived-token-not-wider).
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
+	}
 	target := req.GetUserId()
 	if target == "" {
 		return nil, status.Error(codes.InvalidArgument, "user_id is required")

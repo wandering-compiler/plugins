@@ -213,6 +213,11 @@ func (h *AuthServiceHandler) RevokeDevices(ctx context.Context, req *pb.RevokeDe
 		}
 		userID := dev.GetUser()
 		if err := h.inTx(ctx, func(txCtx context.Context) error {
+			// The API tokens this device created end with it: a stolen
+			// session could have created one bound to the thief's key.
+			if err := endApprovedAPITokens(txCtx, h, userID, id, operator); err != nil {
+				return err
+			}
 			if _, err := h.Mutation.RevokeDeviceTokens(txCtx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: id, RevokedBy: operator, KeepTokenId: noTokenKept}); notFoundOK(err) != nil {
 				return err
 			}
