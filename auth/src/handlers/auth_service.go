@@ -463,7 +463,7 @@ type eraser func(ctx context.Context, h *AuthServiceHandler, userID, email, plac
 
 // erasers are the feature-owned halves of an erasure. Each feature whose
 // tables hold personal data (oauth, two_factor, email_verification,
-// org_invite) appends its own from its file's init(), so the list holds
+// org_invite, sign_up_confirmation) appends its own from its file's init(), so the list holds
 // exactly the tables this activation has; password_reset's share is
 // spendResetLinks above. Declared here, always compiled, because the features
 // that append and the one that runs them (user_admin) stage independently.

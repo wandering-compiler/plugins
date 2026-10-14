@@ -337,7 +337,8 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		return nil, err
 	}
 
-	// Release a lapsed invitation for this address before writing a new one.
+	// Release a lapsed invitation for this address before writing a new one:
+	// it is closed (closed_at), not deleted, and stays as the record.
 	//
 	// The pending-invite index cannot exclude expired rows — a partial index
 	// predicate has to be IMMUTABLE and `NOW()` is not — so an invitation that
@@ -356,7 +357,7 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	// request requires the address, so calling it with "" would refuse every
 	// open invitation with REQUIRED_VIOLATION before it was written.
 	if email != "" {
-		if _, cerr := h.Mutation.ClearExpiredOrgInvite(ctx, &pb.ClearExpiredOrgInviteReq{
+		if _, cerr := h.Mutation.CloseExpiredOrgInvite(ctx, &pb.CloseExpiredOrgInviteReq{
 			OrgId: orgID,
 			Email: email,
 		}); cerr != nil && status.Code(cerr) != codes.NotFound {
@@ -453,7 +454,8 @@ func (h *AuthServiceHandler) RevokeOrgInvite(ctx context.Context, req *pb.Revoke
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
-	if _, err := callerUserID(ctx); err != nil {
+	callerID, err := callerUserID(ctx)
+	if err != nil {
 		return nil, Unauthenticated(err)
 	}
 	orgID, err := activeOrgID(ctx)
@@ -461,12 +463,14 @@ func (h *AuthServiceHandler) RevokeOrgInvite(ctx context.Context, req *pb.Revoke
 		return nil, err
 	}
 	// org_id goes into the statement's WHERE, not just into a check here:
-	// the delete itself refuses an invitation belonging to another
+	// the close itself refuses an invitation belonging to another
 	// organization, so guessing a uuid is not a way to revoke somebody
-	// else's.
-	if _, err := h.Mutation.DeleteOrgInvite(ctx, &pb.DeleteOrgInviteReq{
+	// else's. The invitation is closed, not deleted: the row stays, with who
+	// withdrew it.
+	if _, err := h.Mutation.CloseOrgInvite(ctx, &pb.CloseOrgInviteReq{
 		InviteId: req.GetInviteId(),
 		OrgId:    orgID,
+		ClosedBy: callerID,
 	}); err != nil {
 		return nil, err
 	}

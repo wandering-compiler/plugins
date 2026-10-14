@@ -141,6 +141,9 @@ message RoleCreated {
   google.protobuf.Timestamp created_at = 3;
 }
 
+// RoleDeleted — emitted on AuthMutation.DeleteRole. The role row stays,
+// stamped deleted_at, and every grant of it was revoked in the same
+// transaction (no UserRoleRevoked is emitted for those).
 message RoleDeleted {
   option (w17.event) = { channel: "events", topic: "auth.role.deleted" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -180,6 +183,8 @@ message UserRoleAssigned {
   string                    org_id       = 5 [(w17.contrib.plugin_feature_field) = "org_membership"];
 }
 
+// UserRoleRevoked — emitted on AuthMutation.RevokeRoleFromUser. The grant
+// row stays, stamped revoked_at.
 message UserRoleRevoked {
   option (w17.event) = { channel: "events", topic: "auth.user_role.revoked" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -189,6 +194,9 @@ message UserRoleRevoked {
   string org_id  = 3 [(w17.contrib.plugin_feature_field) = "org_membership"];
 }
 
+// RolePermissionAdded — emitted on every AuthMutation.AddPermissionToRole
+// that answers, including one that revived a removed pair and one that found
+// the permission already granted (the call is idempotent).
 message RolePermissionAdded {
   option (w17.event) = { channel: "events", topic: "auth.role_permission.added" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -202,6 +210,8 @@ message RolePermissionAdded {
   google.protobuf.Timestamp added_at           = 4;
 }
 
+// RolePermissionRemoved — emitted on AuthMutation.RemovePermissionFromRole.
+// The row stays, stamped removed_at.
 message RolePermissionRemoved {
   option (w17.event) = { channel: "events", topic: "auth.role_permission.removed" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -261,6 +271,9 @@ message TotpConfirmed {
   string user_id = 1;
 }
 
+// TotpDisabled — emitted on AuthMutation.RevokeTotpSecret: the authenticator
+// was disabled, or ended because a new enrolment replaces it. The row stays,
+// stamped revoked_at, its seed cleared.
 message TotpDisabled {
   option (w17.event) = { channel: "events", topic: "auth.totp.disabled" };
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -382,9 +395,10 @@ message OrgMembershipAdded {
 }
 
 // OrganizationDeleted — emitted on AuthMutation.DeleteOrganization (the
-// admin Organizations page delete) after the org + its memberships are
-// gone. The symmetric teardown counterpart to OrganizationCreated: a
-// subscriber tears down the org's provisioned resources off org_id.
+// admin Organizations page delete) after the org is stamped deleted_at and
+// its memberships and org-scoped grants ended (the rows stay). The symmetric
+// teardown counterpart to OrganizationCreated: a subscriber tears down the
+// org's provisioned resources off org_id.
 message OrganizationDeleted {
   option (w17.event) = {
     channel: "events"
@@ -422,8 +436,9 @@ message OrgMembershipUpdated {
   string membership_id = 1;
 }
 
-// OrgMembershipRemoved — emitted on AuthMutation.DeleteOrgMembership (the
-// admin OrgMemberships page delete) after the membership row is gone.
+// OrgMembershipRemoved — emitted on AuthMutation.MarkOrgMembershipRemoved
+// (AuthService.RemoveOrgMembership, the admin OrgMemberships page delete)
+// after the membership and its org-scoped grants ended (the rows stay).
 // Subscribers audit revocations or invalidate the user's per-org cache.
 message OrgMembershipRemoved {
   option (w17.event) = {
@@ -475,6 +490,8 @@ message OrgInviteAccepted {
   string role      = 4;
 }
 
+// OrgInviteRevoked — emitted on AuthMutation.CloseOrgInvite (a withdrawn
+// invitation). The row stays, stamped closed_at.
 message OrgInviteRevoked {
   option (w17.event) = {
     channel: "events"

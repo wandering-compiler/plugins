@@ -228,7 +228,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 		// into the org they own at all: resolveOrgScope fails closed, the
 		// refusal is the opaque Unauthenticated every other auth failure
 		// returns, and there is no add-membership action anywhere to undo it.
-		// DeleteOrgMembership would therefore lock an owner out permanently.
+		// MarkOrgMembershipRemoved would therefore lock an owner out permanently.
 		//
 		// It also decides what owner_id MEANS. GetUserOwnsAnyOrg widens an
 		// owner's permissions, but permissions are checked after a scope is

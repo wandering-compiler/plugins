@@ -69,7 +69,10 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 	if _, err := h.checkMayGrantRole(ctx, roleID); err != nil {
 		return nil, err
 	}
-	resp, err := h.Mutation.UpdateOrgMembership(ctx, &pb.UpdateOrgMembershipReq{Id: req.GetId(), RoleId: roleID})
+	// The caller is recorded as revoked_by on the grants the change replaces
+	// (they stay, revoked). No caller id (a direct call) leaves it NULL.
+	callerID, _ := callerUserID(ctx)
+	resp, err := h.Mutation.UpdateOrgMembership(ctx, &pb.UpdateOrgMembershipReq{Id: req.GetId(), RoleId: roleID, ChangedBy: callerID})
 	if err != nil {
 		return nil, err
 	}
@@ -78,12 +81,15 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 
 // RemoveOrgMembership removes a member, under the role ceiling: the removal
 // revokes every role they hold in the organization, so the caller must cover
-// them. AuthMutation.DeleteOrgMembership does the work.
+// them. AuthMutation.MarkOrgMembershipRemoved does the work: the membership
+// and its grants end (removed_at / revoked_at, the caller recorded as the one
+// who removed them) and the rows stay.
 func (h *AuthServiceHandler) RemoveOrgMembership(ctx context.Context, req *pb.RemoveOrgMembershipReq) (*pb.RemoveOrgMembershipResp, error) {
 	if err := h.checkMayManageMembership(ctx, req.GetId()); err != nil {
 		return nil, err
 	}
-	resp, err := h.Mutation.DeleteOrgMembership(ctx, &pb.DeleteOrgMembershipReq{Id: req.GetId()})
+	callerID, _ := callerUserID(ctx)
+	resp, err := h.Mutation.MarkOrgMembershipRemoved(ctx, &pb.MarkOrgMembershipRemovedReq{Id: req.GetId(), RemovedBy: callerID})
 	if err != nil {
 		return nil, err
 	}

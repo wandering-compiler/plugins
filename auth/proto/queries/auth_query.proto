@@ -1166,7 +1166,8 @@ service AuthQuery {
           "SELECT ROWS_TO_ARRAY(rp.permission_id) AS permission_ids "
           "FROM @module.RolePermission rp "
           "JOIN @module.UserRole ur ON ur.role_id = rp.role_id "
-          "WHERE ur.user_id = :user_id"
+          "JOIN @module.Role r ON r.id = rp.role_id "
+          "WHERE ur.user_id = :user_id AND ur.revoked_at IS NULL AND rp.removed_at IS NULL AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1265,8 +1266,8 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
-          "WHERE ur.user_id = :user_id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
+          "WHERE ur.user_id = :user_id AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -1284,7 +1285,8 @@ service AuthQuery {
           "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
           "       r.all_permissions AS all_permissions "
           "FROM @module.Role r "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
+          "WHERE r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -1347,7 +1349,7 @@ service AuthQuery {
           "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.created_at AS created_at "
           "FROM @module.User u "
-          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
+          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id AND m.removed_at IS NULL "
           "ORDER BY u.created_at DESC, u.id DESC"
       }
     };
@@ -1424,7 +1426,7 @@ service AuthQuery {
         dql:
           "SELECT u.id AS user_id "
           "FROM @module.User u "
-          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
+          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id AND m.removed_at IS NULL "
           "WHERE u.id = :user_id"
       }
     };
@@ -1445,7 +1447,7 @@ service AuthQuery {
         dql:
           "SELECT r.id AS id, r.name AS name, "
           "       r.description AS description "
-          "FROM @module.Role r WHERE r.token_type = 2 "
+          "FROM @module.Role r WHERE r.token_type = 2 AND r.deleted_at IS NULL "
           "ORDER BY r.name ASC, r.id ASC"
       }
     };
@@ -1483,7 +1485,7 @@ service AuthQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_first_user = TRUE"
+        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_first_user = TRUE AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1496,7 +1498,7 @@ service AuthQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_default = TRUE"
+        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_default = TRUE AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1551,7 +1553,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
-          "              WHERE o.owner_id = :user_id) AS owns "
+          "              WHERE o.owner_id = :user_id AND o.deleted_at IS NULL) AS owns "
           "FROM @module.User u WHERE u.id = :user_id"
       }
     };
@@ -1576,7 +1578,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT o.id AS org_id FROM @module.Organization o "
-          "WHERE o.slug = :slug AND o.owner_id = :user_id"
+          "WHERE o.slug = :slug AND o.owner_id = :user_id AND o.deleted_at IS NULL"
       }
     };
   }
@@ -1600,7 +1602,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT r.id AS id, r.name AS name, r.description AS description "
-          "FROM @module.Role r WHERE r.org_scoped = TRUE "
+          "FROM @module.Role r WHERE r.org_scoped = TRUE AND r.deleted_at IS NULL "
           "ORDER BY r.name ASC, r.id ASC"
       }
     };
@@ -1618,7 +1620,7 @@ service AuthQuery {
           "       r.assign_default AS assign_default, "
           "       r.preset_key AS preset_key, "
           "       r.created_at AS created_at "
-          "FROM @module.Role r ORDER BY r.name ASC, r.id ASC"
+          "FROM @module.Role r WHERE r.deleted_at IS NULL ORDER BY r.name ASC, r.id ASC"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1642,7 +1644,7 @@ service AuthQuery {
           "       r.assign_default AS assign_default, "
           "       r.preset_key AS preset_key, "
           "       r.created_at AS created_at "
-          "FROM @module.Role r WHERE r.id = :id"
+          "FROM @module.Role r WHERE r.id = :id AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1713,8 +1715,8 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
-          "WHERE ur.user_id = :user_id AND r.token_type = :token_type "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
+          "WHERE ur.user_id = :user_id AND r.token_type = :token_type AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -2026,7 +2028,7 @@ service AuthQuery {
           "       s.last_step AS secret.last_step, "
           "       s.confirmed_at AS secret.confirmed_at, "
           "       s.created_at AS secret.created_at "
-          "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id"
+          "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id AND s.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
@@ -2040,7 +2042,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT COUNT(*) AS count FROM @module.UserRecoveryCode r "
-          "WHERE r.user_id = :user_id AND r.used_at IS NULL"
+          "WHERE r.user_id = :user_id AND r.used_at IS NULL AND r.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
@@ -2162,7 +2164,7 @@ service AuthQuery {
           "       m.role AS role "
           "FROM @module.OrgMembership m "
           "JOIN @module.Organization o ON o.id = m.org_id "
-          "WHERE m.user_id = :user_id "
+          "WHERE m.user_id = :user_id AND m.removed_at IS NULL AND o.deleted_at IS NULL "
           "ORDER BY o.name ASC"
       }
     };
@@ -2178,7 +2180,7 @@ service AuthQuery {
         dql:
           "SELECT ROWS_TO_ARRAY(ur.role_id) AS role_ids "
           "FROM @module.UserRole ur "
-          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id"
+          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id AND ur.revoked_at IS NULL"
       }
     };
   }
@@ -2230,10 +2232,11 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
           "WHERE ur.user_id = :user_id "
           "  AND (ur.org_id = :org_id "
           "       OR (ur.org_id IS NULL AND r.org_scoped = FALSE)) "
+          "  AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -2250,7 +2253,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
-          "              WHERE o.id = :org_id AND o.owner_id = u.id) AS owner "
+          "              WHERE o.id = :org_id AND o.owner_id = u.id AND o.deleted_at IS NULL) AS owner "
           "FROM @module.User u WHERE u.id = :user_id"
       }
     };
@@ -2277,9 +2280,10 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
           "WHERE ur.user_id = :user_id "
           "  AND ur.org_id IS NULL AND r.org_scoped = FALSE "
+          "  AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -2298,7 +2302,7 @@ service AuthQuery {
           "SELECT o.id AS org_id, m.role AS role "
           "FROM @module.OrgMembership m "
           "JOIN @module.Organization o ON o.id = m.org_id "
-          "WHERE m.user_id = :user_id AND o.slug = :slug"
+          "WHERE m.user_id = :user_id AND o.slug = :slug AND m.removed_at IS NULL AND o.deleted_at IS NULL"
       }
     };
   }
@@ -2318,7 +2322,7 @@ service AuthQuery {
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at "
-          "FROM @module.Organization o ORDER BY o.name ASC, o.id ASC"
+          "FROM @module.Organization o WHERE o.deleted_at IS NULL ORDER BY o.name ASC, o.id ASC"
       }
     };
   }
@@ -2334,7 +2338,7 @@ service AuthQuery {
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at "
-          "FROM @module.Organization o WHERE o.id = :id"
+          "FROM @module.Organization o WHERE o.id = :id AND o.deleted_at IS NULL"
       }
     };
   }
@@ -2360,6 +2364,7 @@ service AuthQuery {
           "FROM @module.OrgMembership m "
           "LEFT JOIN @module.User u ON u.id = m.user_id "
           "LEFT JOIN @module.Organization o ON o.id = m.org_id "
+          "WHERE m.removed_at IS NULL "
           "ORDER BY m.created_at DESC, m.id DESC"
       }
     };
@@ -2375,7 +2380,7 @@ service AuthQuery {
         dql:
           "SELECT m.id AS id, m.user_id AS user_id, m.org_id AS org_id, "
           "       m.role AS role, m.created_at AS created_at "
-          "FROM @module.OrgMembership m WHERE m.id = :id"
+          "FROM @module.OrgMembership m WHERE m.id = :id AND m.removed_at IS NULL"
       }
     };
   }
@@ -2460,7 +2465,7 @@ service AuthQuery {
           "FROM @module.OrgMembership m "
           "JOIN @module.User u ON u.id = m.user_id "
           "JOIN @module.Organization o ON o.id = m.org_id "
-          "WHERE m.org_id = :org_id "
+          "WHERE m.org_id = :org_id AND m.removed_at IS NULL AND o.deleted_at IS NULL "
           "ORDER BY u.email ASC"
       }
     };
@@ -2493,7 +2498,7 @@ service AuthQuery {
           "       i.email AS email, "
           "       i.metadata AS metadata "
           "FROM @module.OrgInvite i "
-          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.expires_at > NOW() "
+          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
           "LIMIT 1"
       }
     };
@@ -2515,7 +2520,7 @@ service AuthQuery {
           "       i.created_at AS created_at, "
           "       i.metadata AS metadata "
           "FROM @module.OrgInvite i "
-          "WHERE i.org_id = :org_id AND i.accepted_at IS NULL "
+          "WHERE i.org_id = :org_id AND i.accepted_at IS NULL AND i.closed_at IS NULL "
           "ORDER BY i.created_at DESC"
       }
     };
@@ -2545,7 +2550,7 @@ service AuthQuery {
           "       i.expires_at AS expires_at "
           "FROM @module.OrgInvite i "
           "JOIN @module.Organization o ON o.id = i.org_id "
-          "WHERE i.email = :email AND i.accepted_at IS NULL AND i.expires_at > NOW() "
+          "WHERE i.email = :email AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
           "ORDER BY i.created_at DESC"
       }
     };

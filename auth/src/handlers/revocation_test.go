@@ -425,6 +425,11 @@ func (s *revocationStore) EraseOrgInviteAddress(_ context.Context, in *pb.EraseO
 	return &pb.EraseOrgInviteAddressResp{}, nil
 }
 
+func (s *revocationStore) ErasePendingSignUpAddress(_ context.Context, in *pb.ErasePendingSignUpAddressReq, _ ...grpc.CallOption) (*pb.ErasePendingSignUpAddressResp, error) {
+	s.erased = append(s.erased, "sign_up_confirmation:"+in.GetEmail()+">"+in.GetPlaceholder())
+	return &pb.ErasePendingSignUpAddressResp{}, nil
+}
+
 func (s *revocationStore) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
 	for hash, uid := range s.resetTokens {
 		if uid == in.GetUserId() {
@@ -782,7 +787,7 @@ func TestEraseUsers_PseudonymisesAndKeepsEveryRow(t *testing.T) {
 	}
 	want := []string{
 		"email_verification:u1", "oauth:u1", "org_invite:alice@example.com",
-		"password_reset:u1", "two_factor:u1",
+		"password_reset:u1", "sign_up_confirmation:alice@example.com>erased-u1@erased.invalid", "two_factor:u1",
 	}
 	got := append([]string(nil), s.erased...)
 	sort.Strings(got)

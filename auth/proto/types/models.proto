@@ -578,9 +578,20 @@ message OAuthIdentity {
 // writes it any more: a row that still has it is read through the old key
 // once and moved into `seed` (MoveTotpSeed), so the column empties itself as
 // people sign in. It, the knob and lib/secretbox go in a later release.
+//
+// An authenticator is never deleted. Disabling it, or enrolling a new one in
+// its place, revokes it (RevokeTotpSecret): revoked_at is stamped, the seed and
+// the legacy secret are cleared — a revoked authenticator's seed is not kept
+// usable at rest — and the row stays as the record of when the account had an
+// authenticator. Every reader and every verifying statement reads the live row
+// only (`revoked_at IS NULL`), so a revoked one verifies nothing.
+//
+// One LIVE authenticator per user: the unique index is (user_id, ended_key),
+// and ended_key is '' on the live row and the row's own id once it is revoked
+// (the mechanism every re-addable auth table uses — see ended_key on UserRole).
 message UserTotpSecret {
   option (w17.db.table) = {
-    indexes: [ { unique: true, fields: [{ name: "user_id" }] } ]
+    indexes: [ { unique: true, fields: [{ name: "user_id" }, { name: "ended_key" }] } ]
   };
   option (w17.contrib.plugin_feature) = "two_factor";
 
@@ -604,6 +615,12 @@ message UserTotpSecret {
   // refuses while locked; a success resets the count.
   int64  stepup_attempts = 8 [(w17.field) = { type: COUNTER, default_int: 0 }];
   google.protobuf.Timestamp stepup_locked_until = 9 [(w17.field) = { type: DATETIME, null: true }];
+  // revoked_at — when the authenticator was disabled or replaced by a new
+  // enrolment. NULL = the live one.
+  google.protobuf.Timestamp revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  // ended_key — '' while live, the row's own id once revoked; part of the
+  // unique index, so a revoked row frees the user for a new enrolment.
+  string ended_key = 11 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
 // UserRecoveryCode — the one-time codes that stand in for the authenticator
@@ -613,6 +630,10 @@ message UserTotpSecret {
 // so it is looked up by hash rather than verified against a slow hash, and
 // guessing is bounded by the challenge's attempt budget like any MFA code.
 // used_at NULL = still usable; ConsumeRecoveryCode spends one atomically.
+//
+// A set is never deleted. Replacing it (GenerateRecoveryCodes, a new
+// confirmation) or disabling the authenticator revokes the unused codes
+// (revoked_at), and a revoked code is refused exactly like a used one.
 message UserRecoveryCode {
   option (w17.db.table) = {
     indexes: [ { unique: true, fields: [{ name: "user_id" }, { name: "code_hash" }] } ]
@@ -624,6 +645,10 @@ message UserRecoveryCode {
   string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 64 }]; // hex sha256 of the normalised code
   google.protobuf.Timestamp used_at    = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // revoked_at — the set this code belongs to was replaced, or the
+  // authenticator disabled, before the code was used. NULL = still part of
+  // the live set.
+  google.protobuf.Timestamp revoked_at = 6 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // MfaChallenge — a pending second-factor verification, behind
@@ -668,7 +693,10 @@ message MfaChallenge {
 // or on purpose by someone who knows the address — would block that address for
 // good. Pending rows hold nothing: any number may exist for one address, none
 // of them can sign in, and each dies at expires_at. The first one confirmed
-// becomes the account and the rest are deleted with it.
+// becomes the account (claimed_at) and the rest are ended with it
+// (superseded_at). Nothing deletes a pending row: a claimed, superseded or
+// expired one stays, and every statement that reads a registration as live
+// requires all three to say it is not over.
 //
 // Only hashes are stored: the password the User will get, and the code (the
 // plaintext travels once, in SignUpConfirmationRequested).
@@ -694,6 +722,14 @@ message PendingSignUp {
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  // claimed_at — the registration became the account (ClaimPendingSignUp:
+  // one guarded UPDATE, so two confirmations racing on one row get one
+  // account).
+  google.protobuf.Timestamp claimed_at = 9 [(w17.field) = { type: DATETIME, null: true }];
+  // superseded_at — another registration of the same address became the
+  // account first (SupersedePendingSignUpsForEmail, in the confirming
+  // transaction).
+  google.protobuf.Timestamp superseded_at = 10 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // PasswordResetToken — a single-use, time-bounded credential the
@@ -736,12 +772,22 @@ message EmailVerificationToken {
 // CRUD them at runtime. Role assignment to users goes through
 // UserRole; role's permission membership goes through
 // RolePermission.
+//
+// A role is never deleted. DeleteRole stamps deleted_at, revokes every grant
+// of the role (UserRole) and releases its name and preset_key: ended_key moves
+// from '' to the row's own id, and `name` is unique only together with it, so
+// a new role may take the name; preset_key is cleared, so the next role seed
+// recreates a deleted preset as a new row, as it did when the row was deleted.
+// The deleted row keeps its id, name, flags and RolePermission rows as the
+// record of what it granted. Every role reader reads live roles only.
 message Role {
-  option (w17.db.table) = {};
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "name" }, { name: "ended_key" }] } ]
+  };
   option (w17.contrib.plugin_feature) = "rbac";
 
   string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  string name        = 2 [(w17.field) = { type: SLUG, max_len: 100, unique: true }];
+  string name        = 2 [(w17.field) = { type: SLUG, max_len: 100 }];
   string description = 3 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
   google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 
@@ -854,6 +900,23 @@ message Role {
     (w17.field) = { default_auto: FALSE },
     (w17.contrib.plugin_feature_field) = "org_membership"
   ];
+
+  // deleted_at — when DeleteRole retired the role. NULL = live.
+  google.protobuf.Timestamp deleted_at = 12 [(w17.field) = { type: DATETIME, null: true }];
+
+  // ended_key — '' while the row is live, the row's own id once it has ended
+  // (here: deleted). It is part of the unique index over the row's natural
+  // key, so the ended row keeps every column and still frees that key for a
+  // new live row: every live row shares the one value '', so two live rows
+  // still collide, and every ended row carries a value of its own.
+  //
+  // The mechanism every auth table whose key must be reusable after a removal
+  // uses (Role.name, Organization.slug, UserRole, OrgMembership,
+  // UserTotpSecret): a full index, which every dialect builds — a partial
+  // `WHERE deleted_at IS NULL` index is refused on MySQL — and a re-add is a
+  // plain INSERT of a new row, so no row is ever rewritten back to live and the
+  // ended rows are the history.
+  string ended_key = 13 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
 // RolePermission — M2M link tuple (role_id, permission_id).
@@ -876,6 +939,17 @@ message Role {
 // has no FK target by design (the catalog is a proto enum,
 // not a DB table); the CHECK constraint covers the integrity
 // the FK would have provided.
+//
+// A permission is never deleted from a role. RemovePermissionFromRole stamps
+// removed_at (and removed_by), and every permission reader skips a removed
+// row. Unlike the other re-addable tables (see Role.ended_key), RolePermission
+// keeps ONE row per (role, permission) for good, and adding a removed
+// permission back REVIVES it (AddPermissionToRole: an UPSERT that clears
+// removed_at): the unique (role_id, permission_id) index is the conflict
+// target of the platform's role seed (`upsert_on: [role_id, permission_id]`),
+// so it cannot take an ended_key column without breaking every seed. What the
+// revive overwrites is kept in RolePermissionChange, which both mutations
+// append to.
 message RolePermission {
   option (w17.db.table) = {
     indexes: [
@@ -894,6 +968,42 @@ message RolePermission {
     (w17.db.column) = { index: true }
   ];
   google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // removed_at / removed_by — the permission was taken from the role, and by
+  // whom (NULL when the caller named nobody). NULL removed_at = granted.
+  google.protobuf.Timestamp removed_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  string removed_by = 6 [(w17.field) = { type: UUID, null: true }];
+}
+
+// RolePermissionChangeKind — what a RolePermissionChange row records.
+enum RolePermissionChangeKind {
+  ROLE_PERMISSION_CHANGE_KIND_UNSPECIFIED = 0;
+  ROLE_PERMISSION_CHANGE_KIND_ADDED       = 1;
+  ROLE_PERMISSION_CHANGE_KIND_REMOVED     = 2;
+}
+
+// RolePermissionChange — the append-only log of AddPermissionToRole and
+// RemovePermissionFromRole. RolePermission keeps one row per pair and an add
+// revives a removed one (see RolePermission), so the row alone shows only the
+// latest state; this table keeps every change. Written in the same statement
+// list (one transaction) as the change itself, never updated, never deleted.
+// The platform's role seed writes RolePermission directly and is not logged
+// here.
+//
+// permission_id is a plain number, not CHECK-constrained to the deployed
+// catalogue like RolePermission's: a log row must survive a permission that
+// was later dropped from the lock.
+message RolePermissionChange {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "rbac";
+
+  string id            = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string role_id       = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  int32  permission_id = 3 [(w17.field) = { type: NUMBER }];
+  RolePermissionChangeKind kind = 4 [(w17.field) = { type: ENUM }];
+  // changed_by — the account that made the change; NULL when the caller
+  // named nobody (an admin binding, project code).
+  string changed_by    = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 }
 
 // UserRole — M2M link User ↔ Role. Composite uniqueness prevents
@@ -918,14 +1028,22 @@ message RolePermission {
 //
 // v1 LIMITATION — no DB-level FK on `user_id` / `role_id` / `org_id`
 // (activation-rename caveat applies; see UserToken).
+//
+// A grant is never deleted. Revoking one (RevokeRoleFromUser, a membership's
+// role change or removal, DeleteRole, DeleteOrganization) stamps revoked_at
+// (and revoked_by when the caller is known) and moves ended_key from '' to the
+// row's own id; every index above includes ended_key, so the revoked row stays
+// as the record of the grant while the same grant can be written again — as a
+// NEW row, by the same plain INSERT (see Role.ended_key). Every permission
+// reader counts live grants only (`revoked_at IS NULL`).
 message UserRole {
   option (w17.db.table) = {
     indexes: [
-      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }],
+      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }, { name: "ended_key" }],
         plugin_feature_unless: "org_membership" },
-      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }],
+      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }, { name: "ended_key" }],
         where: "org_id IS NULL", plugin_feature: "org_membership" },
-      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }, { name: "org_id" }],
+      { unique: true, fields: [{ name: "user_id" }, { name: "role_id" }, { name: "org_id" }, { name: "ended_key" }],
         where: "org_id IS NOT NULL", plugin_feature: "org_membership" }
     ]
   };
@@ -979,6 +1097,13 @@ message UserRole {
     (w17.db.column) = { index: true },
     (w17.contrib.plugin_feature_field) = "org_membership"
   ];
+
+  // revoked_at / revoked_by — the grant was revoked, and by whom (NULL when
+  // the caller named nobody: an admin binding, a cascade, project code).
+  google.protobuf.Timestamp revoked_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  string revoked_by = 7 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once revoked (Role.ended_key).
+  string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
 // TokenPermission — the per-API-token permission subset (least-privilege
@@ -1182,12 +1307,20 @@ message CliAuthCode {
 // can belong to MANY of (a private personal org + a company org + …). The
 // `org_membership` feature's generalization of single-tenant tenant_scope:
 // where Tenant is 1:1 with a User, an Organization is M2M via OrgMembership.
+//
+// An organization is never deleted. DeleteOrganization stamps deleted_at,
+// removes every membership and revokes every grant scoped to it, and releases
+// its slug (ended_key, see Role.ended_key) so a new organization may take it.
+// Every organization reader reads live organizations only, so a deleted one is
+// invisible, cannot be selected, and its owner_id grants nothing.
 message Organization {
-  option (w17.db.table) = {};
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "slug" }, { name: "ended_key" }] } ]
+  };
   option (w17.contrib.plugin_feature) = "org_membership";
 
   string id   = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  string slug = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }];
+  string slug = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
   string name = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
   // kind groups the org for the CLI's picker: "private" (personal) or
   // "company". Free-form (not an enum) so a project can add its own kinds.
@@ -1213,6 +1346,10 @@ message Organization {
   // auto-granted" rather than as an error. App-enforced, no DB-level FK —
   // the same caveat every other link in this plugin carries.
   string owner_id = 6 [(w17.field) = { type: UUID, null: true }, (w17.db.column) = { index: true }];
+  // deleted_at — when DeleteOrganization retired it. NULL = live.
+  google.protobuf.Timestamp deleted_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  // ended_key — '' while live, the row's own id once deleted (Role.ended_key).
+  string ended_key = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
 // OrgMembership is the M2M link between a User and an Organization, with
@@ -1221,10 +1358,16 @@ message Organization {
 // org's id into scopes[org_id] (Authenticate decorator) after validating
 // the principal's membership — so per-org data isolation reuses the
 // existing (w17.db.scope) machinery with no client-trusted org input.
+//
+// A membership is never deleted. Removing one stamps removed_at (and
+// removed_by) and moves ended_key to the row's own id, so the person can be
+// added again — a new row, by the same INSERT — while the removed row stays as
+// the record (see Role.ended_key). Every membership reader reads live rows
+// only.
 message OrgMembership {
   option (w17.db.table) = {
     indexes: [
-      { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }] }
+      { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "ended_key" }] }
     ]
   };
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -1237,6 +1380,12 @@ message OrgMembership {
   // the admin's role edit write a Role.name here, so it is as wide as one.
   string role    = 4 [(w17.field) = { type: CHAR, max_len: 100 }];
   google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // removed_at / removed_by — the membership was removed, and by whom (NULL
+  // when nobody is known: an admin binding, an organization's deletion).
+  google.protobuf.Timestamp removed_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  string removed_by = 7 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once removed (Role.ended_key).
+  string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
 // OrgInvite — a pending invitation for an EMAIL to join an Organization
@@ -1278,12 +1427,13 @@ message OrgInvite {
   option (w17.db.table) = {
     indexes: [
       // One PENDING invite per (org, email). Partial, because a consumed
-      // invite must not block a later re-invite — the same person can be
-      // removed from an org and invited back. PG + SQLite only, which is
-      // the support surface this plugin's other `where:` indexes already
-      // assume.
+      // or closed invite must not block a later re-invite — the same person
+      // can be removed from an org and invited back. PG + SQLite only, which
+      // is the support surface this plugin's other `where:` indexes already
+      // assume (org_invite requires org_membership, whose UserRole indexes
+      // are partial too).
       { unique: true, fields: [{ name: "org_id" }, { name: "email" }],
-        where: "accepted_at IS NULL" }
+        where: "accepted_at IS NULL AND closed_at IS NULL" }
     ]
   };
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -1366,4 +1516,13 @@ message OrgInvite {
   // fills those rows. An empty snapshot is refused at accept: such an
   // invitation was never checked, and the inviter can send a new one.
   string role_snapshot = 11 [(w17.field) = { type: TEXT, blank: true, default_string: "" }];
+
+  // closed_at / closed_by — the invitation ended without being accepted:
+  // withdrawn (CloseOrgInvite, the withdrawing account as closed_by), or,
+  // once expired, closed so the address can be invited again
+  // (CloseExpiredOrgInvite, closed_by NULL). Nothing deletes an invitation: a
+  // closed one stays, refused by every path that binds, accepts or lists
+  // pending invitations, and out of the pending index above.
+  google.protobuf.Timestamp closed_at = 12 [(w17.field) = { type: DATETIME, null: true }];
+  string closed_by = 13 [(w17.field) = { type: UUID, null: true }];
 }

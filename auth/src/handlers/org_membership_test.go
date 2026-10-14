@@ -503,9 +503,10 @@ func TestResolveOrgScope_NoSelectorFallsBackToInference(t *testing.T) {
 
 // An OWNER with no membership row can still scope into the org they own.
 //
-// DeleteOrgMembership makes this state reachable: it removes the row
-// and nothing anywhere adds one back, so without the ownership fallback the
-// owner of an organization is locked out of it permanently — and the refusal
+// MarkOrgMembershipRemoved makes this state reachable: it ends the row, and
+// nothing but a new invitation (which the owner, locked out, cannot send) adds
+// one back, so without the ownership fallback the owner of an organization is
+// locked out of it permanently — and the refusal
 // they get is the opaque Unauthenticated every other auth failure returns, so
 // nothing on the way out says "your membership is gone".
 func TestResolveOrgScope_OwnerWithoutMembership(t *testing.T) {

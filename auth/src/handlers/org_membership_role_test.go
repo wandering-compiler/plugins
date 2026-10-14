@@ -22,7 +22,7 @@ type membershipRoleMock struct {
 	memberOrgRoles []string // what u2 holds INSIDE org-1
 
 	updated *pb.UpdateOrgMembershipReq
-	deleted *pb.DeleteOrgMembershipReq
+	deleted *pb.MarkOrgMembershipRemovedReq
 }
 
 func (m *membershipRoleMock) GetOrgMembership(_ context.Context, in *pb.GetOrgMembershipReq, _ ...grpc.CallOption) (*pb.OrgMembership, error) {
@@ -44,9 +44,9 @@ func (m *membershipRoleMock) UpdateOrgMembership(_ context.Context, in *pb.Updat
 	return &pb.UpdateOrgMembershipResp{MembershipId: in.GetId()}, nil
 }
 
-func (m *membershipRoleMock) DeleteOrgMembership(_ context.Context, in *pb.DeleteOrgMembershipReq, _ ...grpc.CallOption) (*pb.DeleteOrgMembershipResp, error) {
+func (m *membershipRoleMock) MarkOrgMembershipRemoved(_ context.Context, in *pb.MarkOrgMembershipRemovedReq, _ ...grpc.CallOption) (*pb.MarkOrgMembershipRemovedResp, error) {
 	m.deleted = in
-	return &pb.DeleteOrgMembershipResp{MembershipId: in.GetId()}, nil
+	return &pb.MarkOrgMembershipRemovedResp{MembershipId: in.GetId()}, nil
 }
 
 func newMembershipRoleHandler(memberHolds ...string) (*AuthServiceHandler, *membershipRoleMock) {

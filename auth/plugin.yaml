@@ -97,7 +97,7 @@ env:
 
 features:
   - name: rbac
-    description: "Role / Permission / UserRole / RolePermission tables + their CRUD mutations (incl. UpdateRole, which edits a role's name/description only — the privilege flags stay declarative) + their lifecycle events. Required when the project's gateway has ACL annotations + uses role-based assignment. Also stages the turnkey declarative signup role assignment (first_user / default -> UserRole), with the BootstrapClaim table (one row) that hands the first_user roles to exactly one sign-up."
+    description: "Role / Permission / UserRole / RolePermission tables + their CRUD mutations (incl. UpdateRole, which edits a role's name/description only — the privilege flags stay declarative) + their lifecycle events. Nothing is deleted: DeleteRole stamps Role.deleted_at and revokes the role's grants, RevokeRoleFromUser stamps UserRole.revoked_at, RemovePermissionFromRole stamps RolePermission.removed_at (AddPermissionToRole revives a removed pair; both are logged in the append-only RolePermissionChange table); every permission reader skips ended rows, and a released name or grant can be taken again. Required when the project's gateway has ACL annotations + uses role-based assignment. Also stages the turnkey declarative signup role assignment (first_user / default -> UserRole), with the BootstrapClaim table (one row) that hands the first_user roles to exactly one sign-up."
     default: true
     go_files:
       - handlers/signup_roles.go
@@ -120,7 +120,7 @@ features:
     requires:
       # It changes what SignUp does, so there must be a SignUp to change.
       - sign_up_turnkey
-    description: "SignUp proves the address before it creates the account. SignUp parks the registration in PendingSignUp (hashed password, hashed code, expiry) and emits SignUpConfirmationRequested with a code for a hand-written delivery channel, which must mail it to that address; it answers confirmation_required + pending_id and NO token. ConfirmSignUp(pending_id, code) creates the User, marks the address SELF_CONFIRMED (when email_verification is on), deletes the address's other pending registrations and issues the session. Why a pending table and not an unverified User: a User row holds its address (the email is unique), so a registration abandoned before the code — by its owner, or on purpose by someone who knows the address — would block that address for good. Pending rows hold nothing; any number may exist for one address, none can sign in, each dies at sign_up_confirmation_ttl_seconds. Guessing is bounded by the code, not by a cap on the address: eight base32 characters (32^8 ≈ 10^12) and five attempts per pending row, so a stranger needs about 10^11 registrations — each one a mail to the address — for an even chance. There is deliberately NO per-address limit on how many codes are sent: anybody can exhaust such a limit, which would block the address again, renewably; floods are bounded per caller by the gateway's limiter on unauthenticated methods. The invite and allowlist gates run when the code is requested; the allowlist is checked again at confirmation. SignUp does not say whether the address already has an account: a taken address is answered exactly like a new one (same work, a code mailed to it), and only ConfirmSignUp, with that code, answers AlreadyExists — so only the address's owner learns it, and a delivery channel should word the mail so it also makes sense to someone who already has an account. Off by default."
+    description: "SignUp proves the address before it creates the account. SignUp parks the registration in PendingSignUp (hashed password, hashed code, expiry) and emits SignUpConfirmationRequested with a code for a hand-written delivery channel, which must mail it to that address; it answers confirmation_required + pending_id and NO token. ConfirmSignUp(pending_id, code) creates the User, marks the address SELF_CONFIRMED (when email_verification is on), supersedes the address's other pending registrations and issues the session. Why a pending table and not an unverified User: a User row holds its address (the email is unique), so a registration abandoned before the code — by its owner, or on purpose by someone who knows the address — would block that address for good. Pending rows hold nothing; any number may exist for one address, none can sign in, each dies at sign_up_confirmation_ttl_seconds. Guessing is bounded by the code, not by a cap on the address: eight base32 characters (32^8 ≈ 10^12) and five attempts per pending row, so a stranger needs about 10^11 registrations — each one a mail to the address — for an even chance. There is deliberately NO per-address limit on how many codes are sent: anybody can exhaust such a limit, which would block the address again, renewably; floods are bounded per caller by the gateway's limiter on unauthenticated methods. The invite and allowlist gates run when the code is requested; the allowlist is checked again at confirmation. SignUp does not say whether the address already has an account: a taken address is answered exactly like a new one (same work, a code mailed to it), and only ConfirmSignUp, with that code, answers AlreadyExists — so only the address's owner learns it, and a delivery channel should word the mail so it also makes sense to someone who already has an account. Off by default."
     default: false
     go_files:
       - handlers/signup_confirm.go
@@ -157,7 +157,7 @@ features:
     go_files:
       - handlers/apitoken.go
   - name: devices
-    description: "Self-service device management: ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices (REST /auth/devices). Device identity itself is base tier and needs no feature: every token is bound to the device key its client signs requests with (DPoP, RFC 9449; the gateway verifies each proof and hands the plugin the key's thumbprint), the Device table is keyed by (user, thumbprint), and trust for two_factor_scope=new_devices belongs to that pair. Revoking a device here deletes its sessions and stamps Device.revoked_at: the key can never sign in to that account again (DEVICE_REVOKED), and its client generates a new key, which is a new device. Off by default."
+    description: "Self-service device management: ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices (REST /auth/devices). Device identity itself is base tier and needs no feature: every token is bound to the device key its client signs requests with (DPoP, RFC 9449; the gateway verifies each proof and hands the plugin the key's thumbprint), the Device table is keyed by (user, thumbprint), and trust for two_factor_scope=new_devices belongs to that pair. Revoking a device here revokes its sessions and stamps Device.revoked_at: the key can never sign in to that account again (DEVICE_REVOKED), and its client generates a new key, which is a new device. Off by default."
     default: false
     go_files:
       - handlers/devices.go
@@ -246,7 +246,7 @@ features:
       # lookup lives here, not in org_invite.go, because both features grant.
       - handlers/org_membership_role.go
   - name: org_invite
-    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / BindOpenOrgInvite / ConsumeOrgInviteByToken / DeleteOrgInvite, and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
+    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / BindOpenOrgInvite / ConsumeOrgInviteByToken / CloseOrgInvite / CloseExpiredOrgInvite (a withdrawn or lapsed invitation is closed, never deleted), and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
     default: false
     # Built ON org_membership, not merely alongside it: the invite writes an
     # OrgMembership row and an org-scoped UserRole, both of which are types
@@ -582,8 +582,10 @@ presets:
     # snippet. Injected onto the project's admin surface (refs qualified
     # with the activation name). Roles are primarily declarative (seeded
     # from `(w17.acl_roles)`), so the page is view + edit-copy + delete:
-    # list catalogue, inspect a role, retitle it, remove a stray one.
-    # The privilege flags stay declarative — see the page's fields below.
+    # list catalogue, inspect a role, retitle it, retire a stray one. The
+    # page's `delete` retires (DeleteRole stamps deleted_at, revokes the
+    # role's grants and frees its name); nothing is deleted. The privilege
+    # flags stay declarative — see the page's fields below.
     # Gated rbac. A hand-written page named "Roles" overrides this.
     pages:
       - name: Roles
@@ -701,8 +703,9 @@ presets:
       # Turnkey Organizations management. Gated org_membership. The
       # tables are plugin-owned, so a project can't author these pages
       # itself. View + edit + delete (list catalogue, inspect an org,
-      # edit its slug/name/kind, remove one — deleting purges its
-      # memberships); creation stays the project's provisioning flow
+      # edit its slug/name/kind, retire one — the `delete` stamps
+      # deleted_at, ends its memberships and org grants and frees its slug;
+      # nothing is deleted); creation stays the project's provisioning flow
       # (CreateOrganization off the OrganizationCreated hook). A
       # hand-written page named
       # "Organizations" overrides this.
@@ -721,7 +724,8 @@ presets:
           readonly_fields: [id, created_at]
       # Turnkey OrgMemberships management (the user↔org link table).
       # Gated org_membership. View + edit the member's role + delete
-      # (revoke one membership). The list projects the member's email +
+      # (remove one membership: removed_at, its org grants revoked; the rows
+      # stay). The list projects the member's email +
       # the org's name (ListOrgMemberships → OrgMembershipAdminRow, ADMIN-
       # FK) so an operator sees "alice@x.com · Acme", never two raw UUIDs:
       # `member` (email) is the clickable handle onto this membership's own
@@ -757,7 +761,8 @@ presets:
           # membership strip an org-admin.
           delete: AuthService.RemoveOrgMembership
           # Only the role is editable — moving a membership to another
-          # user/org is a delete + re-add (unique (user_id, org_id)).
+          # user/org is a removal + re-add (unique (user_id, org_id,
+          # ended_key)).
           fields: [role]
           readonly_fields: [id, user_id, org_id, created_at]
       # Turnkey session/token review. Gated user_admin. Lists every

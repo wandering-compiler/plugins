@@ -100,6 +100,23 @@ var errSignUpConfirmInvalid = status.Error(codes.InvalidArgument,
 
 func init() {
 	signUpConfirmation = startSignUpConfirmation
+	erasers = append(erasers, erasePendingSignUps)
+}
+
+// erasePendingSignUps is sign_up_confirmation's eraser: the registrations
+// parked for the erased address — the account's own claimed one and any
+// superseded, expired or open ones, a stranger's included — are ended and
+// lose the address and their hashes (ErasePendingSignUpAddress). They are
+// kept now rather than deleted at confirmation, so the erasure must reach
+// them. Pending rows store the address normalised; skipped when the account
+// already holds its placeholder (a retried erasure).
+func erasePendingSignUps(ctx context.Context, h *AuthServiceHandler, _, email, placeholder string) error {
+	email = normalizeEmail(email)
+	if email == "" || email == normalizeEmail(placeholder) {
+		return nil
+	}
+	_, err := h.Mutation.ErasePendingSignUpAddress(ctx, &pb.ErasePendingSignUpAddressReq{Email: email, Placeholder: placeholder})
+	return err
 }
 
 // pendingSignUpTenant stamps the tenant SignUp resolved on the pending row.
@@ -157,11 +174,9 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 		return nil, err
 	}
 
-	// Housekeeping for this address only: expired rows are dead anyway (every
-	// read filters on expires_at), this keeps them from piling up.
-	if _, err := h.Mutation.PurgeExpiredPendingSignUps(ctx, &pb.PurgeExpiredPendingSignUpsReq{Email: email}); err != nil {
-		return nil, err
-	}
+	// No housekeeping: an expired registration stays, refused by its
+	// expires_at in every statement that reads one (nothing in the auth tables
+	// is deleted).
 
 	// The link is claimed when the registration STARTS, because only this call
 	// carries it — the confirmation does not. An address that never confirms
@@ -221,10 +236,11 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 //     check against. A zero count is no live row.
 //  2. The code is checked, and the allowlist again — on the stored address,
 //     because the list may have changed since the code was sent.
-//  3. One transaction: claim the row (DELETE … RETURNING — two confirmations
-//     racing get one account), create the User, link its roles, record the
-//     proved address, delete the address's other pending registrations, mint
-//     the session. An address registered meanwhile fails CreateUser's unique
+//  3. One transaction: claim the row (UPDATE … SET claimed_at … RETURNING,
+//     guarded on claimed_at IS NULL — two confirmations racing get one
+//     account), create the User, link its roles, record the proved address,
+//     supersede the address's other pending registrations (superseded_at),
+//     mint the session. Every row stays. An address registered meanwhile fails CreateUser's unique
 //     constraint and rolls the claim back.
 func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmSignUpReq) (*pb.ConfirmSignUpResp, error) {
 	// The device key before the attempt is counted: a client that cannot
@@ -307,7 +323,7 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 	if err := markEmailConfirmed(txCtx, h, userID); err != nil {
 		return nil, err
 	}
-	if _, err := h.Mutation.DeletePendingSignUpsForEmail(txCtx, &pb.DeletePendingSignUpsForEmailReq{Email: claimed.GetEmail()}); err != nil {
+	if _, err := h.Mutation.SupersedePendingSignUpsForEmail(txCtx, &pb.SupersedePendingSignUpsForEmailReq{Email: claimed.GetEmail()}); err != nil {
 		return nil, err
 	}
 	dev, err := mintDevice(txCtx, h, userID, thumbprint)

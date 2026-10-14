@@ -381,11 +381,13 @@ message CreateRecoveryCodeResp {
   string id = 1;
 }
 
-message DeleteRecoveryCodesReq {
+// RevokeRecoveryCodes ends the user's unused codes (revoked_at), when the set
+// is replaced or the authenticator disabled. Was DeleteRecoveryCodes.
+message RevokeRecoveryCodesReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
 }
-message DeleteRecoveryCodesResp {
+message RevokeRecoveryCodesResp {
   option (w17.contrib.plugin_feature) = "two_factor";
 }
 
@@ -400,11 +402,13 @@ message ConsumeRecoveryCodeResp {
   string user_id = 2;
 }
 
-message DeleteTotpSecretReq {
+// RevokeTotpSecret ends the user's live authenticator (revoked_at, seed
+// cleared). Was DeleteTotpSecret.
+message RevokeTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
 }
-message DeleteTotpSecretResp {
+message RevokeTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
 }
@@ -506,8 +510,9 @@ message RecordPendingSignUpAttemptResp {
   string email     = 3;
 }
 
-// ClaimPendingSignUp spends the registration: DELETE … RETURNING is the
-// single-use guard, so two confirmations racing on one row get one account.
+// ClaimPendingSignUp spends the registration: one UPDATE … RETURNING guarded on
+// `claimed_at IS NULL` is the single-use guard, so two confirmations racing on
+// one row get one account. The row stays, with claimed_at.
 message ClaimPendingSignUpReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string pending_id = 1 [(w17.field) = { type: UUID }];
@@ -519,21 +524,31 @@ message ClaimPendingSignUpResp {
   string tenant_id     = 3 [(w17.contrib.plugin_feature_field) = "tenant_scope"];
 }
 
-// DeletePendingSignUpsForEmail clears the other registrations of an address
-// once one of them became the account, and the expired ones before a new one
-// is parked.
-message DeletePendingSignUpsForEmailReq {
+// SupersedePendingSignUpsForEmail ends the other open registrations of an
+// address once one of them became the account (superseded_at). Was
+// DeletePendingSignUpsForEmail; the per-address purge of expired rows
+// (PurgeExpiredPendingSignUps) is gone — an expired row stays, refused by its
+// expires_at.
+message SupersedePendingSignUpsForEmailReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
 }
-message DeletePendingSignUpsForEmailResp {
+message SupersedePendingSignUpsForEmailResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
 }
-message PurgeExpiredPendingSignUpsReq {
+
+// ErasePendingSignUpAddress is sign_up_confirmation's eraser (user_admin's
+// EraseUsers): the pending registrations of the erased address are ended and
+// lose the address and their hashes. They used to be deleted when one of them
+// was confirmed; they stay now, so an erasure has to reach them.
+message ErasePendingSignUpAddressReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
-  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // The address being erased (as stored: normalized).
+  string email       = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // What the rows carry instead — the account's erasure placeholder.
+  string placeholder = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
 }
-message PurgeExpiredPendingSignUpsResp {
+message ErasePendingSignUpAddressResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
 }
 
@@ -968,6 +983,9 @@ message RevokeRoleFromUserReq {
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "org_membership"
   ];
+  // revoked_by — the account revoking, stamped on the grant. Empty = nobody
+  // named (NULL).
+  string revoked_by = 4 [(w17.field) = { type: UUID, null: true }];
 }
 message RevokeRoleFromUserResp {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -991,6 +1009,9 @@ message AddPermissionToRoleReq {
   option (w17.contrib.plugin_feature) = "rbac";
   string role_id       = 1;
   int32  permission_id = 2;
+  // added_by — the account adding it, logged in RolePermissionChange. Empty =
+  // nobody named (NULL).
+  string added_by      = 3 [(w17.field) = { type: UUID, null: true }];
 }
 message AddPermissionToRoleResp {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -1001,6 +1022,9 @@ message RemovePermissionFromRoleReq {
   option (w17.contrib.plugin_feature) = "rbac";
   string role_id       = 1;
   int32  permission_id = 2;
+  // removed_by — the account removing it, stamped on the row and logged in
+  // RolePermissionChange. Empty = nobody named (NULL).
+  string removed_by    = 3 [(w17.field) = { type: UUID, null: true }];
 }
 message RemovePermissionFromRoleResp {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -1189,10 +1213,11 @@ message AddOrgMembershipResp {
   OrgMembership membership = 1;
 }
 
-// Org admin deletes — back the Organizations / OrgMemberships admin
-// pages' `delete`. Requests key on a bare `id` field so the admin
-// detail id-stamp resolves against it regardless of the model name; the
-// responses echo the domain id for the emitted event payload. Gated
+// Org admin removals — back the Organizations page's `delete` and
+// AuthService.RemoveOrgMembership (the OrgMemberships page's `delete`). Both
+// are state changes: nothing is deleted. Requests key on a bare `id` field so
+// the admin detail id-stamp resolves against it regardless of the model name;
+// the responses echo the domain id for the emitted event payload. Gated
 // org_membership.
 message DeleteOrganizationReq {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -1203,11 +1228,15 @@ message DeleteOrganizationResp {
   string org_id = 1;
 }
 
-message DeleteOrgMembershipReq {
+// MarkOrgMembershipRemoved — was DeleteOrgMembership.
+message MarkOrgMembershipRemovedReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string id = 1;
+  // removed_by — the account removing the member, stamped on the membership
+  // and on the grants revoked with it. Empty = nobody named (NULL).
+  string removed_by = 2 [(w17.field) = { type: UUID, null: true }];
 }
-message DeleteOrgMembershipResp {
+message MarkOrgMembershipRemovedResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   string membership_id = 1;
 }
@@ -1244,6 +1273,9 @@ message UpdateOrgMembershipReq {
   reserved 2;
   reserved "role";
   string role_id = 3 [(w17.field) = { type: UUID }];
+  // changed_by — the account changing the role, stamped as revoked_by on the
+  // grants the change replaces. Empty = nobody named (NULL).
+  string changed_by = 4 [(w17.field) = { type: UUID, null: true }];
 }
 message UpdateOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -1293,12 +1325,13 @@ message CreateOrgInviteResp {
   OrgInvite invite = 1;
 }
 
-message ClearExpiredOrgInviteReq {
+// CloseExpiredOrgInvite — was ClearExpiredOrgInvite.
+message CloseExpiredOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string org_id = 1 [(w17.field) = { type: UUID }];
   string email  = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
 }
-message ClearExpiredOrgInviteResp {
+message CloseExpiredOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   string id = 1;
 }
@@ -1348,12 +1381,15 @@ message ConsumeOrgInviteByTokenResp {
   string role_snapshot = 5;
 }
 
-message DeleteOrgInviteReq {
+// CloseOrgInvite — withdraw a pending invitation. Was DeleteOrgInvite.
+message CloseOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string invite_id = 1 [(w17.field) = { type: UUID }];
   string org_id    = 2 [(w17.field) = { type: UUID }];
+  // closed_by — the account withdrawing it. Empty = nobody named (NULL).
+  string closed_by = 3 [(w17.field) = { type: UUID, null: true }];
 }
-message DeleteOrgInviteResp {
+message CloseOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   string invite_id = 1;
 }
@@ -1676,8 +1712,10 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
 
   // CreateTotpSecret — INSERT a TOTP secret (confirmed_at NULL until the
-  // first code verifies). Unique user_id → re-enroll refuses with
-  // AlreadyExists (the handler deletes first to rotate). Emits TotpEnrolled.
+  // first code verifies). One live secret per user (unique (user_id,
+  // ended_key), ended_key '' on the live row) → re-enroll refuses with
+  // AlreadyExists (the handler revokes the old one first to rotate). Emits
+  // TotpEnrolled.
   rpc CreateTotpSecret(CreateTotpSecretReq) returns (CreateTotpSecretResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
@@ -1714,7 +1752,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserTotpSecret SET "
           "confirmed_at = NOW() "
-          "WHERE user_id = :user_id "
+          "WHERE user_id = :user_id AND revoked_at IS NULL "
           "RETURNING user_id"
       }
     };
@@ -1812,7 +1850,7 @@ service AuthMutation {
           "UPDATE @module.UserTotpSecret SET "
           "seed = :seed, "
           "secret = NULL "
-          "WHERE id = :id AND user_id = :user_id "
+          "WHERE id = :id AND user_id = :user_id AND revoked_at IS NULL "
           "RETURNING user_id"
       }
     };
@@ -1828,7 +1866,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserTotpSecret SET "
           "last_step = :step "
-          "WHERE id = :id AND last_step < :step "
+          "WHERE id = :id AND last_step < :step AND revoked_at IS NULL "
           "RETURNING id"
       }
     };
@@ -1845,7 +1883,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserTotpSecret SET "
           "stepup_attempts = stepup_attempts + 1 "
-          "WHERE id = :id AND (stepup_locked_until IS NULL OR stepup_locked_until < NOW()) "
+          "WHERE id = :id AND (stepup_locked_until IS NULL OR stepup_locked_until < NOW()) AND revoked_at IS NULL "
           "RETURNING stepup_attempts AS attempts"
       }
     };
@@ -1878,8 +1916,8 @@ service AuthMutation {
     };
   }
 
-  // CreateRecoveryCode / DeleteRecoveryCodes — the handler replaces a user's
-  // set (delete, then ten inserts) inside one transaction.
+  // CreateRecoveryCode / RevokeRecoveryCodes — the handler replaces a user's
+  // set (revoke the unused codes, then ten inserts) inside one transaction.
   rpc CreateRecoveryCode(CreateRecoveryCodeReq) returns (CreateRecoveryCodeResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
@@ -1893,12 +1931,17 @@ service AuthMutation {
       }
     };
   }
-  rpc DeleteRecoveryCodes(DeleteRecoveryCodesReq) returns (DeleteRecoveryCodesResp) {
+  // RevokeRecoveryCodes — a used code keeps its used_at; every unused one
+  // gets revoked_at and verifies nothing from then on. No RETURNING: a user
+  // with no codes is not an error.
+  rpc RevokeRecoveryCodes(RevokeRecoveryCodesReq) returns (RevokeRecoveryCodesResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserRecoveryCode WHERE user_id = :user_id"
+        dql:
+          "UPDATE @module.UserRecoveryCode SET revoked_at = NOW() "
+          "WHERE user_id = :user_id AND used_at IS NULL AND revoked_at IS NULL"
       }
     };
   }
@@ -1914,7 +1957,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserRecoveryCode SET "
           "used_at = NOW() "
-          "WHERE user_id = :user_id AND code_hash = :code_hash AND used_at IS NULL "
+          "WHERE user_id = :user_id AND code_hash = :code_hash AND used_at IS NULL AND revoked_at IS NULL "
           "RETURNING id, user_id"
       }
     };
@@ -1926,14 +1969,22 @@ service AuthMutation {
     };
   }
 
-  // DeleteTotpSecret — disable the built-in authenticator. Idempotent.
-  // Emits TotpDisabled.
-  rpc DeleteTotpSecret(DeleteTotpSecretReq) returns (DeleteTotpSecretResp) {
+  // RevokeTotpSecret — disable the built-in authenticator, or end it before
+  // a new enrolment replaces it. The row stays: revoked_at is stamped, the
+  // seed and the legacy secret are cleared (a revoked authenticator's seed is
+  // not kept at rest), and ended_key takes the row's id so the user can enrol
+  // again. Guarded on `revoked_at IS NULL`: with no live authenticator it
+  // matches nothing (NotFound, which the handler reads as done). Emits
+  // TotpDisabled.
+  rpc RevokeTotpSecret(RevokeTotpSecretReq) returns (RevokeTotpSecretResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserTotpSecret WHERE user_id = :user_id RETURNING user_id"
+        dql:
+          "UPDATE @module.UserTotpSecret SET revoked_at = NOW(), ended_key = id, seed = NULL, secret = NULL "
+          "WHERE user_id = :user_id AND revoked_at IS NULL "
+          "RETURNING user_id"
       }
     };
     option (w17.event_emit) = {
@@ -2019,7 +2070,8 @@ service AuthMutation {
 
   // RecordPendingSignUpAttempt — claim one guess; see its request message.
   // `expires_at > NOW()` in the WHERE, so an expired row answers like a
-  // missing one and nothing has to sweep the table first.
+  // missing one and nothing has to sweep the table, and a claimed or
+  // superseded row answers the same way.
   rpc RecordPendingSignUpAttempt(RecordPendingSignUpAttemptReq) returns (RecordPendingSignUpAttemptResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
@@ -2028,38 +2080,64 @@ service AuthMutation {
         dql:
           "UPDATE @module.PendingSignUp SET "
           "attempts = attempts + 1 "
-          "WHERE id = :pending_id AND expires_at > NOW() "
+          "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW() "
           "RETURNING attempts AS attempts, code_hash AS code_hash, email AS email"
       }
     };
   }
 
-  // ClaimPendingSignUp — spend the registration (single-use DELETE).
+  // ClaimPendingSignUp — spend the registration: one guarded UPDATE, so of
+  // two confirmations racing on one row exactly one gets it back (the other
+  // matches nothing: NotFound). The row stays, with claimed_at.
   rpc ClaimPendingSignUp(ClaimPendingSignUpReq) returns (ClaimPendingSignUpResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.PendingSignUp "
-          "WHERE id = :pending_id AND expires_at > NOW() "
+          "UPDATE @module.PendingSignUp SET claimed_at = NOW() "
+          "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW() "
           "RETURNING email AS email, password_hash AS password_hash, "
           "?feature(tenant_scope) tenant_id AS tenant_id"
       }
     };
   }
 
-  rpc DeletePendingSignUpsForEmail(DeletePendingSignUpsForEmailReq) returns (DeletePendingSignUpsForEmailResp) {
+  // SupersedePendingSignUpsForEmail — end the address's other open
+  // registrations once one became the account. The claimed row is excluded by
+  // its claimed_at. No RETURNING: none left is not an error.
+  rpc SupersedePendingSignUpsForEmail(SupersedePendingSignUpsForEmailReq) returns (SupersedePendingSignUpsForEmailResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
-      ops: { name: "main" dql: "DELETE FROM @module.PendingSignUp WHERE email = :email" }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.PendingSignUp SET superseded_at = NOW() "
+          "WHERE email = :email AND claimed_at IS NULL AND superseded_at IS NULL"
+      }
     };
   }
 
-  rpc PurgeExpiredPendingSignUps(PurgeExpiredPendingSignUpsReq) returns (PurgeExpiredPendingSignUpsResp) {
+  // ErasePendingSignUpAddress — the erasure of an address's pending
+  // registrations: an open one is ended first (superseded_at), then every
+  // one of them takes the placeholder address and the unusable `!` for both
+  // hashes (no password or code verifies against it). The rows stay. No
+  // RETURNING: an address with no registrations is not an error.
+  rpc ErasePendingSignUpAddress(ErasePendingSignUpAddressReq) returns (ErasePendingSignUpAddressResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
-      ops: { name: "main" dql: "DELETE FROM @module.PendingSignUp WHERE email = :email AND expires_at <= NOW()" }
+      ops: {
+        name: "open"
+        dql:
+          "UPDATE @module.PendingSignUp SET superseded_at = NOW() "
+          "WHERE email = :email AND claimed_at IS NULL AND superseded_at IS NULL"
+      }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.PendingSignUp SET email = :placeholder, password_hash = \'!\', code_hash = \'!\' "
+          "WHERE email = :email"
+      }
     };
   }
 
@@ -2310,10 +2388,6 @@ service AuthMutation {
     };
   }
 
-  // DeleteRole — DELETE matching role. Idempotent. Caller
-  // is responsible for cleaning up dependent UserRole /
-  // RolePermission rows ahead of time (v1: no FK cascade —
-  // the activation-rename FK limitation applies).
   // UpdateRole — the admin Roles page detail `update`. Copy only
   // (name + description); the privilege flags stay declarative, seeded
   // from `(w17.acl_roles)`, so an admin form can't widen a grant.
@@ -2327,7 +2401,7 @@ service AuthMutation {
           "UPDATE @module.Role SET "
           "name = :name, "
           "description = :description "
-          "WHERE id = :role_id "
+          "WHERE id = :role_id AND deleted_at IS NULL "
           "RETURNING id AS role_id"
       }
     };
@@ -2341,12 +2415,36 @@ service AuthMutation {
     };
   }
 
+  // DeleteRole — retire a role (the admin Roles page's `delete`). Nothing is
+  // deleted, in one transaction:
+  //
+  //   grants  every live grant of the role is revoked (revoked_at, ended_key),
+  //           so no reader counts it — it used to be the caller's job to
+  //           clean them up, and a grant left behind kept granting through
+  //           GetUserPermissions;
+  //   main    the role is stamped deleted_at; ended_key takes its id, which
+  //           frees its name for a new role, and preset_key is cleared, so
+  //           the next role seed recreates a deleted preset as a new row
+  //           (as it did when the row was deleted).
+  //
+  // Its RolePermission rows stay as they are, the record of what it granted;
+  // no reader joins them past a deleted role. Guarded on `deleted_at IS
+  // NULL`: deleting a deleted role matches nothing (NotFound), as deleting a
+  // missing one did. revoked_by stays NULL: the admin page binds this
+  // mutation directly, and a statement cannot name its caller.
   rpc DeleteRole(DeleteRoleReq) returns (DeleteRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
+        name: "grants"
+        dql:  "UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE role_id = :role_id AND revoked_at IS NULL"
+      }
+      ops: {
         name: "main"
-        dql:  "DELETE FROM @module.Role WHERE id = :role_id RETURNING id AS role_id"
+        dql:
+          "UPDATE @module.Role SET deleted_at = NOW(), ended_key = id, preset_key = NULL "
+          "WHERE id = :role_id AND deleted_at IS NULL "
+          "RETURNING id AS role_id"
       }
     };
     option (w17.event_emit) = {
@@ -2531,8 +2629,10 @@ service AuthMutation {
   }
 
   // AssignRoleToUser — INSERT UserRole linking a user to a
-  // role. Composite-unique (user_id, role_id) refuses duplicate
-  // assignments with AlreadyExists.
+  // role. A live duplicate (same user, role and org, ended_key '') is refused
+  // by the unique index with AlreadyExists; a REVOKED grant does not block it
+  // (its ended_key is its own id), so a grant revoked earlier is given again
+  // as a new row and the revoked one stays as history.
   rpc AssignRoleToUser(AssignRoleToUserReq) returns (AssignRoleToUserResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
@@ -2569,17 +2669,20 @@ service AuthMutation {
     };
   }
 
-  // RevokeRoleFromUser — DELETE matching UserRole row.
-  // Idempotent.
+  // RevokeRoleFromUser — revoke the matching live grant: revoked_at,
+  // revoked_by and ended_key are stamped and the row stays. Guarded on
+  // `revoked_at IS NULL`: with no live grant it matches nothing (NotFound),
+  // as the DELETE it replaces did.
   rpc RevokeRoleFromUser(RevokeRoleFromUserReq) returns (RevokeRoleFromUserResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.UserRole "
+          "UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :revoked_by, ended_key = id "
           "WHERE user_id = :user_id AND role_id = :role_id "
           "AND ?feature(org_membership) org_id IS NOT DISTINCT FROM :org_id "
+          "AND revoked_at IS NULL "
           "RETURNING user_id, role_id, ?feature(org_membership) org_id"
       }
     };
@@ -2596,18 +2699,31 @@ service AuthMutation {
     };
   }
 
-  // AddPermissionToRole — INSERT RolePermission linking a
-  // permission to a role. Composite-unique (role_id,
-  // permission_id) refuses duplicate grants.
+  // AddPermissionToRole — grant a permission to a role. RolePermission keeps
+  // one row per (role, permission) — the unique index is the role seed's
+  // conflict target — so the write is an UPSERT on that pair: a new pair is
+  // inserted, a REMOVED one is revived (removed_at / removed_by cleared), and
+  // a pair already granted is left as it is and answered (adding a
+  // permission a role holds is no longer AlreadyExists). The change is
+  // appended to RolePermissionChange first, in the same transaction.
   rpc AddPermissionToRole(AddPermissionToRoleReq) returns (AddPermissionToRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
+        name: "log"
+        dql:
+          "INSERT INTO @module.RolePermissionChange SET "
+          "role_id = :role_id, permission_id = :permission_id, kind = 1, changed_by = :added_by"
+      }
+      ops: {
         name: "main"
         dql:
-          "INSERT INTO @module.RolePermission SET "
+          "UPSERT INTO @module.RolePermission SET "
           "role_id = :role_id, "
           "permission_id = :permission_id "
+          "ON CONFLICT (role_id, permission_id) DO UPDATE SET "
+          "removed_at = NULL, "
+          "removed_by = NULL "
           "RETURNING id AS role_permission.id, "
           "          role_id AS role_permission.role_id, "
           "          permission_id AS role_permission.permission_id, "
@@ -2627,16 +2743,26 @@ service AuthMutation {
     };
   }
 
-  // RemovePermissionFromRole — DELETE matching RolePermission
-  // row. Idempotent.
+  // RemovePermissionFromRole — take a permission from a role: removed_at and
+  // removed_by are stamped and the row stays; no permission reader counts a
+  // removed row. The change is appended to RolePermissionChange in the same
+  // transaction. Guarded on `removed_at IS NULL`: with nothing granted it
+  // matches nothing (NotFound, as the DELETE it replaces did) and the log row
+  // rolls back with it.
   rpc RemovePermissionFromRole(RemovePermissionFromRoleReq) returns (RemovePermissionFromRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
+        name: "log"
+        dql:
+          "INSERT INTO @module.RolePermissionChange SET "
+          "role_id = :role_id, permission_id = :permission_id, kind = 2, changed_by = :removed_by"
+      }
+      ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.RolePermission "
-          "WHERE role_id = :role_id AND permission_id = :permission_id "
+          "UPDATE @module.RolePermission SET removed_at = NOW(), removed_by = :removed_by "
+          "WHERE role_id = :role_id AND permission_id = :permission_id AND removed_at IS NULL "
           "RETURNING role_id, permission_id"
       }
     };
@@ -3127,8 +3253,9 @@ service AuthMutation {
   }
 
   // AddOrgMembership — INSERT OrgMembership linking a user to an org
-  // with a role. Composite-unique (user_id, org_id) refuses a duplicate
-  // membership with AlreadyExists. Emits OrgMembershipAdded (fires for
+  // with a role. A live duplicate (same user and org, ended_key '') is
+  // refused by the unique index with AlreadyExists; a REMOVED membership does
+  // not block it, so a removed member can be added again (a new row). Emits OrgMembershipAdded (fires for
   // the creator's owner grant + every later invite accept). Mirrors
   // AssignRoleToUser.
   rpc AddOrgMembership(AddOrgMembershipReq) returns (AddOrgMembershipResp) {
@@ -3162,13 +3289,6 @@ service AuthMutation {
     };
   }
 
-  // DeleteOrganization — the admin Organizations page delete. Purges the
-  // org's memberships first (link table, app-enforced — no DB FK, same
-  // caveat as the rest of the plugin), then the org, atomically. The
-  // membership purge is a NON-final leg (scalar :id bind — no array
-  // expansion, so the final-leg rule for `IN (:ids)` doesn't apply). Emits
-  // OrganizationDeleted for downstream per-org cleanup. Gated
-  // org_membership.
   // UpdateOrganization — the admin Organizations page detail `update`.
   // Gated org_membership.
   rpc UpdateOrganization(UpdateOrganizationReq) returns (UpdateOrganizationResp) {
@@ -3181,7 +3301,7 @@ service AuthMutation {
           "slug = :slug, "
           "name = :name, "
           "kind = :kind "
-          "WHERE id = :id "
+          "WHERE id = :id AND deleted_at IS NULL "
           "RETURNING id AS org_id"
       }
     };
@@ -3195,21 +3315,42 @@ service AuthMutation {
     };
   }
 
+  // DeleteOrganization — the admin Organizations page delete. Nothing is
+  // deleted, in one transaction:
+  //
+  //   memberships  every live membership of the org is removed (removed_at,
+  //                ended_key);
+  //   grants       every live grant scoped to the org is revoked, for the
+  //                reason MarkOrgMembershipRemoved gives;
+  //   main         the org is stamped deleted_at, and ended_key takes its id,
+  //                which frees its slug for a new organization.
+  //
+  // Every organization reader reads live rows only, so the org disappears
+  // from every list and lookup, cannot be selected, and its owner_id grants
+  // nothing. Its invitations are not touched here (org_invite is a feature
+  // of its own): the invitation readers skip a deleted organization's, and
+  // an accepted one would write a membership nothing reads. Guarded on
+  // `deleted_at IS NULL`: a second delete matches nothing (NotFound), as it
+  // did. removed_by / revoked_by stay NULL: the admin page binds this
+  // mutation directly. Emits OrganizationDeleted for downstream per-org
+  // cleanup. Gated org_membership.
   rpc DeleteOrganization(DeleteOrganizationReq) returns (DeleteOrganizationResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
       ops: {
-        name: "purge_memberships"
-        dql:  "DELETE FROM @module.OrgMembership WHERE org_id = :id"
+        name: "memberships"
+        dql:  "UPDATE @module.OrgMembership SET removed_at = NOW(), ended_key = id WHERE org_id = :id AND removed_at IS NULL"
       }
-      // Its grants go with it, for the reason DeleteOrgMembership gives.
       ops: {
-        name: "purge_grants"
-        dql:  "DELETE FROM @module.UserRole WHERE org_id = :id"
+        name: "grants"
+        dql:  "UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE org_id = :id AND revoked_at IS NULL"
       }
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.Organization WHERE id = :id RETURNING id AS org_id"
+        dql:
+          "UPDATE @module.Organization SET deleted_at = NOW(), ended_key = id "
+          "WHERE id = :id AND deleted_at IS NULL "
+          "RETURNING id AS org_id"
       }
     };
     option (w17.event_emit) = {
@@ -3222,21 +3363,20 @@ service AuthMutation {
     };
   }
 
-  // DeleteOrgMembership — the admin OrgMemberships page delete: remove
-  // one membership row (revoke a user's place in an org). Emits
-  // OrgMembershipRemoved. Gated org_membership.
   // UpdateOrgMembership — the admin OrgMemberships page detail
   // `update`. Role only: re-pointing a membership at a different user
-  // or org is a delete + re-add, not an edit (the unique
-  // (user_id, org_id) index makes an in-place move a constraint trap).
+  // or org is a removal + re-add, not an edit (the unique
+  // (user_id, org_id, ended_key) index makes an in-place move a constraint
+  // trap).
   // Gated org_membership.
   // The membership's role label and the org-scoped grant behind it change
   // TOGETHER. Changing the label alone would revoke nothing on a demotion:
   // the member would keep every permission of the role they were demoted
   // from, because permissions are read from UserRole and never from this
   // label. One method, one transaction: read whose membership it is, check
-  // the new role is still an org role, drop every grant the member holds IN
-  // THIS ORGANIZATION, and grant the new one. Realm-wide grants are not
+  // the new role is still an org role, revoke every grant the member holds IN
+  // THIS ORGANIZATION (revoked_at, the caller as revoked_by — the rows stay),
+  // and grant the new one as a new row. Realm-wide grants are not
   // touched. Called by AuthService.UpdateOrgMembershipRole, which holds the
   // change to the role ceiling; it checks nothing about the caller itself.
   rpc UpdateOrgMembership(UpdateOrgMembershipReq) returns (UpdateOrgMembershipResp) {
@@ -3244,11 +3384,11 @@ service AuthMutation {
     option (w17.db.method) = {
       ops: {
         name: "m"
-        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id"
+        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id AND m.removed_at IS NULL"
       }
       ops: {
         name: "r"
-        dql:  "SELECT r.id AS id, r.name AS name FROM @module.Role r WHERE r.id = :role_id AND r.org_scoped = TRUE"
+        dql:  "SELECT r.id AS id, r.name AS name FROM @module.Role r WHERE r.id = :role_id AND r.org_scoped = TRUE AND r.deleted_at IS NULL"
         // Two kinds of caller, two reasons for a miss. Through
         // AuthService.UpdateOrgMembershipRole (which the plugin's own admin
         // page binds) the role was resolved by name a moment ago, so a miss is
@@ -3266,7 +3406,9 @@ service AuthMutation {
       }
       ops: {
         name: "revoke"
-        dql:  "DELETE FROM @module.UserRole WHERE user_id = :m.user_id AND org_id = :m.org_id"
+        dql:
+          "UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :changed_by, ended_key = id "
+          "WHERE user_id = :m.user_id AND org_id = :m.org_id AND revoked_at IS NULL"
       }
       ops: {
         name: "grant"
@@ -3277,7 +3419,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgMembership SET "
           "role = :r.name "
-          "WHERE id = :id "
+          "WHERE id = :id AND removed_at IS NULL "
           "RETURNING id AS membership_id"
       }
     };
@@ -3300,27 +3442,39 @@ service AuthMutation {
     };
   }
 
-  // A membership leaves WITH its org-scoped grants. Removed alone, the grants
-  // would stay and keep counting — permissions read UserRole by (user, org) and
-  // join no membership — so a member re-invited at a LESSER role would come back
-  // with their old one, and one re-invited at the same role would hit the unique
-  // grant and could never accept. The request names only the membership, so the
-  // first op reads whose it is. An owner without a membership is unaffected:
-  // ownership is read off the organization.
-  rpc DeleteOrgMembership(DeleteOrgMembershipReq) returns (DeleteOrgMembershipResp) {
+  // MarkOrgMembershipRemoved — remove a member (AuthService.RemoveOrgMembership,
+  // the OrgMemberships page's delete). Was DeleteOrgMembership; nothing is
+  // deleted: the membership is stamped removed_at / removed_by and its
+  // ended_key takes its id, so the person can be added again as a new row.
+  //
+  // A membership leaves WITH its org-scoped grants. Left live, the grants
+  // would keep counting — permissions read UserRole by (user, org) and join no
+  // membership — so a member re-invited at a LESSER role would come back with
+  // their old one, and one re-invited at the same role would hit the unique
+  // grant and could never accept. They are revoked (revoked_at, the same
+  // actor as revoked_by), not deleted. The request names only the membership,
+  // so the first op reads whose it is; a removed membership matches nothing
+  // (NotFound), as a deleted one did. An owner without a membership is
+  // unaffected: ownership is read off the organization.
+  rpc MarkOrgMembershipRemoved(MarkOrgMembershipRemovedReq) returns (MarkOrgMembershipRemovedResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
       ops: {
         name: "m"
-        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id"
+        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id AND m.removed_at IS NULL"
       }
       ops: {
         name: "revoke"
-        dql:  "DELETE FROM @module.UserRole WHERE user_id = :m.user_id AND org_id = :m.org_id"
+        dql:
+          "UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :removed_by, ended_key = id "
+          "WHERE user_id = :m.user_id AND org_id = :m.org_id AND revoked_at IS NULL"
       }
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.OrgMembership WHERE id = :id RETURNING id AS membership_id"
+        dql:
+          "UPDATE @module.OrgMembership SET removed_at = NOW(), removed_by = :removed_by, ended_key = id "
+          "WHERE id = :id AND removed_at IS NULL "
+          "RETURNING id AS membership_id"
       }
     };
     // The first op locks the membership row, so two changes to one membership
@@ -3548,7 +3702,7 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.OrgInvite SET email = :email "
-          "WHERE token_hash = :token_hash AND email IS NULL AND accepted_at IS NULL AND expires_at > NOW()"
+          "WHERE token_hash = :token_hash AND email IS NULL AND accepted_at IS NULL AND closed_at IS NULL AND expires_at > NOW()"
       }
     };
   }
@@ -3574,7 +3728,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgInvite SET "
           "accepted_at = NOW() "
-          "WHERE token_hash = :token_hash AND accepted_at IS NULL AND expires_at > NOW() "
+          "WHERE token_hash = :token_hash AND accepted_at IS NULL AND closed_at IS NULL AND expires_at > NOW() "
           "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot"
       }
     };
@@ -3597,10 +3751,13 @@ service AuthMutation {
     };
   }
 
-  // ClearExpiredOrgInvite — release the slot an EXPIRED invitation holds.
+  // CloseExpiredOrgInvite — release the slot an EXPIRED invitation holds, by
+  // closing it (closed_at; closed_by NULL — nobody withdrew it, it lapsed).
+  // Was ClearExpiredOrgInvite, which deleted the row; the row stays.
   //
   // The pending-invite index is unique on (org_id, email) WHERE accepted_at
-  // IS NULL, and it cannot say "and not expired": a partial index predicate
+  // IS NULL AND closed_at IS NULL, and it cannot say "and not expired": a
+  // partial index predicate
   // must be IMMUTABLE, and `NOW()` is not. So an invitation that lapsed still
   // occupies the pair, and re-inviting the same address fails on a unique
   // violation whose message reads like two people racing — when in fact
@@ -3614,32 +3771,36 @@ service AuthMutation {
   // Zero rows is the ordinary case — nothing has lapsed — and arrives as
   // NOT_FOUND because of the RETURNING. The caller treats it as "nothing to
   // clear" rather than as a failure.
-  rpc ClearExpiredOrgInvite(ClearExpiredOrgInviteReq) returns (ClearExpiredOrgInviteResp) {
+  rpc CloseExpiredOrgInvite(CloseExpiredOrgInviteReq) returns (CloseExpiredOrgInviteResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.OrgInvite "
+          "UPDATE @module.OrgInvite SET closed_at = NOW() "
           "WHERE org_id = :org_id AND email = :email "
-          "AND accepted_at IS NULL AND expires_at <= NOW() "
+          "AND accepted_at IS NULL AND closed_at IS NULL AND expires_at <= NOW() "
           "RETURNING id"
       }
     };
   }
 
-  // DeleteOrgInvite — withdraw a PENDING invitation. Scoped by org_id in
-  // the WHERE and not only by id: the handler already knows the caller's
-  // active org, and an id-only delete would let a member of one
-  // organization revoke another's invitation by guessing a uuid.
-  rpc DeleteOrgInvite(DeleteOrgInviteReq) returns (DeleteOrgInviteResp) {
+  // CloseOrgInvite — withdraw a PENDING invitation: closed_at and closed_by
+  // are stamped and the row stays; every path that binds, accepts or lists a
+  // pending invitation skips a closed one. Was DeleteOrgInvite. Scoped by
+  // org_id in the WHERE and not only by id: the handler already knows the
+  // caller's active org, and an id-only close would let a member of one
+  // organization revoke another's invitation by guessing a uuid. Guarded on
+  // `closed_at IS NULL`: a second withdrawal matches nothing (NotFound), as
+  // the delete did.
+  rpc CloseOrgInvite(CloseOrgInviteReq) returns (CloseOrgInviteResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.OrgInvite "
-          "WHERE id = :invite_id AND org_id = :org_id AND accepted_at IS NULL "
+          "UPDATE @module.OrgInvite SET closed_at = NOW(), closed_by = :closed_by "
+          "WHERE id = :invite_id AND org_id = :org_id AND accepted_at IS NULL AND closed_at IS NULL "
           "RETURNING id AS invite_id"
       }
     };

@@ -483,7 +483,9 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	return &pb.ConfirmTotpResp{RecoveryCodes: codes}, nil
 }
 
-// DisableTotp removes the caller's authenticator and its recovery codes.
+// DisableTotp ends the caller's authenticator and its recovery codes. Nothing
+// is deleted: the authenticator is revoked (revoked_at, its seed cleared) and
+// the unused codes revoked, and the rows stay.
 // A CONFIRMED authenticator is re-verified against a live TOTP code — or a
 // recovery code — first (stepUp) so a hijacked session
 // can't permanently disable the victim's 2FA — a transient compromise
@@ -514,10 +516,10 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	// they would be a second factor nothing asks for — until the next
 	// enrolment, when they would quietly work again.
 	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
-		if _, err := h.Mutation.DeleteTotpSecret(txCtx, &pb.DeleteTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
+		if _, err := h.Mutation.RevokeTotpSecret(txCtx, &pb.RevokeTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
 			return err
 		}
-		_, err := h.Mutation.DeleteRecoveryCodes(txCtx, &pb.DeleteRecoveryCodesReq{UserId: userID})
+		_, err := h.Mutation.RevokeRecoveryCodes(txCtx, &pb.RevokeRecoveryCodesReq{UserId: userID})
 		return notFoundOK(err)
 	}); err != nil {
 		return nil, err
@@ -525,11 +527,12 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	return &pb.DisableTotpResp{}, nil
 }
 
-// replaceTotpSecret is the delete-then-create pair, kept together so a caller
+// replaceTotpSecret is the revoke-then-create pair, kept together so a caller
 // can run it inside one transaction. Extracted rather than inlined because the
 // pairing IS the fix: separated again, the rollback has nothing to roll back.
+// The old authenticator stays as a revoked row (its seed cleared).
 func (h *AuthServiceHandler) replaceTotpSecret(txCtx context.Context, userID, seed string) error {
-	if _, err := h.Mutation.DeleteTotpSecret(txCtx, &pb.DeleteTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
+	if _, err := h.Mutation.RevokeTotpSecret(txCtx, &pb.RevokeTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
 		return err
 	}
 	if _, err := h.Mutation.CreateTotpSecret(txCtx, &pb.CreateTotpSecretReq{UserId: userID, Seed: seed}); err != nil {

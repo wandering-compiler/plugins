@@ -73,11 +73,12 @@ func TestEraseUsers_AnErasedAccountStillGetsEveryEraser(t *testing.T) {
 			t.Errorf("eraser %s did not run for an erased account: %v", want, s.erased)
 		}
 	}
-	// The invitation eraser has no old address left: it must not re-address
-	// the placeholder to itself (or anything else).
+	// The invitation and pending-registration erasers have no old address
+	// left: they must not re-address the placeholder to itself (or anything
+	// else).
 	for _, e := range s.erased {
-		if strings.HasPrefix(e, "org_invite:") {
-			t.Errorf("the invitation eraser ran with the placeholder: %s", e)
+		if strings.HasPrefix(e, "org_invite:") || strings.HasPrefix(e, "sign_up_confirmation:") {
+			t.Errorf("an address eraser ran with the placeholder: %s", e)
 		}
 	}
 }

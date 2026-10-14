@@ -152,11 +152,11 @@ func (h *AuthServiceHandler) GenerateRecoveryCodes(ctx context.Context, req *pb.
 	return &pb.GenerateRecoveryCodesResp{RecoveryCodes: out}, nil
 }
 
-// replaceRecoveryCodes deletes the user's set and stores a fresh one,
+// replaceRecoveryCodes revokes the user's unused codes and stores a fresh set,
 // returning the plaintext (formatted xxxxx-xxxxx). Run it inside a
 // transaction: half a set is a set the person believes they have.
 func (h *AuthServiceHandler) replaceRecoveryCodes(txCtx context.Context, userID string) ([]string, error) {
-	if _, err := h.Mutation.DeleteRecoveryCodes(txCtx, &pb.DeleteRecoveryCodesReq{UserId: userID}); notFoundOK(err) != nil {
+	if _, err := h.Mutation.RevokeRecoveryCodes(txCtx, &pb.RevokeRecoveryCodesReq{UserId: userID}); notFoundOK(err) != nil {
 		return nil, err
 	}
 	out := make([]string, 0, recoveryCodeCount)
