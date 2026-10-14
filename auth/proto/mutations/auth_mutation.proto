@@ -2410,8 +2410,9 @@ service AuthMutation {
   //            are blanked;
   //   disable  the account is disabled (an earlier disable's time stands);
   //   main     the password hash becomes the unusable `!` (no password
-  //            verifies against it — CreateBotUser's sentinel) and device
-  //            trust ends.
+  //            verifies against it — CreateBotUser's sentinel), the email
+  //            proof is cleared (no OAuth link-by-email can attach to the
+  //            account while the erasers run) and device trust ends.
   //
   // Gated user_admin.
   rpc BeginUserErasure(BeginUserErasureReq) returns (BeginUserErasureResp) {
@@ -2440,6 +2441,10 @@ service AuthMutation {
         dql:
           "UPDATE @module.User SET "
           "password_hash = \'!\', "
+          // The email proof goes now, not at the last step: OAuth links a
+          // provider identity to a VERIFIED account by address, and a link
+          // made while the erasers run would survive the erasure.
+          "?feature(email_verification) email_verified_at = NULL, "
           "device_trust_revoked_at = NOW() "
           "WHERE id = :user_id "
           "RETURNING id AS user_id"

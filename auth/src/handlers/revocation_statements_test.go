@@ -228,12 +228,13 @@ func TestEraseStatements(t *testing.T) {
 		"UPDATE @module.User SET disabled_at = NOW() WHERE id = :user_id AND disabled_at IS NULL",
 		`password_hash = \'!\', `,
 		"device_trust_revoked_at = NOW() ",
+		"?feature(email_verification) email_verified_at = NULL, ",
 	} {
 		if !strings.Contains(begin, want) {
 			t.Errorf("BeginUserErasure lacks %q:\n%s", want, begin)
 		}
 	}
-	if strings.Contains(begin, "email") || strings.Contains(begin, "erased_at") {
+	if strings.Contains(begin, "email =") || strings.Contains(begin, "erased_at") {
 		t.Errorf("BeginUserErasure touches the address or erased_at — that is the last step's:\n%s", begin)
 	}
 	// The last step replaces the address and stamps erased_at, once.

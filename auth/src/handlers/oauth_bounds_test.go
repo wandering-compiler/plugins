@@ -197,6 +197,12 @@ func TestEraseUser_TouchesTheBaseTablesOnly(t *testing.T) {
 	if tables := moduleTables(body); strings.Join(tables, ",") != "User" {
 		t.Errorf("EraseUser touches %v, want User:\n%s", tables, body)
 	}
+	// The email proof goes in the FIRST step: OAuth links a provider identity
+	// to a verified account by address, and a link made while the erasers
+	// run would survive the erasure.
+	if !strings.Contains(begin, "email_verified_at = NULL") {
+		t.Errorf("BeginUserErasure keeps the email proof (an OAuth link-by-email could attach mid-erasure):\n%s", begin)
+	}
 	if strings.Contains(body+begin, "DELETE") {
 		t.Errorf("an erasure step deletes:\n%s\n%s", begin, body)
 	}
