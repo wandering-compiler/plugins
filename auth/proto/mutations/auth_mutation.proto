@@ -2434,20 +2434,18 @@ service AuthMutation {
   //           so no reader counts it — it used to be the caller's job to
   //           clean them up, and a grant left behind kept granting through
   //           GetUserPermissions;
-  //   preset  a PRESET role (preset_key set: seeded from the project's
-  //           `(w17.acl_roles)` declarations) is refused with
-  //           FAILED_PRECONDITION / PRESET_ROLE_NOT_DELETABLE before anything
-  //           is written. The role seed owns it: it upserts the row on
-  //           preset_key with its own deterministic id, so a retired preset
-  //           would either be revived by the next seed or — with its key
-  //           released — collide with it on the id and fail every build.
-  //           Remove a preset from the declarations instead;
-  //   grants  every live grant of the role is revoked (revoked_at, ended_key),
-  //           so no reader counts it — it used to be the caller's job to
-  //           clean them up, and a grant left behind kept granting through
-  //           GetUserPermissions;
   //   main    the role is stamped deleted_at, and ended_key takes its id,
-  //           which frees its name for a new role.
+  //           which frees its name for a new role. preset_key is KEPT.
+  //
+  // A PRESET role (preset_key set, seeded from the project's
+  // `(w17.acl_roles)` declarations) may be deleted too — the seed never
+  // retires a role the project stopped declaring, so this is the only way
+  // to end one (a stale wildcard, an assign_default role still handed to
+  // every sign-up). Its preset_key stays on the deleted row: the next seed
+  // finds the row by that key (its upsert target), rewrites the declared
+  // columns it owns, and leaves deleted_at alone, so the preset STAYS
+  // deleted across re-seeds and nothing collides (the seed writes no id or
+  // name of a second row). To bring it back, declare it under a new key.
   //
   // Its RolePermission rows stay as they are, the record of what it granted;
   // no reader joins them past a deleted role. Guarded on `deleted_at IS
@@ -2459,15 +2457,6 @@ service AuthMutation {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
-        name: "preset"
-        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.preset_key IS NOT NULL"
-        on_present: {
-          code:       ON_PRESENT_FAILED_PRECONDITION
-          error_code: "PRESET_ROLE_NOT_DELETABLE"
-          message:    "This role is declared by the project and cannot be deleted here. Remove it from the project's role declarations instead."
-        }
-      }
-      ops: {
         name: "grants"
         dql:  "UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE role_id = :role_id AND revoked_at IS NULL"
       }
@@ -2475,7 +2464,7 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.Role SET deleted_at = NOW(), ended_key = id "
-          "WHERE id = :role_id AND deleted_at IS NULL AND preset_key IS NULL "
+          "WHERE id = :role_id AND deleted_at IS NULL "
           "RETURNING id AS role_id"
       }
     };
@@ -2673,7 +2662,10 @@ service AuthMutation {
     option (w17.db.method) = {
       ops: {
         name: "role"
-        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.deleted_at IS NULL"
+        // A no-op write rather than a read: it locks the live role row for
+        // the rest of the transaction, so writes naming one role — two adds,
+        // an add and a DeleteRole — run one after another.
+        dql:  "UPDATE @module.Role SET id = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS id"
         on_empty: {
           code:       ON_EMPTY_NOT_FOUND
           error_code: "ROLE_NOT_FOUND"
@@ -2685,7 +2677,7 @@ service AuthMutation {
         dql:
           "INSERT INTO @module.UserRole SET "
           "user_id = :user_id, "
-          "role_id = :role_id, "
+          "role_id = :role.id, "
           "?feature(org_membership) org_id = :org_id "
           "RETURNING id AS user_role.id, "
           "          user_id AS user_role.user_id, "
@@ -2748,7 +2740,9 @@ service AuthMutation {
   // conflict target — so the write is an UPSERT on that pair: a new pair is
   // inserted, a REMOVED one is revived (removed_at / removed_by cleared).
   // Two guards run first, so only a real change is logged and announced: a
-  // deleted (or unknown) role is refused with NOT_FOUND / ROLE_NOT_FOUND, and
+  // deleted (or unknown) role is refused with NOT_FOUND / ROLE_NOT_FOUND —
+  // by a no-op UPDATE that also LOCKS the role row, so two concurrent adds of
+  // one pair cannot both pass the next guard and log twice — and
   // a permission the role already carries with ALREADY_EXISTS /
   // PERMISSION_ALREADY_GRANTED (as the INSERT's unique index refused it
   // before). Then the change is appended to RolePermissionChange and the pair
@@ -2758,7 +2752,10 @@ service AuthMutation {
     option (w17.db.method) = {
       ops: {
         name: "role"
-        dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.deleted_at IS NULL"
+        // A no-op write rather than a read: it locks the live role row for
+        // the rest of the transaction, so writes naming one role — two adds,
+        // an add and a DeleteRole — run one after another.
+        dql:  "UPDATE @module.Role SET id = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS id"
         on_empty: {
           code:       ON_EMPTY_NOT_FOUND
           error_code: "ROLE_NOT_FOUND"
@@ -2767,7 +2764,7 @@ service AuthMutation {
       }
       ops: {
         name: "granted"
-        dql:  "SELECT rp.id AS id FROM @module.RolePermission rp WHERE rp.role_id = :role_id AND rp.permission_id = :permission_id AND rp.removed_at IS NULL"
+        dql:  "SELECT rp.id AS id FROM @module.RolePermission rp WHERE rp.role_id = :role.id AND rp.permission_id = :permission_id AND rp.removed_at IS NULL"
         on_present: {
           code:       ON_PRESENT_ALREADY_EXISTS
           error_code: "PERMISSION_ALREADY_GRANTED"
@@ -2778,13 +2775,13 @@ service AuthMutation {
         name: "log"
         dql:
           "INSERT INTO @module.RolePermissionChange SET "
-          "role_id = :role_id, permission_id = :permission_id, kind = 1, changed_by = :added_by"
+          "role_id = :role.id, permission_id = :permission_id, kind = 1, changed_by = :added_by"
       }
       ops: {
         name: "main"
         dql:
           "UPSERT INTO @module.RolePermission SET "
-          "role_id = :role_id, "
+          "role_id = :role.id, "
           "permission_id = :permission_id "
           "ON CONFLICT (role_id, permission_id) DO UPDATE SET "
           "removed_at = NULL, "

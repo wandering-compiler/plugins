@@ -120,7 +120,7 @@ func TestEveryFormerDeleteIsAGuardedStateChange(t *testing.T) {
 		// rbac
 		"DeleteRole": {
 			"UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE role_id = :role_id AND revoked_at IS NULL",
-			"UPDATE @module.Role SET deleted_at = NOW(), ended_key = id WHERE id = :role_id AND deleted_at IS NULL AND preset_key IS NULL RETURNING id AS role_id",
+			"UPDATE @module.Role SET deleted_at = NOW(), ended_key = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS role_id",
 		},
 		"RevokeRoleFromUser": {"UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :revoked_by, ended_key = id WHERE user_id = :user_id AND role_id = :role_id AND ?feature(org_membership) org_id IS NOT DISTINCT FROM :org_id AND revoked_at IS NULL RETURNING user_id, role_id, ?feature(org_membership) org_id"},
 		"RemovePermissionFromRole": {
@@ -128,8 +128,8 @@ func TestEveryFormerDeleteIsAGuardedStateChange(t *testing.T) {
 			"UPDATE @module.RolePermission SET removed_at = NOW(), removed_by = :removed_by WHERE role_id = :role_id AND permission_id = :permission_id AND removed_at IS NULL RETURNING role_id, permission_id",
 		},
 		"AddPermissionToRole": {
-			"INSERT INTO @module.RolePermissionChange SET role_id = :role_id, permission_id = :permission_id, kind = 1, changed_by = :added_by",
-			"UPSERT INTO @module.RolePermission SET role_id = :role_id, permission_id = :permission_id ON CONFLICT (role_id, permission_id) DO UPDATE SET removed_at = NULL, removed_by = NULL RETURNING",
+			"INSERT INTO @module.RolePermissionChange SET role_id = :role.id, permission_id = :permission_id, kind = 1, changed_by = :added_by",
+			"UPSERT INTO @module.RolePermission SET role_id = :role.id, permission_id = :permission_id ON CONFLICT (role_id, permission_id) DO UPDATE SET removed_at = NULL, removed_by = NULL RETURNING",
 		},
 		// org_membership
 		"DeleteOrganization": {
@@ -679,34 +679,32 @@ func TestInviteToOrg_ClosesALapsedInvitationAndKeepsIt(t *testing.T) {
 }
 
 // The guards that keep a role write from changing nothing, or the wrong
-// thing: a preset role is not DeleteRole's to retire (the role seed owns its
-// row and id), a deleted or unknown role takes no grant and no permission, and
-// a permission the role already carries is refused rather than logged and
-// announced again. Each guard is an op AHEAD of the writes, so a refusal
-// writes nothing.
-func TestRoleWritesRefuseADeletedRoleAndAPresetAndANoOp(t *testing.T) {
+// thing: a deleted or unknown role takes no grant and no permission, and a
+// permission the role already carries is refused rather than logged and
+// announced again. The role guard is the FIRST op and a no-op UPDATE: it
+// locks the live role row, so two adds of one pair serialise (the second sees
+// the first's row and is refused) and an add serialises with DeleteRole. Every
+// guard runs ahead of the real writes, so a refusal writes nothing.
+func TestRoleWritesRefuseADeletedRoleAndANoOp(t *testing.T) {
 	m := rpcBodies(dqlText(authProtos(t)["mutations/auth_mutation.proto"]))
-	roleGuard := []string{
-		`dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.deleted_at IS NULL"`,
-		"code:       ON_EMPTY_NOT_FOUND",
-		`error_code: "ROLE_NOT_FOUND"`,
-	}
+	const lock = `dql:  "UPDATE @module.Role SET id = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS id"`
+	roleGuard := []string{lock, "code:       ON_EMPTY_NOT_FOUND", `error_code: "ROLE_NOT_FOUND"`}
 	for name, guards := range map[string][][]string{
-		"DeleteRole": {{
-			`dql:  "SELECT r.id AS id FROM @module.Role r WHERE r.id = :role_id AND r.preset_key IS NOT NULL"`,
-			"code:       ON_PRESENT_FAILED_PRECONDITION",
-			`error_code: "PRESET_ROLE_NOT_DELETABLE"`,
-		}},
 		"AssignRoleToUser": {roleGuard},
 		"AddPermissionToRole": {roleGuard, {
-			`dql:  "SELECT rp.id AS id FROM @module.RolePermission rp WHERE rp.role_id = :role_id AND rp.permission_id = :permission_id AND rp.removed_at IS NULL"`,
+			`dql:  "SELECT rp.id AS id FROM @module.RolePermission rp WHERE rp.role_id = :role.id AND rp.permission_id = :permission_id AND rp.removed_at IS NULL"`,
 			"code:       ON_PRESENT_ALREADY_EXISTS",
 			`error_code: "PERMISSION_ALREADY_GRANTED"`,
 		}},
 	} {
 		body := m[name]
+		if !strings.Contains(body, `name: "role"`) || strings.Index(body, "ops:") != strings.Index(body, `ops: {
+        name: "role"`) {
+			t.Errorf("%s does not lock the role in its first op:\n%s", name, body)
+		}
+		// The lock is the first write; the real writes come after every guard.
 		firstWrite := len(body)
-		for _, w := range []string{"UPDATE @module.", "INSERT INTO @module.", "UPSERT INTO @module."} {
+		for _, w := range []string{"INSERT INTO @module.", "UPSERT INTO @module."} {
 			if i := strings.Index(body, w); i >= 0 && i < firstWrite {
 				firstWrite = i
 			}
@@ -727,9 +725,14 @@ func TestRoleWritesRefuseADeletedRoleAndAPresetAndANoOp(t *testing.T) {
 			}
 		}
 	}
-	// The preset row is left as the seed wrote it.
-	if strings.Contains(m["DeleteRole"], "preset_key = NULL") {
-		t.Errorf("DeleteRole still releases preset_key — the next seed would collide with the kept row on its id:\n%s", m["DeleteRole"])
+	// The writes use the role the lock found.
+	for name, want := range map[string]string{
+		"AssignRoleToUser":    "role_id = :role.id, ",
+		"AddPermissionToRole": "UPSERT INTO @module.RolePermission SET role_id = :role.id, ",
+	} {
+		if !strings.Contains(m[name], want) {
+			t.Errorf("%s does not write the locked role (%q):\n%s", name, want, m[name])
+		}
 	}
 	// A deleted role's grants are not the member's org roles.
 	q := rpcBodies(dqlText(authProtos(t)["queries/auth_query.proto"]))
@@ -810,5 +813,42 @@ func TestRemoveOrganization_ClosesItsInvitationsAndTheLinksAreDead(t *testing.T)
 	}
 	if len(o.memberships) != 0 {
 		t.Fatal("an invitation of a deleted organization made a membership")
+	}
+}
+
+// rbac/removal-is-a-state: DeleteRole retires a preset role like any other and
+// KEEPS its preset_key — the role seed matches the row by that key and never
+// writes deleted_at, so the preset stays deleted across re-seeds; clearing
+// the key would make the seed insert its deterministic id again and collide
+// with the kept row. Nothing refuses a preset: the seed never retires a role
+// the project stopped declaring, so this is the only way to end one.
+func TestDeleteRoleKeepsAPresetsKey(t *testing.T) {
+	body := rpcBodies(dqlText(authProtos(t)["mutations/auth_mutation.proto"]))["DeleteRole"]
+	if !strings.Contains(body, "UPDATE @module.Role SET deleted_at = NOW(), ended_key = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS role_id") {
+		t.Errorf("DeleteRole does not stamp deleted_at and ended_key on any live role:\n%s", body)
+	}
+	for _, banned := range []string{"preset_key = NULL", "preset_key IS NULL", "preset_key IS NOT NULL", "on_present"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("DeleteRole treats a preset differently (%q):\n%s", banned, body)
+		}
+	}
+	// The seed's conflict target stays the bare preset_key unique.
+	models := authProtos(t)["types/models.proto"]
+	i := strings.Index(models, "message Role {")
+	role := models[i : i+strings.Index(models[i:], "\n}\n")]
+	if !strings.Contains(role, `string preset_key = 9 [(w17.field) = { type: SLUG, max_len: 100, null: true, unique: true }];`) {
+		t.Errorf("Role.preset_key is no longer the seed's unique upsert key:\n%s", role)
+	}
+}
+
+// A request with no caller is refused before anything is written.
+func TestRemoveOrganization_RefusesWithoutACaller(t *testing.T) {
+	o := newOrgTables()
+	h := &AuthServiceHandler{Query: o, Mutation: o}
+	if _, err := h.RemoveOrganization(context.Background(), &pb.RemoveOrganizationReq{Id: "org-1"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("no caller: %v, want Unauthenticated", err)
+	}
+	if len(o.ops) != 0 {
+		t.Fatalf("wrote %v without a caller", o.ops)
 	}
 }

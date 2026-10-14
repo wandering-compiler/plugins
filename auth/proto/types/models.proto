@@ -776,11 +776,12 @@ message EmailVerificationToken {
 // A role is never deleted. DeleteRole stamps deleted_at, revokes every grant
 // of the role (UserRole) and releases its name: ended_key moves from '' to the
 // row's own id, and `name` is unique only together with it, so a new role may
-// take the name. A PRESET role (preset_key set) is refused: the role seed owns
-// it — it upserts on preset_key with its own deterministic id — so it is
-// removed from the project's role declarations, not here. The deleted row
-// keeps its id, name, flags and RolePermission rows as the record of what it
-// granted. Every role reader reads live roles only.
+// take the name. A PRESET role (preset_key set) may be deleted too and keeps
+// its preset_key: the role seed matches the row by that key and rewrites only
+// the columns it declares, never deleted_at, so a deleted preset stays deleted
+// across re-seeds (declare it under a new key to bring it back). The deleted
+// row keeps its id, name, flags and RolePermission rows as the record of what
+// it granted. Every role reader reads live roles only.
 message Role {
   option (w17.db.table) = {
     indexes: [ { unique: true, fields: [{ name: "name" }, { name: "ended_key" }] } ]

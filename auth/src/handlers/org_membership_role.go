@@ -114,9 +114,12 @@ var orgRemovalCascades []func(ctx context.Context, h *AuthServiceHandler, orgID,
 // failure leaves the organization live and a retry completes it; the cascades
 // are idempotent UPDATEs.
 func (h *AuthServiceHandler) RemoveOrganization(ctx context.Context, req *pb.RemoveOrganizationReq) (*pb.RemoveOrganizationResp, error) {
-	callerID, _ := callerUserID(ctx)
+	callerID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
 	var orgID string
-	err := h.inOrgTx(ctx, func(txCtx context.Context) error {
+	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
 		for _, cascade := range orgRemovalCascades {
 			if err := cascade(txCtx, h, req.GetId(), callerID); err != nil {
 				return err
