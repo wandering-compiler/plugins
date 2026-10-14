@@ -50,6 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       W17_TOKEN: ${{ secrets.W17_TOKEN }}
+      # A w17ctl built by `go install` has no console address compiled in.
+      W17_CONSOLE_ADDR: grpcs://api.w17.app:50051
       # The checks below compile against the src/gen the generate step wrote;
       # without this each make target would ask the console again.
       SKIP_GEN: "1"
