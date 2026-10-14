@@ -187,9 +187,10 @@ type AuthServiceHandler struct {
 	// session_token_ttl_seconds). <= 0 → defaultSessionTokenTTLSeconds.
 	SessionTokenTTLSeconds int
 	// PublicSessionTTLSeconds is the lifetime of a session signed in with
-	// public_computer (public_session_ttl_seconds). <= 0 →
-	// defaultPublicSessionTTLSeconds; never longer than the session lifetime
-	// (ValidateConfig refuses a longer one, sessionExpiry caps it).
+	// public_computer (public_session_ttl_seconds). <= 0 (the manifest
+	// default 0) → defaultPublicSessionTTLSeconds, capped at the session
+	// lifetime; an explicit value longer than the session lifetime is refused
+	// by ValidateConfig.
 	PublicSessionTTLSeconds int
 	TotpIssuer              string // otpauth:// issuer label (totp_issuer); empty → project/domain name
 	TwoFactorSecretKey      string // base64 32-byte key encrypting TOTP seeds at rest (two_factor_secret_key)
@@ -518,9 +519,12 @@ func ValidateConfig(h *AuthServiceHandler) error {
 	if _, err := parseSignUpAllowlist(h.SignUpAllowlist); err != nil {
 		return err
 	}
-	// A public-computer session exists to be SHORTER than a normal one; a
-	// longer setting would invert the option, so it is refused rather than
-	// silently capped.
+	// A public-computer session exists to be SHORTER than a normal one; an
+	// explicit longer setting would invert the option, so it is refused
+	// rather than silently capped. 0 — the manifest default, which the bundle
+	// fills in when the variable is unset — means "8 hours, capped at the
+	// session lifetime" (sessionExpiry), so a deployment with sessions
+	// shorter than 8 hours boots without setting it.
 	if h.PublicSessionTTLSeconds > h.sessionTTLSeconds() {
 		return fmt.Errorf("auth plugin: public_session_ttl_seconds=%d is longer than the session lifetime (session_token_ttl_seconds=%d) — a public-computer session must not outlive a normal one; lower public_session_ttl_seconds", h.PublicSessionTTLSeconds, h.sessionTTLSeconds())
 	}

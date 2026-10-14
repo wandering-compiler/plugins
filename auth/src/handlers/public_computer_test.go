@@ -2,6 +2,10 @@ package handlers
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +211,32 @@ func TestPublicSessionTTL(t *testing.T) {
 	}
 	if err := ValidateConfig(&AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: 3600}); err != nil {
 		t.Errorf("an equal lifetime was refused: %v", err)
+	}
+}
+
+// The bundle fills an unset knob with its manifest default, so whatever
+// plugin.yaml declares for public_session_ttl_seconds is what every
+// deployment that does not set it boots with. It must boot with a session
+// lifetime shorter than 8 hours, and give a public session that lifetime.
+func TestPublicSessionTTL_TheManifestDefaultBootsWithShortSessions(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "plugin.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^  - name: public_session_ttl_seconds\n    type: int\n    default: "(-?\d+)"`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("no public_session_ttl_seconds default in plugin.yaml")
+	}
+	def, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: def}
+	if err := ValidateConfig(h); err != nil {
+		t.Fatalf("the manifest default %d fails the boot of a deployment with one-hour sessions: %v", def, err)
+	}
+	if !within(h.sessionExpiry(true), time.Hour) {
+		t.Errorf("a public session expires in %v, want the one-hour session lifetime", time.Until(h.sessionExpiry(true).AsTime()))
 	}
 }
 

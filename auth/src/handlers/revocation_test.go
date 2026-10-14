@@ -36,6 +36,9 @@ type tokenRow struct {
 	expiresAt, revokedAt       *timestamppb.Timestamp
 	revokedBy                  string
 	reason                     pb.RevokeReason
+	// approvedBy: the Device row that approved a CLI session
+	// (approved_by_device_id); "" for every other token.
+	approvedBy string
 }
 
 type deviceRow struct {
@@ -303,10 +306,11 @@ func (s *revocationStore) RevokeTokensForReset(_ context.Context, in *pb.RevokeT
 	return &pb.RevokeTokensForResetResp{}, nil
 }
 
-// RevokeDeviceTokens: user_id AND device_id; by = :revoked_by.
+// RevokeDeviceTokens, both ops: user_id AND (approved_by_device_id OR
+// device_id) = device_id; by = :revoked_by.
 func (s *revocationStore) RevokeDeviceTokens(_ context.Context, in *pb.RevokeDeviceTokensReq, _ ...grpc.CallOption) (*pb.RevokeDeviceTokensResp, error) {
 	for _, t := range s.tokens {
-		if t.userID == in.GetUserId() && t.deviceID == in.GetDeviceId() {
+		if t.userID == in.GetUserId() && (t.deviceID == in.GetDeviceId() || t.approvedBy == in.GetDeviceId()) {
 			revoke(t, in.GetRevokedBy(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
 		}
 	}

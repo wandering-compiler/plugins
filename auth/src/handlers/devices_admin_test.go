@@ -82,6 +82,53 @@ func TestRevokeDevices_RevokesTheDeviceAndEveryTokenOnIt(t *testing.T) {
 	}
 }
 
+// cliApprovedBy adds to s a CLI session of userID bound to its own device (a
+// key of its own) and approved from the browser device approver.
+func cliApprovedBy(s *revocationStore, id, userID, approver string) {
+	s.addDevice("dev-"+id, userID, "cli-key-"+id)
+	s.addToken(id, userID, id+"-bearer", "dev-"+id, pb.TokenType_TOKEN_TYPE_SESSION).approvedBy = approver
+}
+
+// Revoking a device also ends the CLI sessions it APPROVED: they are bound to
+// the CLI's own key, and a stolen browser session that approved the thief's
+// CLI must not leave that CLI signed in once the device is revoked. Only the
+// device's own account's sessions are matched.
+func TestRevokeDevices_EndsTheCLISessionsTheDeviceApproved(t *testing.T) {
+	s := devicesAdminStore()
+	cliApprovedBy(s, "t-cli", "u1", "d1")
+	cliApprovedBy(s, "t-cli-d2", "u1", "d2")
+	cliApprovedBy(s, "t-cli-bob", "u2", "d1") // another account: never matched
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	if _, err := h.RevokeDevices(adminCtx(), &pb.RevokeDevicesReq{Ids: []string{"d1"}}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	cli := assertRevoked(t, s, "t-cli", "admin", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	assertLive(t, s, "t-cli-d2")
+	assertLive(t, s, "t-cli-bob")
+	if s.devices["dev-t-cli"].revokedAt != nil {
+		t.Error("the CLI's own device was revoked; only its session ends")
+	}
+	assertRefusedLikeExpired(t, s, h, cli, "t-cli-bearer")
+}
+
+// The owner's own revocation (`devices`) ends them too, the owner as actor.
+func TestRevokeDevice_EndsTheCLISessionsTheDeviceApproved(t *testing.T) {
+	s := devicesAdminStore()
+	cliApprovedBy(s, "t-cli", "u1", "d1")
+	cliApprovedBy(s, "t-cli-d2", "u1", "d2")
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	if _, err := h.RevokeDevice(sessionCallerCtx("u1", "t-other"), &pb.RevokeDeviceReq{DeviceId: "d1"}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	assertRevoked(t, s, "t-cli", "u1", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+	assertLive(t, s, "t-cli-d2")
+	// …and revoking every device ends every approved CLI session.
+	if _, err := h.RevokeAllDevices(sessionCallerCtx("u1", "t-other"), &pb.RevokeAllDevicesReq{}); err != nil {
+		t.Fatalf("revoke all: %v", err)
+	}
+	assertRevoked(t, s, "t-cli-d2", "u1", pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+}
+
 // A device already revoked is left as it is: its first revocation — time,
 // actor, reason — stands, and no transaction is even opened for it. Unknown
 // ids are done, not an error; an empty selection (the admin's "all rows") is
@@ -210,7 +257,7 @@ func (failingDeviceRead) GetDevice(context.Context, *pb.GetDeviceReq, ...grpc.Ca
 // ── the statements ────────────────────────────────────────────
 
 // The Devices page lists EVERY device — revoked and legacy ones included, so
-// no WHERE at all — the most recently seen first, with the owner's address and
+// no WHERE at all — the newest first (paged on the immutable created_at), with the owner's address and
 // the trust the sign-in would grant: trusted_at later than the account's
 // revocation, and the device not revoked. The detail reads the same
 // projection for one row.
@@ -233,8 +280,8 @@ func TestDevicesAdminStatements(t *testing.T) {
 			t.Errorf("ListAllDevices / GetDevice lack %q:\n%s\n%s", want, list, get)
 		}
 	}
-	if !strings.Contains(list, `ORDER BY d.last_seen_at DESC, d.id DESC`) || strings.Contains(list, "WHERE") {
-		t.Errorf("ListAllDevices is not every device, the most recently seen first:\n%s", list)
+	if !strings.Contains(list, `ORDER BY d.created_at DESC, d.id DESC`) || strings.Contains(list, "WHERE") {
+		t.Errorf("ListAllDevices is not every device, the newest first on an immutable key:\n%s", list)
 	}
 	if !strings.Contains(get, `WHERE d.id = :id`) {
 		t.Errorf("GetDevice does not read the one row:\n%s", get)
@@ -260,6 +307,16 @@ func TestDevicesAdminStatements(t *testing.T) {
 			if block := src[i : i+strings.Index(src[i:], "}")]; strings.Contains(block, "plugin_feature") {
 				t.Errorf("message %s is feature-gated:\n%s", msg, block)
 			}
+		}
+	}
+	// Both ops of RevokeDeviceTokens: the device's own tokens, and the CLI
+	// sessions it approved — same reason, actor and account.
+	for _, want := range []string{
+		`UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 WHERE user_id = :user_id AND approved_by_device_id = :device_id AND revoked_at IS NULL`,
+		`UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 WHERE user_id = :user_id AND device_id = :device_id AND revoked_at IS NULL`,
+	} {
+		if !strings.Contains(m["RevokeDeviceTokens"], want) {
+			t.Errorf("RevokeDeviceTokens lacks %q:\n%s", want, m["RevokeDeviceTokens"])
 		}
 	}
 	if !strings.Contains(m["RevokeDeviceTokens"], "revoked_by = :revoked_by, revoke_reason = 5 ") ||

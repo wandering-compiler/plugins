@@ -2657,8 +2657,10 @@ service AuthQuery {
     };
   }
 
-  // ListAllDevices — every device for the admin Devices page, the most
-  // recently seen first, cursor-paged on (last_seen_at, id). LEFT JOIN User
+  // ListAllDevices — every device for the admin Devices page, the newest
+  // first, cursor-paged on (created_at, id): an immutable key, because every
+  // sign-in rewrites last_seen_at and a keyset over it would skip or repeat
+  // rows while an operator pages (last seen is shown as a column). LEFT JOIN User
   // for the owner's address and the account's trust revocation; `trusted` is
   // the sign-in's rule (trusted_at later than the account's revocation, the
   // device not revoked). Revoked and legacy (keyless) devices are listed.
@@ -2679,7 +2681,7 @@ service AuthQuery {
           "       d.revoked_at AS revoked_at "
           "FROM @module.Device d "
           "LEFT JOIN @module.User u ON u.id = d.user_id "
-          "ORDER BY d.last_seen_at DESC, d.id DESC"
+          "ORDER BY d.created_at DESC, d.id DESC"
       }
     };
   }
