@@ -188,6 +188,14 @@ message IssueApiTokenReq {
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
   // sha256(token), hex — see IssueTokenReq.token_hash.
   string    token_hash = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // device_id — the Device the token is bound to: the (owner, thumbprint)
+  // row of the public key the request named (RegisterDevice). REQUIRED, as on
+  // IssueTokenReq: no API token is minted unbound.
+  string    device_id  = 6 [(w17.field) = { type: UUID }];
+  // The Device row of the caller that created the token
+  // (UserToken.approved_by_device_id); empty (NULL) when the caller's request
+  // was bound to none.
+  string    approved_by_device_id = 7 [(w17.field) = { type: UUID, null: true }];
 }
 message IssueApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -741,6 +749,8 @@ message RegisterDeviceReq {
   string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
   string label      = 3 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   string ip         = 4 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  // A program's key (Device.api_key): written only when the row is created.
+  bool   api_key    = 5;
 }
 message RegisterDeviceResp {
   Device device = 1;
@@ -1721,8 +1731,10 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
 
   // IssueApiToken — INSERT an API UserToken (token_type stamped by
-  // the handler) with an optional label. token fills app-side via
-  // CRYPTO_RANDOM. Gated api_token.
+  // the handler) with an optional label, bound to the Device of the key the
+  // request named (device_id, required) and recording the creator's device
+  // (approved_by_device_id). The handler mints the token and passes only its
+  // sha256. Gated api_token.
   rpc IssueApiToken(IssueApiTokenReq) returns (IssueApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
     option (w17.db.method) = {
@@ -1734,13 +1746,17 @@ service AuthMutation {
           "token_hash = :token_hash, "
           "token_type = :token_type, "
           "name = :name, "
-          "expires_at = :expires_at "
+          "expires_at = :expires_at, "
+          "device_id = :device_id, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
           "          token_type AS token.token_type, "
           "          name AS token.name, "
           "          created_at AS token.created_at, "
-          "          expires_at AS token.expires_at"
+          "          expires_at AS token.expires_at, "
+          "          device_id AS token.device_id, "
+          "          approved_by_device_id AS token.approved_by_device_id"
       }
     };
   }
@@ -2346,7 +2362,9 @@ service AuthMutation {
   // seen (it never clears revoked_at). No create-then-re-read race: the
   // unique (user_id, thumbprint) index decides. :thumbprint is never NULL
   // (the request requires it), so a legacy row (NULL thumbprint) is never
-  // the conflict target.
+  // the conflict target. api_key is written on the INSERT only: whether a key
+  // is a program's (Device.api_key) is decided by the request that first
+  // named it, and the caller refuses a row of the other kind.
   rpc RegisterDevice(RegisterDeviceReq) returns (RegisterDeviceResp) {
     option (w17.db.method) = {
       ops: {
@@ -2356,7 +2374,8 @@ service AuthMutation {
           "user_id = :user_id, "
           "thumbprint = :thumbprint, "
           "label = :label, "
-          "ip = :ip "
+          "ip = :ip, "
+          "api_key = :api_key "
           "ON CONFLICT (user_id, thumbprint) DO UPDATE SET "
           "last_seen_at = NOW(), "
           "label = :label, "
@@ -2369,7 +2388,8 @@ service AuthMutation {
           "          trusted_at AS device.trusted_at, "
           "          last_seen_at AS device.last_seen_at, "
           "          created_at AS device.created_at, "
-          "          revoked_at AS device.revoked_at"
+          "          revoked_at AS device.revoked_at, "
+          "          api_key AS device.api_key"
       }
     };
   }
@@ -2473,7 +2493,10 @@ service AuthMutation {
   // the CLI's own key, so the first op does not match them. Without it, a
   // stolen browser session could approve the thief's own CLI key, and
   // revoking the stolen device would leave that CLI session alive for its
-  // whole lifetime. Same reason, same actor, same ownership predicate; it
+  // whole lifetime. SESSION tokens only: an API token records the device that
+  // created it in the same column (as audit), and an API token is ended by
+  // RevokeApiToken or by revoking its own program key's device, never by
+  // revoking the browser it was created from (devices/revoke-all-spares-api-tokens). Same reason, same actor, same ownership predicate; it
   // spares :keep_token_id, the caller's own session when RevokeOtherDevices
   // comes from a CLI session the revoked browser approved.
   //
@@ -2487,7 +2510,8 @@ service AuthMutation {
         name: "approved"
         dql:
           "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
-          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND id <> :keep_token_id AND revoked_at IS NULL"
+          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND id <> :keep_token_id AND revoked_at IS NULL "
+          "AND ?feature(api_token) token_type = 1"
       }
       ops: {
         name: "main"

@@ -316,11 +316,14 @@ func TestServiceAccount_TheWritesThatMustNotSeparate(t *testing.T) {
 		if !strings.Contains(fn, tc.seam) {
 			t.Errorf("%s no longer goes through %s — nothing holds its writes together", tc.fn, tc.seam)
 		}
-		if !strings.Contains(fn, "distx.Begin(") {
-			t.Errorf("%s opens no transaction — the seam exists but nothing wraps it", tc.fn)
-		}
-		if !strings.Contains(fn, "tx.Rollback(") {
-			t.Errorf("%s never rolls back — a failure keeps what it wrote", tc.fn)
+		// inTx is Begin, Rollback on fn's error and Commit, in one place.
+		if !strings.Contains(fn, "h.inTx(") {
+			if !strings.Contains(fn, "distx.Begin(") {
+				t.Errorf("%s opens no transaction — the seam exists but nothing wraps it", tc.fn)
+			}
+			if !strings.Contains(fn, "tx.Rollback(") {
+				t.Errorf("%s never rolls back — a failure keeps what it wrote", tc.fn)
+			}
 		}
 		for _, direct := range tc.apart {
 			if strings.Contains(fn, direct) {

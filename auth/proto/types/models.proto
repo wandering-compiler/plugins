@@ -367,15 +367,17 @@ message UserToken {
 
   // device_id — the Device this token is BOUND to (DPoP's `cnf.jkt`, kept
   // as a reference to the Device row whose `thumbprint` is the binding).
-  // Every mint path (SignIn, SignUp, ConfirmSignUp, VerifyMfa,
+  // Every session mint path (SignIn, SignUp, ConfirmSignUp, VerifyMfa,
   // OAuthExchange, CliToken) stamps it from the request's proof of
-  // possession; Authenticate refuses a token whose device's thumbprint is
-  // not the one the request's proof was signed with, and a token with none.
+  // possession; an API token (CreateApiToken, IssueBotToken) from the public
+  // key its request names — the program that will use it. Authenticate
+  // refuses a token whose device's thumbprint is not the one the request's
+  // proof was signed with, and a token with none.
   // No DB-level FK (the activation-rename caveat that applies to every
   // cross-table id ref in this plugin — see the message header).
   // Nullable only for rows minted before device binding (refused by
-  // Authenticate, so their holders sign in once more) and for API tokens,
-  // which cannot be minted until they carry a key of their own.
+  // Authenticate, so their holders sign in once more) and for MCP-flow
+  // tokens (mcp_only).
   string device_id = 9 [
     (w17.field) = { type: UUID, null: true },
     (w17.db.column) = { index: true }
@@ -434,14 +436,19 @@ message UserToken {
   // storage only. FALSE for every other token. Base tier.
   bool public_computer = 15 [(w17.field) = { default_auto: FALSE }];
 
-  // approved_by_device_id — for a CLI session (cli_login's CliToken), the
-  // Device row of the browser session that APPROVED the login (CliAuthorize).
-  // The session itself is bound to the CLI's own key (device_id); the
-  // approving browser is a different device and is recorded here, so an
-  // operator can see "this CLI session was approved from device X". NULL on
-  // every other token, and on a CLI session whose approving session was bound
-  // to no device. Base tier, like mcp_only: one mint path sets it. No
-  // DB-level FK (the activation-rename caveat in the message header).
+  // approved_by_device_id — the Device row of the session that AUTHORIZED a
+  // token bound to another key: for a CLI session (cli_login's CliToken) the
+  // browser session that approved the login (CliAuthorize); for an API token
+  // the caller's device that created it (CreateApiToken) or, for a machine
+  // account's token, the operator's device that issued it (IssueBotToken).
+  // The token itself is bound to the CLI's, the program's or the machine
+  // account's own key (device_id); the authorizing device is a different one
+  // and is recorded here, so an operator can see "approved from device X".
+  // Revoking that device revokes the tokens it approved of the same owner
+  // (RevokeDeviceTokens' "approved" op): a stolen session could otherwise
+  // approve a key of the thief's that outlives the revocation. NULL on every
+  // other token, and when the authorizing request was bound to no device. Base
+  // tier. No DB-level FK (the activation-rename caveat in the message header).
   string approved_by_device_id = 16 [(w17.field) = { type: UUID, null: true }];
 }
 
@@ -507,6 +514,16 @@ message Device {
   google.protobuf.Timestamp created_at   = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   // When the pair was revoked; NULL = live. Set once, never cleared.
   google.protobuf.Timestamp revoked_at   = 11 [(w17.field) = { type: DATETIME, null: true }];
+  // api_key — a PROGRAM's key, named in an API-token request (CreateApiToken,
+  // IssueBotToken) rather than proved by a sign-in. Set when the row is
+  // created and never changed: a key is a program's or a signed-in client's
+  // for good. A program key never signs in (every sign-in mint refuses it),
+  // a signed-in client's key is never taken for an API token, and the
+  // owner's device management (`devices`: ListDevices, RevokeOtherDevices,
+  // RevokeAllDevices) lists and revokes signed-in devices only — an API
+  // token ends by RevokeApiToken, or by revoking its device on the admin
+  // Devices page. Base tier.
+  bool api_key = 12 [(w17.field) = { default_auto: FALSE }];
 }
 
 // SignInMethod — which mint path a SignInEvent records. Values are explicit
@@ -529,6 +546,15 @@ enum SignInMethod {
   // CliToken: a CLI redeems the code a signed-in browser approved
   // (cli_login).
   SIGN_IN_METHOD_CLI = 6;
+  // CreateApiToken: a signed-in person issues an API token bound to a
+  // program's key (api_token). Not a sign-in of the request's own client, but
+  // a credential minted for a device all the same; the row names that
+  // device, and the client address and user agent of the creating request.
+  SIGN_IN_METHOD_API_TOKEN = 7;
+  // IssueBotToken: an operator issues a machine account's token bound to its
+  // key (service_account). The row names the machine account and its device,
+  // and the operator's client address and user agent.
+  SIGN_IN_METHOD_BOT_TOKEN = 8;
 }
 
 // SignInOutcome — how a sign-in attempt ended. One value per refusal the mint
@@ -552,7 +578,8 @@ enum SignInOutcome {
   SIGN_IN_OUTCOME_MACHINE_ACCOUNT = 6;
   // The request proved no device key (DEVICE_PROOF_REQUIRED).
   SIGN_IN_OUTCOME_DEVICE_PROOF_REQUIRED = 7;
-  // The device key was revoked for this account (DEVICE_REVOKED).
+  // The device key was revoked for this account (DEVICE_REVOKED; for an API
+  // or machine-account token, the key its request names: DEVICE_KEY_REVOKED).
   SIGN_IN_OUTCOME_DEVICE_REVOKED = 8;
   // A single-use code was wrong, unknown, expired or spent: the second
   // factor's code, a sign-up confirmation code, an OAuth login code or its
@@ -582,6 +609,11 @@ enum SignInOutcome {
   // Any other refusal (for example a CLI exchange after the approving
   // session ended).
   SIGN_IN_OUTCOME_REFUSED = 18;
+  // An API or machine-account token was asked for with no key, a key that is
+  // not a public P-256 or Ed25519 JWK (a private one included), or — for a
+  // machine account — another key than the one it has (DEVICE_KEY_REQUIRED,
+  // DEVICE_KEY_INVALID, BOT_KEY_MISMATCH).
+  SIGN_IN_OUTCOME_KEY_REFUSED = 19;
 }
 
 // SignInEvent — the sign-in history: one row per sign-in attempt on every
