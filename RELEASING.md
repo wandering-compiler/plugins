@@ -95,6 +95,15 @@ may use, so a workflow edited on another branch never sees them:
 - `W17_SIGN_TOKEN`: a console token whose account may sign plugin releases;
 - `RELEASE_TAG_TOKEN`: a token allowed to create `*/v*` tags.
 
+**The organization that signs** is named by `w17/lock.yaml` at the repository
+root, written by `w17ctl org pin wandering-compiler` against the hosted console.
+It records only the organization (`org_id`, `org_slug`, `w17_url`); this
+repository is not a w17 project. `W17_SIGN_TOKEN` carries no organization of
+its own, and for an account in several organizations the console refuses to
+guess, so without the lock the release is refused with `missing permission
+compiler.Codegen.SignPluginRelease`. Re-pin it (and commit) only if the
+publishing organization changes or the console is rebuilt.
+
 A published tag is never moved, and the repository enforces it: a ruleset
 forbids updating or deleting `*/v*` tags, for everyone. A second ruleset lets
 only repository admins create them. A fix ships as the next version.

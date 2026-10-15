@@ -1,0 +1,6 @@
+# Written by `w17ctl org pin wandering-compiler` against grpcs://api.w17.app:50051.
+# This directory is not a w17 project: the lock names only the organization
+# w17ctl acts in here (sent as the w17-org header). Commit it.
+org_id: 01a08faa-bba7-7f3c-bc4b-962c69e23b74
+org_slug: wandering-compiler
+w17_url: grpcs://api.w17.app:50051
