@@ -36,11 +36,15 @@ type tokenRow struct {
 	expiresAt, revokedAt       *timestamppb.Timestamp
 	revokedBy                  string
 	reason                     pb.RevokeReason
+	// approvedBy: the Device row that approved a CLI session
+	// (approved_by_device_id); "" for every other token.
+	approvedBy string
 }
 
 type deviceRow struct {
 	id, userID, thumb, label, ip string
 	revokedAt                    *timestamppb.Timestamp
+	apiKey                       bool // a program's key (Device.api_key)
 }
 
 type userRow struct {
@@ -230,11 +234,12 @@ func (s *revocationStore) GetUserByEmail(_ context.Context, in *pb.GetUserByEmai
 	return nil, notFound()
 }
 
-// ListUserDevices: `revoked_at IS NULL AND thumbprint IS NOT NULL`.
+// ListUserDevices: `revoked_at IS NULL AND thumbprint IS NOT NULL AND
+// api_key = FALSE`.
 func (s *revocationStore) ListUserDevices(_ context.Context, in *pb.ListUserDevicesReq, _ ...grpc.CallOption) (*pb.ListUserDevicesResp, error) {
 	var out []*pb.Device
 	for _, d := range s.devices {
-		if d.userID == in.GetUserId() && d.revokedAt == nil && d.thumb != "" {
+		if d.userID == in.GetUserId() && d.revokedAt == nil && d.thumb != "" && !d.apiKey {
 			out = append(out, &pb.Device{Id: d.id, UserId: d.userID, Thumbprint: d.thumb})
 		}
 	}
@@ -303,14 +308,29 @@ func (s *revocationStore) RevokeTokensForReset(_ context.Context, in *pb.RevokeT
 	return &pb.RevokeTokensForResetResp{}, nil
 }
 
-// RevokeDeviceTokens: user_id AND device_id; by = user_id.
+// RevokeDeviceTokens, both ops: user_id AND device_id = :device_id, and
+// user_id AND approved_by_device_id = :device_id AND id <> :keep_token_id;
+// by = :revoked_by.
 func (s *revocationStore) RevokeDeviceTokens(_ context.Context, in *pb.RevokeDeviceTokensReq, _ ...grpc.CallOption) (*pb.RevokeDeviceTokensResp, error) {
 	for _, t := range s.tokens {
-		if t.userID == in.GetUserId() && t.deviceID == in.GetDeviceId() {
-			revoke(t, in.GetUserId(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+		// The "approved" op: session tokens only (token_type = 1).
+		approved := t.approvedBy == in.GetDeviceId() && t.id != in.GetKeepTokenId() && t.kind == pb.TokenType_TOKEN_TYPE_SESSION
+		if t.userID == in.GetUserId() && (t.deviceID == in.GetDeviceId() || approved) {
+			revoke(t, in.GetRevokedBy(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
 		}
 	}
 	return &pb.RevokeDeviceTokensResp{}, nil
+}
+
+// RevokeApprovedApiTokens: user_id AND approved_by_device_id AND token_type
+// AND revoked_at IS NULL; by = revoked_by.
+func (s *revocationStore) RevokeApprovedApiTokens(_ context.Context, in *pb.RevokeApprovedApiTokensReq, _ ...grpc.CallOption) (*pb.RevokeApprovedApiTokensResp, error) {
+	for _, t := range s.tokens {
+		if t.userID == in.GetUserId() && t.approvedBy == in.GetDeviceId() && t.kind == in.GetTokenType() {
+			revoke(t, in.GetRevokedBy(), pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED)
+		}
+	}
+	return &pb.RevokeApprovedApiTokensResp{}, nil
 }
 
 // RevokeUndevicedSessions: user_id AND device_id IS NULL AND id <> keep AND
@@ -748,6 +768,48 @@ func TestRevokeSessions_TheOperatorRevokesAndARevokedRowIsANoOp(t *testing.T) {
 	// An empty selection (the admin's "all rows") revokes nothing.
 	if _, err := h.RevokeSessions(ctx, &pb.RevokeSessionsReq{}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("an empty selection answered %v, want InvalidArgument", err)
+	}
+}
+
+// The admin's `delete` slots, which kept their names and responses: Sessions'
+// revokes one token with the operator recorded and answers its id (a second
+// delete is a no-op, not an error), Users' erases the account with the
+// operator recorded and answers its id. Both need a caller.
+func TestRevokeSessionAndEraseAccount_TheDeleteSlots(t *testing.T) {
+	s := aliceStore()
+	s.addUser("admin", "ops@example.com")
+	h := eraseHandler(s)
+	ctx := sessionCallerCtx("admin", "t-admin")
+
+	resp, err := h.RevokeSession(ctx, &pb.RevokeSessionReq{Id: "t-session"})
+	if err != nil || resp.GetTokenId() != "t-session" {
+		t.Fatalf("RevokeSession = %+v, %v; want token_id t-session", resp, err)
+	}
+	tok := assertRevoked(t, s, "t-session", "admin", pb.RevokeReason_REVOKE_REASON_ADMIN_REVOKED)
+	assertRefusedLikeExpired(t, s, h, tok, "alice-session")
+	first := *tok
+	if resp, err := h.RevokeSession(ctx, &pb.RevokeSessionReq{Id: "t-session"}); err != nil || resp.GetTokenId() != "t-session" {
+		t.Errorf("revoking a revoked session = %+v, %v; want token_id and no error", resp, err)
+	}
+	if !proto.Equal(tok.revokedAt, first.revokedAt) || tok.revokedBy != first.revokedBy {
+		t.Errorf("the second revoke rewrote the first: %+v, was %+v", tok, first)
+	}
+
+	er, err := h.EraseAccount(ctx, &pb.EraseAccountReq{UserId: "u1"})
+	if err != nil || er.GetUserId() != "u1" {
+		t.Fatalf("EraseAccount = %+v, %v; want user_id u1", er, err)
+	}
+	u := s.users["u1"]
+	if u == nil || u.erasedAt == nil || u.disabledAt == nil || u.email != "erased-u1@erased.invalid" {
+		t.Fatalf("user after EraseAccount = %+v, want the row kept, erased and disabled", u)
+	}
+	assertRevoked(t, s, "t-other", "admin", pb.RevokeReason_REVOKE_REASON_USER_ERASED)
+
+	if _, err := h.RevokeSession(context.Background(), &pb.RevokeSessionReq{Id: "t-other"}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("RevokeSession without a caller: %v, want Unauthenticated", err)
+	}
+	if _, err := h.EraseAccount(context.Background(), &pb.EraseAccountReq{UserId: "admin"}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("EraseAccount without a caller: %v, want Unauthenticated", err)
 	}
 }
 

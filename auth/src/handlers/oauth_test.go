@@ -24,6 +24,7 @@ type oauthMock struct {
 
 	issuedHash   string // the token_hash IssueToken was handed
 	issuedDevice string // the device IssueToken bound the session to
+	issuedReq    *pb.IssueTokenReq
 
 	provider     *pb.OAuthProvider
 	identity     *pb.OAuthIdentity // existing identity (nil = first sign-in)
@@ -159,7 +160,7 @@ func (m *oauthMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ..
 	return &pb.TrustDeviceResp{}, nil
 }
 func (m *oauthMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
-	m.issuedHash, m.issuedDevice = in.GetTokenHash(), in.GetDeviceId()
+	m.issuedHash, m.issuedDevice, m.issuedReq = in.GetTokenHash(), in.GetDeviceId(), in
 	return &pb.IssueTokenResp{Token: &pb.UserToken{}}, nil
 }
 

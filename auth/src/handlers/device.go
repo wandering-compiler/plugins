@@ -134,6 +134,11 @@ type signInDevice struct {
 //
 // A revoked device comes back with its id beside the refusal, for the
 // sign-in history (no token is ever bound to it).
+//
+// A PROGRAM's key (Device.api_key: named for an API token) is refused too,
+// with the opaque refusal: a program key never signs in. Otherwise a session
+// could live on a device the owner's device management does not list, and
+// "sign out everywhere else" would leave it running.
 func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint string) (signInDevice, error) {
 	label, ip := deviceLabel(ctx)
 	resp, err := h.Mutation.RegisterDevice(ctx, &pb.RegisterDeviceReq{
@@ -155,6 +160,9 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 	if dev.GetRevokedAt() != nil {
 		return signInDevice{id: dev.GetId(), thumbprint: thumbprint}, deviceRevoked(ctx)
 	}
+	if dev.GetApiKey() {
+		return signInDevice{id: dev.GetId(), thumbprint: thumbprint}, errDeviceIsAProgramKey
+	}
 	out := signInDevice{id: dev.GetId(), thumbprint: thumbprint}
 	if dev.GetTrustedAt() == nil {
 		return out, nil
@@ -170,12 +178,40 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 	return out, nil
 }
 
+// revokeApprovedAPITokens revokes the owner's API tokens the device created
+// (UserToken.approved_by_device_id), on ctx. Installed by apitoken.go: nil
+// without api_token, where no API token exists. Called only when ONE device
+// is revoked on purpose (the owner's RevokeDevice, the admin RevokeDevices);
+// RevokeOtherDevices and RevokeAllDevices spare API tokens.
+var revokeApprovedAPITokens func(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error
+
+// endApprovedAPITokens runs revokeApprovedAPITokens when it is installed.
+func endApprovedAPITokens(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error {
+	if revokeApprovedAPITokens == nil {
+		return nil
+	}
+	return revokeApprovedAPITokens(ctx, h, userID, deviceID, revokedBy)
+}
+
+// noTokenKept is the keep_token_id that keeps none (the column is a UUID, so
+// the empty string would not bind). Base tier: the devices calls and the admin
+// Devices page both pass it to RevokeDeviceTokens.
+const noTokenKept = "00000000-0000-0000-0000-000000000000"
+
+// sessionGrant is what a mint records on the session beside its device:
+// whether it is a public-computer session, and — for a CLI session — the
+// Device row of the browser session that approved it.
+type sessionGrant struct {
+	public     bool
+	approvedBy string
+}
+
 // issueBoundToken mints a session token bound to dev, expiring at
 // expiresAt, and returns the token the caller is handed once. The ONE place a
 // session row is written, so there is no path that mints one unbound:
 // IssueToken's request requires the device as well. The device's key
 // thumbprint goes to TokenIssued as its device_id.
-func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID string, dev signInDevice, expiresAt *timestamppb.Timestamp) (string, error) {
+func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID string, dev signInDevice, expiresAt *timestamppb.Timestamp, grant sessionGrant) (string, error) {
 	if dev.id == "" {
 		return "", errDeviceNotRegistered
 	}
@@ -189,6 +225,9 @@ func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID string,
 		ExpiresAt:  expiresAt,
 		TokenHash:  hash,
 		Thumbprint: dev.thumbprint,
+
+		PublicComputer:     grant.public,
+		ApprovedByDeviceId: grant.approvedBy,
 	}); err != nil {
 		return "", err
 	}
@@ -196,9 +235,10 @@ func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID string,
 }
 
 // issueSession mints the session bearer for an authenticated principal,
-// bound to the device mintDevice registered, with the session lifetime, and
-// writes the attempt's success row with it (mintSession: one transaction).
-// Shared by SignIn, VerifyMfa and the OAuth exchange.
+// bound to the device mintDevice registered, with the session lifetime — the
+// public-computer one when the attempt asked for it — and writes the
+// attempt's success row with it (mintSession: one transaction). Shared by
+// SignIn, VerifyMfa and the OAuth exchange.
 //
 // trustCutoff says whether this sign-in may make the device trusted: nil means
 // it may not. Only a sign-in that passed the plugin's second factor, or was not
@@ -210,16 +250,19 @@ func (h *AuthServiceHandler) issueBoundToken(ctx context.Context, userID string,
 // a disable) was not revoked after it, so a revocation that commits while the
 // sign-in is in flight is not undone by it.
 //
+// A public-computer sign-in never trusts the device, whatever cutoff it
+// brings: the next person at that computer must meet the second factor again.
+//
 // Trust is best effort: a failed TrustDevice leaves the device untrusted (it
 // is challenged again next time) and does not fail the session just issued.
 // It is written after the session's transaction commits, so a failed trust
 // statement cannot abort that transaction.
 func issueSession(ctx context.Context, h *AuthServiceHandler, a *signInAttempt, userID string, dev signInDevice, trustCutoff *timestamppb.Timestamp) (string, error) {
-	token, err := h.mintSession(ctx, a, userID, dev, h.sessionTokenExpiry())
+	token, err := h.mintSession(ctx, a, userID, dev, h.sessionExpiry(a.publicComputer), "")
 	if err != nil {
 		return "", err
 	}
-	if trustCutoff != nil {
+	if trustCutoff != nil && !a.publicComputer {
 		_, _ = h.Mutation.TrustDevice(ctx, &pb.TrustDeviceReq{
 			UserId:          userID,
 			DeviceId:        dev.id,
@@ -285,6 +328,11 @@ func checkMCPToken(p *authPrincipal) error {
 func sameKey(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
+
+// errDeviceIsAProgramKey is the cause behind the refusal of a sign-in whose
+// proof is by a program's key (Device.api_key). Never on the wire: the
+// opaque refusal.
+var errDeviceIsAProgramKey = errors.New("the key is a program's key (an API token's device); it does not sign in")
 
 // errDeviceBindingRefused is the cause behind the opaque refusal of a token
 // the request's proof does not match (or a non-MCP token without a proof on

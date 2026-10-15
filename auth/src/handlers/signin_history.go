@@ -22,7 +22,9 @@ import (
 // Sign-in history — base tier, staged with every feature.
 //
 // Every sign-in attempt on every mint path (SignIn, SignUp when it issues a
-// session, ConfirmSignUp, VerifyMfa, OAuthExchange, CliToken) appends exactly
+// session, ConfirmSignUp, VerifyMfa, OAuthExchange, CliToken) — and every
+// API-token issuance (CreateApiToken, IssueBotToken: a credential minted for a
+// device too, if not a sign-in of the request's own client) — appends exactly
 // one SignInEvent row, whatever its outcome: success, a refusal before any
 // account was looked up (no proof, an unknown address), a wrong password, a
 // refused device. The table is append-only (only an erasure rewrites the
@@ -71,6 +73,10 @@ type signInAttempt struct {
 	thumbprint string
 	ip         string
 	userAgent  string
+	// publicComputer: the attempt asked for a public-computer session. The
+	// mint paths read it for the session's lifetime and trust, and the row
+	// records it whatever the outcome.
+	publicComputer bool
 	// account is the row of userID when the path read it with erased_at
 	// (SignIn's lookup); otherwise endSignIn reads it if it needs to.
 	account *pb.User
@@ -123,6 +129,8 @@ func (a *signInAttempt) row(outcome pb.SignInOutcome) *pb.RecordSignInEventReq {
 		UserAgent:  a.userAgent,
 		Method:     a.method,
 		Outcome:    outcome,
+
+		PublicComputer: a.publicComputer,
 	}
 }
 
@@ -204,12 +212,14 @@ func (h *AuthServiceHandler) pseudonymiseErased(ctx context.Context, a *signInAt
 // attempt's success row, in ONE transaction when the bundle has a
 // coordinator (a generated bundle always has; a hand-built test handler
 // runs the two calls in order). The token is returned only once both are
-// written.
-func (h *AuthServiceHandler) mintSession(ctx context.Context, a *signInAttempt, userID string, dev signInDevice, expiresAt *timestamppb.Timestamp) (string, error) {
+// written. The session records the attempt's public-computer choice and
+// approvedBy, the Device row of the session that approved a CLI login ("" for
+// every other path).
+func (h *AuthServiceHandler) mintSession(ctx context.Context, a *signInAttempt, userID string, dev signInDevice, expiresAt *timestamppb.Timestamp, approvedBy string) (string, error) {
 	var token string
 	err := h.inTx(ctx, func(txCtx context.Context) error {
 		var err error
-		if token, err = h.issueBoundToken(txCtx, userID, dev, expiresAt); err != nil {
+		if token, err = h.issueBoundToken(txCtx, userID, dev, expiresAt, sessionGrant{public: a.publicComputer, approvedBy: approvedBy}); err != nil {
 			return err
 		}
 		return h.recordSignInOK(txCtx, a, userID, dev)
@@ -271,6 +281,10 @@ var outcomeByCode = map[string]pb.SignInOutcome{
 	CodeAccountDisabled:        pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED,
 	CodeClientRevoked:          pb.SignInOutcome_SIGN_IN_OUTCOME_CLIENT_REFUSED,
 	CodeAuthUnavailable:        pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR,
+	CodeDeviceKeyRequired:      pb.SignInOutcome_SIGN_IN_OUTCOME_KEY_REFUSED,
+	CodeDeviceKeyInvalid:       pb.SignInOutcome_SIGN_IN_OUTCOME_KEY_REFUSED,
+	CodeBotKeyMismatch:         pb.SignInOutcome_SIGN_IN_OUTCOME_KEY_REFUSED,
+	CodeDeviceKeyRevoked:       pb.SignInOutcome_SIGN_IN_OUTCOME_DEVICE_REVOKED,
 }
 
 // signInOutcome reads the outcome of a failed attempt off the error its

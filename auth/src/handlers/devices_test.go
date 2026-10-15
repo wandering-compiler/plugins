@@ -27,6 +27,7 @@ type deviceMock struct {
 	revokedDevs   []*pb.MarkDeviceRevokedReq
 	allTokensFor  string
 	undeviced     []*pb.RevokeUndevicedSessionsReq
+	approvedAPI   []*pb.RevokeApprovedApiTokensReq
 
 	// User.device_trust_revoked_at, and a read failure for it
 	revokedAt  *timestamppb.Timestamp
@@ -38,6 +39,11 @@ func (m *deviceMock) GetDeviceTrustRevokedAt(context.Context, *pb.GetDeviceTrust
 		return nil, m.revokedErr
 	}
 	return &pb.GetDeviceTrustRevokedAtResp{DeviceTrustRevokedAt: m.revokedAt}, nil
+}
+
+func (m *deviceMock) RevokeApprovedApiTokens(_ context.Context, in *pb.RevokeApprovedApiTokensReq, _ ...grpc.CallOption) (*pb.RevokeApprovedApiTokensResp, error) {
+	m.approvedAPI = append(m.approvedAPI, in)
+	return &pb.RevokeApprovedApiTokensResp{}, nil
 }
 
 func (m *deviceMock) ListUserDevices(context.Context, *pb.ListUserDevicesReq, ...grpc.CallOption) (*pb.ListUserDevicesResp, error) {
@@ -160,6 +166,10 @@ func TestRevokeDevice_RevokesTokensThenMarksTheDeviceRevoked(t *testing.T) {
 	}
 	if len(m.revokedDevs) != 1 || m.revokedDevs[0].GetUserId() != "u1" || m.revokedDevs[0].GetDeviceId() != "dev-7" {
 		t.Errorf("device revocation wrong: %+v", m.revokedDevs)
+	}
+	// ONE device revoked on purpose ends the API tokens it created too.
+	if a := m.approvedAPI; len(a) != 1 || a[0].GetUserId() != "u1" || a[0].GetDeviceId() != "dev-7" || a[0].GetRevokedBy() != "u1" || a[0].GetTokenType() != pb.TokenType_TOKEN_TYPE_API {
+		t.Errorf("the API tokens the device created were not revoked: %+v", a)
 	}
 }
 

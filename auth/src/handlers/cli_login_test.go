@@ -31,6 +31,8 @@ type cliCode struct {
 	consumed    bool
 	// the approving session's expiry, as CliAuthorize bound it
 	sessionExpiresAt *timestamppb.Timestamp
+	// the approving session's device, as CliAuthorize recorded it
+	approvedBy string
 }
 
 type cliMock struct {
@@ -42,6 +44,14 @@ type cliMock struct {
 	issuedFor    string                 // user_id IssueToken was last called with
 	issuedExpiry *timestamppb.Timestamp // expires_at IssueToken was last called with
 	issuedDevice string                 // device_id IssueToken was last called with
+	issuedReq    *pb.IssueTokenReq      // the last IssueToken request
+	// sessionDevice is the Device row every approving session is bound to
+	// (GetLiveSessionExpiry's device_id); "" = none.
+	sessionDevice string
+	// approverRevoked: GetCliApproverRevocation answers these devices
+	// revoked; approverErr fails the read.
+	approverRevoked map[string]bool
+	approverErr     error
 
 	// sessions mirrors the live UserToken rows GetLiveSessionExpiry reads,
 	// keyed on the exact (token_id, user_id) pair its WHERE matches; a nil
@@ -74,6 +84,7 @@ func (m *cliMock) CreateCliAuthCode(ctx context.Context, in *pb.CreateCliAuthCod
 		expiresAt:   in.GetExpiresAt().AsTime(),
 
 		sessionExpiresAt: in.GetSessionExpiresAt(),
+		approvedBy:       in.GetApprovedByDeviceId(),
 	}
 	return &pb.CreateCliAuthCodeResp{Code: &pb.CliAuthCode{Id: "cac-1", UserId: in.GetUserId(), CodeHash: in.GetCodeHash()}}, nil
 }
@@ -91,7 +102,8 @@ func (m *cliMock) ConsumeCliAuthCode(ctx context.Context, in *pb.ConsumeCliAuthC
 	c.consumed = true
 	return &pb.ConsumeCliAuthCodeResp{
 		UserId: c.userID, CodeChallenge: c.challenge, RedirectUri: c.redirectURI,
-		SessionExpiresAt: c.sessionExpiresAt,
+		SessionExpiresAt:   c.sessionExpiresAt,
+		ApprovedByDeviceId: c.approvedBy,
 	}, nil
 }
 
@@ -100,16 +112,29 @@ func (m *cliMock) GetLiveSessionExpiry(ctx context.Context, in *pb.GetLiveSessio
 		return nil, m.sessionErr
 	}
 	if m.sessions == nil {
-		return &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId()}, nil
+		return &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId(), DeviceId: m.sessionDevice}, nil
 	}
 	exp, ok := m.sessions[[2]string{in.GetTokenId(), in.GetUserId()}]
 	// Mirror the WHERE's liveness filter: an expired row matches nothing.
 	if !ok || (exp != nil && !exp.After(time.Now())) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	resp := &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId()}
+	resp := &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId(), DeviceId: m.sessionDevice}
 	if exp != nil {
 		resp.ExpiresAt = timestamppb.New(*exp)
+	}
+	return resp, nil
+}
+
+// GetCliApproverRevocation reads the approving Device row (any id is a live
+// device unless marked revoked).
+func (m *cliMock) GetCliApproverRevocation(_ context.Context, in *pb.GetCliApproverRevocationReq, _ ...grpc.CallOption) (*pb.GetCliApproverRevocationResp, error) {
+	if m.approverErr != nil {
+		return nil, m.approverErr
+	}
+	resp := &pb.GetCliApproverRevocationResp{DeviceId: in.GetDeviceId()}
+	if m.approverRevoked[in.GetDeviceId()] {
+		resp.RevokedAt = timestamppb.Now()
 	}
 	return resp, nil
 }
@@ -158,6 +183,7 @@ func (m *cliMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grp
 	m.issuedHash = in.GetTokenHash()
 	m.issuedExpiry = in.GetExpiresAt()
 	m.issuedDevice = in.GetDeviceId()
+	m.issuedReq = in
 	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", UserId: in.GetUserId()}}, nil
 }
 

@@ -37,12 +37,14 @@ func withJKT(ctx context.Context, jkt string) context.Context {
 func mintCtx() context.Context { return withJKT(context.Background(), testJKT) }
 
 // fakeRegisterDevice answers RegisterDevice for a mock that only needs a live,
-// untrusted device to bind a token to: a fresh row named after the key.
+// untrusted device to bind a token to: a fresh row named after the key, of
+// the kind the request asked for (a program's key or a signed-in client's).
 func fakeRegisterDevice(in *pb.RegisterDeviceReq) (*pb.RegisterDeviceResp, error) {
 	return &pb.RegisterDeviceResp{Device: &pb.Device{
 		Id:         "dev-" + in.GetThumbprint()[:8],
 		UserId:     in.GetUserId(),
 		Thumbprint: in.GetThumbprint(),
+		ApiKey:     in.GetApiKey(),
 	}}, nil
 }
 
@@ -95,7 +97,7 @@ func (s *deviceStore) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq
 	s.registered = append(s.registered, in)
 	d, ok := s.rows[devKey(in.GetUserId(), in.GetThumbprint())]
 	if !ok {
-		d = s.put(in.GetUserId(), in.GetThumbprint(), &pb.Device{})
+		d = s.put(in.GetUserId(), in.GetThumbprint(), &pb.Device{ApiKey: in.GetApiKey()})
 	}
 	d.Label, d.Ip, d.LastSeenAt = in.GetLabel(), in.GetIp(), timestamppb.Now()
 	return &pb.RegisterDeviceResp{Device: proto.Clone(d).(*pb.Device)}, nil
@@ -177,7 +179,7 @@ func noSecondFactor(t *testing.T) *[]bool {
 	t.Helper()
 	saved := signInMfaGate
 	var seen []bool
-	signInMfaGate = func(_ context.Context, _ *AuthServiceHandler, _ *pb.User, _ string, trusted bool) (*pb.SignInResp, bool, error) {
+	signInMfaGate = func(_ context.Context, _ *AuthServiceHandler, _ *pb.User, _ string, trusted, _ bool) (*pb.SignInResp, bool, error) {
 		seen = append(seen, trusted)
 		return nil, false, nil
 	}
@@ -285,7 +287,7 @@ func TestMintDevice_AStoreThatAnswersNoRowBindsNothing(t *testing.T) {
 	if _, err := mintDevice(mintCtx(), h, "u1", testJKT); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("a legacy row: err = %v, want errDeviceNotRegistered", err)
 	}
-	if _, err := h.issueBoundToken(mintCtx(), "u1", signInDevice{thumbprint: testJKT}, h.sessionTokenExpiry()); !errors.Is(err, errDeviceNotRegistered) {
+	if _, err := h.issueBoundToken(mintCtx(), "u1", signInDevice{thumbprint: testJKT}, h.sessionTokenExpiry(), sessionGrant{}); !errors.Is(err, errDeviceNotRegistered) {
 		t.Fatalf("an unbound mint: err = %v, want errDeviceNotRegistered", err)
 	}
 }
@@ -811,12 +813,19 @@ func TestRegisterDevice_IsOneUpsertOnTheUserDevicePair(t *testing.T) {
 	for _, want := range []string{
 		`"UPSERT INTO @module.Device SET "`,
 		`"ON CONFLICT (user_id, thumbprint) DO UPDATE SET "`,
-		`"          revoked_at AS device.revoked_at"`,
+		`"          revoked_at AS device.revoked_at, "`,
 		`"          trusted_at AS device.trusted_at, "`,
+		`"          api_key AS device.api_key"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("RegisterDevice lacks %s:\n%s", want, body)
 		}
+	}
+	// Whether a key is a program's is decided when the row is created: the
+	// INSERT writes it, the conflict update never does.
+	insert, update, _ := strings.Cut(body, "ON CONFLICT")
+	if !strings.Contains(insert, `"api_key = :api_key "`) || strings.Contains(update, "api_key =") {
+		t.Errorf("RegisterDevice must write api_key on the INSERT only:\n%s", body)
 	}
 	if strings.Contains(body, "revoked_at = ") {
 		t.Errorf("RegisterDevice must never write revoked_at (a revoked device is never revived):\n%s", body)
@@ -842,7 +851,7 @@ func TestTrustDevice_TheStatementIsGuardedByTheRevocations(t *testing.T) {
 // Every session row is written with its device, and both token lookups read
 // the binding with the token, so the check costs no round trip.
 func TestTokenStatements_CarryTheBinding(t *testing.T) {
-	if body := mutationRPCBody(t, "IssueToken"); !strings.Contains(body, `"device_id = :device_id "`) || strings.Contains(body, "feature(devices)") {
+	if body := mutationRPCBody(t, "IssueToken"); !strings.Contains(body, `"device_id = :device_id, "`) || strings.Contains(body, "feature(devices)") {
 		t.Errorf("IssueToken does not always write the device:\n%s", body)
 	}
 	for _, rpc := range []string{"GetUserByTokenWithPermissions", "GetTokenWithType"} {
@@ -898,41 +907,6 @@ func TestMarkDeviceRevoked_IsAnUpdateNeverADelete(t *testing.T) {
 	}
 }
 
-// ── API tokens: refused rather than minted unbound ──────────
-
-// mintAPITokensUnbound lifts apiTokenBindingGate for a test of the API-token
-// minting machinery underneath it (the transaction, the subset, the expiry,
-// the bot checks), which stays the path the bound mint will take.
-func mintAPITokensUnbound(t *testing.T) {
-	t.Helper()
-	saved := apiTokenBindingGate
-	apiTokenBindingGate = func(context.Context) error { return nil }
-	t.Cleanup(func() { apiTokenBindingGate = saved })
-}
-
-// device/no-unbound-credential for API tokens: until a request can carry the
-// key of the program that will use the token, none is minted — and the
-// refusal says why, with nothing written.
-func TestApiTokens_AreRefusedUntilTheyCanBeBound(t *testing.T) {
-	m := &apiTokenMgmtMock{}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-	_, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{Name: "ci"})
-	if status.Code(err) != codes.Unimplemented || detailOf(t, err).GetCode() != CodeDeviceKeyRequired {
-		t.Fatalf("CreateApiToken = %v, want Unimplemented/%s", err, CodeDeviceKeyRequired)
-	}
-	if m.issueReq != nil {
-		t.Fatalf("an API token was minted unbound: %+v", m.issueReq)
-	}
-
-	// The one minting path IssueBotToken shares refuses the same way.
-	if _, _, err := h.issueApiTokenTx(context.Background(), "bot-1", "deploy", nil, nil); detailOf(t, err).GetCode() != CodeDeviceKeyRequired {
-		t.Fatalf("issueApiTokenTx = %v, want %s", err, CodeDeviceKeyRequired)
-	}
-	if m.issueReq != nil {
-		t.Fatalf("a bot token was minted unbound: %+v", m.issueReq)
-	}
-}
-
 // device/label-is-display-only: a long multi-byte header is cut on a rune
 // boundary, never into invalid UTF-8 (which would fail the proto marshal and
 // with it the sign-in).
@@ -961,7 +935,7 @@ func TestLegacyDevices_StayAsHistoryAndOutOfTheActiveList(t *testing.T) {
 	if !strings.Contains(string(raw), `string thumbprint  = 10 [(w17.field) = { type: CHAR, max_len: 43, null: true }];`) {
 		t.Error("Device.thumbprint must be nullable, so legacy rows survive the migration")
 	}
-	if body := queryRPCBody(t, "ListUserDevices"); !strings.Contains(body, `"AND d.thumbprint IS NOT NULL "`) {
+	if body := queryRPCBody(t, "ListUserDevices"); !strings.Contains(body, `"AND d.thumbprint IS NOT NULL AND d.api_key = FALSE "`) {
 		t.Errorf("ListUserDevices lists legacy devices:\n%s", body)
 	}
 	if body := mutationRPCBody(t, "RegisterDevice"); !strings.Contains(body, `"thumbprint = :thumbprint, "`) {
@@ -978,7 +952,7 @@ func TestExpiryAndChallengeStatements_CarryTheKey(t *testing.T) {
 			t.Errorf("%s does not read the binding:\n%s", rpc, body)
 		}
 	}
-	if body := mutationRPCBody(t, "CreateMfaChallenge"); !strings.Contains(body, `"thumbprint = :thumbprint "`) {
+	if body := mutationRPCBody(t, "CreateMfaChallenge"); !strings.Contains(body, `"thumbprint = :thumbprint, "`) {
 		t.Errorf("CreateMfaChallenge does not record the key:\n%s", body)
 	}
 	if body := queryRPCBody(t, "GetMfaChallenge"); !strings.Contains(body, `COALESCE(c.thumbprint, '') AS challenge.thumbprint`) {

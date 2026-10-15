@@ -311,8 +311,9 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 // mfaSignInGate is the two_factor SignIn seam. It decides whether a
 // challenge fires (scope), creates the MfaChallenge (which emits
 // MfaChallengeRequested), and returns the mfa_required response so SignIn
-// stops short of issuing a token.
-func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted bool) (*pb.SignInResp, bool, error) {
+// stops short of issuing a token. The challenge records the sign-in's key and
+// its public-computer choice, which VerifyMfa honours.
+func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted, public bool) (*pb.SignInResp, bool, error) {
 	// new_devices: only challenge an untrusted device. all_logins (default):
 	// every sign-in challenges.
 	if h.TwoFactorScope == scopeNewDevices && deviceTrusted {
@@ -345,13 +346,14 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, th
 
 	expiresAt := timestamppb.New(time.Now().Add(h.mfaTTL()))
 	created, err := h.issueMfaChallenge(ctx, &pb.CreateMfaChallengeReq{
-		UserId:       user.GetId(),
-		CodeHash:     codeHash,
-		TotpEnrolled: enrolled,
-		Email:        user.GetEmail(),
-		Code:         code,
-		ExpiresAt:    expiresAt,
-		Thumbprint:   thumbprint,
+		UserId:         user.GetId(),
+		CodeHash:       codeHash,
+		TotpEnrolled:   enrolled,
+		Email:          user.GetEmail(),
+		Code:           code,
+		ExpiresAt:      expiresAt,
+		Thumbprint:     thumbprint,
+		PublicComputer: public,
 	})
 	if err != nil {
 		return nil, false, err
@@ -590,6 +592,9 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	}
 	ch := resp.GetChallenge()
 	attempt.userID = ch.GetUserId()
+	// The sign-in this completes chose public-computer or not; the request
+	// cannot change it.
+	attempt.publicComputer = ch.GetPublicComputer()
 	if ch.GetConsumedAt() != nil {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
@@ -673,12 +678,13 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	// The trust this completion grants holds only if the account's device
 	// trust was not revoked since the challenge was raised: the password the
 	// SignIn checked may be the one a password change just replaced. A
-	// challenge read without its creation time trusts nothing.
+	// challenge read without its creation time trusts nothing, and a
+	// public-computer sign-in trusts nothing either (issueSession).
 	token, err := issueSession(ctx, h, attempt, userID, dev, ch.GetCreatedAt())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	return &pb.VerifyMfaResp{UserId: userID, Token: token}, nil
+	return &pb.VerifyMfaResp{UserId: userID, Token: token, PublicComputer: attempt.publicComputer}, nil
 }
 
 // verifyMfaCode is the dual-path check: a confirmed TOTP user (with the

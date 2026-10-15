@@ -18,6 +18,7 @@ type apiTokenMgmtMock struct {
 	pb.AuthMutationClient
 
 	issueReq   *pb.IssueApiTokenReq
+	registered []*pb.RegisterDeviceReq
 	addedPerms []int32
 	revokeReq  *pb.MarkApiTokenRevokedReq
 	revokeErr  error // what MarkApiTokenRevoked answers (NotFound = nothing matched)
@@ -31,6 +32,12 @@ type apiTokenMgmtMock struct {
 func (m *apiTokenMgmtMock) IssueApiToken(ctx context.Context, in *pb.IssueApiTokenReq, _ ...grpc.CallOption) (*pb.IssueApiTokenResp, error) {
 	m.issueReq = in
 	return &pb.IssueApiTokenResp{Token: &pb.UserToken{Id: "tok-1", Token: "secret-xyz"}}, nil
+}
+
+// RegisterDevice answers the key's device as a fresh live row.
+func (m *apiTokenMgmtMock) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	m.registered = append(m.registered, in)
+	return fakeRegisterDevice(in)
 }
 func (m *apiTokenMgmtMock) AddTokenPermission(ctx context.Context, in *pb.AddTokenPermissionReq, _ ...grpc.CallOption) (*pb.AddTokenPermissionResp, error) {
 	if m.addPermErr != nil {
@@ -55,10 +62,9 @@ func ctxWithCaller(uid string) context.Context {
 }
 
 func TestCreateApiToken_StampsAPIRealm_AndSubset(t *testing.T) {
-	mintAPITokensUnbound(t)
 	m := &apiTokenMgmtMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	resp, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{Name: "ci", PermissionSubset: []int32{5, 7}})
+	resp, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK, Name: "ci", PermissionSubset: []int32{5, 7}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -83,7 +89,7 @@ func TestCreateApiToken_StampsAPIRealm_AndSubset(t *testing.T) {
 
 func TestCreateApiToken_NoCaller_Unauthenticated(t *testing.T) {
 	h := &AuthServiceHandler{Query: &apiTokenMgmtMock{}, Mutation: &apiTokenMgmtMock{}}
-	if _, err := h.CreateApiToken(context.Background(), &pb.CreateApiTokenReq{}); err == nil {
+	if _, err := h.CreateApiToken(context.Background(), &pb.CreateApiTokenReq{PublicKey: p256JWK}); err == nil {
 		t.Fatal("expected Unauthenticated without scope metadata")
 	}
 }
@@ -144,12 +150,11 @@ func newApiTokenHandlerTx(m *apiTokenMgmtMock, tx *recordingDistTx) *AuthService
 // IssueBotToken and CreateBot the same day. The bot endpoints are called by an
 // admin; this one is called by everybody.
 func TestCreateApiToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
-	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	m := &apiTokenMgmtMock{addPermErr: errTestNarrowFailed}
 	h := newApiTokenHandlerTx(m, tx)
 
-	_, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{
+	_, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK,
 		Name: "ci", PermissionSubset: []int32{7},
 	})
 	if err == nil {
@@ -167,12 +172,11 @@ func TestCreateApiToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
 // holds a transaction the two writes never join, so the rollback above would
 // undo nothing.
 func TestCreateApiToken_Success_CommitsOnTheHandlersConnection(t *testing.T) {
-	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	m := &apiTokenMgmtMock{}
 	h := newApiTokenHandlerTx(m, tx)
 
-	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{
+	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK,
 		Name: "ci", PermissionSubset: []int32{7, 9},
 	}); err != nil {
 		t.Fatalf("mint: %v", err)
@@ -195,7 +199,7 @@ func TestCreateApiToken_BeginRefused_MintsNothing(t *testing.T) {
 	m := &apiTokenMgmtMock{}
 	h := newApiTokenHandlerTx(m, tx)
 
-	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{
+	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK,
 		Name: "ci", PermissionSubset: []int32{7},
 	}); err == nil {
 		t.Fatal("a refused Begin must fail the mint")

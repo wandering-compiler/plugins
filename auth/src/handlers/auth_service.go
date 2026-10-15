@@ -83,6 +83,11 @@ func sha256Hex(s string) string {
 // (30 days) when session_token_ttl_seconds is unset / <= 0.
 const defaultSessionTokenTTLSeconds = 30 * 24 * 60 * 60
 
+// defaultPublicSessionTTLSeconds is the fallback lifetime of a public-computer
+// session (8 hours) when public_session_ttl_seconds is unset / <= 0: a working
+// day at a shared computer, after which a forgotten sign-out stops mattering.
+const defaultPublicSessionTTLSeconds = 8 * 60 * 60
+
 // scopeUserIDKey / userMetadataKey are the gRPC metadata keys the
 // gateway threads the authenticated principal under: the
 // AuthResp.scopes["user_id"] entry, and the always-present
@@ -181,8 +186,14 @@ type AuthServiceHandler struct {
 	// freshly minted session bearer token's expires_at (from
 	// session_token_ttl_seconds). <= 0 → defaultSessionTokenTTLSeconds.
 	SessionTokenTTLSeconds int
-	TotpIssuer             string // otpauth:// issuer label (totp_issuer); empty → project/domain name
-	TwoFactorSecretKey     string // base64 32-byte key encrypting TOTP seeds at rest (two_factor_secret_key)
+	// PublicSessionTTLSeconds is the lifetime of a session signed in with
+	// public_computer (public_session_ttl_seconds). <= 0 (the manifest
+	// default 0) → defaultPublicSessionTTLSeconds, capped at the session
+	// lifetime; an explicit value longer than the session lifetime is refused
+	// by ValidateConfig.
+	PublicSessionTTLSeconds int
+	TotpIssuer              string // otpauth:// issuer label (totp_issuer); empty → project/domain name
+	TwoFactorSecretKey      string // base64 32-byte key encrypting TOTP seeds at rest (two_factor_secret_key)
 
 	// oauth knob (set from env in RegisterPlugin; read only by
 	// handlers/oauth.go). Public base URL the callback is reachable at;
@@ -508,6 +519,15 @@ func ValidateConfig(h *AuthServiceHandler) error {
 	if _, err := parseSignUpAllowlist(h.SignUpAllowlist); err != nil {
 		return err
 	}
+	// A public-computer session exists to be SHORTER than a normal one; an
+	// explicit longer setting would invert the option, so it is refused
+	// rather than silently capped. 0 — the manifest default, which the bundle
+	// fills in when the variable is unset — means "8 hours, capped at the
+	// session lifetime" (sessionExpiry), so a deployment with sessions
+	// shorter than 8 hours boots without setting it.
+	if h.PublicSessionTTLSeconds > h.sessionTTLSeconds() {
+		return fmt.Errorf("auth plugin: public_session_ttl_seconds=%d is longer than the session lifetime (session_token_ttl_seconds=%d) — a public-computer session must not outlive a normal one; lower public_session_ttl_seconds", h.PublicSessionTTLSeconds, h.sessionTTLSeconds())
+	}
 	return nil
 }
 
@@ -699,7 +719,7 @@ var signupClaimInvite = func(ctx context.Context, h *AuthServiceHandler, email, 
 // MfaChallenge (emitting MfaChallengeRequested) and returns the
 // mfa_required SignInResp + challenged=true so SignIn returns it
 // WITHOUT issuing a token.
-var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted bool) (resp *pb.SignInResp, challenged bool, err error) {
+var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted, public bool) (resp *pb.SignInResp, challenged bool, err error) {
 	return nil, false, nil
 }
 
@@ -710,11 +730,35 @@ var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.Us
 // even without an explicit logout. Read by issueSession, SignUp and
 // ConfirmSignUp; a CLI session takes the earlier of it and its approver's.
 func (h *AuthServiceHandler) sessionTokenExpiry() *timestamppb.Timestamp {
-	ttl := h.SessionTokenTTLSeconds
-	if ttl <= 0 {
-		ttl = defaultSessionTokenTTLSeconds
+	return h.sessionExpiry(false)
+}
+
+// sessionExpiry is the expiry of a session minted now: the public-computer
+// lifetime for a public one, the session lifetime otherwise. The public
+// lifetime is capped at the session lifetime, so a handler built without
+// ValidateConfig still never gives a public session the longer one.
+func (h *AuthServiceHandler) sessionExpiry(public bool) *timestamppb.Timestamp {
+	ttl := h.sessionTTLSeconds()
+	if public {
+		ttl = min(h.publicSessionTTLSeconds(), ttl)
 	}
 	return timestamppb.New(time.Now().Add(time.Duration(ttl) * time.Second))
+}
+
+// sessionTTLSeconds is session_token_ttl_seconds, or its default.
+func (h *AuthServiceHandler) sessionTTLSeconds() int {
+	if h.SessionTokenTTLSeconds <= 0 {
+		return defaultSessionTokenTTLSeconds
+	}
+	return h.SessionTokenTTLSeconds
+}
+
+// publicSessionTTLSeconds is public_session_ttl_seconds, or its default.
+func (h *AuthServiceHandler) publicSessionTTLSeconds() int {
+	if h.PublicSessionTTLSeconds <= 0 {
+		return defaultPublicSessionTTLSeconds
+	}
+	return h.PublicSessionTTLSeconds
 }
 
 // Shutdown runs once on bundle teardown with the bundle's drain
@@ -930,6 +974,7 @@ func (h *AuthServiceHandler) presentedToken(raw string) (token string, viaDPoP b
 func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *pb.SignInResp, err error) {
 	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_PASSWORD)
 	attempt.named(req.GetEmail())
+	attempt.publicComputer = req.GetPublicComputer()
 	defer func() { h.endSignIn(ctx, attempt, err) }()
 
 	// The device key first: without a proof there is no token to issue, and
@@ -985,10 +1030,17 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 		return nil, Unauthenticated(err)
 	}
 
+	// A public-computer sign-in does not lean on trust the device earned
+	// before: whoever sits at a shared computer next may hold the password,
+	// so the second factor is asked as for a new device, and the trust is
+	// neither used nor renewed.
+	trusted := dev.trusted && !attempt.publicComputer
+
 	// Second-factor gate (two_factor feature; no-op otherwise). When it
 	// raises a challenge it returns the mfa_required response and we
 	// stop here WITHOUT issuing a token — VerifyMfa completes the login.
-	if resp, challenged, gErr := signInMfaGate(ctx, h, user, thumbprint, dev.trusted); gErr != nil {
+	// The challenge carries the public-computer choice to VerifyMfa.
+	if resp, challenged, gErr := signInMfaGate(ctx, h, user, thumbprint, trusted, attempt.publicComputer); gErr != nil {
 		return nil, Unauthenticated(gErr)
 	} else if challenged {
 		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_MFA_REQUIRED
@@ -1002,7 +1054,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 	// ever signed in skip the factor once `two_factor_scope=new_devices` is
 	// switched on. A device earns trust by passing VerifyMfa.
 	var trustCutoff *timestamppb.Timestamp
-	if dev.trusted {
+	if trusted {
 		trustCutoff = dev.trustCutoff
 	}
 	token, err := issueSession(ctx, h, attempt, user.GetId(), dev, trustCutoff)
@@ -1010,8 +1062,9 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 		return nil, Unauthenticated(err)
 	}
 	return &pb.SignInResp{
-		UserId: user.GetId(),
-		Token:  token,
+		UserId:         user.GetId(),
+		Token:          token,
+		PublicComputer: attempt.publicComputer,
 	}, nil
 }
 

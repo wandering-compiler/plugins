@@ -92,6 +92,7 @@ func signInEventOf(in *pb.RecordSignInEventReq) *pb.SignInEvent {
 		CreatedAt: timestamppb.Now(), UserId: in.GetUserId(), Address: in.GetAddress(),
 		DeviceId: in.GetDeviceId(), Thumbprint: in.GetThumbprint(), Ip: in.GetIp(),
 		UserAgent: in.GetUserAgent(), Method: in.GetMethod(), Outcome: in.GetOutcome(),
+		PublicComputer: in.GetPublicComputer(),
 	}
 }
 
@@ -175,7 +176,7 @@ func TestSignInHistory_SignIn_EveryOutcomeWritesOneRow(t *testing.T) {
 	}
 	setMfa := func(t *testing.T, resp *pb.SignInResp, challenged bool, err error) {
 		saved := signInMfaGate
-		signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+		signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool, bool) (*pb.SignInResp, bool, error) {
 			return resp, challenged, err
 		}
 		t.Cleanup(func() { signInMfaGate = saved })
@@ -467,7 +468,7 @@ func TestSignInHistory_VerifyMfa(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
-	if _, challenged, _ := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false); !challenged {
+	if _, challenged, _ := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
 		t.Fatal("expected a challenge")
 	}
 	code := m.createdChallenge.GetCode()
@@ -860,7 +861,7 @@ func TestEventsCarryTheDevice(t *testing.T) {
 	// MfaChallengeRequested, RecoveryCodeUsed, MfaVerified, TokenIssued: all
 	// the device that signed the sign-in.
 	c.thumbs = map[string][]string{}
-	if _, challenged, err := mfaSignInGate(mintCtx(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false); err != nil || !challenged {
+	if _, challenged, err := mfaSignInGate(mintCtx(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); err != nil || !challenged {
 		t.Fatalf("challenge: %v", err)
 	}
 	if _, err := h.VerifyMfa(mintCtx(), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: rc[0]}); err != nil {
@@ -908,7 +909,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 	// device to one is a separate change.
 	exempt := map[string]string{
 		"UserCreated":                "account lifecycle (also admin- and fixture-created)",
-		"UserErased":                 "account lifecycle (an operator's erasure)",
+		"UserDeleted":                "account lifecycle (an operator's erasure)",
 		"UserUpdated":                "account lifecycle (an operator's edit)",
 		"UserRoleAssigned":           "grant (also the role seed and sign-up roles)",
 		"UserRoleRevoked":            "grant",
@@ -942,7 +943,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("event %s names a user and no device_id", name)
 		}
 	}
-	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled"} {
+	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled", "ApiTokenCreated"} {
 		if !withDevice[ev] {
 			t.Errorf("%s carries no device_id", ev)
 		}
@@ -968,8 +969,8 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("%s's request %s declares no thumbprint", rpc, req[1])
 		}
 	}
-	if emits != 9 {
-		t.Errorf("%d emits of a device-carrying event, want 9 (one per event)", emits)
+	if emits != 10 {
+		t.Errorf("%d emits of a device-carrying event, want 10 (one per event)", emits)
 	}
 }
 

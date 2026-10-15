@@ -50,6 +50,9 @@ var (
 	// The session approving the login is no longer live — revoked, expired,
 	// or not the caller's. An approval it cannot back is no approval.
 	errCliSessionNotLive = errors.New("cli auth: the approving session is not live")
+	// The device that approved the code was revoked during the code's life:
+	// the approval it gave is withdrawn with it.
+	errCliApproverRevoked = errors.New("cli auth: the approving device was revoked")
 )
 
 // init adds the outcomes of CliToken's refusals to the sign-in history.
@@ -83,7 +86,7 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 	if err := h.checkRedirectAllowed(ctx, req.GetClientId(), req.GetRedirectUri()); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	sessionExpiresAt, err := h.approvingSessionExpiry(ctx, userID)
+	approving, err := h.approvingSession(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +106,10 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 		ExpiresAt: timestamppb.New(time.Now().Add(defaultCliAuthCodeTTL)),
 		// The session CliToken mints inherits this, so the CLI login ends
 		// when the browser session that approved it does.
-		SessionExpiresAt: sessionExpiresAt,
+		SessionExpiresAt: approving.GetExpiresAt(),
+		// The approving browser's device, recorded on the CLI session as its
+		// approver. The CLI session itself is bound to the CLI's own key.
+		ApprovedByDeviceId: approving.GetDeviceId(),
 	}); err != nil {
 		return nil, err
 	}
@@ -213,6 +219,9 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 			return nil, err
 		}
 	}
+	if err := h.refuseRevokedApprover(ctx, consumed.GetApprovedByDeviceId()); err != nil {
+		return nil, err
+	}
 	account, err := refuseUnsignableAccount(ctx, h, userID)
 	attempt.account = account
 	if err != nil {
@@ -229,7 +238,9 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	token, err := h.mintSession(ctx, attempt, userID, dev, expiresAt)
+	// Bound to the CLI's key (dev); the browser that approved the login is
+	// recorded beside it as the approver.
+	token, err := h.mintSession(ctx, attempt, userID, dev, expiresAt, consumed.GetApprovedByDeviceId())
 	if err != nil {
 		// Classified like every other refusal here: an outage is reported as
 		// one, and no storage text reaches the CLI.
@@ -238,15 +249,42 @@ func (h *AuthServiceHandler) CliToken(ctx context.Context, req *pb.CliTokenReq) 
 	return &pb.CliTokenResp{Token: token, UserId: userID}, nil
 }
 
-// approvingSessionExpiry reads the expiry of the session approving a CLI
-// login: the caller's own session token, named by the gateway envelope.
-// nil means that session never expires.
+// refuseRevokedApprover refuses a code whose approving device was revoked
+// after it approved the code (the code lives 60 s, a revocation can land in
+// between): revoking a device ends the CLI sessions it approved, and one it
+// had approved but not yet minted must not be minted after it. The opaque
+// refusal of every other code failure; the history records REFUSED (not
+// DEVICE_REVOKED, which names the key signing the request — the CLI's own key
+// is not revoked). A read that does not answer refuses too, and a code with no
+// approver (approved by a session bound to no device, or minted before the
+// column) has nothing to check.
+func (h *AuthServiceHandler) refuseRevokedApprover(ctx context.Context, deviceID string) error {
+	if deviceID == "" {
+		return nil
+	}
+	got, err := h.Query.GetCliApproverRevocation(ctx, &pb.GetCliApproverRevocationReq{DeviceId: deviceID})
+	if err != nil {
+		if notFoundOK(err) == nil {
+			return Unauthenticated(errCliApproverRevoked)
+		}
+		return Unauthenticated(err)
+	}
+	if got.GetDeviceId() != deviceID || got.GetRevokedAt() != nil {
+		return Unauthenticated(errCliApproverRevoked)
+	}
+	return nil
+}
+
+// approvingSession reads the session approving a CLI login — the caller's
+// own session token, named by the gateway envelope: its expiry (nil: it never
+// expires) and the Device row it is bound to (the approver recorded on the
+// CLI session).
 //
 // A session that is no longer there refuses the approval rather than
 // degrading to "no cap": a missing row read as "never expires" would hand a
 // revoked session a fresh full-lifetime one, which is the renewal this exists
 // to stop. A read that did not answer refuses too.
-func (h *AuthServiceHandler) approvingSessionExpiry(ctx context.Context, userID string) (*timestamppb.Timestamp, error) {
+func (h *AuthServiceHandler) approvingSession(ctx context.Context, userID string) (*pb.GetLiveSessionExpiryResp, error) {
 	tokenID := callerSessionTokenID(ctx)
 	if tokenID == "" {
 		// requireSessionCaller has already refused this; kept so the
@@ -268,7 +306,7 @@ func (h *AuthServiceHandler) approvingSessionExpiry(ctx context.Context, userID 
 	if resp.GetTokenId() != tokenID {
 		return nil, Unauthenticated(errCliSessionNotLive)
 	}
-	return resp.GetExpiresAt(), nil
+	return resp, nil
 }
 
 // cliSessionExpiry is the expiry of the session CliToken mints: the normal
@@ -551,19 +589,19 @@ func (h *AuthServiceHandler) SetClientEnabled(ctx context.Context, req *pb.SetCl
 	return &pb.SetClientEnabledResp{}, nil
 }
 
-// RevokeClient ends a registration for good: AuthClient.revoked_at is
+// DeleteClient ends a registration for good: AuthClient.revoked_at is
 // stamped and the row stays, as the record of what was trusted. Every
 // resolver refuses it from then on, SetClientEnabled cannot restore it, and
 // the pair can be registered again (a new row with a new secret). Revoking a
 // revoked or unknown registration matches no row, which is done.
-func (h *AuthServiceHandler) RevokeClient(ctx context.Context, req *pb.RevokeClientReq) (*pb.RevokeClientResp, error) {
+func (h *AuthServiceHandler) DeleteClient(ctx context.Context, req *pb.DeleteClientReq) (*pb.DeleteClientResp, error) {
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
 	if _, err := h.Mutation.RevokeAuthClient(ctx, &pb.RevokeAuthClientReq{Id: req.GetId()}); notFoundOK(err) != nil {
 		return nil, err
 	}
-	return &pb.RevokeClientResp{}, nil
+	return &pb.DeleteClientResp{}, nil
 }
 
 var (
