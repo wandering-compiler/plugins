@@ -294,10 +294,27 @@ features:
       # active feature is staged once.
       - handlers/role_ceiling.go
   - name: user_admin
-    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, a Sessions page to review and revoke tokens, and a SignIns page with the sign-in history (every attempt, failures included; read-only, paged). Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser and the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserDeleted), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount; actions Disable / Enable / Erase) the Sessions page (revoked tokens listed as revoked; each session's device, whether it is a public-computer session, and for a CLI session the device that approved it) and the Devices page (every device of every account — label, key thumbprint, first and last seen, whether its trust stands, revoked or not; AuthQuery.ListAllDevices + GetDevice; the Revoke action, AuthService.RevokeDevices, revokes a device for good, every token bound to it and every CLI session it approved, recording the operator). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
+    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, and a Sessions page to review and revoke tokens. Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser and the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserDeleted), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke), plus the queries and the action the opt-in SignIns and Devices pages use (AuthQuery.ListSignInEvents + GetSignInEvent, AuthQuery.ListAllDevices + GetDevice, AuthService.RevokeDevices). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount; actions Disable / Enable / Erase) and the Sessions page (revoked tokens listed as revoked; each session's device, whether it is a public-computer session, and for a CLI session the device that approved it). The SignIns and Devices pages are NOT contributed by this feature: they are the admin_sign_ins and admin_devices features, so an upgrade adds no page to an existing activation (an admin that declares nav groups must list every page). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
     default: false
     go_files:
       - handlers/user_admin.go
+  # The two admin pages below are features of their own, not part of
+  # user_admin, because they arrived after user_admin had adopters: an admin
+  # that declares `nav` groups must list EVERY page, including the pages a
+  # plugin contributes (fail-closed), so a page added to an existing feature
+  # breaks every such adopter on upgrade. Opt-in pages cannot. They gate the
+  # PAGES only — the queries and the action stay with user_admin, which both
+  # require.
+  - name: admin_sign_ins
+    requires:
+      - user_admin
+    description: "The SignIns admin page: the sign-in history of every account (every attempt, failures included; read-only, paged; AuthQuery.ListSignInEvents + GetSignInEvent, which user_admin stages). Opt in with user_admin, and add the page to the admin nav if it declares groups. Off by default."
+    default: false
+  - name: admin_devices
+    requires:
+      - user_admin
+    description: "The Devices admin page: every device of every account — label, key thumbprint, first and last seen, whether its trust stands, revoked or not (AuthQuery.ListAllDevices + GetDevice, which user_admin stages). Its Revoke action (AuthService.RevokeDevices) revokes a device for good, every token bound to it and every CLI session it approved, recording the operator. Opt in with user_admin, and add the page to the admin nav if it declares groups. Off by default."
+    default: false
 
 # Files that need a feature PAIR. A machine account under tenant_scope must be
 # written with a tenant (User.tenant_id is NOT NULL), and the code that fills it
@@ -795,12 +812,14 @@ presets:
           # carries the user id. Users is gated by the same user_admin
           # feature, so it always co-exists with this page (no dangling ref).
           #
-          # device → the Devices page, the cell reading as the device's label
-          # (its browser). Devices is gated by the same user_admin feature.
+          # device_label: the device's label (its browser), as plain text. NOT
+          # a ref onto the Devices page: that page is the opt-in admin_devices
+          # feature, a column ref cannot be gated, and a ref to a page the
+          # activation does not have fails the admin build.
           columns:
             - owner
             - { name: user, ref: { page: Users } }
-            - { name: device, ref: { title: device_label, page: Devices } }
+            - device_label
             - thumbprint
             - public_computer
             - created_at
@@ -819,9 +838,12 @@ presets:
             label: "Revoke"
             confirm: "Revoke the selected sessions? Whoever holds them is signed out at once."
             target: both
+      # Sign-in history. Gated admin_sign_ins (opt-in, requires user_admin):
+      # a page added to user_admin would break every adopter whose admin
+      # declares nav groups. A hand-written page named "SignIns" overrides this.
       - name: SignIns
         model: SignInEvent
-        feature: user_admin
+        feature: admin_sign_ins
         list:
           source: AuthQuery.ListSignInEvents
           columns:
@@ -836,7 +858,8 @@ presets:
         detail:
           read: AuthQuery.GetSignInEvent
           readonly_fields: [id, created_at, user_id, address, method, outcome, device_id, thumbprint, ip, user_agent, public_computer]
-      # Turnkey device review. Gated user_admin. Every Device row of every
+      # Turnkey device review. Gated admin_devices (opt-in, requires
+      # user_admin, for the same nav reason as SignIns). Every Device row of every
       # account — revoked and legacy (keyless, recorded before device binding)
       # ones included: nothing in the auth tables is deleted. A legacy row
       # shows no thumbprint and can never be used. The list projects the
@@ -849,7 +872,7 @@ presets:
       # hand-written page named "Devices" overrides this.
       - name: Devices
         model: Device
-        feature: user_admin
+        feature: admin_devices
         list:
           source: AuthQuery.ListAllDevices
           columns:

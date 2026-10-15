@@ -37,7 +37,8 @@ This release binds every token to a device key and stops deleting rows from the 
    - Events: `UserDeleted` (`auth.user.deleted`) keeps its name and topic; the erasure emits it (erasure is the plugin's deletion). New `ApiTokenCreated`. The token and MFA events carry `device_id`.
 6. **The admin changes.**
    - Delete buttons are gone. Users and ServiceAccounts erase (`Erase`), and Sessions and Devices revoke (`Revoke`). Revoked and erased rows stay listed.
-   - New pages: `Devices` and `SignIns` (`user_admin`).
+   - New pages, opt-in: `Devices` (feature `admin_devices`) and `SignIns` (feature `admin_sign_ins`), both requiring `user_admin`. The upgrade adds no page to an existing activation. To get them, enable the features and, if your admin declares `nav` groups, add the pages to one: an admin with nav groups must list every page, and the build refuses one it does not list.
+   - The Sessions page shows each session's device by its label, without a link to the Devices page.
    - The admin's sign-in form has a "This is a public computer" box, and the app's sign-in requests take `public_computer`. Such a session never trusts the device, is kept in session storage only, and expires after `public_session_ttl_seconds`.
    - Federated (OAuth) sign-in to the admin needs `oauth` enabled on the admin's realm. Without it the sign-in returns a token bound to no key, and the admin refuses it.
 7. **Known limits.**

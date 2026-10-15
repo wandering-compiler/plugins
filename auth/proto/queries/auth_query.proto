@@ -1067,13 +1067,13 @@ message UserTokenAdminRow {
   // and sort reasons as expires_at) and why.
   google.protobuf.Timestamp revoked_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   RevokeReason revoke_reason = 8;
-  // device — the Device row the token is bound to, linked to the Devices
-  // page by the page's AdminColumnRef with `device_label` as its title. NULL
-  // for a token bound to no device (minted before binding, an API or MCP
-  // token).
+  // device — the Device row the token is bound to. NULL for a token bound to
+  // no device (minted before binding, an API or MCP token). The Sessions page
+  // does not link it to the Devices page: that page is the opt-in
+  // admin_devices feature, and a column ref cannot be gated.
   string device = 9 [(w17.field) = { type: UUID, null: true }];
   // The device's label (its user agent), blank when there is none — the
-  // ref's title, so the cell reads as the browser rather than a UUID.
+  // Sessions column, so the cell reads as the browser rather than a UUID.
   string device_label = 10;
   // The device's key thumbprint (the id events and AuthResp call device_id);
   // NULL for no device or a legacy (keyless) one.
