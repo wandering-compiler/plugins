@@ -34,6 +34,9 @@ type roundTripStore struct {
 
 	users map[string]*pb.User // email (as stored) -> row
 	next  int
+
+	// the sessions minted, with the device each is bound to
+	issued []*pb.IssueTokenReq
 }
 
 func newRoundTripStore() *roundTripStore {
@@ -62,7 +65,12 @@ func (s *roundTripStore) GetUserByEmail(_ context.Context, in *pb.GetUserByEmail
 	return &pb.GetUserByEmailResp{User: u}, nil
 }
 
+func (s *roundTripStore) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
+}
+
 func (s *roundTripStore) IssueToken(_ context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
+	s.issued = append(s.issued, in)
 	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "t-1", Token: "bearer", UserId: in.GetUserId()}}, nil
 }
 func (s *roundTripStore) AssignRoleToUser(context.Context, *pb.AssignRoleToUserReq, ...grpc.CallOption) (*pb.AssignRoleToUserResp, error) {
@@ -79,11 +87,11 @@ func (s *roundTripStore) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq
 // rather than the test binary's accidental union of every feature.
 //
 // Every feature's file compiles into this binary, so every init() seam is
-// installed — tenant_scope's create path, devices' resolver, two_factor's
-// gate. A real activation stages only the files its features name. Without
-// pinning, a sign-in here walks through `devices` (which the console does not
-// enable) and panics on a store that has no reason to implement it, and the
-// test says nothing about the deployment anybody actually runs.
+// installed — tenant_scope's create path, two_factor's gate. A real
+// activation stages only the files its features name. Without pinning, a
+// sign-in here walks through `two_factor` (which the console does not enable)
+// and panics on a store that has no reason to implement it, and the test says
+// nothing about the deployment anybody actually runs.
 //
 // Console features, for the record: rbac, authenticate_turnkey,
 // sign_in_turnkey, sign_up_turnkey, cli_login, org_membership, org_invite,
@@ -91,14 +99,8 @@ func (s *roundTripStore) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq
 // two_factor, no tenant_scope, no sign_up_confirmation.
 func pinConsoleActivation(t *testing.T) {
 	t.Helper()
-	origDevice := resolveSignInDevice
-	resolveSignInDevice = func(context.Context, *AuthServiceHandler, string) (signInDevice, error) {
-		return signInDevice{trusted: true}, nil
-	}
-	t.Cleanup(func() { resolveSignInDevice = origDevice })
-
 	origMfa := signInMfaGate
-	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool, bool) (*pb.SignInResp, bool, error) {
 		return nil, false, nil
 	}
 	t.Cleanup(func() { signInMfaGate = origMfa })
@@ -140,11 +142,16 @@ func TestSignUpThenSignIn_TheSamePasswordWorks(t *testing.T) {
 		email    = "jaroslav@example.com"
 		password = "correct horse battery staple"
 	)
-	if _, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: email, Password: password}); err != nil {
+	if _, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: email, Password: password}); err != nil {
 		t.Fatalf("SignUp: %v", err)
 	}
-	if _, err := h.SignIn(context.Background(), &pb.SignInReq{Email: email, Password: password}); err != nil {
+	if _, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: email, Password: password}); err != nil {
 		t.Fatalf("an account could not sign in with the password it registered with: %v", err)
+	}
+	// device/no-unbound-credential: the registration's session and the
+	// sign-in's are both bound to the device whose key signed the request.
+	if len(s.issued) != 2 || s.issued[0].GetDeviceId() != "dev-"+testJKT[:8] || s.issued[1].GetDeviceId() != "dev-"+testJKT[:8] {
+		t.Fatalf("sessions not bound to the requests' device: %+v", s.issued)
 	}
 }
 
@@ -163,10 +170,10 @@ func TestSignUpThenSignIn_EmailSpellingDoesNotSplitTheAccount(t *testing.T) {
 		h := &AuthServiceHandler{Query: s, Mutation: s, PasswordHash: testPasswordSettings()}
 		const password = "correct horse battery staple"
 
-		if _, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: tc.registered, Password: password}); err != nil {
+		if _, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: tc.registered, Password: password}); err != nil {
 			t.Fatalf("SignUp %q: %v", tc.registered, err)
 		}
-		if _, err := h.SignIn(context.Background(), &pb.SignInReq{Email: tc.typed, Password: password}); err != nil {
+		if _, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: tc.typed, Password: password}); err != nil {
 			t.Errorf("registered as %q, typed %q — refused: %v", tc.registered, tc.typed, err)
 		}
 	}
@@ -179,12 +186,12 @@ func TestSignUpThenSignIn_AWrongPasswordIsStillRefused(t *testing.T) {
 	s := newRoundTripStore()
 	h := &AuthServiceHandler{Query: s, Mutation: s, PasswordHash: testPasswordSettings()}
 
-	if _, err := h.SignUp(context.Background(), &pb.SignUpReq{
+	if _, err := h.SignUp(mintCtx(), &pb.SignUpReq{
 		Email: "a@b.c", Password: "correct horse battery staple",
 	}); err != nil {
 		t.Fatalf("SignUp: %v", err)
 	}
-	if _, err := h.SignIn(context.Background(), &pb.SignInReq{Email: "a@b.c", Password: "something else"}); err == nil {
+	if _, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: "a@b.c", Password: "something else"}); err == nil {
 		t.Error("a wrong password signed in")
 	}
 }
@@ -233,7 +240,7 @@ func TestConsumePaths_ABadTokenIsAlwaysTheSameOpaqueRefusal(t *testing.T) {
 			return err
 		}},
 		{"cli code exchange", func(h *AuthServiceHandler) error {
-			_, err := h.CliToken(context.Background(), &pb.CliTokenReq{
+			_, err := h.CliToken(mintCtx(), &pb.CliTokenReq{
 				Code: "c", CodeVerifier: strings.Repeat("a", 64),
 			})
 			return err
@@ -309,11 +316,14 @@ func TestServiceAccount_TheWritesThatMustNotSeparate(t *testing.T) {
 		if !strings.Contains(fn, tc.seam) {
 			t.Errorf("%s no longer goes through %s — nothing holds its writes together", tc.fn, tc.seam)
 		}
-		if !strings.Contains(fn, "distx.Begin(") {
-			t.Errorf("%s opens no transaction — the seam exists but nothing wraps it", tc.fn)
-		}
-		if !strings.Contains(fn, "tx.Rollback(") {
-			t.Errorf("%s never rolls back — a failure keeps what it wrote", tc.fn)
+		// inTx is Begin, Rollback on fn's error and Commit, in one place.
+		if !strings.Contains(fn, "h.inTx(") {
+			if !strings.Contains(fn, "distx.Begin(") {
+				t.Errorf("%s opens no transaction — the seam exists but nothing wraps it", tc.fn)
+			}
+			if !strings.Contains(fn, "tx.Rollback(") {
+				t.Errorf("%s never rolls back — a failure keeps what it wrote", tc.fn)
+			}
 		}
 		for _, direct := range tc.apart {
 			if strings.Contains(fn, direct) {

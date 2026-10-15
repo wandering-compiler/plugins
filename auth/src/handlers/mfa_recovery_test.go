@@ -129,16 +129,16 @@ func TestVerifyMfa_ARecoveryCodeSignsInOnce(t *testing.T) {
 	ctx := ctxWithCaller("u1")
 	_, rc := enrolled(t, h, ctx)
 	typed := strings.ToUpper(strings.ReplaceAll(rc[0], "-", " "))
-	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, "", false); !ch {
+	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false); !ch {
 		t.Fatal("expected challenge")
 	}
-	if v, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: typed}); err != nil || v.GetToken() == "" {
+	if v, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: typed}); err != nil || v.GetToken() == "" {
 		t.Fatalf("a recovery code did not sign in: %v", err)
 	}
-	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, "", false); !ch {
+	if _, ch, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false); !ch {
 		t.Fatal("expected challenge")
 	}
-	if _, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: rc[0]}); err == nil {
+	if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: rc[0]}); err == nil {
 		t.Error("a spent recovery code signed in again")
 	}
 	st, _ := h.GetMfaStatus(ctx, &pb.GetMfaStatusReq{})
@@ -155,14 +155,14 @@ func TestEnrollTotp_ReplacingAConfirmedAuthenticatorTakesACode(t *testing.T) {
 	h := newMfaHandler(m)
 	ctx := ctxWithCaller("u1")
 	_, rc := enrolled(t, h, ctx)
-	m.deletedTotp = false
+	m.revokedTotp = false
 	if _, err := h.EnrollTotp(ctx, &pb.EnrollTotpReq{}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("re-enrolling with no code: %v, want Unauthenticated", err)
 	}
 	if _, err := h.EnrollTotp(ctx, &pb.EnrollTotpReq{Code: "000000"}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("re-enrolling with a wrong code: %v, want Unauthenticated", err)
 	}
-	if m.deletedTotp {
+	if m.revokedTotp {
 		t.Fatal("the confirmed authenticator was replaced without proof")
 	}
 	if _, err := h.EnrollTotp(ctx, &pb.EnrollTotpReq{Code: rc[1]}); err != nil {
@@ -178,8 +178,57 @@ func TestDisableTotp_TakesARecoveryCodeAndDropsTheSet(t *testing.T) {
 	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: rc[2]}); err != nil {
 		t.Fatalf("disable with a recovery code: %v", err)
 	}
-	if !m.deletedTotp || m.recovery != nil {
-		t.Errorf("deleted=%v recovery=%v — the authenticator and its codes go together", m.deletedTotp, m.recovery)
+	if !m.revokedTotp || m.recovery != nil {
+		t.Errorf("revoked=%v recovery=%v — the authenticator and its codes go together", m.revokedTotp, m.recovery)
+	}
+}
+
+// two_factor/disable-is-a-state: disabling keeps the authenticator as a
+// revoked row with its seed cleared and keeps the unused recovery codes as
+// revoked rows; afterwards nothing of them verifies.
+func TestDisableTotp_KeepsTheRowsRevokedAndNothingVerifies(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	ctx := ctxWithCaller("u1")
+	seed, rc := enrolled(t, h, ctx)
+	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: nextCode(t, seed)}); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if len(m.revokedSecrets) != 1 || !m.revokedSecrets[0].confirmed || m.revokedSecrets[0].seed != "" || m.revokedSecrets[0].secret != "" {
+		t.Fatalf("the authenticator is not kept as one revoked, confirmed row with its seed cleared: %+v", m.revokedSecrets)
+	}
+	if len(m.revokedCodes) != recoveryCodeCount {
+		t.Errorf("%d recovery codes kept as revoked, want all %d", len(m.revokedCodes), recoveryCodeCount)
+	}
+	for _, c := range rc {
+		if h.acceptRecoveryCode(ctx, "u1", c) {
+			t.Fatalf("a recovery code of the disabled authenticator still works: %s", c)
+		}
+	}
+	if st, err := h.GetMfaStatus(ctx, &pb.GetMfaStatusReq{}); err != nil || st.GetTotpEnrolled() {
+		t.Errorf("a disabled authenticator still counts as enrolled: %+v, %v", st, err)
+	}
+	// A new enrolment is not blocked by the revoked row.
+	if _, err := h.EnrollTotp(ctx, &pb.EnrollTotpReq{}); err != nil {
+		t.Errorf("enrolling again after a disable: %v", err)
+	}
+}
+
+// Re-enrolling over a confirmed authenticator keeps the replaced one as a
+// revoked row (seed cleared) and revokes nothing else.
+func TestEnrollTotp_TheReplacedAuthenticatorStaysRevoked(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	ctx := ctxWithCaller("u1")
+	_, rc := enrolled(t, h, ctx)
+	if _, err := h.EnrollTotp(ctx, &pb.EnrollTotpReq{Code: rc[1]}); err != nil {
+		t.Fatalf("re-enroll: %v", err)
+	}
+	if len(m.revokedSecrets) != 1 || !m.revokedSecrets[0].confirmed {
+		t.Fatalf("the replaced authenticator is not kept as a revoked row: %+v", m.revokedSecrets)
+	}
+	if m.totpSeed == "" || m.totpConfirmed {
+		t.Error("the new enrolment is not the live, pending authenticator")
 	}
 }
 
@@ -200,6 +249,10 @@ func TestGenerateRecoveryCodes_ReplacesTheSetBehindTheStepUp(t *testing.T) {
 	}
 	if h.acceptRecoveryCode(ctx, "u1", old[3]) {
 		t.Error("a code from the replaced set still works")
+	}
+	// Replaced, not deleted: the old unused codes stay as revoked rows.
+	if len(m.revokedCodes) != recoveryCodeCount {
+		t.Errorf("%d codes of the replaced set kept as revoked, want %d", len(m.revokedCodes), recoveryCodeCount)
 	}
 	if !h.acceptRecoveryCode(ctx, "u1", fresh.GetRecoveryCodes()[0]) {
 		t.Error("a code from the new set does not work")
@@ -227,7 +280,7 @@ func TestStepUp_FiveWrongCodesLockIt(t *testing.T) {
 	h := newMfaHandler(m)
 	ctx := ctxWithCaller("u1")
 	seed, _ := enrolled(t, h, ctx)
-	m.deletedTotp = false
+	m.revokedTotp = false
 	for i := 0; i < maxStepUpAttempts; i++ {
 		if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: "000000"}); status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("wrong code %d: %v, want Unauthenticated", i+1, err)
@@ -239,7 +292,7 @@ func TestStepUp_FiveWrongCodesLockIt(t *testing.T) {
 	if _, err := h.GenerateRecoveryCodes(ctx, &pb.GenerateRecoveryCodesReq{Code: nextCode(t, seed)}); status.Code(err) != codes.ResourceExhausted {
 		t.Errorf("the lock is the step-up's, not one endpoint's: %v", err)
 	}
-	if m.deletedTotp {
+	if m.revokedTotp {
 		t.Error("the authenticator was removed while the step-up was locked")
 	}
 	m.stepUpLocked = time.Now().Add(-time.Second) // the lockout ran out

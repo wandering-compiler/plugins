@@ -39,7 +39,7 @@ func cliLogin(t *testing.T, h *AuthServiceHandler, uid, sessionTokenID string) (
 	if err != nil {
 		t.Fatalf("CliAuthorize: %v", err)
 	}
-	return h.CliToken(context.Background(), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier})
+	return h.CliToken(mintCtx(), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier})
 }
 
 func TestCliToken_InheritsTheApprovingSessionsEarlierExpiry(t *testing.T) {
@@ -209,7 +209,7 @@ func TestCliToken_RefusesWhenTheApprovingSessionExpiredMeanwhile(t *testing.T) {
 	// Time passes: the bound expiry is now behind us.
 	m.codes[sha256Hex(authz.GetCode())].sessionExpiresAt = timestamppb.New(time.Now().Add(-time.Second))
 
-	_, err = h.CliToken(context.Background(), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier})
+	_, err = h.CliToken(mintCtx(), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier})
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("err = %v, want Unauthenticated", err)
 	}

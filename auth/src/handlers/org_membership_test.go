@@ -503,9 +503,10 @@ func TestResolveOrgScope_NoSelectorFallsBackToInference(t *testing.T) {
 
 // An OWNER with no membership row can still scope into the org they own.
 //
-// DeleteOrgMembership makes this state reachable: it removes the row
-// and nothing anywhere adds one back, so without the ownership fallback the
-// owner of an organization is locked out of it permanently — and the refusal
+// MarkOrgMembershipRemoved makes this state reachable: it ends the row, and
+// nothing but a new invitation (which the owner, locked out, cannot send) adds
+// one back, so without the ownership fallback the owner of an organization is
+// locked out of it permanently — and the refusal
 // they get is the opaque Unauthenticated every other auth failure returns, so
 // nothing on the way out says "your membership is gone".
 func TestResolveOrgScope_OwnerWithoutMembership(t *testing.T) {
@@ -677,7 +678,7 @@ func TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot(t *testing.T
 	prevResolve, prevDec, prevNarrow := resolvePrincipal, scopeDecorators, grantNarrowers
 	t.Cleanup(func() { resolvePrincipal, scopeDecorators, grantNarrowers = prevResolve, prevDec, prevNarrow })
 	resolvePrincipal = func(context.Context, *AuthServiceHandler, string) (*authPrincipal, error) {
-		return &authPrincipal{userID: "u1"}, nil
+		return &authPrincipal{userID: "u1", deviceThumbprint: testJKT}, nil
 	}
 	var seen []bool
 	scopeDecorators = []scopeDecorator{func(ctx context.Context, _ *AuthServiceHandler, _ string, _, _, _ map[string]string) error {
@@ -689,7 +690,7 @@ func TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot(t *testing.T
 		return nil
 	}}
 	h := &AuthServiceHandler{HeaderName: "Authorization"}
-	req := &pb.AuthReq{Headers: map[string]string{"authorization": "tok"}}
+	req := boundAuthReq("tok", testJKT)
 
 	if _, err := h.AuthenticateAdmin(context.Background(), req); err != nil {
 		t.Fatal(err)

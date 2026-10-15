@@ -121,7 +121,7 @@ func TestIssueBotToken_WithoutOrgs_MintsForABot(t *testing.T) {
 	withoutOrgs(t)
 	m := &botAdminMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	resp, err := h.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{UserId: "bot-1"})
+	resp, err := h.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-1"})
 	if err != nil || resp.GetToken() == "" || !m.issued {
 		t.Fatalf("mint for a realm bot: err=%v token=%q issued=%v", err, resp.GetToken(), m.issued)
 	}
@@ -136,14 +136,14 @@ func TestIssueBotToken_WithoutOrgs_RefusesAPersonAndAMissingAccountAlike(t *test
 	withoutOrgs(t)
 	rec := &mintRecorder{}
 	h := &AuthServiceHandler{Query: botTokenQuery{kind: pb.AccountKind_HUMAN}, Mutation: rec}
-	_, errPerson := h.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{UserId: "u1"})
+	_, errPerson := h.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1"})
 	if status.Code(errPerson) != codes.PermissionDenied || rec.issued {
 		t.Fatalf("a person: err=%v issued=%v", errPerson, rec.issued)
 	}
 
 	m := &botAdminMock{missing: true}
 	h2 := &AuthServiceHandler{Query: m, Mutation: m}
-	_, errMissing := h2.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{UserId: "nobody"})
+	_, errMissing := h2.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "nobody"})
 	if status.Code(errMissing) != codes.PermissionDenied || m.issued {
 		t.Fatalf("a missing account: err=%v issued=%v", errMissing, m.issued)
 	}
@@ -175,7 +175,7 @@ func TestMachineAccounts_OrgsWithoutTheirScopingRefuse(t *testing.T) {
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	ctx := ctxWithCallerInOrg("admin-1", "org-1")
 	_, errList := h.ListBots(ctx, &pb.ListBotsReq{})
-	_, errMint := h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1"})
+	_, errMint := h.IssueBotToken(ctx, &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-1"})
 	_, errCreate := h.CreateBot(ctx, &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"})
 	for name, err := range map[string]error{"list": errList, "mint": errMint, "create": errCreate} {
 		if status.Code(err) != codes.Internal {
@@ -207,7 +207,7 @@ func TestMachineAccounts_WithoutOrgs_StayInTheOperatorsTenant(t *testing.T) {
 
 	m2 := &botAdminMock{botTenant2: "tenant-2"}
 	h2 := &AuthServiceHandler{Query: m2, Mutation: m2}
-	_, err = h2.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{UserId: "bot-other"})
+	_, err = h2.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-other"})
 	if status.Code(err) != codes.PermissionDenied || m2.issued {
 		t.Fatalf("minting for another tenant's bot: err=%v issued=%v", err, m2.issued)
 	}
@@ -247,7 +247,7 @@ func TestIssueBotToken_RefusesABotAboveTheOperator(t *testing.T) {
 				return metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 					scopeUserIDKey, "op-1", "x-w17-scope-org_id", "org-1", "x-w17-scope-tenant_id", "tenant-1"))
 			}
-			_, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7), &pb.IssueBotTokenReq{UserId: "bot-1"})
+			_, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-1"})
 			if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "machine account holds a role") {
 				t.Fatalf("err = %v, want the mint ceiling's PermissionDenied", err)
 			}
@@ -255,7 +255,7 @@ func TestIssueBotToken_RefusesABotAboveTheOperator(t *testing.T) {
 				t.Error("a token was minted for a bot above the operator")
 			}
 			// The control: the same operator holding everything the role carries.
-			if _, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7, 99), &pb.IssueBotTokenReq{UserId: "bot-1"}); err != nil || !m.issued {
+			if _, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7, 99), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-1"}); err != nil || !m.issued {
 				t.Fatalf("an operator holding the bot's role was refused: %v", err)
 			}
 		})

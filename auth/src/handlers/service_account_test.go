@@ -89,10 +89,23 @@ func (q botTokenQuery) GetOrgMember(_ context.Context, in *pb.GetOrgMemberReq, _
 	return &pb.GetOrgMemberResp{UserId: in.GetUserId()}, nil
 }
 
+// The machine account has no key yet: its first token registers one.
+func (q botTokenQuery) LockMachineAccount(_ context.Context, in *pb.LockMachineAccountReq, _ ...grpc.CallOption) (*pb.LockMachineAccountResp, error) {
+	return &pb.LockMachineAccountResp{UserId: in.GetUserId()}, nil
+}
+
+func (q botTokenQuery) ListMachineKeys(context.Context, *pb.ListMachineKeysReq, ...grpc.CallOption) (*pb.ListMachineKeysResp, error) {
+	return &pb.ListMachineKeysResp{}, nil
+}
+
 // mintRecorder records whether a token was actually issued.
 type mintRecorder struct {
 	pb.AuthMutationClient
 	issued bool
+}
+
+func (m *mintRecorder) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
 }
 
 func (m *mintRecorder) IssueApiToken(context.Context, *pb.IssueApiTokenReq, ...grpc.CallOption) (*pb.IssueApiTokenResp, error) {
@@ -109,7 +122,7 @@ func TestIssueBotToken_RefusesAPerson(t *testing.T) {
 	rec := &mintRecorder{}
 	h := &AuthServiceHandler{Query: botTokenQuery{kind: pb.AccountKind_HUMAN}, Mutation: rec}
 
-	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{UserId: "u1"})
+	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1"})
 	if err == nil {
 		t.Fatal("minted a token for a HUMAN account — this endpoint is an impersonation primitive")
 	}
@@ -131,7 +144,7 @@ func TestIssueBotToken_MintsForABot(t *testing.T) {
 	rec := &mintRecorder{}
 	h := &AuthServiceHandler{Query: botTokenQuery{kind: pb.AccountKind_BOT}, Mutation: rec}
 
-	resp, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{UserId: "u1"})
+	resp, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1"})
 	if err != nil {
 		t.Fatalf("a BOT was refused a token: %v", err)
 	}
@@ -150,7 +163,7 @@ func TestIssueBotToken_RefusesADisabledBot(t *testing.T) {
 	rec := &mintRecorder{}
 	h := &AuthServiceHandler{Query: botTokenQuery{kind: pb.AccountKind_BOT, disabled: true}, Mutation: rec}
 
-	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{UserId: "u1"})
+	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("err = %v, want FailedPrecondition for a disabled bot", err)
 	}
@@ -391,6 +404,19 @@ func (m *botAdminMock) ListRealmMachineAccounts(ctx context.Context, _ *pb.ListR
 	return &pb.ListRealmMachineAccountsResp{Accounts: m.realmBots}, nil
 }
 
+func (m *botAdminMock) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
+}
+
+// The machine account has no key yet: its first token registers one.
+func (m *botAdminMock) LockMachineAccount(_ context.Context, in *pb.LockMachineAccountReq, _ ...grpc.CallOption) (*pb.LockMachineAccountResp, error) {
+	return &pb.LockMachineAccountResp{UserId: in.GetUserId()}, nil
+}
+
+func (m *botAdminMock) ListMachineKeys(context.Context, *pb.ListMachineKeysReq, ...grpc.CallOption) (*pb.ListMachineKeysResp, error) {
+	return &pb.ListMachineKeysResp{}, nil
+}
+
 func (m *botAdminMock) IssueApiToken(ctx context.Context, in *pb.IssueApiTokenReq, _ ...grpc.CallOption) (*pb.IssueApiTokenResp, error) {
 	m.issued = true
 	return &pb.IssueApiTokenResp{Token: &pb.UserToken{Id: "t1", Token: "secret"}}, nil
@@ -453,7 +479,7 @@ func TestIssueBotToken_RefusesABotFromAnotherOrganization(t *testing.T) {
 	m := &botAdminMock{botsOrg: "org-other"}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
-	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-mine"), &pb.IssueBotTokenReq{UserId: "bot-elsewhere"})
+	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-mine"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-elsewhere"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("code = %v, want PermissionDenied (err=%v)", status.Code(err), err)
 	}
@@ -520,7 +546,7 @@ func TestSignIn_RefusesAMachineAccountThatHasAPassword(t *testing.T) {
 	t.Cleanup(func() { signInBotGate = orig })
 
 	h := &AuthServiceHandler{Query: signInBotQuery{kind: pb.AccountKind_BOT, hash: hash}, PasswordHash: s}
-	_, err = h.SignIn(context.Background(), &pb.SignInReq{Email: "ci@example.com", Password: "correct-horse"})
+	_, err = h.SignIn(mintCtx(), &pb.SignInReq{Email: "ci@example.com", Password: "correct-horse"})
 	if err == nil {
 		t.Error("a machine account signed in with its correct password — the path documented as closed")
 	} else if status.Code(err) != codes.Unauthenticated {
@@ -543,7 +569,7 @@ func TestSignIn_RefusesAMachineAccountThatHasAPassword(t *testing.T) {
 	h = &AuthServiceHandler{Query: signInBotQuery{kind: pb.AccountKind_HUMAN, hash: hash}, PasswordHash: s}
 	func() {
 		defer func() { _ = recover() }() // a later stage may need plumbing we do not provide
-		_, _ = h.SignIn(context.Background(), &pb.SignInReq{Email: "person@example.com", Password: "correct-horse"})
+		_, _ = h.SignIn(mintCtx(), &pb.SignInReq{Email: "person@example.com", Password: "correct-horse"})
 	}()
 	if len(seen) != 1 || seen[0] != pb.AccountKind_HUMAN {
 		t.Errorf("the gate saw %v for a person — the decoy is not exercising the same path", seen)
@@ -569,6 +595,10 @@ type narrowingMint struct {
 	issued    bool
 	narrowed  []int32
 	narrowErr error
+}
+
+func (m *narrowingMint) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
 }
 
 func (m *narrowingMint) IssueApiToken(context.Context, *pb.IssueApiTokenReq, ...grpc.CallOption) (*pb.IssueApiTokenResp, error) {
@@ -601,7 +631,7 @@ func TestIssueBotToken_Success_CommitsOnTheHandlersConnection(t *testing.T) {
 	mut := &narrowingMint{}
 	h := newBotTokenHandlerTx(mut, tx)
 	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"),
-		&pb.IssueBotTokenReq{UserId: "u1", PermissionSubset: []int32{7, 9}})
+		&pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1", PermissionSubset: []int32{7, 9}})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -624,7 +654,7 @@ func TestIssueBotToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
 	mut := &narrowingMint{narrowErr: errTestNarrowFailed}
 	h := newBotTokenHandlerTx(mut, tx)
 	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"),
-		&pb.IssueBotTokenReq{UserId: "u1", PermissionSubset: []int32{7}})
+		&pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1", PermissionSubset: []int32{7}})
 	if err == nil {
 		t.Fatal("a failed narrowing must fail the mint — otherwise the caller owns a wider credential than they asked for")
 	}
@@ -646,7 +676,7 @@ func TestIssueBotToken_BeginRefused_MintsNothing(t *testing.T) {
 	mut := &narrowingMint{}
 	h := newBotTokenHandlerTx(mut, tx)
 	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"),
-		&pb.IssueBotTokenReq{UserId: "u1", PermissionSubset: []int32{7}})
+		&pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1", PermissionSubset: []int32{7}})
 	if err == nil {
 		t.Fatal("a refused Begin must fail the mint")
 	}

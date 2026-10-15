@@ -20,7 +20,7 @@ func TestCreateApiToken_DefaultExpiryReachesTheTokenAndTheCaller(t *testing.T) {
 	h := &AuthServiceHandler{Query: m, Mutation: m, APITokenDefaultTTLHours: 24}
 	before := time.Now()
 
-	resp, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{Name: "ci"})
+	resp, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK, Name: "ci"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestAPITokenExpiry(t *testing.T) {
 
 	m := &apiTokenMgmtMock{}
 	h = &AuthServiceHandler{Query: m, Mutation: m, APITokenDefaultTTLHours: 24}
-	_, err = h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{ExpiresAt: timestamppb.New(time.Now().Add(-time.Minute))})
+	_, err = h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK, ExpiresAt: timestamppb.New(time.Now().Add(-time.Minute))})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("an expiry in the past: code %v (%v)", status.Code(err), err)
 	}

@@ -265,8 +265,8 @@ func (m *mintMock) ListRoleGrants(_ context.Context, _ *pb.ListRoleGrantsReq, _ 
 	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "role-1"}}}, nil
 }
 
-func (m *mintMock) ClearExpiredOrgInvite(_ context.Context, _ *pb.ClearExpiredOrgInviteReq, _ ...grpc.CallOption) (*pb.ClearExpiredOrgInviteResp, error) {
-	return &pb.ClearExpiredOrgInviteResp{}, nil
+func (m *mintMock) CloseExpiredOrgInvite(_ context.Context, _ *pb.CloseExpiredOrgInviteReq, _ ...grpc.CallOption) (*pb.CloseExpiredOrgInviteResp, error) {
+	return &pb.CloseExpiredOrgInviteResp{}, nil
 }
 
 func (m *mintMock) CreateOrgInvite(_ context.Context, in *pb.CreateOrgInviteReq, _ ...grpc.CallOption) (*pb.CreateOrgInviteResp, error) {

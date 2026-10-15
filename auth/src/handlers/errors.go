@@ -131,6 +131,18 @@ const (
 	// whoever holds the code mailed to that address.
 	CodeEmailTaken = "EMAIL_TAKEN"
 
+	// CodeEmailInvalid: an address no account may be given. Today that is the
+	// domain erased accounts are re-addressed to (erasedEmailDomain): an
+	// account holding `erased-<id>@erased.invalid` before the account with
+	// that id is erased would block its erasure for good (the address is
+	// unique).
+	CodeEmailInvalid = "EMAIL_INVALID"
+
+	// CodeClientRevoked: registering a (client_id, redirect_uri) pair whose
+	// registration was revoked. A revoked registration is history and is not
+	// reused; the operator registers the callback under another client_id.
+	CodeClientRevoked = "CLIENT_REVOKED"
+
 	// CodeRoleAboveCaller: a role the caller tried to hand out (an invitation,
 	// a grant) carries permissions the caller does not hold. Reached only by a
 	// caller already allowed to grant at all, so it names a rule they can act
@@ -212,6 +224,46 @@ const (
 	// Also the ErrorInfo reason (domain ErrorDomain), which a client reads
 	// together with the expires_at metadata.
 	CodeSessionExpired = "SESSION_EXPIRED"
+
+	// The device-binding refusals. Every token is bound to the key of the
+	// device it was issued to (DPoP, RFC 9449), and each of these tells the
+	// client what to do with its key; all three are also the ErrorInfo reason
+	// (domain ErrorDomain).
+	//
+	// CodeDeviceProofRequired: no proof of possession where one is needed —
+	// a mint request, or an authenticated request (no proof, or the token
+	// sent as Bearer). Decided before any token lookup. A token proved by
+	// another key, or bound to none (minted before device binding), gets the
+	// opaque refusal instead, like an unknown one: its thief learns nothing.
+	CodeDeviceProofRequired = "DEVICE_PROOF_REQUIRED"
+
+	// CodeDeviceRevoked: the device was revoked, for good. The client
+	// discards its key, generates a new one and signs in again as a new
+	// device.
+	CodeDeviceRevoked = "DEVICE_REVOKED"
+
+	// CodeDeviceKeyRequired: an API token (CreateApiToken, IssueBotToken)
+	// asked for without the public key of the client that will use it. Every
+	// token is bound to a device key, so none is minted unbound.
+	CodeDeviceKeyRequired = "DEVICE_KEY_REQUIRED"
+)
+
+// The refusals of the key an API token's request names (CreateApiToken,
+// IssueBotToken). ErrorDetail only, never a google.rpc.ErrorInfo and never
+// Unauthenticated: they are about the key in the request body, not the
+// caller's own device, so a client must not read them as "my key is gone".
+const (
+	// CodeDeviceKeyInvalid: public_key is not a public P-256 or Ed25519 JWK
+	// (malformed, another key type or curve, a point off the curve), carries a
+	// private member, or is the key of a device that signs in to the account.
+	CodeDeviceKeyInvalid = "DEVICE_KEY_INVALID"
+	// CodeDeviceKeyRevoked: the key names a device of the token's owner that
+	// was revoked, for good. The program generates a new key.
+	CodeDeviceKeyRevoked = "DEVICE_KEY_REVOKED"
+	// CodeBotKeyMismatch: the machine account already has a key and the
+	// request names another (device/bot-one-key). Its replicas share the one
+	// key; to replace it, revoke the account's device first.
+	CodeBotKeyMismatch = "BOT_KEY_MISMATCH"
 )
 
 // ErrorDomain is the google.rpc.ErrorInfo domain of the refusals this plugin
@@ -266,6 +318,10 @@ const (
 	// account round the registration form instead of to sign-in.
 	MsgEmailTaken = "An account with this address already exists. Sign in instead."
 
+	MsgEmailInvalid = "This email address cannot be used. Use another address."
+
+	MsgClientRevoked = "This callback was registered under this client ID and revoked. Register it under a new client ID."
+
 	MsgRoleAboveCaller = "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
 
 	// Minting for a machine account whose role the operator could not grant —
@@ -290,6 +346,21 @@ const (
 	// session is renewed by signing in, an API token only by minting another.
 	MsgSessionExpired  = "Your session expired on {date}. Sign in again."
 	MsgAPITokenExpired = "This API token expired on {date}. Create a new token." // #nosec G101 -- the SENTENCE a person reads, not a credential value
+
+	// The device-binding refusals. A person reads them when their app could
+	// not (or no longer may) prove which device it runs on; the remedy is
+	// always the same — sign in again — and the app does the key handling.
+	MsgDeviceProofRequired = "This app did not prove which device it runs on. Reload or update it, then sign in again."
+	MsgDeviceRevoked       = "This device was signed out for good. Sign in again to use it as a new device."
+
+	// An API token is bound to the key of the program that will use it. The
+	// remedies name what to send: its PUBLIC key, never the private one.
+	MsgClientKeyNeeded  = "Give the public key of the program that will use this token."
+	MsgClientKeyInvalid = "That public key cannot be used. Give a P-256 or Ed25519 public key as a JWK."
+	MsgClientKeyPrivate = "That key contains its private part. Give only the public key, and keep the private key where the program runs."
+	MsgClientKeyRevoked = "That key belongs to a device that was revoked. Generate a new key for the program."
+	MsgClientKeySignsIn = "That key belongs to a device you sign in with. Generate a separate key for the program."
+	MsgBotKeyMismatch   = "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's
@@ -322,6 +393,26 @@ func isEmailTaken(err error) bool {
 		}
 	}
 	return false
+}
+
+// erasedEmailDomain is the domain an erased account's address is replaced
+// with (erasedAddress, `user_admin`). `.invalid` is reserved (RFC 2606), so no
+// real mailbox is in it; refuseReservedEmail keeps every other path from
+// writing it.
+const erasedEmailDomain = "erased.invalid"
+
+// refuseReservedEmail refuses an address in erasedEmailDomain, at every path
+// that gives an account an address (SignUp, ConfirmSignUp, the OAuth account
+// creation, the admin's UpdateAccount, CreateBot). Only an erasure writes one:
+// an account that held `erased-<id>@erased.invalid` first would make the
+// erasure of account <id> fail on the unique address for good.
+func refuseReservedEmail(ctx context.Context, email string) error {
+	if strings.HasSuffix(normalizeEmail(email), "@"+erasedEmailDomain) {
+		return refusal(ctx, codes.InvalidArgument,
+			"the "+erasedEmailDomain+" domain is reserved for erased accounts",
+			CodeEmailInvalid, "email", MsgEmailInvalid, nil)
+	}
+	return nil
 }
 
 // emailTaken is the refusal for registering an address that has an account.

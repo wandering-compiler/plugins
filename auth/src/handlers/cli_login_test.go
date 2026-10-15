@@ -31,6 +31,8 @@ type cliCode struct {
 	consumed    bool
 	// the approving session's expiry, as CliAuthorize bound it
 	sessionExpiresAt *timestamppb.Timestamp
+	// the approving session's device, as CliAuthorize recorded it
+	approvedBy string
 }
 
 type cliMock struct {
@@ -41,6 +43,15 @@ type cliMock struct {
 	issuedHash   string
 	issuedFor    string                 // user_id IssueToken was last called with
 	issuedExpiry *timestamppb.Timestamp // expires_at IssueToken was last called with
+	issuedDevice string                 // device_id IssueToken was last called with
+	issuedReq    *pb.IssueTokenReq      // the last IssueToken request
+	// sessionDevice is the Device row every approving session is bound to
+	// (GetLiveSessionExpiry's device_id); "" = none.
+	sessionDevice string
+	// approverRevoked: GetCliApproverRevocation answers these devices
+	// revoked; approverErr fails the read.
+	approverRevoked map[string]bool
+	approverErr     error
 
 	// sessions mirrors the live UserToken rows GetLiveSessionExpiry reads,
 	// keyed on the exact (token_id, user_id) pair its WHERE matches; a nil
@@ -73,6 +84,7 @@ func (m *cliMock) CreateCliAuthCode(ctx context.Context, in *pb.CreateCliAuthCod
 		expiresAt:   in.GetExpiresAt().AsTime(),
 
 		sessionExpiresAt: in.GetSessionExpiresAt(),
+		approvedBy:       in.GetApprovedByDeviceId(),
 	}
 	return &pb.CreateCliAuthCodeResp{Code: &pb.CliAuthCode{Id: "cac-1", UserId: in.GetUserId(), CodeHash: in.GetCodeHash()}}, nil
 }
@@ -90,7 +102,8 @@ func (m *cliMock) ConsumeCliAuthCode(ctx context.Context, in *pb.ConsumeCliAuthC
 	c.consumed = true
 	return &pb.ConsumeCliAuthCodeResp{
 		UserId: c.userID, CodeChallenge: c.challenge, RedirectUri: c.redirectURI,
-		SessionExpiresAt: c.sessionExpiresAt,
+		SessionExpiresAt:   c.sessionExpiresAt,
+		ApprovedByDeviceId: c.approvedBy,
 	}, nil
 }
 
@@ -99,16 +112,29 @@ func (m *cliMock) GetLiveSessionExpiry(ctx context.Context, in *pb.GetLiveSessio
 		return nil, m.sessionErr
 	}
 	if m.sessions == nil {
-		return &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId()}, nil
+		return &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId(), DeviceId: m.sessionDevice}, nil
 	}
 	exp, ok := m.sessions[[2]string{in.GetTokenId(), in.GetUserId()}]
 	// Mirror the WHERE's liveness filter: an expired row matches nothing.
 	if !ok || (exp != nil && !exp.After(time.Now())) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	resp := &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId()}
+	resp := &pb.GetLiveSessionExpiryResp{TokenId: in.GetTokenId(), DeviceId: m.sessionDevice}
 	if exp != nil {
 		resp.ExpiresAt = timestamppb.New(*exp)
+	}
+	return resp, nil
+}
+
+// GetCliApproverRevocation reads the approving Device row (any id is a live
+// device unless marked revoked).
+func (m *cliMock) GetCliApproverRevocation(_ context.Context, in *pb.GetCliApproverRevocationReq, _ ...grpc.CallOption) (*pb.GetCliApproverRevocationResp, error) {
+	if m.approverErr != nil {
+		return nil, m.approverErr
+	}
+	resp := &pb.GetCliApproverRevocationResp{DeviceId: in.GetDeviceId()}
+	if m.approverRevoked[in.GetDeviceId()] {
+		resp.RevokedAt = timestamppb.Now()
 	}
 	return resp, nil
 }
@@ -145,6 +171,10 @@ func (m *cliMock) RegisterAuthClient(ctx context.Context, in *pb.RegisterAuthCli
 	}}, nil
 }
 
+func (m *cliMock) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
+}
+
 func (m *cliMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
 	if m.issueErr != nil {
 		return nil, m.issueErr
@@ -152,6 +182,8 @@ func (m *cliMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grp
 	m.issuedFor = in.GetUserId()
 	m.issuedHash = in.GetTokenHash()
 	m.issuedExpiry = in.GetExpiresAt()
+	m.issuedDevice = in.GetDeviceId()
+	m.issuedReq = in
 	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "tok-1", UserId: in.GetUserId()}}, nil
 }
 
@@ -207,7 +239,7 @@ func TestCliLogin_EndToEnd(t *testing.T) {
 		t.Error("authorization code hash not stored")
 	}
 
-	tok, err := h.CliToken(context.Background(), &pb.CliTokenReq{
+	tok, err := h.CliToken(mintCtx(), &pb.CliTokenReq{
 		Code:         authz.GetCode(),
 		CodeVerifier: verifier,
 	})
@@ -223,9 +255,14 @@ func TestCliLogin_EndToEnd(t *testing.T) {
 	if m.issuedFor != "user-1" {
 		t.Errorf("IssueToken called for %q, want user-1", m.issuedFor)
 	}
+	// device/cli-own-device: bound to the key of the CLI that redeemed the
+	// code, never to the approving browser's.
+	if m.issuedDevice != "dev-"+testJKT[:8] {
+		t.Errorf("the CLI session is bound to %q, want the redeeming CLI's device", m.issuedDevice)
+	}
 
 	// Single-use: redeeming the same code again fails opaquely.
-	if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier}); status.Code(err) != codes.Unauthenticated {
+	if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{Code: authz.GetCode(), CodeVerifier: verifier}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("replay should be Unauthenticated, got %v", err)
 	}
 }
@@ -265,7 +302,7 @@ func TestCliToken_Rejections(t *testing.T) {
 		m := newCliMock()
 		m.codes[sha256Hex("c")] = &cliCode{userID: "u", challenge: ch, expiresAt: time.Now().Add(time.Minute)}
 		h := newCliHandler(m)
-		if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{Code: "c", CodeVerifier: "tooshort"}); status.Code(err) != codes.Unauthenticated {
+		if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{Code: "c", CodeVerifier: "tooshort"}); status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("want Unauthenticated, got %v", err)
 		}
 		if m.codes[sha256Hex("c")].consumed {
@@ -276,7 +313,7 @@ func TestCliToken_Rejections(t *testing.T) {
 	t.Run("unknown code", func(t *testing.T) {
 		m := newCliMock()
 		h := newCliHandler(m)
-		if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{Code: "nope", CodeVerifier: verifier}); status.Code(err) != codes.Unauthenticated {
+		if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{Code: "nope", CodeVerifier: verifier}); status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("want Unauthenticated, got %v", err)
 		}
 		if m.issuedFor != "" {
@@ -288,7 +325,7 @@ func TestCliToken_Rejections(t *testing.T) {
 		m := newCliMock()
 		m.codes[sha256Hex("c")] = &cliCode{userID: "u", challenge: ch, expiresAt: time.Now().Add(time.Minute)}
 		h := newCliHandler(m)
-		if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{Code: "c", CodeVerifier: strings.Repeat("bZ9-._~", 7)}); status.Code(err) != codes.Unauthenticated {
+		if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{Code: "c", CodeVerifier: strings.Repeat("bZ9-._~", 7)}); status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("want Unauthenticated, got %v", err)
 		}
 		if m.issuedFor != "" {
@@ -303,7 +340,7 @@ func TestCliToken_Rejections(t *testing.T) {
 		m := newCliMock()
 		m.codes[sha256Hex("c")] = &cliCode{userID: "u", challenge: ch, expiresAt: time.Now().Add(-time.Second)}
 		h := newCliHandler(m)
-		if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{Code: "c", CodeVerifier: verifier}); status.Code(err) != codes.Unauthenticated {
+		if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{Code: "c", CodeVerifier: verifier}); status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("want Unauthenticated, got %v", err)
 		}
 	})
@@ -327,7 +364,7 @@ func TestCliLogin_StorageErrorsPropagate(t *testing.T) {
 		m := newCliMock()
 		m.consumeErr = boom
 		h := newCliHandler(m)
-		if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{Code: "c", CodeVerifier: validVerifier()}); !errors.Is(err, boom) {
+		if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{Code: "c", CodeVerifier: validVerifier()}); !errors.Is(err, boom) {
 			t.Fatalf("want raw db error, got %v", err)
 		}
 	})
@@ -337,7 +374,7 @@ func TestCliLogin_StorageErrorsPropagate(t *testing.T) {
 		m.codes[sha256Hex("c")] = &cliCode{userID: "u", challenge: pkceChallenge(validVerifier()), expiresAt: time.Now().Add(time.Minute)}
 		m.issueErr = boom
 		h := newCliHandler(m)
-		if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{Code: "c", CodeVerifier: validVerifier()}); !errors.Is(err, boom) {
+		if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{Code: "c", CodeVerifier: validVerifier()}); !errors.Is(err, boom) {
 			t.Fatalf("want raw db error, got %v", err)
 		}
 	})
@@ -487,7 +524,7 @@ func TestCliToken_RefusesAnExchangeNamingADifferentRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
-	if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{
+	if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{
 		Code: authorized.GetCode(), CodeVerifier: verifier,
 		RedirectUri: "https://app.acme.example/cb-b", // the OTHER registered one
 	}); err == nil {
@@ -509,7 +546,7 @@ func TestCliToken_AcceptsTheRedirectTheCodeWasIssuedFor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
-	resp, err := h.CliToken(context.Background(), &pb.CliTokenReq{
+	resp, err := h.CliToken(mintCtx(), &pb.CliTokenReq{
 		Code: authorized.GetCode(), CodeVerifier: verifier,
 		RedirectUri: "https://app.acme.example/cb-a",
 	})

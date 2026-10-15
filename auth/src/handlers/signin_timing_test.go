@@ -29,7 +29,7 @@ func TestSignIn_UserNotFound_RunsDummyVerify(t *testing.T) {
 	t.Cleanup(func() { signInDummyVerify = orig })
 
 	h := &AuthServiceHandler{Query: signInNotFoundQuery{}}
-	if _, err := h.SignIn(context.Background(), &pb.SignInReq{Email: "nobody@example.com", Password: "pw"}); err == nil {
+	if _, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: "nobody@example.com", Password: "pw"}); err == nil {
 		t.Fatal("SignIn for an unknown user must return Unauthenticated")
 	}
 	if !called {
@@ -57,7 +57,7 @@ func TestSignIn_NormalizesEmailForLookup(t *testing.T) {
 
 	m := &emailRecorderQuery{}
 	h := &AuthServiceHandler{Query: m}
-	_, _ = h.SignIn(context.Background(), &pb.SignInReq{Email: "  Foo@X.COM ", Password: "pw"})
+	_, _ = h.SignIn(mintCtx(), &pb.SignInReq{Email: "  Foo@X.COM ", Password: "pw"})
 	if m.gotEmail != "foo@x.com" {
 		t.Errorf("GetUserByEmail email = %q, want normalized %q", m.gotEmail, "foo@x.com")
 	}

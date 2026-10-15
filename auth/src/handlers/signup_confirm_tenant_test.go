@@ -80,7 +80,7 @@ func TestConfirmSignUp_CreatesTheAccountInTheTenantSignUpResolved(t *testing.T) 
 	pendingSignUpTenant, confirmCreateUser = stampPendingSignUpTenant, createConfirmedUserInTenant
 	h := &AuthServiceHandler{Query: s, Mutation: s, PasswordHash: testPasswordSettings()}
 
-	pending, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner", TenantSlug: "acme"})
+	pending, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner", TenantSlug: "acme"})
 	if err != nil {
 		t.Fatalf("SignUp: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestConfirmSignUp_CreatesTheAccountInTheTenantSignUpResolved(t *testing.T) 
 	resolvedAtSignUp := s.lookups
 
 	wrongHost := metadata.NewIncomingContext(context.Background(), metadata.Pairs(forwardedHostMetadataKey, "globex.example"))
-	if _, err := h.ConfirmSignUp(wrongHost, &pb.ConfirmSignUpReq{PendingId: pending.GetPendingId(), Code: s.codes[pending.GetPendingId()]}); err != nil {
+	if _, err := h.ConfirmSignUp(withJKT(wrongHost, testJKT), &pb.ConfirmSignUpReq{PendingId: pending.GetPendingId(), Code: s.codes[pending.GetPendingId()]}); err != nil {
 		t.Fatalf("ConfirmSignUp: %v", err)
 	}
 	if len(s.createdIn) != 1 || s.createdIn[0] != "tenant-acme" {
@@ -127,7 +127,7 @@ func TestSignUpConfirmation_TheInviteGateAndClaimRunAtSignUpOnly(t *testing.T) {
 		return nil
 	}
 
-	pending, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner", InviteToken: "open-link"})
+	pending, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: "ceo@example.com", Password: "pw-owner", InviteToken: "open-link"})
 	if err != nil {
 		t.Fatalf("SignUp: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestSignUpConfirmation_TheInviteGateAndClaimRunAtSignUpOnly(t *testing.T) {
 	}
 
 	revoked = true // the invitation is withdrawn while the code is in the mailbox
-	done, err := h.ConfirmSignUp(context.Background(), &pb.ConfirmSignUpReq{PendingId: pending.GetPendingId(), Code: s.codes[pending.GetPendingId()]})
+	done, err := h.ConfirmSignUp(mintCtx(), &pb.ConfirmSignUpReq{PendingId: pending.GetPendingId(), Code: s.codes[pending.GetPendingId()]})
 	if err != nil || done.GetUserId() == "" {
 		t.Fatalf("ConfirmSignUp after the invitation was withdrawn: %v — the gate is documented as request-time only", err)
 	}

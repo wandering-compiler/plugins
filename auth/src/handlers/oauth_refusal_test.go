@@ -73,7 +73,7 @@ func TestOAuth_ADisabledAccountSaysAccountDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.userDisabled = true
-	_, err = h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
+	_, err = h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()})
 	if c, got := detailCode(t, err); c != codes.Unauthenticated || got != CodeAccountDisabled {
 		t.Errorf("exchange = %v/%q, want Unauthenticated/%s", c, got, CodeAccountDisabled)
 	}
@@ -86,7 +86,7 @@ func TestOAuth_ADisabledAccountSaysAccountDisabled(t *testing.T) {
 // The OAuth handlers answer with these codes, not the opaque bare refusal.
 func TestOAuthExchange_ABadCodeSaysOAuthFailed(t *testing.T) {
 	h, _, _ := exchangeHandler(t)
-	_, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: "nope", CodeVerifier: validVerifier()})
+	_, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: "nope", CodeVerifier: validVerifier()})
 	if _, got := detailCode(t, err); got != CodeOAuthFailed {
 		t.Errorf("code = %q, want %s (err %v)", got, CodeOAuthFailed, err)
 	}

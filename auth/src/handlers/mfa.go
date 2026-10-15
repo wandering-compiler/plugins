@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/auth/lib/qrsvg"
@@ -54,13 +55,21 @@ const (
 	defaultMfaChallengeWindowSeconds = 900
 )
 
-// scopeNewDevices is the two_factor_scope value that challenges only
-// untrusted devices (requires the `devices` feature — codegen rejects the
-// combo without it, so at runtime an absent devices feature can't reach
-// this branch meaningfully).
+// scopeNewDevices is the two_factor_scope value that challenges only an
+// untrusted (account, device) pair. Device identity is base tier, so it works
+// in every activation.
 const scopeNewDevices = "new_devices"
 
 var errMfaChallengeInvalid = errors.New("mfa challenge invalid/expired/consumed")
+
+// errMfaAttemptsSpent: the challenge's attempt budget is spent. The same
+// opaque refusal on the wire as errMfaChallengeInvalid; its own cause only so
+// the sign-in history can tell a locked challenge from a wrong code.
+var errMfaAttemptsSpent = errors.New("mfa challenge attempts spent")
+
+// errMfaChallengeOtherDevice: VerifyMfa signed by another key than the
+// SignIn that raised the challenge. Opaque on the wire, like every refusal.
+var errMfaChallengeOtherDevice = errors.New("mfa challenge raised for another device key")
 
 // errMfaChallengeBudget refuses a new challenge once the issuance cap is
 // spent. It is a wireError — a DELIBERATE, non-opaque answer — because it is
@@ -73,9 +82,25 @@ var errMfaChallengeBudget = &wireError{
 	msg:  "too many verification codes requested for this account — wait a few minutes and sign in again",
 }
 
-// init wires the two_factor sign-in gate on package load.
+// init wires the two_factor sign-in gate on package load, and this feature's
+// share of an erasure.
 func init() {
 	signInMfaGate = mfaSignInGate
+	erasers = append(erasers, eraseTwoFactorData)
+	signInOutcomeRules = append(signInOutcomeRules,
+		outcomeRule{errMfaChallengeInvalid, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		outcomeRule{errMfaAttemptsSpent, pb.SignInOutcome_SIGN_IN_OUTCOME_TOO_MANY_ATTEMPTS},
+		outcomeRule{errMfaChallengeOtherDevice, pb.SignInOutcome_SIGN_IN_OUTCOME_OTHER_DEVICE},
+		outcomeRule{errMfaChallengeBudget, pb.SignInOutcome_SIGN_IN_OUTCOME_RATE_LIMITED},
+	)
+}
+
+// eraseTwoFactorData is two_factor's eraser: the authenticator's seed is
+// cleared, unused recovery codes spent and pending challenges consumed
+// (EraseTwoFactorData). The rows stay.
+func eraseTwoFactorData(ctx context.Context, h *AuthServiceHandler, userID, _, _ string) error {
+	_, err := h.Mutation.EraseTwoFactorData(ctx, &pb.EraseTwoFactorDataReq{UserId: userID})
+	return err
 }
 
 // enrolmentAllowed refuses an enrolment this deployment does not offer.
@@ -286,8 +311,9 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 // mfaSignInGate is the two_factor SignIn seam. It decides whether a
 // challenge fires (scope), creates the MfaChallenge (which emits
 // MfaChallengeRequested), and returns the mfa_required response so SignIn
-// stops short of issuing a token.
-func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, deviceID string, deviceTrusted bool) (*pb.SignInResp, bool, error) {
+// stops short of issuing a token. The challenge records the sign-in's key and
+// its public-computer choice, which VerifyMfa honours.
+func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted, public bool) (*pb.SignInResp, bool, error) {
 	// new_devices: only challenge an untrusted device. all_logins (default):
 	// every sign-in challenges.
 	if h.TwoFactorScope == scopeNewDevices && deviceTrusted {
@@ -320,12 +346,14 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, de
 
 	expiresAt := timestamppb.New(time.Now().Add(h.mfaTTL()))
 	created, err := h.issueMfaChallenge(ctx, &pb.CreateMfaChallengeReq{
-		UserId:       user.GetId(),
-		CodeHash:     codeHash,
-		TotpEnrolled: enrolled,
-		Email:        user.GetEmail(),
-		Code:         code,
-		ExpiresAt:    expiresAt,
+		UserId:         user.GetId(),
+		CodeHash:       codeHash,
+		TotpEnrolled:   enrolled,
+		Email:          user.GetEmail(),
+		Code:           code,
+		ExpiresAt:      expiresAt,
+		Thumbprint:     thumbprint,
+		PublicComputer: public,
 	})
 	if err != nil {
 		return nil, false, err
@@ -382,7 +410,7 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	// deleted, and they are locked out of the thing that was protecting them
 	// — by an operation whose entire purpose was to move it to a new phone.
 	// Same distx shape AcceptOrgInvite uses.
-	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
+	if err := h.inTx(ctx, func(txCtx context.Context) error {
 		return h.replaceTotpSecret(txCtx, userID, secret)
 	}); err != nil {
 		return nil, err
@@ -398,23 +426,6 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 		return nil, err
 	}
 	return &pb.EnrollTotpResp{Secret: secret, OtpauthUri: uri, QrSvg: svg}, nil
-}
-
-// inMfaTx runs fn in one distributed transaction when the bundle has a
-// coordinator (always, in a generated bundle), plainly otherwise.
-func (h *AuthServiceHandler) inMfaTx(ctx context.Context, fn func(txCtx context.Context) error) error {
-	if h.DistTx == nil {
-		return fn(ctx)
-	}
-	tx, txCtx, err := distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection})
-	if err != nil {
-		return err
-	}
-	if err := fn(txCtx); err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	return tx.Commit(ctx)
 }
 
 // ConfirmTotp verifies the first code against the pending secret and, on
@@ -456,8 +467,8 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	// protects the account with no way back from a lost phone is one support
 	// ticket away from an account takeover by social engineering.
 	var codes []string
-	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
-		if _, err := h.Mutation.ConfirmTotpSecret(txCtx, &pb.ConfirmTotpSecretReq{UserId: userID}); err != nil {
+	if err := h.inTx(ctx, func(txCtx context.Context) error {
+		if _, err := h.Mutation.ConfirmTotpSecret(txCtx, &pb.ConfirmTotpSecretReq{UserId: userID, Thumbprint: requestThumbprint(ctx)}); err != nil {
 			return err
 		}
 		var err error
@@ -469,7 +480,9 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	return &pb.ConfirmTotpResp{RecoveryCodes: codes}, nil
 }
 
-// DisableTotp removes the caller's authenticator and its recovery codes.
+// DisableTotp ends the caller's authenticator and its recovery codes. Nothing
+// is deleted: the authenticator is revoked (revoked_at, its seed cleared) and
+// the unused codes revoked, and the rows stay.
 // A CONFIRMED authenticator is re-verified against a live TOTP code — or a
 // recovery code — first (stepUp) so a hijacked session
 // can't permanently disable the victim's 2FA — a transient compromise
@@ -499,11 +512,11 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	// The recovery codes go with the authenticator they stand in for: kept,
 	// they would be a second factor nothing asks for — until the next
 	// enrolment, when they would quietly work again.
-	if err := h.inMfaTx(ctx, func(txCtx context.Context) error {
-		if _, err := h.Mutation.DeleteTotpSecret(txCtx, &pb.DeleteTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
+	if err := h.inTx(ctx, func(txCtx context.Context) error {
+		if _, err := h.Mutation.RevokeTotpSecret(txCtx, &pb.RevokeTotpSecretReq{UserId: userID, Thumbprint: requestThumbprint(ctx)}); notFoundOK(err) != nil {
 			return err
 		}
-		_, err := h.Mutation.DeleteRecoveryCodes(txCtx, &pb.DeleteRecoveryCodesReq{UserId: userID})
+		_, err := h.Mutation.RevokeRecoveryCodes(txCtx, &pb.RevokeRecoveryCodesReq{UserId: userID})
 		return notFoundOK(err)
 	}); err != nil {
 		return nil, err
@@ -511,14 +524,15 @@ func (h *AuthServiceHandler) DisableTotp(ctx context.Context, req *pb.DisableTot
 	return &pb.DisableTotpResp{}, nil
 }
 
-// replaceTotpSecret is the delete-then-create pair, kept together so a caller
+// replaceTotpSecret is the revoke-then-create pair, kept together so a caller
 // can run it inside one transaction. Extracted rather than inlined because the
 // pairing IS the fix: separated again, the rollback has nothing to roll back.
+// The old authenticator stays as a revoked row (its seed cleared).
 func (h *AuthServiceHandler) replaceTotpSecret(txCtx context.Context, userID, seed string) error {
-	if _, err := h.Mutation.DeleteTotpSecret(txCtx, &pb.DeleteTotpSecretReq{UserId: userID}); notFoundOK(err) != nil {
+	if _, err := h.Mutation.RevokeTotpSecret(txCtx, &pb.RevokeTotpSecretReq{UserId: userID, Thumbprint: requestThumbprint(txCtx)}); notFoundOK(err) != nil {
 		return err
 	}
-	if _, err := h.Mutation.CreateTotpSecret(txCtx, &pb.CreateTotpSecretReq{UserId: userID, Seed: seed}); err != nil {
+	if _, err := h.Mutation.CreateTotpSecret(txCtx, &pb.CreateTotpSecretReq{UserId: userID, Seed: seed, Thumbprint: requestThumbprint(txCtx)}); err != nil {
 		return err
 	}
 	return nil
@@ -549,15 +563,38 @@ func (h *AuthServiceHandler) GetMfaStatus(ctx context.Context, req *pb.GetMfaSta
 
 // VerifyMfa completes a two-step sign-in: load the pending challenge,
 // dual-path verify (confirmed TOTP → check the secret; else → check the
-// event-flow code hash), consume it single-use, then issue the session
-// (re-resolving + trusting the device under `devices`). Every failure is
-// the same opaque Unauthenticated (anti-enumeration).
-func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq) (*pb.VerifyMfaResp, error) {
+// event-flow code hash), consume it single-use, then issue the session bound
+// to — and trusting — the device. The request must be signed by the key the
+// challenged SignIn was signed with. Every failure is the same opaque
+// Unauthenticated (anti-enumeration).
+//
+// Every attempt appends one SignInEvent (method MFA), the refusals too; the
+// success row is written with the session.
+func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq) (_ *pb.VerifyMfaResp, err error) {
+	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_MFA)
+	defer func() { h.endSignIn(ctx, attempt, err) }()
+
+	// The device key first, before an attempt is claimed: a client that
+	// cannot sign must not spend the challenge's budget on a session it could
+	// never be given.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := h.Query.GetMfaChallenge(ctx, &pb.GetMfaChallengeReq{ChallengeId: req.GetChallengeId()})
 	if err != nil || resp.GetChallenge() == nil {
+		// The caller hears an invalid challenge either way; the history
+		// tells an outage from an unknown challenge.
+		if err != nil && status.Code(err) != codes.NotFound {
+			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 	ch := resp.GetChallenge()
+	attempt.userID = ch.GetUserId()
+	// The sign-in this completes chose public-computer or not; the request
+	// cannot change it.
+	attempt.publicComputer = ch.GetPublicComputer()
 	if ch.GetConsumedAt() != nil {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
@@ -586,6 +623,9 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		// otherwise the store being unreachable is itself the bypass. This is
 		// a change in direction: the increment used to sit on the failure path
 		// where its error could be discarded harmlessly.
+		if status.Code(attErr) != codes.NotFound {
+			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 	// Zero is unambiguous HERE, and only here: a matched row always comes
@@ -597,7 +637,14 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 	if att.GetAttempts() > maxMfaAttempts {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		return nil, Unauthenticated(errMfaAttemptsSpent)
+	}
+	// Only the key that passed the password completes its sign-in. Checked
+	// after the attempt is claimed, so a probe with another key spends the
+	// challenge's budget like a wrong code; the challenge is not consumed
+	// (consuming it records the factor as verified).
+	if !sameKey(ch.GetThumbprint(), thumbprint) {
+		return nil, Unauthenticated(errMfaChallengeOtherDevice)
 	}
 	userID := ch.GetUserId()
 
@@ -607,7 +654,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 
 	// Single-use consume — RETURNING user_id empty means another request
 	// already consumed it (race); fail closed.
-	consumed, err := h.Mutation.ConsumeMfaChallenge(ctx, &pb.ConsumeMfaChallengeReq{ChallengeId: req.GetChallengeId()})
+	consumed, err := h.Mutation.ConsumeMfaChallenge(ctx, &pb.ConsumeMfaChallengeReq{ChallengeId: req.GetChallengeId(), Thumbprint: thumbprint})
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -615,26 +662,29 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 
-	// Re-resolve the device from THIS request (same device as the SignIn
-	// that raised the challenge) so issueSession trusts it under `devices`.
-	dev, err := resolveSignInDevice(ctx, h, userID)
+	account, err := refuseUnsignableAccount(ctx, h, userID)
+	attempt.account = account
+	if err != nil {
+		return nil, err
+	}
+	// The device is the key that signed THIS request — the challenged one: the
+	// session is bound to it and passing the second factor trusts it. A
+	// revoked one is refused even with the right code.
+	dev, err := mintDevice(ctx, h, userID, thumbprint)
+	attempt.deviceID = dev.id
 	if err != nil {
 		return nil, Unauthenticated(err)
-	}
-	if err := refuseUnsignableAccount(ctx, h, userID); err != nil {
-		return nil, err
 	}
 	// The trust this completion grants holds only if the account's device
 	// trust was not revoked since the challenge was raised: the password the
 	// SignIn checked may be the one a password change just replaced. A
-	// challenge read without its creation time trusts nothing.
-	token, trustToken, err := issueSession(ctx, h, userID, dev.id, ch.GetCreatedAt())
+	// challenge read without its creation time trusts nothing, and a
+	// public-computer sign-in trusts nothing either (issueSession).
+	token, err := issueSession(ctx, h, attempt, userID, dev, ch.GetCreatedAt())
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	out := &pb.VerifyMfaResp{UserId: userID, Token: token}
-	stampDeviceTrust(out, trustToken) // devices-gated field; seam is a no-op without `devices`
-	return out, nil
+	return &pb.VerifyMfaResp{UserId: userID, Token: token, PublicComputer: attempt.publicComputer}, nil
 }
 
 // verifyMfaCode is the dual-path check: a confirmed TOTP user (with the

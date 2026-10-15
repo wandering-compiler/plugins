@@ -36,9 +36,9 @@ func (r *resetCallRecorder) SpendPasswordResetTokens(context.Context, *pb.SpendP
 	return &pb.SpendPasswordResetTokensResp{}, nil
 }
 
-func (r *resetCallRecorder) DeleteUserSessionsForReset(context.Context, *pb.DeleteUserSessionsForResetReq, ...grpc.CallOption) (*pb.DeleteUserSessionsForResetResp, error) {
-	r.calls = append(r.calls, "DeleteUserSessionsForReset")
-	return &pb.DeleteUserSessionsForResetResp{}, nil
+func (r *resetCallRecorder) RevokeTokensForReset(context.Context, *pb.RevokeTokensForResetReq, ...grpc.CallOption) (*pb.RevokeTokensForResetResp, error) {
+	r.calls = append(r.calls, "RevokeTokensForReset")
+	return &pb.RevokeTokensForResetResp{}, nil
 }
 
 // A reset proves the mailbox and nothing more. It sets the password, spends
@@ -54,7 +54,7 @@ func TestResetPassword_TouchesThePasswordAndTokensOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResetPassword: %v", err)
 	}
-	want := "ConsumePasswordResetToken,UpdateUserPassword,SpendPasswordResetTokens,DeleteUserSessionsForReset"
+	want := "ConsumePasswordResetToken,UpdateUserPassword,SpendPasswordResetTokens,RevokeTokensForReset"
 	if got := strings.Join(r.calls, ","); got != want {
 		t.Errorf("a reset ran %s, want %s", got, want)
 	}
@@ -68,7 +68,7 @@ func TestResetPassword_TouchesThePasswordAndTokensOnly(t *testing.T) {
 	// And the statements behind those calls name nothing of the second factor
 	// or of the address proof.
 	src := readProto(t, filepath.Join("..", "..", "proto", "mutations", "auth_mutation.proto"))
-	for _, rpc := range []string{"UpdateUserPassword", "ConsumePasswordResetToken", "SpendPasswordResetTokens", "DeleteUserSessionsForReset"} {
+	for _, rpc := range []string{"UpdateUserPassword", "ConsumePasswordResetToken", "SpendPasswordResetTokens", "RevokeTokensForReset"} {
 		body := methodDQL(t, src, "rpc "+rpc+"(")
 		for _, banned := range []string{"Totp", "RecoveryCode", "MfaChallenge", "email_verified_at", "email_proof"} {
 			if strings.Contains(body, banned) {

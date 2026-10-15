@@ -122,7 +122,7 @@ func TestOAuthOutbound_ReadsAtMostOneMiB(t *testing.T) {
 func TestOAuthExchange_IsNotChallengedForTheSecondFactor(t *testing.T) {
 	asked := 0
 	saved := signInMfaGate
-	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool, bool) (*pb.SignInResp, bool, error) {
 		asked++
 		return &pb.SignInResp{}, true, nil
 	}
@@ -151,9 +151,9 @@ func TestOAuthExchange_IsNotChallengedForTheSecondFactor(t *testing.T) {
 
 // --- user_admin × oauth ------------------------------------------------------
 
-// deletedOwnerMock is oauthMock after DeleteUser: the identity row survived
-// (DeleteUser purges tokens and the User row only), the account it names is
-// gone.
+// deletedOwnerMock is oauthMock with an identity whose account row is
+// missing: nothing deletes a User any more (erasure pseudonymises it), but a
+// deployment can hold such rows from before, or from a hand-written delete.
 type deletedOwnerMock struct{ *oauthMock }
 
 func (deletedOwnerMock) GetUserById(context.Context, *pb.GetUserByIdReq, ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
@@ -185,17 +185,29 @@ func TestOAuthCallback_AnIdentityWhoseAccountWasDeletedCannotSignIn(t *testing.T
 	}
 }
 
-// DeleteUser removes the account's tokens and the User row, and nothing a
-// feature owns: the rows of OAuthIdentity, UserRole, OrgMembership, Device and
-// UserTotpSecret outlive it, for the UserDeleted consumer to clean up.
-func TestDeleteUser_PurgesTokensAndTheUserOnly(t *testing.T) {
-	body := mutationRPCBody(t, "DeleteUser")
-	tables := moduleTables(body)
-	if strings.Join(tables, ",") != "UserToken,User" {
-		t.Errorf("DeleteUser touches %v, want UserToken then User:\n%s", tables, body)
+// BeginUserErasure and EraseUser update the account's tokens, devices and User
+// row — the base tables — and delete nothing. The feature-owned tables are the
+// erasers' (AuthService.EraseUsers), not these statement sets'.
+func TestEraseUser_TouchesTheBaseTablesOnly(t *testing.T) {
+	begin := mutationRPCBody(t, "BeginUserErasure")
+	if tables := moduleTables(begin); strings.Join(tables, ",") != "UserToken,Device,Device,User,User" {
+		t.Errorf("BeginUserErasure touches %v, want UserToken, Device (x2), User (x2):\n%s", tables, begin)
+	}
+	body := mutationRPCBody(t, "EraseUser")
+	if tables := moduleTables(body); strings.Join(tables, ",") != "User" {
+		t.Errorf("EraseUser touches %v, want User:\n%s", tables, body)
+	}
+	// The email proof goes in the FIRST step: OAuth links a provider identity
+	// to a verified account by address, and a link made while the erasers
+	// run would survive the erasure.
+	if !strings.Contains(begin, "email_verified_at = NULL") {
+		t.Errorf("BeginUserErasure keeps the email proof (an OAuth link-by-email could attach mid-erasure):\n%s", begin)
+	}
+	if strings.Contains(body+begin, "DELETE") {
+		t.Errorf("an erasure step deletes:\n%s\n%s", begin, body)
 	}
 	if !strings.Contains(body, `event: "UserDeleted"`) {
-		t.Errorf("DeleteUser emits no UserDeleted for downstream cleanup:\n%s", body)
+		t.Errorf("EraseUser emits no UserDeleted:\n%s", body)
 	}
 }
 

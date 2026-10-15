@@ -40,14 +40,14 @@ func (s *digestStore) GetUserByTokenWithPermissions(_ context.Context, in *pb.Ge
 	if !s.match(in.GetTokenHash(), in.GetLegacyToken()) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: s.tokenHash}, nil
+	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: s.tokenHash, DeviceThumbprint: testJKT}, nil
 }
 
 func (s *digestStore) GetTokenWithType(_ context.Context, in *pb.GetTokenWithTypeReq, _ ...grpc.CallOption) (*pb.GetTokenWithTypeResp, error) {
 	if !s.match(in.GetTokenHash(), in.GetLegacyToken()) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: s.kind, User: &pb.User{Id: "u1"}, StoredTokenHash: s.tokenHash}, nil
+	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: s.kind, User: &pb.User{Id: "u1"}, StoredTokenHash: s.tokenHash, DeviceThumbprint: testJKT}, nil
 }
 
 // The miss path's expiry probe: the row is live, so no expired row matches.
@@ -199,7 +199,7 @@ func (s *countingStore) grants() []*pb.RoleGrant {
 
 func (s *countingStore) GetUserByTokenWithPermissions(context.Context, *pb.GetUserByTokenWithPermissionsReq, ...grpc.CallOption) (*pb.GetUserByTokenWithPermissionsResp, error) {
 	s.calls = append(s.calls, "GetUserByTokenWithPermissions")
-	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: "h"}, nil
+	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: "h", DeviceThumbprint: testJKT}, nil
 }
 
 func (s *countingStore) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
@@ -209,7 +209,7 @@ func (s *countingStore) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrants
 
 func (s *countingStore) GetTokenWithType(context.Context, *pb.GetTokenWithTypeReq, ...grpc.CallOption) (*pb.GetTokenWithTypeResp, error) {
 	s.calls = append(s.calls, "GetTokenWithType")
-	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: s.kind, User: &pb.User{Id: "u1"}, StoredTokenHash: "h"}, nil
+	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "t1", TokenType: s.kind, User: &pb.User{Id: "u1"}, StoredTokenHash: "h", DeviceThumbprint: testJKT}, nil
 }
 
 func (s *countingStore) GetUserRolePermissionsByRealm(context.Context, *pb.GetUserRolePermissionsByRealmReq, ...grpc.CallOption) (*pb.GetUserRolePermissionsByRealmResp, error) {
@@ -267,7 +267,7 @@ func TestAuthenticate_QueryCountIsFixedWhateverTheRoleCount(t *testing.T) {
 	s := &countingStore{kind: pb.TokenType_TOKEN_TYPE_SESSION, roles: 40}
 	h := &AuthServiceHandler{Query: s, Mutation: &touchRecorder{}, HeaderName: "Authorization", Scheme: "Bearer"}
 	scopeDecorators, grantNarrowers = []scopeDecorator{resolveTenantScope, labelMachineAccount}, nil
-	if _, err := h.Authenticate(context.Background(), &pb.AuthReq{Headers: map[string]string{"authorization": "Bearer plain"}}); err != nil {
+	if _, err := h.Authenticate(context.Background(), boundAuthReq("plain", testJKT)); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.calls) != 4 {

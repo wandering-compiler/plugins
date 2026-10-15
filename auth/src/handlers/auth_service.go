@@ -31,7 +31,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
@@ -83,6 +82,11 @@ func sha256Hex(s string) string {
 // defaultSessionTokenTTLSeconds is the fallback session bearer lifetime
 // (30 days) when session_token_ttl_seconds is unset / <= 0.
 const defaultSessionTokenTTLSeconds = 30 * 24 * 60 * 60
+
+// defaultPublicSessionTTLSeconds is the fallback lifetime of a public-computer
+// session (8 hours) when public_session_ttl_seconds is unset / <= 0: a working
+// day at a shared computer, after which a forgotten sign-out stops mattering.
+const defaultPublicSessionTTLSeconds = 8 * 60 * 60
 
 // scopeUserIDKey / userMetadataKey are the gRPC metadata keys the
 // gateway threads the authenticated principal under: the
@@ -182,8 +186,14 @@ type AuthServiceHandler struct {
 	// freshly minted session bearer token's expires_at (from
 	// session_token_ttl_seconds). <= 0 → defaultSessionTokenTTLSeconds.
 	SessionTokenTTLSeconds int
-	TotpIssuer             string // otpauth:// issuer label (totp_issuer); empty → project/domain name
-	TwoFactorSecretKey     string // base64 32-byte key encrypting TOTP seeds at rest (two_factor_secret_key)
+	// PublicSessionTTLSeconds is the lifetime of a session signed in with
+	// public_computer (public_session_ttl_seconds). <= 0 (the manifest
+	// default 0) → defaultPublicSessionTTLSeconds, capped at the session
+	// lifetime; an explicit value longer than the session lifetime is refused
+	// by ValidateConfig.
+	PublicSessionTTLSeconds int
+	TotpIssuer              string // otpauth:// issuer label (totp_issuer); empty → project/domain name
+	TwoFactorSecretKey      string // base64 32-byte key encrypting TOTP seeds at rest (two_factor_secret_key)
 
 	// oauth knob (set from env in RegisterPlugin; read only by
 	// handlers/oauth.go). Public base URL the callback is reachable at;
@@ -306,6 +316,31 @@ type authPrincipal struct {
 	// as used — read by recordTokenUse once authentication succeeded.
 	usedTokenID string
 	lastUsedAt  *timestamppb.Timestamp
+
+	// deviceThumbprint / deviceRevokedAt are the device the token is bound
+	// to (empty: bound to none) and when it was revoked (nil: live), read by
+	// the token lookup itself so the binding check costs no round trip.
+	deviceThumbprint string
+	deviceRevokedAt  *timestamppb.Timestamp
+
+	// mcpOnly is UserToken.mcp_only: a token of the MCP OAuth flow, accepted
+	// without a proof on the MCP surface and nowhere else.
+	mcpOnly bool
+
+	// legacyToken is the presented token when it resolved to a LEGACY row
+	// (stored in the clear, no hash yet), "" otherwise. The resolvers only
+	// note it; Authenticate moves the row to the hash once the request has
+	// passed every check, so a refused request writes nothing.
+	legacyToken string
+}
+
+// legacyPlaintext is the token to move to the hash: the presented one when the
+// row it resolved to has no stored hash (a legacy row), "" otherwise.
+func legacyPlaintext(token, storedHash string) string {
+	if storedHash != "" {
+		return ""
+	}
+	return token
 }
 
 // recordTokenUse stamps the accepted token's last_used_at. Base no-op: the
@@ -360,13 +395,18 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 	resp, err := h.Query.GetUserByTokenWithPermissions(ctx, &pb.GetUserByTokenWithPermissionsReq{LegacyToken: token, TokenHash: hash})
 	if err != nil {
 		// With api_token off every token is a session.
-		return nil, expiredTokenRefusal(ctx, err, func() (*timestamppb.Timestamp, pb.TokenType, error) {
+		return nil, expiredTokenRefusal(err, func() (endedToken, error) {
 			exp, err := h.Query.GetExpiredToken(ctx, &pb.GetExpiredTokenReq{LegacyToken: token, TokenHash: hash})
-			return exp.GetExpiresAt(), pb.TokenType_TOKEN_TYPE_SESSION, err
+			return endedToken{
+				expiresAt:       exp.GetExpiresAt(),
+				revokedAt:       exp.GetRevokedAt(),
+				kind:            pb.TokenType_TOKEN_TYPE_SESSION,
+				thumbprint:      exp.GetDeviceThumbprint(),
+				deviceRevokedAt: exp.GetDeviceRevokedAt(),
+			}, err
 		})
 	}
-	h.upgradeLegacyToken(ctx, token, hash, resp.GetStoredTokenHash())
-	// A disabled account's tokens are deleted when it is disabled, but one
+	// A disabled account's tokens are revoked when it is disabled, but one
 	// minted after that (a sign-in racing the disable) must not work either.
 	if err := signInDisabledGate(resp.GetUser()); err != nil {
 		return nil, err
@@ -380,10 +420,14 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 		return nil, err
 	}
 	return &authPrincipal{
-		userID:  userID,
-		tokenID: resp.GetTokenId(),
-		realm:   pb.TokenType_TOKEN_TYPE_SESSION,
-		grants:  grants.GetGrants(),
+		userID:           userID,
+		tokenID:          resp.GetTokenId(),
+		realm:            pb.TokenType_TOKEN_TYPE_SESSION,
+		grants:           grants.GetGrants(),
+		deviceThumbprint: resp.GetDeviceThumbprint(),
+		deviceRevokedAt:  resp.GetDeviceRevokedAt(),
+		mcpOnly:          resp.GetMcpOnly(),
+		legacyToken:      legacyPlaintext(token, resp.GetStoredTokenHash()),
 	}, nil
 }
 
@@ -422,21 +466,27 @@ type signupRoles struct {
 // `password_change` without `password_reset` stages nothing it cannot build.
 var spendResetLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error { return nil }
 
+// eraser erases one feature's share of an account's personal data, inside the
+// erasure's transaction (AuthService.EraseUsers, `user_admin`): email is the
+// address being erased (as stored), placeholder the one replacing it. Nothing
+// it runs deletes a row.
+type eraser func(ctx context.Context, h *AuthServiceHandler, userID, email, placeholder string) error
+
+// erasers are the feature-owned halves of an erasure. Each feature whose
+// tables hold personal data (oauth, two_factor, email_verification,
+// org_invite, sign_up_confirmation) appends its own from its file's init(), so the list holds
+// exactly the tables this activation has; password_reset's share is
+// spendResetLinks above. Declared here, always compiled, because the features
+// that append and the one that runs them (user_admin) stage independently.
+var erasers []eraser
+
 // SignIn seams — always-present default behaviours opt-in feature
 // files override via init(), mirroring resolvePrincipal /
-// signupCreateUser / scopeDecorators. They let `devices` and
-// `two_factor` layer into the password sign-in without the base
-// handler knowing about either. With no feature file staged the
-// defaults make SignIn the plain GetUserByEmail → verify →
-// IssueToken flow.
-
-// devicesActive reports whether the `devices` feature is staged into this
-// bundle — handlers/devices.go's init() sets it true. The base value
-// (false) holds when the feature is off. Read by ValidateConfig to reject
-// two_factor_scope=new_devices without devices (the env value isn't
-// visible at codegen, so this fail-loud guard runs at plugin bootstrap —
-// the earliest point both the feature set and the env value are known).
-var devicesActive bool
+// signupCreateUser / scopeDecorators. They let `two_factor` (and the
+// account gates) layer into the password sign-in without the base
+// handler knowing about them. With no feature file staged the
+// defaults make SignIn the plain GetUserByEmail → verify → register the
+// device → IssueToken flow.
 
 // defaultAPITokenTTLHours is the lifetime of an API token whose caller asked
 // for none, when the deployment did not choose one: 90 days.
@@ -453,14 +503,11 @@ const defaultAPITokenTTLHours = 90 * 24
 const maxAPITokenTTLHours = 100 * 365 * 24
 
 // ValidateConfig fails plugin bootstrap loud on a contradictory
-// activation, rather than silently degrading. Today: two_factor_scope=
-// new_devices requires the `devices` feature (without it the trusted-
-// device signal is always "trusted", so new-device 2FA would never fire —
-// a silent no-op). Called from RegisterPlugin after the handler is built.
+// activation, rather than silently degrading. Called from RegisterPlugin
+// after the handler is built. (two_factor_scope=new_devices no longer needs
+// the `devices` feature: device identity is base tier, so every activation
+// knows which device signs in.)
 func ValidateConfig(h *AuthServiceHandler) error {
-	if h.TwoFactorScope == "new_devices" && !devicesActive {
-		return errors.New("auth plugin: two_factor_scope=new_devices requires the `devices` feature (enable it in the activation's features[])")
-	}
 	// Refused at boot rather than at the first mint: past this many hours
 	// time.Duration overflows, and a "practically never" setting would mint
 	// tokens already expired — accepted by the mint, refused by every read.
@@ -471,6 +518,15 @@ func ValidateConfig(h *AuthServiceHandler) error {
 	// no address keeps out exactly the people it was written for.
 	if _, err := parseSignUpAllowlist(h.SignUpAllowlist); err != nil {
 		return err
+	}
+	// A public-computer session exists to be SHORTER than a normal one; an
+	// explicit longer setting would invert the option, so it is refused
+	// rather than silently capped. 0 — the manifest default, which the bundle
+	// fills in when the variable is unset — means "8 hours, capped at the
+	// session lifetime" (sessionExpiry), so a deployment with sessions
+	// shorter than 8 hours boots without setting it.
+	if h.PublicSessionTTLSeconds > h.sessionTTLSeconds() {
+		return fmt.Errorf("auth plugin: public_session_ttl_seconds=%d is longer than the session lifetime (session_token_ttl_seconds=%d) — a public-computer session must not outlive a normal one; lower public_session_ttl_seconds", h.PublicSessionTTLSeconds, h.sessionTTLSeconds())
 	}
 	return nil
 }
@@ -528,24 +584,6 @@ func signUpAllowlistGate(h *AuthServiceHandler, email string) error {
 // without that feature there is nothing to record and nothing to refuse.
 var markEmailConfirmed = func(_ context.Context, _ *AuthServiceHandler, _ string) error {
 	return nil
-}
-
-// signInDevice is what resolveSignInDevice found: the device's id, whether it
-// is trusted, and — for a trusted one — the cutoff a renewal of that trust must
-// hold against (see issueSession's trustCutoff).
-type signInDevice struct {
-	id          string
-	trusted     bool
-	trustCutoff *timestamppb.Timestamp
-}
-
-// resolveSignInDevice resolves the device this sign-in belongs to.
-// Default (no `devices`): no device tracking — empty id, and
-// "trusted" reported true so any 2FA new-device check (which itself
-// requires `devices`) is a non-issue. handlers/devices.go overrides
-// via init() with header/fingerprint resolution + upsert.
-var resolveSignInDevice = func(ctx context.Context, h *AuthServiceHandler, userID string) (signInDevice, error) {
-	return signInDevice{trusted: true}, nil
 }
 
 // inviteVerifiedEmailGate refuses an acceptance from an account whose address
@@ -674,56 +712,53 @@ var signupClaimInvite = func(ctx context.Context, h *AuthServiceHandler, email, 
 }
 
 // signInMfaGate decides whether a second factor challenges this
-// sign-in. Default (no `two_factor`): never — returns (nil, false,
+// sign-in. thumbprint is the device key that signed it: a challenge records
+// it, and only that key may complete the sign-in (VerifyMfa). Default (no `two_factor`): never — returns (nil, false,
 // nil) so SignIn proceeds straight to token issuance.
 // handlers/mfa.go overrides via init(): on a challenge it creates the
 // MfaChallenge (emitting MfaChallengeRequested) and returns the
 // mfa_required SignInResp + challenged=true so SignIn returns it
 // WITHOUT issuing a token.
-var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.User, deviceID string, deviceTrusted bool) (resp *pb.SignInResp, challenged bool, err error) {
+var signInMfaGate = func(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted, public bool) (resp *pb.SignInResp, challenged bool, err error) {
 	return nil, false, nil
-}
-
-// issueSession mints the bearer token for an authenticated principal and
-// returns the opaque session token plus (devices only) a server-issued
-// device-trust token the client replays as X-Device-Trust. Default (no
-// `devices`): IssueToken (no device column), empty trust token.
-// handlers/devices.go overrides via init() to stamp device_id + mint
-// + store the device-trust token. Shared by SignIn, OAuth, and (under
-// two_factor) VerifyMfa so they all honour device binding.
-//
-// trustCutoff says whether this sign-in may make the device trusted: nil means
-// it may not. Only a sign-in that passed the plugin's second factor, or was not
-// asked for one, may: a trusted device skips the second factor later
-// (two_factor_scope=new_devices), so trust earned by a sign-in that skipped it
-// — OAuth — would carry that skip over to password sign-ins from the same
-// device. A non-nil cutoff is the instant the sign-in's checks are good for:
-// the trust is written only if the account's device trust (a password change,
-// a disable) was not revoked after it, so a revocation that commits while the
-// sign-in is in flight is not undone by it.
-var issueSession = func(ctx context.Context, h *AuthServiceHandler, userID, deviceID string, trustCutoff *timestamppb.Timestamp) (token, trustToken string, err error) {
-	token, hash, err := newBearerToken()
-	if err != nil {
-		return "", "", err
-	}
-	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{UserId: userID, ExpiresAt: h.sessionTokenExpiry(), TokenHash: hash}); err != nil {
-		return "", "", err
-	}
-	return token, "", nil
 }
 
 // sessionTokenExpiry returns the absolute expiry stamped into a freshly
 // minted session bearer token: NOW + session_token_ttl_seconds (default
 // 30d when unset/<=0). The token-validation queries reject a token past
 // this instant, so a leaked session token stops working after the TTL
-// even without an explicit logout. Shared by issueSession and the
-// `devices` override (issueSessionWithDevice).
+// even without an explicit logout. Read by issueSession, SignUp and
+// ConfirmSignUp; a CLI session takes the earlier of it and its approver's.
 func (h *AuthServiceHandler) sessionTokenExpiry() *timestamppb.Timestamp {
-	ttl := h.SessionTokenTTLSeconds
-	if ttl <= 0 {
-		ttl = defaultSessionTokenTTLSeconds
+	return h.sessionExpiry(false)
+}
+
+// sessionExpiry is the expiry of a session minted now: the public-computer
+// lifetime for a public one, the session lifetime otherwise. The public
+// lifetime is capped at the session lifetime, so a handler built without
+// ValidateConfig still never gives a public session the longer one.
+func (h *AuthServiceHandler) sessionExpiry(public bool) *timestamppb.Timestamp {
+	ttl := h.sessionTTLSeconds()
+	if public {
+		ttl = min(h.publicSessionTTLSeconds(), ttl)
 	}
 	return timestamppb.New(time.Now().Add(time.Duration(ttl) * time.Second))
+}
+
+// sessionTTLSeconds is session_token_ttl_seconds, or its default.
+func (h *AuthServiceHandler) sessionTTLSeconds() int {
+	if h.SessionTokenTTLSeconds <= 0 {
+		return defaultSessionTokenTTLSeconds
+	}
+	return h.SessionTokenTTLSeconds
+}
+
+// publicSessionTTLSeconds is public_session_ttl_seconds, or its default.
+func (h *AuthServiceHandler) publicSessionTTLSeconds() int {
+	if h.PublicSessionTTLSeconds <= 0 {
+		return defaultPublicSessionTTLSeconds
+	}
+	return h.PublicSessionTTLSeconds
 }
 
 // Shutdown runs once on bundle teardown with the bundle's drain
@@ -802,22 +837,43 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	if !ok || raw == "" {
 		return nil, Unauthenticated(errAuthnHeaderMissing)
 	}
-	token := raw
-	if h.Scheme != "" {
-		prefix := h.Scheme + " "
-		if !strings.HasPrefix(raw, prefix) {
-			return nil, Unauthenticated(errAuthnSchemeMismatch)
-		}
-		token = strings.TrimPrefix(raw, prefix)
+	token, viaDPoP, err := h.presentedToken(raw)
+	if err != nil {
+		return nil, Unauthenticated(err)
 	}
-	if token == "" {
-		return nil, Unauthenticated(errAuthnTokenEmpty)
+	// Decided BEFORE the token is looked up, so it says nothing about the
+	// token: a request that proves no key is refused here, unless the gateway
+	// marked it as the MCP surface (whose clients cannot sign yet), where only
+	// an MCP-flow token passes — checked after the lookup, with every other
+	// outcome the opaque refusal.
+	jkt := req.GetHeaders()[dpopJKTKey]
+	proofed := viaDPoP && validThumbprint(jkt)
+	mcpSurface := req.GetHeaders()[surfaceKey] == surfaceMCP
+	if !proofed && !mcpSurface {
+		return nil, Unauthenticated(deviceProofRequired(ctx))
 	}
 
 	// Resolve identity + permission IDs. Default = single-realm
 	// session path; api_token swaps in the realm-aware + subset-
 	// narrowed resolver (see resolvePrincipal).
 	prin, err := resolvePrincipal(ctx, h, token)
+	if err != nil {
+		// An expired token says so only to the holder of its key; to anyone
+		// else, as an unknown one, it is the opaque refusal.
+		if proofed {
+			if expired := expiredFor(ctx, err, jkt); expired != nil {
+				return nil, Unauthenticated(expired)
+			}
+		}
+		return nil, Unauthenticated(err)
+	}
+	// The binding, before anything else, so nothing is decorated, narrowed or
+	// recorded as used for a request that fails it.
+	if proofed {
+		err = checkTokenBinding(ctx, prin, jkt)
+	} else {
+		err = checkMCPToken(prin)
+	}
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -851,6 +907,12 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 		}
 	}
 
+	// Written only now that the request passed every check — the binding
+	// included — so a refused request (a stolen token with the wrong key, a
+	// narrower's refusal) changes nothing.
+	if prin.legacyToken != "" {
+		h.upgradeLegacyToken(ctx, prin.legacyToken, sha256Hex(prin.legacyToken), "")
+	}
 	recordTokenUse(ctx, h, prin)
 
 	// Flatten LAST. Every axis has had its say on the roles by now, so a
@@ -863,7 +925,31 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 		Scopes:         scopes,
 		Labels:         labels,
 		SessionTokenId: prin.tokenID,
+		DeviceId:       prin.deviceThumbprint,
 	}, nil
+}
+
+// presentedToken strips the scheme off the auth header. A token may come
+// under DPoP (RFC 9449, a bound token with a proof — viaDPoP) or under the
+// configured scheme (Bearer); checkTokenBinding refuses the latter once the
+// token resolves, with a code that tells the client to sign its requests. A
+// configured scheme of "" takes the header as the bare token.
+func (h *AuthServiceHandler) presentedToken(raw string) (token string, viaDPoP bool, err error) {
+	switch {
+	// The scheme is case-insensitive (RFC 9110 §11.1).
+	case len(raw) > len(dpopScheme) && strings.EqualFold(raw[:len(dpopScheme)], dpopScheme) && raw[len(dpopScheme)] == ' ':
+		token, viaDPoP = raw[len(dpopScheme)+1:], true
+	case h.Scheme == "":
+		token = raw
+	case strings.HasPrefix(raw, h.Scheme+" "):
+		token = strings.TrimPrefix(raw, h.Scheme+" ")
+	default:
+		return "", false, errAuthnSchemeMismatch
+	}
+	if token == "" {
+		return "", false, errAuthnTokenEmpty
+	}
+	return token, viaDPoP, nil
 }
 
 // SignIn is the canonical email+password→bearer-token flow.
@@ -882,9 +968,27 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 // failed rehash doesn't invalidate the auth) — discarded here
 // since the plugin doesn't yet have an UpdateUserPasswordHash
 // mutation to apply the new hash anyway.
-func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb.SignInResp, error) {
+//
+// Every attempt appends one SignInEvent (method PASSWORD), the refusals too
+// (signin_history.go); the row changes nothing the caller gets.
+func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *pb.SignInResp, err error) {
+	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_PASSWORD)
+	attempt.named(req.GetEmail())
+	attempt.publicComputer = req.GetPublicComputer()
+	defer func() { h.endSignIn(ctx, attempt, err) }()
+
+	// The device key first: without a proof there is no token to issue, and
+	// refusing before the lookup costs nothing and says nothing about the
+	// address.
+	thumbprint, err := mintThumbprint(ctx)
+	if err != nil {
+		return nil, err
+	}
 	userResp, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: normalizeEmail(req.GetEmail())})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_UNKNOWN_ACCOUNT
+		}
 		// Anti-enumeration: a missing account must cost the same as a wrong
 		// password. Without this, GetUserByEmail returns fast (no argon2) for a
 		// non-existent user but the found path pays the ~argon2 derivation — a
@@ -895,6 +999,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 		return nil, UnauthenticatedSignIn(err)
 	}
 	user := userResp.GetUser()
+	attempt.userID, attempt.account = user.GetId(), user
 
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), nil)
 	if !ok {
@@ -916,20 +1021,29 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 		return nil, UnauthenticatedSignIn(err)
 	}
 
-	// Resolve the device (devices feature; no-op otherwise) so the 2FA
-	// gate can make its new-device decision and the token can be bound.
-	dev, err := resolveSignInDevice(ctx, h, user.GetId())
+	// Register the device the token will be bound to, so the 2FA gate can
+	// make its new-device decision (and bind the challenge to this key). A revoked device is refused here, after
+	// the password: only someone who knows it learns the device's state.
+	dev, err := mintDevice(ctx, h, user.GetId(), thumbprint)
+	attempt.deviceID = dev.id
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	deviceID, trusted := dev.id, dev.trusted
+
+	// A public-computer sign-in does not lean on trust the device earned
+	// before: whoever sits at a shared computer next may hold the password,
+	// so the second factor is asked as for a new device, and the trust is
+	// neither used nor renewed.
+	trusted := dev.trusted && !attempt.publicComputer
 
 	// Second-factor gate (two_factor feature; no-op otherwise). When it
 	// raises a challenge it returns the mfa_required response and we
 	// stop here WITHOUT issuing a token — VerifyMfa completes the login.
-	if resp, challenged, gErr := signInMfaGate(ctx, h, user, deviceID, trusted); gErr != nil {
+	// The challenge carries the public-computer choice to VerifyMfa.
+	if resp, challenged, gErr := signInMfaGate(ctx, h, user, thumbprint, trusted, attempt.publicComputer); gErr != nil {
 		return nil, Unauthenticated(gErr)
 	} else if challenged {
+		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_MFA_REQUIRED
 		return resp, nil
 	}
 
@@ -943,38 +1057,16 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (*pb
 	if trusted {
 		trustCutoff = dev.trustCutoff
 	}
-	token, trustToken, err := issueSession(ctx, h, user.GetId(), deviceID, trustCutoff)
+	token, err := issueSession(ctx, h, attempt, user.GetId(), dev, trustCutoff)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	resp := &pb.SignInResp{
-		UserId: user.GetId(),
-		Token:  token,
-	}
-	stampSignInDeviceTrust(resp, trustToken)
-	return resp, nil
+	return &pb.SignInResp{
+		UserId:         user.GetId(),
+		Token:          token,
+		PublicComputer: attempt.publicComputer,
+	}, nil
 }
-
-// stampSignInDeviceTrust sets the device-trust token on a SignInResp.
-// No-op by default: `device_trust_token` is gated behind the `devices`
-// feature, so it is ABSENT from the consumer's generated SignInResp when
-// devices isn't active — the always-compiled base handler must not name the
-// field. handlers/devices.go (staged only when `devices` is active) overrides
-// this via init() to set resp.DeviceTrustToken, mirroring the issueSession
-// seam. Without this seam the base SignIn handler fails to compile on any
-// project that activates auth WITHOUT devices (e.g. console-app).
-var stampSignInDeviceTrust = func(resp *pb.SignInResp, trustToken string) {}
-
-// stampDeviceTrust is the device-trust seam for the responses whose MESSAGE is
-// itself feature-gated — OAuthExchangeResp (`oauth`) and VerifyMfaResp
-// (`two_factor`). Unlike SignInResp (always present), the base handler can't
-// name those Go types' `device_trust_token` field, so this seam sets it by
-// proto field NAME via reflection: the always-compiled base stays free of the
-// gated field and is a no-op unless handlers/devices.go (staged only under
-// `devices`) overrides it. Also a no-op for any message lacking the field
-// (devices off → the field is absent from the generated message). This is what
-// lets a project activate `oauth` / `two_factor` WITHOUT `devices`.
-var stampDeviceTrust = func(msg proto.Message, trustToken string) {}
 
 // signInDisabledGate rejects a soft-disabled account on SignIn. Base
 // no-op: `User.disabled_at` is gated behind the `user_admin` feature, so
@@ -1022,18 +1114,23 @@ var signInBotGate = func(user *pb.User) error { return nil }
 // may have changed since: SignIn refused a disabled account, but a challenge
 // opened before the disable would still issue a session. Refused with the
 // opaque Unauthenticated, as SignIn is.
-func refuseUnsignableAccount(ctx context.Context, h *AuthServiceHandler, userID string) error {
+//
+// It returns the account it read (nil when the read failed), refused or not:
+// the sign-in history uses it to tell an erased account without reading it
+// again.
+func refuseUnsignableAccount(ctx context.Context, h *AuthServiceHandler, userID string) (*pb.User, error) {
 	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
 	if err != nil {
-		return Unauthenticated(err)
+		return nil, Unauthenticated(err)
 	}
-	if err := signInDisabledGate(got.GetUser()); err != nil {
-		return Unauthenticated(err)
+	user := got.GetUser()
+	if err := signInDisabledGate(user); err != nil {
+		return user, Unauthenticated(err)
 	}
-	if err := signInBotGate(got.GetUser()); err != nil {
-		return Unauthenticated(err)
+	if err := signInBotGate(user); err != nil {
+		return user, Unauthenticated(err)
 	}
-	return nil
+	return user, nil
 }
 
 // normalizeEmail canonicalises an email for both storage and lookup: trim +
@@ -1115,11 +1212,12 @@ var whoAmIEnrich = func(ctx context.Context, h *AuthServiceHandler, userID strin
 // Logout revokes the caller's CURRENT session token — the base-tier
 // counterpart to SignIn, available without the `devices` feature. It
 // reads the authenticated principal (user_id) plus the session_token_id
-// the gateway threaded in the auth envelope and deletes exactly that one
-// SESSION token via DeleteSessionToken (ownership guarded in the mutation:
-// id AND user_id). The raw bearer never reaches here — only the resolved
-// session token id does, so it's always a session token (the DQL drops the
-// token_type filter — that column is api_token-gated).
+// the gateway threaded in the auth envelope and revokes exactly that one
+// SESSION token via RevokeSessionToken (ownership guarded in the mutation:
+// id AND user_id; reason LOGOUT, the caller as revoked_by). The row stays.
+// The raw bearer never reaches here — only the resolved session token id
+// does, so it's always a session token (the DQL drops the token_type
+// filter — that column is api_token-gated).
 //
 // Idempotent about the SESSION, not about the caller: a token that was already
 // revoked still gets a clean success, because "this session is already gone" is
@@ -1145,7 +1243,7 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 		// An empty id means Logout does not know WHICH session to end. That is
 		// not idempotence — idempotence is "this session is already gone, so
 		// there is nothing to do", and the handler below says so by treating a
-		// zero-row delete as success. This is "I was not told which one", and
+		// zero-row revoke as success. This is "I was not told which one", and
 		// answering OK to that is a claim that is not true.
 		//
 		// What an OK would cost: a facade wrapping Logout whose VerifyRes
@@ -1167,12 +1265,13 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 				"or the auth envelope reaching this handler is missing AuthResp.session_token_id (field 4), "+
 				"which a hand-written facade VerifyRes must carry for logout to revoke anything")
 	}
-	if _, err := h.Mutation.DeleteSessionToken(ctx, &pb.DeleteSessionTokenReq{
-		TokenId:   tokenID,
-		UserId:    userID,
-		TokenType: pb.TokenType_TOKEN_TYPE_SESSION,
+	if _, err := h.Mutation.RevokeSessionToken(ctx, &pb.RevokeSessionTokenReq{
+		TokenId:    tokenID,
+		UserId:     userID,
+		TokenType:  pb.TokenType_TOKEN_TYPE_SESSION,
+		Thumbprint: requestThumbprint(ctx),
 	}); err != nil {
-		// Already-gone token (zero rows → NotFound) is an idempotent
+		// Already-revoked token (zero rows → NotFound) is an idempotent
 		// logout success; anything else propagates.
 		if e := notFoundOK(err); e != nil {
 			return nil, e
@@ -1181,11 +1280,11 @@ func (h *AuthServiceHandler) Logout(ctx context.Context, _ *pb.LogoutReq) (*pb.L
 	return &pb.LogoutResp{}, nil
 }
 
-// notFoundOK turns a storage NotFound into success. The DELETE primitives
+// notFoundOK turns a storage NotFound into success. The write primitives
 // RETURNING a row map zero matched rows to NotFound (single-row scan →
-// sql.ErrNoRows), but deleting something already gone — revoking a stale
-// device, clearing a TOTP secret that was never enrolled — is a no-op, not
-// an error. Lives here (always-compiled) so both handlers/devices.go and
+// sql.ErrNoRows), but revoking something already revoked — a stale device,
+// a token signed out twice — or clearing a TOTP secret that was never
+// enrolled is a no-op, not an error. Lives here (always-compiled) so both handlers/devices.go and
 // handlers/mfa.go use it without a cross-feature dependency.
 func notFoundOK(err error) error {
 	if status.Code(err) == codes.NotFound {

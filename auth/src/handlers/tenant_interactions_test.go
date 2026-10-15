@@ -70,6 +70,10 @@ func (s *tenantSignupStore) AssignRoleToUser(_ context.Context, in *pb.AssignRol
 	return &pb.AssignRoleToUserResp{}, nil
 }
 
+func (s *tenantSignupStore) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
+}
+
 func (s *tenantSignupStore) IssueToken(context.Context, *pb.IssueTokenReq, ...grpc.CallOption) (*pb.IssueTokenResp, error) {
 	return &pb.IssueTokenResp{Token: &pb.UserToken{Id: "t-1"}}, nil
 }
@@ -91,11 +95,11 @@ func TestSignUp_OnlyTheDeploymentsFirstAccountIsBootstrapped(t *testing.T) {
 	}
 	h := &AuthServiceHandler{Query: s, Mutation: s, PasswordHash: testPasswordSettings()}
 
-	first, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: "a@acme.example", Password: "pw-first-account", TenantSlug: "acme"})
+	first, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: "a@acme.example", Password: "pw-first-account", TenantSlug: "acme"})
 	if err != nil {
 		t.Fatalf("first SignUp: %v", err)
 	}
-	other, err := h.SignUp(context.Background(), &pb.SignUpReq{Email: "a@globex.example", Password: "pw-other-tenant", TenantSlug: "globex"})
+	other, err := h.SignUp(mintCtx(), &pb.SignUpReq{Email: "a@globex.example", Password: "pw-other-tenant", TenantSlug: "globex"})
 	if err != nil {
 		t.Fatalf("second tenant's first SignUp: %v", err)
 	}
@@ -163,7 +167,7 @@ type twoScopeStore struct {
 }
 
 func (s twoScopeStore) GetUserByTokenWithPermissions(context.Context, *pb.GetUserByTokenWithPermissionsReq, ...grpc.CallOption) (*pb.GetUserByTokenWithPermissionsResp, error) {
-	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: "h"}, nil
+	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "t1", StoredTokenHash: "h", DeviceThumbprint: testJKT}, nil
 }
 
 func (s twoScopeStore) GetUserRoleGrants(context.Context, *pb.GetUserRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
@@ -185,7 +189,7 @@ func TestAuthenticate_TenantAndOrgScopesAreStampedIndependently(t *testing.T) {
 
 	s := twoScopeStore{&orgMock{bySlug: map[string]*pb.GetUserOrgBySlugResp{"u1|acme": {OrgId: "org-acme"}}}}
 	h := &AuthServiceHandler{Query: s, Mutation: &touchRecorder{}, HeaderName: "Authorization", Scheme: "Bearer"}
-	req := &pb.AuthReq{Headers: map[string]string{"authorization": "Bearer plain"}}
+	req := boundAuthReq("plain", testJKT)
 
 	var answers []*pb.AuthResp
 	for _, order := range [][]scopeDecorator{

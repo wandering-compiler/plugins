@@ -71,9 +71,9 @@ func (m *tokenFlowMock) SpendPasswordResetTokens(_ context.Context, in *pb.Spend
 	}
 	return &pb.SpendPasswordResetTokensResp{}, nil
 }
-func (m *tokenFlowMock) DeleteUserSessionsForReset(ctx context.Context, in *pb.DeleteUserSessionsForResetReq, _ ...grpc.CallOption) (*pb.DeleteUserSessionsForResetResp, error) {
+func (m *tokenFlowMock) RevokeTokensForReset(ctx context.Context, in *pb.RevokeTokensForResetReq, _ ...grpc.CallOption) (*pb.RevokeTokensForResetResp, error) {
 	m.revokedFor = in.GetUserId()
-	return &pb.DeleteUserSessionsForResetResp{UserId: in.GetUserId()}, nil
+	return &pb.RevokeTokensForResetResp{}, nil
 }
 func (m *tokenFlowMock) CreateEmailVerificationToken(ctx context.Context, in *pb.CreateEmailVerificationTokenReq, _ ...grpc.CallOption) (*pb.CreateEmailVerificationTokenResp, error) {
 	m.createdVerify = in
@@ -239,12 +239,12 @@ type resetSweepMock struct {
 	swept    bool
 }
 
-func (m *resetSweepMock) DeleteUserSessionsForReset(ctx context.Context, in *pb.DeleteUserSessionsForResetReq, o ...grpc.CallOption) (*pb.DeleteUserSessionsForResetResp, error) {
+func (m *resetSweepMock) RevokeTokensForReset(ctx context.Context, in *pb.RevokeTokensForResetReq, o ...grpc.CallOption) (*pb.RevokeTokensForResetResp, error) {
 	m.swept = true
 	if m.sweepErr != nil {
 		return nil, m.sweepErr
 	}
-	return m.tokenFlowMock.DeleteUserSessionsForReset(ctx, in, o...)
+	return m.tokenFlowMock.RevokeTokensForReset(ctx, in, o...)
 }
 
 func TestResetPassword_ReportsWhenTheSessionSweepDidNotRun(t *testing.T) {

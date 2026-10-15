@@ -30,7 +30,7 @@ func (m *inviteMock) ListRoleGrants(_ context.Context, _ *pb.ListRoleGrantsReq, 
 	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{{RoleId: "r1"}}}, nil
 }
 
-func (m *inviteMock) ClearExpiredOrgInvite(ctx context.Context, in *pb.ClearExpiredOrgInviteReq, _ ...grpc.CallOption) (*pb.ClearExpiredOrgInviteResp, error) {
+func (m *inviteMock) CloseExpiredOrgInvite(ctx context.Context, in *pb.CloseExpiredOrgInviteReq, _ ...grpc.CallOption) (*pb.CloseExpiredOrgInviteResp, error) {
 	m.clearCalls++
 	// The request field is a required EMAIL: a real store refuses "".
 	if in.GetEmail() == "" {
@@ -39,7 +39,7 @@ func (m *inviteMock) ClearExpiredOrgInvite(ctx context.Context, in *pb.ClearExpi
 	if m.clearErr != nil {
 		return nil, m.clearErr
 	}
-	return &pb.ClearExpiredOrgInviteResp{Id: "old"}, nil
+	return &pb.CloseExpiredOrgInviteResp{Id: "old"}, nil
 }
 
 func (m *inviteMock) CreateOrgInvite(ctx context.Context, in *pb.CreateOrgInviteReq, _ ...grpc.CallOption) (*pb.CreateOrgInviteResp, error) {

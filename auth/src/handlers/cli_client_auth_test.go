@@ -57,6 +57,10 @@ func (m *clientAuthMock) GetAuthClientSecret(ctx context.Context, in *pb.GetAuth
 	return &pb.GetAuthClientSecretResp{ClientSecret: m.storedHash, Enabled: m.enabled}, nil
 }
 
+func (m *clientAuthMock) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	return fakeRegisterDevice(in)
+}
+
 func (m *clientAuthMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
 	m.issued = true
 	return &pb.IssueTokenResp{Token: &pb.UserToken{Token: "tok"}}, nil
@@ -98,7 +102,7 @@ func TestCliToken_RegisteredClientMustPresentItsSecret(t *testing.T) {
 	// Right secret → token.
 	req := base()
 	req.ClientSecret = "s3cret-value"
-	if _, err := h.CliToken(context.Background(), req); err != nil {
+	if _, err := h.CliToken(mintCtx(), req); err != nil {
 		t.Fatalf("the registered client could not redeem with its own secret: %v", err)
 	}
 	if m.askedClientID != "engine-7" {
@@ -109,7 +113,7 @@ func TestCliToken_RegisteredClientMustPresentItsSecret(t *testing.T) {
 	m.issued = false
 	req = base()
 	req.ClientSecret = "not-the-secret"
-	if _, err := h.CliToken(context.Background(), req); err == nil {
+	if _, err := h.CliToken(mintCtx(), req); err == nil {
 		t.Error("a wrong client secret redeemed the code")
 	}
 	if m.issued {
@@ -119,7 +123,7 @@ func TestCliToken_RegisteredClientMustPresentItsSecret(t *testing.T) {
 	// ABSENT secret → refused. This is the shape a caller who never
 	// registered would send, and the one the old flow accepted.
 	m.issued = false
-	if _, err := h.CliToken(context.Background(), base()); err == nil {
+	if _, err := h.CliToken(mintCtx(), base()); err == nil {
 		t.Error("a code for a registered client was redeemed with no secret at all")
 	}
 	if m.issued {
@@ -134,7 +138,7 @@ func TestCliToken_LoopbackStaysAPublicClient(t *testing.T) {
 	m := &clientAuthMock{codeRedirectURI: "http://127.0.0.1:8123/cb"} // no client id
 	h := newClientAuthHandler(t, m, "")
 
-	if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{
+	if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{
 		Code:         "code",
 		CodeVerifier: testVerifier,
 		RedirectUri:  "http://127.0.0.1:8123/cb",
@@ -156,7 +160,7 @@ func TestCliToken_ClientDisabledAfterAuthorizeCannotRedeem(t *testing.T) {
 	}
 	h := newClientAuthHandler(t, m, "s3cret-value")
 
-	if _, err := h.CliToken(context.Background(), &pb.CliTokenReq{
+	if _, err := h.CliToken(mintCtx(), &pb.CliTokenReq{
 		Code: "code", CodeVerifier: testVerifier,
 		RedirectUri: "https://engine7.example/cb", ClientSecret: "s3cret-value",
 	}); err == nil {
@@ -183,7 +187,7 @@ func TestCliToken_ClientAuthFailuresAreIndistinguishable(t *testing.T) {
 		if tc.name == "wrong secret" {
 			sec = "wrong"
 		}
-		_, err := h.CliToken(context.Background(), &pb.CliTokenReq{
+		_, err := h.CliToken(mintCtx(), &pb.CliTokenReq{
 			Code: "code", CodeVerifier: testVerifier,
 			RedirectUri: "https://a.example/cb", ClientSecret: sec,
 		})

@@ -7,6 +7,8 @@ import (
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
+	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 )
 
 // Changing or removing a member, and the role catalogue every org-role grant
@@ -69,7 +71,10 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 	if _, err := h.checkMayGrantRole(ctx, roleID); err != nil {
 		return nil, err
 	}
-	resp, err := h.Mutation.UpdateOrgMembership(ctx, &pb.UpdateOrgMembershipReq{Id: req.GetId(), RoleId: roleID})
+	// The caller is recorded as revoked_by on the grants the change replaces
+	// (they stay, revoked). No caller id (a direct call) leaves it NULL.
+	callerID, _ := callerUserID(ctx)
+	resp, err := h.Mutation.UpdateOrgMembership(ctx, &pb.UpdateOrgMembershipReq{Id: req.GetId(), RoleId: roleID, ChangedBy: callerID})
 	if err != nil {
 		return nil, err
 	}
@@ -78,16 +83,76 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 
 // RemoveOrgMembership removes a member, under the role ceiling: the removal
 // revokes every role they hold in the organization, so the caller must cover
-// them. AuthMutation.DeleteOrgMembership does the work.
+// them. AuthMutation.MarkOrgMembershipRemoved does the work: the membership
+// and its grants end (removed_at / revoked_at, the caller recorded as the one
+// who removed them) and the rows stay.
 func (h *AuthServiceHandler) RemoveOrgMembership(ctx context.Context, req *pb.RemoveOrgMembershipReq) (*pb.RemoveOrgMembershipResp, error) {
 	if err := h.checkMayManageMembership(ctx, req.GetId()); err != nil {
 		return nil, err
 	}
-	resp, err := h.Mutation.DeleteOrgMembership(ctx, &pb.DeleteOrgMembershipReq{Id: req.GetId()})
+	callerID, _ := callerUserID(ctx)
+	resp, err := h.Mutation.MarkOrgMembershipRemoved(ctx, &pb.MarkOrgMembershipRemovedReq{Id: req.GetId(), RemovedBy: callerID})
 	if err != nil {
 		return nil, err
 	}
 	return &pb.RemoveOrgMembershipResp{MembershipId: resp.GetMembershipId()}, nil
+}
+
+// orgRemovalCascades are what other features end with an organization, run by
+// RemoveOrganization BEFORE the organization itself is deleted and in its
+// transaction: org_invite appends the closing of its pending invitations,
+// which AuthMutation.DeleteOrganization cannot do — a statement cannot name a
+// table its activation may not have. orgID is the organization, by the
+// account deleting it.
+var orgRemovalCascades []func(ctx context.Context, h *AuthServiceHandler, orgID, by string) error
+
+// RemoveOrganization deletes an organization — the admin Organizations page's
+// delete. Nothing is deleted: the cascades end what other features hold for
+// it (its pending invitations), then AuthMutation.DeleteOrganization removes
+// its memberships, revokes its org grants and stamps it deleted_at. One
+// transaction with a coordinator. Without one the cascades run first, so a
+// failure leaves the organization live and a retry completes it; the cascades
+// are idempotent UPDATEs.
+func (h *AuthServiceHandler) RemoveOrganization(ctx context.Context, req *pb.RemoveOrganizationReq) (*pb.RemoveOrganizationResp, error) {
+	callerID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	var orgID string
+	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
+		for _, cascade := range orgRemovalCascades {
+			if err := cascade(txCtx, h, req.GetId(), callerID); err != nil {
+				return err
+			}
+		}
+		resp, err := h.Mutation.DeleteOrganization(txCtx, &pb.DeleteOrganizationReq{Id: req.GetId()})
+		if err != nil {
+			return err
+		}
+		orgID = resp.GetOrgId()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.RemoveOrganizationResp{OrgId: orgID}, nil
+}
+
+// inOrgTx runs fn in one distributed transaction when the bundle has a
+// coordinator, plainly otherwise.
+func (h *AuthServiceHandler) inOrgTx(ctx context.Context, fn func(txCtx context.Context) error) error {
+	if h.DistTx == nil {
+		return fn(ctx)
+	}
+	tx, txCtx, err := distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection})
+	if err != nil {
+		return err
+	}
+	if err := fn(txCtx); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // checkMayManageMembership is what a change or a removal of one membership

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -31,7 +30,7 @@ import (
 // render, failing the test if the call was not refused at all.
 func signInDetail(t *testing.T, h *AuthServiceHandler, email, password string) *w17pb.ErrorDetail {
 	t.Helper()
-	_, err := h.SignIn(context.Background(), &pb.SignInReq{Email: email, Password: password})
+	_, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: email, Password: password})
 	if err == nil {
 		t.Fatal("SignIn succeeded where the test needs a refusal")
 	}
@@ -69,7 +68,7 @@ func signInRefusalCases(t *testing.T) map[string]func() (*AuthServiceHandler, st
 		"wrong password": func() (*AuthServiceHandler, string, string) {
 			s := newRoundTripStore()
 			h := &AuthServiceHandler{Query: s, Mutation: s, PasswordHash: ps}
-			if _, err := h.SignUp(context.Background(), &pb.SignUpReq{
+			if _, err := h.SignUp(mintCtx(), &pb.SignUpReq{
 				Email: "a@b.c", Password: password,
 			}); err != nil {
 				t.Fatalf("SignUp: %v", err)

@@ -123,6 +123,15 @@ func init() {
 	inviteVerifiedEmailGate = inviteVerifiedEmailGateImpl
 	markEmailDerived = markEmailDerivedImpl
 	markEmailConfirmed = markEmailConfirmedImpl
+	erasers = append(erasers, spendVerificationLinks)
+}
+
+// spendVerificationLinks is email_verification's eraser: every live
+// verification link of the account is marked used, so none can stamp the
+// erased account verified (SpendEmailVerificationTokens). The rows stay.
+func spendVerificationLinks(ctx context.Context, h *AuthServiceHandler, userID, _, _ string) error {
+	_, err := h.Mutation.SpendEmailVerificationTokens(ctx, &pb.SpendEmailVerificationTokensReq{UserId: userID})
+	return err
 }
 
 // markEmailConfirmedImpl records a SELF_CONFIRMED address through the same

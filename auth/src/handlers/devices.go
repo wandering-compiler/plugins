@@ -2,327 +2,35 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/hex"
-	"strings"
-	"time"
 
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// This file implements the `devices` feature. It is staged into a bundle
-// ONLY when the activation enables `devices` (plugin.yaml maps the feature
-// to this file via go_files). With the feature off it is not staged, so
-// the sign-in seams keep their defaults (no device tracking) and the
-// UserToken.device_id column / Device table aren't emitted. Standalone
-// (the plugin author's own `go test`) always compiles it, since gating
-// happens at activation staging, not in the source tree.
+// This file implements the `devices` feature: the self-service device
+// management RPCs (list, revoke one, revoke the others, revoke all). It is
+// staged into a bundle ONLY when the activation enables `devices`
+// (plugin.yaml go_files). Device identity itself — the Device table, the
+// binding of every token to a device key, trust for
+// two_factor_scope=new_devices — is base tier and lives in device.go.
 
-// Device-detection metadata keys. The gateway lowercases forwarded header
-// names into gRPC metadata (MetadataPropagation); a project enables device
-// tracking by forwarding these via `(w17.rest_api).metadata_propagation`
-// (X-Device-Id + User-Agent + X-Forwarded-For). Absent header →
-// fingerprint fallback, so a misconfigured project still tracks devices
-// coarsely rather than crashing.
-const (
-	deviceIDMetadataKey    = "x-device-id"    // stable client-managed device id
-	deviceTrustMetadataKey = "x-device-trust" // server-issued device-trust token (replayed by the client)
-	userAgentMetadataKey   = "user-agent"     // → Device.label (friendly name)
-	// forwardedUserAgentMetadataKey — where restgw puts the BROWSER's UA.
-	forwardedUserAgentMetadataKey = "x-forwarded-user-agent"
-	clientIPMetadataKey           = "x-forwarded-for" // → Device.ip (first hop)
-)
-
-const (
-	maxIdentifierLen = 128 // Device.identifier CHAR(128)
-	maxLabelLen      = 255 // Device.label CHAR(255)
-)
-
-// init wires the devices behaviour on package load: the sign-in device
-// resolver (upsert + trusted signal) AND the device-bound token issuer
-// (issues the session bound to the device, plus trust). The
-// bundle imports this package (alias-imported under the activation name),
-// so init runs once during server bring-up.
-func init() {
-	resolveSignInDevice = resolveSignInDeviceImpl
-	issueSession = issueSessionWithDevice
-	// `device_trust_token` exists on SignInResp only when `devices` is active
-	// (this file is staged) — so the field reference is safe to compile here.
-	stampSignInDeviceTrust = func(resp *pb.SignInResp, trustToken string) {
-		resp.DeviceTrustToken = trustToken
-	}
-	// The message-gated responses (OAuthExchangeResp / VerifyMfaResp) carry the
-	// same `device_trust_token`, but their Go type isn't compiled unless their
-	// own feature is active — so set it by proto NAME via reflection instead of
-	// naming the field. No-op for a message that lacks the field.
-	stampDeviceTrust = func(msg proto.Message, trustToken string) {
-		m := msg.ProtoReflect()
-		if fd := m.Descriptor().Fields().ByName("device_trust_token"); fd != nil {
-			m.Set(fd, protoreflect.ValueOfString(trustToken))
-		}
-	}
-	devicesActive = true // lets ValidateConfig allow two_factor_scope=new_devices
-}
-
-// deviceIdentity is the resolved device coordinates for the current
-// request: a stable identifier (header or fingerprint), a friendly label
-// (user-agent), the client IP, and the server-issued device-trust
-// token the client replays (empty if none).
-type deviceIdentity struct {
-	identifier string
-	label      string
-	ip         string
-	trustToken string
-}
-
-// resolveDeviceIdentity derives the request's device coordinates from
-// incoming gRPC metadata. Prefers the client-sent X-Device-Id (stable
-// across token rotation); falls back to a SHA-256 fingerprint of
-// user-agent + IP. The fingerprint is best-effort: UA/IP churn yields a
-// new identifier → a new-device read → (under two_factor new-device mode)
-// an extra challenge, which is the safe failure, never fail-open. The
-// X-Device-Trust token is read straight through — it proves device
-// trust, distinct from the X-Device-Id which only names the device.
-func resolveDeviceIdentity(ctx context.Context) deviceIdentity {
-	md, _ := metadata.FromIncomingContext(ctx)
-	// The browser's User-Agent travels under x-forwarded-user-agent: the gRPC
-	// hop from the gateway replaces user-agent with its own ("grpc-go/…"), so
-	// read there every device was labelled grpc-go and the UA+IP fingerprint
-	// collapsed every browser of a user into one device. user-agent stays the
-	// fallback for an in-process call.
-	ua := firstMeta(md, forwardedUserAgentMetadataKey)
-	if ua == "" {
-		ua = firstMeta(md, userAgentMetadataKey)
-	}
-	ip := firstHop(firstMeta(md, clientIPMetadataKey))
-
-	di := deviceIdentity{
-		label:      truncate(ua, maxLabelLen),
-		ip:         ip,
-		trustToken: strings.TrimSpace(firstMeta(md, deviceTrustMetadataKey)),
-	}
-	if hdr := strings.TrimSpace(firstMeta(md, deviceIDMetadataKey)); hdr != "" {
-		di.identifier = truncate(hdr, maxIdentifierLen)
-		return di
-	}
-	sum := sha256.Sum256([]byte(ua + "|" + ip))
-	di.identifier = hex.EncodeToString(sum[:]) // 64 hex chars, fits CHAR(128)
-	return di
-}
-
-// newDeviceTrustToken mints a fresh high-entropy device-trust token: the
-// plaintext to hand back to the client and its SHA-256 hex to store on the
-// Device row. The plaintext is never persisted — a DB read can't
-// impersonate a trusted device.
-func newDeviceTrustToken() (token, hash string, err error) {
-	b := make([]byte, 32) // 256-bit
-	if _, err := rand.Read(b); err != nil {
-		return "", "", err
-	}
-	token = base64.RawURLEncoding.EncodeToString(b)
-	return token, hashDeviceTrustToken(token), nil
-}
-
-// hashDeviceTrustToken is the one-way function applied to a device-trust
-// token for storage + comparison (SHA-256 hex, fits CHAR(128)).
-func hashDeviceTrustToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
-
-// deviceTrustValid reports whether the presented trust token proves the device
-// is trusted: the row must carry a stored hash AND the presented token must
-// hash to it (constant-time). A device with trusted_at but no stored hash (e.g.
-// a row stored before the device-trust token existed) or a request with
-// no/empty token is NOT trusted — the safe direction, costing at most one extra
-// new-device challenge after which a fresh token is minted.
-func deviceTrustValid(dev *pb.Device, presented string) bool {
-	stored := dev.GetTrustTokenHash()
-	if stored == "" || presented == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(hashDeviceTrustToken(presented)), []byte(stored)) == 1
-}
-
-// trustOutlivesRevocation reports whether trust stamped at trustedAt still
-// stands against the account's last wholesale revocation (revokedAt, written
-// by a password change or a disable — User.device_trust_revoked_at). Never
-// revoked: it stands. Revoked: only trust stamped strictly LATER stands, so a
-// device trusted before the revocation has to pass the second factor again. An
-// equal instant (a database that keeps whole seconds) counts as revoked — the
-// safe side, at the cost of one extra challenge.
-func trustOutlivesRevocation(trustedAt, revokedAt *timestamppb.Timestamp) bool {
-	if revokedAt == nil {
-		return true
-	}
-	return trustedAt != nil && trustedAt.AsTime().After(revokedAt.AsTime())
-}
-
-// deviceTrustRevokedAt reads when the account's device trust was last revoked
-// (nil = never).
-func deviceTrustRevokedAt(ctx context.Context, h *AuthServiceHandler, userID string) (*timestamppb.Timestamp, error) {
-	resp, err := h.Query.GetDeviceTrustRevokedAt(ctx, &pb.GetDeviceTrustRevokedAtReq{UserId: userID})
-	if err != nil {
-		return nil, err
-	}
-	return resp.GetDeviceTrustRevokedAt(), nil
-}
-
-// neverRevoked is the trust cutoff of an account whose device trust was never
-// revoked: any revocation is later than it.
-var neverRevoked = timestamppb.New(time.Unix(0, 0))
-
-// signInDeviceTrusted is the whole trust decision at sign-in: the request
-// proves the server-issued trust token, AND that trust was granted after the
-// account's last revocation. The revocation is read only for a device that
-// passed the token check; a failed read means untrusted (one extra challenge,
-// never a skipped one). A trusted device comes back with the revocation stamp
-// it was judged against as its trust cutoff: renewing the trust must not
-// outlive a revocation that commits after this read.
-func signInDeviceTrusted(ctx context.Context, h *AuthServiceHandler, userID string, dev *pb.Device, presented string) signInDevice {
-	out := signInDevice{id: dev.GetId()}
-	if !deviceTrustValid(dev, presented) {
-		return out
-	}
-	revokedAt, err := deviceTrustRevokedAt(ctx, h, userID)
-	if err != nil || !trustOutlivesRevocation(dev.GetTrustedAt(), revokedAt) {
-		return out
-	}
-	out.trusted, out.trustCutoff = true, revokedAt
-	if revokedAt == nil {
-		out.trustCutoff = neverRevoked
-	}
-	return out
-}
-
-// firstMeta returns the first value for a metadata key, or "".
-func firstMeta(md metadata.MD, key string) string {
-	if vals := md.Get(key); len(vals) > 0 {
-		return vals[0]
-	}
-	return ""
-}
-
-// firstHop returns the first comma-separated entry of an X-Forwarded-For
-// value (the original client), trimmed. Empty stays empty.
-func firstHop(xff string) string {
-	if xff == "" {
+// callerDeviceThumbprint is the key thumbprint the caller's token is bound to,
+// from the gateway's x-w17-user envelope (Authenticate answers it as
+// AuthResp.device_id after checking the request's proof). "" on any miss,
+// which the callers read as "this device cannot be pinned".
+func callerDeviceThumbprint(ctx context.Context) string {
+	var ar pb.AuthResp
+	if err := principal.Envelope(ctx, &ar); err != nil {
 		return ""
 	}
-	if i := strings.IndexByte(xff, ','); i >= 0 {
-		return strings.TrimSpace(xff[:i])
-	}
-	return strings.TrimSpace(xff)
+	return ar.GetDeviceId()
 }
 
-func truncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
-	}
-	return s
-}
-
-// resolveSignInDeviceImpl resolves (and upserts) the device this sign-in
-// belongs to, returning its id + whether it is already trusted. First
-// sight of an (user, identifier) creates the Device (trusted_at NULL);
-// the unique index makes a racing duplicate surface as an error on
-// CreateDevice, which we recover from by re-reading. Any GetDevice error
-// is treated as "not seen yet" and falls through to create.
-func resolveSignInDeviceImpl(ctx context.Context, h *AuthServiceHandler, userID string) (signInDevice, error) {
-	di := resolveDeviceIdentity(ctx)
-
-	if dev := getDevice(ctx, h, userID, di.identifier); dev != nil {
-		// Trust requires proving possession of the server-issued
-		// trust token, not merely a trusted_at flag on a client-named
-		// device (which an attacker who learns the victim's X-Device-Id
-		// could otherwise ride to skip new-device 2FA). Trust granted
-		// before a password change or a disable does not count.
-		return signInDeviceTrusted(ctx, h, userID, dev, di.trustToken), nil
-	}
-	created, err := h.Mutation.CreateDevice(ctx, &pb.CreateDeviceReq{
-		UserId:     userID,
-		Identifier: di.identifier,
-		Label:      di.label,
-		Ip:         di.ip,
-	})
-	if err != nil {
-		// Likely a concurrent create (unique violation) — re-read.
-		if dev := getDevice(ctx, h, userID, di.identifier); dev != nil {
-			return signInDeviceTrusted(ctx, h, userID, dev, di.trustToken), nil
-		}
-		return signInDevice{}, err
-	}
-	// A freshly-created device has no stored trust hash → untrusted.
-	return signInDevice{id: created.GetDevice().GetId()}, nil
-}
-
-// getDevice reads the (user, identifier) device, returning nil on any
-// miss (NotFound or transient) so callers fall through to create.
-func getDevice(ctx context.Context, h *AuthServiceHandler, userID, identifier string) *pb.Device {
-	resp, err := h.Query.GetDeviceByIdentifier(ctx, &pb.GetDeviceByIdentifierReq{
-		UserId:     userID,
-		Identifier: identifier,
-	})
-	if err != nil {
-		return nil
-	}
-	return resp.GetDevice()
-}
-
-// issueSessionWithDevice mints a device-bound session token and trusts the
-// device (a completed login means this device passed every gate). It
-// also mints a fresh device-trust token, stores its hash on the row, and
-// returns the plaintext for the caller to hand back to the client (which
-// replays it as X-Device-Trust to skip the next new-device challenge).
-// Trust is best-effort: a failed TrustDevice / token mint doesn't
-// invalidate the freshly issued session, so the error is swallowed and the
-// returned trust token is empty (the device simply re-challenges next
-// new-device sign-in — fail-safe). The token is rotated every login.
-// trustCutoff nil trusts nothing; otherwise TrustDevice writes only while the
-// account's device trust was not revoked after it, and a revocation that won
-// that race leaves the session untrusted, with no trust token.
-func issueSessionWithDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID string, trustCutoff *timestamppb.Timestamp) (string, string, error) {
-	token, hash, err := newBearerToken()
-	if err != nil {
-		return "", "", err
-	}
-	if _, err := h.Mutation.IssueToken(ctx, &pb.IssueTokenReq{
-		UserId:    userID,
-		DeviceId:  deviceID,
-		ExpiresAt: h.sessionTokenExpiry(),
-		TokenHash: hash,
-	}); err != nil {
-		return "", "", err
-	}
-	var trustToken string
-	if deviceID != "" && trustCutoff != nil {
-		if plain, hash, gErr := newDeviceTrustToken(); gErr == nil {
-			if _, tErr := h.Mutation.TrustDevice(ctx, &pb.TrustDeviceReq{
-				UserId:          userID,
-				DeviceId:        deviceID,
-				TrustTokenHash:  hash,
-				NotRevokedAfter: trustCutoff,
-			}); tErr == nil {
-				trustToken = plain
-			}
-		}
-	}
-	return token, trustToken, nil
-}
-
-// ListDevices returns the caller's devices, deriving `trusted`
+// ListDevices returns the caller's live devices, deriving `trusted`
 // (trusted_at present and later than the account's last trust revocation,
-// the same rule the sign-in applies) and `current` (this device matches the calling
-// request's resolved identifier). The raw identifier never leaves the
-// handler.
+// the same rule the sign-in applies) and `current` (this is the device the
+// caller's token is bound to). The key thumbprint never leaves the handler.
 func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevicesReq) (*pb.ListDevicesResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
@@ -336,55 +44,75 @@ func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevice
 	if err != nil {
 		return nil, err
 	}
-	current := resolveDeviceIdentity(ctx).identifier
+	current := callerDeviceThumbprint(ctx)
 	out := make([]*pb.DeviceInfo, 0, len(resp.GetDevices()))
 	for _, d := range resp.GetDevices() {
+		if d.GetThumbprint() == "" {
+			// A legacy device (recorded before binding) is history: nothing
+			// can sign in with it, so it is not a device to manage. The
+			// statement already leaves it out; this keeps it out of the list
+			// whatever the store answers.
+			continue
+		}
 		out = append(out, &pb.DeviceInfo{
 			Id:         d.GetId(),
 			Label:      d.GetLabel(),
 			Ip:         d.GetIp(),
 			LastSeenAt: d.GetLastSeenAt(),
 			Trusted:    d.GetTrustedAt() != nil && trustOutlivesRevocation(d.GetTrustedAt(), revokedAt),
-			Current:    d.GetIdentifier() == current,
+			Current:    current != "" && d.GetThumbprint() == current,
 		})
 	}
 	return &pb.ListDevicesResp{Devices: out}, nil
 }
 
-// RevokeDevice logs out one device: delete its tokens, then the Device
-// row. Both are ownership-guarded by the caller's user_id, so a bearer
-// can't revoke another user's device. Idempotent.
+// RevokeDevice revokes one device for good: revoke its tokens, then stamp
+// the Device row revoked (never deleted — a deleted row would let the same
+// key register again as a fresh device). Both are ownership-guarded by the
+// caller's user_id, so a bearer can't revoke another user's device.
+// Idempotent.
 func (h *AuthServiceHandler) RevokeDevice(ctx context.Context, req *pb.RevokeDeviceReq) (*pb.RevokeDeviceResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := revokeOneDevice(ctx, h, userID, req.GetDeviceId()); err != nil {
+	// ONE device revoked on purpose also ends the API tokens it created:
+	// a stolen session could have created one bound to the thief's key.
+	if err := endApprovedAPITokens(ctx, h, userID, req.GetDeviceId(), userID); err != nil {
+		return nil, err
+	}
+	if err := revokeOneDevice(ctx, h, userID, req.GetDeviceId(), noTokenKept); err != nil {
 		return nil, err
 	}
 	return &pb.RevokeDeviceResp{}, nil
 }
 
-// RevokeOtherDevices logs out every device except the caller's. The
-// caller's device is identified by the calling request's resolved
-// identifier; if it matches none of the user's devices (e.g. a
-// fingerprint that has drifted), every device is revoked — the safe
-// reading of "log out everywhere but here" when "here" can't be pinned.
+// RevokeOtherDevices revokes every device except the caller's. The caller's
+// device is the one its token is bound to (the envelope's device_id, checked
+// against the request's proof by Authenticate); if it matches none of the
+// user's devices, every device is revoked — the safe reading of "log out
+// everywhere but here" when "here" can't be pinned.
 func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.RevokeOtherDevicesReq) (*pb.RevokeOtherDevicesResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	current := resolveDeviceIdentity(ctx).identifier
+	current := callerDeviceThumbprint(ctx)
 	resp, err := h.Query.ListUserDevices(ctx, &pb.ListUserDevicesReq{UserId: userID})
 	if err != nil {
 		return nil, err
 	}
+	// "Here" is also the caller's own session: a CLI session whose approving
+	// browser is one of the devices revoked here must not be ended with it.
+	keep := callerSessionTokenID(ctx)
+	if keep == "" {
+		keep = noTokenKept
+	}
 	for _, d := range resp.GetDevices() {
-		if d.GetIdentifier() == current {
+		if current != "" && d.GetThumbprint() == current {
 			continue
 		}
-		if err := revokeOneDevice(ctx, h, userID, d.GetId()); err != nil {
+		if err := revokeOneDevice(ctx, h, userID, d.GetId(), keep); err != nil {
 			return nil, err
 		}
 	}
@@ -394,17 +122,21 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 	return &pb.RevokeOtherDevicesResp{}, nil
 }
 
-// RevokeAllDevices logs out everywhere (including the caller): revoke every
-// device's tokens + Device row. Idempotent.
+// RevokeAllDevices revokes every device, the caller's included: their
+// tokens are revoked and each Device row is stamped revoked, so every key the
+// account signed in with must be replaced. Idempotent.
 //
 // This revokes each device individually via revokeOneDevice
-// (DeleteDeviceTokens is device_id-filtered) rather than the broad
-// DeleteAllUserTokens. DeleteAllUserTokens has no token_type filter (that
-// column is api_token-gated), so it would ALSO delete the user's
-// API tokens — credentials that aren't device-bound (device_id NULL) and must
-// only be removed via RevokeApiToken. "Every interactive session is device-bound"
-// was the premise here, and it is false — see revokeUndevicedSessions, which
-// now sweeps the rest while still sparing API tokens. Mirrors
+// (RevokeDeviceTokens is device_id-filtered) rather than the broad
+// RevokeAllUserTokens, which has no token_type filter (that column is
+// api_token-gated) and would ALSO revoke the user's API tokens. Those are
+// ended only by RevokeApiToken (or an operator revoking their key on the
+// admin Devices page, or revoking the ONE device that created it,
+// RevokeDevice): an API token is bound to a program's key (Device.api_key),
+// which ListUserDevices leaves out, and RevokeDeviceTokens' "approved" op
+// matches session tokens only. Sessions minted before device binding
+// hold no device and are revoked by revokeUndevicedSessions (they no longer
+// authenticate either way), still sparing API tokens. Mirrors
 // RevokeOtherDevices, but includes the caller's current device.
 func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.RevokeAllDevicesReq) (*pb.RevokeAllDevicesResp, error) {
 	userID, err := callerUserID(ctx)
@@ -416,7 +148,7 @@ func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.Revok
 		return nil, err
 	}
 	for _, d := range resp.GetDevices() {
-		if err := revokeOneDevice(ctx, h, userID, d.GetId()); err != nil {
+		if err := revokeOneDevice(ctx, h, userID, d.GetId(), noTokenKept); err != nil {
 			return nil, err
 		}
 	}
@@ -426,33 +158,35 @@ func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.Revok
 	return &pb.RevokeAllDevicesResp{}, nil
 }
 
-// noTokenKept is the keep_token_id that keeps none (the column is a UUID, so
-// the empty string would not bind).
-const noTokenKept = "00000000-0000-0000-0000-000000000000"
-
-// revokeUndevicedSessions ends the user's sessions that no device holds, all
-// but keep (the caller's own, or none). The per-device sweep cannot reach
-// them: SignUp, ConfirmSignUp, the OAuth callback and CliToken issue a session
-// with no device, so the "every interactive session is device-bound" premise
-// this file once rested on was false, and "log out everywhere" left a
-// registration's session standing.
+// revokeUndevicedSessions revokes the user's sessions that hold no device, all
+// but keep (the caller's own, or none): rows minted before device binding,
+// reason UNBOUND_SESSION. They no longer authenticate (Authenticate refuses an
+// unbound token), so this records their end rather than causes it. Sessions
+// bound to a LEGACY device (a pre-binding Device row, no key) carry a
+// device_id and are not matched here; they are refused at authentication all
+// the same, as bound to no key.
 func revokeUndevicedSessions(ctx context.Context, h *AuthServiceHandler, userID, keep string) error {
 	if keep == "" {
 		keep = noTokenKept
 	}
-	_, err := h.Mutation.DeleteUndevicedSessions(ctx, &pb.DeleteUndevicedSessionsReq{UserId: userID, KeepTokenId: keep})
+	_, err := h.Mutation.RevokeUndevicedSessions(ctx, &pb.RevokeUndevicedSessionsReq{UserId: userID, KeepTokenId: keep})
 	return notFoundOK(err)
 }
 
-// revokeOneDevice deletes a device's tokens then the Device row, both
-// guarded by user_id. Token delete first so a partial failure leaves the
-// Device (and its now-orphaned membership) discoverable for retry rather
-// than a dangling token with no Device.
-func revokeOneDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID string) error {
-	if _, err := h.Mutation.DeleteDeviceTokens(ctx, &pb.DeleteDeviceTokensReq{UserId: userID, DeviceId: deviceID}); notFoundOK(err) != nil {
+// revokeOneDevice revokes a device's tokens (reason DEVICE_REVOKED) then
+// stamps the Device row revoked, both guarded by user_id; nothing is deleted.
+// Tokens first, so a partial failure leaves a live, listed device to retry on;
+// the device's revocation alone would refuse them too (Authenticate reads it
+// through the token's binding). An already revoked device matches no row
+// (NotFound), which is done, not a failure.
+//
+// RevokeDeviceTokens also ends the CLI sessions the device approved, all but
+// keep (the caller's own session for RevokeOtherDevices, else noTokenKept).
+func revokeOneDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID, keep string) error {
+	if _, err := h.Mutation.RevokeDeviceTokens(ctx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: deviceID, RevokedBy: userID, KeepTokenId: keep}); notFoundOK(err) != nil {
 		return err
 	}
-	if _, err := h.Mutation.DeleteDevice(ctx, &pb.DeleteDeviceReq{UserId: userID, DeviceId: deviceID}); notFoundOK(err) != nil {
+	if _, err := h.Mutation.MarkDeviceRevoked(ctx, &pb.MarkDeviceRevokedReq{UserId: userID, DeviceId: deviceID}); notFoundOK(err) != nil {
 		return err
 	}
 	return nil

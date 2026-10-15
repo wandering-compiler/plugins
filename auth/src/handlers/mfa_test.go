@@ -33,6 +33,10 @@ type mfaMock struct {
 	pb.AuthMutationClient
 
 	issuedHash string // the token_hash IssueToken was handed
+	// the device IssueToken bound the session to, and the RegisterDevice
+	// request that registered it
+	issuedDevice     string
+	registeredDevice *pb.RegisterDeviceReq
 
 	// totp secret state
 	totpSecretEnc string          // legacy `secret` (secretbox blob, rc.19 and earlier); "" = none
@@ -40,12 +44,16 @@ type mfaMock struct {
 	movedSeed     string          // what MoveTotpSeed was given
 	movedRow      string          // …and the enrolment row it was keyed by
 	lastStep      int64           // UserTotpSecret.last_step (the replay guard)
-	recovery      map[string]bool // code_hash → used
-	claimErr      error           // ClaimTotpStep fails (store unreachable)
-	stepUps       int64           // UserTotpSecret.stepup_attempts
-	stepUpLocked  time.Time       // UserTotpSecret.stepup_locked_until
-	totpConfirmed bool
-	totpReadErr   error // enrolment store refuses to answer
+	recovery      map[string]bool // code_hash → used, the LIVE set (revoked_at IS NULL)
+	// The rows RevokeRecoveryCodes / RevokeTotpSecret ended: they stay, as
+	// the statements keep them (nothing is deleted).
+	revokedCodes   map[string]bool // code_hash of an unused code whose set was revoked
+	revokedSecrets []revokedTotpRow
+	claimErr       error     // ClaimTotpStep fails (store unreachable)
+	stepUps        int64     // UserTotpSecret.stepup_attempts
+	stepUpLocked   time.Time // UserTotpSecret.stepup_locked_until
+	totpConfirmed  bool
+	totpReadErr    error // enrolment store refuses to answer
 
 	// Concurrency seam. The real RecordMfaAttempt is one atomic UPDATE …
 	// RETURNING; here a mutex stands in for that serialisation so the test
@@ -59,10 +67,13 @@ type mfaMock struct {
 
 	// challenge state (single challenge)
 	chUserID    string
+	chThumb     string // the key the challenge was raised for
 	chCodeHash  string
 	chCreatedAt *timestamppb.Timestamp
 	chConsumed  bool
 	chAttempts  int64 // failed-attempt counter
+	chPublic    bool  // the challenged sign-in asked for a public-computer session
+	issuedReq   *pb.IssueTokenReq
 
 	userEmail string
 
@@ -77,7 +88,14 @@ type mfaMock struct {
 	trustedDevice    *pb.TrustDeviceReq
 	createdChallenge *pb.CreateMfaChallengeReq
 	confirmedTotp    bool
-	deletedTotp      bool
+	revokedTotp      bool
+}
+
+// revokedTotpRow is a UserTotpSecret row after RevokeTotpSecret: revoked_at
+// stamped, seed and legacy secret cleared, confirmed_at kept.
+type revokedTotpRow struct {
+	seed, secret string
+	confirmed    bool
 }
 
 // --- queries ---
@@ -108,7 +126,7 @@ func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ 
 func (m *mfaMock) GetMfaChallenge(ctx context.Context, in *pb.GetMfaChallengeReq, _ ...grpc.CallOption) (*pb.GetMfaChallengeResp, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ch := &pb.MfaChallenge{Id: in.GetChallengeId(), UserId: m.chUserID, CodeHash: m.chCodeHash, CreatedAt: m.chCreatedAt, Attempts: m.chAttempts}
+	ch := &pb.MfaChallenge{Id: in.GetChallengeId(), UserId: m.chUserID, CodeHash: m.chCodeHash, CreatedAt: m.chCreatedAt, Attempts: m.chAttempts, Thumbprint: m.chThumb, PublicComputer: m.chPublic}
 	if m.chConsumed {
 		ch.ConsumedAt = timestamppb.Now()
 	}
@@ -120,9 +138,6 @@ func (m *mfaMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...g
 		u.DisabledAt = timestamppb.Now()
 	}
 	return &pb.GetUserByIdResp{User: u}, nil
-}
-func (m *mfaMock) GetDeviceByIdentifier(ctx context.Context, in *pb.GetDeviceByIdentifierReq, _ ...grpc.CallOption) (*pb.GetDeviceByIdentifierResp, error) {
-	return &pb.GetDeviceByIdentifierResp{}, nil // not found → create
 }
 
 // --- mutations ---
@@ -174,9 +189,21 @@ func (m *mfaMock) CreateRecoveryCode(ctx context.Context, in *pb.CreateRecoveryC
 	m.recovery[in.GetCodeHash()] = false
 	return &pb.CreateRecoveryCodeResp{Id: "rc"}, nil
 }
-func (m *mfaMock) DeleteRecoveryCodes(ctx context.Context, in *pb.DeleteRecoveryCodesReq, _ ...grpc.CallOption) (*pb.DeleteRecoveryCodesResp, error) {
+
+// RevokeRecoveryCodes: `SET revoked_at = NOW() WHERE user_id = :user_id AND
+// used_at IS NULL AND revoked_at IS NULL` — the unused codes move to the
+// revoked rows, the used ones keep their used_at; none stay live.
+func (m *mfaMock) RevokeRecoveryCodes(ctx context.Context, in *pb.RevokeRecoveryCodesReq, _ ...grpc.CallOption) (*pb.RevokeRecoveryCodesResp, error) {
+	for hash, used := range m.recovery {
+		if !used {
+			if m.revokedCodes == nil {
+				m.revokedCodes = map[string]bool{}
+			}
+			m.revokedCodes[hash] = true
+		}
+	}
 	m.recovery = nil
-	return &pb.DeleteRecoveryCodesResp{}, nil
+	return &pb.RevokeRecoveryCodesResp{}, nil
 }
 func (m *mfaMock) ConsumeRecoveryCode(ctx context.Context, in *pb.ConsumeRecoveryCodeReq, _ ...grpc.CallOption) (*pb.ConsumeRecoveryCodeResp, error) {
 	used, ok := m.recovery[in.GetCodeHash()]
@@ -205,16 +232,27 @@ func (m *mfaMock) ConfirmTotpSecret(ctx context.Context, in *pb.ConfirmTotpSecre
 	m.confirmedTotp = true
 	return &pb.ConfirmTotpSecretResp{UserId: in.GetUserId()}, nil
 }
-func (m *mfaMock) DeleteTotpSecret(ctx context.Context, in *pb.DeleteTotpSecretReq, _ ...grpc.CallOption) (*pb.DeleteTotpSecretResp, error) {
+
+// RevokeTotpSecret: `SET revoked_at = NOW(), ended_key = id, seed = NULL,
+// secret = NULL WHERE user_id = :user_id AND revoked_at IS NULL RETURNING
+// user_id` — the live row is kept as a revoked one with its seed cleared; no
+// live row is NotFound.
+func (m *mfaMock) RevokeTotpSecret(ctx context.Context, in *pb.RevokeTotpSecretReq, _ ...grpc.CallOption) (*pb.RevokeTotpSecretResp, error) {
+	if m.totpSecretEnc == "" && m.totpSeed == "" {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	m.revokedSecrets = append(m.revokedSecrets, revokedTotpRow{confirmed: m.totpConfirmed})
 	m.totpSecretEnc, m.totpSeed = "", ""
 	m.totpConfirmed = false
-	m.deletedTotp = true
-	return &pb.DeleteTotpSecretResp{UserId: in.GetUserId()}, nil
+	m.revokedTotp = true
+	return &pb.RevokeTotpSecretResp{UserId: in.GetUserId()}, nil
 }
 func (m *mfaMock) CreateMfaChallenge(ctx context.Context, in *pb.CreateMfaChallengeReq, _ ...grpc.CallOption) (*pb.CreateMfaChallengeResp, error) {
 	m.ops = append(m.ops, "create")
 	m.createdChallenge = in
 	m.chUserID = in.GetUserId()
+	m.chThumb = in.GetThumbprint()
+	m.chPublic = in.GetPublicComputer()
 	m.chCodeHash = in.GetCodeHash()
 	m.chCreatedAt = timestamppb.Now()
 	m.chConsumed = false
@@ -248,16 +286,17 @@ func (m *mfaMock) RecordMfaAttempt(ctx context.Context, in *pb.RecordMfaAttemptR
 	return &pb.RecordMfaAttemptResp{Attempts: m.chAttempts}, nil
 }
 
-// device-path methods VerifyMfa transits (issueSession override)
-func (m *mfaMock) CreateDevice(ctx context.Context, in *pb.CreateDeviceReq, _ ...grpc.CallOption) (*pb.CreateDeviceResp, error) {
-	return &pb.CreateDeviceResp{Device: &pb.Device{Id: "dev-1", Identifier: in.GetIdentifier()}}, nil
+// device-path methods VerifyMfa transits: the device the session is bound to
+func (m *mfaMock) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	m.registeredDevice = in
+	return fakeRegisterDevice(in)
 }
 func (m *mfaMock) TrustDevice(ctx context.Context, in *pb.TrustDeviceReq, _ ...grpc.CallOption) (*pb.TrustDeviceResp, error) {
 	m.trustedDevice = in
 	return &pb.TrustDeviceResp{DeviceId: in.GetDeviceId()}, nil
 }
 func (m *mfaMock) IssueToken(ctx context.Context, in *pb.IssueTokenReq, _ ...grpc.CallOption) (*pb.IssueTokenResp, error) {
-	m.issuedHash = in.GetTokenHash()
+	m.issuedHash, m.issuedDevice, m.issuedReq = in.GetTokenHash(), in.GetDeviceId(), in
 	return &pb.IssueTokenResp{Token: &pb.UserToken{}}, nil
 }
 
@@ -284,7 +323,7 @@ func newMfaHandler(m *mfaMock) *AuthServiceHandler {
 func TestMfaGate_AllLogins_NoTotp_GeneratesCode(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
-	resp, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false)
+	resp, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false)
 	if err != nil || !challenged {
 		t.Fatalf("all_logins must challenge: challenged=%v err=%v", challenged, err)
 	}
@@ -306,7 +345,7 @@ func TestMfaGate_NewDevices_SkipsTrusted(t *testing.T) {
 	m := &mfaMock{}
 	h := newMfaHandler(m)
 	h.TwoFactorScope = scopeNewDevices
-	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", true)
+	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", true, false)
 	if err != nil {
 		t.Fatalf("gate: %v", err)
 	}
@@ -319,7 +358,7 @@ func TestMfaGate_NewDevices_ChallengesUntrusted(t *testing.T) {
 	m := &mfaMock{}
 	h := newMfaHandler(m)
 	h.TwoFactorScope = scopeNewDevices
-	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", false)
+	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "dev-1", false, false)
 	if err != nil || !challenged {
 		t.Errorf("new_devices must challenge an untrusted device: challenged=%v err=%v", challenged, err)
 	}
@@ -328,7 +367,7 @@ func TestMfaGate_NewDevices_ChallengesUntrusted(t *testing.T) {
 func TestMfaGate_TotpEnrolled_NoCode(t *testing.T) {
 	m := &mfaMock{totpSeed: "x", totpConfirmed: true} // confirmed authenticator
 	h := newMfaHandler(m)
-	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, "", false)
+	_, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1"}, testJKT, false, false)
 	if err != nil || !challenged {
 		t.Fatalf("must challenge: %v", err)
 	}
@@ -361,12 +400,12 @@ func TestEnrollConfirmVerify_TotpRoundTrip(t *testing.T) {
 		t.Error("confirm should mark the secret confirmed")
 	}
 	// Now a sign-in challenge + VerifyMfa with a TOTP code.
-	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, "", false)
+	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false)
 	if !challenged {
 		t.Fatal("expected challenge")
 	}
 	verifyCode := nextCode(t, enroll.GetSecret()) // the confirm spent this window's code
-	vresp, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: verifyCode})
+	vresp, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: verifyCode})
 	if err != nil {
 		t.Fatalf("verify (TOTP path): %v", err)
 	}
@@ -380,7 +419,7 @@ func TestVerifyMfa_EventCodePath(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false // event path even though we could enroll
 	ctx := ctxWithCaller("u1")
-	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false)
+	_, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false)
 	if !challenged {
 		t.Fatal("expected challenge")
 	}
@@ -388,7 +427,7 @@ func TestVerifyMfa_EventCodePath(t *testing.T) {
 	if code == "" {
 		t.Fatal("event path should have generated a code")
 	}
-	vresp, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: code})
+	vresp, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: code})
 	if err != nil {
 		t.Fatalf("verify (event path): %v", err)
 	}
@@ -397,13 +436,43 @@ func TestVerifyMfa_EventCodePath(t *testing.T) {
 	}
 }
 
+// The second factor completes the sign-in of the device that passed the
+// password: the challenge records SignIn's key, and VerifyMfa signed by any
+// other key is refused — even with the right code — as opaquely as a wrong
+// code, spending an attempt (so probing is bounded) without consuming the
+// challenge (which would record the factor as verified). The right key then
+// still completes it.
+func TestVerifyMfa_OnlyTheChallengedKeyCompletesTheSignIn(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	h.TwoFactorTOTP = false
+	ctx := ctxWithCaller("u1")
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
+		t.Fatal("expected challenge")
+	}
+	if m.createdChallenge.GetThumbprint() != testJKT {
+		t.Fatalf("the challenge records key %q, want SignIn's", m.createdChallenge.GetThumbprint())
+	}
+	code := m.createdChallenge.GetCode()
+	_, err := h.VerifyMfa(withJKT(ctx, otherJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: code})
+	if st, _ := status.FromError(err); st.Code() != codes.Unauthenticated || len(st.Details()) != 0 {
+		t.Fatalf("another key: err = %v, want the opaque refusal", err)
+	}
+	if m.chConsumed || m.issuedHash != "" || m.chAttempts != 1 {
+		t.Fatalf("another key: consumed=%v issued=%q attempts=%d, want an attempt spent and nothing else", m.chConsumed, m.issuedHash, m.chAttempts)
+	}
+	if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: code}); err != nil {
+		t.Fatalf("the challenged key was refused after a probe: %v", err)
+	}
+}
+
 func TestVerifyMfa_WrongCode_Unauthenticated(t *testing.T) {
 	m := &mfaMock{}
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
 	ctx := ctxWithCaller("u1")
-	_, _, _ = signInMfaGate(ctx, h, &pb.User{Id: "u1"}, "", false)
-	if _, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"}); err == nil {
+	_, _, _ = signInMfaGate(ctx, h, &pb.User{Id: "u1"}, testJKT, false, false)
+	if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"}); err == nil {
 		t.Error("a wrong code must fail VerifyMfa")
 	}
 }
@@ -412,7 +481,7 @@ func TestVerifyMfa_WrongCode_Unauthenticated(t *testing.T) {
 // the TTL. After maxMfaAttempts wrong codes the challenge is locked — even
 // the CORRECT code is then refused (the attacker can't outrun the counter).
 func TestVerifyMfa_LocksOutAfterMaxAttempts(t *testing.T) {
-	m := &mfaMock{chUserID: "u1", chCreatedAt: timestamppb.Now()}
+	m := &mfaMock{chUserID: "u1", chThumb: testJKT, chCreatedAt: timestamppb.Now()}
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false // event/code path
 	ctx := ctxWithCaller("u1")
@@ -425,7 +494,7 @@ func TestVerifyMfa_LocksOutAfterMaxAttempts(t *testing.T) {
 	m.chCodeHash = hash
 
 	for i := 0; i < maxMfaAttempts; i++ {
-		if _, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"}); err == nil {
+		if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"}); err == nil {
 			t.Fatalf("wrong-code attempt %d must fail", i+1)
 		}
 	}
@@ -433,7 +502,7 @@ func TestVerifyMfa_LocksOutAfterMaxAttempts(t *testing.T) {
 		t.Fatalf("recorded attempts = %d, want >= %d (failures must be counted)", m.chAttempts, maxMfaAttempts)
 	}
 	// The challenge is now locked: the correct code is rejected too.
-	if _, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "123456"}); err == nil {
+	if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "123456"}); err == nil {
 		t.Fatal("after maxMfaAttempts failures the challenge must be locked even for the correct code")
 	}
 }
@@ -441,21 +510,22 @@ func TestVerifyMfa_LocksOutAfterMaxAttempts(t *testing.T) {
 func TestVerifyMfa_Expired_Unauthenticated(t *testing.T) {
 	m := &mfaMock{
 		chUserID:    "u1",
+		chThumb:     testJKT,
 		chCodeHash:  "",
 		chCreatedAt: timestamppb.New(time.Now().Add(-10 * time.Minute)), // older than TTL
 	}
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
-	if _, err := h.VerifyMfa(ctxWithCaller("u1"), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "123456"}); err == nil {
+	if _, err := h.VerifyMfa(withJKT(ctxWithCaller("u1"), testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "123456"}); err == nil {
 		t.Error("an expired challenge must fail VerifyMfa")
 	}
 }
 
 func TestVerifyMfa_Consumed_Unauthenticated(t *testing.T) {
-	m := &mfaMock{chUserID: "u1", chCreatedAt: timestamppb.Now(), chConsumed: true}
+	m := &mfaMock{chUserID: "u1", chThumb: testJKT, chCreatedAt: timestamppb.Now(), chConsumed: true}
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
-	if _, err := h.VerifyMfa(ctxWithCaller("u1"), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "123456"}); err == nil {
+	if _, err := h.VerifyMfa(withJKT(ctxWithCaller("u1"), testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "123456"}); err == nil {
 		t.Error("an already-consumed challenge must fail VerifyMfa")
 	}
 }
@@ -514,7 +584,7 @@ func TestLegacySeed_KeyGone_Refuses(t *testing.T) {
 	if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeTotpUnavailable {
 		t.Errorf("want FailedPrecondition/%s, got %v", CodeTotpUnavailable, err)
 	}
-	if m.deletedTotp {
+	if m.revokedTotp {
 		t.Error("an authenticator that could not be checked was dropped")
 	}
 }
@@ -533,7 +603,7 @@ func TestGetMfaStatus_ReflectsEnrollment(t *testing.T) {
 
 // enrollAndConfirm sets up a CONFIRMED authenticator on the mock and
 // returns the plaintext secret so a test can compute live codes. It
-// resets the mock's recorded `deletedTotp` flag because EnrollTotp
+// resets the mock's recorded `revokedTotp` flag because EnrollTotp
 // itself delete-then-creates (so the flag reflects only post-setup
 // deletions).
 func enrollAndConfirm(t *testing.T, h *AuthServiceHandler, m *mfaMock, ctx context.Context) string {
@@ -546,7 +616,7 @@ func enrollAndConfirm(t *testing.T, h *AuthServiceHandler, m *mfaMock, ctx conte
 	if _, err := h.ConfirmTotp(ctx, &pb.ConfirmTotpReq{Code: code}); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	m.deletedTotp = false
+	m.revokedTotp = false
 	return enroll.GetSecret()
 }
 
@@ -562,7 +632,7 @@ func TestDisableTotp_ValidCode_Deletes(t *testing.T) {
 	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: nextCode(t, secret)}); err != nil {
 		t.Fatalf("disable with valid code: %v", err)
 	}
-	if !m.deletedTotp {
+	if !m.revokedTotp {
 		t.Error("DisableTotp with a valid code should delete the secret")
 	}
 }
@@ -578,7 +648,7 @@ func TestDisableTotp_WrongCode_Rejected(t *testing.T) {
 	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: "000000"}); err == nil {
 		t.Error("DisableTotp with a wrong code must fail")
 	}
-	if m.deletedTotp {
+	if m.revokedTotp {
 		t.Error("a wrong code must NOT delete the confirmed secret (2FA-disable hijack)")
 	}
 }
@@ -593,7 +663,7 @@ func TestDisableTotp_EmptyCode_Rejected(t *testing.T) {
 	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{}); err == nil {
 		t.Error("DisableTotp with an empty code must fail")
 	}
-	if m.deletedTotp {
+	if m.revokedTotp {
 		t.Error("an empty code must NOT delete the confirmed secret")
 	}
 }
@@ -612,28 +682,18 @@ func TestDisableTotp_Unconfirmed_NoCodeNeeded(t *testing.T) {
 	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{}); err != nil {
 		t.Fatalf("disable pending enrollment: %v", err)
 	}
-	if !m.deletedTotp {
+	if !m.revokedTotp {
 		t.Error("an unconfirmed enrollment should be cancellable without a code")
 	}
 }
 
-func TestValidateConfig_NewDevicesRequiresDevices(t *testing.T) {
-	// devices.go init() sets devicesActive=true in the standalone binary;
-	// flip it to exercise both branches of the guard.
-	saved := devicesActive
-	defer func() { devicesActive = saved }()
-
-	devicesActive = false
-	if err := ValidateConfig(&AuthServiceHandler{TwoFactorScope: "new_devices"}); err == nil {
-		t.Error("new_devices without the devices feature must be rejected at bootstrap")
-	}
-	if err := ValidateConfig(&AuthServiceHandler{TwoFactorScope: "all_logins"}); err != nil {
-		t.Errorf("all_logins must validate without devices: %v", err)
-	}
-
-	devicesActive = true
-	if err := ValidateConfig(&AuthServiceHandler{TwoFactorScope: "new_devices"}); err != nil {
-		t.Errorf("new_devices WITH devices must validate: %v", err)
+// Device identity is base tier: every activation knows the device a sign-in
+// comes from, so new_devices no longer needs the `devices` feature.
+func TestValidateConfig_NewDevicesNeedsNoFeature(t *testing.T) {
+	for _, scope := range []string{"new_devices", "all_logins"} {
+		if err := ValidateConfig(&AuthServiceHandler{TwoFactorScope: scope}); err != nil {
+			t.Errorf("%s must validate in every activation: %v", scope, err)
+		}
 	}
 }
 
@@ -658,7 +718,7 @@ func TestDisableTotp_ReadFailure_DoesNotDisableWithoutACode(t *testing.T) {
 	if _, err := h.DisableTotp(ctx, &pb.DisableTotpReq{Code: "000000"}); err == nil {
 		t.Error("a failed enrolment read must refuse, not skip the TOTP check")
 	}
-	if m.deletedTotp {
+	if m.revokedTotp {
 		t.Error("a confirmed second factor was dropped without a valid code")
 	}
 }
@@ -669,7 +729,7 @@ func TestMfaGate_ReadFailure_RefusesRatherThanSkipTheChallenge(t *testing.T) {
 	h := newMfaHandler(m)
 	m.totpReadErr = status.Error(codes.Unavailable, "enrolment store down")
 
-	_, _, err := mfaSignInGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false)
+	_, _, err := mfaSignInGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false, false)
 	if err == nil {
 		t.Error("a failed enrolment read must not let sign-in proceed on one factor")
 	}
@@ -708,10 +768,10 @@ func TestVerifyMfa_ReadFailure_DoesNotFallToTheWeakerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	m.chUserID, m.chCodeHash, m.chCreatedAt = "u1", hash, timestamppb.Now()
+	m.chUserID, m.chCodeHash, m.chCreatedAt, m.chThumb = "u1", hash, timestamppb.Now(), testJKT
 	m.totpReadErr = status.Error(codes.Unavailable, "enrolment store down")
 
-	if _, err := h.VerifyMfa(context.Background(), &pb.VerifyMfaReq{ChallengeId: "c1", Code: "123456"}); err == nil {
+	if _, err := h.VerifyMfa(mintCtx(), &pb.VerifyMfaReq{ChallengeId: "c1", Code: "123456"}); err == nil {
 		t.Error("an unreadable enrolment must not be verified against the fallback code")
 	}
 }
@@ -735,7 +795,7 @@ func TestVerifyMfa_ConcurrentGuessesShareOneBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	m.chUserID, m.chCodeHash, m.chCreatedAt = "u1", hash, timestamppb.Now()
+	m.chUserID, m.chCodeHash, m.chCreatedAt, m.chThumb = "u1", hash, timestamppb.Now(), testJKT
 
 	// Every one of these is WRONG, so none may succeed on its own merit; what
 	// is being counted is how many were allowed to try at all. The mock's
@@ -753,7 +813,7 @@ func TestVerifyMfa_ConcurrentGuessesShareOneBudget(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			_, _ = h.VerifyMfa(context.Background(), &pb.VerifyMfaReq{
+			_, _ = h.VerifyMfa(mintCtx(), &pb.VerifyMfaReq{
 				ChallengeId: "c1", Code: fmt.Sprintf("%06d", n),
 			})
 		}(i)
@@ -787,9 +847,9 @@ type failingCreateTotp struct {
 	deleted bool
 }
 
-func (f *failingCreateTotp) DeleteTotpSecret(ctx context.Context, in *pb.DeleteTotpSecretReq, o ...grpc.CallOption) (*pb.DeleteTotpSecretResp, error) {
+func (f *failingCreateTotp) RevokeTotpSecret(ctx context.Context, in *pb.RevokeTotpSecretReq, o ...grpc.CallOption) (*pb.RevokeTotpSecretResp, error) {
 	f.deleted = true
-	return f.mfaMock.DeleteTotpSecret(ctx, in, o...)
+	return f.mfaMock.RevokeTotpSecret(ctx, in, o...)
 }
 
 func (f *failingCreateTotp) CreateTotpSecret(context.Context, *pb.CreateTotpSecretReq, ...grpc.CallOption) (*pb.CreateTotpSecretResp, error) {
@@ -835,7 +895,7 @@ func TestEnrollTotp_BothWritesGoThroughOneSeam(t *testing.T) {
 	}
 	end := strings.Index(body[i:], "\n}\n")
 	fn := body[i : i+end]
-	for _, direct := range []string{"h.Mutation.DeleteTotpSecret(", "h.Mutation.CreateTotpSecret("} {
+	for _, direct := range []string{"h.Mutation.RevokeTotpSecret(", "h.Mutation.CreateTotpSecret("} {
 		if strings.Contains(fn, direct) {
 			t.Errorf("EnrollTotp calls %s directly — the two writes are separable again, "+
 				"and a failure between them takes the user's existing authenticator with it", direct)
@@ -844,12 +904,17 @@ func TestEnrollTotp_BothWritesGoThroughOneSeam(t *testing.T) {
 	if !strings.Contains(fn, "replaceTotpSecret(") {
 		t.Error("EnrollTotp no longer goes through replaceTotpSecret — nothing holds the pair together")
 	}
-	if !strings.Contains(fn, "h.inMfaTx(") {
+	if !strings.Contains(fn, "h.inTx(") {
 		t.Error("EnrollTotp opens no transaction — the seam exists but nothing wraps it")
 	}
-	j := strings.Index(body, "func (h *AuthServiceHandler) inMfaTx(")
-	if j < 0 || !strings.Contains(body[j:j+strings.Index(body[j:], "\n}\n")], "distx.Begin(") {
-		t.Error("inMfaTx begins no distributed transaction")
+	helper, err := os.ReadFile("signin_history.go")
+	if err != nil {
+		t.Fatalf("read signin_history.go: %v", err)
+	}
+	hb := string(helper)
+	j := strings.Index(hb, "func (h *AuthServiceHandler) inTx(")
+	if j < 0 || !strings.Contains(hb[j:j+strings.Index(hb[j:], "\n}\n")], "distx.Begin(") {
+		t.Error("inTx begins no distributed transaction")
 	}
 }
 
@@ -860,11 +925,11 @@ func TestVerifyMfa_ADisabledAccountGetsNoSession(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
 	ctx := ctxWithCaller("u1")
-	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false); !challenged {
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
 		t.Fatal("expected challenge")
 	}
 	m.disabled = true
-	resp, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: m.createdChallenge.GetCode()})
+	resp, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: m.createdChallenge.GetCode()})
 	if status.Code(err) != codes.Unauthenticated || resp.GetToken() != "" {
 		t.Fatalf("a disabled account finished its sign-in: %v %v", resp, err)
 	}
@@ -911,11 +976,11 @@ func TestVerifyMfa_TrustIsGuardedFromTheChallengeOn(t *testing.T) {
 	h := newMfaHandler(m)
 	h.TwoFactorTOTP = false
 	ctx := ctxWithCaller("u1")
-	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, "", false); !challenged {
+	if _, challenged, _ := signInMfaGate(ctx, h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); !challenged {
 		t.Fatal("expected challenge")
 	}
 	m.chCreatedAt = timestamppb.New(time.Now().Add(-time.Minute))
-	if _, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: m.createdChallenge.GetCode()}); err != nil {
+	if _, err := h.VerifyMfa(withJKT(ctx, testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: m.createdChallenge.GetCode()}); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
 	if m.trustedDevice == nil {
@@ -923,5 +988,13 @@ func TestVerifyMfa_TrustIsGuardedFromTheChallengeOn(t *testing.T) {
 	}
 	if got := m.trustedDevice.GetNotRevokedAfter(); !got.AsTime().Equal(m.chCreatedAt.AsTime()) {
 		t.Errorf("trust cutoff = %v, want the challenge's creation %v", got, m.chCreatedAt)
+	}
+	// The device trusted, and the one the session is bound to, is the key that
+	// signed THIS request — the one that passed the second factor.
+	if m.registeredDevice.GetThumbprint() != testJKT || m.registeredDevice.GetUserId() != "u1" {
+		t.Errorf("RegisterDevice = %+v, want (u1, the request's key)", m.registeredDevice)
+	}
+	if want := "dev-" + testJKT[:8]; m.issuedDevice != want || m.trustedDevice.GetDeviceId() != want {
+		t.Errorf("bound to %q, trusted %q, want both %q", m.issuedDevice, m.trustedDevice.GetDeviceId(), want)
 	}
 }

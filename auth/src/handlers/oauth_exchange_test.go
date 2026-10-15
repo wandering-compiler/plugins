@@ -71,13 +71,13 @@ func TestOAuthExchange_OnlyTheStartingBrowsersVerifierRedeems(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := strings.Repeat("x", 43)
-	if _, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: other}); err == nil {
+	if _, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: other}); err == nil {
 		t.Fatal("another browser's verifier redeemed the code")
 	}
 	if m.issuedHash != "" {
 		t.Error("a refused exchange issued a session")
 	}
-	if _, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()}); err == nil {
+	if _, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()}); err == nil {
 		t.Error("a code that met a wrong verifier still redeemed")
 	}
 }
@@ -91,7 +91,7 @@ func TestOAuthExchange_ACodeRedeemsOnce(t *testing.T) {
 	if redeem(t, h, resp).GetToken() == "" {
 		t.Fatal("the first exchange issued no session")
 	}
-	if _, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()}); err == nil {
+	if _, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: resp.GetCode(), CodeVerifier: validVerifier()}); err == nil {
 		t.Error("a code redeemed twice")
 	}
 }
@@ -102,7 +102,7 @@ func TestOAuthExchange_RefusesAShortVerifierOrNoCode(t *testing.T) {
 		{Code: "c", CodeVerifier: strings.Repeat("x", 42)},
 		{Code: "", CodeVerifier: validVerifier()},
 	} {
-		if _, err := h.OAuthExchange(context.Background(), r); err == nil {
+		if _, err := h.OAuthExchange(mintCtx(), r); err == nil {
 			t.Errorf("exchange %+v was accepted", r)
 		}
 	}
@@ -192,7 +192,7 @@ func TestOAuth_TheRawChallengeIsAcceptedNowhere(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.OAuthExchange(context.Background(), &pb.OAuthExchangeReq{Code: "raw-code", CodeVerifier: validVerifier()}); err == nil {
+	if _, err := h.OAuthExchange(mintCtx(), &pb.OAuthExchangeReq{Code: "raw-code", CodeVerifier: validVerifier()}); err == nil {
 		t.Error("a login code stored with the raw challenge redeemed")
 	}
 }
@@ -216,7 +216,11 @@ func TestOAuthExchange_DoesNotTrustTheDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	ex := redeem(t, h, resp)
-	if m.trustedDevice || ex.GetDeviceTrustToken() != "" {
-		t.Errorf("the OAuth exchange trusted the device (trust token %q)", ex.GetDeviceTrustToken())
+	if m.trustedDevice {
+		t.Error("the OAuth exchange trusted the device")
+	}
+	// It is still bound to the device whose key signed the exchange.
+	if m.issuedDevice != "dev-"+testJKT[:8] || ex.GetToken() == "" {
+		t.Errorf("the OAuth session is bound to %q, want the exchange's device", m.issuedDevice)
 	}
 }
