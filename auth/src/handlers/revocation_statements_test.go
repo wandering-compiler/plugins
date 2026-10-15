@@ -333,38 +333,40 @@ func TestAuthClientStatements(t *testing.T) {
 	}
 }
 
-// The admin pages offer no delete for users and sessions: the Users and
-// ServiceAccounts pages erase, the Sessions page revokes — through the service
-// methods that record the operator.
+// The admin pages' `delete` deletes nothing: on Users and ServiceAccounts it
+// erases, on Sessions it revokes — through the service methods that record the
+// operator. The slot keeps its name, so an existing admin keeps its button, its
+// permission and its tests; and no page gains an action that duplicates it (an
+// action would add a permission and a scaffolded e2e test on upgrade).
 func TestAdminPagesEraseAndRevokeNeverDelete(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "plugin.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest := string(raw)
-	for _, banned := range []string{"AuthMutation.DeleteUser", "delete: AuthMutation.RevokeUserToken", "update: AuthMutation.UpdateUser"} {
+	for _, banned := range []string{"AuthMutation.DeleteUser", "delete: AuthMutation.RevokeUserToken", "update: AuthMutation.UpdateUser", "source: AuthService.EraseUsers", "source: AuthService.RevokeSessions"} {
 		if strings.Contains(manifest, banned) {
 			t.Errorf("plugin.yaml still binds %s", banned)
 		}
 	}
-	for _, page := range []string{"name: Users\n", "name: ServiceAccounts\n", "name: Sessions\n"} {
-		i := strings.Index(manifest, page)
+	for page, want := range map[string]string{
+		"Users":           "delete: AuthService.EraseAccount\n",
+		"ServiceAccounts": "delete: AuthService.EraseAccount\n",
+		"Sessions":        "delete: AuthService.RevokeSession\n",
+	} {
+		i := strings.Index(manifest, "      - name: "+page+"\n")
 		if i < 0 {
-			t.Fatalf("no %q page", strings.TrimSpace(page))
+			t.Fatalf("no %s page", page)
 		}
 		block := manifest[i:]
 		if end := strings.Index(block[1:], "\n      - name: "); end > 0 {
 			block = block[:end+1]
 		}
-		if strings.Contains(block, "delete:") {
-			t.Errorf("page %s still has a delete:\n%s", strings.TrimSpace(page), block)
-		}
-		want := "source: AuthService.EraseUsers"
-		if page == "name: Sessions\n" {
-			want = "source: AuthService.RevokeSessions"
-		}
 		if !strings.Contains(block, want) {
-			t.Errorf("page %s lacks the %s action:\n%s", strings.TrimSpace(page), want, block)
+			t.Errorf("page %s lacks %q:\n%s", page, strings.TrimSpace(want), block)
+		}
+		if strings.Contains(block, "name: erase\n") || strings.Contains(block, "name: revoke\n") {
+			t.Errorf("page %s duplicates its delete with an action:\n%s", page, block)
 		}
 	}
 }

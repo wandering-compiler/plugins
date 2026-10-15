@@ -771,6 +771,48 @@ func TestRevokeSessions_TheOperatorRevokesAndARevokedRowIsANoOp(t *testing.T) {
 	}
 }
 
+// The admin's `delete` slots, which kept their names and responses: Sessions'
+// revokes one token with the operator recorded and answers its id (a second
+// delete is a no-op, not an error), Users' erases the account with the
+// operator recorded and answers its id. Both need a caller.
+func TestRevokeSessionAndEraseAccount_TheDeleteSlots(t *testing.T) {
+	s := aliceStore()
+	s.addUser("admin", "ops@example.com")
+	h := eraseHandler(s)
+	ctx := sessionCallerCtx("admin", "t-admin")
+
+	resp, err := h.RevokeSession(ctx, &pb.RevokeSessionReq{Id: "t-session"})
+	if err != nil || resp.GetTokenId() != "t-session" {
+		t.Fatalf("RevokeSession = %+v, %v; want token_id t-session", resp, err)
+	}
+	tok := assertRevoked(t, s, "t-session", "admin", pb.RevokeReason_REVOKE_REASON_ADMIN_REVOKED)
+	assertRefusedLikeExpired(t, s, h, tok, "alice-session")
+	first := *tok
+	if resp, err := h.RevokeSession(ctx, &pb.RevokeSessionReq{Id: "t-session"}); err != nil || resp.GetTokenId() != "t-session" {
+		t.Errorf("revoking a revoked session = %+v, %v; want token_id and no error", resp, err)
+	}
+	if !proto.Equal(tok.revokedAt, first.revokedAt) || tok.revokedBy != first.revokedBy {
+		t.Errorf("the second revoke rewrote the first: %+v, was %+v", tok, first)
+	}
+
+	er, err := h.EraseAccount(ctx, &pb.EraseAccountReq{UserId: "u1"})
+	if err != nil || er.GetUserId() != "u1" {
+		t.Fatalf("EraseAccount = %+v, %v; want user_id u1", er, err)
+	}
+	u := s.users["u1"]
+	if u == nil || u.erasedAt == nil || u.disabledAt == nil || u.email != "erased-u1@erased.invalid" {
+		t.Fatalf("user after EraseAccount = %+v, want the row kept, erased and disabled", u)
+	}
+	assertRevoked(t, s, "t-other", "admin", pb.RevokeReason_REVOKE_REASON_USER_ERASED)
+
+	if _, err := h.RevokeSession(context.Background(), &pb.RevokeSessionReq{Id: "t-other"}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("RevokeSession without a caller: %v, want Unauthenticated", err)
+	}
+	if _, err := h.EraseAccount(context.Background(), &pb.EraseAccountReq{UserId: "admin"}); status.Code(err) != codes.Unauthenticated {
+		t.Errorf("EraseAccount without a caller: %v, want Unauthenticated", err)
+	}
+}
+
 // DisableUsers' token leg: every token of the account revoked, with no actor
 // (the admin action binds the storage mutation). Refused as expired tokens
 // are; re-enabling gives none of them back.

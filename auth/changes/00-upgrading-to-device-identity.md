@@ -24,7 +24,7 @@ This release binds every token to a device key and stops deleting rows from the 
    - Every existing session is refused once, so everyone signs in again, one time. A pending second-factor challenge has to be started over.
    - API tokens and machine-account tokens issued before this release are refused. Issue them again with the public JWK of the program that uses them: `w17ctl key public`, or the SDKs' keygen helper. The program then signs every request with that key.
 5. **Update project code that calls the plugin's storage directly.**
-   - Renamed: `DeleteToken` → `RevokeToken`, `DeleteSessionToken` → `RevokeSessionToken`, `DeleteApiToken` → `MarkApiTokenRevoked`, `DeleteOtherSessionTokens` → `RevokeOtherSessionTokens`, `DeleteUserSessionsForReset` → `RevokeTokensForReset`, `DeleteDeviceTokens` → `RevokeDeviceTokens`, `DeleteUndevicedSessions` → `RevokeUndevicedSessions`, `DeleteAllUserTokens` → `RevokeAllUserTokens`, `DeleteAuthClient` → `RevokeAuthClient`, and `DeleteUser` → `BeginUserErasure` + `EraseUser` (through `AuthService.EraseUsers`).
+   - Renamed: `DeleteToken` → `RevokeToken`, `DeleteSessionToken` → `RevokeSessionToken`, `DeleteApiToken` → `MarkApiTokenRevoked`, `DeleteOtherSessionTokens` → `RevokeOtherSessionTokens`, `DeleteUserSessionsForReset` → `RevokeTokensForReset`, `DeleteDeviceTokens` → `RevokeDeviceTokens`, `DeleteUndevicedSessions` → `RevokeUndevicedSessions`, `DeleteAllUserTokens` → `RevokeAllUserTokens`, `DeleteAuthClient` → `RevokeAuthClient`, and `DeleteUser` → `BeginUserErasure` + `EraseUser` (through `AuthService.EraseAccount`, or `AuthService.EraseUsers` for several).
    - Also renamed: `DeleteOrgMembership` → `MarkOrgMembershipRemoved`, `DeleteOrgInvite` → `CloseOrgInvite`, `ClearExpiredOrgInvite` → `CloseExpiredOrgInvite`, `DeletePendingSignUpsForEmail` → `SupersedePendingSignUpsForEmail`, `DeleteTotpSecret` → `RevokeTotpSecret`, and `DeleteRecoveryCodes` → `RevokeRecoveryCodes`. `AuthService.DeleteClient` keeps its name and route and now revokes the registration.
    - Removed: `DeleteTokenPermissions`, `PurgeExpiredPendingSignUps`, and the device rpcs `GetDeviceByIdentifier`, `CreateDevice`, `TouchDevice`, `DeleteDevice` and `DeleteAllUserDevices` (now `RegisterDevice` and `MarkDeviceRevoked`). The `X-Device-Id` and `X-Device-Trust` headers and `device_trust_token` are gone too.
    - Changed requests and responses:
@@ -36,11 +36,18 @@ This release binds every token to a device key and stops deleting rows from the 
    - Roles: `AddPermissionToRole` revives a removed pair and still refuses one the role holds (`ALREADY_EXISTS`). It and `AssignRoleToUser` refuse a deleted or unknown role (`NOT_FOUND` / `ROLE_NOT_FOUND`). A preset role deleted at runtime stays deleted across re-seeds; declare it under a new key to bring it back.
    - Events: `UserDeleted` (`auth.user.deleted`) keeps its name and topic; the erasure emits it (erasure is the plugin's deletion). New `ApiTokenCreated`. The token and MFA events carry `device_id`.
 6. **The admin changes.**
-   - Delete buttons are gone. Users and ServiceAccounts erase (`Erase`), and Sessions and Devices revoke (`Revoke`). Revoked and erased rows stay listed.
+   - The `delete` on the Users, ServiceAccounts and Sessions pages stays, with its button, its permission (the model's `delete`) and its response, so hand-written admin tests (`admin.Users.Delete` → `user_id`, `admin.Sessions.Delete` → `token_id`) keep passing. It no longer deletes: on Users and ServiceAccounts it erases the account (`AuthService.EraseAccount`), on Sessions it revokes the token (`AuthService.RevokeSession`), the operator recorded either way. Revoked and erased rows stay listed.
    - New pages, opt-in: `Devices` (feature `admin_devices`) and `SignIns` (feature `admin_sign_ins`), both requiring `user_admin`. The upgrade adds no page to an existing activation. To get them, enable the features and, if your admin declares `nav` groups, add the pages to one: an admin with nav groups must list every page, and the build refuses one it does not list.
    - The Sessions page shows each session's device by its label, without a link to the Devices page.
    - The admin's sign-in form has a "This is a public computer" box, and the app's sign-in requests take `public_computer`. Such a session never trusts the device, is kept in session storage only, and expires after `public_session_ttl_seconds`.
    - Federated (OAuth) sign-in to the admin needs `oauth` enabled on the admin's realm. Without it the sign-in returns a token bound to no key, and the admin refuses it.
-7. **Known limits.**
+7. **Opt-in features.** Everything this release adds to a published surface is behind a feature that is off by default, so an upgrade adds no page, endpoint, admin action, permission or scaffolded e2e test to an existing activation:
+   - `admin_sign_ins` — the admin `SignIns` page (requires `user_admin`).
+   - `admin_devices` — the admin `Devices` page and its `Revoke` action (requires `user_admin`).
+   - `my_sign_ins` — `GET /auth/sign-ins`, the caller's own sign-in history (requires `authenticate_turnkey`).
+   - `client_secret_rotation` — `POST /auth/clients/{id}/rotate-secret` (requires `cli_login`).
+
+   One addition is not optional: with `oauth`, `POST /auth/oauth/exchange` is published, because the callback now hands the browser a login code instead of a session and the exchange is the only way to redeem it. A project with `oauth` gets a scaffolded e2e test for it on the next generation and should write it (or keep its own test of the OAuth flow).
+8. **Known limits.**
    - MCP clients keep their OAuth flow without DPoP. Their tokens (`mcp_only`) are accepted only on the MCP surface.
    - On a surface that binds devices, the e2e runner skips MCP scenarios and counts the skips.
