@@ -61,7 +61,7 @@ func TestSessionTokenExpiry_DefaultWhenUnset(t *testing.T) {
 func TestIssueSession_StampsExpiry(t *testing.T) {
 	m := &ttlMutationMock{}
 	h := &AuthServiceHandler{Mutation: m, SessionTokenTTLSeconds: 3600}
-	if _, err := issueSession(context.Background(), h, "user-1", "dev-1", nil); err != nil {
+	if _, err := issueSession(context.Background(), h, beginSignIn(context.Background(), pb.SignInMethod_SIGN_IN_METHOD_PASSWORD), "user-1", signInDevice{id: "dev-1"}, nil); err != nil {
 		t.Fatalf("issueSession: %v", err)
 	}
 	if !m.called {

@@ -15,6 +15,14 @@ syntax = "proto3";
 // Every id field on every event is a UUID (string carrier) —
 // mirrors the plugin's UUID-native identifier strategy
 // (types/models.proto §"Identifier strategy").
+//
+// device_id is the exception: on the token, sign-in and MFA events it is the
+// key thumbprint of the device that caused the event (RFC 7638, 43
+// characters) — the value AuthResp.device_id and principal.DeviceID carry,
+// so a subscriber can match it against the device of any request — not the
+// Device row's UUID. Each emit fills it from its request's event-only
+// `thumbprint`. The sign-in attempts themselves are not events: they are the
+// SignInEvent rows (types/models.proto).
 
 package w17.contrib.auth;
 
@@ -38,16 +46,18 @@ message UserCreated {
   google.protobuf.Timestamp created_at = 3;
 }
 
-// UserErased — emitted on AuthMutation.EraseUser once an account has been
+// UserDeleted — emitted on AuthMutation.EraseUser once an account has been
 // erased (GDPR): its row pseudonymised in place, its tokens and devices
-// revoked. Nothing was deleted, in this plugin or by it. A subscriber holding
-// the person's data under this user_id (a profile, a mailing list, a billing
-// contact) erases its own copy here. Carries only the id: the address is gone,
-// and an event is no place to keep it. Gated user_admin.
-message UserErased {
+// revoked. Erasure is how this plugin deletes an account: nothing is deleted,
+// in this plugin or by it, and the event keeps its released name and topic so
+// every project's events lock that lists it still compiles. A subscriber
+// holding the person's data under this user_id (a profile, a mailing list, a
+// billing contact) erases its own copy here. Carries only the id: the address
+// is gone, and an event is no place to keep it. Gated user_admin.
+message UserDeleted {
   option (w17.event) = {
     channel: "events"
-    topic:   "auth.user.erased"
+    topic:   "auth.user.deleted"
   };
   option (w17.contrib.plugin_feature) = "user_admin";
 
@@ -84,6 +94,40 @@ message UserTokenRevoked {
   option (w17.contrib.plugin_feature) = "user_admin";
 
   string token_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the operator's device,
+  // not the revoked token's.
+  string device_id = 2;
+}
+
+// ApiTokenCreated — emitted on AuthMutation.IssueApiToken after the token
+// commits: a person's API token (CreateApiToken) or a machine account's
+// (IssueBotToken). Audit and notification hook ("a new API token was created
+// on your account"). No secret: never the token, its hash or a key — only the
+// key's thumbprint.
+message ApiTokenCreated {
+  option (w17.event) = { channel: "events", topic: "auth.api_token.created" };
+  option (w17.contrib.plugin_feature) = "api_token";
+
+  string                    token_id   = 1;
+  // The token's owner: the person, or the machine account.
+  string                    user_id    = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // device_id — the key thumbprint of the device that CREATED it (the value
+  // AuthResp.device_id and principal.DeviceID carry for the creating
+  // request): the browser, or the CLI session's own key when a CLI created
+  // it. Empty when the request carried no device. The token records the
+  // ROOT approver instead (UserToken.approved_by_device_id: for a CLI
+  // session, the browser that approved the CLI), so this is where the
+  // immediate creator stays visible.
+  string                    device_id  = 4;
+  // key_thumbprint — the thumbprint of the PROGRAM's key the token is bound
+  // to (the device id Authenticate answers for its requests).
+  string                    key_thumbprint = 5;
+  string                    name       = 6;
+  // created_by — the account that created it: the owner itself for
+  // CreateApiToken, the operator for IssueBotToken.
+  string                    created_by = 7;
 }
 
 // TokenIssued — emitted on AuthMutation.IssueToken after the
@@ -99,6 +143,10 @@ message TokenIssued {
   string                    token_id  = 1;
   string                    user_id   = 2;
   google.protobuf.Timestamp issued_at = 3;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the device the token
+  // is bound to, which signed the sign-in.
+  string                    device_id = 4;
 }
 
 // TokenRevoked — emitted on AuthMutation.RevokeSessionToken (the live
@@ -126,6 +174,10 @@ message TokenRevoked {
 
   string token_id = 1;
   string user_id  = 2;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the device that
+  // signed out.
+  string device_id = 3;
 }
 
 // RBAC lifecycle — fired by the eight mutations on the
@@ -141,6 +193,9 @@ message RoleCreated {
   google.protobuf.Timestamp created_at = 3;
 }
 
+// RoleDeleted — emitted on AuthMutation.DeleteRole. The role row stays,
+// stamped deleted_at, and every grant of it was revoked in the same
+// transaction (no UserRoleRevoked is emitted for those).
 message RoleDeleted {
   option (w17.event) = { channel: "events", topic: "auth.role.deleted" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -180,6 +235,8 @@ message UserRoleAssigned {
   string                    org_id       = 5 [(w17.contrib.plugin_feature_field) = "org_membership"];
 }
 
+// UserRoleRevoked — emitted on AuthMutation.RevokeRoleFromUser. The grant
+// row stays, stamped revoked_at.
 message UserRoleRevoked {
   option (w17.event) = { channel: "events", topic: "auth.user_role.revoked" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -189,6 +246,9 @@ message UserRoleRevoked {
   string org_id  = 3 [(w17.contrib.plugin_feature_field) = "org_membership"];
 }
 
+// RolePermissionAdded — emitted when AuthMutation.AddPermissionToRole grants
+// a permission: a new pair, or a removed one revived. Not for a refusal (a
+// deleted role, a permission the role already carries): nothing changed.
 message RolePermissionAdded {
   option (w17.event) = { channel: "events", topic: "auth.role_permission.added" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -202,6 +262,8 @@ message RolePermissionAdded {
   google.protobuf.Timestamp added_at           = 4;
 }
 
+// RolePermissionRemoved — emitted on AuthMutation.RemovePermissionFromRole.
+// The row stays, stamped removed_at.
 message RolePermissionRemoved {
   option (w17.event) = { channel: "events", topic: "auth.role_permission.removed" };
   option (w17.contrib.plugin_feature) = "rbac";
@@ -235,6 +297,10 @@ message MfaChallengeRequested {
   string                    email         = 4; // delivery hint
   string                    code          = 5; // plugin-generates mode only; blank otherwise
   google.protobuf.Timestamp expires_at    = 6;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry): the device that passed
+  // the password and must complete the sign-in.
+  string                    device_id     = 7;
 }
 
 // MfaVerified — emitted by ConsumeMfaChallenge on a successful second
@@ -244,6 +310,9 @@ message MfaVerified {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id      = 1;
   string challenge_id = 2;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id    = 3;
 }
 
 // TotpEnrolled / TotpConfirmed / TotpDisabled — authenticator lifecycle
@@ -253,18 +322,30 @@ message TotpEnrolled {
   option (w17.contrib.plugin_feature) = "two_factor";
   string                    user_id     = 1;
   google.protobuf.Timestamp enrolled_at = 2;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string                    device_id   = 3;
 }
 
 message TotpConfirmed {
   option (w17.event) = { channel: "events", topic: "auth.totp.confirmed" };
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id = 2;
 }
 
+// TotpDisabled — emitted on AuthMutation.RevokeTotpSecret: the authenticator
+// was disabled, or ended because a new enrolment replaces it. The row stays,
+// stamped revoked_at, its seed cleared.
 message TotpDisabled {
   option (w17.event) = { channel: "events", topic: "auth.totp.disabled" };
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id = 2;
 }
 
 // RecoveryCodeUsed — a recovery code was spent (sign-in, or the step-up of
@@ -274,6 +355,9 @@ message RecoveryCodeUsed {
   option (w17.event) = { channel: "events", topic: "auth.mfa.recovery_code_used" };
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
+  // device_id — the key thumbprint of the device that caused it (the value
+  // AuthResp.device_id and principal.DeviceID carry).
+  string device_id = 2;
 }
 
 // password_reset lifecycle — emitted by CreatePasswordResetToken when a
@@ -382,9 +466,10 @@ message OrgMembershipAdded {
 }
 
 // OrganizationDeleted — emitted on AuthMutation.DeleteOrganization (the
-// admin Organizations page delete) after the org + its memberships are
-// gone. The symmetric teardown counterpart to OrganizationCreated: a
-// subscriber tears down the org's provisioned resources off org_id.
+// admin Organizations page delete) after the org is stamped deleted_at and
+// its memberships and org-scoped grants ended (the rows stay). The symmetric
+// teardown counterpart to OrganizationCreated: a subscriber tears down the
+// org's provisioned resources off org_id.
 message OrganizationDeleted {
   option (w17.event) = {
     channel: "events"
@@ -422,8 +507,9 @@ message OrgMembershipUpdated {
   string membership_id = 1;
 }
 
-// OrgMembershipRemoved — emitted on AuthMutation.DeleteOrgMembership (the
-// admin OrgMemberships page delete) after the membership row is gone.
+// OrgMembershipRemoved — emitted on AuthMutation.MarkOrgMembershipRemoved
+// (AuthService.RemoveOrgMembership, the admin OrgMemberships page delete)
+// after the membership and its org-scoped grants ended (the rows stay).
 // Subscribers audit revocations or invalidate the user's per-org cache.
 message OrgMembershipRemoved {
   option (w17.event) = {
@@ -475,6 +561,8 @@ message OrgInviteAccepted {
   string role      = 4;
 }
 
+// OrgInviteRevoked — emitted on AuthMutation.CloseOrgInvite (a withdrawn
+// invitation). The row stays, stamped closed_at.
 message OrgInviteRevoked {
   option (w17.event) = {
     channel: "events"

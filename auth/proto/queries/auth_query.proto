@@ -457,6 +457,12 @@ message ApiTokenInfo {
   // NULL = live.
   google.protobuf.Timestamp revoked_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
   RevokeReason              revoke_reason = 7;
+  // The key the token is bound to (its device's thumbprint, the device id
+  // Authenticate answers for it); NULL for a token minted before binding.
+  string                    device_thumbprint = 8 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  // When that device was revoked; NULL = live. A token of a revoked device
+  // is refused like a revoked token.
+  google.protobuf.Timestamp device_revoked_at = 9 [(w17.field) = { type: DATETIME, null: true }];
 }
 message ListApiTokensByUserReq {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -466,6 +472,67 @@ message ListApiTokensByUserReq {
 message ListApiTokensByUserResp {
   option (w17.contrib.plugin_feature) = "api_token";
   repeated ApiTokenInfo tokens = 1;
+}
+
+// GetUserDeviceByThumbprint — the caller's own Device row for the key its
+// request was proved with (the envelope's device_id), recorded as the
+// approver of an API token it creates. A revoked or unknown pair is no row:
+// Authenticate already refused a revoked device.
+message GetUserDeviceByThumbprintReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
+}
+message GetUserDeviceByThumbprintResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string device_id = 1;
+}
+
+// GetSessionApprover — the device that approved the caller's own session
+// (UserToken.approved_by_device_id: a CLI session's approving browser), so a
+// token the session creates records that ROOT approver and ends when it is
+// revoked. A session approved by nothing answers NULL (empty).
+message GetSessionApproverReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+}
+message GetSessionApproverResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string approved_by_device_id = 1 [(w17.field) = { type: UUID, null: true }];
+}
+
+// LockMachineAccount takes a row lock on the machine account for the rest of
+// the caller's transaction, so two IssueBotToken calls for ONE account
+// serialise: each reads the account's key (ListMachineKeys) and registers
+// one only when there is none, and that read-then-write is the one-key rule
+// only when nothing runs beside it. Two concurrent first tokens with
+// different keys would otherwise both read "no key" and register both. The
+// account row always exists by then (the handler just read it), so it is the
+// row to serialise on — the key row may not exist yet.
+message LockMachineAccountReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message LockMachineAccountResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string user_id = 1;
+}
+
+// ListMachineKeys — a machine account's LIVE keyed devices (not revoked,
+// with a thumbprint): at most one by device/bot-one-key.
+message ListMachineKeysReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message MachineKey {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string id         = 1;
+  string thumbprint = 2;
+}
+message ListMachineKeysResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  repeated MachineKey keys = 1;
 }
 
 // --- oauth feature: provider + identity lookups ---
@@ -525,6 +592,20 @@ message GetLiveSessionExpiryReq {
   string token_id = 1 [(w17.field) = { type: UUID }];
   string user_id  = 2 [(w17.field) = { type: UUID }];
 }
+// GetCliApproverRevocation — whether the device that approved a CLI code
+// has been revoked since (cli_login). CliToken refuses a code whose approver
+// was revoked during the code's short life.
+message GetCliApproverRevocationReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string device_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetCliApproverRevocationResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  // Echoed so the handler can tell "found, live" from "no row".
+  string device_id = 1;
+  google.protobuf.Timestamp revoked_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
 message GetLiveSessionExpiryResp {
   option (w17.contrib.plugin_feature) = "cli_login";
   // Echoed so the handler can tell "found, never expires" (NULL expires_at)
@@ -532,6 +613,9 @@ message GetLiveSessionExpiryResp {
   string token_id = 1;
   // NULL = the session never expires. Declared so a SQL NULL scans.
   google.protobuf.Timestamp expires_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+  // The Device row the approving session is bound to — recorded on the code
+  // as the approver of the CLI login. NULL (empty) when it has none.
+  string device_id = 3 [(w17.field) = { type: UUID, null: true }];
 }
 
 message ListAuthClientsReq {
@@ -983,6 +1067,19 @@ message UserTokenAdminRow {
   // and sort reasons as expires_at) and why.
   google.protobuf.Timestamp revoked_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   RevokeReason revoke_reason = 8;
+  // device — the Device row the token is bound to. NULL for a token bound to
+  // no device (minted before binding, an API or MCP token). The Sessions page
+  // does not link it to the Devices page: that page is the opt-in
+  // admin_devices feature, and a column ref cannot be gated.
+  string device = 9 [(w17.field) = { type: UUID, null: true }];
+  // The device's label (its user agent), blank when there is none — the
+  // Sessions column, so the cell reads as the browser rather than a UUID.
+  string device_label = 10;
+  // The device's key thumbprint (the id events and AuthResp call device_id);
+  // NULL for no device or a legacy (keyless) one.
+  string thumbprint = 11 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  // A public-computer session (UserToken.public_computer).
+  bool public_computer = 12;
 }
 
 message ListUserTokensResp {
@@ -1002,6 +1099,154 @@ message ListUserTokensResp {
 message GetUserTokenReq {
   option (w17.contrib.plugin_feature) = "user_admin";
   string id = 1;
+}
+
+// UserTokenAdminDetail — the Sessions detail projection: the token's safe
+// columns (NEVER the secret `token` or `token_hash`) joined to the Device it
+// is bound to and, for a CLI session, to the Device of the browser session
+// that approved it. Not a table. Every joined column is NULL / blank when
+// there is no such device. Gated user_admin.
+message UserTokenAdminDetail {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id      = 1 [(w17.field) = { type: UUID }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp revoked_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  string revoked_by = 6 [(w17.field) = { type: UUID, null: true }];
+  RevokeReason revoke_reason = 7;
+  bool public_computer = 8;
+  // The device the token is bound to: its row, label and key thumbprint.
+  string device_id         = 9  [(w17.field) = { type: UUID, null: true }];
+  string device_label      = 10;
+  string device_thumbprint = 11 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  // A CLI session's approver: the Device of the browser session that
+  // approved the login (UserToken.approved_by_device_id), its label and
+  // thumbprint. NULL / blank on every other token.
+  string approved_by_device_id = 12 [(w17.field) = { type: UUID, null: true }];
+  string approver_label        = 13;
+  string approver_thumbprint   = 14 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+}
+
+// ── sign-in history reads ─────────────────────────────────────
+//
+// ListSignInEvents / GetSignInEvent back the admin Sign-ins page (user_admin,
+// the realm that manages accounts); ListUserSignInEvents backs the signed-in
+// person's own history (AuthService.ListMySignInEvents). Read-only: the
+// table is append-only (SignInEvent).
+
+message ListSignInEventsReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+}
+
+// SignInEventAdminRow — the Sign-ins list projection (ADMIN-FK), like
+// UserTokenAdminRow: not a table, a read-only DTO the ListSignInEvents DQL
+// joins User into.
+//   - account — who the attempt was about, as a person reads it: the
+//               account's current address, or the address typed when the
+//               attempt reached no account; the row's link to its detail.
+//   - user    — the raw user_id, linked to the Users page by the page's
+//               AdminColumnRef; NULL when the attempt reached no account
+//               (declared null so the row scans it).
+// The user agent and the Device row are on the detail.
+// Gated user_admin.
+message SignInEventAdminRow {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id      = 1 [(w17.field) = { type: UUID }];
+  string account = 2;
+  string user    = 3 [(w17.field) = { type: UUID, null: true }];
+  SignInMethod  method  = 4;
+  SignInOutcome outcome = 5;
+  string ip      = 6;
+  google.protobuf.Timestamp created_at = 7;
+  // The proof's key thumbprint — the value events and AuthResp call
+  // device_id — so an operator can match a row to an event. NULL without a
+  // proof.
+  string thumbprint = 8 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+}
+
+message ListSignInEventsResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated SignInEventAdminRow events = 1;
+
+  // Cursor-paged (admin-only), like ListUserTokens: the history grows with
+  // every attempt, failures included, so an unpaged list would load it
+  // whole.
+  w17.Paging paging = 2;
+}
+
+message GetSignInEventReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id = 1;
+}
+
+// ── user_admin: the Devices page ──────────────────────────────
+//
+// ListAllDevices / GetDevice back the admin Devices page: every Device row
+// of every account — revoked and legacy ones included, nothing in the table
+// is deleted — with the account's address and whether the device's trust
+// still stands. Gated user_admin.
+
+message ListAllDevicesReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+}
+
+// DeviceAdminRow — one device as the operator reads it (ADMIN-FK, like
+// UserTokenAdminRow; the list and the detail share it). Not a table.
+//   - owner      — the account's address (COALESCE: a device of a missing
+//                  account lists with a blank owner instead of failing the
+//                  page); the row's link to its detail.
+//   - user       — the raw user_id, linked to the Users page by the page's
+//                  AdminColumnRef.
+//   - thumbprint — the key thumbprint; NULL on a LEGACY row (recorded before
+//                  device binding, never usable).
+//   - created_at / last_seen_at — first and last seen.
+//   - trusted_at — when the device last passed the second factor (NULL:
+//                  never); trust_revoked_at — when the account's device trust
+//                  was last revoked as a whole (User.device_trust_revoked_at:
+//                  a password change, a disable, an erasure).
+//   - trusted    — whether the trust still stands: trusted_at set, later than
+//                  trust_revoked_at, and the device not revoked — the rule the
+//                  sign-in applies.
+//   - revoked_at — when the device was revoked for good (NULL: live).
+// Gated user_admin.
+message DeviceAdminRow {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id         = 1 [(w17.field) = { type: UUID }];
+  string owner      = 2;
+  string user       = 3 [(w17.field) = { type: UUID }];
+  string label      = 4;
+  string thumbprint = 5 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  string ip         = 6;
+  google.protobuf.Timestamp created_at   = 7;
+  google.protobuf.Timestamp last_seen_at = 8;
+  google.protobuf.Timestamp trusted_at       = 9  [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp trust_revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  bool trusted = 11;
+  google.protobuf.Timestamp revoked_at = 12 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+message ListAllDevicesResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated DeviceAdminRow devices = 1;
+
+  // Cursor-paged (admin-only), like ListUserTokens: every key that ever
+  // passed a password is a row, and none is ever deleted.
+  w17.Paging paging = 2;
+}
+
+message GetDeviceReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id = 1;
+}
+
+message ListUserSignInEventsReq {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListUserSignInEventsResp {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+  repeated SignInEvent events = 1;
 }
 
 // AuthQuery — read-only DB lookups.
@@ -1118,6 +1363,9 @@ service AuthQuery {
           "       u.created_at AS user.created_at, "
           "       ?feature(service_account) u.kind AS user.kind, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          // erased_at (`user_admin`): the sign-in history writes an attempt
+          // at an erased account without the client's address and agent.
+          "       ?feature(user_admin) u.erased_at AS user.erased_at, "
           // email_verified_at (`email_verification`): read by the OAuth
           // local-account check, which refuses to link a provider identity to
           // an existing password account unless that address is verified.
@@ -1166,7 +1414,8 @@ service AuthQuery {
           "SELECT ROWS_TO_ARRAY(rp.permission_id) AS permission_ids "
           "FROM @module.RolePermission rp "
           "JOIN @module.UserRole ur ON ur.role_id = rp.role_id "
-          "WHERE ur.user_id = :user_id"
+          "JOIN @module.Role r ON r.id = rp.role_id "
+          "WHERE ur.user_id = :user_id AND ur.revoked_at IS NULL AND rp.removed_at IS NULL AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1265,8 +1514,8 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
-          "WHERE ur.user_id = :user_id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
+          "WHERE ur.user_id = :user_id AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -1284,7 +1533,8 @@ service AuthQuery {
           "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
           "       r.all_permissions AS all_permissions "
           "FROM @module.Role r "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
+          "WHERE r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -1347,7 +1597,7 @@ service AuthQuery {
           "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.created_at AS created_at "
           "FROM @module.User u "
-          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
+          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id AND m.removed_at IS NULL "
           "ORDER BY u.created_at DESC, u.id DESC"
       }
     };
@@ -1424,7 +1674,7 @@ service AuthQuery {
         dql:
           "SELECT u.id AS user_id "
           "FROM @module.User u "
-          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id "
+          "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id AND m.removed_at IS NULL "
           "WHERE u.id = :user_id"
       }
     };
@@ -1445,7 +1695,7 @@ service AuthQuery {
         dql:
           "SELECT r.id AS id, r.name AS name, "
           "       r.description AS description "
-          "FROM @module.Role r WHERE r.token_type = 2 "
+          "FROM @module.Role r WHERE r.token_type = 2 AND r.deleted_at IS NULL "
           "ORDER BY r.name ASC, r.id ASC"
       }
     };
@@ -1483,7 +1733,7 @@ service AuthQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_first_user = TRUE"
+        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_first_user = TRUE AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1496,7 +1746,7 @@ service AuthQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_default = TRUE"
+        dql: "SELECT ROWS_TO_ARRAY(r.id) AS role_ids FROM @module.Role r WHERE r.assign_default = TRUE AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1551,7 +1801,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
-          "              WHERE o.owner_id = :user_id) AS owns "
+          "              WHERE o.owner_id = :user_id AND o.deleted_at IS NULL) AS owns "
           "FROM @module.User u WHERE u.id = :user_id"
       }
     };
@@ -1576,7 +1826,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT o.id AS org_id FROM @module.Organization o "
-          "WHERE o.slug = :slug AND o.owner_id = :user_id"
+          "WHERE o.slug = :slug AND o.owner_id = :user_id AND o.deleted_at IS NULL"
       }
     };
   }
@@ -1600,7 +1850,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT r.id AS id, r.name AS name, r.description AS description "
-          "FROM @module.Role r WHERE r.org_scoped = TRUE "
+          "FROM @module.Role r WHERE r.org_scoped = TRUE AND r.deleted_at IS NULL "
           "ORDER BY r.name ASC, r.id ASC"
       }
     };
@@ -1618,7 +1868,7 @@ service AuthQuery {
           "       r.assign_default AS assign_default, "
           "       r.preset_key AS preset_key, "
           "       r.created_at AS created_at "
-          "FROM @module.Role r ORDER BY r.name ASC, r.id ASC"
+          "FROM @module.Role r WHERE r.deleted_at IS NULL ORDER BY r.name ASC, r.id ASC"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1642,7 +1892,7 @@ service AuthQuery {
           "       r.assign_default AS assign_default, "
           "       r.preset_key AS preset_key, "
           "       r.created_at AS created_at "
-          "FROM @module.Role r WHERE r.id = :id"
+          "FROM @module.Role r WHERE r.id = :id AND r.deleted_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";
@@ -1713,8 +1963,8 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
-          "WHERE ur.user_id = :user_id AND r.token_type = :token_type "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
+          "WHERE ur.user_id = :user_id AND r.token_type = :token_type AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -1762,13 +2012,80 @@ service AuthQuery {
           "       t.expires_at AS expires_at, "
           "       t.created_at AS created_at, "
           "       t.revoked_at AS revoked_at, "
-          "       t.revoke_reason AS revoke_reason "
+          "       t.revoke_reason AS revoke_reason, "
+          "       d.thumbprint AS device_thumbprint, "
+          "       d.revoked_at AS device_revoked_at "
           "FROM @module.UserToken t "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE t.user_id = :user_id AND t.token_type = :token_type "
           "ORDER BY t.created_at DESC"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // GetUserDeviceByThumbprint — the live (user, thumbprint) Device row; see
+  // the request. Gated api_token.
+  rpc GetUserDeviceByThumbprint(GetUserDeviceByThumbprintReq) returns (GetUserDeviceByThumbprintResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS device_id "
+          "FROM @module.Device d "
+          "WHERE d.user_id = :user_id AND d.thumbprint = :thumbprint AND d.revoked_at IS NULL"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // GetSessionApprover — the caller's session's approver; see the request.
+  // Gated api_token.
+  rpc GetSessionApprover(GetSessionApproverReq) returns (GetSessionApproverResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.approved_by_device_id AS approved_by_device_id "
+          "FROM @module.UserToken t "
+          "WHERE t.id = :token_id AND t.user_id = :user_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // LockMachineAccount — SELECT … FOR UPDATE on the machine account's user
+  // row, read inside IssueBotToken's transaction; see the request. Gated
+  // service_account.
+  rpc LockMachineAccount(LockMachineAccountReq) returns (LockMachineAccountResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT u.id AS user_id FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "User", kind: SELECT_FOR_UPDATE }
+      ]
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // ListMachineKeys — the machine account's live keyed devices; see the
+  // request. FLAT aliases (a list-shaped response). Gated service_account.
+  rpc ListMachineKeys(ListMachineKeysReq) returns (ListMachineKeysResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS id, d.thumbprint AS thumbprint "
+          "FROM @module.Device d "
+          "WHERE d.user_id = :user_id AND d.revoked_at IS NULL AND d.thumbprint IS NOT NULL "
+          "ORDER BY d.created_at"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
   }
 
   // GetUserTenant — resolves the principal's tenant_id (the
@@ -1911,13 +2228,26 @@ service AuthQuery {
   // from the handler instead — requireSessionCaller runs first, and the
   // envelope carries a session_token_id only for a session-realm token, so
   // the id this query is asked about is always a session's.
+  // GetCliApproverRevocation — the approving device's revoked_at, read by
+  // CliToken for a code that names one. Gated cli_login.
+  rpc GetCliApproverRevocation(GetCliApproverRevocationReq) returns (GetCliApproverRevocationResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT d.id AS device_id, d.revoked_at AS revoked_at FROM @module.Device d WHERE d.id = :device_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+
   rpc GetLiveSessionExpiry(GetLiveSessionExpiryReq) returns (GetLiveSessionExpiryResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
           "SELECT t.id AS token_id, "
-          "       t.expires_at AS expires_at "
+          "       t.expires_at AS expires_at, "
+          "       t.device_id AS device_id "
           "FROM @module.UserToken t "
           "WHERE t.id = :token_id AND t.user_id = :user_id "
           "AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
@@ -2026,7 +2356,7 @@ service AuthQuery {
           "       s.last_step AS secret.last_step, "
           "       s.confirmed_at AS secret.confirmed_at, "
           "       s.created_at AS secret.created_at "
-          "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id"
+          "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id AND s.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
@@ -2040,7 +2370,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT COUNT(*) AS count FROM @module.UserRecoveryCode r "
-          "WHERE r.user_id = :user_id AND r.used_at IS NULL"
+          "WHERE r.user_id = :user_id AND r.used_at IS NULL AND r.revoked_at IS NULL"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
@@ -2061,7 +2391,8 @@ service AuthQuery {
           "       c.consumed_at AS challenge.consumed_at, "
           "       c.created_at AS challenge.created_at, "
           "       c.attempts AS challenge.attempts, "
-          "       COALESCE(c.thumbprint, '') AS challenge.thumbprint "
+          "       COALESCE(c.thumbprint, '') AS challenge.thumbprint, "
+          "       c.public_computer AS challenge.public_computer "
           "FROM @module.MfaChallenge c WHERE c.id = :challenge_id"
       }
     };
@@ -2119,7 +2450,10 @@ service AuthQuery {
   // ListUserDevices — the caller's live devices (management view), newest
   // first; a revoked device, and a legacy one recorded before device binding
   // (no thumbprint), is history, not a device to manage — both stay in the
-  // table, queryable. The handler
+  // table, queryable. A program's key (api_key: an API token's device) is not
+  // a device the owner signs in with: it is managed through its API token,
+  // so RevokeOtherDevices and RevokeAllDevices, which read this list, leave
+  // API tokens alone. The handler
   // maps each row to DeviceInfo, deriving `trusted` (trusted_at later than
   // the account's trust revocation) + `current` (thumbprint matches the
   // device the caller's token is bound to). Gated devices.
@@ -2137,7 +2471,7 @@ service AuthQuery {
           "       d.last_seen_at AS last_seen_at, "
           "       d.created_at AS created_at "
           "FROM @module.Device d WHERE d.user_id = :user_id AND d.revoked_at IS NULL "
-          "AND d.thumbprint IS NOT NULL "
+          "AND d.thumbprint IS NOT NULL AND d.api_key = FALSE "
           "ORDER BY d.last_seen_at DESC"
       }
     };
@@ -2162,7 +2496,7 @@ service AuthQuery {
           "       m.role AS role "
           "FROM @module.OrgMembership m "
           "JOIN @module.Organization o ON o.id = m.org_id "
-          "WHERE m.user_id = :user_id "
+          "WHERE m.user_id = :user_id AND m.removed_at IS NULL AND o.deleted_at IS NULL "
           "ORDER BY o.name ASC"
       }
     };
@@ -2178,7 +2512,8 @@ service AuthQuery {
         dql:
           "SELECT ROWS_TO_ARRAY(ur.role_id) AS role_ids "
           "FROM @module.UserRole ur "
-          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id"
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id AND ur.revoked_at IS NULL AND r.deleted_at IS NULL"
       }
     };
   }
@@ -2230,10 +2565,11 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
           "WHERE ur.user_id = :user_id "
           "  AND (ur.org_id = :org_id "
           "       OR (ur.org_id IS NULL AND r.org_scoped = FALSE)) "
+          "  AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -2250,7 +2586,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
-          "              WHERE o.id = :org_id AND o.owner_id = u.id) AS owner "
+          "              WHERE o.id = :org_id AND o.owner_id = u.id AND o.deleted_at IS NULL) AS owner "
           "FROM @module.User u WHERE u.id = :user_id"
       }
     };
@@ -2277,9 +2613,10 @@ service AuthQuery {
           "       r.all_permissions AS all_permissions "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
           "WHERE ur.user_id = :user_id "
           "  AND ur.org_id IS NULL AND r.org_scoped = FALSE "
+          "  AND ur.revoked_at IS NULL AND r.deleted_at IS NULL "
           "GROUP BY r.id, r.all_permissions "
           "ORDER BY r.id ASC"
       }
@@ -2298,7 +2635,7 @@ service AuthQuery {
           "SELECT o.id AS org_id, m.role AS role "
           "FROM @module.OrgMembership m "
           "JOIN @module.Organization o ON o.id = m.org_id "
-          "WHERE m.user_id = :user_id AND o.slug = :slug"
+          "WHERE m.user_id = :user_id AND o.slug = :slug AND m.removed_at IS NULL AND o.deleted_at IS NULL"
       }
     };
   }
@@ -2318,7 +2655,7 @@ service AuthQuery {
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at "
-          "FROM @module.Organization o ORDER BY o.name ASC, o.id ASC"
+          "FROM @module.Organization o WHERE o.deleted_at IS NULL ORDER BY o.name ASC, o.id ASC"
       }
     };
   }
@@ -2334,7 +2671,7 @@ service AuthQuery {
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
           "       o.kind AS kind, o.created_at AS created_at "
-          "FROM @module.Organization o WHERE o.id = :id"
+          "FROM @module.Organization o WHERE o.id = :id AND o.deleted_at IS NULL"
       }
     };
   }
@@ -2360,6 +2697,7 @@ service AuthQuery {
           "FROM @module.OrgMembership m "
           "LEFT JOIN @module.User u ON u.id = m.user_id "
           "LEFT JOIN @module.Organization o ON o.id = m.org_id "
+          "WHERE m.removed_at IS NULL "
           "ORDER BY m.created_at DESC, m.id DESC"
       }
     };
@@ -2375,7 +2713,7 @@ service AuthQuery {
         dql:
           "SELECT m.id AS id, m.user_id AS user_id, m.org_id AS org_id, "
           "       m.role AS role, m.created_at AS created_at "
-          "FROM @module.OrgMembership m WHERE m.id = :id"
+          "FROM @module.OrgMembership m WHERE m.id = :id AND m.removed_at IS NULL"
       }
     };
   }
@@ -2405,19 +2743,23 @@ service AuthQuery {
         dql:
           "SELECT t.id AS id, COALESCE(u.email, '') AS owner, t.user_id AS user, "
           "       t.created_at AS created_at, t.expires_at AS expires_at, "
-          "       t.revoked_at AS revoked_at, t.revoke_reason AS revoke_reason "
+          "       t.revoked_at AS revoked_at, t.revoke_reason AS revoke_reason, "
+          "       t.device_id AS device, COALESCE(d.label, '') AS device_label, "
+          "       d.thumbprint AS thumbprint, t.public_computer AS public_computer "
           "FROM @module.UserToken t "
           "LEFT JOIN @module.User u ON u.id = t.user_id "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "ORDER BY t.created_at DESC, t.id DESC"
       }
     };
   }
 
-  // GetUserToken — one token for the admin Sessions detail view. Returns
-  // the UserToken model DIRECTLY but projects only the safe base columns
-  // (NO secret `token`, same discipline as GetUser omitting
-  // password_hash). Gated user_admin.
-  rpc GetUserToken(GetUserTokenReq) returns (UserToken) {
+  // GetUserToken — one token for the admin Sessions detail view, as
+  // UserTokenAdminDetail: only the safe columns (NO secret `token` or
+  // `token_hash`, same discipline as GetUser omitting password_hash), the
+  // device the token is bound to (LEFT JOIN Device d) and, for a CLI session,
+  // the device that approved it (LEFT JOIN Device a). Gated user_admin.
+  rpc GetUserToken(GetUserTokenReq) returns (UserTokenAdminDetail) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
       ops: {
@@ -2426,8 +2768,130 @@ service AuthQuery {
           "SELECT t.id AS id, t.user_id AS user_id, "
           "       t.created_at AS created_at, t.expires_at AS expires_at, "
           "       t.revoked_at AS revoked_at, t.revoked_by AS revoked_by, "
-          "       t.revoke_reason AS revoke_reason "
-          "FROM @module.UserToken t WHERE t.id = :id"
+          "       t.revoke_reason AS revoke_reason, t.public_computer AS public_computer, "
+          "       t.device_id AS device_id, COALESCE(d.label, '') AS device_label, "
+          "       d.thumbprint AS device_thumbprint, "
+          "       t.approved_by_device_id AS approved_by_device_id, "
+          "       COALESCE(a.label, '') AS approver_label, a.thumbprint AS approver_thumbprint "
+          "FROM @module.UserToken t "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
+          "LEFT JOIN @module.Device a ON a.id = t.approved_by_device_id "
+          "WHERE t.id = :id"
+      }
+    };
+  }
+
+  // ListSignInEvents — the sign-in history for the admin Sign-ins page,
+  // newest first, cursor-paged on (created_at, id). LEFT JOIN User: an
+  // attempt that reached no account has no user, and shows the address it
+  // named instead. Every outcome is listed, failures included. Gated
+  // user_admin.
+  rpc ListSignInEvents(ListSignInEventsReq) returns (ListSignInEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT e.id AS id, COALESCE(u.email, e.address) AS account, e.user_id AS user, "
+          "       e.method AS method, e.outcome AS outcome, e.ip AS ip, "
+          "       e.created_at AS created_at, e.thumbprint AS thumbprint "
+          "FROM @module.SignInEvent e "
+          "LEFT JOIN @module.User u ON u.id = e.user_id "
+          "ORDER BY e.created_at DESC, e.id DESC"
+      }
+    };
+  }
+
+  // GetSignInEvent — one attempt for the admin Sign-ins detail view, every
+  // column. Gated user_admin.
+  rpc GetSignInEvent(GetSignInEventReq) returns (SignInEvent) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT e.id AS id, e.created_at AS created_at, e.user_id AS user_id, "
+          "       e.address AS address, e.device_id AS device_id, "
+          "       e.thumbprint AS thumbprint, e.ip AS ip, e.user_agent AS user_agent, "
+          "       e.method AS method, e.outcome AS outcome, "
+          "       e.public_computer AS public_computer "
+          "FROM @module.SignInEvent e WHERE e.id = :id"
+      }
+    };
+  }
+
+  // ListAllDevices — every device for the admin Devices page, the newest
+  // first, cursor-paged on (created_at, id): an immutable key, because every
+  // sign-in rewrites last_seen_at and a keyset over it would skip or repeat
+  // rows while an operator pages (last seen is shown as a column). LEFT JOIN User
+  // for the owner's address and the account's trust revocation; `trusted` is
+  // the sign-in's rule (trusted_at later than the account's revocation, the
+  // device not revoked). Revoked and legacy (keyless) devices are listed.
+  // Gated user_admin.
+  rpc ListAllDevices(ListAllDevicesReq) returns (ListAllDevicesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS id, COALESCE(u.email, '') AS owner, d.user_id AS user, "
+          "       d.label AS label, d.thumbprint AS thumbprint, d.ip AS ip, "
+          "       d.created_at AS created_at, d.last_seen_at AS last_seen_at, "
+          "       d.trusted_at AS trusted_at, u.device_trust_revoked_at AS trust_revoked_at, "
+          "       CASE WHEN d.trusted_at IS NOT NULL AND d.revoked_at IS NULL "
+          "            AND (u.device_trust_revoked_at IS NULL OR d.trusted_at > u.device_trust_revoked_at) "
+          "            THEN TRUE ELSE FALSE END AS trusted, "
+          "       d.revoked_at AS revoked_at "
+          "FROM @module.Device d "
+          "LEFT JOIN @module.User u ON u.id = d.user_id "
+          "ORDER BY d.created_at DESC, d.id DESC"
+      }
+    };
+  }
+
+  // GetDevice — one device for the admin Devices detail view (and the
+  // Revoke action, which reads the device's account and state with it), the
+  // list's projection. Gated user_admin.
+  rpc GetDevice(GetDeviceReq) returns (DeviceAdminRow) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS id, COALESCE(u.email, '') AS owner, d.user_id AS user, "
+          "       d.label AS label, d.thumbprint AS thumbprint, d.ip AS ip, "
+          "       d.created_at AS created_at, d.last_seen_at AS last_seen_at, "
+          "       d.trusted_at AS trusted_at, u.device_trust_revoked_at AS trust_revoked_at, "
+          "       CASE WHEN d.trusted_at IS NOT NULL AND d.revoked_at IS NULL "
+          "            AND (u.device_trust_revoked_at IS NULL OR d.trusted_at > u.device_trust_revoked_at) "
+          "            THEN TRUE ELSE FALSE END AS trusted, "
+          "       d.revoked_at AS revoked_at "
+          "FROM @module.Device d "
+          "LEFT JOIN @module.User u ON u.id = d.user_id "
+          "WHERE d.id = :id"
+      }
+    };
+  }
+
+  // ListUserSignInEvents — one account's own sign-in history, newest first,
+  // the latest 100 (AuthService.ListMySignInEvents, which passes the
+  // caller's id). Served by the (user_id, created_at) index. Gated
+  // authenticate_turnkey, the feature that knows the caller.
+  rpc ListUserSignInEvents(ListUserSignInEventsReq) returns (ListUserSignInEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT e.id AS id, e.created_at AS created_at, "
+          "       e.user_id AS user_id, e.address AS address, "
+          "       e.device_id AS device_id, e.thumbprint AS thumbprint, "
+          "       e.ip AS ip, e.user_agent AS user_agent, "
+          "       e.method AS method, e.outcome AS outcome, "
+          "       e.public_computer AS public_computer "
+          "FROM @module.SignInEvent e WHERE e.user_id = :user_id "
+          "ORDER BY e.created_at DESC, e.id DESC "
+          "LIMIT 100"
       }
     };
   }
@@ -2460,7 +2924,7 @@ service AuthQuery {
           "FROM @module.OrgMembership m "
           "JOIN @module.User u ON u.id = m.user_id "
           "JOIN @module.Organization o ON o.id = m.org_id "
-          "WHERE m.org_id = :org_id "
+          "WHERE m.org_id = :org_id AND m.removed_at IS NULL AND o.deleted_at IS NULL "
           "ORDER BY u.email ASC"
       }
     };
@@ -2493,7 +2957,8 @@ service AuthQuery {
           "       i.email AS email, "
           "       i.metadata AS metadata "
           "FROM @module.OrgInvite i "
-          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.expires_at > NOW() "
+          "JOIN @module.Organization o ON o.id = i.org_id "
+          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
           "LIMIT 1"
       }
     };
@@ -2515,7 +2980,7 @@ service AuthQuery {
           "       i.created_at AS created_at, "
           "       i.metadata AS metadata "
           "FROM @module.OrgInvite i "
-          "WHERE i.org_id = :org_id AND i.accepted_at IS NULL "
+          "WHERE i.org_id = :org_id AND i.accepted_at IS NULL AND i.closed_at IS NULL "
           "ORDER BY i.created_at DESC"
       }
     };
@@ -2545,7 +3010,7 @@ service AuthQuery {
           "       i.expires_at AS expires_at "
           "FROM @module.OrgInvite i "
           "JOIN @module.Organization o ON o.id = i.org_id "
-          "WHERE i.email = :email AND i.accepted_at IS NULL AND i.expires_at > NOW() "
+          "WHERE i.email = :email AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
           "ORDER BY i.created_at DESC"
       }
     };

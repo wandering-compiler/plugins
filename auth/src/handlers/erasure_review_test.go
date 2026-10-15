@@ -73,11 +73,12 @@ func TestEraseUsers_AnErasedAccountStillGetsEveryEraser(t *testing.T) {
 			t.Errorf("eraser %s did not run for an erased account: %v", want, s.erased)
 		}
 	}
-	// The invitation eraser has no old address left: it must not re-address
-	// the placeholder to itself (or anything else).
+	// The invitation and pending-registration erasers have no old address
+	// left: they must not re-address the placeholder to itself (or anything
+	// else).
 	for _, e := range s.erased {
-		if strings.HasPrefix(e, "org_invite:") {
-			t.Errorf("the invitation eraser ran with the placeholder: %s", e)
+		if strings.HasPrefix(e, "org_invite:") || strings.HasPrefix(e, "sign_up_confirmation:") {
+			t.Errorf("an address eraser ran with the placeholder: %s", e)
 		}
 	}
 }
@@ -327,7 +328,7 @@ func TestEraseUsers_APartialErasureLeavesNoUsableAccount(t *testing.T) {
 	if _, err := h.SignIn(mintCtx(), &pb.SignInReq{Email: "alice@example.com", Password: "alice-password"}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("a password sign-in after a partial erasure: %v, want refused", err)
 	}
-	if err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
+	if _, err := refuseUnsignableAccount(context.Background(), h, "u1"); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("the account gates passed a partially erased account: %v", err)
 	}
 }
