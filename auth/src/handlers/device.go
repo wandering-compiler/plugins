@@ -134,6 +134,11 @@ type signInDevice struct {
 //
 // A revoked device comes back with its id beside the refusal, for the
 // sign-in history (no token is ever bound to it).
+//
+// A PROGRAM's key (Device.api_key: named for an API token) is refused too,
+// with the opaque refusal: a program key never signs in. Otherwise a session
+// could live on a device the owner's device management does not list, and
+// "sign out everywhere else" would leave it running.
 func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint string) (signInDevice, error) {
 	label, ip := deviceLabel(ctx)
 	resp, err := h.Mutation.RegisterDevice(ctx, &pb.RegisterDeviceReq{
@@ -155,6 +160,9 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 	if dev.GetRevokedAt() != nil {
 		return signInDevice{id: dev.GetId(), thumbprint: thumbprint}, deviceRevoked(ctx)
 	}
+	if dev.GetApiKey() {
+		return signInDevice{id: dev.GetId(), thumbprint: thumbprint}, errDeviceIsAProgramKey
+	}
 	out := signInDevice{id: dev.GetId(), thumbprint: thumbprint}
 	if dev.GetTrustedAt() == nil {
 		return out, nil
@@ -168,6 +176,21 @@ func mintDevice(ctx context.Context, h *AuthServiceHandler, userID, thumbprint s
 		out.trustCutoff = neverRevoked
 	}
 	return out, nil
+}
+
+// revokeApprovedAPITokens revokes the owner's API tokens the device created
+// (UserToken.approved_by_device_id), on ctx. Installed by apitoken.go: nil
+// without api_token, where no API token exists. Called only when ONE device
+// is revoked on purpose (the owner's RevokeDevice, the admin RevokeDevices);
+// RevokeOtherDevices and RevokeAllDevices spare API tokens.
+var revokeApprovedAPITokens func(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error
+
+// endApprovedAPITokens runs revokeApprovedAPITokens when it is installed.
+func endApprovedAPITokens(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error {
+	if revokeApprovedAPITokens == nil {
+		return nil
+	}
+	return revokeApprovedAPITokens(ctx, h, userID, deviceID, revokedBy)
 }
 
 // noTokenKept is the keep_token_id that keeps none (the column is a UUID, so
@@ -305,6 +328,11 @@ func checkMCPToken(p *authPrincipal) error {
 func sameKey(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
+
+// errDeviceIsAProgramKey is the cause behind the refusal of a sign-in whose
+// proof is by a program's key (Device.api_key). Never on the wire: the
+// opaque refusal.
+var errDeviceIsAProgramKey = errors.New("the key is a program's key (an API token's device); it does not sign in")
 
 // errDeviceBindingRefused is the cause behind the opaque refusal of a token
 // the request's proof does not match (or a non-MCP token without a proof on

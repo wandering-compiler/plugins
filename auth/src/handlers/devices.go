@@ -76,6 +76,11 @@ func (h *AuthServiceHandler) RevokeDevice(ctx context.Context, req *pb.RevokeDev
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	// ONE device revoked on purpose also ends the API tokens it created:
+	// a stolen session could have created one bound to the thief's key.
+	if err := endApprovedAPITokens(ctx, h, userID, req.GetDeviceId(), userID); err != nil {
+		return nil, err
+	}
 	if err := revokeOneDevice(ctx, h, userID, req.GetDeviceId(), noTokenKept); err != nil {
 		return nil, err
 	}
@@ -123,10 +128,13 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 //
 // This revokes each device individually via revokeOneDevice
 // (RevokeDeviceTokens is device_id-filtered) rather than the broad
-// RevokeAllUserTokens. RevokeAllUserTokens has no token_type filter (that
-// column is api_token-gated), so it would ALSO revoke the user's
-// API tokens — credentials that aren't device-bound (device_id NULL) and must
-// only be revoked via RevokeApiToken. Sessions minted before device binding
+// RevokeAllUserTokens, which has no token_type filter (that column is
+// api_token-gated) and would ALSO revoke the user's API tokens. Those are
+// ended only by RevokeApiToken (or an operator revoking their key on the
+// admin Devices page, or revoking the ONE device that created it,
+// RevokeDevice): an API token is bound to a program's key (Device.api_key),
+// which ListUserDevices leaves out, and RevokeDeviceTokens' "approved" op
+// matches session tokens only. Sessions minted before device binding
 // hold no device and are revoked by revokeUndevicedSessions (they no longer
 // authenticate either way), still sparing API tokens. Mirrors
 // RevokeOtherDevices, but includes the caller's current device.

@@ -437,10 +437,11 @@ func assertFieldsExist(t *testing.T, what string, msg proto.Message, names []str
 	}
 }
 
-// The Devices page: user_admin, listed by ListAllDevices and read by
+// The Devices page: admin_devices, listed by ListAllDevices and read by
 // GetDevice, revoked through the service method that records the operator and
 // ends the tokens, never deleted. Every column and detail field exists on the
-// projection, and the Sessions page links its device column to it.
+// projection, and the Sessions page shows each session's device by its label
+// without linking it to the opt-in Devices page.
 func TestAdminPages_DevicesAndTheSessionsDeviceColumn(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "plugin.yaml"))
 	if err != nil {
@@ -449,7 +450,7 @@ func TestAdminPages_DevicesAndTheSessionsDeviceColumn(t *testing.T) {
 	manifest := string(raw)
 	devices := pageBlock(t, manifest, "Devices")
 	for _, want := range []string{
-		"model: Device\n", "feature: user_admin\n", "source: AuthQuery.ListAllDevices\n",
+		"model: Device\n", "feature: admin_devices\n", "source: AuthQuery.ListAllDevices\n",
 		"read: AuthQuery.GetDevice\n", "source: AuthService.RevokeDevices\n", "detail_link_column: owner\n",
 		"{ name: user, ref: { page: Users } }",
 	} {
@@ -468,11 +469,11 @@ func TestAdminPages_DevicesAndTheSessionsDeviceColumn(t *testing.T) {
 	assertFieldsExist(t, "Devices detail", &pb.DeviceAdminRow{}, readonlyFields(devices))
 
 	sessions := pageBlock(t, manifest, "Sessions")
-	if !strings.Contains(sessions, "{ name: device, ref: { title: device_label, page: Devices } }") {
-		t.Errorf("the Sessions page does not link the device to the Devices page:\n%s", sessions)
+	if !strings.Contains(sessions, "feature: user_admin\n") || strings.Contains(sessions, "page: Devices") {
+		t.Errorf("the Sessions page (user_admin) links to the opt-in Devices page:\n%s", sessions)
 	}
 	scols := listColumns(sessions)
-	for _, c := range []string{"device", "thumbprint", "public_computer", "revoked_at", "revoke_reason"} {
+	for _, c := range []string{"device_label", "thumbprint", "public_computer", "revoked_at", "revoke_reason"} {
 		if !strings.Contains(","+strings.Join(scols, ",")+",", ","+c+",") {
 			t.Errorf("Sessions columns %v lack %s", scols, c)
 		}
@@ -486,8 +487,90 @@ func TestAdminPages_DevicesAndTheSessionsDeviceColumn(t *testing.T) {
 		}
 	}
 	signIns := pageBlock(t, manifest, "SignIns")
+	if !strings.Contains(signIns, "feature: admin_sign_ins\n") {
+		t.Errorf("the SignIns page is not gated admin_sign_ins:\n%s", signIns)
+	}
 	assertFieldsExist(t, "SignIns detail", &pb.SignInEvent{}, readonlyFields(signIns))
 	if !strings.Contains(signIns, "public_computer") {
 		t.Errorf("the SignIns detail does not show public_computer:\n%s", signIns)
+	}
+}
+
+// An admin that declares nav groups must list every page, the pages a plugin
+// contributes included, so a page added to a feature that already has
+// adopters breaks each of them on upgrade. The pages that arrived with device
+// identity are therefore features of their own, off by default, each
+// requiring user_admin (whose queries they read); and no page links to a page
+// its own gate does not guarantee, since a ref to a page the activation lacks
+// fails the admin build.
+func TestAdminPages_NewPagesAreOptIn(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "plugin.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := string(raw)
+	features := manifest[strings.Index(manifest, "\nfeatures:\n"):]
+	features = features[:strings.Index(features, "\ngo_files_combined:")]
+	requires := map[string][]string{}
+	for _, f := range regexp.MustCompile(`(?m)^  - name: `).Split(features, -1)[1:] {
+		name := strings.TrimSpace(f[:strings.Index(f, "\n")])
+		if m := regexp.MustCompile(`(?s)\n    requires:\n((?:      (?:- \w+|#[^\n]*)\n)+)`).FindStringSubmatch(f); m != nil {
+			for _, r := range regexp.MustCompile(`- (\w+)`).FindAllStringSubmatch(m[1], -1) {
+				requires[name] = append(requires[name], r[1])
+			}
+		}
+		if name == "admin_sign_ins" || name == "admin_devices" {
+			if !strings.Contains(f, "default: false\n") {
+				t.Errorf("%s is on by default", name)
+			}
+		}
+	}
+	for _, f := range []string{"admin_sign_ins", "admin_devices"} {
+		if strings.Join(requires[f], ",") != "user_admin" {
+			t.Errorf("%s requires %v, want [user_admin]", f, requires[f])
+		}
+	}
+	implied := func(from, to string) bool {
+		seen := map[string]bool{}
+		var walk func(string) bool
+		walk = func(f string) bool {
+			if f == to {
+				return true
+			}
+			if seen[f] {
+				return false
+			}
+			seen[f] = true
+			for _, r := range requires[f] {
+				if walk(r) {
+					return true
+				}
+			}
+			return false
+		}
+		return walk(from)
+	}
+	gate := map[string]string{}
+	refs := map[string][]string{}
+	pages := manifest[strings.Index(manifest, "\n    pages:\n"):]
+	pages = pages[:strings.Index(pages, "\nsandboxes:")]
+	for _, m := range regexp.MustCompile(`(?m)^      - name: (\w+)\n`).FindAllStringSubmatch(pages, -1) {
+		block := pageBlock(t, manifest, m[1])
+		if g := regexp.MustCompile(`\n        feature: (\w+)\n`).FindStringSubmatch(block); g != nil {
+			gate[m[1]] = g[1]
+		}
+		for _, r := range regexp.MustCompile(`ref: \{[^}]*\bpage: (\w+)`).FindAllStringSubmatch(block, -1) {
+			refs[m[1]] = append(refs[m[1]], r[1])
+		}
+	}
+	if gate["SignIns"] != "admin_sign_ins" || gate["Devices"] != "admin_devices" {
+		t.Errorf("SignIns gated %q, Devices gated %q", gate["SignIns"], gate["Devices"])
+	}
+	for page, targets := range refs {
+		for _, to := range targets {
+			if !implied(gate[page], gate[to]) {
+				t.Errorf("page %s (%s) links to page %s (%s), which its gate does not guarantee", page, gate[page], to, gate[to])
+			}
+		}
 	}
 }

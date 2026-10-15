@@ -22,7 +22,9 @@ import (
 // Sign-in history — base tier, staged with every feature.
 //
 // Every sign-in attempt on every mint path (SignIn, SignUp when it issues a
-// session, ConfirmSignUp, VerifyMfa, OAuthExchange, CliToken) appends exactly
+// session, ConfirmSignUp, VerifyMfa, OAuthExchange, CliToken) — and every
+// API-token issuance (CreateApiToken, IssueBotToken: a credential minted for a
+// device too, if not a sign-in of the request's own client) — appends exactly
 // one SignInEvent row, whatever its outcome: success, a refusal before any
 // account was looked up (no proof, an unknown address), a wrong password, a
 // refused device. The table is append-only (only an erasure rewrites the
@@ -279,6 +281,10 @@ var outcomeByCode = map[string]pb.SignInOutcome{
 	CodeAccountDisabled:        pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED,
 	CodeClientRevoked:          pb.SignInOutcome_SIGN_IN_OUTCOME_CLIENT_REFUSED,
 	CodeAuthUnavailable:        pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR,
+	CodeDeviceKeyRequired:      pb.SignInOutcome_SIGN_IN_OUTCOME_KEY_REFUSED,
+	CodeDeviceKeyInvalid:       pb.SignInOutcome_SIGN_IN_OUTCOME_KEY_REFUSED,
+	CodeBotKeyMismatch:         pb.SignInOutcome_SIGN_IN_OUTCOME_KEY_REFUSED,
+	CodeDeviceKeyRevoked:       pb.SignInOutcome_SIGN_IN_OUTCOME_DEVICE_REVOKED,
 }
 
 // signInOutcome reads the outcome of a failed attempt off the error its

@@ -206,8 +206,8 @@ func TestEraseUser_TouchesTheBaseTablesOnly(t *testing.T) {
 	if strings.Contains(body+begin, "DELETE") {
 		t.Errorf("an erasure step deletes:\n%s\n%s", begin, body)
 	}
-	if !strings.Contains(body, `event: "UserErased"`) {
-		t.Errorf("EraseUser emits no UserErased:\n%s", body)
+	if !strings.Contains(body, `event: "UserDeleted"`) {
+		t.Errorf("EraseUser emits no UserDeleted:\n%s", body)
 	}
 }
 

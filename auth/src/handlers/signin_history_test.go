@@ -909,7 +909,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 	// device to one is a separate change.
 	exempt := map[string]string{
 		"UserCreated":                "account lifecycle (also admin- and fixture-created)",
-		"UserErased":                 "account lifecycle (an operator's erasure)",
+		"UserDeleted":                "account lifecycle (an operator's erasure)",
 		"UserUpdated":                "account lifecycle (an operator's edit)",
 		"UserRoleAssigned":           "grant (also the role seed and sign-up roles)",
 		"UserRoleRevoked":            "grant",
@@ -943,7 +943,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("event %s names a user and no device_id", name)
 		}
 	}
-	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled"} {
+	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled", "ApiTokenCreated"} {
 		if !withDevice[ev] {
 			t.Errorf("%s carries no device_id", ev)
 		}
@@ -969,8 +969,8 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("%s's request %s declares no thumbprint", rpc, req[1])
 		}
 	}
-	if emits != 9 {
-		t.Errorf("%d emits of a device-carrying event, want 9 (one per event)", emits)
+	if emits != 10 {
+		t.Errorf("%d emits of a device-carrying event, want 10 (one per event)", emits)
 	}
 }
 

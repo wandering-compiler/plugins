@@ -18,7 +18,7 @@ import (
 // permission set Authenticate resolved for the request, which is what the role
 // ceiling reads. Keeps whatever scopes ctx already carries.
 func withHeldPermissions(ctx context.Context, userID string, held ...int32) context.Context {
-	raw, err := proto.Marshal(&pb.AuthResp{UserId: userID, PermissionIds: held})
+	raw, err := proto.Marshal(&pb.AuthResp{UserId: userID, SessionTokenId: "session-" + userID, PermissionIds: held})
 	if err != nil {
 		panic(err)
 	}

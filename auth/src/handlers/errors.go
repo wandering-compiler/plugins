@@ -244,9 +244,26 @@ const (
 
 	// CodeDeviceKeyRequired: an API token (CreateApiToken, IssueBotToken)
 	// asked for without the public key of the client that will use it. Every
-	// token is bound to a device key, and these requests cannot carry one
-	// yet, so they are refused rather than minted unbound.
+	// token is bound to a device key, so none is minted unbound.
 	CodeDeviceKeyRequired = "DEVICE_KEY_REQUIRED"
+)
+
+// The refusals of the key an API token's request names (CreateApiToken,
+// IssueBotToken). ErrorDetail only, never a google.rpc.ErrorInfo and never
+// Unauthenticated: they are about the key in the request body, not the
+// caller's own device, so a client must not read them as "my key is gone".
+const (
+	// CodeDeviceKeyInvalid: public_key is not a public P-256 or Ed25519 JWK
+	// (malformed, another key type or curve, a point off the curve), carries a
+	// private member, or is the key of a device that signs in to the account.
+	CodeDeviceKeyInvalid = "DEVICE_KEY_INVALID"
+	// CodeDeviceKeyRevoked: the key names a device of the token's owner that
+	// was revoked, for good. The program generates a new key.
+	CodeDeviceKeyRevoked = "DEVICE_KEY_REVOKED"
+	// CodeBotKeyMismatch: the machine account already has a key and the
+	// request names another (device/bot-one-key). Its replicas share the one
+	// key; to replace it, revoke the account's device first.
+	CodeBotKeyMismatch = "BOT_KEY_MISMATCH"
 )
 
 // ErrorDomain is the google.rpc.ErrorInfo domain of the refusals this plugin
@@ -336,9 +353,14 @@ const (
 	MsgDeviceProofRequired = "This app did not prove which device it runs on. Reload or update it, then sign in again."
 	MsgDeviceRevoked       = "This device was signed out for good. Sign in again to use it as a new device."
 
-	// An API token needs the public key of the program that will use it;
-	// this version cannot take one, so it issues none.
-	MsgClientKeyNeeded = "API tokens cannot be issued in this version. They will need the public key of the program that uses them."
+	// An API token is bound to the key of the program that will use it. The
+	// remedies name what to send: its PUBLIC key, never the private one.
+	MsgClientKeyNeeded  = "Give the public key of the program that will use this token."
+	MsgClientKeyInvalid = "That public key cannot be used. Give a P-256 or Ed25519 public key as a JWK."
+	MsgClientKeyPrivate = "That key contains its private part. Give only the public key, and keep the private key where the program runs."
+	MsgClientKeyRevoked = "That key belongs to a device that was revoked. Generate a new key for the program."
+	MsgClientKeySignsIn = "That key belongs to a device you sign in with. Generate a separate key for the program."
+	MsgBotKeyMismatch   = "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

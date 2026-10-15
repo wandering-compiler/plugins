@@ -72,7 +72,7 @@ var errEmptySelection = status.Error(codes.InvalidArgument,
 	"select the rows to act on: an empty selection would apply to every row, which this action does not do")
 
 // EraseUsers erases each selected account (GDPR) without deleting anything —
-// the admin Users page's `erase` action. Account by account: with a
+// the bulk form of EraseAccount, for project code. Account by account: with a
 // transaction coordinator each account is one transaction, so one that fails
 // leaves the ones before it erased and itself untouched; without one, the
 // account that failed is left with its access already ended and is completed
@@ -92,6 +92,22 @@ func (h *AuthServiceHandler) EraseUsers(ctx context.Context, req *pb.EraseUsersR
 		}
 	}
 	return &pb.EraseUsersResp{}, nil
+}
+
+// EraseAccount erases one account — the admin Users and ServiceAccounts pages'
+// `delete`, which kept its name when deleting became erasing, so an existing
+// admin keeps its button, its ACL code and its tests. The same erasure as
+// EraseUsers, the operator recorded; it answers the account's id as the delete
+// it replaces did. An account already erased is completed, not refused.
+func (h *AuthServiceHandler) EraseAccount(ctx context.Context, req *pb.EraseAccountReq) (*pb.EraseAccountResp, error) {
+	operator, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	if err := h.eraseUser(ctx, req.GetUserId(), operator); err != nil {
+		return nil, err
+	}
+	return &pb.EraseAccountResp{UserId: req.GetUserId()}, nil
 }
 
 // eraseUser erases one account in three steps:
@@ -206,13 +222,28 @@ func (h *AuthServiceHandler) RevokeDevices(ctx context.Context, req *pb.RevokeDe
 			}
 			return nil, err
 		}
-		if dev.GetId() != id || dev.GetRevokedAt() != nil {
-			// Not the row asked for (an answer that names another row is no
-			// answer), or already revoked: nothing to do.
+		if dev.GetId() != id {
+			// Not the row asked for: an answer that names another row is no
+			// answer.
+			continue
+		}
+		if dev.GetRevokedAt() != nil {
+			// Already revoked — by its owner's RevokeOtherDevices, say, which
+			// spares API tokens. Its tokens and its row stay as the first
+			// revocation left them; only the API tokens it created are ended
+			// now, which is why an operator revokes it again. Idempotent.
+			if err := endApprovedAPITokens(ctx, h, dev.GetUser(), id, operator); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		userID := dev.GetUser()
 		if err := h.inTx(ctx, func(txCtx context.Context) error {
+			// The API tokens this device created end with it: a stolen
+			// session could have created one bound to the thief's key.
+			if err := endApprovedAPITokens(txCtx, h, userID, id, operator); err != nil {
+				return err
+			}
 			if _, err := h.Mutation.RevokeDeviceTokens(txCtx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: id, RevokedBy: operator, KeepTokenId: noTokenKept}); notFoundOK(err) != nil {
 				return err
 			}
@@ -228,8 +259,8 @@ func (h *AuthServiceHandler) RevokeDevices(ctx context.Context, req *pb.RevokeDe
 	return &pb.RevokeDevicesResp{}, nil
 }
 
-// RevokeSessions revokes each selected token — the admin Sessions page's
-// `revoke` action. The operator is recorded as revoked_by, the reason is
+// RevokeSessions revokes each selected token — the bulk form of
+// RevokeSession, for project code. The operator is recorded as revoked_by, the reason is
 // ADMIN_REVOKED, and the rows stay (the page lists them as revoked). A token
 // already revoked keeps its first revocation: the statement matches no row,
 // which is done, not an error, so revoking a revoked row is a no-op.
@@ -247,4 +278,21 @@ func (h *AuthServiceHandler) RevokeSessions(ctx context.Context, req *pb.RevokeS
 		}
 	}
 	return &pb.RevokeSessionsResp{}, nil
+}
+
+// RevokeSession revokes one token — the admin Sessions page's `delete`, which
+// kept its name when deleting became revoking, so an existing admin keeps its
+// button, its ACL code and its tests. The operator is recorded as revoked_by,
+// the reason is ADMIN_REVOKED and the row stays, listed as revoked; a token
+// already revoked keeps its first revocation and is not an error. It answers
+// the token's id, as the delete it replaces did.
+func (h *AuthServiceHandler) RevokeSession(ctx context.Context, req *pb.RevokeSessionReq) (*pb.RevokeSessionResp, error) {
+	operator, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	if _, err := h.Mutation.RevokeUserToken(ctx, &pb.RevokeUserTokenReq{Id: req.GetId(), RevokedBy: operator, Thumbprint: requestThumbprint(ctx)}); notFoundOK(err) != nil {
+		return nil, err
+	}
+	return &pb.RevokeSessionResp{TokenId: req.GetId()}, nil
 }

@@ -457,6 +457,12 @@ message ApiTokenInfo {
   // NULL = live.
   google.protobuf.Timestamp revoked_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
   RevokeReason              revoke_reason = 7;
+  // The key the token is bound to (its device's thumbprint, the device id
+  // Authenticate answers for it); NULL for a token minted before binding.
+  string                    device_thumbprint = 8 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  // When that device was revoked; NULL = live. A token of a revoked device
+  // is refused like a revoked token.
+  google.protobuf.Timestamp device_revoked_at = 9 [(w17.field) = { type: DATETIME, null: true }];
 }
 message ListApiTokensByUserReq {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -466,6 +472,67 @@ message ListApiTokensByUserReq {
 message ListApiTokensByUserResp {
   option (w17.contrib.plugin_feature) = "api_token";
   repeated ApiTokenInfo tokens = 1;
+}
+
+// GetUserDeviceByThumbprint — the caller's own Device row for the key its
+// request was proved with (the envelope's device_id), recorded as the
+// approver of an API token it creates. A revoked or unknown pair is no row:
+// Authenticate already refused a revoked device.
+message GetUserDeviceByThumbprintReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
+}
+message GetUserDeviceByThumbprintResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string device_id = 1;
+}
+
+// GetSessionApprover — the device that approved the caller's own session
+// (UserToken.approved_by_device_id: a CLI session's approving browser), so a
+// token the session creates records that ROOT approver and ends when it is
+// revoked. A session approved by nothing answers NULL (empty).
+message GetSessionApproverReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+}
+message GetSessionApproverResp {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string approved_by_device_id = 1 [(w17.field) = { type: UUID, null: true }];
+}
+
+// LockMachineAccount takes a row lock on the machine account for the rest of
+// the caller's transaction, so two IssueBotToken calls for ONE account
+// serialise: each reads the account's key (ListMachineKeys) and registers
+// one only when there is none, and that read-then-write is the one-key rule
+// only when nothing runs beside it. Two concurrent first tokens with
+// different keys would otherwise both read "no key" and register both. The
+// account row always exists by then (the handler just read it), so it is the
+// row to serialise on — the key row may not exist yet.
+message LockMachineAccountReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message LockMachineAccountResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string user_id = 1;
+}
+
+// ListMachineKeys — a machine account's LIVE keyed devices (not revoked,
+// with a thumbprint): at most one by device/bot-one-key.
+message ListMachineKeysReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message MachineKey {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string id         = 1;
+  string thumbprint = 2;
+}
+message ListMachineKeysResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  repeated MachineKey keys = 1;
 }
 
 // --- oauth feature: provider + identity lookups ---
@@ -1000,13 +1067,13 @@ message UserTokenAdminRow {
   // and sort reasons as expires_at) and why.
   google.protobuf.Timestamp revoked_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   RevokeReason revoke_reason = 8;
-  // device — the Device row the token is bound to, linked to the Devices
-  // page by the page's AdminColumnRef with `device_label` as its title. NULL
-  // for a token bound to no device (minted before binding, an API or MCP
-  // token).
+  // device — the Device row the token is bound to. NULL for a token bound to
+  // no device (minted before binding, an API or MCP token). The Sessions page
+  // does not link it to the Devices page: that page is the opt-in
+  // admin_devices feature, and a column ref cannot be gated.
   string device = 9 [(w17.field) = { type: UUID, null: true }];
   // The device's label (its user agent), blank when there is none — the
-  // ref's title, so the cell reads as the browser rather than a UUID.
+  // Sessions column, so the cell reads as the browser rather than a UUID.
   string device_label = 10;
   // The device's key thumbprint (the id events and AuthResp call device_id);
   // NULL for no device or a legacy (keyless) one.
@@ -1945,13 +2012,80 @@ service AuthQuery {
           "       t.expires_at AS expires_at, "
           "       t.created_at AS created_at, "
           "       t.revoked_at AS revoked_at, "
-          "       t.revoke_reason AS revoke_reason "
+          "       t.revoke_reason AS revoke_reason, "
+          "       d.thumbprint AS device_thumbprint, "
+          "       d.revoked_at AS device_revoked_at "
           "FROM @module.UserToken t "
+          "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE t.user_id = :user_id AND t.token_type = :token_type "
           "ORDER BY t.created_at DESC"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // GetUserDeviceByThumbprint — the live (user, thumbprint) Device row; see
+  // the request. Gated api_token.
+  rpc GetUserDeviceByThumbprint(GetUserDeviceByThumbprintReq) returns (GetUserDeviceByThumbprintResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS device_id "
+          "FROM @module.Device d "
+          "WHERE d.user_id = :user_id AND d.thumbprint = :thumbprint AND d.revoked_at IS NULL"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // GetSessionApprover — the caller's session's approver; see the request.
+  // Gated api_token.
+  rpc GetSessionApprover(GetSessionApproverReq) returns (GetSessionApproverResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.approved_by_device_id AS approved_by_device_id "
+          "FROM @module.UserToken t "
+          "WHERE t.id = :token_id AND t.user_id = :user_id"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+  }
+
+  // LockMachineAccount — SELECT … FOR UPDATE on the machine account's user
+  // row, read inside IssueBotToken's transaction; see the request. Gated
+  // service_account.
+  rpc LockMachineAccount(LockMachineAccountReq) returns (LockMachineAccountResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT u.id AS user_id FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "User", kind: SELECT_FOR_UPDATE }
+      ]
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // ListMachineKeys — the machine account's live keyed devices; see the
+  // request. FLAT aliases (a list-shaped response). Gated service_account.
+  rpc ListMachineKeys(ListMachineKeysReq) returns (ListMachineKeysResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT d.id AS id, d.thumbprint AS thumbprint "
+          "FROM @module.Device d "
+          "WHERE d.user_id = :user_id AND d.revoked_at IS NULL AND d.thumbprint IS NOT NULL "
+          "ORDER BY d.created_at"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
   }
 
   // GetUserTenant — resolves the principal's tenant_id (the
@@ -2316,7 +2450,10 @@ service AuthQuery {
   // ListUserDevices — the caller's live devices (management view), newest
   // first; a revoked device, and a legacy one recorded before device binding
   // (no thumbprint), is history, not a device to manage — both stay in the
-  // table, queryable. The handler
+  // table, queryable. A program's key (api_key: an API token's device) is not
+  // a device the owner signs in with: it is managed through its API token,
+  // so RevokeOtherDevices and RevokeAllDevices, which read this list, leave
+  // API tokens alone. The handler
   // maps each row to DeviceInfo, deriving `trusted` (trusted_at later than
   // the account's trust revocation) + `current` (thumbprint matches the
   // device the caller's token is bound to). Gated devices.
@@ -2334,7 +2471,7 @@ service AuthQuery {
           "       d.last_seen_at AS last_seen_at, "
           "       d.created_at AS created_at "
           "FROM @module.Device d WHERE d.user_id = :user_id AND d.revoked_at IS NULL "
-          "AND d.thumbprint IS NOT NULL "
+          "AND d.thumbprint IS NOT NULL AND d.api_key = FALSE "
           "ORDER BY d.last_seen_at DESC"
       }
     };
