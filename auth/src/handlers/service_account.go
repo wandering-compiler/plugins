@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/plugins/auth/lib/devicekey"
 )
 
 // errAuthnBotNoPassword is the internal reason a machine account was refused a
@@ -45,6 +47,8 @@ func init() {
 		}
 		return nil
 	}
+	signInOutcomeRules = append(signInOutcomeRules,
+		outcomeRule{errAuthnBotNoPassword, pb.SignInOutcome_SIGN_IN_OUTCOME_MACHINE_ACCOUNT})
 }
 
 // errNotABotAccount is the refusal for minting a token against a person.
@@ -71,9 +75,32 @@ var (
 // Refused with PermissionDenied rather than InvalidArgument: the caller may
 // name a real account and still not be allowed to mint for it, which is an
 // authorisation answer, not a malformed request.
-func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBotTokenReq) (*pb.IssueBotTokenResp, error) {
-	if _, err := callerUserID(ctx); err != nil {
+//
+// The token is bound to the machine account's key (public_key), and the
+// account has exactly ONE (device/bot-one-key): its first token registers
+// the key as the account's device, every later token must name the same key
+// — the account's replicas share it — and another key is refused
+// (BOT_KEY_MISMATCH) while the account's device is live. Replacing the key is
+// revoking that device (the admin Devices page), then issuing with the new
+// one. The operator's own device is recorded as the token's approver.
+//
+// Recorded in the sign-in history (method BOT_TOKEN), one row whatever the
+// outcome; the row names the machine account only once it is known to be one
+// the operator may mint for, so a refused probe of another account writes no
+// account onto that account's history.
+func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBotTokenReq) (_ *pb.IssueBotTokenResp, err error) {
+	callerID, err := callerUserID(ctx)
+	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	attempt := beginKeyedMint(ctx, pb.SignInMethod_SIGN_IN_METHOD_BOT_TOKEN)
+	defer func() { h.endSignIn(ctx, attempt, err) }()
+	// A credential is minted only by a signed-in person, as CreateApiToken
+	// and CliAuthorize require: an API token — the bot's own, or an
+	// operator's on an API-realm role that may call this — must not mint
+	// further machine tokens (api_token/derived-token-not-wider).
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
 	}
 	target := req.GetUserId()
 	if target == "" {
@@ -134,12 +161,26 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	// anyway, and the admin should hear why instead of receiving a dead one.
 	// After the ceiling, so an operator who may not act as the bot does not
 	// learn its state either.
-	if err := signInDisabledGate(userResp.GetUser()); err != nil {
+	bot := userResp.GetUser()
+	attempt.userID, attempt.account = bot.GetId(), bot
+	attempt.named(bot.GetEmail())
+	if err := signInDisabledGate(bot); err != nil {
+		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED
 		return nil, status.Error(codes.FailedPrecondition, "machine account is disabled; enable it first")
 	}
+	key, err := parseTokenKey(ctx, req.GetPublicKey())
+	if err != nil {
+		return nil, err
+	}
+	attempt.thumbprint = key.Thumbprint
 
-	// The token and its narrowing are ONE unit, and this is the sharpest
-	// reason in this file for a transaction.
+	expiresAt, err := h.apiTokenExpiry(ctx, req.GetExpiresAt())
+	if err != nil {
+		return nil, err
+	}
+
+	// The account's key, the token, its narrowing and the history row are ONE
+	// unit, and this is the sharpest reason in this file for a transaction.
 	//
 	// Minted first and narrowed after, a failure partway leaves a LIVE token
 	// with a partial subset — or with none, which the resolver reads as
@@ -148,34 +189,55 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	// error back, could be leaving behind a WIDER one than they asked for,
 	// believing nothing happened.
 	//
-	// Rolled back together, the failure means what the caller was told.
-	var tx *distx.TxHandle
-	txCtx := ctx
-	if h.DistTx != nil {
-		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
-			return nil, err
+	// Rolled back together, the failure means what the caller was told. And
+	// the one-key check holds only inside it: the account row is locked
+	// first, so a concurrent first token with another key waits, then reads
+	// the key this one registered.
+	var token, tokenID string
+	err = h.inTx(ctx, func(txCtx context.Context) error {
+		dev, err := h.machineKeyDevice(txCtx, attempt, target, key)
+		if err != nil {
+			return err
 		}
-	}
-	expiresAt, err := h.apiTokenExpiry(ctx, req.GetExpiresAt())
+		approver, err := h.approverDevice(txCtx, callerID)
+		if err != nil {
+			return err
+		}
+		token, tokenID, err = h.issueApiTokenTx(txCtx, attempt, target, req.GetName(), req.GetPermissionSubset(), expiresAt, dev, approver)
+		return err
+	})
 	if err != nil {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
 		return nil, err
 	}
-	token, tokenID, err := h.issueApiTokenTx(txCtx, target, req.GetName(), req.GetPermissionSubset(), expiresAt)
+	return &pb.IssueBotTokenResp{Token: token, TokenId: tokenID, ExpiresAt: expiresAt, DeviceId: key.Thumbprint}, nil
+}
+
+// machineKeyLabel labels a machine account's device: one key for every token
+// and replica of the account, so no token's name.
+const machineKeyLabel = "Machine account key"
+
+// machineKeyDevice is the machine account's one device for key, on txCtx
+// (device/bot-one-key): the account row is locked (LockMachineAccount), its
+// live key read (ListMachineKeys), and another live key refuses the mint
+// (BOT_KEY_MISMATCH); the same key — or none yet — registers or finds the
+// device as a person's API token does (registerKeyDevice, which refuses a
+// revoked one).
+func (h *AuthServiceHandler) machineKeyDevice(txCtx context.Context, a *signInAttempt, botID string, key devicekey.Key) (signInDevice, error) {
+	if _, err := h.Query.LockMachineAccount(txCtx, &pb.LockMachineAccountReq{UserId: botID}); err != nil {
+		return signInDevice{}, err
+	}
+	keys, err := h.Query.ListMachineKeys(txCtx, &pb.ListMachineKeysReq{UserId: botID})
 	if err != nil {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
-		return nil, err
+		return signInDevice{}, err
 	}
-	if tx != nil {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, err
+	for _, k := range keys.GetKeys() {
+		if k.GetThumbprint() != key.Thumbprint {
+			return signInDevice{}, refusal(txCtx, codes.FailedPrecondition,
+				"the machine account already has another key; its replicas share one key, and replacing it means revoking the account's device first",
+				CodeBotKeyMismatch, "public_key", MsgBotKeyMismatch, nil)
 		}
 	}
-	return &pb.IssueBotTokenResp{Token: token, TokenId: tokenID, ExpiresAt: expiresAt}, nil
+	return h.registerKeyDevice(txCtx, a, botID, key, machineKeyLabel)
 }
 
 // botUserFillers complete a CreateBotUser request with what another feature's

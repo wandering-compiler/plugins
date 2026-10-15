@@ -101,6 +101,15 @@ message IssueTokenReq {
   // sha256(token), hex: the handler mints the token, stores only this, and
   // returns the token to the caller itself (it is never read back).
   string token_hash = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the bound device, TokenIssued's device_id — the value
+  // Authenticate later answers as AuthResp.device_id for this token.
+  string thumbprint = 5;
+  // A public-computer session (UserToken.public_computer).
+  bool public_computer = 6;
+  // The Device row of the browser session that approved a CLI login
+  // (UserToken.approved_by_device_id); empty (NULL) for every other mint.
+  string approved_by_device_id = 7 [(w17.field) = { type: UUID, null: true }];
 }
 message IssueTokenResp { UserToken token = 1; }
 
@@ -151,6 +160,9 @@ message RevokeSessionTokenReq {
   string    token_id   = 1 [(w17.field) = { type: UUID }];
   string    user_id    = 2 [(w17.field) = { type: UUID }];
   TokenType token_type = 3;
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string    thumbprint = 4;
 }
 message RevokeSessionTokenResp {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
@@ -176,6 +188,21 @@ message IssueApiTokenReq {
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
   // sha256(token), hex — see IssueTokenReq.token_hash.
   string    token_hash = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // device_id — the Device the token is bound to: the (owner, thumbprint)
+  // row of the public key the request named (RegisterDevice). REQUIRED, as on
+  // IssueTokenReq: no API token is minted unbound.
+  string    device_id  = 6 [(w17.field) = { type: UUID }];
+  // The ROOT approver of the token (UserToken.approved_by_device_id): the
+  // Device row of the creating caller's device, or — when the caller is a
+  // session that was itself approved by another device (a CLI session) —
+  // that session's approver. Empty (NULL) when the request was bound to none.
+  string    approved_by_device_id = 7 [(w17.field) = { type: UUID, null: true }];
+  // event-only (no w17.field: not persisted, not validated), for
+  // ApiTokenCreated: the creating device's key thumbprint (device_id), the
+  // program key's thumbprint, and the creating account.
+  string    thumbprint     = 8;
+  string    key_thumbprint = 9;
+  string    created_by     = 10;
 }
 message IssueApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -231,6 +258,9 @@ message CreateTotpSecretReq {
   string user_id = 1 [(w17.field) = { type: UUID }];
   reserved 2; // `secret`, the secretbox blob — see UserTotpSecret
   string seed    = 3 [(w17.field) = { type: CRYPTED_SECRET }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 4;
 }
 message CreateTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -240,6 +270,9 @@ message CreateTotpSecretResp {
 message ConfirmTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 2;
 }
 message ConfirmTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -395,6 +428,9 @@ message ConsumeRecoveryCodeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 3;
 }
 message ConsumeRecoveryCodeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -407,6 +443,9 @@ message ConsumeRecoveryCodeResp {
 message RevokeTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 2;
 }
 message RevokeTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -433,6 +472,8 @@ message CreateMfaChallengeReq {
   // The key that signed the sign-in raising the challenge; VerifyMfa must
   // be signed by the same one.
   string thumbprint = 7 [(w17.field) = { type: CHAR, max_len: 43 }];
+  // The sign-in asked for a public-computer session; VerifyMfa honours it.
+  bool public_computer = 8;
 }
 message CreateMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -453,6 +494,10 @@ message SupersedePendingMfaChallengesResp {
 message ConsumeMfaChallengeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string challenge_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint VerifyMfa was signed with — the challenged one, which it has
+  // checked — MfaVerified's device_id.
+  string thumbprint = 2;
 }
 message ConsumeMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -711,9 +756,52 @@ message RegisterDeviceReq {
   string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
   string label      = 3 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   string ip         = 4 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  // A program's key (Device.api_key): written only when the row is created.
+  bool   api_key    = 5;
 }
 message RegisterDeviceResp {
   Device device = 1;
+}
+
+// ── sign-in history (base tier) ────────────────────────────────
+
+// RecordSignInEventReq — one SignInEvent row. Every field is what the mint
+// path knows when the attempt ends; an empty nullable one is written NULL.
+message RecordSignInEventReq {
+  // The account the attempt reached; empty (NULL) when it reached none.
+  string user_id    = 1 [(w17.field) = { type: UUID, null: true }];
+  // The address the attempt named, normalised; may be blank, and need not be
+  // a valid address (it is what was typed).
+  string address    = 2 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  // The Device row; empty (NULL) when the attempt registered none.
+  string device_id  = 3 [(w17.field) = { type: UUID, null: true }];
+  // The proof's key thumbprint; empty (NULL) without a proof.
+  string thumbprint = 4 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  string ip         = 5 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  string user_agent = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  SignInMethod  method  = 7 [(w17.field) = { type: ENUM }];
+  SignInOutcome outcome = 8 [(w17.field) = { type: ENUM }];
+  // The attempt asked for a public-computer session.
+  bool public_computer = 9;
+}
+message RecordSignInEventResp {
+  string id = 1;
+}
+
+// EraseSignInEventsReq — the erasure's share of the sign-in history
+// (user_admin): the account's rows, and the rows that reached no account but
+// named its address, take the placeholder address and lose their client
+// address and user agent.
+message EraseSignInEventsReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id     = 1 [(w17.field) = { type: UUID }];
+  // The address being erased, normalised (what SignIn would have recorded).
+  string email       = 2 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  // What the rows carry instead — the account's erasure placeholder.
+  string placeholder = 3 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message EraseSignInEventsResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
 }
 
 message TrustDeviceReq {
@@ -736,22 +824,44 @@ message TrustDeviceResp {
   string device_id = 1;
 }
 
+// RevokeDeviceTokensReq / MarkDeviceRevokedReq — base tier: both the
+// `devices` self-service calls and the `user_admin` Devices page revoke a
+// device with them, and an rpc carries one gate.
 message RevokeDeviceTokensReq {
-  option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
+  // Who revoked: the device's owner for the self-service calls, the operator
+  // for the admin Devices page.
+  string revoked_by = 3 [(w17.field) = { type: UUID }];
+  // The one token the "approved" op keeps: the caller's own session for
+  // RevokeOtherDevices ("everywhere but here" — the caller may be a CLI
+  // session the revoked device approved); the nil UUID (keeps none) for
+  // every other caller.
+  string keep_token_id = 4 [(w17.field) = { type: UUID }];
 }
 message RevokeDeviceTokensResp {
-  option (w17.contrib.plugin_feature) = "devices";
+}
+
+// RevokeApprovedApiTokens — the owner's API tokens one device created
+// (UserToken.approved_by_device_id). Run beside RevokeDeviceTokens when ONE
+// device is revoked explicitly (the owner's RevokeDevice, the admin Devices
+// revoke); see the rpc. token_type is handler-stamped (API).
+message RevokeApprovedApiTokensReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string    user_id    = 1 [(w17.field) = { type: UUID }];
+  string    device_id  = 2 [(w17.field) = { type: UUID }];
+  string    revoked_by = 3 [(w17.field) = { type: UUID }];
+  TokenType token_type = 4;
+}
+message RevokeApprovedApiTokensResp {
+  option (w17.contrib.plugin_feature) = "api_token";
 }
 
 message MarkDeviceRevokedReq {
-  option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
 }
 message MarkDeviceRevokedResp {
-  option (w17.contrib.plugin_feature) = "devices";
   string device_id = 1;
 }
 
@@ -1144,6 +1254,9 @@ message CreateCliAuthCodeReq {
   // caller's UserToken row (GetLiveSessionExpiry). Absent = that session
   // never expires. See CliAuthCode.session_expires_at.
   google.protobuf.Timestamp session_expires_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  // The Device row the approving session is bound to (read with its expiry).
+  // See CliAuthCode.approved_by_device_id. Empty (NULL) when it has none.
+  string approved_by_device_id = 8 [(w17.field) = { type: UUID, null: true }];
 }
 message CreateCliAuthCodeResp {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -1173,6 +1286,9 @@ message ConsumeCliAuthCodeResp {
   // NULL (unset) = that session never expires, or the code predates the
   // column — the normal session TTL applies. Declared so a SQL NULL scans.
   google.protobuf.Timestamp session_expires_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  // The approving session's device; CliToken records it on the CLI session.
+  // NULL (empty) when it had none. Declared so a SQL NULL scans.
+  string approved_by_device_id = 6 [(w17.field) = { type: UUID, null: true }];
 }
 
 // ── org_membership mutation request/response messages ───────
@@ -1289,6 +1405,9 @@ message RevokeUserTokenReq {
   option (w17.contrib.plugin_feature) = "user_admin";
   string id = 1 [(w17.field) = { type: UUID }];
   string revoked_by = 2 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the operator's device, UserTokenRevoked's device_id.
+  string thumbprint = 3;
 }
 message RevokeUserTokenResp {
   option (w17.contrib.plugin_feature) = "user_admin";
@@ -1490,10 +1609,14 @@ service AuthMutation {
           "user_id = :user_id, "
           "token_hash = :token_hash, "
           "expires_at = :expires_at, "
-          "device_id = :device_id "
+          "device_id = :device_id, "
+          "public_computer = :public_computer, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
           "          device_id AS token.device_id, "
+          "          public_computer AS token.public_computer, "
+          "          approved_by_device_id AS token.approved_by_device_id, "
           "          created_at AS token.created_at"
       }
     };
@@ -1503,7 +1626,8 @@ service AuthMutation {
         fields: [
           { key: "token_id",  value: "$response.token.id" },
           { key: "user_id",   value: "$response.token.user_id" },
-          { key: "issued_at", value: "$response.token.created_at" }
+          { key: "issued_at", value: "$response.token.created_at" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
@@ -1615,7 +1739,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "token_id", value: "$response.token_id" },
-          { key: "user_id",  value: "$response.user_id" }
+          { key: "user_id",  value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
@@ -1628,8 +1753,10 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
 
   // IssueApiToken — INSERT an API UserToken (token_type stamped by
-  // the handler) with an optional label. token fills app-side via
-  // CRYPTO_RANDOM. Gated api_token.
+  // the handler) with an optional label, bound to the Device of the key the
+  // request named (device_id, required) and recording the creator's device
+  // (approved_by_device_id). The handler mints the token and passes only its
+  // sha256. Gated api_token.
   rpc IssueApiToken(IssueApiTokenReq) returns (IssueApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
     option (w17.db.method) = {
@@ -1641,13 +1768,31 @@ service AuthMutation {
           "token_hash = :token_hash, "
           "token_type = :token_type, "
           "name = :name, "
-          "expires_at = :expires_at "
+          "expires_at = :expires_at, "
+          "device_id = :device_id, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
           "          token_type AS token.token_type, "
           "          name AS token.name, "
           "          created_at AS token.created_at, "
-          "          expires_at AS token.expires_at"
+          "          expires_at AS token.expires_at, "
+          "          device_id AS token.device_id, "
+          "          approved_by_device_id AS token.approved_by_device_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "ApiTokenCreated"
+      payload: {
+        fields: [
+          { key: "token_id",       value: "$response.token.id" },
+          { key: "user_id",        value: "$response.token.user_id" },
+          { key: "created_at",     value: "$response.token.created_at" },
+          { key: "name",           value: "$response.token.name" },
+          { key: "key_thumbprint", value: "$request.key_thumbprint" },
+          { key: "created_by",     value: "$request.created_by" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -1687,6 +1832,28 @@ service AuthMutation {
           "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 2 "
           "WHERE id = :token_id AND user_id = :user_id AND token_type = :token_type AND revoked_at IS NULL "
           "RETURNING id AS token_id"
+      }
+    };
+  }
+
+  // RevokeApprovedApiTokens — revoke (reason DEVICE_REVOKED, the caller as
+  // revoked_by) the owner's live API tokens the device CREATED
+  // (approved_by_device_id). A stolen browser session can create an API token
+  // bound to the thief's own key; revoking that device explicitly must end
+  // it, as it ends the CLI sessions the device approved. Called only when ONE
+  // device is revoked on purpose (RevokeDevice, the admin RevokeDevices) —
+  // never by RevokeOtherDevices / RevokeAllDevices, which spare API tokens
+  // (devices/revoke-all-spares-api-tokens). Owner-guarded like
+  // RevokeDeviceTokens, first revocation stands, no RETURNING. Gated
+  // api_token.
+  rpc RevokeApprovedApiTokens(RevokeApprovedApiTokensReq) returns (RevokeApprovedApiTokensResp) {
+    option (w17.contrib.plugin_feature_rpc) = "api_token";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
+          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND token_type = :token_type AND revoked_at IS NULL"
       }
     };
   }
@@ -1748,7 +1915,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "user_id",     value: "$response.secret.user_id" },
-          { key: "enrolled_at", value: "$response.secret.created_at" }
+          { key: "enrolled_at", value: "$response.secret.created_at" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
@@ -1771,7 +1939,10 @@ service AuthMutation {
     option (w17.event_emit) = {
       event: "TotpConfirmed"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -1976,7 +2147,10 @@ service AuthMutation {
     option (w17.event_emit) = {
       event: "RecoveryCodeUsed"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -2002,7 +2176,10 @@ service AuthMutation {
     option (w17.event_emit) = {
       event: "TotpDisabled"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -2023,7 +2200,8 @@ service AuthMutation {
           "INSERT INTO @module.MfaChallenge SET "
           "user_id = :user_id, "
           "code_hash = :code_hash, "
-          "thumbprint = :thumbprint "
+          "thumbprint = :thumbprint, "
+          "public_computer = :public_computer "
           "RETURNING id AS challenge.id, "
           "          user_id AS challenge.user_id, "
           "          code_hash AS challenge.code_hash, "
@@ -2040,7 +2218,8 @@ service AuthMutation {
           { key: "totp_enrolled", value: "$request.totp_enrolled" },
           { key: "email",         value: "$request.email" },
           { key: "code",          value: "$request.code" },
-          { key: "expires_at",    value: "$request.expires_at" }
+          { key: "expires_at",    value: "$request.expires_at" },
+          { key: "device_id",     value: "$request.thumbprint" }
         ]
       }
     };
@@ -2173,7 +2352,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "challenge_id", value: "$response.challenge_id" },
-          { key: "user_id",      value: "$response.user_id" }
+          { key: "user_id",      value: "$response.user_id" },
+          { key: "device_id",    value: "$request.thumbprint" }
         ]
       }
     };
@@ -2226,7 +2406,8 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
   // device identity mutations — the device every mint binds to
   // (base) + the revoke primitives the device-mgmt RPCs compose
-  // (gated `devices`).
+  // (RevokeDeviceTokens / MarkDeviceRevoked base, shared by `devices`
+  // and the `user_admin` Devices page; the rest gated `devices`).
   // ────────────────────────────────────────────────────────────
 
 
@@ -2239,7 +2420,9 @@ service AuthMutation {
   // seen (it never clears revoked_at). No create-then-re-read race: the
   // unique (user_id, thumbprint) index decides. :thumbprint is never NULL
   // (the request requires it), so a legacy row (NULL thumbprint) is never
-  // the conflict target.
+  // the conflict target. api_key is written on the INSERT only: whether a key
+  // is a program's (Device.api_key) is decided by the request that first
+  // named it, and the caller refuses a row of the other kind.
   rpc RegisterDevice(RegisterDeviceReq) returns (RegisterDeviceResp) {
     option (w17.db.method) = {
       ops: {
@@ -2249,7 +2432,8 @@ service AuthMutation {
           "user_id = :user_id, "
           "thumbprint = :thumbprint, "
           "label = :label, "
-          "ip = :ip "
+          "ip = :ip, "
+          "api_key = :api_key "
           "ON CONFLICT (user_id, thumbprint) DO UPDATE SET "
           "last_seen_at = NOW(), "
           "label = :label, "
@@ -2262,7 +2446,51 @@ service AuthMutation {
           "          trusted_at AS device.trusted_at, "
           "          last_seen_at AS device.last_seen_at, "
           "          created_at AS device.created_at, "
-          "          revoked_at AS device.revoked_at"
+          "          revoked_at AS device.revoked_at, "
+          "          api_key AS device.api_key"
+      }
+    };
+  }
+
+  // RecordSignInEvent — append one row to the sign-in history. The only
+  // statement that writes SignInEvent but the erasure's (EraseSignInEvents):
+  // the table is append-only. A successful mint calls it inside the
+  // transaction that issues the session; a refusal calls it on its own.
+  rpc RecordSignInEvent(RecordSignInEventReq) returns (RecordSignInEventResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.SignInEvent SET "
+          "user_id = :user_id, "
+          "address = :address, "
+          "device_id = :device_id, "
+          "thumbprint = :thumbprint, "
+          "ip = :ip, "
+          "user_agent = :user_agent, "
+          "method = :method, "
+          "outcome = :outcome, "
+          "public_computer = :public_computer "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EraseSignInEvents — an erasure's share of the sign-in history: every row
+  // of the account, and every row that reached no account but named the
+  // erased address, take the placeholder address; their client address and
+  // user agent are blanked. The rows stay (method, outcome, time, device key
+  // and the account link are not personal data). The ONE update of the
+  // append-only table. No RETURNING: an account without history is not an
+  // error. Gated user_admin.
+  rpc EraseSignInEvents(EraseSignInEventsReq) returns (EraseSignInEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.SignInEvent SET address = :placeholder, ip = \'\', user_agent = \'\' "
+          "WHERE user_id = :user_id OR (user_id IS NULL AND address = :email)"
       }
     };
   }
@@ -2291,9 +2519,11 @@ service AuthMutation {
   }
 
   // RevokeDeviceTokens — revoke every token a device holds (the "log out
-  // this device" primitive), reason DEVICE_REVOKED, the caller as the actor.
-  // Ownership-guarded by user_id so a caller can't end another user's
-  // sessions. Idempotent. RevokeUndevicedSessions — revoke the user's
+  // this device" primitive), reason DEVICE_REVOKED, :revoked_by as the actor
+  // (the owner for the devices calls, the operator for the admin Devices
+  // page). Ownership-guarded by user_id so a caller can't end another user's
+  // sessions. Base tier, like MarkDeviceRevoked: `devices` and `user_admin`
+  // both compose them. Idempotent. RevokeUndevicedSessions — revoke the user's
   // session tokens that carry no device: rows minted before device binding,
   // which Authenticate already refuses (unbound), so this records their end
   // rather than causes it (reason UNBOUND_SESSION). Tokens bound to a legacy
@@ -2315,13 +2545,37 @@ service AuthMutation {
     };
   }
 
+  //
+  // The "approved" op ends, in the same statement set, the CLI sessions the
+  // device APPROVED (cli_login: UserToken.approved_by_device_id) — bound to
+  // the CLI's own key, so the first op does not match them. Without it, a
+  // stolen browser session could approve the thief's own CLI key, and
+  // revoking the stolen device would leave that CLI session alive for its
+  // whole lifetime. SESSION tokens only: an API token records the device that
+  // created it in the same column, and the API tokens a device created are
+  // ended only when that ONE device is revoked on purpose
+  // (RevokeApprovedApiTokens, beside this) — RevokeOtherDevices and
+  // RevokeAllDevices spare API tokens (devices/revoke-all-spares-api-tokens). Same reason, same actor, same ownership predicate; it
+  // spares :keep_token_id, the caller's own session when RevokeOtherDevices
+  // comes from a CLI session the revoked browser approved.
+  //
+  // Ending the approving browser SESSION (Logout, the admin Sessions revoke)
+  // does not end the CLI sessions it approved, on purpose: a CLI session is
+  // ended by revoking the approving DEVICE or by revoking the CLI session
+  // itself.
   rpc RevokeDeviceTokens(RevokeDeviceTokensReq) returns (RevokeDeviceTokensResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
+      ops: {
+        name: "approved"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
+          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND id <> :keep_token_id AND revoked_at IS NULL "
+          "AND ?feature(api_token) token_type = 1"
+      }
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 5 "
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
           "WHERE user_id = :user_id AND device_id = :device_id AND revoked_at IS NULL"
       }
     };
@@ -2336,7 +2590,6 @@ service AuthMutation {
   // stands. Zero rows (already revoked, or not the caller's) → NotFound,
   // which the handler treats as done.
   rpc MarkDeviceRevoked(MarkDeviceRevokedReq) returns (MarkDeviceRevokedResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
@@ -2577,7 +2830,7 @@ service AuthMutation {
   // and erased_at is stamped. Guarded on `erased_at IS NULL`: a second erase
   // matches no row (NotFound) and changes nothing. Last because it replaces
   // the address the invitation eraser looks for, and because erased_at is
-  // what a retry reads to skip it. Emits UserErased. Gated user_admin.
+  // what a retry reads to skip it. Emits UserDeleted. Gated user_admin.
   rpc EraseUser(EraseUserReq) returns (EraseUserResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
@@ -2593,7 +2846,7 @@ service AuthMutation {
       }
     };
     option (w17.event_emit) = {
-      event: "UserErased"
+      event: "UserDeleted"
       payload: {
         fields: [
           { key: "user_id", value: "$response.user_id" }
@@ -3239,7 +3492,8 @@ service AuthMutation {
           "redirect_uri = :redirect_uri, "
           "client_id = :client_id, "
           "expires_at = :expires_at, "
-          "session_expires_at = :session_expires_at "
+          "session_expires_at = :session_expires_at, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS code.id, "
           "          user_id AS code.user_id, "
           "          code_hash AS code.code_hash, "
@@ -3264,7 +3518,7 @@ service AuthMutation {
           "UPDATE @module.CliAuthCode SET "
           "consumed_at = NOW() "
           "WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() "
-          "RETURNING user_id, code_challenge, redirect_uri, client_id, session_expires_at"
+          "RETURNING user_id, code_challenge, redirect_uri, client_id, session_expires_at, approved_by_device_id"
       }
     };
   }
@@ -3584,7 +3838,8 @@ service AuthMutation {
       event: "UserTokenRevoked"
       payload: {
         fields: [
-          { key: "token_id", value: "$response.token_id" }
+          { key: "token_id",  value: "$response.token_id" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };

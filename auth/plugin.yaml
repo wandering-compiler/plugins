@@ -1,6 +1,6 @@
 name: auth
 version: 0.1.0-rc.25
-requires_w17: ">=1.11"
+requires_w17: ">=1.12"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -50,6 +50,10 @@ env:
     type: int
     default: "2592000"
     description: "Absolute lifetime (seconds) of a browser session bearer token, stamped into UserToken.expires_at at mint time (SignIn / SignUp / VerifyMfa). Default 2592000 = 30 days. The token-validation queries reject an expired token (expires_at > NOW()), so a leaked session token stops working after the TTL even without an explicit logout (OWASP session-timeout baseline). <= 0 falls back to the 30-day default. API tokens have their own lifetime (api_token_default_ttl_hours)."
+  - name: public_session_ttl_seconds
+    type: int
+    default: "0"
+    description: "Absolute lifetime (seconds) of a session signed in with \"this is a public computer\" (public_computer on SignIn, OAuthExchange, SignUp, ConfirmSignUp; VerifyMfa takes it from the challenge). Such a session's device is never made trusted, and the client keeps its token in session storage only. 0 (the default) or <= 0 = 8 hours, silently capped at the session lifetime (session_token_ttl_seconds), so a deployment with sessions shorter than 8 hours boots unchanged. A value > 0 set explicitly must not be longer than session_token_ttl_seconds: a longer one fails the boot."
   - name: api_token_default_ttl_hours
     type: int
     default: "2160"
@@ -146,7 +150,7 @@ features:
     go_files:
       - handlers/tenant.go
   - name: api_token
-    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. Two narrowings over bare permission-id SETS cannot compose, so both axes resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (the anonymous case with NO permissions is a custom auth method, as in a public-link view). ⛔ In this version CreateApiToken (and service_account's IssueBotToken) refuse with DEVICE_KEY_REQUIRED: every token is bound to a device key, an API token's device is the program that will use it, and the request cannot carry that program's public key yet. API tokens minted before device binding are refused by Authenticate like every unbound token."
+    description: "API / MCP tokens alongside browser bearer sessions. Adds UserToken.token_type discriminator (SESSION/API) + management columns (name/last_used_at) + the TokenPermission subset table, plus Create/List/Revoke management RPCs (exposed via the plugin's REST + MCP presets). API tokens resolve permissions from the user's API-realm roles, intersected with the per-token subset (narrow-only). (Token expiry is base-tier — UserToken.expires_at applies to every token, see models.proto.) Off by default — opt in for projects exposing an MCP surface or non-browser API clients. ⚠️ A token here belongs to a USER, not to an organization: it hangs off UserToken and its ceiling is that user's roles. There is deliberately no org-owned key — a credential that carries permissions must carry an identity, or nobody answers for what it does — so machine access is a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have. Two narrowings over bare permission-id SETS cannot compose, so both axes resolve role-attributed grants and intersect on ROLES, so a permission survives only when ONE role grants it and that role passes every axis. Machine access is still a VIRTUAL USER (bot1, audit-bot) with the membership and role it should have, not a third realm (the anonymous case with NO permissions is a custom auth method, as in a public-link view). Every API token is bound to a device key — the program's that will use it: CreateApiToken (and service_account's IssueBotToken) require public_key, the program's PUBLIC JWK (EC P-256 or OKP Ed25519; a private member is refused), bind the token to its RFC 7638 thumbprint, and every request with the token needs a DPoP proof by that key. Only a signed-in session creates one. The creating device (for a CLI session, the browser that approved it) is recorded, and revoking that one device ends the token. API tokens minted before device binding are refused by Authenticate like every unbound token. Emits ApiTokenCreated."
     requires:
       # GetUserRolePermissionsByRealm resolves an API token's permissions
       # from UserRole, Role and RolePermission — rbac's tables. Without rbac
@@ -290,10 +294,42 @@ features:
       # active feature is staged once.
       - handlers/role_ceiling.go
   - name: user_admin
-    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, and a Sessions page to review and revoke tokens. Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser and the AuthService.EraseUsers action (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserErased), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSessions (the Sessions page revoke). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount; actions Disable / Enable / Erase) and the Sessions page (revoked tokens listed as revoked). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
+    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, and a Sessions page to review and revoke tokens. Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser behind AuthService.EraseAccount (the Users and ServiceAccounts pages' delete) and its bulk form AuthService.EraseUsers (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserDeleted), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSession (the Sessions page's delete, which revokes) with its bulk form AuthService.RevokeSessions, plus the queries and the action the opt-in SignIns and Devices pages use (AuthQuery.ListSignInEvents + GetSignInEvent, AuthQuery.ListAllDevices + GetDevice, AuthService.RevokeDevices). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount + delete EraseAccount, which erases; actions Disable / Enable) and the Sessions page (delete RevokeSession, which revokes; revoked tokens listed as revoked; each session's device, whether it is a public-computer session, and for a CLI session the device that approved it). The SignIns and Devices pages are NOT contributed by this feature: they are the admin_sign_ins and admin_devices features, so an upgrade adds no page to an existing activation (an admin that declares nav groups must list every page). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
     default: false
     go_files:
       - handlers/user_admin.go
+  # The two admin pages below are features of their own, not part of
+  # user_admin, because they arrived after user_admin had adopters: an admin
+  # that declares `nav` groups must list EVERY page, including the pages a
+  # plugin contributes (fail-closed), so a page added to an existing feature
+  # breaks every such adopter on upgrade. Opt-in pages cannot. They gate the
+  # PAGES only — the queries and the action stay with user_admin, which both
+  # require.
+  - name: admin_sign_ins
+    requires:
+      - user_admin
+    description: "The SignIns admin page: the sign-in history of every account (every attempt, failures included; read-only, paged; AuthQuery.ListSignInEvents + GetSignInEvent, which user_admin stages). Opt in with user_admin, and add the page to the admin nav if it declares groups. Off by default."
+    default: false
+  # The two endpoints below are opt-in for the same reason as the pages above:
+  # an endpoint published by a feature that already has adopters makes every
+  # adopter's codegen scaffold a new e2e test for it, a deliberately failing
+  # placeholder until someone writes it. They gate the REST ENDPOINTS only —
+  # the methods stay with the features they belong to.
+  - name: my_sign_ins
+    requires:
+      - authenticate_turnkey
+    description: "Publishes GET /auth/sign-ins (AuthService.ListMySignInEvents): the signed-in caller's own sign-in history, newest first. The history is recorded in every activation; this only publishes the caller's view of it. Off by default."
+    default: false
+  - name: client_secret_rotation
+    requires:
+      - cli_login
+    description: "Publishes POST /auth/clients/{id}/rotate-secret (AuthService.RotateClientSecret): issue a registered client a new client_secret, the old one stops working, the client_id stays. Off by default."
+    default: false
+  - name: admin_devices
+    requires:
+      - user_admin
+    description: "The Devices admin page: every device of every account — label, key thumbprint, first and last seen, whether its trust stands, revoked or not (AuthQuery.ListAllDevices + GetDevice, which user_admin stages). Its Revoke action (AuthService.RevokeDevices) revokes a device for good, every token bound to it and every CLI session it approved, recording the operator. Opt in with user_admin, and add the page to the admin nav if it declares groups. Off by default."
+    default: false
 
 # Files that need a feature PAIR. A machine account under tenant_scope must be
 # written with a tenant (User.tenant_id is NOT NULL), and the code that fills it
@@ -364,6 +400,10 @@ presets:
           # authenticated). Base-tier — no `devices` feature needed;
           # "log out everywhere" stays the devices group's job.
           - { ref: AuthService.Logout, method: POST, path: /logout,                        feature: authenticate_turnkey }
+          # The caller's own sign-in history. Opt-in (my_sign_ins): an
+          # endpoint added to a feature that already has adopters scaffolds a
+          # new e2e test into every one of them on upgrade.
+          - { ref: AuthService.ListMySignInEvents, method: GET, path: /sign-ins,           feature: my_sign_ins }
       # API/MCP token management — the caller manages their OWN tokens,
       # authenticated by their browser-session bearer (no exclude_auth).
       # Gated api_token: the whole group drops when the feature is off.
@@ -494,8 +534,10 @@ presets:
           - { ref: AuthService.RegisterClient,   method: POST,   path: "",            feature: cli_login }
           - { ref: AuthService.ListClients,      method: GET,    path: "",            feature: cli_login }
           - { ref: AuthService.SetClientEnabled, method: PATCH,  path: "/{id}",       feature: cli_login }
-          - { ref: AuthService.RevokeClient,     method: DELETE, path: "/{id}",       feature: cli_login }
-          - { ref: AuthService.RotateClientSecret, method: POST, path: "/{id}/rotate-secret", feature: cli_login }
+          - { ref: AuthService.DeleteClient,     method: DELETE, path: "/{id}",       feature: cli_login }
+          # Opt-in (client_secret_rotation), for the same upgrade reason as
+          # /auth/sign-ins.
+          - { ref: AuthService.RotateClientSecret, method: POST, path: "/{id}/rotate-secret", feature: client_secret_rotation }
       # Multi-org membership — the caller lists their OWN orgs, bearer-
       # authenticated. Gated org_membership.
       - prefix: /auth/orgs
@@ -610,9 +652,9 @@ presets:
       # on the realm whose admin manages end-user accounts (typically a
       # staff/admin realm). List + editable detail (email only — never
       # surfaces password_hash); the disable / enable bulk actions flip
-      # User.disabled_at (SignIn rejects a disabled account). No `delete`:
-      # nothing in the auth tables is deleted. The `erase` action is the
-      # GDPR request — the row stays, pseudonymised (AuthService.EraseUsers).
+      # User.disabled_at (SignIn rejects a disabled account). The `delete`
+      # ERASES: the GDPR request, the row stays, pseudonymised
+      # (AuthService.EraseAccount). Nothing in the auth tables is deleted.
       # A hand-written page named "Users" overrides this.
       - name: Users
         model: User
@@ -626,9 +668,16 @@ presets:
           # Through the Service method, not AuthMutation.UpdateUser: it
           # refuses the erased-account domain, which the mutation cannot.
           update: AuthService.UpdateAccount
+          # `delete` ERASES the account (GDPR, AuthService.EraseAccount): the
+          # row stays, pseudonymised, disabled, every token and device
+          # revoked, the operator recorded. Nothing is deleted. The slot keeps
+          # its name from when it hard-deleted the row, so an existing admin
+          # keeps its button, the model's delete permission still gates it
+          # and its tests (admin.Users.Delete → user_id) still hold.
+          delete: AuthService.EraseAccount
           # email is the only column UpdateUser writes. disabled_at
           # stays readonly — it belongs to the disable/enable actions
-          # below, erased_at to the erase action — and password_hash is
+          # below, erased_at to the erasure — and password_hash is
           # never surfaced at all.
           fields: [email]
           readonly_fields: [id, disabled_at, erased_at, created_at]
@@ -643,12 +692,6 @@ presets:
             label: "Enable"
             confirm: "Re-enable the selected accounts? An erased account stays disabled."
             target: both
-          # One account at a time (detail only): erasure cannot be undone.
-          - name: erase
-            source: AuthService.EraseUsers
-            label: "Erase"
-            confirm: "Erase this account? Its address, password and device details are replaced for good, it is disabled and every session and device is revoked. The record stays, without personal data. This cannot be undone."
-            target: detail
       # Machine accounts. Gated service_account.
       #
       # Its own page rather than a `kind` column on Users: `User.kind` is
@@ -683,6 +726,10 @@ presets:
           detail_link_column: email
         detail:
           read: AuthQuery.GetUser
+          # `delete` ERASES the machine account (AuthService.EraseAccount):
+          # disabled for good, every token revoked, the record kept. Nothing
+          # is deleted; the slot keeps its name, permission and tests.
+          delete: AuthService.EraseAccount
           readonly_fields: [id, disabled_at, erased_at, created_at]
         actions:
           - name: disable
@@ -695,11 +742,6 @@ presets:
             label: "Enable"
             confirm: "Re-enable the selected machine accounts?"
             target: both
-          - name: erase
-            source: AuthService.EraseUsers
-            label: "Erase"
-            confirm: "Erase this machine account? It is disabled for good and every token it holds is revoked. The record stays. This cannot be undone."
-            target: detail
       # Turnkey Organizations management. Gated org_membership. The
       # tables are plugin-owned, so a project can't author these pages
       # itself. View + edit + delete (list catalogue, inspect an org,
@@ -770,10 +812,10 @@ presets:
       # Turnkey session/token review. Gated user_admin. Lists every
       # UserToken across users (NEVER the secret token value) so an
       # operator can review + revoke sessions. Revoked tokens stay listed,
-      # with when and why; the `revoke` action revokes the selection
-      # (force-logout) through AuthService.RevokeSessions, which records the
-      # operator — a token already revoked is left as it is. No `delete`:
-      # nothing in the auth tables is deleted. The list projects the session owner's email
+      # with when and why; the `delete` REVOKES one session (force-logout)
+      # through AuthService.RevokeSession, which records the operator — a
+      # token already revoked is left as it is. Nothing in the auth tables is
+      # deleted. The list projects the session owner's email
       # (ListUserTokens → UserTokenAdminRow, ADMIN-FK) so an operator sees
       # "alice@x.com", never a bare user UUID: `owner` (email) is the
       # clickable handle onto this session's own detail; `user` links to
@@ -789,22 +831,88 @@ presets:
           # to the column header — the cell reads "User" and its tooltip
           # carries the user id. Users is gated by the same user_admin
           # feature, so it always co-exists with this page (no dangling ref).
+          #
+          # device_label: the device's label (its browser), as plain text. NOT
+          # a ref onto the Devices page: that page is the opt-in admin_devices
+          # feature, a column ref cannot be gated, and a ref to a page the
+          # activation does not have fails the admin build.
           columns:
             - owner
             - { name: user, ref: { page: Users } }
+            - device_label
+            - thumbprint
+            - public_computer
             - created_at
             - expires_at
             - revoked_at
             - revoke_reason
           detail_link_column: owner
         detail:
+          # UserTokenAdminDetail: the token, its device and — for a CLI
+          # session — the device of the browser session that approved it.
           read: AuthQuery.GetUserToken
-          readonly_fields: [id, user_id, created_at, expires_at, revoked_at, revoked_by, revoke_reason]
+          # `delete` REVOKES the session (AuthService.RevokeSession): the
+          # operator is recorded as revoked_by, the row stays and is listed as
+          # revoked. Nothing is deleted; the slot keeps its name, permission
+          # and tests (admin.Sessions.Delete → token_id).
+          delete: AuthService.RevokeSession
+          readonly_fields: [id, user_id, created_at, expires_at, revoked_at, revoked_by, revoke_reason, public_computer, device_id, device_label, device_thumbprint, approved_by_device_id, approver_label, approver_thumbprint]
+      # Sign-in history. Gated admin_sign_ins (opt-in, requires user_admin):
+      # a page added to user_admin would break every adopter whose admin
+      # declares nav groups. A hand-written page named "SignIns" overrides this.
+      - name: SignIns
+        model: SignInEvent
+        feature: admin_sign_ins
+        list:
+          source: AuthQuery.ListSignInEvents
+          columns:
+            - account
+            - { name: user, ref: { page: Users } }
+            - method
+            - outcome
+            - ip
+            - thumbprint
+            - created_at
+          detail_link_column: account
+        detail:
+          read: AuthQuery.GetSignInEvent
+          readonly_fields: [id, created_at, user_id, address, method, outcome, device_id, thumbprint, ip, user_agent, public_computer]
+      # Turnkey device review. Gated admin_devices (opt-in, requires
+      # user_admin, for the same nav reason as SignIns). Every Device row of every
+      # account — revoked and legacy (keyless, recorded before device binding)
+      # ones included: nothing in the auth tables is deleted. A legacy row
+      # shows no thumbprint and can never be used. The list projects the
+      # account's address (ListAllDevices → DeviceAdminRow, ADMIN-FK) and
+      # whether the device's trust still stands (`trusted`: trusted_at later
+      # than the account's device-trust revocation, and not revoked). The
+      # `revoke` action revokes the selection for good through
+      # AuthService.RevokeDevices: the device, every token bound to it and every
+      # CLI session it approved, the operator recorded; a revoked device is left as it is. No `delete`. A
+      # hand-written page named "Devices" overrides this.
+      - name: Devices
+        model: Device
+        feature: admin_devices
+        list:
+          source: AuthQuery.ListAllDevices
+          columns:
+            - owner
+            - { name: user, ref: { page: Users } }
+            - label
+            - thumbprint
+            - ip
+            - created_at
+            - last_seen_at
+            - trusted
+            - revoked_at
+          detail_link_column: owner
+        detail:
+          read: AuthQuery.GetDevice
+          readonly_fields: [id, owner, user, label, thumbprint, ip, created_at, last_seen_at, trusted_at, trust_revoked_at, trusted, revoked_at]
         actions:
           - name: revoke
-            source: AuthService.RevokeSessions
+            source: AuthService.RevokeDevices
             label: "Revoke"
-            confirm: "Revoke the selected sessions? Whoever holds them is signed out at once."
+            confirm: "Revoke the selected devices? Every session on them, and every CLI session they approved, ends at once, and their keys can never sign in to these accounts again."
             target: both
 
 # Dev-only sandbox services this plugin brings for testing / manual
@@ -850,19 +958,23 @@ sandboxes:
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
   - "A token cannot expire in the past. Choose a later date."
-  - "API tokens cannot be issued in this version. They will need the public key of the program that uses them."
   - "An account with this address already exists. Sign in instead."
   - "An account with this email address exists but has not verified it. Sign in with your password and verify the address first."
   - "An account with this email address exists, and the sign-in provider has not verified the address. Sign in with your password instead."
   - "Authentication is temporarily unavailable. Please try again shortly."
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Confirm your email address before accepting this invitation."
+  - "Give the public key of the program that will use this token."
   - "Registration is by invitation only. Ask the organization you are joining to invite you."
   - "Registration is not open for this email address."
   - "Set up an authenticator app first. Recovery codes belong to it."
   - "Sign in to do this. An API token cannot create credentials."
   - "Signing in with the provider did not complete. Please start again."
   - "That expiry date is not a valid date."
+  - "That key belongs to a device that was revoked. Generate a new key for the program."
+  - "That key belongs to a device you sign in with. Generate a separate key for the program."
+  - "That key contains its private part. Give only the public key, and keep the private key where the program runs."
+  - "That public key cannot be used. Give a P-256 or Ed25519 public key as a JWK."
   - "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
   - "There is no organization role named {role}."
   - "This API token expired on {date}. Create a new token."
@@ -874,6 +986,7 @@ msgids:
   - "This device was signed out for good. Sign in again to use it as a new device."
   - "This email address cannot be used. Use another address."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
+  - "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
