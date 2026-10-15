@@ -2830,7 +2830,7 @@ service AuthMutation {
   // and erased_at is stamped. Guarded on `erased_at IS NULL`: a second erase
   // matches no row (NotFound) and changes nothing. Last because it replaces
   // the address the invitation eraser looks for, and because erased_at is
-  // what a retry reads to skip it. Emits UserErased. Gated user_admin.
+  // what a retry reads to skip it. Emits UserDeleted. Gated user_admin.
   rpc EraseUser(EraseUserReq) returns (EraseUserResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
@@ -2846,7 +2846,7 @@ service AuthMutation {
       }
     };
     option (w17.event_emit) = {
-      event: "UserErased"
+      event: "UserDeleted"
       payload: {
         fields: [
           { key: "user_id", value: "$response.user_id" }

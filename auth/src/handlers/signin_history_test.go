@@ -909,7 +909,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 	// device to one is a separate change.
 	exempt := map[string]string{
 		"UserCreated":                "account lifecycle (also admin- and fixture-created)",
-		"UserErased":                 "account lifecycle (an operator's erasure)",
+		"UserDeleted":                "account lifecycle (an operator's erasure)",
 		"UserUpdated":                "account lifecycle (an operator's edit)",
 		"UserRoleAssigned":           "grant (also the role seed and sign-up roles)",
 		"UserRoleRevoked":            "grant",

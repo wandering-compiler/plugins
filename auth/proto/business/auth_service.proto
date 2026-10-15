@@ -1036,7 +1036,7 @@ service AuthService {
   rpc CreateApiToken(CreateApiTokenReq) returns (CreateApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
-  // RegisterClient / ListClients / SetClientEnabled / RevokeClient — the
+  // RegisterClient / ListClients / SetClientEnabled / DeleteClient — the
   // operator's registry of non-loopback redirect targets for the
   // authorization-code flow. Admin-only, bearer-authenticated: writing one
   // down is the act that makes a redirect trustworthy, so it belongs to a
@@ -1051,9 +1051,10 @@ service AuthService {
   rpc SetClientEnabled(SetClientEnabledReq) returns (SetClientEnabledResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
-  // RevokeClient ends a registration for good (AuthClient.revoked_at); the
-  // row stays. It was DeleteClient, which removed it.
-  rpc RevokeClient(RevokeClientReq) returns (RevokeClientResp) {
+  // DeleteClient ends a registration for good (AuthClient.revoked_at); the
+  // row stays. It keeps its released name (and so its ACL code, REST route
+  // and MCP tool); it used to remove the row.
+  rpc DeleteClient(DeleteClientReq) returns (DeleteClientResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
   // RotateClientSecret replaces a LIVE registration's secret and returns the
@@ -1072,8 +1073,8 @@ service AuthService {
   rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
-  // EraseUsers — the admin Users (and ServiceAccounts) page's `erase` action:
-  // erase each account (GDPR) without deleting anything, in three steps —
+  // EraseUsers — the bulk form of EraseAccount, for project code: erase each
+  // account (GDPR) without deleting anything, in three steps —
   // AuthMutation.BeginUserErasure (access ends: disabled, password unusable,
   // every token and device revoked, the operator recorded as revoked_by),
   // then the per-feature erasers, then AuthMutation.EraseUser (the address
@@ -1085,11 +1086,29 @@ service AuthService {
   rpc EraseUsers(EraseUsersReq) returns (EraseUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
-  // RevokeSessions — the admin Sessions page's `revoke` action: revoke each
-  // token (AuthMutation.RevokeUserToken), the operator recorded as
+  // EraseAccount — the admin Users and ServiceAccounts pages' `delete`: erase
+  // ONE account (GDPR) exactly as EraseUsers does, the operator recorded. The
+  // slot keeps the name it had when it hard-deleted the row, so an existing
+  // admin, its ACL codes (the model's `delete` permission) and its e2e tests
+  // stay valid; nothing is deleted. Answers the account's id, as the delete it
+  // replaces did. Gated user_admin.
+  rpc EraseAccount(EraseAccountReq) returns (EraseAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // RevokeSessions — the bulk form of RevokeSession, for project code: revoke
+  // each token (AuthMutation.RevokeUserToken), the operator recorded as
   // revoked_by. A token already revoked keeps its first revocation and is
   // not an error. Refuses an empty id list. Gated user_admin.
   rpc RevokeSessions(RevokeSessionsReq) returns (RevokeSessionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // RevokeSession — the admin Sessions page's `delete`: revoke ONE token
+  // (AuthMutation.RevokeUserToken), the operator recorded as revoked_by, the
+  // row kept and listed as revoked. The slot keeps the name it had when it
+  // deleted the row, so an existing admin, its ACL codes and its e2e tests stay
+  // valid; nothing is deleted. A token already revoked keeps its first
+  // revocation and is not an error. Answers the token's id. Gated user_admin.
+  rpc RevokeSession(RevokeSessionReq) returns (RevokeSessionResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
   // RevokeDevices — the admin Devices page's `revoke` action: revoke each
@@ -1491,11 +1510,11 @@ message RotateClientSecretResp {
   // The old secret stops working when this commits.
   string client_secret = 1;
 }
-message RevokeClientReq {
+message DeleteClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id = 1 [(w17.field) = { type: UUID }];
 }
-message RevokeClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+message DeleteClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
 
 // The admin action wire contract: a `repeated string ids` selection (the
 // model's UUID primary keys). Responses are empty — the admin shows success
@@ -1505,6 +1524,16 @@ message EraseUsersReq {
   repeated string ids = 1;
 }
 message EraseUsersResp { option (w17.contrib.plugin_feature) = "user_admin"; }
+// EraseAccountReq — `user_id` is the row the admin URL names (the key field
+// of the User model), as AuthMutation.DeleteUser's was.
+message EraseAccountReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message EraseAccountResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+}
 // UpdateAccountReq / Resp — the shape of AuthMutation.UpdateUser's, which it
 // calls: `user_id` is the row the admin URL names, `email` the one editable
 // field.
@@ -1523,6 +1552,16 @@ message RevokeSessionsReq {
   repeated string ids = 1;
 }
 message RevokeSessionsResp { option (w17.contrib.plugin_feature) = "user_admin"; }
+// RevokeSessionReq — `id` is the token row the admin URL names, as
+// AuthMutation.RevokeUserToken's was.
+message RevokeSessionReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RevokeSessionResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string token_id = 1;
+}
 message RevokeDevicesReq {
   option (w17.contrib.plugin_feature) = "user_admin";
   repeated string ids = 1;
