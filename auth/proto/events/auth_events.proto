@@ -46,16 +46,18 @@ message UserCreated {
   google.protobuf.Timestamp created_at = 3;
 }
 
-// UserErased — emitted on AuthMutation.EraseUser once an account has been
+// UserDeleted — emitted on AuthMutation.EraseUser once an account has been
 // erased (GDPR): its row pseudonymised in place, its tokens and devices
-// revoked. Nothing was deleted, in this plugin or by it. A subscriber holding
-// the person's data under this user_id (a profile, a mailing list, a billing
-// contact) erases its own copy here. Carries only the id: the address is gone,
-// and an event is no place to keep it. Gated user_admin.
-message UserErased {
+// revoked. Erasure is how this plugin deletes an account: nothing is deleted,
+// in this plugin or by it, and the event keeps its released name and topic so
+// every project's events lock that lists it still compiles. A subscriber
+// holding the person's data under this user_id (a profile, a mailing list, a
+// billing contact) erases its own copy here. Carries only the id: the address
+// is gone, and an event is no place to keep it. Gated user_admin.
+message UserDeleted {
   option (w17.event) = {
     channel: "events"
-    topic:   "auth.user.erased"
+    topic:   "auth.user.deleted"
   };
   option (w17.contrib.plugin_feature) = "user_admin";
 

@@ -342,7 +342,7 @@ func TestAdminPagesEraseAndRevokeNeverDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := string(raw)
-	for _, banned := range []string{"AuthMutation.DeleteUser", "delete: AuthMutation.RevokeUserToken", "AuthService.DeleteClient", "update: AuthMutation.UpdateUser"} {
+	for _, banned := range []string{"AuthMutation.DeleteUser", "delete: AuthMutation.RevokeUserToken", "update: AuthMutation.UpdateUser"} {
 		if strings.Contains(manifest, banned) {
 			t.Errorf("plugin.yaml still binds %s", banned)
 		}
@@ -411,7 +411,7 @@ func (c *clientRegistry) SetAuthClientEnabled(_ context.Context, in *pb.SetAuthC
 	return &pb.SetAuthClientEnabledResp{Id: r.id}, nil
 }
 
-// RevokeClient keeps the registration as a revoked row; the redirect is then
+// DeleteClient keeps the registration as a revoked row; the redirect is then
 // refused exactly as an unregistered one, enabling it again is refused, and a
 // second revoke is done, not an error.
 func TestRevokeClient_KeepsTheRowAndRefusesItLikeAnUnregisteredOne(t *testing.T) {
@@ -424,7 +424,7 @@ func TestRevokeClient_KeepsTheRowAndRefusesItLikeAnUnregisteredOne(t *testing.T)
 	if err := h.checkRedirectAllowed(ctx, "app", redirect); err != nil {
 		t.Fatalf("the live registration was refused: %v", err)
 	}
-	if _, err := h.RevokeClient(ctx, &pb.RevokeClientReq{Id: "c1"}); err != nil {
+	if _, err := h.DeleteClient(ctx, &pb.DeleteClientReq{Id: "c1"}); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	row := c.rows["c1"]
@@ -442,7 +442,7 @@ func TestRevokeClient_KeepsTheRowAndRefusesItLikeAnUnregisteredOne(t *testing.T)
 	if row.enabled {
 		t.Error("a revoked registration was enabled again")
 	}
-	if _, err := h.RevokeClient(ctx, &pb.RevokeClientReq{Id: "c1"}); err != nil {
+	if _, err := h.DeleteClient(ctx, &pb.DeleteClientReq{Id: "c1"}); err != nil {
 		t.Errorf("a second revoke failed: %v", err)
 	}
 }

@@ -1036,7 +1036,7 @@ service AuthService {
   rpc CreateApiToken(CreateApiTokenReq) returns (CreateApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
-  // RegisterClient / ListClients / SetClientEnabled / RevokeClient — the
+  // RegisterClient / ListClients / SetClientEnabled / DeleteClient — the
   // operator's registry of non-loopback redirect targets for the
   // authorization-code flow. Admin-only, bearer-authenticated: writing one
   // down is the act that makes a redirect trustworthy, so it belongs to a
@@ -1051,9 +1051,10 @@ service AuthService {
   rpc SetClientEnabled(SetClientEnabledReq) returns (SetClientEnabledResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
-  // RevokeClient ends a registration for good (AuthClient.revoked_at); the
-  // row stays. It was DeleteClient, which removed it.
-  rpc RevokeClient(RevokeClientReq) returns (RevokeClientResp) {
+  // DeleteClient ends a registration for good (AuthClient.revoked_at); the
+  // row stays. It keeps its released name (and so its ACL code, REST route
+  // and MCP tool); it used to remove the row.
+  rpc DeleteClient(DeleteClientReq) returns (DeleteClientResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
   // RotateClientSecret replaces a LIVE registration's secret and returns the
@@ -1491,11 +1492,11 @@ message RotateClientSecretResp {
   // The old secret stops working when this commits.
   string client_secret = 1;
 }
-message RevokeClientReq {
+message DeleteClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id = 1 [(w17.field) = { type: UUID }];
 }
-message RevokeClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+message DeleteClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
 
 // The admin action wire contract: a `repeated string ids` selection (the
 // model's UUID primary keys). Responses are empty — the admin shows success

@@ -25,7 +25,7 @@ This release binds every token to a device key and stops deleting rows from the 
    - API tokens and machine-account tokens issued before this release are refused. Issue them again with the public JWK of the program that uses them: `w17ctl key public`, or the SDKs' keygen helper. The program then signs every request with that key.
 5. **Update project code that calls the plugin's storage directly.**
    - Renamed: `DeleteToken` → `RevokeToken`, `DeleteSessionToken` → `RevokeSessionToken`, `DeleteApiToken` → `MarkApiTokenRevoked`, `DeleteOtherSessionTokens` → `RevokeOtherSessionTokens`, `DeleteUserSessionsForReset` → `RevokeTokensForReset`, `DeleteDeviceTokens` → `RevokeDeviceTokens`, `DeleteUndevicedSessions` → `RevokeUndevicedSessions`, `DeleteAllUserTokens` → `RevokeAllUserTokens`, `DeleteAuthClient` → `RevokeAuthClient`, and `DeleteUser` → `BeginUserErasure` + `EraseUser` (through `AuthService.EraseUsers`).
-   - Also renamed: `DeleteOrgMembership` → `MarkOrgMembershipRemoved`, `DeleteOrgInvite` → `CloseOrgInvite`, `ClearExpiredOrgInvite` → `CloseExpiredOrgInvite`, `DeletePendingSignUpsForEmail` → `SupersedePendingSignUpsForEmail`, `DeleteTotpSecret` → `RevokeTotpSecret`, `DeleteRecoveryCodes` → `RevokeRecoveryCodes`, and `AuthService.DeleteClient` → `RevokeClient`.
+   - Also renamed: `DeleteOrgMembership` → `MarkOrgMembershipRemoved`, `DeleteOrgInvite` → `CloseOrgInvite`, `ClearExpiredOrgInvite` → `CloseExpiredOrgInvite`, `DeletePendingSignUpsForEmail` → `SupersedePendingSignUpsForEmail`, `DeleteTotpSecret` → `RevokeTotpSecret`, and `DeleteRecoveryCodes` → `RevokeRecoveryCodes`. `AuthService.DeleteClient` keeps its name and route and now revokes the registration.
    - Removed: `DeleteTokenPermissions`, `PurgeExpiredPendingSignUps`, and the device rpcs `GetDeviceByIdentifier`, `CreateDevice`, `TouchDevice`, `DeleteDevice` and `DeleteAllUserDevices` (now `RegisterDevice` and `MarkDeviceRevoked`). The `X-Device-Id` and `X-Device-Trust` headers and `device_trust_token` are gone too.
    - Changed requests and responses:
      - `IssueToken` requires `device_id`.
@@ -34,7 +34,7 @@ This release binds every token to a device key and stops deleting rows from the 
      - `AuthQuery.GetUserToken` returns `UserTokenAdminDetail`.
      - Several revoke responses are empty now.
    - Roles: `AddPermissionToRole` revives a removed pair and still refuses one the role holds (`ALREADY_EXISTS`). It and `AssignRoleToUser` refuse a deleted or unknown role (`NOT_FOUND` / `ROLE_NOT_FOUND`). A preset role deleted at runtime stays deleted across re-seeds; declare it under a new key to bring it back.
-   - Events: `UserDeleted` (`auth.user.deleted`) is replaced by `UserErased` (`auth.user.erased`), so re-subscribe. New `ApiTokenCreated`. The token and MFA events carry `device_id`.
+   - Events: `UserDeleted` (`auth.user.deleted`) keeps its name and topic; the erasure emits it (erasure is the plugin's deletion). New `ApiTokenCreated`. The token and MFA events carry `device_id`.
 6. **The admin changes.**
    - Delete buttons are gone. Users and ServiceAccounts erase (`Erase`), and Sessions and Devices revoke (`Revoke`). Revoked and erased rows stay listed.
    - New pages: `Devices` and `SignIns` (`user_admin`).
