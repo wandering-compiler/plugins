@@ -66,7 +66,7 @@ func (h *AuthServiceHandler) ListDevices(ctx context.Context, req *pb.ListDevice
 	return &pb.ListDevicesResp{Devices: out}, nil
 }
 
-// RevokeDevice revokes one device for good: delete its tokens, then stamp
+// RevokeDevice revokes one device for good: revoke its tokens, then stamp
 // the Device row revoked (never deleted — a deleted row would let the same
 // key register again as a fresh device). Both are ownership-guarded by the
 // caller's user_id, so a bearer can't revoke another user's device.
@@ -76,7 +76,12 @@ func (h *AuthServiceHandler) RevokeDevice(ctx context.Context, req *pb.RevokeDev
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := revokeOneDevice(ctx, h, userID, req.GetDeviceId()); err != nil {
+	// ONE device revoked on purpose also ends the API tokens it created:
+	// a stolen session could have created one bound to the thief's key.
+	if err := endApprovedAPITokens(ctx, h, userID, req.GetDeviceId(), userID); err != nil {
+		return nil, err
+	}
+	if err := revokeOneDevice(ctx, h, userID, req.GetDeviceId(), noTokenKept); err != nil {
 		return nil, err
 	}
 	return &pb.RevokeDeviceResp{}, nil
@@ -97,11 +102,17 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 	if err != nil {
 		return nil, err
 	}
+	// "Here" is also the caller's own session: a CLI session whose approving
+	// browser is one of the devices revoked here must not be ended with it.
+	keep := callerSessionTokenID(ctx)
+	if keep == "" {
+		keep = noTokenKept
+	}
 	for _, d := range resp.GetDevices() {
 		if current != "" && d.GetThumbprint() == current {
 			continue
 		}
-		if err := revokeOneDevice(ctx, h, userID, d.GetId()); err != nil {
+		if err := revokeOneDevice(ctx, h, userID, d.GetId(), keep); err != nil {
 			return nil, err
 		}
 	}
@@ -112,16 +123,19 @@ func (h *AuthServiceHandler) RevokeOtherDevices(ctx context.Context, req *pb.Rev
 }
 
 // RevokeAllDevices revokes every device, the caller's included: their
-// tokens are deleted and each Device row is stamped revoked, so every key the
+// tokens are revoked and each Device row is stamped revoked, so every key the
 // account signed in with must be replaced. Idempotent.
 //
 // This revokes each device individually via revokeOneDevice
-// (DeleteDeviceTokens is device_id-filtered) rather than the broad
-// DeleteAllUserTokens. DeleteAllUserTokens has no token_type filter (that
-// column is api_token-gated), so it would ALSO delete the user's
-// API tokens — credentials that aren't device-bound (device_id NULL) and must
-// only be removed via RevokeApiToken. Sessions minted before device binding
-// hold no device and are deleted by revokeUndevicedSessions (they no longer
+// (RevokeDeviceTokens is device_id-filtered) rather than the broad
+// RevokeAllUserTokens, which has no token_type filter (that column is
+// api_token-gated) and would ALSO revoke the user's API tokens. Those are
+// ended only by RevokeApiToken (or an operator revoking their key on the
+// admin Devices page, or revoking the ONE device that created it,
+// RevokeDevice): an API token is bound to a program's key (Device.api_key),
+// which ListUserDevices leaves out, and RevokeDeviceTokens' "approved" op
+// matches session tokens only. Sessions minted before device binding
+// hold no device and are revoked by revokeUndevicedSessions (they no longer
 // authenticate either way), still sparing API tokens. Mirrors
 // RevokeOtherDevices, but includes the caller's current device.
 func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.RevokeAllDevicesReq) (*pb.RevokeAllDevicesResp, error) {
@@ -134,7 +148,7 @@ func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.Revok
 		return nil, err
 	}
 	for _, d := range resp.GetDevices() {
-		if err := revokeOneDevice(ctx, h, userID, d.GetId()); err != nil {
+		if err := revokeOneDevice(ctx, h, userID, d.GetId(), noTokenKept); err != nil {
 			return nil, err
 		}
 	}
@@ -144,32 +158,32 @@ func (h *AuthServiceHandler) RevokeAllDevices(ctx context.Context, req *pb.Revok
 	return &pb.RevokeAllDevicesResp{}, nil
 }
 
-// noTokenKept is the keep_token_id that keeps none (the column is a UUID, so
-// the empty string would not bind).
-const noTokenKept = "00000000-0000-0000-0000-000000000000"
-
-// revokeUndevicedSessions deletes the user's sessions that hold no device, all
-// but keep (the caller's own, or none): rows minted before device binding.
-// They no longer authenticate (Authenticate refuses an unbound token), so this
-// is tidying, not what ends them. Sessions bound to a LEGACY device (a
-// pre-binding Device row, no key) carry a device_id and are not swept here;
-// they are refused at authentication all the same, as bound to no key.
-// Recording either as revoked_at instead of deleting is the next step.
+// revokeUndevicedSessions revokes the user's sessions that hold no device, all
+// but keep (the caller's own, or none): rows minted before device binding,
+// reason UNBOUND_SESSION. They no longer authenticate (Authenticate refuses an
+// unbound token), so this records their end rather than causes it. Sessions
+// bound to a LEGACY device (a pre-binding Device row, no key) carry a
+// device_id and are not matched here; they are refused at authentication all
+// the same, as bound to no key.
 func revokeUndevicedSessions(ctx context.Context, h *AuthServiceHandler, userID, keep string) error {
 	if keep == "" {
 		keep = noTokenKept
 	}
-	_, err := h.Mutation.DeleteUndevicedSessions(ctx, &pb.DeleteUndevicedSessionsReq{UserId: userID, KeepTokenId: keep})
+	_, err := h.Mutation.RevokeUndevicedSessions(ctx, &pb.RevokeUndevicedSessionsReq{UserId: userID, KeepTokenId: keep})
 	return notFoundOK(err)
 }
 
-// revokeOneDevice deletes a device's tokens then stamps the Device row
-// revoked, both guarded by user_id. Tokens first, so a partial failure leaves
-// a live, listed device to retry on; the revocation alone would refuse them
-// too (Authenticate reads it through the token's binding). An already
-// revoked device matches no row (NotFound), which is done, not a failure.
-func revokeOneDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID string) error {
-	if _, err := h.Mutation.DeleteDeviceTokens(ctx, &pb.DeleteDeviceTokensReq{UserId: userID, DeviceId: deviceID}); notFoundOK(err) != nil {
+// revokeOneDevice revokes a device's tokens (reason DEVICE_REVOKED) then
+// stamps the Device row revoked, both guarded by user_id; nothing is deleted.
+// Tokens first, so a partial failure leaves a live, listed device to retry on;
+// the device's revocation alone would refuse them too (Authenticate reads it
+// through the token's binding). An already revoked device matches no row
+// (NotFound), which is done, not a failure.
+//
+// RevokeDeviceTokens also ends the CLI sessions the device approved, all but
+// keep (the caller's own session for RevokeOtherDevices, else noTokenKept).
+func revokeOneDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID, keep string) error {
+	if _, err := h.Mutation.RevokeDeviceTokens(ctx, &pb.RevokeDeviceTokensReq{UserId: userID, DeviceId: deviceID, RevokedBy: userID, KeepTokenId: keep}); notFoundOK(err) != nil {
 		return err
 	}
 	if _, err := h.Mutation.MarkDeviceRevoked(ctx, &pb.MarkDeviceRevokedReq{UserId: userID, DeviceId: deviceID}); notFoundOK(err) != nil {

@@ -81,7 +81,8 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		// Session bearer absolute lifetime (base-tier; <=0 → 30d default
 		// applied in sessionTokenExpiry). pluginwire sets this from
 		// envInt(session_token_ttl_seconds, 2592000).
-		SessionTokenTTLSeconds: cfg.SessionTokenTtlSeconds,
+		SessionTokenTTLSeconds:  cfg.SessionTokenTtlSeconds,
+		PublicSessionTTLSeconds: cfg.PublicSessionTtlSeconds,
 
 		// oauth knob (ignored unless the `oauth` feature is staged).
 		OAuthRedirectBase: cfg.OauthRedirectBase,

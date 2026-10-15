@@ -101,12 +101,21 @@ message IssueTokenReq {
   // sha256(token), hex: the handler mints the token, stores only this, and
   // returns the token to the caller itself (it is never read back).
   string token_hash = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the bound device, TokenIssued's device_id — the value
+  // Authenticate later answers as AuthResp.device_id for this token.
+  string thumbprint = 5;
+  // A public-computer session (UserToken.public_computer).
+  bool public_computer = 6;
+  // The Device row of the browser session that approved a CLI login
+  // (UserToken.approved_by_device_id); empty (NULL) for every other mint.
+  string approved_by_device_id = 7 [(w17.field) = { type: UUID, null: true }];
 }
 message IssueTokenResp { UserToken token = 1; }
 
 // token_hash finds the row; legacy_token only a legacy one (see
 // GetUserByTokenReq).
-message DeleteTokenReq  { string legacy_token = 1; string token_hash = 2; }
+message RevokeTokenReq  { string legacy_token = 1; string token_hash = 2; }
 
 // UpgradeTokenHash moves a legacy row — found by its token in the clear —
 // to the hash, and clears the clear copy. Run by the lookup that found it;
@@ -129,30 +138,33 @@ message TouchTokenLastUsedReq {
 message TouchTokenLastUsedResp {
   option (w17.contrib.plugin_feature) = "api_token";
 }
-// DeleteToken returns the deleted row's identifiers for the
+// RevokeToken returns the revoked row's identifiers for the
 // caller's response. Consumers that don't need the IDs ignore the
 // response (or pin a `_ = resp` discard). (TokenRevoked is emitted
-// by DeleteSessionToken, the live logout path, not here.)
-message DeleteTokenResp {
+// by RevokeSessionToken, the live logout path, not here.)
+message RevokeTokenResp {
   string token_id = 1;
   string user_id  = 2;
 }
 
-// DeleteSessionToken backs the base-tier AuthService.Logout (gated
-// authenticate_turnkey, no `devices` feature needed). Delete-by-id,
+// RevokeSessionToken backs the base-tier AuthService.Logout (gated
+// authenticate_turnkey, no `devices` feature needed). Revoke-by-id,
 // ownership guarded (id AND user_id) so a caller can only revoke their
 // OWN token. token_id is always the caller's resolved SESSION token (the
-// handler reads it from the auth envelope; an API-token bearer no-ops),
-// so an API token can't be hit. Idempotent — an absent token deletes zero
-// rows and returns an empty token_id. (token_type is NOT in the DQL — see
-// the rpc comment: that column is api_token-gated.)
-message DeleteSessionTokenReq {
+// handler reads it from the auth envelope; an API-token bearer is
+// refused), so an API token can't be hit. Idempotent — a token already
+// revoked matches no row (NotFound), which Logout reads as done. (token_type
+// is NOT in the DQL — see the rpc comment: that column is api_token-gated.)
+message RevokeSessionTokenReq {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
   string    token_id   = 1 [(w17.field) = { type: UUID }];
   string    user_id    = 2 [(w17.field) = { type: UUID }];
   TokenType token_type = 3;
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string    thumbprint = 4;
 }
-message DeleteSessionTokenResp {
+message RevokeSessionTokenResp {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
   string token_id = 1;
   string user_id  = 2;
@@ -164,7 +176,7 @@ message DeleteSessionTokenResp {
 // AuthService handlers (CreateApiToken / RevokeApiToken) compose
 // them after resolving the caller from the bearer-session scope.
 // token_type is a handler-stamped param (never client-set) so the
-// fixed INSERT/DELETE DQL doesn't need an enum literal.
+// fixed INSERT/UPDATE DQL doesn't need an enum literal.
 
 message IssueApiTokenReq {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -176,6 +188,21 @@ message IssueApiTokenReq {
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
   // sha256(token), hex — see IssueTokenReq.token_hash.
   string    token_hash = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // device_id — the Device the token is bound to: the (owner, thumbprint)
+  // row of the public key the request named (RegisterDevice). REQUIRED, as on
+  // IssueTokenReq: no API token is minted unbound.
+  string    device_id  = 6 [(w17.field) = { type: UUID }];
+  // The ROOT approver of the token (UserToken.approved_by_device_id): the
+  // Device row of the creating caller's device, or — when the caller is a
+  // session that was itself approved by another device (a CLI session) —
+  // that session's approver. Empty (NULL) when the request was bound to none.
+  string    approved_by_device_id = 7 [(w17.field) = { type: UUID, null: true }];
+  // event-only (no w17.field: not persisted, not validated), for
+  // ApiTokenCreated: the creating device's key thumbprint (device_id), the
+  // program key's thumbprint, and the creating account.
+  string    thumbprint     = 8;
+  string    key_thumbprint = 9;
+  string    created_by     = 10;
 }
 message IssueApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -192,22 +219,15 @@ message AddTokenPermissionResp {
   TokenPermission token_permission = 1;
 }
 
-message DeleteApiTokenReq {
+// MarkApiTokenRevoked — the storage half of AuthService.RevokeApiToken
+// (named Mark… because the service method owns the RevokeApiToken name).
+message MarkApiTokenRevokedReq {
   option (w17.contrib.plugin_feature) = "api_token";
   string    token_id   = 1 [(w17.field) = { type: UUID }];
   string    user_id    = 2 [(w17.field) = { type: UUID }];
   TokenType token_type = 3;
 }
-message DeleteApiTokenResp {
-  option (w17.contrib.plugin_feature) = "api_token";
-  string token_id = 1;
-}
-
-message DeleteTokenPermissionsReq {
-  option (w17.contrib.plugin_feature) = "api_token";
-  string token_id = 1 [(w17.field) = { type: UUID }];
-}
-message DeleteTokenPermissionsResp {
+message MarkApiTokenRevokedResp {
   option (w17.contrib.plugin_feature) = "api_token";
   string token_id = 1;
 }
@@ -238,6 +258,9 @@ message CreateTotpSecretReq {
   string user_id = 1 [(w17.field) = { type: UUID }];
   reserved 2; // `secret`, the secretbox blob — see UserTotpSecret
   string seed    = 3 [(w17.field) = { type: CRYPTED_SECRET }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 4;
 }
 message CreateTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -247,6 +270,9 @@ message CreateTotpSecretResp {
 message ConfirmTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 2;
 }
 message ConfirmTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -388,11 +414,13 @@ message CreateRecoveryCodeResp {
   string id = 1;
 }
 
-message DeleteRecoveryCodesReq {
+// RevokeRecoveryCodes ends the user's unused codes (revoked_at), when the set
+// is replaced or the authenticator disabled. Was DeleteRecoveryCodes.
+message RevokeRecoveryCodesReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
 }
-message DeleteRecoveryCodesResp {
+message RevokeRecoveryCodesResp {
   option (w17.contrib.plugin_feature) = "two_factor";
 }
 
@@ -400,6 +428,9 @@ message ConsumeRecoveryCodeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 3;
 }
 message ConsumeRecoveryCodeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -407,11 +438,16 @@ message ConsumeRecoveryCodeResp {
   string user_id = 2;
 }
 
-message DeleteTotpSecretReq {
+// RevokeTotpSecret ends the user's live authenticator (revoked_at, seed
+// cleared). Was DeleteTotpSecret.
+message RevokeTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device that caused it, the event's device_id.
+  string thumbprint = 2;
 }
-message DeleteTotpSecretResp {
+message RevokeTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
 }
@@ -436,6 +472,8 @@ message CreateMfaChallengeReq {
   // The key that signed the sign-in raising the challenge; VerifyMfa must
   // be signed by the same one.
   string thumbprint = 7 [(w17.field) = { type: CHAR, max_len: 43 }];
+  // The sign-in asked for a public-computer session; VerifyMfa honours it.
+  bool public_computer = 8;
 }
 message CreateMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -456,6 +494,10 @@ message SupersedePendingMfaChallengesResp {
 message ConsumeMfaChallengeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string challenge_id = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint VerifyMfa was signed with — the challenged one, which it has
+  // checked — MfaVerified's device_id.
+  string thumbprint = 2;
 }
 message ConsumeMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -513,8 +555,9 @@ message RecordPendingSignUpAttemptResp {
   string email     = 3;
 }
 
-// ClaimPendingSignUp spends the registration: DELETE … RETURNING is the
-// single-use guard, so two confirmations racing on one row get one account.
+// ClaimPendingSignUp spends the registration: one UPDATE … RETURNING guarded on
+// `claimed_at IS NULL` is the single-use guard, so two confirmations racing on
+// one row get one account. The row stays, with claimed_at.
 message ClaimPendingSignUpReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string pending_id = 1 [(w17.field) = { type: UUID }];
@@ -526,21 +569,31 @@ message ClaimPendingSignUpResp {
   string tenant_id     = 3 [(w17.contrib.plugin_feature_field) = "tenant_scope"];
 }
 
-// DeletePendingSignUpsForEmail clears the other registrations of an address
-// once one of them became the account, and the expired ones before a new one
-// is parked.
-message DeletePendingSignUpsForEmailReq {
+// SupersedePendingSignUpsForEmail ends the other open registrations of an
+// address once one of them became the account (superseded_at). Was
+// DeletePendingSignUpsForEmail; the per-address purge of expired rows
+// (PurgeExpiredPendingSignUps) is gone — an expired row stays, refused by its
+// expires_at.
+message SupersedePendingSignUpsForEmailReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
 }
-message DeletePendingSignUpsForEmailResp {
+message SupersedePendingSignUpsForEmailResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
 }
-message PurgeExpiredPendingSignUpsReq {
+
+// ErasePendingSignUpAddress is sign_up_confirmation's eraser (user_admin's
+// EraseUsers): the pending registrations of the erased address are ended and
+// lose the address and their hashes. They used to be deleted when one of them
+// was confirmed; they stay now, so an erasure has to reach them.
+message ErasePendingSignUpAddressReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
-  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // The address being erased (as stored: normalized).
+  string email       = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // What the rows carry instead — the account's erasure placeholder.
+  string placeholder = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
 }
-message PurgeExpiredPendingSignUpsResp {
+message ErasePendingSignUpAddressResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
 }
 
@@ -610,12 +663,12 @@ message UpdateUserPasswordIfUnchangedResp {
   string user_id = 1;
 }
 
-// DeleteOtherSessionTokens ends every SESSION of a user but the one named:
+// RevokeOtherSessionTokens ends every SESSION of a user but the one named:
 // a password change signs the person out everywhere else, because whoever
 // held the old password may hold a session too. API tokens are kept — they
 // are credentials the person minted on purpose, for CI and scripts. Gated
 // `password_change`.
-message DeleteOtherSessionTokensReq {
+message RevokeOtherSessionTokensReq {
   option (w17.contrib.plugin_feature) = "password_change";
   string    user_id       = 1 [(w17.field) = { type: UUID }];
   // The caller's own session, kept. The nil UUID keeps none (a caller on an
@@ -628,22 +681,21 @@ message DeleteOtherSessionTokensReq {
   reserved 3;
   reserved "token_type";
 }
-message DeleteOtherSessionTokensResp {
+message RevokeOtherSessionTokensResp {
   option (w17.contrib.plugin_feature) = "password_change";
 }
 
-// DeleteUserSessionsForReset — revoke ALL of a user's tokens after a
-// password reset (a reset implies the old credential may be compromised,
-// so every session AND API token is dropped — the conservative default).
-// Gated `password_reset` so it exists independently of the `devices`
-// feature's DeleteAllUserTokens.
-message DeleteUserSessionsForResetReq {
+// RevokeTokensForReset — revoke ALL of a user's tokens after a password
+// reset (a reset implies the old credential may be compromised, so every
+// session AND API token is ended — the conservative default). Gated
+// `password_reset` so it exists independently of the `devices` feature's
+// RevokeAllUserTokens.
+message RevokeTokensForResetReq {
   option (w17.contrib.plugin_feature) = "password_reset";
   string user_id = 1 [(w17.field) = { type: UUID }];
 }
-message DeleteUserSessionsForResetResp {
+message RevokeTokensForResetResp {
   option (w17.contrib.plugin_feature) = "password_reset";
-  string user_id = 1;
 }
 
 // ── email_verification request/response messages ────────────
@@ -704,9 +756,52 @@ message RegisterDeviceReq {
   string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
   string label      = 3 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   string ip         = 4 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  // A program's key (Device.api_key): written only when the row is created.
+  bool   api_key    = 5;
 }
 message RegisterDeviceResp {
   Device device = 1;
+}
+
+// ── sign-in history (base tier) ────────────────────────────────
+
+// RecordSignInEventReq — one SignInEvent row. Every field is what the mint
+// path knows when the attempt ends; an empty nullable one is written NULL.
+message RecordSignInEventReq {
+  // The account the attempt reached; empty (NULL) when it reached none.
+  string user_id    = 1 [(w17.field) = { type: UUID, null: true }];
+  // The address the attempt named, normalised; may be blank, and need not be
+  // a valid address (it is what was typed).
+  string address    = 2 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  // The Device row; empty (NULL) when the attempt registered none.
+  string device_id  = 3 [(w17.field) = { type: UUID, null: true }];
+  // The proof's key thumbprint; empty (NULL) without a proof.
+  string thumbprint = 4 [(w17.field) = { type: CHAR, max_len: 43, null: true }];
+  string ip         = 5 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  string user_agent = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  SignInMethod  method  = 7 [(w17.field) = { type: ENUM }];
+  SignInOutcome outcome = 8 [(w17.field) = { type: ENUM }];
+  // The attempt asked for a public-computer session.
+  bool public_computer = 9;
+}
+message RecordSignInEventResp {
+  string id = 1;
+}
+
+// EraseSignInEventsReq — the erasure's share of the sign-in history
+// (user_admin): the account's rows, and the rows that reached no account but
+// named its address, take the placeholder address and lose their client
+// address and user agent.
+message EraseSignInEventsReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id     = 1 [(w17.field) = { type: UUID }];
+  // The address being erased, normalised (what SignIn would have recorded).
+  string email       = 2 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  // What the rows carry instead — the account's erasure placeholder.
+  string placeholder = 3 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message EraseSignInEventsResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
 }
 
 message TrustDeviceReq {
@@ -729,46 +824,65 @@ message TrustDeviceResp {
   string device_id = 1;
 }
 
-message DeleteDeviceTokensReq {
-  option (w17.contrib.plugin_feature) = "devices";
+// RevokeDeviceTokensReq / MarkDeviceRevokedReq — base tier: both the
+// `devices` self-service calls and the `user_admin` Devices page revoke a
+// device with them, and an rpc carries one gate.
+message RevokeDeviceTokensReq {
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
+  // Who revoked: the device's owner for the self-service calls, the operator
+  // for the admin Devices page.
+  string revoked_by = 3 [(w17.field) = { type: UUID }];
+  // The one token the "approved" op keeps: the caller's own session for
+  // RevokeOtherDevices ("everywhere but here" — the caller may be a CLI
+  // session the revoked device approved); the nil UUID (keeps none) for
+  // every other caller.
+  string keep_token_id = 4 [(w17.field) = { type: UUID }];
 }
-message DeleteDeviceTokensResp {
-  option (w17.contrib.plugin_feature) = "devices";
-  string device_id = 1;
+message RevokeDeviceTokensResp {
+}
+
+// RevokeApprovedApiTokens — the owner's API tokens one device created
+// (UserToken.approved_by_device_id). Run beside RevokeDeviceTokens when ONE
+// device is revoked explicitly (the owner's RevokeDevice, the admin Devices
+// revoke); see the rpc. token_type is handler-stamped (API).
+message RevokeApprovedApiTokensReq {
+  option (w17.contrib.plugin_feature) = "api_token";
+  string    user_id    = 1 [(w17.field) = { type: UUID }];
+  string    device_id  = 2 [(w17.field) = { type: UUID }];
+  string    revoked_by = 3 [(w17.field) = { type: UUID }];
+  TokenType token_type = 4;
+}
+message RevokeApprovedApiTokensResp {
+  option (w17.contrib.plugin_feature) = "api_token";
 }
 
 message MarkDeviceRevokedReq {
-  option (w17.contrib.plugin_feature) = "devices";
   string user_id   = 1 [(w17.field) = { type: UUID }];
   string device_id = 2 [(w17.field) = { type: UUID }];
 }
 message MarkDeviceRevokedResp {
-  option (w17.contrib.plugin_feature) = "devices";
   string device_id = 1;
 }
 
-// DeleteUndevicedSessionsReq — the user's SESSIONS that no device holds,
+// RevokeUndevicedSessionsReq — the user's SESSIONS that no device holds,
 // except keep_token_id (the caller's own, for "log out the others"; the nil
 // UUID keeps none).
-message DeleteUndevicedSessionsReq {
+message RevokeUndevicedSessionsReq {
   option (w17.contrib.plugin_feature) = "devices";
   string user_id       = 1 [(w17.field) = { type: UUID }];
   string keep_token_id = 2 [(w17.field) = { type: UUID }];
 }
-message DeleteUndevicedSessionsResp {
+message RevokeUndevicedSessionsResp {
   option (w17.contrib.plugin_feature) = "devices";
-  string user_id = 1;
 }
 
-message DeleteAllUserTokensReq {
+message RevokeAllUserTokensReq {
   option (w17.contrib.plugin_feature) = "devices";
   string user_id = 1 [(w17.field) = { type: UUID }];
 }
-message DeleteAllUserTokensResp {
+message RevokeAllUserTokensResp {
   option (w17.contrib.plugin_feature) = "devices";
-  string user_id = 1;
 }
 
 // ── RBAC mutation request/response messages ─────────────────
@@ -815,20 +929,38 @@ message UpdateRoleResp {
 }
 
 // --- user_admin feature: turnkey admin user management ---
-// DeleteUser is the admin Users page detail `delete` (single row):
-// it hard-deletes the account and its session/API tokens in one
-// transaction, then emits UserDeleted so downstream subscribers can
-// purge feature-owned rows the plugin can't name unconditionally
-// (UserRole/rbac, devices, oauth, totp — all no-FK, app-enforced, and
-// unreachable to a fresh UUIDv7 id so an orphan can never re-bind).
-// DisableUsers / EnableUsers are the page's bulk `actions` — the
-// AdminAction wire contract requires a `repeated string ids` request;
-// they flip User.disabled_at and read back the affected ids.
-message DeleteUserReq {
+// Erasing an account (GDPR) is three steps, run by AuthService.EraseUsers in
+// this order (one transaction with a coordinator; without one, a retry
+// completes a failed erasure): BeginUserErasure ends the account's access —
+// disabled, password unusable, every token and device revoked — and leaves its
+// address alone; the per-feature erasers blank or spend the feature-owned
+// rows; EraseUser replaces the address and stamps erased_at. Nothing is
+// deleted. Access ends FIRST so that an erasure stopped part-way never leaves
+// a usable account with half of its data gone.
+message BeginUserErasureReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  // The operator who erased it, stamped as revoked_by on every token it ends.
+  string revoked_by = 2 [(w17.field) = { type: UUID }];
+}
+message BeginUserErasureResp {
   option (w17.contrib.plugin_feature) = "user_admin";
   string user_id = 1;
 }
-message DeleteUserResp {
+// DisableUsers / EnableUsers are the Users page's bulk `actions` — the
+// AdminAction wire contract requires a `repeated string ids` request.
+message EraseUserReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  // The placeholder that replaces the address: `erased-<user_id>@erased.invalid`,
+  // composed by the handler. Unique because the id is, non-routable (.invalid,
+  // RFC 2606), and it frees the old address for a new sign-up.
+  string email = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // 3 = revoked_by: the tokens are revoked by BeginUserErasure now.
+  reserved 3;
+  reserved "revoked_by";
+}
+message EraseUserResp {
   option (w17.contrib.plugin_feature) = "user_admin";
   string user_id = 1;
 }
@@ -849,6 +981,57 @@ message UpdateUserResp {
   option (w17.contrib.plugin_feature) = "user_admin";
   string user_id = 1;
   string email   = 2;
+}
+
+// ── erasure: the feature-owned halves of AuthService.EraseUsers ──
+//
+// Each is gated by the feature that owns its table, so an activation without
+// that feature has neither the table nor the statement. AuthService.EraseUsers
+// runs the ones its activation has, in the same transaction as EraseUser.
+// None deletes a row: personal columns are blanked or replaced, and anything
+// still usable is marked spent.
+
+// EraseOAuthData — the account's OAuth identities and login codes.
+message EraseOAuthDataReq {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message EraseOAuthDataResp {
+  option (w17.contrib.plugin_feature) = "oauth";
+}
+
+// EraseTwoFactorData — the account's authenticator, recovery codes and
+// pending challenges.
+message EraseTwoFactorDataReq {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message EraseTwoFactorDataResp {
+  option (w17.contrib.plugin_feature) = "two_factor";
+}
+
+// SpendEmailVerificationTokens — mark every live verification link of an
+// account used (the PasswordResetToken twin, SpendPasswordResetTokens).
+message SpendEmailVerificationTokensReq {
+  option (w17.contrib.plugin_feature) = "email_verification";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message SpendEmailVerificationTokensResp {
+  option (w17.contrib.plugin_feature) = "email_verification";
+}
+
+// EraseOrgInviteAddress — replace an erased address on the invitations sent
+// to it with the account's placeholder.
+message EraseOrgInviteAddressReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  // The address being erased (as stored: normalized).
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  // 2 = placeholder: the address is cleared (NULL), not re-addressed.
+  reserved 2;
+  reserved "placeholder";
+}
+message EraseOrgInviteAddressResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
 }
 
 message DisableUsersReq {
@@ -910,6 +1093,9 @@ message RevokeRoleFromUserReq {
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "org_membership"
   ];
+  // revoked_by — the account revoking, stamped on the grant. Empty = nobody
+  // named (NULL).
+  string revoked_by = 4 [(w17.field) = { type: UUID, null: true }];
 }
 message RevokeRoleFromUserResp {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -933,6 +1119,9 @@ message AddPermissionToRoleReq {
   option (w17.contrib.plugin_feature) = "rbac";
   string role_id       = 1;
   int32  permission_id = 2;
+  // added_by — the account adding it, logged in RolePermissionChange. Empty =
+  // nobody named (NULL).
+  string added_by      = 3 [(w17.field) = { type: UUID, null: true }];
 }
 message AddPermissionToRoleResp {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -943,6 +1132,9 @@ message RemovePermissionFromRoleReq {
   option (w17.contrib.plugin_feature) = "rbac";
   string role_id       = 1;
   int32  permission_id = 2;
+  // removed_by — the account removing it, stamped on the row and logged in
+  // RolePermissionChange. Empty = nobody named (NULL).
+  string removed_by    = 3 [(w17.field) = { type: UUID, null: true }];
 }
 message RemovePermissionFromRoleResp {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -971,6 +1163,18 @@ message RegisterAuthClientResp {
   AuthClient client = 1;
 }
 
+message RotateAuthClientSecretReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id            = 1 [(w17.field) = { type: UUID }];
+  // The new secret's argon2id hash (the handler hashes; the plaintext is
+  // returned to the operator once and never stored).
+  string client_secret = 2 [(w17.field) = { type: PASSWORD }];
+}
+message RotateAuthClientSecretResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1;
+}
+
 message SetAuthClientEnabledReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id      = 1 [(w17.field) = { type: UUID }];
@@ -981,11 +1185,11 @@ message SetAuthClientEnabledResp {
   string id = 1;
 }
 
-message DeleteAuthClientReq {
+message RevokeAuthClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id = 1 [(w17.field) = { type: UUID }];
 }
-message DeleteAuthClientResp {
+message RevokeAuthClientResp {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id = 1;
 }
@@ -1050,6 +1254,9 @@ message CreateCliAuthCodeReq {
   // caller's UserToken row (GetLiveSessionExpiry). Absent = that session
   // never expires. See CliAuthCode.session_expires_at.
   google.protobuf.Timestamp session_expires_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  // The Device row the approving session is bound to (read with its expiry).
+  // See CliAuthCode.approved_by_device_id. Empty (NULL) when it has none.
+  string approved_by_device_id = 8 [(w17.field) = { type: UUID, null: true }];
 }
 message CreateCliAuthCodeResp {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -1079,6 +1286,9 @@ message ConsumeCliAuthCodeResp {
   // NULL (unset) = that session never expires, or the code predates the
   // column — the normal session TTL applies. Declared so a SQL NULL scans.
   google.protobuf.Timestamp session_expires_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  // The approving session's device; CliToken records it on the CLI session.
+  // NULL (empty) when it had none. Declared so a SQL NULL scans.
+  string approved_by_device_id = 6 [(w17.field) = { type: UUID, null: true }];
 }
 
 // ── org_membership mutation request/response messages ───────
@@ -1119,10 +1329,11 @@ message AddOrgMembershipResp {
   OrgMembership membership = 1;
 }
 
-// Org admin deletes — back the Organizations / OrgMemberships admin
-// pages' `delete`. Requests key on a bare `id` field so the admin
-// detail id-stamp resolves against it regardless of the model name; the
-// responses echo the domain id for the emitted event payload. Gated
+// Org admin removals — back the Organizations page's `delete` and
+// AuthService.RemoveOrgMembership (the OrgMemberships page's `delete`). Both
+// are state changes: nothing is deleted. Requests key on a bare `id` field so
+// the admin detail id-stamp resolves against it regardless of the model name;
+// the responses echo the domain id for the emitted event payload. Gated
 // org_membership.
 message DeleteOrganizationReq {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -1133,11 +1344,15 @@ message DeleteOrganizationResp {
   string org_id = 1;
 }
 
-message DeleteOrgMembershipReq {
+// MarkOrgMembershipRemoved — was DeleteOrgMembership.
+message MarkOrgMembershipRemovedReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string id = 1;
+  // removed_by — the account removing the member, stamped on the membership
+  // and on the grants revoked with it. Empty = nobody named (NULL).
+  string removed_by = 2 [(w17.field) = { type: UUID, null: true }];
 }
-message DeleteOrgMembershipResp {
+message MarkOrgMembershipRemovedResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   string membership_id = 1;
 }
@@ -1174,17 +1389,25 @@ message UpdateOrgMembershipReq {
   reserved 2;
   reserved "role";
   string role_id = 3 [(w17.field) = { type: UUID }];
+  // changed_by — the account changing the role, stamped as revoked_by on the
+  // grants the change replaces. Empty = nobody named (NULL).
+  string changed_by = 4 [(w17.field) = { type: UUID, null: true }];
 }
 message UpdateOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   string membership_id = 1;
 }
 
-// RevokeUserToken — the admin Sessions page `delete`: hard-remove one
-// token (log out that session). Gated user_admin.
+// RevokeUserToken — an operator revokes one token (the admin Sessions page's
+// `revoke` action, through AuthService.RevokeSessions, which stamps the
+// operator as revoked_by). Gated user_admin.
 message RevokeUserTokenReq {
   option (w17.contrib.plugin_feature) = "user_admin";
-  string id = 1;
+  string id = 1 [(w17.field) = { type: UUID }];
+  string revoked_by = 2 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the operator's device, UserTokenRevoked's device_id.
+  string thumbprint = 3;
 }
 message RevokeUserTokenResp {
   option (w17.contrib.plugin_feature) = "user_admin";
@@ -1221,12 +1444,13 @@ message CreateOrgInviteResp {
   OrgInvite invite = 1;
 }
 
-message ClearExpiredOrgInviteReq {
+// CloseExpiredOrgInvite — was ClearExpiredOrgInvite.
+message CloseExpiredOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string org_id = 1 [(w17.field) = { type: UUID }];
   string email  = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
 }
-message ClearExpiredOrgInviteResp {
+message CloseExpiredOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   string id = 1;
 }
@@ -1276,12 +1500,27 @@ message ConsumeOrgInviteByTokenResp {
   string role_snapshot = 5;
 }
 
-message DeleteOrgInviteReq {
+// CloseOrgInvitesOfOrg — the invitations of an organization being deleted
+// (AuthService.RemoveOrganization).
+message CloseOrgInvitesOfOrgReq {
+  option (w17.contrib.plugin_feature) = "org_invite";
+  string org_id    = 1 [(w17.field) = { type: UUID }];
+  // closed_by — the account deleting the organization. Empty = NULL.
+  string closed_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message CloseOrgInvitesOfOrgResp {
+  option (w17.contrib.plugin_feature) = "org_invite";
+}
+
+// CloseOrgInvite — withdraw a pending invitation. Was DeleteOrgInvite.
+message CloseOrgInviteReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string invite_id = 1 [(w17.field) = { type: UUID }];
   string org_id    = 2 [(w17.field) = { type: UUID }];
+  // closed_by — the account withdrawing it. Empty = nobody named (NULL).
+  string closed_by = 3 [(w17.field) = { type: UUID, null: true }];
 }
-message DeleteOrgInviteResp {
+message CloseOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
   string invite_id = 1;
 }
@@ -1353,31 +1592,16 @@ service AuthMutation {
   }
 
 
-  // IssueToken — INSERT UserToken. The `token` column fills
-  // app-side via the CRYPTO_RANDOM default — request
-  // doesn't carry the token value; codegen preamble generates
-  // it before SQL emit.
+  // IssueToken — INSERT UserToken. The handler mints the token and
+  // passes only its sha256 (token_hash); the token itself is never
+  // stored.
   //
-  // The first op sweeps the user's EXPIRED SESSION tokens in the same
-  // transaction as the mint. Every session mint runs through this rpc
-  // (SignIn, SignUp, ConfirmSignUp, VerifyMfa, the OAuth exchange, CliToken),
-  // so expired sessions stop accumulating with no scheduler: each sign-in
-  // clears what the person's previous sessions left behind, bounded by one
-  // user's rows. Never-expiring rows (NULL) and live ones do not match
-  // `expires_at <= NOW()`. API and bot tokens are spared by the token_type
-  // operand, gated because the column exists only with `api_token` (without
-  // it every token is a session). An expired row is kept until this point on
-  // purpose: Authenticate reads it to answer SESSION_EXPIRED instead of
-  // "invalid credentials", and by the next sign-in the person has acted on it.
+  // One statement. It used to sweep the user's expired sessions first, in
+  // the same transaction; that sweep is gone because nothing in the auth
+  // tables is deleted: an expired token is history like a revoked one, and
+  // every lookup refuses it by its expires_at.
   rpc IssueToken(IssueTokenReq) returns (IssueTokenResp) {
     option (w17.db.method) = {
-      ops: {
-        name: "sweep"
-        dql:
-          "DELETE FROM @module.UserToken "
-          "WHERE user_id = :user_id AND expires_at <= NOW() "
-          "AND ?feature(api_token) token_type = 1"
-      }
       ops: {
         name: "main"
         dql:
@@ -1385,10 +1609,14 @@ service AuthMutation {
           "user_id = :user_id, "
           "token_hash = :token_hash, "
           "expires_at = :expires_at, "
-          "device_id = :device_id "
+          "device_id = :device_id, "
+          "public_computer = :public_computer, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
           "          device_id AS token.device_id, "
+          "          public_computer AS token.public_computer, "
+          "          approved_by_device_id AS token.approved_by_device_id, "
           "          created_at AS token.created_at"
       }
     };
@@ -1398,35 +1626,40 @@ service AuthMutation {
         fields: [
           { key: "token_id",  value: "$response.token.id" },
           { key: "user_id",   value: "$response.token.user_id" },
-          { key: "issued_at", value: "$response.token.created_at" }
+          { key: "issued_at", value: "$response.token.created_at" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
   }
 
-  // DeleteToken — DELETE matching token. Idempotent: no-such-
-  // token returns OK with an empty response (RowsAffected = 0
-  // is not an error for sign-out semantics).
+  // RevokeToken — revoke the token presented (by its hash, or the legacy
+  // clear token): stamps revoked_at with reason TOKEN_REVOKED, revoked_by
+  // NULL (project code, no actor). The row stays. Guarded on
+  // `revoked_at IS NULL`, so a token already revoked keeps its first
+  // revocation and matches no row (NotFound — the caller's "already done").
   //
   // Token rotation is not a single-RPC primitive — consumer
-  // composes it as GetUserByToken → DeleteToken → IssueToken
+  // composes it as GetUserByToken → RevokeToken → IssueToken
   // (3 calls, ~3 lines). DQL doesn't pass results between
   // query/mutation ops in the same RPC, so atomic rotation
   // can't be expressed in the current DSL; the time gap
   // between old-invalid and new-issued is irrelevant for
   // bearer-token semantics.
   // Does NOT emit TokenRevoked: the eventbus allows one emit site per
-  // event, and DeleteSessionToken (the live, handler-driven logout path)
-  // owns it. DeleteToken is an uncalled low-level primitive — emitting
-  // here would be dead (never fires) and, in its documented rotation use
-  // (GetUserByToken → DeleteToken → IssueToken), a misleading "revoked"
-  // signal for what is really a rotation. The RETURNING ids stay for the
-  // caller's response.
-  rpc DeleteToken(DeleteTokenReq) returns (DeleteTokenResp) {
+  // event, and RevokeSessionToken (the live, handler-driven logout path)
+  // owns it. RevokeToken is an uncalled low-level primitive — emitting
+  // here would be dead (never fires) and, in its documented rotation use,
+  // a misleading "revoked" signal for what is really a rotation. The
+  // RETURNING ids stay for the caller's response.
+  rpc RevokeToken(RevokeTokenReq) returns (RevokeTokenResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserToken WHERE token_hash = :token_hash OR token = :legacy_token RETURNING id AS token_id, user_id"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoke_reason = 10 "
+          "WHERE (token_hash = :token_hash OR token = :legacy_token) AND revoked_at IS NULL "
+          "RETURNING id AS token_id, user_id"
       }
     };
   }
@@ -1471,11 +1704,14 @@ service AuthMutation {
     };
   }
 
-  // DeleteSessionToken — base-tier logout primitive (gated
-  // authenticate_turnkey). Delete-by-id, OWNERSHIP guarded (id AND
-  // user_id) so a caller revokes only their own token. This is the SOLE
-  // TokenRevoked emit site (the live logout path) so cache-invalidation
-  // subscribers react on logout; DeleteToken no longer emits. Idempotent.
+  // RevokeSessionToken — base-tier logout primitive (gated
+  // authenticate_turnkey). Revoke-by-id, OWNERSHIP guarded (id AND
+  // user_id) so a caller revokes only their own token; the holder is the
+  // actor (revoked_by = user_id), the reason LOGOUT. The row stays. This
+  // is the SOLE TokenRevoked emit site (the live logout path) so cache-
+  // invalidation subscribers react on logout; RevokeToken does not emit.
+  // Idempotent: an already revoked token matches no row (`revoked_at IS
+  // NULL`), keeps its first revocation and emits nothing.
   //
   // The DQL deliberately does NOT filter on token_type — that
   // column is gated by the `api_token` feature, so referencing it here (a
@@ -1487,14 +1723,14 @@ service AuthMutation {
   // (an API-token bearer yields "" → idempotent no-op), so token_id is
   // always a session token. The retained req.token_type field is unused by
   // the DQL (kept for wire stability + the handler's explicit intent).
-  rpc DeleteSessionToken(DeleteSessionTokenReq) returns (DeleteSessionTokenResp) {
+  rpc RevokeSessionToken(RevokeSessionTokenReq) returns (RevokeSessionTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.UserToken "
-          "WHERE id = :token_id AND user_id = :user_id "
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 1 "
+          "WHERE id = :token_id AND user_id = :user_id AND revoked_at IS NULL "
           "RETURNING id AS token_id, user_id"
       }
     };
@@ -1503,21 +1739,24 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "token_id", value: "$response.token_id" },
-          { key: "user_id",  value: "$response.user_id" }
+          { key: "user_id",  value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
   }
 
   // ────────────────────────────────────────────────────────────
-  // api_token mutations — issue / delete API tokens + their
+  // api_token mutations — issue / revoke API tokens + their
   // permission subset rows. Composed by the AuthService handlers
   // (apitoken.go) behind the bearer-session scope.
   // ────────────────────────────────────────────────────────────
 
   // IssueApiToken — INSERT an API UserToken (token_type stamped by
-  // the handler) with an optional label. token fills app-side via
-  // CRYPTO_RANDOM. Gated api_token.
+  // the handler) with an optional label, bound to the Device of the key the
+  // request named (device_id, required) and recording the creator's device
+  // (approved_by_device_id). The handler mints the token and passes only its
+  // sha256. Gated api_token.
   rpc IssueApiToken(IssueApiTokenReq) returns (IssueApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
     option (w17.db.method) = {
@@ -1529,13 +1768,31 @@ service AuthMutation {
           "token_hash = :token_hash, "
           "token_type = :token_type, "
           "name = :name, "
-          "expires_at = :expires_at "
+          "expires_at = :expires_at, "
+          "device_id = :device_id, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
           "          token_type AS token.token_type, "
           "          name AS token.name, "
           "          created_at AS token.created_at, "
-          "          expires_at AS token.expires_at"
+          "          expires_at AS token.expires_at, "
+          "          device_id AS token.device_id, "
+          "          approved_by_device_id AS token.approved_by_device_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "ApiTokenCreated"
+      payload: {
+        fields: [
+          { key: "token_id",       value: "$response.token.id" },
+          { key: "user_id",        value: "$response.token.user_id" },
+          { key: "created_at",     value: "$response.token.created_at" },
+          { key: "name",           value: "$response.token.name" },
+          { key: "key_thumbprint", value: "$request.key_thumbprint" },
+          { key: "created_by",     value: "$request.created_by" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -1559,33 +1816,44 @@ service AuthMutation {
     };
   }
 
-  // DeleteApiToken — DELETE the caller's own API token (ownership +
+  // MarkApiTokenRevoked — revoke the caller's own API token (ownership +
   // realm guarded: id AND user_id AND token_type all match, so a
   // bearer can't revoke another user's token or a session token via
-  // this path). Idempotent. Gated api_token.
-  rpc DeleteApiToken(DeleteApiTokenReq) returns (DeleteApiTokenResp) {
+  // this path). The owner is the actor, the reason API_TOKEN_REVOKED;
+  // the row stays, and so do its TokenPermission subset rows — the token
+  // they narrow is refused anyway, and they record what it could do.
+  // Idempotent: an already revoked token matches no row. Gated api_token.
+  rpc MarkApiTokenRevoked(MarkApiTokenRevokedReq) returns (MarkApiTokenRevokedResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.UserToken "
-          "WHERE id = :token_id AND user_id = :user_id AND token_type = :token_type "
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 2 "
+          "WHERE id = :token_id AND user_id = :user_id AND token_type = :token_type AND revoked_at IS NULL "
           "RETURNING id AS token_id"
       }
     };
   }
 
-  // DeleteTokenPermissions — DELETE every subset row for a token
-  // (revoke cleanup, before/after DeleteApiToken). All deleted rows
-  // share the same token_id, so the single response field is well-
-  // defined. Idempotent. Gated api_token.
-  rpc DeleteTokenPermissions(DeleteTokenPermissionsReq) returns (DeleteTokenPermissionsResp) {
+  // RevokeApprovedApiTokens — revoke (reason DEVICE_REVOKED, the caller as
+  // revoked_by) the owner's live API tokens the device CREATED
+  // (approved_by_device_id). A stolen browser session can create an API token
+  // bound to the thief's own key; revoking that device explicitly must end
+  // it, as it ends the CLI sessions the device approved. Called only when ONE
+  // device is revoked on purpose (RevokeDevice, the admin RevokeDevices) —
+  // never by RevokeOtherDevices / RevokeAllDevices, which spare API tokens
+  // (devices/revoke-all-spares-api-tokens). Owner-guarded like
+  // RevokeDeviceTokens, first revocation stands, no RETURNING. Gated
+  // api_token.
+  rpc RevokeApprovedApiTokens(RevokeApprovedApiTokensReq) returns (RevokeApprovedApiTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.TokenPermission WHERE token_id = :token_id RETURNING token_id"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
+          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND token_type = :token_type AND revoked_at IS NULL"
       }
     };
   }
@@ -1623,8 +1891,10 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
 
   // CreateTotpSecret — INSERT a TOTP secret (confirmed_at NULL until the
-  // first code verifies). Unique user_id → re-enroll refuses with
-  // AlreadyExists (the handler deletes first to rotate). Emits TotpEnrolled.
+  // first code verifies). One live secret per user (unique (user_id,
+  // ended_key), ended_key '' on the live row) → re-enroll refuses with
+  // AlreadyExists (the handler revokes the old one first to rotate). Emits
+  // TotpEnrolled.
   rpc CreateTotpSecret(CreateTotpSecretReq) returns (CreateTotpSecretResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
@@ -1645,7 +1915,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "user_id",     value: "$response.secret.user_id" },
-          { key: "enrolled_at", value: "$response.secret.created_at" }
+          { key: "enrolled_at", value: "$response.secret.created_at" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
       }
     };
@@ -1661,14 +1932,17 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserTotpSecret SET "
           "confirmed_at = NOW() "
-          "WHERE user_id = :user_id "
+          "WHERE user_id = :user_id AND revoked_at IS NULL "
           "RETURNING user_id"
       }
     };
     option (w17.event_emit) = {
       event: "TotpConfirmed"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -1759,7 +2033,7 @@ service AuthMutation {
           "UPDATE @module.UserTotpSecret SET "
           "seed = :seed, "
           "secret = NULL "
-          "WHERE id = :id AND user_id = :user_id "
+          "WHERE id = :id AND user_id = :user_id AND revoked_at IS NULL "
           "RETURNING user_id"
       }
     };
@@ -1775,7 +2049,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserTotpSecret SET "
           "last_step = :step "
-          "WHERE id = :id AND last_step < :step "
+          "WHERE id = :id AND last_step < :step AND revoked_at IS NULL "
           "RETURNING id"
       }
     };
@@ -1792,7 +2066,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserTotpSecret SET "
           "stepup_attempts = stepup_attempts + 1 "
-          "WHERE id = :id AND (stepup_locked_until IS NULL OR stepup_locked_until < NOW()) "
+          "WHERE id = :id AND (stepup_locked_until IS NULL OR stepup_locked_until < NOW()) AND revoked_at IS NULL "
           "RETURNING stepup_attempts AS attempts"
       }
     };
@@ -1825,8 +2099,8 @@ service AuthMutation {
     };
   }
 
-  // CreateRecoveryCode / DeleteRecoveryCodes — the handler replaces a user's
-  // set (delete, then ten inserts) inside one transaction.
+  // CreateRecoveryCode / RevokeRecoveryCodes — the handler replaces a user's
+  // set (revoke the unused codes, then ten inserts) inside one transaction.
   rpc CreateRecoveryCode(CreateRecoveryCodeReq) returns (CreateRecoveryCodeResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
@@ -1840,12 +2114,17 @@ service AuthMutation {
       }
     };
   }
-  rpc DeleteRecoveryCodes(DeleteRecoveryCodesReq) returns (DeleteRecoveryCodesResp) {
+  // RevokeRecoveryCodes — a used code keeps its used_at; every unused one
+  // gets revoked_at and verifies nothing from then on. No RETURNING: a user
+  // with no codes is not an error.
+  rpc RevokeRecoveryCodes(RevokeRecoveryCodesReq) returns (RevokeRecoveryCodesResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserRecoveryCode WHERE user_id = :user_id"
+        dql:
+          "UPDATE @module.UserRecoveryCode SET revoked_at = NOW() "
+          "WHERE user_id = :user_id AND used_at IS NULL AND revoked_at IS NULL"
       }
     };
   }
@@ -1861,32 +2140,46 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserRecoveryCode SET "
           "used_at = NOW() "
-          "WHERE user_id = :user_id AND code_hash = :code_hash AND used_at IS NULL "
+          "WHERE user_id = :user_id AND code_hash = :code_hash AND used_at IS NULL AND revoked_at IS NULL "
           "RETURNING id, user_id"
       }
     };
     option (w17.event_emit) = {
       event: "RecoveryCodeUsed"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
 
-  // DeleteTotpSecret — disable the built-in authenticator. Idempotent.
-  // Emits TotpDisabled.
-  rpc DeleteTotpSecret(DeleteTotpSecretReq) returns (DeleteTotpSecretResp) {
+  // RevokeTotpSecret — disable the built-in authenticator, or end it before
+  // a new enrolment replaces it. The row stays: revoked_at is stamped, the
+  // seed and the legacy secret are cleared (a revoked authenticator's seed is
+  // not kept at rest), and ended_key takes the row's id so the user can enrol
+  // again. Guarded on `revoked_at IS NULL`: with no live authenticator it
+  // matches nothing (NotFound, which the handler reads as done). Emits
+  // TotpDisabled.
+  rpc RevokeTotpSecret(RevokeTotpSecretReq) returns (RevokeTotpSecretResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserTotpSecret WHERE user_id = :user_id RETURNING user_id"
+        dql:
+          "UPDATE @module.UserTotpSecret SET revoked_at = NOW(), ended_key = id, seed = NULL, secret = NULL "
+          "WHERE user_id = :user_id AND revoked_at IS NULL "
+          "RETURNING user_id"
       }
     };
     option (w17.event_emit) = {
       event: "TotpDisabled"
       payload: {
-        fields: [ { key: "user_id", value: "$response.user_id" } ]
+        fields: [
+          { key: "user_id",   value: "$response.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -1907,7 +2200,8 @@ service AuthMutation {
           "INSERT INTO @module.MfaChallenge SET "
           "user_id = :user_id, "
           "code_hash = :code_hash, "
-          "thumbprint = :thumbprint "
+          "thumbprint = :thumbprint, "
+          "public_computer = :public_computer "
           "RETURNING id AS challenge.id, "
           "          user_id AS challenge.user_id, "
           "          code_hash AS challenge.code_hash, "
@@ -1924,7 +2218,8 @@ service AuthMutation {
           { key: "totp_enrolled", value: "$request.totp_enrolled" },
           { key: "email",         value: "$request.email" },
           { key: "code",          value: "$request.code" },
-          { key: "expires_at",    value: "$request.expires_at" }
+          { key: "expires_at",    value: "$request.expires_at" },
+          { key: "device_id",     value: "$request.thumbprint" }
         ]
       }
     };
@@ -1966,7 +2261,8 @@ service AuthMutation {
 
   // RecordPendingSignUpAttempt — claim one guess; see its request message.
   // `expires_at > NOW()` in the WHERE, so an expired row answers like a
-  // missing one and nothing has to sweep the table first.
+  // missing one and nothing has to sweep the table, and a claimed or
+  // superseded row answers the same way.
   rpc RecordPendingSignUpAttempt(RecordPendingSignUpAttemptReq) returns (RecordPendingSignUpAttemptResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
@@ -1975,38 +2271,64 @@ service AuthMutation {
         dql:
           "UPDATE @module.PendingSignUp SET "
           "attempts = attempts + 1 "
-          "WHERE id = :pending_id AND expires_at > NOW() "
+          "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW() "
           "RETURNING attempts AS attempts, code_hash AS code_hash, email AS email"
       }
     };
   }
 
-  // ClaimPendingSignUp — spend the registration (single-use DELETE).
+  // ClaimPendingSignUp — spend the registration: one guarded UPDATE, so of
+  // two confirmations racing on one row exactly one gets it back (the other
+  // matches nothing: NotFound). The row stays, with claimed_at.
   rpc ClaimPendingSignUp(ClaimPendingSignUpReq) returns (ClaimPendingSignUpResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.PendingSignUp "
-          "WHERE id = :pending_id AND expires_at > NOW() "
+          "UPDATE @module.PendingSignUp SET claimed_at = NOW() "
+          "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW() "
           "RETURNING email AS email, password_hash AS password_hash, "
           "?feature(tenant_scope) tenant_id AS tenant_id"
       }
     };
   }
 
-  rpc DeletePendingSignUpsForEmail(DeletePendingSignUpsForEmailReq) returns (DeletePendingSignUpsForEmailResp) {
+  // SupersedePendingSignUpsForEmail — end the address's other open
+  // registrations once one became the account. The claimed row is excluded by
+  // its claimed_at. No RETURNING: none left is not an error.
+  rpc SupersedePendingSignUpsForEmail(SupersedePendingSignUpsForEmailReq) returns (SupersedePendingSignUpsForEmailResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
-      ops: { name: "main" dql: "DELETE FROM @module.PendingSignUp WHERE email = :email" }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.PendingSignUp SET superseded_at = NOW() "
+          "WHERE email = :email AND claimed_at IS NULL AND superseded_at IS NULL"
+      }
     };
   }
 
-  rpc PurgeExpiredPendingSignUps(PurgeExpiredPendingSignUpsReq) returns (PurgeExpiredPendingSignUpsResp) {
+  // ErasePendingSignUpAddress — the erasure of an address's pending
+  // registrations: an open one is ended first (superseded_at), then every
+  // one of them takes the placeholder address and the unusable `!` for both
+  // hashes (no password or code verifies against it). The rows stay. No
+  // RETURNING: an address with no registrations is not an error.
+  rpc ErasePendingSignUpAddress(ErasePendingSignUpAddressReq) returns (ErasePendingSignUpAddressResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_up_confirmation";
     option (w17.db.method) = {
-      ops: { name: "main" dql: "DELETE FROM @module.PendingSignUp WHERE email = :email AND expires_at <= NOW()" }
+      ops: {
+        name: "open"
+        dql:
+          "UPDATE @module.PendingSignUp SET superseded_at = NOW() "
+          "WHERE email = :email AND claimed_at IS NULL AND superseded_at IS NULL"
+      }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.PendingSignUp SET email = :placeholder, password_hash = \'!\', code_hash = \'!\' "
+          "WHERE email = :email"
+      }
     };
   }
 
@@ -2030,7 +2352,8 @@ service AuthMutation {
       payload: {
         fields: [
           { key: "challenge_id", value: "$response.challenge_id" },
-          { key: "user_id",      value: "$response.user_id" }
+          { key: "user_id",      value: "$response.user_id" },
+          { key: "device_id",    value: "$request.thumbprint" }
         ]
       }
     };
@@ -2083,7 +2406,8 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
   // device identity mutations — the device every mint binds to
   // (base) + the revoke primitives the device-mgmt RPCs compose
-  // (gated `devices`).
+  // (RevokeDeviceTokens / MarkDeviceRevoked base, shared by `devices`
+  // and the `user_admin` Devices page; the rest gated `devices`).
   // ────────────────────────────────────────────────────────────
 
 
@@ -2096,7 +2420,9 @@ service AuthMutation {
   // seen (it never clears revoked_at). No create-then-re-read race: the
   // unique (user_id, thumbprint) index decides. :thumbprint is never NULL
   // (the request requires it), so a legacy row (NULL thumbprint) is never
-  // the conflict target.
+  // the conflict target. api_key is written on the INSERT only: whether a key
+  // is a program's (Device.api_key) is decided by the request that first
+  // named it, and the caller refuses a row of the other kind.
   rpc RegisterDevice(RegisterDeviceReq) returns (RegisterDeviceResp) {
     option (w17.db.method) = {
       ops: {
@@ -2106,7 +2432,8 @@ service AuthMutation {
           "user_id = :user_id, "
           "thumbprint = :thumbprint, "
           "label = :label, "
-          "ip = :ip "
+          "ip = :ip, "
+          "api_key = :api_key "
           "ON CONFLICT (user_id, thumbprint) DO UPDATE SET "
           "last_seen_at = NOW(), "
           "label = :label, "
@@ -2119,7 +2446,51 @@ service AuthMutation {
           "          trusted_at AS device.trusted_at, "
           "          last_seen_at AS device.last_seen_at, "
           "          created_at AS device.created_at, "
-          "          revoked_at AS device.revoked_at"
+          "          revoked_at AS device.revoked_at, "
+          "          api_key AS device.api_key"
+      }
+    };
+  }
+
+  // RecordSignInEvent — append one row to the sign-in history. The only
+  // statement that writes SignInEvent but the erasure's (EraseSignInEvents):
+  // the table is append-only. A successful mint calls it inside the
+  // transaction that issues the session; a refusal calls it on its own.
+  rpc RecordSignInEvent(RecordSignInEventReq) returns (RecordSignInEventResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.SignInEvent SET "
+          "user_id = :user_id, "
+          "address = :address, "
+          "device_id = :device_id, "
+          "thumbprint = :thumbprint, "
+          "ip = :ip, "
+          "user_agent = :user_agent, "
+          "method = :method, "
+          "outcome = :outcome, "
+          "public_computer = :public_computer "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EraseSignInEvents — an erasure's share of the sign-in history: every row
+  // of the account, and every row that reached no account but named the
+  // erased address, take the placeholder address; their client address and
+  // user agent are blanked. The rows stay (method, outcome, time, device key
+  // and the account link are not personal data). The ONE update of the
+  // append-only table. No RETURNING: an account without history is not an
+  // error. Gated user_admin.
+  rpc EraseSignInEvents(EraseSignInEventsReq) returns (EraseSignInEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.SignInEvent SET address = :placeholder, ip = \'\', user_agent = \'\' "
+          "WHERE user_id = :user_id OR (user_id IS NULL AND address = :email)"
       }
     };
   }
@@ -2147,38 +2518,65 @@ service AuthMutation {
     };
   }
 
-  // DeleteDeviceTokens — DELETE every session token a device owns (the "log out
-  // this device" primitive). Ownership-guarded by user_id so a caller can't
-  // drop another user's sessions. Idempotent. DeleteUndevicedSessions — DELETE
-  // the user's session tokens that carry no device: rows minted before device
-  // binding, which Authenticate already refuses (unbound), so the sweep tidies
-  // rather than ends them. Tokens bound to a legacy (keyless) Device row are
-  // not matched here and are refused at authentication the same way. API
-  // tokens are spared — they are not sessions, and are removed only through
-  // RevokeApiToken.
-  rpc DeleteUndevicedSessions(DeleteUndevicedSessionsReq) returns (DeleteUndevicedSessionsResp) {
+  // RevokeDeviceTokens — revoke every token a device holds (the "log out
+  // this device" primitive), reason DEVICE_REVOKED, :revoked_by as the actor
+  // (the owner for the devices calls, the operator for the admin Devices
+  // page). Ownership-guarded by user_id so a caller can't end another user's
+  // sessions. Base tier, like MarkDeviceRevoked: `devices` and `user_admin`
+  // both compose them. Idempotent. RevokeUndevicedSessions — revoke the user's
+  // session tokens that carry no device: rows minted before device binding,
+  // which Authenticate already refuses (unbound), so this records their end
+  // rather than causes it (reason UNBOUND_SESSION). Tokens bound to a legacy
+  // (keyless) Device row are not matched here and are refused at
+  // authentication the same way. API tokens are spared — they are not
+  // sessions, and are revoked only through RevokeApiToken. Both are guarded
+  // on `revoked_at IS NULL` (the first revocation stands) and carry no
+  // RETURNING: revoking nothing is no failure.
+  rpc RevokeUndevicedSessions(RevokeUndevicedSessionsReq) returns (RevokeUndevicedSessionsResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.UserToken "
-          "WHERE user_id = :user_id AND device_id IS NULL AND id <> :keep_token_id "
-          "AND ?feature(api_token) token_type = 1 "
-          "RETURNING user_id"
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 6 "
+          "WHERE user_id = :user_id AND device_id IS NULL AND id <> :keep_token_id AND revoked_at IS NULL "
+          "AND ?feature(api_token) token_type = 1"
       }
     };
   }
 
-  rpc DeleteDeviceTokens(DeleteDeviceTokensReq) returns (DeleteDeviceTokensResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
+  //
+  // The "approved" op ends, in the same statement set, the CLI sessions the
+  // device APPROVED (cli_login: UserToken.approved_by_device_id) — bound to
+  // the CLI's own key, so the first op does not match them. Without it, a
+  // stolen browser session could approve the thief's own CLI key, and
+  // revoking the stolen device would leave that CLI session alive for its
+  // whole lifetime. SESSION tokens only: an API token records the device that
+  // created it in the same column, and the API tokens a device created are
+  // ended only when that ONE device is revoked on purpose
+  // (RevokeApprovedApiTokens, beside this) — RevokeOtherDevices and
+  // RevokeAllDevices spare API tokens (devices/revoke-all-spares-api-tokens). Same reason, same actor, same ownership predicate; it
+  // spares :keep_token_id, the caller's own session when RevokeOtherDevices
+  // comes from a CLI session the revoked browser approved.
+  //
+  // Ending the approving browser SESSION (Logout, the admin Sessions revoke)
+  // does not end the CLI sessions it approved, on purpose: a CLI session is
+  // ended by revoking the approving DEVICE or by revoking the CLI session
+  // itself.
+  rpc RevokeDeviceTokens(RevokeDeviceTokensReq) returns (RevokeDeviceTokensResp) {
     option (w17.db.method) = {
+      ops: {
+        name: "approved"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
+          "WHERE user_id = :user_id AND approved_by_device_id = :device_id AND id <> :keep_token_id AND revoked_at IS NULL "
+          "AND ?feature(api_token) token_type = 1"
+      }
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.UserToken "
-          "WHERE user_id = :user_id AND device_id = :device_id "
-          "RETURNING device_id"
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 5 "
+          "WHERE user_id = :user_id AND device_id = :device_id AND revoked_at IS NULL"
       }
     };
   }
@@ -2192,7 +2590,6 @@ service AuthMutation {
   // stands. Zero rows (already revoked, or not the caller's) → NotFound,
   // which the handler treats as done.
   rpc MarkDeviceRevoked(MarkDeviceRevokedReq) returns (MarkDeviceRevokedResp) {
-    option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
@@ -2204,14 +2601,19 @@ service AuthMutation {
     };
   }
 
-  // DeleteAllUserTokens — DELETE every session token the user holds
-  // ("log out everywhere", incl. the caller). Idempotent.
-  rpc DeleteAllUserTokens(DeleteAllUserTokensReq) returns (DeleteAllUserTokensResp) {
+  // RevokeAllUserTokens — revoke every token the user holds, sessions and
+  // API tokens alike ("log out everywhere", incl. the caller), the user as
+  // the actor, reason ALL_TOKENS_REVOKED. A low-level primitive for project
+  // code: the plugin's own RevokeAllDevices revokes per device instead, so
+  // API tokens survive it. Idempotent; no RETURNING.
+  rpc RevokeAllUserTokens(RevokeAllUserTokensReq) returns (RevokeAllUserTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "devices";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserToken WHERE user_id = :user_id RETURNING user_id"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 11 "
+          "WHERE user_id = :user_id AND revoked_at IS NULL"
       }
     };
   }
@@ -2251,10 +2653,6 @@ service AuthMutation {
     };
   }
 
-  // DeleteRole — DELETE matching role. Idempotent. Caller
-  // is responsible for cleaning up dependent UserRole /
-  // RolePermission rows ahead of time (v1: no FK cascade —
-  // the activation-rename FK limitation applies).
   // UpdateRole — the admin Roles page detail `update`. Copy only
   // (name + description); the privilege flags stay declarative, seeded
   // from `(w17.acl_roles)`, so an admin form can't widen a grant.
@@ -2268,7 +2666,7 @@ service AuthMutation {
           "UPDATE @module.Role SET "
           "name = :name, "
           "description = :description "
-          "WHERE id = :role_id "
+          "WHERE id = :role_id AND deleted_at IS NULL "
           "RETURNING id AS role_id"
       }
     };
@@ -2282,12 +2680,45 @@ service AuthMutation {
     };
   }
 
+  // DeleteRole — retire a role (the admin Roles page's `delete`). Nothing is
+  // deleted, in one transaction:
+  //
+  //   grants  every live grant of the role is revoked (revoked_at, ended_key),
+  //           so no reader counts it — it used to be the caller's job to
+  //           clean them up, and a grant left behind kept granting through
+  //           GetUserPermissions;
+  //   main    the role is stamped deleted_at, and ended_key takes its id,
+  //           which frees its name for a new role. preset_key is KEPT.
+  //
+  // A PRESET role (preset_key set, seeded from the project's
+  // `(w17.acl_roles)` declarations) may be deleted too — the seed never
+  // retires a role the project stopped declaring, so this is the only way
+  // to end one (a stale wildcard, an assign_default role still handed to
+  // every sign-up). Its preset_key stays on the deleted row: the next seed
+  // finds the row by that key (its upsert target), rewrites the declared
+  // columns it owns, and leaves deleted_at alone, so the preset STAYS
+  // deleted across re-seeds and nothing collides (the seed writes no id or
+  // name of a second row). To bring it back, declare it under a new key.
+  //
+  // Its RolePermission rows stay as they are, the record of what it granted;
+  // no reader joins them past a deleted role. Guarded on `deleted_at IS
+  // NULL`: deleting a deleted role (or a missing one) matches nothing
+  // (NotFound), as deleting a missing one did. revoked_by stays NULL: the
+  // admin page binds this mutation directly, and a statement cannot name its
+  // caller.
   rpc DeleteRole(DeleteRoleReq) returns (DeleteRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
+        name: "grants"
+        dql:  "UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE role_id = :role_id AND revoked_at IS NULL"
+      }
+      ops: {
         name: "main"
-        dql:  "DELETE FROM @module.Role WHERE id = :role_id RETURNING id AS role_id"
+        dql:
+          "UPDATE @module.Role SET deleted_at = NOW(), ended_key = id "
+          "WHERE id = :role_id AND deleted_at IS NULL "
+          "RETURNING id AS role_id"
       }
     };
     option (w17.event_emit) = {
@@ -2300,11 +2731,6 @@ service AuthMutation {
     };
   }
 
-  // DeleteUser — hard-delete one account + its tokens (base UserToken;
-  // always present) in one transaction, newest op is the response
-  // producer. Emits UserDeleted for downstream cleanup of feature-owned
-  // rows the plugin can't reference here (see the message comment).
-  // Gated user_admin.
   // UpdateUser — the admin Users page detail `update`. Sets the email
   // only; password_hash stays with UpdateUserPassword (gated
   // password_reset) so credential material never rides an admin form.
@@ -2328,7 +2754,9 @@ service AuthMutation {
           // to keep in step — and re-verifying after an address change is what
           // a person expects anyway.
           "?feature(email_verification) email_verified_at = NULL "
-          "WHERE id = :user_id "
+          // An erased account keeps its placeholder: re-personalising it
+          // would undo the erasure (User.erased_at).
+          "WHERE id = :user_id AND erased_at IS NULL "
           "RETURNING id AS user_id, email AS email"
       }
     };
@@ -2343,16 +2771,78 @@ service AuthMutation {
     };
   }
 
-  rpc DeleteUser(DeleteUserReq) returns (DeleteUserResp) {
+  // BeginUserErasure — the first step of an erasure: end the account's
+  // access, leaving its address alone. Idempotent, so a retried erasure runs
+  // it again harmlessly; the response comes from the last op.
+  //
+  //   tokens   every token of the account is revoked, reason USER_ERASED,
+  //            the operator as revoked_by (first revocation stands);
+  //   devices  every Device of the account is revoked, and its
+  //            label / ip (the user agent and address it was seen from)
+  //            are blanked;
+  //   disable  the account is disabled (an earlier disable's time stands);
+  //   main     the password hash becomes the unusable `!` (no password
+  //            verifies against it — CreateBotUser's sentinel), the email
+  //            proof is cleared (no OAuth link-by-email can attach to the
+  //            account while the erasers run) and device trust ends.
+  //
+  // Gated user_admin.
+  rpc BeginUserErasure(BeginUserErasureReq) returns (BeginUserErasureResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
       ops: {
-        name: "purge_tokens"
-        dql:  "DELETE FROM @module.UserToken WHERE user_id = :user_id"
+        name: "tokens"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 9 "
+          "WHERE user_id = :user_id AND revoked_at IS NULL"
+      }
+      ops: {
+        name: "devices"
+        dql:  "UPDATE @module.Device SET revoked_at = NOW() WHERE user_id = :user_id AND revoked_at IS NULL"
+      }
+      ops: {
+        name: "device_details"
+        dql:  "UPDATE @module.Device SET label = \'\', ip = \'\' WHERE user_id = :user_id"
+      }
+      ops: {
+        name: "disable"
+        dql:  "UPDATE @module.User SET disabled_at = NOW() WHERE id = :user_id AND disabled_at IS NULL"
       }
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.User WHERE id = :user_id RETURNING id AS user_id"
+        dql:
+          "UPDATE @module.User SET "
+          "password_hash = \'!\', "
+          // The email proof goes now, not at the last step: OAuth links a
+          // provider identity to a VERIFIED account by address, and a link
+          // made while the erasers run would survive the erasure.
+          "?feature(email_verification) email_verified_at = NULL, "
+          "device_trust_revoked_at = NOW() "
+          "WHERE id = :user_id "
+          "RETURNING id AS user_id"
+      }
+    };
+  }
+
+  // EraseUser — the last step of an erasure (BeginUserErasure and the
+  // feature erasers have run): the User row is pseudonymised in place — the
+  // address becomes the handler's placeholder, the email proof is cleared,
+  // and erased_at is stamped. Guarded on `erased_at IS NULL`: a second erase
+  // matches no row (NotFound) and changes nothing. Last because it replaces
+  // the address the invitation eraser looks for, and because erased_at is
+  // what a retry reads to skip it. Emits UserDeleted. Gated user_admin.
+  rpc EraseUser(EraseUserReq) returns (EraseUserResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "email = :email, "
+          "erased_at = NOW(), "
+          "?feature(email_verification) email_verified_at = NULL "
+          "WHERE id = :user_id AND erased_at IS NULL "
+          "RETURNING id AS user_id"
       }
     };
     option (w17.event_emit) = {
@@ -2366,13 +2856,15 @@ service AuthMutation {
   }
 
   // DisableUsers — bulk soft-disable (Django is_active=false). Sets
-  // disabled_at on the still-active rows in the id set, and DELETES every
-  // token of those accounts — sessions and API tokens. Disabling a departing
-  // person has to end their access, not only their next sign-in: tokens used
-  // to survive until they expired (30 days for a session). Re-enabling gives
-  // nothing back; the person signs in again. One unit of work, both legs on
-  // the same id set (an `IN (:ids)` on a non-final leg needs w17 platform
-  // 1.9). Gated user_admin.
+  // disabled_at on the still-active rows in the id set, and REVOKES every
+  // token of those accounts — sessions and API tokens — with reason
+  // USER_DISABLED. Disabling a departing person has to end their access,
+  // not only their next sign-in: tokens used to survive until they expired
+  // (30 days for a session). Re-enabling gives nothing back; the person
+  // signs in again. revoked_by stays NULL: the admin action binds this
+  // storage mutation directly, and a statement cannot name its caller. One
+  // unit of work, both legs on the same id set (an `IN (:ids)` on a
+  // non-final leg needs w17 platform 1.9). Gated user_admin.
   rpc DisableUsers(DisableUsersReq) returns (DisableUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
@@ -2388,38 +2880,57 @@ service AuthMutation {
         },
         {
           name: "main"
-          dql:  "DELETE FROM @module.UserToken WHERE user_id IN (:ids)"
+          dql:  "UPDATE @module.UserToken SET revoked_at = NOW(), revoke_reason = 8 "
+                "WHERE user_id IN (:ids) AND revoked_at IS NULL"
         }
       ]
     };
   }
 
-  // EnableUsers — bulk re-enable (clear disabled_at); returns the ids it
-  // re-enabled. Single-op, so its `IN (:ids)` binds on the final leg.
-  // Gated user_admin.
+  // EnableUsers — bulk re-enable (clear disabled_at). Single-op, so its
+  // `IN (:ids)` binds on the final leg. An ERASED account is left disabled:
+  // the `erased_at IS NULL` guard makes enabling one a no-op, so an erasure
+  // cannot be turned back into a usable account. Gated user_admin.
   rpc EnableUsers(EnableUsersReq) returns (EnableUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:  "UPDATE @module.User SET disabled_at = NULL "
-              "WHERE id IN (:ids) AND disabled_at IS NOT NULL"
+              "WHERE id IN (:ids) AND disabled_at IS NOT NULL AND erased_at IS NULL"
       }
     };
   }
 
   // AssignRoleToUser — INSERT UserRole linking a user to a
-  // role. Composite-unique (user_id, role_id) refuses duplicate
-  // assignments with AlreadyExists.
+  // role. A live duplicate (same user, role and org, ended_key '') is refused
+  // by the unique index with AlreadyExists; a REVOKED grant does not block it
+  // (its ended_key is its own id), so a grant revoked earlier is given again
+  // as a new row and the revoked one stays as history. A deleted (or
+  // unknown) role is refused with NOT_FOUND / ROLE_NOT_FOUND before the
+  // write: a grant of a deleted role would grant nothing, yet still be listed
+  // among the member's org roles.
   rpc AssignRoleToUser(AssignRoleToUserReq) returns (AssignRoleToUserResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
+      ops: {
+        name: "role"
+        // A no-op write rather than a read: it locks the live role row for
+        // the rest of the transaction, so writes naming one role — two adds,
+        // an add and a DeleteRole — run one after another.
+        dql:  "UPDATE @module.Role SET id = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS id"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "ROLE_NOT_FOUND"
+          message:    "That role does not exist, or it was deleted."
+        }
+      }
       ops: {
         name: "main"
         dql:
           "INSERT INTO @module.UserRole SET "
           "user_id = :user_id, "
-          "role_id = :role_id, "
+          "role_id = :role.id, "
           "?feature(org_membership) org_id = :org_id "
           "RETURNING id AS user_role.id, "
           "          user_id AS user_role.user_id, "
@@ -2447,17 +2958,20 @@ service AuthMutation {
     };
   }
 
-  // RevokeRoleFromUser — DELETE matching UserRole row.
-  // Idempotent.
+  // RevokeRoleFromUser — revoke the matching live grant: revoked_at,
+  // revoked_by and ended_key are stamped and the row stays. Guarded on
+  // `revoked_at IS NULL`: with no live grant it matches nothing (NotFound),
+  // as the DELETE it replaces did.
   rpc RevokeRoleFromUser(RevokeRoleFromUserReq) returns (RevokeRoleFromUserResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.UserRole "
+          "UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :revoked_by, ended_key = id "
           "WHERE user_id = :user_id AND role_id = :role_id "
           "AND ?feature(org_membership) org_id IS NOT DISTINCT FROM :org_id "
+          "AND revoked_at IS NULL "
           "RETURNING user_id, role_id, ?feature(org_membership) org_id"
       }
     };
@@ -2474,18 +2988,57 @@ service AuthMutation {
     };
   }
 
-  // AddPermissionToRole — INSERT RolePermission linking a
-  // permission to a role. Composite-unique (role_id,
-  // permission_id) refuses duplicate grants.
+  // AddPermissionToRole — grant a permission to a role. RolePermission keeps
+  // one row per (role, permission) — the unique index is the role seed's
+  // conflict target — so the write is an UPSERT on that pair: a new pair is
+  // inserted, a REMOVED one is revived (removed_at / removed_by cleared).
+  // Two guards run first, so only a real change is logged and announced: a
+  // deleted (or unknown) role is refused with NOT_FOUND / ROLE_NOT_FOUND —
+  // by a no-op UPDATE that also LOCKS the role row, so two concurrent adds of
+  // one pair cannot both pass the next guard and log twice — and
+  // a permission the role already carries with ALREADY_EXISTS /
+  // PERMISSION_ALREADY_GRANTED (as the INSERT's unique index refused it
+  // before). Then the change is appended to RolePermissionChange and the pair
+  // written, in the same transaction; RolePermissionAdded fires only then.
   rpc AddPermissionToRole(AddPermissionToRoleReq) returns (AddPermissionToRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
+        name: "role"
+        // A no-op write rather than a read: it locks the live role row for
+        // the rest of the transaction, so writes naming one role — two adds,
+        // an add and a DeleteRole — run one after another.
+        dql:  "UPDATE @module.Role SET id = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS id"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "ROLE_NOT_FOUND"
+          message:    "That role does not exist, or it was deleted."
+        }
+      }
+      ops: {
+        name: "granted"
+        dql:  "SELECT rp.id AS id FROM @module.RolePermission rp WHERE rp.role_id = :role.id AND rp.permission_id = :permission_id AND rp.removed_at IS NULL"
+        on_present: {
+          code:       ON_PRESENT_ALREADY_EXISTS
+          error_code: "PERMISSION_ALREADY_GRANTED"
+          message:    "The role already carries that permission."
+        }
+      }
+      ops: {
+        name: "log"
+        dql:
+          "INSERT INTO @module.RolePermissionChange SET "
+          "role_id = :role.id, permission_id = :permission_id, kind = 1, changed_by = :added_by"
+      }
+      ops: {
         name: "main"
         dql:
-          "INSERT INTO @module.RolePermission SET "
-          "role_id = :role_id, "
+          "UPSERT INTO @module.RolePermission SET "
+          "role_id = :role.id, "
           "permission_id = :permission_id "
+          "ON CONFLICT (role_id, permission_id) DO UPDATE SET "
+          "removed_at = NULL, "
+          "removed_by = NULL "
           "RETURNING id AS role_permission.id, "
           "          role_id AS role_permission.role_id, "
           "          permission_id AS role_permission.permission_id, "
@@ -2505,16 +3058,26 @@ service AuthMutation {
     };
   }
 
-  // RemovePermissionFromRole — DELETE matching RolePermission
-  // row. Idempotent.
+  // RemovePermissionFromRole — take a permission from a role: removed_at and
+  // removed_by are stamped and the row stays; no permission reader counts a
+  // removed row. The change is appended to RolePermissionChange in the same
+  // transaction. Guarded on `removed_at IS NULL`: with nothing granted it
+  // matches nothing (NotFound, as the DELETE it replaces did) and the log row
+  // rolls back with it.
   rpc RemovePermissionFromRole(RemovePermissionFromRoleReq) returns (RemovePermissionFromRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "rbac";
     option (w17.db.method) = {
       ops: {
+        name: "log"
+        dql:
+          "INSERT INTO @module.RolePermissionChange SET "
+          "role_id = :role_id, permission_id = :permission_id, kind = 2, changed_by = :removed_by"
+      }
+      ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.RolePermission "
-          "WHERE role_id = :role_id AND permission_id = :permission_id "
+          "UPDATE @module.RolePermission SET removed_at = NOW(), removed_by = :removed_by "
+          "WHERE role_id = :role_id AND permission_id = :permission_id AND removed_at IS NULL "
           "RETURNING role_id, permission_id"
       }
     };
@@ -2649,27 +3212,34 @@ service AuthMutation {
     };
   }
 
-  // DeleteUserSessionsForReset — revoke every token for the user after a
-  // reset (sessions + API tokens; the conservative post-reset default).
-  rpc DeleteUserSessionsForReset(DeleteUserSessionsForResetReq) returns (DeleteUserSessionsForResetResp) {
+  // RevokeTokensForReset — revoke every token of the user after a reset
+  // (sessions + API tokens; the conservative post-reset default), reason
+  // PASSWORD_RESET. revoked_by NULL: whoever reset the password proved only
+  // the link, not an identity. No RETURNING: an account holding no live
+  // token revokes nothing, and that is no failure (it used to answer
+  // NotFound, which ResetPassword reported as "sessions not revoked").
+  rpc RevokeTokensForReset(RevokeTokensForResetReq) returns (RevokeTokensForResetResp) {
     option (w17.contrib.plugin_feature_rpc) = "password_reset";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "DELETE FROM @module.UserToken WHERE user_id = :user_id RETURNING user_id"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoke_reason = 4 "
+          "WHERE user_id = :user_id AND revoked_at IS NULL"
       }
     };
   }
-  // DeleteOtherSessionTokens — see the request. No RETURNING: a person with
-  // no other session deletes nothing, and that is no failure.
-  rpc DeleteOtherSessionTokens(DeleteOtherSessionTokensReq) returns (DeleteOtherSessionTokensResp) {
+  // RevokeOtherSessionTokens — see the request. The person changing the
+  // password is the actor; reason PASSWORD_CHANGED. No RETURNING: a person
+  // with no other session revokes nothing, and that is no failure.
+  rpc RevokeOtherSessionTokens(RevokeOtherSessionTokensReq) returns (RevokeOtherSessionTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "password_change";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.UserToken "
-          "WHERE user_id = :user_id AND id <> :keep_token_id "
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :user_id, revoke_reason = 3 "
+          "WHERE user_id = :user_id AND id <> :keep_token_id AND revoked_at IS NULL "
           "AND ?feature(api_token) token_type = 1"
       }
     };
@@ -2804,7 +3374,8 @@ service AuthMutation {
 
   // SetAuthClientEnabled — retire (or restore) ONE registered callback.
   // Per row, not per client: an operator taking down a single environment's
-  // callback must not have to remove the others.
+  // callback must not have to remove the others. A REVOKED registration is
+  // not restored: the `revoked_at IS NULL` guard makes it match no row.
   rpc SetAuthClientEnabled(SetAuthClientEnabledReq) returns (SetAuthClientEnabledResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
     option (w17.db.method) = {
@@ -2812,18 +3383,39 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.AuthClient SET enabled = :enabled "
-          "WHERE id = :id RETURNING id AS id"
+          "WHERE id = :id AND revoked_at IS NULL RETURNING id AS id"
       }
     };
   }
 
-  // DeleteAuthClient — remove a registration outright.
-  rpc DeleteAuthClient(DeleteAuthClientReq) returns (DeleteAuthClientResp) {
+  // RotateAuthClientSecret — replace the secret of a LIVE registration. A
+  // revoked one matches no row (NotFound): its secret stays as it was, and it
+  // is refused anyway.
+  rpc RotateAuthClientSecret(RotateAuthClientSecretReq) returns (RotateAuthClientSecretResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "DELETE FROM @module.AuthClient WHERE id = :id RETURNING id AS id"
+        dql:
+          "UPDATE @module.AuthClient SET client_secret = :client_secret "
+          "WHERE id = :id AND revoked_at IS NULL RETURNING id AS id"
+      }
+    };
+  }
+
+  // RevokeAuthClient — end a registration for good: stamps revoked_at (and
+  // clears enabled, so a reader of either column sees it retired). The row
+  // stays as the record of what was trusted; every resolver refuses it and
+  // the pair can be registered again as a new row. Guarded on
+  // `revoked_at IS NULL`: revoking it again matches no row (NotFound).
+  rpc RevokeAuthClient(RevokeAuthClientReq) returns (RevokeAuthClientResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.AuthClient SET revoked_at = NOW(), enabled = FALSE "
+          "WHERE id = :id AND revoked_at IS NULL RETURNING id AS id"
       }
     };
   }
@@ -2900,7 +3492,8 @@ service AuthMutation {
           "redirect_uri = :redirect_uri, "
           "client_id = :client_id, "
           "expires_at = :expires_at, "
-          "session_expires_at = :session_expires_at "
+          "session_expires_at = :session_expires_at, "
+          "approved_by_device_id = :approved_by_device_id "
           "RETURNING id AS code.id, "
           "          user_id AS code.user_id, "
           "          code_hash AS code.code_hash, "
@@ -2925,7 +3518,7 @@ service AuthMutation {
           "UPDATE @module.CliAuthCode SET "
           "consumed_at = NOW() "
           "WHERE code_hash = :code_hash AND consumed_at IS NULL AND expires_at > NOW() "
-          "RETURNING user_id, code_challenge, redirect_uri, client_id, session_expires_at"
+          "RETURNING user_id, code_challenge, redirect_uri, client_id, session_expires_at, approved_by_device_id"
       }
     };
   }
@@ -2976,8 +3569,9 @@ service AuthMutation {
   }
 
   // AddOrgMembership — INSERT OrgMembership linking a user to an org
-  // with a role. Composite-unique (user_id, org_id) refuses a duplicate
-  // membership with AlreadyExists. Emits OrgMembershipAdded (fires for
+  // with a role. A live duplicate (same user and org, ended_key '') is
+  // refused by the unique index with AlreadyExists; a REMOVED membership does
+  // not block it, so a removed member can be added again (a new row). Emits OrgMembershipAdded (fires for
   // the creator's owner grant + every later invite accept). Mirrors
   // AssignRoleToUser.
   rpc AddOrgMembership(AddOrgMembershipReq) returns (AddOrgMembershipResp) {
@@ -3011,13 +3605,6 @@ service AuthMutation {
     };
   }
 
-  // DeleteOrganization — the admin Organizations page delete. Purges the
-  // org's memberships first (link table, app-enforced — no DB FK, same
-  // caveat as the rest of the plugin), then the org, atomically. The
-  // membership purge is a NON-final leg (scalar :id bind — no array
-  // expansion, so the final-leg rule for `IN (:ids)` doesn't apply). Emits
-  // OrganizationDeleted for downstream per-org cleanup. Gated
-  // org_membership.
   // UpdateOrganization — the admin Organizations page detail `update`.
   // Gated org_membership.
   rpc UpdateOrganization(UpdateOrganizationReq) returns (UpdateOrganizationResp) {
@@ -3030,7 +3617,7 @@ service AuthMutation {
           "slug = :slug, "
           "name = :name, "
           "kind = :kind "
-          "WHERE id = :id "
+          "WHERE id = :id AND deleted_at IS NULL "
           "RETURNING id AS org_id"
       }
     };
@@ -3044,21 +3631,46 @@ service AuthMutation {
     };
   }
 
+  // DeleteOrganization — the admin Organizations page delete. Nothing is
+  // deleted, in one transaction:
+  //
+  //   memberships  every live membership of the org is removed (removed_at,
+  //                ended_key);
+  //   grants       every live grant scoped to the org is revoked, for the
+  //                reason MarkOrgMembershipRemoved gives;
+  //   main         the org is stamped deleted_at, and ended_key takes its id,
+  //                which frees its slug for a new organization.
+  //
+  // Every organization reader reads live rows only, so the org disappears
+  // from every list and lookup, cannot be selected, and its owner_id grants
+  // nothing. Its invitations are not touched here — org_invite is a feature
+  // of its own, and a statement cannot name a table its activation may not
+  // have — so AuthService.RemoveOrganization (which the admin page binds)
+  // closes them first, in the same transaction (CloseOrgInvitesOfOrg); and
+  // every statement that reads, binds or accepts an invitation requires its
+  // organization to be live, so one called directly leaves none usable either.
+  // Guarded on
+  // `deleted_at IS NULL`: a second delete matches nothing (NotFound), as it
+  // did. removed_by / revoked_by stay NULL: the admin page binds this
+  // mutation directly. Emits OrganizationDeleted for downstream per-org
+  // cleanup. Gated org_membership.
   rpc DeleteOrganization(DeleteOrganizationReq) returns (DeleteOrganizationResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
       ops: {
-        name: "purge_memberships"
-        dql:  "DELETE FROM @module.OrgMembership WHERE org_id = :id"
+        name: "memberships"
+        dql:  "UPDATE @module.OrgMembership SET removed_at = NOW(), ended_key = id WHERE org_id = :id AND removed_at IS NULL"
       }
-      // Its grants go with it, for the reason DeleteOrgMembership gives.
       ops: {
-        name: "purge_grants"
-        dql:  "DELETE FROM @module.UserRole WHERE org_id = :id"
+        name: "grants"
+        dql:  "UPDATE @module.UserRole SET revoked_at = NOW(), ended_key = id WHERE org_id = :id AND revoked_at IS NULL"
       }
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.Organization WHERE id = :id RETURNING id AS org_id"
+        dql:
+          "UPDATE @module.Organization SET deleted_at = NOW(), ended_key = id "
+          "WHERE id = :id AND deleted_at IS NULL "
+          "RETURNING id AS org_id"
       }
     };
     option (w17.event_emit) = {
@@ -3071,21 +3683,20 @@ service AuthMutation {
     };
   }
 
-  // DeleteOrgMembership — the admin OrgMemberships page delete: remove
-  // one membership row (revoke a user's place in an org). Emits
-  // OrgMembershipRemoved. Gated org_membership.
   // UpdateOrgMembership — the admin OrgMemberships page detail
   // `update`. Role only: re-pointing a membership at a different user
-  // or org is a delete + re-add, not an edit (the unique
-  // (user_id, org_id) index makes an in-place move a constraint trap).
+  // or org is a removal + re-add, not an edit (the unique
+  // (user_id, org_id, ended_key) index makes an in-place move a constraint
+  // trap).
   // Gated org_membership.
   // The membership's role label and the org-scoped grant behind it change
   // TOGETHER. Changing the label alone would revoke nothing on a demotion:
   // the member would keep every permission of the role they were demoted
   // from, because permissions are read from UserRole and never from this
   // label. One method, one transaction: read whose membership it is, check
-  // the new role is still an org role, drop every grant the member holds IN
-  // THIS ORGANIZATION, and grant the new one. Realm-wide grants are not
+  // the new role is still an org role, revoke every grant the member holds IN
+  // THIS ORGANIZATION (revoked_at, the caller as revoked_by — the rows stay),
+  // and grant the new one as a new row. Realm-wide grants are not
   // touched. Called by AuthService.UpdateOrgMembershipRole, which holds the
   // change to the role ceiling; it checks nothing about the caller itself.
   rpc UpdateOrgMembership(UpdateOrgMembershipReq) returns (UpdateOrgMembershipResp) {
@@ -3093,11 +3704,11 @@ service AuthMutation {
     option (w17.db.method) = {
       ops: {
         name: "m"
-        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id"
+        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id AND m.removed_at IS NULL"
       }
       ops: {
         name: "r"
-        dql:  "SELECT r.id AS id, r.name AS name FROM @module.Role r WHERE r.id = :role_id AND r.org_scoped = TRUE"
+        dql:  "SELECT r.id AS id, r.name AS name FROM @module.Role r WHERE r.id = :role_id AND r.org_scoped = TRUE AND r.deleted_at IS NULL"
         // Two kinds of caller, two reasons for a miss. Through
         // AuthService.UpdateOrgMembershipRole (which the plugin's own admin
         // page binds) the role was resolved by name a moment ago, so a miss is
@@ -3115,7 +3726,9 @@ service AuthMutation {
       }
       ops: {
         name: "revoke"
-        dql:  "DELETE FROM @module.UserRole WHERE user_id = :m.user_id AND org_id = :m.org_id"
+        dql:
+          "UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :changed_by, ended_key = id "
+          "WHERE user_id = :m.user_id AND org_id = :m.org_id AND revoked_at IS NULL"
       }
       ops: {
         name: "grant"
@@ -3126,7 +3739,7 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgMembership SET "
           "role = :r.name "
-          "WHERE id = :id "
+          "WHERE id = :id AND removed_at IS NULL "
           "RETURNING id AS membership_id"
       }
     };
@@ -3149,27 +3762,39 @@ service AuthMutation {
     };
   }
 
-  // A membership leaves WITH its org-scoped grants. Removed alone, the grants
-  // would stay and keep counting — permissions read UserRole by (user, org) and
-  // join no membership — so a member re-invited at a LESSER role would come back
-  // with their old one, and one re-invited at the same role would hit the unique
-  // grant and could never accept. The request names only the membership, so the
-  // first op reads whose it is. An owner without a membership is unaffected:
-  // ownership is read off the organization.
-  rpc DeleteOrgMembership(DeleteOrgMembershipReq) returns (DeleteOrgMembershipResp) {
+  // MarkOrgMembershipRemoved — remove a member (AuthService.RemoveOrgMembership,
+  // the OrgMemberships page's delete). Was DeleteOrgMembership; nothing is
+  // deleted: the membership is stamped removed_at / removed_by and its
+  // ended_key takes its id, so the person can be added again as a new row.
+  //
+  // A membership leaves WITH its org-scoped grants. Left live, the grants
+  // would keep counting — permissions read UserRole by (user, org) and join no
+  // membership — so a member re-invited at a LESSER role would come back with
+  // their old one, and one re-invited at the same role would hit the unique
+  // grant and could never accept. They are revoked (revoked_at, the same
+  // actor as revoked_by), not deleted. The request names only the membership,
+  // so the first op reads whose it is; a removed membership matches nothing
+  // (NotFound), as a deleted one did. An owner without a membership is
+  // unaffected: ownership is read off the organization.
+  rpc MarkOrgMembershipRemoved(MarkOrgMembershipRemovedReq) returns (MarkOrgMembershipRemovedResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
       ops: {
         name: "m"
-        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id"
+        dql:  "SELECT m.user_id AS user_id, m.org_id AS org_id FROM @module.OrgMembership m WHERE m.id = :id AND m.removed_at IS NULL"
       }
       ops: {
         name: "revoke"
-        dql:  "DELETE FROM @module.UserRole WHERE user_id = :m.user_id AND org_id = :m.org_id"
+        dql:
+          "UPDATE @module.UserRole SET revoked_at = NOW(), revoked_by = :removed_by, ended_key = id "
+          "WHERE user_id = :m.user_id AND org_id = :m.org_id AND revoked_at IS NULL"
       }
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.OrgMembership WHERE id = :id RETURNING id AS membership_id"
+        dql:
+          "UPDATE @module.OrgMembership SET removed_at = NOW(), removed_by = :removed_by, ended_key = id "
+          "WHERE id = :id AND removed_at IS NULL "
+          "RETURNING id AS membership_id"
       }
     };
     // The first op locks the membership row, so two changes to one membership
@@ -3191,23 +3816,145 @@ service AuthMutation {
     };
   }
 
-  // RevokeUserToken — the admin Sessions page delete: hard-remove one
-  // token so that session/API bearer stops authenticating immediately.
-  // Emits UserTokenRevoked. Gated user_admin.
+  // RevokeUserToken — an operator revokes one token (the admin Sessions
+  // page's revoke, through AuthService.RevokeSessions): that session/API
+  // bearer stops authenticating immediately. Reason ADMIN_REVOKED, the
+  // operator as revoked_by; the row stays and the Sessions page shows it
+  // revoked. Guarded on `revoked_at IS NULL`: revoking a revoked token
+  // matches no row (NotFound, which the service reads as done) and emits
+  // nothing. Emits UserTokenRevoked. Gated user_admin.
   rpc RevokeUserToken(RevokeUserTokenReq) returns (RevokeUserTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql:  "DELETE FROM @module.UserToken WHERE id = :id RETURNING id AS token_id"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :revoked_by, revoke_reason = 7 "
+          "WHERE id = :id AND revoked_at IS NULL "
+          "RETURNING id AS token_id"
       }
     };
     option (w17.event_emit) = {
       event: "UserTokenRevoked"
       payload: {
         fields: [
-          { key: "token_id", value: "$response.token_id" }
+          { key: "token_id",  value: "$response.token_id" },
+          { key: "device_id", value: "$request.thumbprint" }
         ]
+      }
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // erasure — the feature-owned halves of AuthService.EraseUsers (see
+  // EraseUser for the base tables). Each runs inside the erasure's
+  // transaction; none deletes a row and none carries a RETURNING, so an
+  // account with nothing in the table is no failure.
+  // ────────────────────────────────────────────────────────────
+
+  // EraseOAuthData — identities: the asserted email is blanked and the
+  // provider subject is replaced by the row's own id, which is unique (so
+  // the (provider_id, external_id) index holds) and matches no subject a
+  // provider sends — the person can sign in through the provider again and
+  // gets a new account, and nothing resolves to the erased one. Login codes
+  // of the account are spent and their identity copy blanked.
+  //
+  // That includes the codes of the sign-in that CREATED the account: such a
+  // code is written with user_id NULL (the account did not exist yet) and
+  // nothing back-fills it, so it is found by the identity it carries — the
+  // (provider_id, external_id) of one of the account's identities. That op
+  // runs first, while the identities still hold the subject.
+  rpc EraseOAuthData(EraseOAuthDataReq) returns (EraseOAuthDataResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+    option (w17.db.method) = {
+      ops: {
+        name: "unlinked_codes_spent"
+        dql:
+          "UPDATE @module.OAuthLoginCode c SET consumed_at = NOW() "
+          "WHERE c.user_id IS NULL AND c.consumed_at IS NULL AND EXISTS (SELECT i.id FROM @module.OAuthIdentity i "
+          "WHERE i.user_id = :user_id AND i.provider_id = c.provider_id AND i.external_id = c.external_id)"
+      }
+      ops: {
+        name: "unlinked_codes"
+        dql:
+          "UPDATE @module.OAuthLoginCode c SET email = \'\', external_id = \'\' "
+          "WHERE c.user_id IS NULL AND EXISTS (SELECT i.id FROM @module.OAuthIdentity i "
+          "WHERE i.user_id = :user_id AND i.provider_id = c.provider_id AND i.external_id = c.external_id)"
+      }
+      ops: {
+        name: "codes_spent"
+        dql:  "UPDATE @module.OAuthLoginCode SET consumed_at = NOW() WHERE user_id = :user_id AND consumed_at IS NULL"
+      }
+      ops: {
+        name: "codes"
+        dql:  "UPDATE @module.OAuthLoginCode SET email = \'\', external_id = \'\' WHERE user_id = :user_id"
+      }
+      ops: {
+        name: "main"
+        dql:  "UPDATE @module.OAuthIdentity SET external_id = id, email = \'\' WHERE user_id = :user_id"
+      }
+    };
+  }
+
+  // EraseTwoFactorData — the authenticator's seed (and the legacy sealed
+  // copy) is cleared and the row unconfirmed, every unused recovery code is
+  // spent, every pending challenge consumed. The rows stay.
+  rpc EraseTwoFactorData(EraseTwoFactorDataReq) returns (EraseTwoFactorDataResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor";
+    option (w17.db.method) = {
+      ops: {
+        name: "challenges"
+        dql:  "UPDATE @module.MfaChallenge SET consumed_at = NOW() WHERE user_id = :user_id AND consumed_at IS NULL"
+      }
+      ops: {
+        name: "codes"
+        dql:  "UPDATE @module.UserRecoveryCode SET used_at = NOW() WHERE user_id = :user_id AND used_at IS NULL"
+      }
+      ops: {
+        name: "main"
+        dql:  "UPDATE @module.UserTotpSecret SET seed = NULL, secret = NULL, confirmed_at = NULL WHERE user_id = :user_id"
+      }
+    };
+  }
+
+  // SpendEmailVerificationTokens — see the request.
+  rpc SpendEmailVerificationTokens(SpendEmailVerificationTokensReq) returns (SpendEmailVerificationTokensResp) {
+    option (w17.contrib.plugin_feature_rpc) = "email_verification";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.EmailVerificationToken SET "
+          "consumed_at = NOW() "
+          "WHERE user_id = :user_id AND consumed_at IS NULL"
+      }
+    };
+  }
+
+  // EraseOrgInviteAddress — every invitation addressed to the erased
+  // address loses it: email becomes NULL, pending or accepted. NULL, not a
+  // placeholder, because the one-pending-per-(org, email) partial index
+  // would make a placeholder collide (an organization that re-invited the
+  // address between two attempts of a retried erasure), and NULL never
+  // collides.
+  //
+  // But NULL on a PENDING invitation means OPEN — whoever holds the link
+  // picks an address — so a pending one is ended first: its expires_at is
+  // set to NOW(), and every path that binds or accepts an invitation
+  // requires `expires_at > NOW()`. An accepted one keeps the record of the
+  // membership without the address.
+  rpc EraseOrgInviteAddress(EraseOrgInviteAddressReq) returns (EraseOrgInviteAddressResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "pending"
+        dql:
+          "UPDATE @module.OrgInvite SET email = NULL, expires_at = NOW() "
+          "WHERE email = :email AND accepted_at IS NULL AND expires_at > NOW()"
+      }
+      ops: {
+        name: "main"
+        dql:  "UPDATE @module.OrgInvite SET email = NULL WHERE email = :email"
       }
     };
   }
@@ -3275,8 +4022,9 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.OrgInvite SET email = :email "
-          "WHERE token_hash = :token_hash AND email IS NULL AND accepted_at IS NULL AND expires_at > NOW()"
+          "UPDATE @module.OrgInvite i SET email = :email "
+          "WHERE i.token_hash = :token_hash AND i.email IS NULL AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
+          "AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL)"
       }
     };
   }
@@ -3300,9 +4048,10 @@ service AuthMutation {
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.OrgInvite SET "
+          "UPDATE @module.OrgInvite i SET "
           "accepted_at = NOW() "
-          "WHERE token_hash = :token_hash AND accepted_at IS NULL AND expires_at > NOW() "
+          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
+          "AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL) "
           "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot"
       }
     };
@@ -3325,10 +4074,13 @@ service AuthMutation {
     };
   }
 
-  // ClearExpiredOrgInvite — release the slot an EXPIRED invitation holds.
+  // CloseExpiredOrgInvite — release the slot an EXPIRED invitation holds, by
+  // closing it (closed_at; closed_by NULL — nobody withdrew it, it lapsed).
+  // Was ClearExpiredOrgInvite, which deleted the row; the row stays.
   //
   // The pending-invite index is unique on (org_id, email) WHERE accepted_at
-  // IS NULL, and it cannot say "and not expired": a partial index predicate
+  // IS NULL AND closed_at IS NULL, and it cannot say "and not expired": a
+  // partial index predicate
   // must be IMMUTABLE, and `NOW()` is not. So an invitation that lapsed still
   // occupies the pair, and re-inviting the same address fails on a unique
   // violation whose message reads like two people racing — when in fact
@@ -3342,32 +4094,52 @@ service AuthMutation {
   // Zero rows is the ordinary case — nothing has lapsed — and arrives as
   // NOT_FOUND because of the RETURNING. The caller treats it as "nothing to
   // clear" rather than as a failure.
-  rpc ClearExpiredOrgInvite(ClearExpiredOrgInviteReq) returns (ClearExpiredOrgInviteResp) {
+  rpc CloseExpiredOrgInvite(CloseExpiredOrgInviteReq) returns (CloseExpiredOrgInviteResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.OrgInvite "
+          "UPDATE @module.OrgInvite SET closed_at = NOW() "
           "WHERE org_id = :org_id AND email = :email "
-          "AND accepted_at IS NULL AND expires_at <= NOW() "
+          "AND accepted_at IS NULL AND closed_at IS NULL AND expires_at <= NOW() "
           "RETURNING id"
       }
     };
   }
 
-  // DeleteOrgInvite — withdraw a PENDING invitation. Scoped by org_id in
-  // the WHERE and not only by id: the handler already knows the caller's
-  // active org, and an id-only delete would let a member of one
-  // organization revoke another's invitation by guessing a uuid.
-  rpc DeleteOrgInvite(DeleteOrgInviteReq) returns (DeleteOrgInviteResp) {
+  // CloseOrgInvitesOfOrg — close every pending invitation of an organization
+  // being deleted (AuthService.RemoveOrganization runs it before
+  // DeleteOrganization, in one transaction). No RETURNING: an organization
+  // with none is not an error.
+  rpc CloseOrgInvitesOfOrg(CloseOrgInvitesOfOrgReq) returns (CloseOrgInvitesOfOrgResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "DELETE FROM @module.OrgInvite "
-          "WHERE id = :invite_id AND org_id = :org_id AND accepted_at IS NULL "
+          "UPDATE @module.OrgInvite SET closed_at = NOW(), closed_by = :closed_by "
+          "WHERE org_id = :org_id AND accepted_at IS NULL AND closed_at IS NULL"
+      }
+    };
+  }
+
+  // CloseOrgInvite — withdraw a PENDING invitation: closed_at and closed_by
+  // are stamped and the row stays; every path that binds, accepts or lists a
+  // pending invitation skips a closed one. Was DeleteOrgInvite. Scoped by
+  // org_id in the WHERE and not only by id: the handler already knows the
+  // caller's active org, and an id-only close would let a member of one
+  // organization revoke another's invitation by guessing a uuid. Guarded on
+  // `closed_at IS NULL`: a second withdrawal matches nothing (NotFound), as
+  // the delete did.
+  rpc CloseOrgInvite(CloseOrgInviteReq) returns (CloseOrgInviteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_invite";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgInvite SET closed_at = NOW(), closed_by = :closed_by "
+          "WHERE id = :invite_id AND org_id = :org_id AND accepted_at IS NULL AND closed_at IS NULL "
           "RETURNING id AS invite_id"
       }
     };

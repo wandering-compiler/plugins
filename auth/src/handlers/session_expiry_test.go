@@ -434,12 +434,15 @@ func TestSessionExpiryStatements(t *testing.T) {
 	queries := readProto(t, filepath.Join("..", "..", "proto", "queries", "auth_query.proto"))
 	mutations := readProto(t, filepath.Join("..", "..", "proto", "mutations", "auth_mutation.proto"))
 
-	// The miss-path lookups find EXPIRED rows only, by the live lookup's keys.
+	// The miss-path lookups find ENDED rows only — expired or revoked, exactly
+	// what the live lookups refuse — by the live lookup's keys.
 	for _, rpc := range []string{"rpc GetExpiredToken(", "rpc GetExpiredTokenWithType("} {
 		dql := methodDQL(t, queries, rpc)
 		for _, want := range []string{
-			"(t.token_hash = :token_hash OR t.token = :legacy_token) AND t.expires_at <= NOW()",
+			"(t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at <= NOW() OR t.revoked_at IS NOT NULL)",
 			"t.expires_at AS expires_at",
+			"t.revoked_at AS revoked_at",
+			"d.revoked_at AS device_revoked_at",
 		} {
 			if !strings.Contains(dql, want) {
 				t.Errorf("%s lacks %q:\n%s", rpc, want, dql)
@@ -459,32 +462,15 @@ func TestSessionExpiryStatements(t *testing.T) {
 		t.Errorf("TouchTokenLastUsed is not throttled in SQL:\n%s", touch)
 	}
 
-	// The sweep: one user's expired SESSION tokens, in the mint's own
-	// transaction, before the insert.
+	// No sweep: minting is one INSERT. Expired tokens are history like revoked
+	// ones (nothing in the auth tables is deleted), refused by their
+	// expires_at.
 	issue := methodDQL(t, mutations, "rpc IssueToken(")
-	sweep := strings.Index(issue, `name: "sweep"`)
-	main := strings.Index(issue, `name: "main"`)
-	if sweep < 0 || main < 0 || sweep > main {
-		t.Fatalf("IssueToken has no sweep op ahead of the insert:\n%s", issue)
+	if n := strings.Count(issue, "dql:"); n != 1 || !strings.Contains(issue, "INSERT INTO @module.UserToken SET ") {
+		t.Errorf("IssueToken is not the one INSERT:\n%s", issue)
 	}
-	sweepDQL := issue[sweep:main]
-	for _, want := range []string{
-		"DELETE FROM @module.UserToken ",
-		// Only this user's rows.
-		"WHERE user_id = :user_id ",
-		// Only expired ones: a NULL (never-expiring) row does not match.
-		"AND expires_at <= NOW() ",
-		// Never an API or bot token. A top-level AND operand of a mutation's
-		// WHERE, the one place a SELECT-less gate may sit.
-		"AND ?feature(api_token) token_type = 1",
-	} {
-		if !strings.Contains(sweepDQL, want) {
-			t.Errorf("IssueToken sweep lacks %q:\n%s", want, sweepDQL)
-		}
-	}
-	// An OR anywhere would let a row escape one of the conjuncts above.
-	if strings.Contains(sweepDQL, " OR ") {
-		t.Errorf("IssueToken sweep has an OR; every guard must be a conjunct:\n%s", sweepDQL)
+	if strings.Contains(issue, "DELETE") {
+		t.Errorf("IssueToken still deletes:\n%s", issue)
 	}
 }
 

@@ -97,8 +97,9 @@ func (h *AuthServiceHandler) ResetPassword(ctx context.Context, req *pb.ResetPas
 		}
 	}
 
-	// Revoke every existing token (sessions + API tokens): a reset implies the
-	// prior credential may be compromised. Deliberately OUTSIDE the
+	// Revoke every existing token (sessions + API tokens; reason
+	// PASSWORD_RESET, the rows stay): a reset implies the prior credential may
+	// be compromised. Deliberately OUTSIDE the
 	// transaction and still best-effort — the password is committed by now and
 	// a failed sweep must not undo it — but the outcome is REPORTED.
 	//
@@ -108,7 +109,7 @@ func (h *AuthServiceHandler) ResetPassword(ctx context.Context, req *pb.ResetPas
 	// sweep exists for — a reset after a theft — could leave the thief's
 	// session alive and tell nobody, least of all the person who had just
 	// reset their password believing it had done something.
-	_, sweepErr := h.Mutation.DeleteUserSessionsForReset(ctx, &pb.DeleteUserSessionsForResetReq{UserId: userID})
+	_, sweepErr := h.Mutation.RevokeTokensForReset(ctx, &pb.RevokeTokensForResetReq{UserId: userID})
 	return &pb.ResetPasswordResp{SessionsRevoked: sweepErr == nil}, nil
 }
 

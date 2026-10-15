@@ -23,16 +23,16 @@ import (
 type logoutMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
-	deleteReq *pb.DeleteSessionTokenReq
-	deleteErr error
+	revokeReq *pb.RevokeSessionTokenReq
+	revokeErr error
 }
 
-func (m *logoutMock) DeleteSessionToken(_ context.Context, in *pb.DeleteSessionTokenReq, _ ...grpc.CallOption) (*pb.DeleteSessionTokenResp, error) {
-	m.deleteReq = in
-	if m.deleteErr != nil {
-		return nil, m.deleteErr
+func (m *logoutMock) RevokeSessionToken(_ context.Context, in *pb.RevokeSessionTokenReq, _ ...grpc.CallOption) (*pb.RevokeSessionTokenResp, error) {
+	m.revokeReq = in
+	if m.revokeErr != nil {
+		return nil, m.revokeErr
 	}
-	return &pb.DeleteSessionTokenResp{TokenId: in.GetTokenId(), UserId: in.GetUserId()}, nil
+	return &pb.RevokeSessionTokenResp{TokenId: in.GetTokenId(), UserId: in.GetUserId()}, nil
 }
 
 // ctxWithEnvelope sets the gateway's x-w17-user envelope (base64 AuthResp)
@@ -53,18 +53,18 @@ func TestLogout_RevokesCurrentSession(t *testing.T) {
 	if _, err := h.Logout(ctxWithEnvelope(t, "u1", "tok-1"), &pb.LogoutReq{}); err != nil {
 		t.Fatalf("logout: %v", err)
 	}
-	if m.deleteReq == nil {
-		t.Fatal("Logout did not call DeleteSessionToken")
+	if m.revokeReq == nil {
+		t.Fatal("Logout did not call RevokeSessionToken")
 	}
-	if m.deleteReq.GetTokenId() != "tok-1" || m.deleteReq.GetUserId() != "u1" {
-		t.Errorf("delete guard wrong: %+v (want token tok-1 / user u1)", m.deleteReq)
+	if m.revokeReq.GetTokenId() != "tok-1" || m.revokeReq.GetUserId() != "u1" {
+		t.Errorf("revoke guard wrong: %+v (want token tok-1 / user u1)", m.revokeReq)
 	}
-	if m.deleteReq.GetTokenType() != pb.TokenType_TOKEN_TYPE_SESSION {
-		t.Errorf("delete token_type = %v, want SESSION (logout must never revoke an API token)", m.deleteReq.GetTokenType())
+	if m.revokeReq.GetTokenType() != pb.TokenType_TOKEN_TYPE_SESSION {
+		t.Errorf("revoke token_type = %v, want SESSION (logout must never revoke an API token)", m.revokeReq.GetTokenType())
 	}
 }
 
-// No session_token_id in the envelope → REFUSE, and delete nothing.
+// No session_token_id in the envelope → REFUSE, and revoke nothing.
 //
 // ⚠️ An idempotent NO-OP here, on the reasoning that an API-token bearer
 // should not get an error, lets a broken facade ship: one whose VerifyRes
@@ -93,15 +93,15 @@ func TestLogout_NoSessionToken_Refused(t *testing.T) {
 			t.Errorf("the refusal must mention %q; got: %v", want, err)
 		}
 	}
-	if m.deleteReq != nil {
-		t.Errorf("must not delete when there is no session token id; got %+v", m.deleteReq)
+	if m.revokeReq != nil {
+		t.Errorf("must not revoke when there is no session token id; got %+v", m.revokeReq)
 	}
 }
 
 // Deleting an already-revoked / expired token (zero rows → NotFound) is an
 // idempotent logout success.
 func TestLogout_AlreadyRevoked_Idempotent(t *testing.T) {
-	m := &logoutMock{deleteErr: status.Error(codes.NotFound, "no rows")}
+	m := &logoutMock{revokeErr: status.Error(codes.NotFound, "no rows")}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	if _, err := h.Logout(ctxWithEnvelope(t, "u1", "tok-1"), &pb.LogoutReq{}); err != nil {
 		t.Fatalf("logout of an already-revoked session must succeed, got %v", err)
@@ -110,7 +110,7 @@ func TestLogout_AlreadyRevoked_Idempotent(t *testing.T) {
 
 // A real (non-NotFound) mutation error must propagate, not be swallowed.
 func TestLogout_MutationError_Propagates(t *testing.T) {
-	m := &logoutMock{deleteErr: errors.New("db down")}
+	m := &logoutMock{revokeErr: errors.New("db down")}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	if _, err := h.Logout(ctxWithEnvelope(t, "u1", "tok-1"), &pb.LogoutReq{}); err == nil {
 		t.Fatal("a non-NotFound mutation error must propagate")
@@ -148,11 +148,11 @@ func TestResolvePrincipalRealmAware_ReturnsTokenID(t *testing.T) {
 }
 
 // An API-token bearer must resolve with an EMPTY session_token_id, so Logout
-// (which deletes the session_token_id) refuses them with FailedPrecondition and
-// deletes nothing. Otherwise it deletes the API TOKEN itself —
-// DeleteSessionToken's DQL drops the token_type filter (the column is
+// (which revokes the session_token_id) refuses them with FailedPrecondition and
+// revokes nothing. Otherwise it revokes the API TOKEN itself —
+// RevokeSessionToken's DQL drops the token_type filter (the column is
 // api_token-gated), so an id+user_id match revokes the API token by mistake, a
-// credential that should only be removed via RevokeApiToken.
+// credential that should only be revoked via RevokeApiToken.
 func TestResolvePrincipalRealmAware_ApiTokenHasNoSessionID(t *testing.T) {
 	m := &apiTokenQueryMock{
 		tok:        &pb.GetTokenWithTypeResp{StoredTokenHash: "stored", UserId: "u1", TokenId: "api-7", TokenType: pb.TokenType_TOKEN_TYPE_API},

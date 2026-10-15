@@ -154,6 +154,13 @@ message SignInReq {
   option (w17.contrib.plugin_feature) = "sign_in_turnkey";
   string email    = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
   string password = 2 [(w17.field) = { type: PASSWORD }];
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response. With two_factor the challenge carries it to VerifyMfa.
+  bool public_computer = 3;
 }
 message SignInResp {
   option (w17.contrib.plugin_feature) = "sign_in_turnkey";
@@ -174,6 +181,10 @@ message SignInResp {
   // now, so there is nothing to replay.
   reserved 5;
   reserved "device_trust_token";
+
+  // public_computer — echoes the request's choice on a response that carries
+  // a token: the client keeps a public-computer token in session storage only.
+  bool public_computer = 6;
 }
 
 // SignUpReq / SignUpResp — canonical register-and-issue-token
@@ -210,6 +221,14 @@ message SignUpReq {
     (w17.field) = { type: SLUG, max_len: 100, null: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response. Ignored under sign_up_confirmation, where SignUp issues no
+  // session: ConfirmSignUp takes its own.
+  bool public_computer = 5;
 }
 message SignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_turnkey";
@@ -220,6 +239,8 @@ message SignUpResp {
   // ConfirmSignUp takes together with the code mailed to the address.
   bool   confirmation_required = 3 [(w17.contrib.plugin_feature_field) = "sign_up_confirmation"];
   string pending_id            = 4 [(w17.contrib.plugin_feature_field) = "sign_up_confirmation"];
+  // Echoes the request's public_computer when a session was issued.
+  bool   public_computer       = 5;
 }
 
 // ConfirmSignUp — the second step of a `sign_up_confirmation` registration:
@@ -228,11 +249,19 @@ message ConfirmSignUpReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string pending_id = 1 [(w17.field) = { type: UUID }];
   string code       = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response.
+  bool public_computer = 3;
 }
 message ConfirmSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string token   = 2;
+  bool   public_computer = 3;
 }
 
 // WhoAmIReq / WhoAmIResp — current-principal probe. The FE calls
@@ -281,7 +310,8 @@ message WhoAmIResp {
 // LogoutReq / LogoutResp — revoke the CURRENT session (base-tier, no
 // `devices` feature). No body: the handler reads the authenticated
 // principal (user_id) + the resolved session_token_id from the gateway's
-// auth envelope and deletes exactly that one SESSION token. Idempotent —
+// auth envelope and revokes exactly that one SESSION token (the row
+// stays, with revoked_at). Idempotent —
 // a logout against an already-revoked / expired session still succeeds.
 // "Log out everywhere / other devices" is the `devices` feature's job
 // (RevokeAllDevices); this revokes only the bearer that made the call.
@@ -290,6 +320,20 @@ message LogoutReq {
 }
 message LogoutResp {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+}
+
+// ListMySignInEvents — the caller's own sign-in history: every attempt that
+// reached their account, newest first, the latest 100, failures included
+// (a wrong password, a refused device). Attempts that named their address
+// while it had no account are not theirs to read and are not listed.
+// Authenticated; the account is the caller's (the gateway envelope), never a
+// request field.
+message ListMySignInEventsReq {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+}
+message ListMySignInEventsResp {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+  repeated SignInEvent events = 1;
 }
 
 // ── api_token: token-management business surface ────────────
@@ -379,6 +423,19 @@ message IssueBotTokenReq {
   // rotated by issuing a new one and revoking the old — the expiry is what
   // makes forgetting the second step safe.
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+  // public_key — the PUBLIC key of the machine account — generated where it runs, as
+  // the JSON of a JWK (RFC 7517): {"kty":"EC","crv":"P-256","x":…,"y":…} or
+  // {"kty":"OKP","crv":"Ed25519","x":…}. REQUIRED: the token is bound to this
+  // key (its RFC 7638 thumbprint, computed by the handler) and works only with
+  // DPoP proofs signed by it. A JWK with any private member ("d", …) is
+  // refused and never stored or logged; the private key stays where the
+  // program runs.
+  //
+  // A machine account has exactly ONE key (device/bot-one-key): its first
+  // token registers it, every later token must name the same key (its
+  // replicas share it), and a different key is refused (BOT_KEY_MISMATCH)
+  // until the account's device is revoked.
+  string public_key = 5 [(w17.field) = { type: CHAR, max_len: 1024 }];
 }
 message IssueBotTokenResp {
   option (w17.contrib.plugin_feature) = "service_account";
@@ -387,6 +444,9 @@ message IssueBotTokenResp {
   string token_id = 2 [(w17.field) = { type: UUID }];
   // When it expires; absent = never (the deployment's default is 0).
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+  // The thumbprint of the key the token is bound to — the device id
+  // Authenticate answers for its requests.
+  string device_id = 4;
 }
 
 message CreateApiTokenReq {
@@ -403,6 +463,14 @@ message CreateApiTokenReq {
   // rotated by issuing a new one and revoking the old — the expiry is what
   // makes forgetting the second step safe.
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+  // public_key — the PUBLIC key of the program that will use the token, as
+  // the JSON of a JWK (RFC 7517): {"kty":"EC","crv":"P-256","x":…,"y":…} or
+  // {"kty":"OKP","crv":"Ed25519","x":…}. REQUIRED: the token is bound to this
+  // key (its RFC 7638 thumbprint, computed by the handler) and works only with
+  // DPoP proofs signed by it. A JWK with any private member ("d", …) is
+  // refused and never stored or logged; the private key stays where the
+  // program runs.
+  string public_key = 4 [(w17.field) = { type: CHAR, max_len: 1024 }];
 }
 message CreateApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -412,6 +480,9 @@ message CreateApiTokenResp {
   string token_id = 2 [(w17.field) = { type: UUID }];
   // When it expires; absent = never (the deployment's default is 0).
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+  // The thumbprint of the key the token is bound to — the device id
+  // Authenticate answers for its requests.
+  string device_id = 4;
 }
 
 message ListApiTokensReq {
@@ -478,6 +549,16 @@ message OAuthExchangeReq {
   // only here, in the page's own request, never through a URL or the
   // provider.
   string invite_token  = 3;
+  // public_computer — "this is a public computer" (an internet café, a
+  // shared PC). The session gets the public lifetime
+  // (public_session_ttl_seconds, shorter than the normal one) and the device
+  // is never made trusted, so two_factor_scope=new_devices asks the second
+  // factor at every sign-in from it. The client keeps the token in session
+  // storage only. Echoed on the response. Taken here, at the exchange, and not at
+  // OAuthAuthorizeURL: the exchange is the mint, made by the same page that
+  // started the flow, and nothing about the choice needs to travel through
+  // the provider. An OAuth sign-in never trusts the device anyway.
+  bool public_computer = 4;
 }
 message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -486,6 +567,7 @@ message OAuthExchangeResp {
   // 3 = device_trust_token (see SignInResp).
   reserved 3;
   reserved "device_trust_token";
+  bool   public_computer = 4;
 }
 
 // ── two_factor: enrollment + challenge verification surface ──
@@ -581,6 +663,9 @@ message VerifyMfaResp {
   // the device the request's key names; nothing is handed back for it.
   reserved 3;
   reserved "device_trust_token";
+  // The challenged SignIn's public_computer, which this completion honoured
+  // (VerifyMfa takes it from the challenge, never from its own request).
+  bool   public_computer = 4;
 }
 
 // ── devices: device/session management business surface ─────
@@ -679,6 +764,19 @@ message RemoveOrgMembershipReq {
 message RemoveOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   string membership_id = 1;
+}
+
+// RemoveOrganization — delete an organization (the admin Organizations
+// page's delete): its pending invitations are closed (with org_invite
+// staged), then AuthMutation.DeleteOrganization ends its memberships and org
+// grants and stamps it deleted, in one transaction. Nothing is deleted.
+message RemoveOrganizationReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RemoveOrganizationResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string org_id = 1;
 }
 
 message ListOrgMembersReq {
@@ -912,9 +1010,14 @@ service AuthService {
   }
   // Logout — revoke the caller's CURRENT session token (base-tier, no
   // `devices` feature). Reads user_id + session_token_id from the gateway
-  // auth envelope and deletes that one SESSION token via
-  // AuthMutation.DeleteSessionToken. Idempotent.
+  // auth envelope and revokes that one SESSION token via
+  // AuthMutation.RevokeSessionToken (the row stays). Idempotent.
   rpc Logout(LogoutReq) returns (LogoutResp) {
+    option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
+  }
+  // ListMySignInEvents — the caller's own sign-in history (see the
+  // request). Reads AuthQuery.ListUserSignInEvents for the envelope's user.
+  rpc ListMySignInEvents(ListMySignInEventsReq) returns (ListMySignInEventsResp) {
     option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
   }
 
@@ -922,10 +1025,14 @@ service AuthService {
   // authenticated), optionally narrowed to a permission subset. Returns
   // the opaque token ONCE. Gated api_token.
   //
-  // ⛔ Refused (Unimplemented, DEVICE_KEY_REQUIRED) until the request can
-  // carry the public key of the client that will use the token: every token
-  // is bound to a device, and binding an API token to the browser that
-  // created it would make it useless to the script it is for.
+  // Bound to the key in public_key — the program that will use the token,
+  // not the browser creating it — exactly like a session is bound to its
+  // device: the (caller, thumbprint) Device is found or registered (a
+  // revoked one is refused, DEVICE_KEY_REVOKED) and every request with the
+  // token needs a DPoP proof by that key. The caller's own device is recorded
+  // as the token's approver (UserToken.approved_by_device_id). Refusals:
+  // DEVICE_KEY_REQUIRED (no key), DEVICE_KEY_INVALID (not a public P-256 or
+  // Ed25519 JWK, or one with a private member).
   rpc CreateApiToken(CreateApiTokenReq) returns (CreateApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
@@ -944,8 +1051,75 @@ service AuthService {
   rpc SetClientEnabled(SetClientEnabledReq) returns (SetClientEnabledResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
   }
+  // DeleteClient ends a registration for good (AuthClient.revoked_at); the
+  // row stays. It keeps its released name (and so its ACL code, REST route
+  // and MCP tool); it used to remove the row.
   rpc DeleteClient(DeleteClientReq) returns (DeleteClientResp) {
     option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+  // RotateClientSecret replaces a LIVE registration's secret and returns the
+  // new one once — how a client that lost its secret keeps its client_id now
+  // that revoking keeps the row (and its pair) instead of deleting it. A
+  // revoked or unknown registration is refused (NotFound). Same gating as
+  // RegisterClient: a signed-in session, and the project's ACL. Gated
+  // cli_login.
+  rpc RotateClientSecret(RotateClientSecretReq) returns (RotateClientSecretResp) {
+    option (w17.contrib.plugin_feature_rpc) = "cli_login";
+  }
+  // UpdateAccount — the admin Users page's detail `update` (email only),
+  // through AuthMutation.UpdateUser, refusing the erased-account domain
+  // (EMAIL_INVALID): an account holding an erasure's placeholder first would
+  // block that erasure for good. Gated user_admin.
+  rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // EraseUsers — the bulk form of EraseAccount, for project code: erase each
+  // account (GDPR) without deleting anything, in three steps —
+  // AuthMutation.BeginUserErasure (access ends: disabled, password unusable,
+  // every token and device revoked, the operator recorded as revoked_by),
+  // then the per-feature erasers, then AuthMutation.EraseUser (the address
+  // becomes the placeholder, erased_at is stamped). One transaction per
+  // account with a transaction coordinator; without one, a partial run leaves
+  // the account without access and running the erasure again completes it.
+  // An account already erased skips only EraseUser. Refuses an empty id list
+  // (the admin's "apply to all rows" sends one). Gated user_admin.
+  rpc EraseUsers(EraseUsersReq) returns (EraseUsersResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // EraseAccount — the admin Users and ServiceAccounts pages' `delete`: erase
+  // ONE account (GDPR) exactly as EraseUsers does, the operator recorded. The
+  // slot keeps the name it had when it hard-deleted the row, so an existing
+  // admin, its ACL codes (the model's `delete` permission) and its e2e tests
+  // stay valid; nothing is deleted. Answers the account's id, as the delete it
+  // replaces did. Gated user_admin.
+  rpc EraseAccount(EraseAccountReq) returns (EraseAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // RevokeSessions — the bulk form of RevokeSession, for project code: revoke
+  // each token (AuthMutation.RevokeUserToken), the operator recorded as
+  // revoked_by. A token already revoked keeps its first revocation and is
+  // not an error. Refuses an empty id list. Gated user_admin.
+  rpc RevokeSessions(RevokeSessionsReq) returns (RevokeSessionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // RevokeSession — the admin Sessions page's `delete`: revoke ONE token
+  // (AuthMutation.RevokeUserToken), the operator recorded as revoked_by, the
+  // row kept and listed as revoked. The slot keeps the name it had when it
+  // deleted the row, so an existing admin, its ACL codes and its e2e tests stay
+  // valid; nothing is deleted. A token already revoked keeps its first
+  // revocation and is not an error. Answers the token's id. Gated user_admin.
+  rpc RevokeSession(RevokeSessionReq) returns (RevokeSessionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+  }
+  // RevokeDevices — the admin Devices page's `revoke` action: revoke each
+  // device for good and every token bound to it (reason DEVICE_REVOKED, the
+  // operator recorded as revoked_by), in one transaction per device
+  // (AuthMutation.RevokeDeviceTokens + MarkDeviceRevoked). The key can never
+  // sign in to that account again (DEVICE_REVOKED). A device already revoked
+  // is left as it is; an unknown id is not an error. Refuses an empty id
+  // list. Gated user_admin.
+  rpc RevokeDevices(RevokeDevicesReq) returns (RevokeDevicesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
   }
   // CreateBot — provision a machine account AND give it its role, in one
   // call. Gated service_account.
@@ -968,8 +1142,10 @@ service AuthService {
   // IssueBotToken — mint an API token FOR a machine account. Refuses any
   // target that is not `kind = BOT`. Gated service_account.
   //
-  // ⛔ Refused (Unimplemented, DEVICE_KEY_REQUIRED) until the request can
-  // carry the bot's public key — see CreateApiToken.
+  // Bound to the machine account's key (public_key), as CreateApiToken
+  // binds to its: the account has ONE key, registered by its first token;
+  // a later token with another key is refused (BOT_KEY_MISMATCH). The
+  // operator's device is recorded as the token's approver.
   rpc IssueBotToken(IssueBotTokenReq) returns (IssueBotTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "service_account";
   }
@@ -977,7 +1153,8 @@ service AuthService {
   rpc ListApiTokens(ListApiTokensReq) returns (ListApiTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
-  // RevokeApiToken — delete the caller's own API token + its subset rows.
+  // RevokeApiToken — revoke the caller's own API token (revoked_at; the
+  // row and its subset rows stay).
   rpc RevokeApiToken(RevokeApiTokenReq) returns (RevokeApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
   }
@@ -1025,7 +1202,7 @@ service AuthService {
 
   // ── devices management — list + log out one/others/all ──────
   // ListDevices — the caller's devices (mgmt view, derived trusted /
-  // current). RevokeDevice — revoke one device for good (delete its
+  // current). RevokeDevice — revoke one device for good (revoke its
   // tokens, stamp Device.revoked_at; its key can never sign in again).
   // RevokeOtherDevices — revoke every device but the caller's.
   // RevokeAllDevices — revoke every device, the caller's included.
@@ -1116,6 +1293,14 @@ service AuthService {
   // RemoveOrgMembership — the delete twin: the caller must cover every role
   // the member holds in that organization, which the removal revokes.
   rpc RemoveOrgMembership(RemoveOrgMembershipReq) returns (RemoveOrgMembershipResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+  }
+
+  // RemoveOrganization — the Organizations page's delete: closes the
+  // organization's pending invitations (org_invite) and deletes it
+  // (AuthMutation.DeleteOrganization) in one transaction, the caller recorded
+  // as who closed them.
+  rpc RemoveOrganization(RemoveOrganizationReq) returns (RemoveOrganizationResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
   }
 
@@ -1295,9 +1480,10 @@ message RegisterClientResp {
   // response that happens to carry the model.
   AuthClient client = 1;
   // client_secret — the PLAINTEXT, and the only time it exists outside the
-  // client. Stored hashed, never recoverable: a client that loses it is
-  // re-registered rather than reminded. Same single-delivery contract as a
-  // password-reset token.
+  // client. Stored hashed, never recoverable: a client that loses it gets a
+  // NEW one from RotateClientSecret (same client_id, same callback) rather
+  // than being reminded. Same single-delivery contract as a password-reset
+  // token.
   string client_secret = 2;
 }
 message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
@@ -1311,11 +1497,76 @@ message SetClientEnabledReq {
   bool   enabled = 2;
 }
 message SetClientEnabledResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+// RotateClientSecretReq — the registration (one (client_id, redirect_uri)
+// row) whose secret is replaced. Its client_id stays: it is baked into the
+// clients that use it.
+message RotateClientSecretReq {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RotateClientSecretResp {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  // The new PLAINTEXT, handed out once, like RegisterClientResp.client_secret.
+  // The old secret stops working when this commits.
+  string client_secret = 1;
+}
 message DeleteClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
   string id = 1 [(w17.field) = { type: UUID }];
 }
 message DeleteClientResp { option (w17.contrib.plugin_feature) = "cli_login"; }
+
+// The admin action wire contract: a `repeated string ids` selection (the
+// model's UUID primary keys). Responses are empty — the admin shows success
+// or failure.
+message EraseUsersReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated string ids = 1;
+}
+message EraseUsersResp { option (w17.contrib.plugin_feature) = "user_admin"; }
+// EraseAccountReq — `user_id` is the row the admin URL names (the key field
+// of the User model), as AuthMutation.DeleteUser's was.
+message EraseAccountReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message EraseAccountResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+}
+// UpdateAccountReq / Resp — the shape of AuthMutation.UpdateUser's, which it
+// calls: `user_id` is the row the admin URL names, `email` the one editable
+// field.
+message UpdateAccountReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string email   = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message UpdateAccountResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+  string email   = 2;
+}
+message RevokeSessionsReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated string ids = 1;
+}
+message RevokeSessionsResp { option (w17.contrib.plugin_feature) = "user_admin"; }
+// RevokeSessionReq — `id` is the token row the admin URL names, as
+// AuthMutation.RevokeUserToken's was.
+message RevokeSessionReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RevokeSessionResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string token_id = 1;
+}
+message RevokeDevicesReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated string ids = 1;
+}
+message RevokeDevicesResp { option (w17.contrib.plugin_feature) = "user_admin"; }
 
 message CliTokenReq {
   option (w17.contrib.plugin_feature) = "cli_login";

@@ -28,7 +28,7 @@ type passwordChangeMock struct {
 	casErr    error
 	plainCall int // UpdateUserPassword — the un-predicated write; must stay unused here
 
-	sweeps   []*pb.DeleteOtherSessionTokensReq
+	sweeps   []*pb.RevokeOtherSessionTokensReq
 	sweepErr error
 
 	spentLinksFor string // user whose reset links SpendPasswordResetTokens spent
@@ -43,12 +43,12 @@ func (m *passwordChangeMock) SpendPasswordResetTokens(_ context.Context, in *pb.
 	return &pb.SpendPasswordResetTokensResp{}, nil
 }
 
-func (m *passwordChangeMock) DeleteOtherSessionTokens(ctx context.Context, in *pb.DeleteOtherSessionTokensReq, _ ...grpc.CallOption) (*pb.DeleteOtherSessionTokensResp, error) {
+func (m *passwordChangeMock) RevokeOtherSessionTokens(ctx context.Context, in *pb.RevokeOtherSessionTokensReq, _ ...grpc.CallOption) (*pb.RevokeOtherSessionTokensResp, error) {
 	m.sweeps = append(m.sweeps, in)
 	if m.sweepErr != nil {
 		return nil, m.sweepErr
 	}
-	return &pb.DeleteOtherSessionTokensResp{}, nil
+	return &pb.RevokeOtherSessionTokensResp{}, nil
 }
 
 func (m *passwordChangeMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
@@ -171,7 +171,7 @@ func TestChangePassword_WrongCurrentPasswordWritesNothing(t *testing.T) {
 }
 
 // A password change signs the person out everywhere ELSE: every other
-// session of theirs is deleted, the one they changed it from is kept, and
+// session of theirs is revoked, the one they changed it from is kept, and
 // their API tokens are not touched (only sessions are named).
 func TestChangePassword_EndsEveryOtherSession(t *testing.T) {
 	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
@@ -248,11 +248,11 @@ func TestChangePassword_AFailedSpendFailsTheChange(t *testing.T) {
 // The sweep spares API tokens by naming the session realm in the statement,
 // behind ?feature(api_token): the token_type column exists only with that
 // feature, so an ungated filter would break every activation of
-// password_change without it, and no filter at all would delete API tokens.
+// password_change without it, and no filter at all would revoke API tokens.
 func TestChangePassword_TheSweepSparesAPITokensOnlyWhereTheyExist(t *testing.T) {
-	body := mutationRPCBody(t, "DeleteOtherSessionTokens")
+	body := mutationRPCBody(t, "RevokeOtherSessionTokens")
 	if !strings.Contains(body, `"AND ?feature(api_token) token_type = 1"`) {
-		t.Errorf("DeleteOtherSessionTokens does not filter the session realm behind ?feature(api_token):\n%s", body)
+		t.Errorf("RevokeOtherSessionTokens does not filter the session realm behind ?feature(api_token):\n%s", body)
 	}
 }
 

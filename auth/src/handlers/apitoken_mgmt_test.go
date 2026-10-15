@@ -17,12 +17,12 @@ type apiTokenMgmtMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 
-	issueReq       *pb.IssueApiTokenReq
-	addedPerms     []int32
-	deleteReq      *pb.DeleteApiTokenReq
-	deletedTokenID string // what DeleteApiToken RETURNINGs (empty = nothing deleted)
-	subsetCleared  bool
-	listResult     []*pb.ApiTokenInfo
+	issueReq   *pb.IssueApiTokenReq
+	registered []*pb.RegisterDeviceReq
+	addedPerms []int32
+	revokeReq  *pb.MarkApiTokenRevokedReq
+	revokeErr  error // what MarkApiTokenRevoked answers (NotFound = nothing matched)
+	listResult []*pb.ApiTokenInfo
 	// addPermErr fails the NARROWING — the second half of the pair, and the
 	// failure the transaction exists for. A rollback here is what keeps a live
 	// token from being left behind with no subset.
@@ -33,6 +33,12 @@ func (m *apiTokenMgmtMock) IssueApiToken(ctx context.Context, in *pb.IssueApiTok
 	m.issueReq = in
 	return &pb.IssueApiTokenResp{Token: &pb.UserToken{Id: "tok-1", Token: "secret-xyz"}}, nil
 }
+
+// RegisterDevice answers the key's device as a fresh live row.
+func (m *apiTokenMgmtMock) RegisterDevice(_ context.Context, in *pb.RegisterDeviceReq, _ ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
+	m.registered = append(m.registered, in)
+	return fakeRegisterDevice(in)
+}
 func (m *apiTokenMgmtMock) AddTokenPermission(ctx context.Context, in *pb.AddTokenPermissionReq, _ ...grpc.CallOption) (*pb.AddTokenPermissionResp, error) {
 	if m.addPermErr != nil {
 		return nil, m.addPermErr
@@ -40,13 +46,12 @@ func (m *apiTokenMgmtMock) AddTokenPermission(ctx context.Context, in *pb.AddTok
 	m.addedPerms = append(m.addedPerms, in.GetPermissionId())
 	return &pb.AddTokenPermissionResp{}, nil
 }
-func (m *apiTokenMgmtMock) DeleteApiToken(ctx context.Context, in *pb.DeleteApiTokenReq, _ ...grpc.CallOption) (*pb.DeleteApiTokenResp, error) {
-	m.deleteReq = in
-	return &pb.DeleteApiTokenResp{TokenId: m.deletedTokenID}, nil
-}
-func (m *apiTokenMgmtMock) DeleteTokenPermissions(ctx context.Context, in *pb.DeleteTokenPermissionsReq, _ ...grpc.CallOption) (*pb.DeleteTokenPermissionsResp, error) {
-	m.subsetCleared = true
-	return &pb.DeleteTokenPermissionsResp{}, nil
+func (m *apiTokenMgmtMock) MarkApiTokenRevoked(ctx context.Context, in *pb.MarkApiTokenRevokedReq, _ ...grpc.CallOption) (*pb.MarkApiTokenRevokedResp, error) {
+	m.revokeReq = in
+	if m.revokeErr != nil {
+		return nil, m.revokeErr
+	}
+	return &pb.MarkApiTokenRevokedResp{TokenId: in.GetTokenId()}, nil
 }
 func (m *apiTokenMgmtMock) ListApiTokensByUser(ctx context.Context, in *pb.ListApiTokensByUserReq, _ ...grpc.CallOption) (*pb.ListApiTokensByUserResp, error) {
 	return &pb.ListApiTokensByUserResp{Tokens: m.listResult}, nil
@@ -57,10 +62,9 @@ func ctxWithCaller(uid string) context.Context {
 }
 
 func TestCreateApiToken_StampsAPIRealm_AndSubset(t *testing.T) {
-	mintAPITokensUnbound(t)
 	m := &apiTokenMgmtMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	resp, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{Name: "ci", PermissionSubset: []int32{5, 7}})
+	resp, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK, Name: "ci", PermissionSubset: []int32{5, 7}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -85,33 +89,37 @@ func TestCreateApiToken_StampsAPIRealm_AndSubset(t *testing.T) {
 
 func TestCreateApiToken_NoCaller_Unauthenticated(t *testing.T) {
 	h := &AuthServiceHandler{Query: &apiTokenMgmtMock{}, Mutation: &apiTokenMgmtMock{}}
-	if _, err := h.CreateApiToken(context.Background(), &pb.CreateApiTokenReq{}); err == nil {
+	if _, err := h.CreateApiToken(context.Background(), &pb.CreateApiTokenReq{PublicKey: p256JWK}); err == nil {
 		t.Fatal("expected Unauthenticated without scope metadata")
 	}
 }
 
-func TestRevokeApiToken_Owned_ClearsSubset(t *testing.T) {
-	m := &apiTokenMgmtMock{deletedTokenID: "tok-1"} // token was deleted (owned)
+// RevokeApiToken revokes through the guarded statement — the caller's id, the
+// API realm — and touches nothing else: no DeleteTokenPermissions any more
+// (the mock has no such method; calling one would panic on the nil client).
+func TestRevokeApiToken_RevokesTheCallersApiToken(t *testing.T) {
+	m := &apiTokenMgmtMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	if _, err := h.RevokeApiToken(ctxWithCaller("u1"), &pb.RevokeApiTokenReq{TokenId: "tok-1"}); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if m.deleteReq.GetUserId() != "u1" || m.deleteReq.GetTokenType() != pb.TokenType_TOKEN_TYPE_API {
-		t.Errorf("delete guard wrong: %+v", m.deleteReq)
-	}
-	if !m.subsetCleared {
-		t.Error("owned-token revoke must clear the subset rows")
+	if m.revokeReq.GetTokenId() != "tok-1" || m.revokeReq.GetUserId() != "u1" || m.revokeReq.GetTokenType() != pb.TokenType_TOKEN_TYPE_API {
+		t.Errorf("revoke guard wrong: %+v", m.revokeReq)
 	}
 }
 
-func TestRevokeApiToken_NotOwned_SkipsSubsetCleanup(t *testing.T) {
-	m := &apiTokenMgmtMock{deletedTokenID: ""} // nothing deleted (not owner / not API)
+// A token that is already revoked, unknown or not the caller's matches no row
+// (NotFound): revoking it again is done, not an error. Any other failure
+// still fails the call.
+func TestRevokeApiToken_NothingMatchedIsDone(t *testing.T) {
+	m := &apiTokenMgmtMock{revokeErr: status.Error(codes.NotFound, "no rows")}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	if _, err := h.RevokeApiToken(ctxWithCaller("u1"), &pb.RevokeApiTokenReq{TokenId: "someone-elses"}); err != nil {
-		t.Fatalf("revoke: %v", err)
+		t.Fatalf("a revoke that matched nothing failed: %v", err)
 	}
-	if m.subsetCleared {
-		t.Error("must NOT clear subset rows when no owned token was deleted")
+	m.revokeErr = status.Error(codes.Unavailable, "db down")
+	if _, err := h.RevokeApiToken(ctxWithCaller("u1"), &pb.RevokeApiTokenReq{TokenId: "tok-1"}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("an outage was swallowed: %v", err)
 	}
 }
 
@@ -124,53 +132,6 @@ func TestListApiTokens_ReturnsCallersTokens(t *testing.T) {
 	}
 	if len(resp.GetTokens()) != 1 || resp.GetTokens()[0].GetId() != "tok-1" {
 		t.Errorf("tokens = %+v, want [tok-1]", resp.GetTokens())
-	}
-}
-
-// --- revoke, when the token had no permission subset -------------------
-
-type revokeMock struct {
-	pb.AuthQueryClient
-	pb.AuthMutationClient
-
-	cleanupErr error
-	cleanupRan bool
-}
-
-func (m *revokeMock) DeleteApiToken(ctx context.Context, in *pb.DeleteApiTokenReq, _ ...grpc.CallOption) (*pb.DeleteApiTokenResp, error) {
-	return &pb.DeleteApiTokenResp{TokenId: in.GetTokenId()}, nil
-}
-
-func (m *revokeMock) DeleteTokenPermissions(ctx context.Context, _ *pb.DeleteTokenPermissionsReq, _ ...grpc.CallOption) (*pb.DeleteTokenPermissionsResp, error) {
-	m.cleanupRan = true
-	return &pb.DeleteTokenPermissionsResp{}, m.cleanupErr
-}
-
-// The common case: a token with no subset. The cleanup DELETE matches no row,
-// which the generated mutation reports as NotFound — and the token is ALREADY
-// deleted by then. Failing here told the caller "no such token" about a token
-// that had just been revoked, and a retry said the same, so the operator
-// concluded it was still live.
-func TestRevokeApiToken_EmptySubsetIsNotAFailure(t *testing.T) {
-	m := &revokeMock{cleanupErr: status.Error(codes.NotFound, "AuthMutation.DeleteTokenPermissions: not found")}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-
-	if _, err := h.RevokeApiToken(ctxWithCaller("u1"), &pb.RevokeApiTokenReq{TokenId: "tok-1"}); err != nil {
-		t.Fatalf("revoking a token with no permission subset failed: %v", err)
-	}
-	if !m.cleanupRan {
-		t.Error("the cleanup never ran — the test would pass for the wrong reason")
-	}
-}
-
-// Control: only NotFound is swallowed. A subset that could not be removed
-// leaves a credential narrower than it looks, and must still fail.
-func TestRevokeApiToken_OtherCleanupErrorsStillFail(t *testing.T) {
-	m := &revokeMock{cleanupErr: status.Error(codes.Unavailable, "db down")}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-
-	if _, err := h.RevokeApiToken(ctxWithCaller("u1"), &pb.RevokeApiTokenReq{TokenId: "tok-1"}); err == nil {
-		t.Fatal("a failed subset cleanup was reported as a successful revoke")
 	}
 }
 
@@ -189,12 +150,11 @@ func newApiTokenHandlerTx(m *apiTokenMgmtMock, tx *recordingDistTx) *AuthService
 // IssueBotToken and CreateBot the same day. The bot endpoints are called by an
 // admin; this one is called by everybody.
 func TestCreateApiToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
-	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	m := &apiTokenMgmtMock{addPermErr: errTestNarrowFailed}
 	h := newApiTokenHandlerTx(m, tx)
 
-	_, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{
+	_, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK,
 		Name: "ci", PermissionSubset: []int32{7},
 	})
 	if err == nil {
@@ -212,12 +172,11 @@ func TestCreateApiToken_NarrowingFails_RollsBackTheLiveToken(t *testing.T) {
 // holds a transaction the two writes never join, so the rollback above would
 // undo nothing.
 func TestCreateApiToken_Success_CommitsOnTheHandlersConnection(t *testing.T) {
-	mintAPITokensUnbound(t)
 	tx := &recordingDistTx{}
 	m := &apiTokenMgmtMock{}
 	h := newApiTokenHandlerTx(m, tx)
 
-	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{
+	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK,
 		Name: "ci", PermissionSubset: []int32{7, 9},
 	}); err != nil {
 		t.Fatalf("mint: %v", err)
@@ -240,7 +199,7 @@ func TestCreateApiToken_BeginRefused_MintsNothing(t *testing.T) {
 	m := &apiTokenMgmtMock{}
 	h := newApiTokenHandlerTx(m, tx)
 
-	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{
+	if _, err := h.CreateApiToken(ctxWithCaller("u1"), &pb.CreateApiTokenReq{PublicKey: p256JWK,
 		Name: "ci", PermissionSubset: []int32{7},
 	}); err == nil {
 		t.Fatal("a refused Begin must fail the mint")

@@ -1,19 +1,19 @@
 package handlers
 
 import (
-	"time"
-
 	"context"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"errors"
+	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 
-	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
-	"github.com/wandering-compiler/sdk/go/service/tx/distx"
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/plugins/auth/lib/devicekey"
 )
 
 // This file implements the `api_token` feature. It is staged into a
@@ -30,6 +30,20 @@ import (
 func init() {
 	resolvePrincipal = resolvePrincipalRealmAware
 	recordTokenUse = touchTokenLastUsed
+	revokeApprovedAPITokens = revokeAPITokensOfDevice
+}
+
+// revokeAPITokensOfDevice revokes the owner's live API tokens the device
+// created — a stolen browser session could have created one bound to the
+// thief's own key. Revoking nothing is no failure.
+func revokeAPITokensOfDevice(ctx context.Context, h *AuthServiceHandler, userID, deviceID, revokedBy string) error {
+	_, err := h.Mutation.RevokeApprovedApiTokens(ctx, &pb.RevokeApprovedApiTokensReq{
+		UserId:    userID,
+		DeviceId:  deviceID,
+		RevokedBy: revokedBy,
+		TokenType: pb.TokenType_TOKEN_TYPE_API,
+	})
+	return notFoundOK(err)
 }
 
 // tokenUseWindow is how often, at most, a token's last_used_at is written.
@@ -91,13 +105,19 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 	if err != nil {
 		// Expired API tokens answer SESSION_EXPIRED too: the holder knows the
 		// token, and its expiry is all the refusal adds.
-		return nil, expiredTokenRefusal(err, func() (*timestamppb.Timestamp, pb.TokenType, string, error) {
+		return nil, expiredTokenRefusal(err, func() (endedToken, error) {
 			exp, err := h.Query.GetExpiredTokenWithType(ctx, &pb.GetExpiredTokenWithTypeReq{LegacyToken: token, TokenHash: hash})
-			return exp.GetExpiresAt(), exp.GetTokenType(), exp.GetDeviceThumbprint(), err
+			return endedToken{
+				expiresAt:       exp.GetExpiresAt(),
+				revokedAt:       exp.GetRevokedAt(),
+				kind:            exp.GetTokenType(),
+				thumbprint:      exp.GetDeviceThumbprint(),
+				deviceRevokedAt: exp.GetDeviceRevokedAt(),
+			}, err
 		})
 	}
 	// Same rule as the session path: a disabled account authenticates with no
-	// token, including one minted after the disable deleted the rest.
+	// token, including one minted after the disable revoked the rest.
 	if err := signInDisabledGate(tok.GetUser()); err != nil {
 		return nil, err
 	}
@@ -134,8 +154,8 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		}
 	}
 	// Only a SESSION token is stamped as the caller's session_token_id. Two
-	// things read it. Logout deletes whatever id the envelope carries, and
-	// DeleteSessionToken's DQL drops the token_type filter (the column is
+	// things read it. Logout revokes whatever id the envelope carries, and
+	// RevokeSessionToken's DQL drops the token_type filter (the column is
 	// api_token-gated), so an API token's id there would let Logout revoke it
 	// (it is removed only via RevokeApiToken). requireSessionCaller reads
 	// "non-empty" as "this caller is a session" and lets it mint credentials,
@@ -167,84 +187,232 @@ func applyTokenSubset(p *authPrincipal, subset []int32, lock *acllock.Lock) {
 }
 
 // CreateApiToken issues an API token for the calling user, optionally
-// narrowed to a permission subset. The opaque token is returned ONCE.
-func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateApiTokenReq) (*pb.CreateApiTokenResp, error) {
+// narrowed to a permission subset, bound to the public key the request names
+// — the program that will use the token, not the browser creating it. The
+// opaque token is returned ONCE.
+//
+// The issuance is recorded in the sign-in history (method API_TOKEN), like a
+// sign-in: one row whatever the outcome, the success row in the transaction
+// that mints the token.
+func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateApiTokenReq) (_ *pb.CreateApiTokenResp, err error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	attempt := beginKeyedMint(ctx, pb.SignInMethod_SIGN_IN_METHOD_API_TOKEN)
+	// The caller authenticated, and Authenticate refuses a disabled account
+	// (an erased one is disabled): the account is not erased, and the history
+	// needs no read to know it.
+	attempt.userID, attempt.account = userID, &pb.User{Id: userID}
+	defer func() { h.endSignIn(ctx, attempt, err) }()
+
 	if err := requireSessionCaller(ctx); err != nil {
 		return nil, err
 	}
-	// The token and its narrowing are ONE unit — the same reason IssueBotToken
-	// gives, and this is the endpoint a PERSON calls.
+	key, err := parseTokenKey(ctx, req.GetPublicKey())
+	if err != nil {
+		return nil, err
+	}
+	attempt.thumbprint = key.Thumbprint
+	expiresAt, err := h.apiTokenExpiry(ctx, req.GetExpiresAt())
+	if err != nil {
+		return nil, err
+	}
+	// The device, the token, its narrowing and the history row are ONE unit
+	// — the same reason IssueBotToken gives, and this is the endpoint a
+	// PERSON calls.
 	//
-	// Minting first is forced: a permission row points at the token's id. So a
-	// failure partway leaves a LIVE token carrying a partial subset — or none,
-	// which the resolver reads as `all_permissions` (applyTokenSubset narrows
-	// only a non-empty subset). A caller who asked for a narrow credential and
-	// got an error back would be left owning a WIDER one, believing nothing
-	// happened.
+	// Minting before narrowing is forced: a permission row points at the
+	// token's id. So a failure partway leaves a LIVE token carrying a partial
+	// subset — or none, which the resolver reads as `all_permissions`
+	// (applyTokenSubset narrows only a non-empty subset). A caller who asked
+	// for a narrow credential and got an error back would be left owning a
+	// WIDER one, believing nothing happened.
 	//
 	// ⚠️ IssueBotToken and CreateBot hold their writes in one transaction for
 	// the same reason; a change to one belongs in all three. The bot endpoints are
 	// called by an admin, and this one is called by everybody.
-	var tx *distx.TxHandle
-	txCtx := ctx
-	if h.DistTx != nil {
-		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
-			return nil, err
+	var token, tokenID string
+	err = h.inTx(ctx, func(txCtx context.Context) error {
+		dev, err := h.registerKeyDevice(txCtx, attempt, userID, key, "API token: "+req.GetName())
+		if err != nil {
+			return err
 		}
-	}
-	expiresAt, err := h.apiTokenExpiry(ctx, req.GetExpiresAt())
+		approver, err := h.approverDevice(txCtx, userID)
+		if err != nil {
+			return err
+		}
+		token, tokenID, err = h.issueApiTokenTx(txCtx, attempt, userID, req.GetName(), req.GetPermissionSubset(), expiresAt, dev, approver)
+		return err
+	})
 	if err != nil {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
 		return nil, err
-	}
-	token, tokenID, err := h.issueApiTokenTx(txCtx, userID, req.GetName(), req.GetPermissionSubset(), expiresAt)
-	if err != nil {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
-		return nil, err
-	}
-	if tx != nil {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, err
-		}
 	}
 	return &pb.CreateApiTokenResp{
 		Token:     token,
 		TokenId:   tokenID,
 		ExpiresAt: expiresAt,
+		DeviceId:  key.Thumbprint,
 	}, nil
 }
 
-// issueApiTokenTx mints the token and writes its permission subset on the SAME
-// context, so a transaction wrapped around the pair holds both. Separated for
-// exactly that reason: a caller that inlined the two could not roll them back
-// together, and the seam is what a test can drive.
+// beginKeyedMint opens the history row of an API-token issuance: the
+// creating request's client address and user agent, and NO thumbprint yet —
+// the token is bound to the key the request NAMES, not to the one its proof
+// was signed with, so the row's key is set once that key is read.
+func beginKeyedMint(ctx context.Context, method pb.SignInMethod) *signInAttempt {
+	a := &signInAttempt{method: method}
+	a.userAgent, a.ip = deviceLabel(ctx)
+	return a
+}
+
+// parseTokenKey reads the public key an API token is to be bound to, or
+// refuses it on the public_key field: DEVICE_KEY_REQUIRED when there is none,
+// DEVICE_KEY_INVALID when it is not a public P-256 or Ed25519 JWK — with its
+// own sentence when it carries a private member.
+//
+// device/private-key-never-leaves: the key is never stored, logged or echoed —
+// only its thumbprint is kept, and a refusal names members, never values. A
+// private key that reached this far is dropped with the request.
+func parseTokenKey(ctx context.Context, raw string) (devicekey.Key, error) {
+	if raw == "" {
+		return devicekey.Key{}, refusal(ctx, codes.InvalidArgument,
+			"public_key is required: the token is bound to the key of the program that will use it",
+			CodeDeviceKeyRequired, "public_key", MsgClientKeyNeeded, nil)
+	}
+	key, err := devicekey.Parse(raw)
+	switch {
+	case err == nil:
+		return key, nil
+	case errors.Is(err, devicekey.ErrPrivateKey):
+		return devicekey.Key{}, refusal(ctx, codes.InvalidArgument,
+			"public_key carries a private key member; send the public key only",
+			CodeDeviceKeyInvalid, "public_key", MsgClientKeyPrivate, nil)
+	default:
+		return devicekey.Key{}, refusal(ctx, codes.InvalidArgument,
+			"public_key: "+err.Error(),
+			CodeDeviceKeyInvalid, "public_key", MsgClientKeyInvalid, nil)
+	}
+}
+
+// registerKeyDevice finds or registers the (owner, thumbprint) Device an API
+// token is bound to, on txCtx: the same UPSERT a sign-in runs (RegisterDevice),
+// labelled after the token, with no client address — the creating request's
+// address is not the program's — and marked a program's key (api_key, written
+// when the row is created). A key that already signs in for the owner is
+// refused: keys are a program's or a signed-in client's, never both (see
+// Device.api_key). A REVOKED pair is refused for
+// good, as at sign-in, but as DEVICE_KEY_REVOKED (FailedPrecondition): the
+// revoked key is the one in the request body, not the caller's own, so the
+// refusal must not read as the caller's device being gone. The history row
+// names a revoked device (it exists already); a new one, rolled back with
+// the refusal, it does not.
+func (h *AuthServiceHandler) registerKeyDevice(txCtx context.Context, a *signInAttempt, ownerID string, key devicekey.Key, label string) (signInDevice, error) {
+	resp, err := h.Mutation.RegisterDevice(txCtx, &pb.RegisterDeviceReq{
+		UserId:     ownerID,
+		Thumbprint: key.Thumbprint,
+		Label:      truncate(strings.ToValidUTF8(label, invalidUTF8), maxLabelLen),
+		ApiKey:     true,
+	})
+	if err != nil {
+		return signInDevice{}, err
+	}
+	dev := resp.GetDevice()
+	if dev.GetId() == "" || dev.GetThumbprint() != key.Thumbprint {
+		return signInDevice{}, errDeviceNotRegistered
+	}
+	if !dev.GetApiKey() {
+		// The key already signs in for this account: a device, not a
+		// program. Bound to it, the token would be ended by the owner's
+		// device management and would let a session's key outlive the
+		// session lifetime as an API token.
+		return signInDevice{}, refusal(txCtx, codes.InvalidArgument,
+			"the key is a device that signs in to this account; generate a separate key for the program",
+			CodeDeviceKeyInvalid, "public_key", MsgClientKeySignsIn, nil)
+	}
+	if dev.GetRevokedAt() != nil {
+		a.deviceID = dev.GetId()
+		return signInDevice{}, refusal(txCtx, codes.FailedPrecondition,
+			"the key names a revoked device; generate a new key",
+			CodeDeviceKeyRevoked, "public_key", MsgClientKeyRevoked, nil)
+	}
+	return signInDevice{id: dev.GetId(), thumbprint: key.Thumbprint}, nil
+}
+
+// approverDevice is the ROOT approver recorded on the token
+// (UserToken.approved_by_device_id): the device whose revocation must end it.
+//
+//   - When the caller's session was itself approved by another device — a CLI
+//     session, approved by a browser (cli_login) — it is THAT device. A stolen
+//     browser session can approve the thief's CLI key and create API tokens
+//     from the CLI session; revoking the browser ends the CLI session, and must
+//     end those tokens too, which it does only if they name the browser. The
+//     immediate creator (the CLI's key) stays visible as ApiTokenCreated's
+//     device_id.
+//   - Otherwise the Device row of the caller's own device — the key its
+//     request was proved with.
+//
+// "" when the request carries no device (project code calling the handler
+// directly) or the pair has no live row; an outage fails the mint. One level
+// is enough: a CLI session's approver is the session that approved it at
+// CliAuthorize, recorded the same way.
+func (h *AuthServiceHandler) approverDevice(txCtx context.Context, callerID string) (string, error) {
+	jkt := requestThumbprint(txCtx)
+	if jkt == "" {
+		return "", nil
+	}
+	if sid := callerSessionTokenID(txCtx); sid != "" {
+		root, err := h.Query.GetSessionApprover(txCtx, &pb.GetSessionApproverReq{TokenId: sid, UserId: callerID})
+		if err != nil && status.Code(err) != codes.NotFound {
+			return "", err
+		}
+		if id := root.GetApprovedByDeviceId(); id != "" {
+			return id, nil
+		}
+	}
+	resp, err := h.Query.GetUserDeviceByThumbprint(txCtx, &pb.GetUserDeviceByThumbprintReq{UserId: callerID, Thumbprint: jkt})
+	if status.Code(err) == codes.NotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return resp.GetDeviceId(), nil
+}
+
+// issueApiTokenTx mints the token bound to dev, writes its permission subset
+// and the history's success row, all on the SAME context, so a transaction
+// wrapped around them holds every one. Separated for exactly that reason: a
+// caller that inlined them could not roll them back together, and the seam
+// is what a test can drive.
 //
 // The one minting path for every API token — a person's (CreateApiToken) and a
 // machine account's (IssueBotToken, service_account requires api_token). They
 // were two copies of this function, which is how one of them would have been
-// left minting never-expiring tokens.
-func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, userID, name string, subset []int32, expiresAt *timestamppb.Timestamp) (token, tokenID string, err error) {
-	if err := apiTokenBindingGate(txCtx); err != nil {
-		return "", "", err
+// left minting never-expiring tokens. No device, no token
+// (device/no-unbound-credential): IssueApiTokenReq requires it as well.
+func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAttempt, userID, name string, subset []int32, expiresAt *timestamppb.Timestamp, dev signInDevice, approvedBy string) (token, tokenID string, err error) {
+	if dev.id == "" {
+		return "", "", errDeviceNotRegistered
 	}
 	token, hash, err := newBearerToken()
 	if err != nil {
 		return "", "", err
 	}
+	// ApiTokenCreated's creator: the account calling, "" for project code.
+	creator, _ := callerUserID(txCtx)
 	issued, err := h.Mutation.IssueApiToken(txCtx, &pb.IssueApiTokenReq{
-		UserId:    userID,
-		Name:      name,
-		TokenType: pb.TokenType_TOKEN_TYPE_API,
-		ExpiresAt: expiresAt,
-		TokenHash: hash,
+		UserId:             userID,
+		Name:               name,
+		TokenType:          pb.TokenType_TOKEN_TYPE_API,
+		ExpiresAt:          expiresAt,
+		TokenHash:          hash,
+		DeviceId:           dev.id,
+		ApprovedByDeviceId: approvedBy,
+
+		Thumbprint:    requestThumbprint(txCtx),
+		KeyThumbprint: dev.thumbprint,
+		CreatedBy:     creator,
 	})
 	if err != nil {
 		return "", "", err
@@ -258,28 +426,10 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, userID, name
 			return "", "", err
 		}
 	}
+	if err := h.recordSignInOK(txCtx, a, userID, dev); err != nil {
+		return "", "", err
+	}
 	return token, id, nil
-}
-
-// apiTokenBindingGate stands where an API token would be bound to its
-// client's key, and refuses: every token is bound to a device
-// (device/no-unbound-credential), and an API token's device is the program
-// that will use it — a CI job, a script, a bot — not the browser creating
-// it, so binding it to the caller's key would mint a credential useless to
-// the program it is for. The requests cannot carry that program's public key
-// yet; until they do, no API token is minted at all rather than one minted
-// unbound. Authenticate refuses an unbound token anyway, so one minted here
-// would be dead on arrival.
-//
-// Inside issueApiTokenTx, the one minting path for every API token, so
-// CreateApiToken and IssueBotToken cannot drift apart; IssueBotToken's
-// authorization checks run first, so a caller who may not mint for the bot
-// still hears that. A var so the tests of the minting machinery (the
-// transaction, the subset, the expiry) can still drive it.
-var apiTokenBindingGate = func(ctx context.Context) error {
-	return refusal(ctx, codes.Unimplemented,
-		"API tokens need the public key of the client that will use them, which this version cannot accept; none is minted unbound",
-		CodeDeviceKeyRequired, "", MsgClientKeyNeeded, nil)
 }
 
 // ListApiTokens returns the calling user's API tokens (management view —
@@ -299,48 +449,25 @@ func (h *AuthServiceHandler) ListApiTokens(ctx context.Context, req *pb.ListApiT
 	return &pb.ListApiTokensResp{Tokens: resp.GetTokens()}, nil
 }
 
-// RevokeApiToken deletes one of the calling user's API tokens + its
-// permission-subset rows. The token delete is ownership + realm guarded
-// (id AND user_id AND token_type=API), so a caller can't revoke another
-// user's token or a session token. Subset cleanup runs only AFTER an
-// owned token was actually deleted — never on a token the caller doesn't
-// own. Idempotent (revoking an absent token is a no-op).
+// RevokeApiToken revokes one of the calling user's API tokens: the row stays,
+// with revoked_at, reason API_TOKEN_REVOKED and the caller as revoked_by, and
+// every lookup refuses it from then on. The revoke is ownership + realm
+// guarded (id AND user_id AND token_type=API), so a caller can't revoke
+// another user's token or a session token. Its TokenPermission subset rows
+// stay too: they narrow a token that is refused anyway, and they record what
+// it was allowed to do. Idempotent — revoking a token that is already revoked,
+// unknown or not the caller's matches no row (NotFound) and is no error.
 func (h *AuthServiceHandler) RevokeApiToken(ctx context.Context, req *pb.RevokeApiTokenReq) (*pb.RevokeApiTokenResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	del, err := h.Mutation.DeleteApiToken(ctx, &pb.DeleteApiTokenReq{
+	if _, err := h.Mutation.MarkApiTokenRevoked(ctx, &pb.MarkApiTokenRevokedReq{
 		TokenId:   req.GetTokenId(),
 		UserId:    userID,
 		TokenType: pb.TokenType_TOKEN_TYPE_API,
-	})
-	if err != nil {
+	}); notFoundOK(err) != nil {
 		return nil, err
-	}
-	if del.GetTokenId() == "" {
-		// Nothing deleted — not the caller's, or not an API token. Don't
-		// touch the subset rows (they may belong to someone else's token).
-		return &pb.RevokeApiTokenResp{}, nil
-	}
-	// A token with NO subset rows has nothing to clean up, and that is the
-	// COMMON case — CreateApiToken leaves the subset empty unless the caller
-	// narrows it, and a machine account's token carries its rights through a
-	// ROLE rather than a per-token subset.
-	//
-	// The cleanup's DELETE fills its response from RETURNING, so matching no
-	// row is a mutation that produced no result — NotFound. Propagating that
-	// turned every such revoke into a 404 while the token was ALREADY DELETED
-	// one statement earlier: the caller reads "no such token", retries, gets
-	// 404 again, and concludes the token is still live. Found by running
-	// examples/plugin-surfaces against a database.
-	//
-	// Only NotFound is swallowed. Any other failure still fails the call — a
-	// subset that could not be removed is a credential narrower than it looks.
-	if _, err := h.Mutation.DeleteTokenPermissions(ctx, &pb.DeleteTokenPermissionsReq{TokenId: req.GetTokenId()}); err != nil {
-		if status.Code(err) != codes.NotFound {
-			return nil, err
-		}
 	}
 	return &pb.RevokeApiTokenResp{}, nil
 }

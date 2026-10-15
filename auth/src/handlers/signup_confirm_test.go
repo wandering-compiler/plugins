@@ -18,14 +18,16 @@ import (
 // --- sign_up_confirmation ---------------------------------------------------
 //
 // The store keeps what the handler wrote and applies the same conditions the
-// DQL does (expiry in the WHERE, DELETE … RETURNING as the claim, the UPSERT's
-// window arithmetic), so a test proves the handler against those rules rather
-// than against canned answers.
+// DQL does (expiry in the WHERE, the claim as an UPDATE guarded on claimed_at
+// IS NULL, superseding as an UPDATE, nothing ever removed from the map), so a
+// test proves the handler against those rules rather than against canned
+// answers.
 
 type pendingRow struct {
 	email, passwordHash, codeHash string
 	attempts                      int64
 	expiresAt                     time.Time
+	claimedAt, supersededAt       *time.Time
 }
 
 type confirmStore struct {
@@ -44,15 +46,6 @@ func newConfirmStore() *confirmStore {
 	}
 }
 
-func (s *confirmStore) PurgeExpiredPendingSignUps(_ context.Context, in *pb.PurgeExpiredPendingSignUpsReq, _ ...grpc.CallOption) (*pb.PurgeExpiredPendingSignUpsResp, error) {
-	for id, r := range s.pending {
-		if r.email == in.GetEmail() && !r.expiresAt.After(time.Now()) {
-			delete(s.pending, id)
-		}
-	}
-	return &pb.PurgeExpiredPendingSignUpsResp{}, nil
-}
-
 func (s *confirmStore) CreatePendingSignUp(_ context.Context, in *pb.CreatePendingSignUpReq, _ ...grpc.CallOption) (*pb.CreatePendingSignUpResp, error) {
 	s.nextID++
 	id := "p-" + string(rune('0'+s.nextID))
@@ -61,9 +54,11 @@ func (s *confirmStore) CreatePendingSignUp(_ context.Context, in *pb.CreatePendi
 	return &pb.CreatePendingSignUpResp{Pending: &pb.PendingSignUp{Id: id, Email: in.GetEmail()}}, nil
 }
 
+// live is the statements' predicate: claimed_at IS NULL AND superseded_at IS
+// NULL AND expires_at > NOW().
 func (s *confirmStore) live(id string) (*pendingRow, bool) {
 	r, ok := s.pending[id]
-	return r, ok && r.expiresAt.After(time.Now())
+	return r, ok && r.claimedAt == nil && r.supersededAt == nil && r.expiresAt.After(time.Now())
 }
 
 func (s *confirmStore) RecordPendingSignUpAttempt(_ context.Context, in *pb.RecordPendingSignUpAttemptReq, _ ...grpc.CallOption) (*pb.RecordPendingSignUpAttemptResp, error) {
@@ -80,17 +75,19 @@ func (s *confirmStore) ClaimPendingSignUp(_ context.Context, in *pb.ClaimPending
 	if !ok {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	delete(s.pending, in.GetPendingId())
+	at := time.Now()
+	r.claimedAt = &at
 	return &pb.ClaimPendingSignUpResp{Email: r.email, PasswordHash: r.passwordHash}, nil
 }
 
-func (s *confirmStore) DeletePendingSignUpsForEmail(_ context.Context, in *pb.DeletePendingSignUpsForEmailReq, _ ...grpc.CallOption) (*pb.DeletePendingSignUpsForEmailResp, error) {
-	for id, r := range s.pending {
-		if r.email == in.GetEmail() {
-			delete(s.pending, id)
+func (s *confirmStore) SupersedePendingSignUpsForEmail(_ context.Context, in *pb.SupersedePendingSignUpsForEmailReq, _ ...grpc.CallOption) (*pb.SupersedePendingSignUpsForEmailResp, error) {
+	for _, r := range s.pending {
+		if r.email == in.GetEmail() && r.claimedAt == nil && r.supersededAt == nil {
+			at := time.Now()
+			r.supersededAt = &at
 		}
 	}
-	return &pb.DeletePendingSignUpsForEmailResp{}, nil
+	return &pb.SupersedePendingSignUpsForEmailResp{}, nil
 }
 
 // CreateUser refuses a taken address the way a REAL store does: the unique
@@ -199,11 +196,15 @@ func TestSignUpConfirmation_AnAbandonedRegistrationBlocksNobody(t *testing.T) {
 	if _, err := h.SignIn(withJKT(ctx, testJKT), &pb.SignInReq{Email: "ceo@example.com", Password: "pw-stranger"}); err == nil {
 		t.Error("the stranger's password signs in to the owner's account")
 	}
-	if _, ok := s.pending[squat.GetPendingId()]; ok {
-		t.Error("the stranger's registration survived the owner's confirmation")
+	// Superseded, not deleted: the row stays as the record of the attempt.
+	if r := s.pending[squat.GetPendingId()]; r == nil || r.supersededAt == nil || r.claimedAt != nil {
+		t.Errorf("the stranger's registration was not superseded by the owner's confirmation: %+v", r)
+	}
+	if r := s.pending[own.GetPendingId()]; r == nil || r.claimedAt == nil || r.supersededAt != nil {
+		t.Errorf("the owner's registration is not kept as the claimed one: %+v", r)
 	}
 	// And it cannot be confirmed afterwards either — the code the stranger never
-	// received is not the point; the row is gone.
+	// received is not the point; the row is ended.
 	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: squat.GetPendingId(), Code: s.codes[squat.GetPendingId()]}); err == nil {
 		t.Error("a second account was created for a confirmed address")
 	}
@@ -239,6 +240,32 @@ func TestSignUpConfirmation_ACodeIsSingleUse(t *testing.T) {
 	}
 	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), req); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("a spent registration confirmed again: %v", err)
+	}
+	// Claimed, not deleted: the row stays, stamped once.
+	r := s.pending[resp.GetPendingId()]
+	if r == nil || r.claimedAt == nil {
+		t.Fatalf("the claimed registration is gone or not stamped: %+v", r)
+	}
+	if len(s.users) != 1 {
+		t.Errorf("a registration claimed twice made %d accounts", len(s.users))
+	}
+}
+
+// Parking a new registration no longer purges the address's expired ones: an
+// expired row stays, still refused by its expires_at.
+func TestSignUpConfirmation_AnExpiredRegistrationStaysAndIsRefused(t *testing.T) {
+	h, s := confirmHandler(t)
+	ctx := context.Background()
+	old, _ := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw"})
+	s.pending[old.GetPendingId()].expiresAt = time.Now().Add(-time.Second)
+	if _, err := h.SignUp(withJKT(ctx, testJKT), &pb.SignUpReq{Email: "a@example.com", Password: "pw2"}); err != nil {
+		t.Fatalf("second SignUp: %v", err)
+	}
+	if _, ok := s.pending[old.GetPendingId()]; !ok {
+		t.Fatal("the expired registration was removed")
+	}
+	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: old.GetPendingId(), Code: s.codes[old.GetPendingId()]}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("an expired registration: want InvalidArgument, got %v", err)
 	}
 }
 
@@ -302,8 +329,15 @@ func TestSignUpConfirmation_NoNumberOfStrangersRefusesTheOwner(t *testing.T) {
 	if _, err := h.ConfirmSignUp(withJKT(ctx, testJKT), &pb.ConfirmSignUpReq{PendingId: own.GetPendingId(), Code: s.codes[own.GetPendingId()]}); err != nil {
 		t.Fatalf("owner's ConfirmSignUp: %v", err)
 	}
-	if len(s.pending) != 0 {
-		t.Errorf("%d strangers' registrations survived the owner's confirmation", len(s.pending))
+	// Every one of them stays, ended: the owner's claimed, the strangers'
+	// superseded, none of them live.
+	for id := range s.pending {
+		if _, live := s.live(id); live {
+			t.Errorf("registration %s is still live after the owner's confirmation", id)
+		}
+	}
+	if len(s.pending) != 51 {
+		t.Errorf("%d registrations kept, want all 51", len(s.pending))
 	}
 }
 

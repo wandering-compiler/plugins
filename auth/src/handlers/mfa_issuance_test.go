@@ -60,7 +60,7 @@ func TestMfaIssuance_CapRefusesOnceTheWindowIsSpent(t *testing.T) {
 	h.MaxMfaChallengesPerWindow = 3
 
 	m.challengeCount = 3
-	resp, challenged, err := mfaSignInGate(context.Background(), h, gateUser(), "", false)
+	resp, challenged, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false)
 	if err == nil {
 		t.Fatalf("the %dth challenge in the window was issued — the cap is not enforced (resp=%v challenged=%v)",
 			m.challengeCount+1, resp, challenged)
@@ -72,7 +72,7 @@ func TestMfaIssuance_CapRefusesOnceTheWindowIsSpent(t *testing.T) {
 	// And one under the cap still works, so the test is not passing because
 	// the gate refuses everything.
 	m.challengeCount = 2
-	if _, ok, err := mfaSignInGate(context.Background(), h, gateUser(), "", false); err != nil || !ok {
+	if _, ok, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false); err != nil || !ok {
 		t.Fatalf("a sign-in inside the budget was refused: ok=%v err=%v", ok, err)
 	}
 }
@@ -114,7 +114,7 @@ func TestMfaIssuance_CapFailsClosedWhenTheCountIsUnreadable(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c", countErr: status.Error(codes.Unavailable, "counter down")}
 	h := newMfaHandler(m)
 
-	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false); err == nil {
+	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false); err == nil {
 		t.Fatal("an unreadable count issued a challenge anyway — the cap is open during an outage")
 	}
 	if m.createdChallenge != nil {
@@ -128,7 +128,7 @@ func TestMfaIssuance_CountsOverTheConfiguredWindow(t *testing.T) {
 	h := newMfaHandler(m)
 	h.MfaChallengeWindowSeconds = 60
 
-	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false); err != nil {
+	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false); err != nil {
 		t.Fatalf("gate: %v", err)
 	}
 	if m.countedSince == nil {
@@ -141,7 +141,7 @@ func TestMfaIssuance_CountsOverTheConfiguredWindow(t *testing.T) {
 	// Unset → the default, not a zero window (which would count nothing and
 	// make the cap unreachable).
 	h.MfaChallengeWindowSeconds = 0
-	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false); err != nil {
+	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false); err != nil {
 		t.Fatalf("gate: %v", err)
 	}
 	if age := time.Since(m.countedSince.AsTime()); age < time.Duration(defaultMfaChallengeWindowSeconds-30)*time.Second {
@@ -156,7 +156,7 @@ func TestMfaIssuance_NewChallengeRetiresThePendingOnes(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c"}
 	h := newMfaHandler(m)
 
-	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false); err != nil {
+	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false); err != nil {
 		t.Fatalf("gate: %v", err)
 	}
 	want := []string{"lock:u1", "supersede:u1", "create"}
@@ -209,7 +209,7 @@ func TestMfaIssuance_AFailedSupersedeMintsNothing(t *testing.T) {
 	m := &mfaMock{userEmail: "a@b.c", supersedeErr: errors.New("update refused")}
 	h := newMfaHandler(m)
 
-	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false); err == nil {
+	if _, _, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false); err == nil {
 		t.Fatal("a failed supersede still issued a challenge — older codes stay live beside the new one")
 	}
 	if m.createdChallenge != nil {
@@ -307,7 +307,7 @@ func TestMfaIssuance_CapHoldsUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, ok, err := mfaSignInGate(context.Background(), h, gateUser(), "", false)
+			_, ok, err := mfaSignInGate(context.Background(), h, gateUser(), "", false, false)
 			if err != nil {
 				m.release() // refused inside the section: rollback
 				return

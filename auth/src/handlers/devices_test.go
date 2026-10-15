@@ -23,10 +23,11 @@ type deviceMock struct {
 
 	listResult []*pb.Device
 
-	deletedTokens []*pb.DeleteDeviceTokensReq
+	revokedTokens []*pb.RevokeDeviceTokensReq
 	revokedDevs   []*pb.MarkDeviceRevokedReq
 	allTokensFor  string
-	undeviced     []*pb.DeleteUndevicedSessionsReq
+	undeviced     []*pb.RevokeUndevicedSessionsReq
+	approvedAPI   []*pb.RevokeApprovedApiTokensReq
 
 	// User.device_trust_revoked_at, and a read failure for it
 	revokedAt  *timestamppb.Timestamp
@@ -40,18 +41,23 @@ func (m *deviceMock) GetDeviceTrustRevokedAt(context.Context, *pb.GetDeviceTrust
 	return &pb.GetDeviceTrustRevokedAtResp{DeviceTrustRevokedAt: m.revokedAt}, nil
 }
 
+func (m *deviceMock) RevokeApprovedApiTokens(_ context.Context, in *pb.RevokeApprovedApiTokensReq, _ ...grpc.CallOption) (*pb.RevokeApprovedApiTokensResp, error) {
+	m.approvedAPI = append(m.approvedAPI, in)
+	return &pb.RevokeApprovedApiTokensResp{}, nil
+}
+
 func (m *deviceMock) ListUserDevices(context.Context, *pb.ListUserDevicesReq, ...grpc.CallOption) (*pb.ListUserDevicesResp, error) {
 	return &pb.ListUserDevicesResp{Devices: m.listResult}, nil
 }
 
-func (m *deviceMock) DeleteUndevicedSessions(_ context.Context, in *pb.DeleteUndevicedSessionsReq, _ ...grpc.CallOption) (*pb.DeleteUndevicedSessionsResp, error) {
+func (m *deviceMock) RevokeUndevicedSessions(_ context.Context, in *pb.RevokeUndevicedSessionsReq, _ ...grpc.CallOption) (*pb.RevokeUndevicedSessionsResp, error) {
 	m.undeviced = append(m.undeviced, in)
-	return &pb.DeleteUndevicedSessionsResp{UserId: in.GetUserId()}, nil
+	return &pb.RevokeUndevicedSessionsResp{}, nil
 }
 
-func (m *deviceMock) DeleteDeviceTokens(_ context.Context, in *pb.DeleteDeviceTokensReq, _ ...grpc.CallOption) (*pb.DeleteDeviceTokensResp, error) {
-	m.deletedTokens = append(m.deletedTokens, in)
-	return &pb.DeleteDeviceTokensResp{DeviceId: in.GetDeviceId()}, nil
+func (m *deviceMock) RevokeDeviceTokens(_ context.Context, in *pb.RevokeDeviceTokensReq, _ ...grpc.CallOption) (*pb.RevokeDeviceTokensResp, error) {
+	m.revokedTokens = append(m.revokedTokens, in)
+	return &pb.RevokeDeviceTokensResp{}, nil
 }
 
 func (m *deviceMock) MarkDeviceRevoked(_ context.Context, in *pb.MarkDeviceRevokedReq, _ ...grpc.CallOption) (*pb.MarkDeviceRevokedResp, error) {
@@ -59,9 +65,9 @@ func (m *deviceMock) MarkDeviceRevoked(_ context.Context, in *pb.MarkDeviceRevok
 	return &pb.MarkDeviceRevokedResp{DeviceId: in.GetDeviceId()}, nil
 }
 
-func (m *deviceMock) DeleteAllUserTokens(_ context.Context, in *pb.DeleteAllUserTokensReq, _ ...grpc.CallOption) (*pb.DeleteAllUserTokensResp, error) {
+func (m *deviceMock) RevokeAllUserTokens(_ context.Context, in *pb.RevokeAllUserTokensReq, _ ...grpc.CallOption) (*pb.RevokeAllUserTokensResp, error) {
 	m.allTokensFor = in.GetUserId()
-	return &pb.DeleteAllUserTokensResp{UserId: in.GetUserId()}, nil
+	return &pb.RevokeAllUserTokensResp{}, nil
 }
 
 // ctxOnDevice is a management request from uid whose token is bound to the
@@ -146,20 +152,24 @@ func TestListDevices_TrustRevokedByACredentialChange_NotShownTrusted(t *testing.
 	}
 }
 
-// device/revocation-is-a-state: revoking a device deletes its tokens and
+// device/revocation-is-a-state: revoking a device revokes its tokens and
 // stamps the row revoked — never deletes it, so the key cannot come back as a
 // fresh device. Both writes carry the caller's user_id guard.
-func TestRevokeDevice_DeletesTokensThenMarksTheDeviceRevoked(t *testing.T) {
+func TestRevokeDevice_RevokesTokensThenMarksTheDeviceRevoked(t *testing.T) {
 	m := &deviceMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	if _, err := h.RevokeDevice(ctxOnDevice(t, "u1", "s1", testJKT), &pb.RevokeDeviceReq{DeviceId: "dev-7"}); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if len(m.deletedTokens) != 1 || m.deletedTokens[0].GetUserId() != "u1" || m.deletedTokens[0].GetDeviceId() != "dev-7" {
-		t.Errorf("token delete guard wrong: %+v", m.deletedTokens)
+	if len(m.revokedTokens) != 1 || m.revokedTokens[0].GetUserId() != "u1" || m.revokedTokens[0].GetDeviceId() != "dev-7" {
+		t.Errorf("token revoke guard wrong: %+v", m.revokedTokens)
 	}
 	if len(m.revokedDevs) != 1 || m.revokedDevs[0].GetUserId() != "u1" || m.revokedDevs[0].GetDeviceId() != "dev-7" {
 		t.Errorf("device revocation wrong: %+v", m.revokedDevs)
+	}
+	// ONE device revoked on purpose ends the API tokens it created too.
+	if a := m.approvedAPI; len(a) != 1 || a[0].GetUserId() != "u1" || a[0].GetDeviceId() != "dev-7" || a[0].GetRevokedBy() != "u1" || a[0].GetTokenType() != pb.TokenType_TOKEN_TYPE_API {
+		t.Errorf("the API tokens the device created were not revoked: %+v", a)
 	}
 }
 
@@ -193,7 +203,7 @@ func TestRevokeOtherDevices_KeepsTheCallersDevice(t *testing.T) {
 }
 
 // RevokeAllDevices revokes each device individually — NOT the broad
-// DeleteAllUserTokens, which has no token_type filter and would also delete
+// RevokeAllUserTokens, which has no token_type filter and would also revoke
 // the user's API tokens.
 func TestRevokeAllDevices_PerDeviceSparesApiTokens(t *testing.T) {
 	m := &deviceMock{listResult: []*pb.Device{{Id: "dev-1"}, {Id: "dev-2"}}}
@@ -202,11 +212,11 @@ func TestRevokeAllDevices_PerDeviceSparesApiTokens(t *testing.T) {
 		t.Fatalf("revoke-all: %v", err)
 	}
 	if m.allTokensFor != "" {
-		t.Errorf("revoke-all must NOT call DeleteAllUserTokens (it deletes API tokens too); got %q", m.allTokensFor)
+		t.Errorf("revoke-all must NOT call RevokeAllUserTokens (it revokes API tokens too); got %q", m.allTokensFor)
 	}
-	if len(m.deletedTokens) != 2 || len(m.revokedDevs) != 2 {
-		t.Errorf("revoke-all must delete tokens + revoke per device (2 each); got %d token-deletes, %d revocations",
-			len(m.deletedTokens), len(m.revokedDevs))
+	if len(m.revokedTokens) != 2 || len(m.revokedDevs) != 2 {
+		t.Errorf("revoke-all must revoke tokens + the device per device (2 each); got %d token revokes, %d device revocations",
+			len(m.revokedTokens), len(m.revokedDevs))
 	}
 }
 
@@ -214,13 +224,13 @@ func TestRevokeAllDevices_PerDeviceSparesApiTokens(t *testing.T) {
 // treat it as done (an already revoked device matches no row).
 type notFoundMock struct{ deviceMock }
 
-func (notFoundMock) DeleteDeviceTokens(context.Context, *pb.DeleteDeviceTokensReq, ...grpc.CallOption) (*pb.DeleteDeviceTokensResp, error) {
+func (notFoundMock) RevokeDeviceTokens(context.Context, *pb.RevokeDeviceTokensReq, ...grpc.CallOption) (*pb.RevokeDeviceTokensResp, error) {
 	return nil, status.Error(codes.NotFound, "not found")
 }
 func (notFoundMock) MarkDeviceRevoked(context.Context, *pb.MarkDeviceRevokedReq, ...grpc.CallOption) (*pb.MarkDeviceRevokedResp, error) {
 	return nil, status.Error(codes.NotFound, "not found")
 }
-func (notFoundMock) DeleteUndevicedSessions(context.Context, *pb.DeleteUndevicedSessionsReq, ...grpc.CallOption) (*pb.DeleteUndevicedSessionsResp, error) {
+func (notFoundMock) RevokeUndevicedSessions(context.Context, *pb.RevokeUndevicedSessionsReq, ...grpc.CallOption) (*pb.RevokeUndevicedSessionsResp, error) {
 	return nil, status.Error(codes.NotFound, "not found")
 }
 

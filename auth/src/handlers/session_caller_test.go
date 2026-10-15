@@ -32,7 +32,7 @@ func sessionCallerCtx(uid, sessionTokenID string) context.Context {
 func TestCreateApiToken_AnAPITokenCallerIsRefused(t *testing.T) {
 	m := &apiTokenMgmtMock{}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	_, err := h.CreateApiToken(sessionCallerCtx("u1", ""), &pb.CreateApiTokenReq{Name: "wider"})
+	_, err := h.CreateApiToken(sessionCallerCtx("u1", ""), &pb.CreateApiTokenReq{PublicKey: p256JWK, Name: "wider"})
 	if status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
 		t.Fatalf("an API-token caller minted a token: err = %v, want PermissionDenied/%s", err, CodeSessionRequired)
 	}

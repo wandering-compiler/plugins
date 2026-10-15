@@ -69,7 +69,7 @@ func TestCliToken_AnUnsignableAccountGetsNoSession(t *testing.T) {
 func TestCliToken_RunsNoSecondFactor(t *testing.T) {
 	asked := 0
 	saved := signInMfaGate
-	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool) (*pb.SignInResp, bool, error) {
+	signInMfaGate = func(context.Context, *AuthServiceHandler, *pb.User, string, bool, bool) (*pb.SignInResp, bool, error) {
 		asked++
 		return &pb.SignInResp{}, true, nil
 	}
