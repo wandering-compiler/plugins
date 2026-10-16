@@ -8,9 +8,11 @@ name: Release
 #
 # Secrets live in the `release` environment, which only main may use, so a
 # workflow edited on any other branch never sees them:
-#   W17_SIGN_TOKEN     a console token whose account may sign plugin releases
-#   RELEASE_TAG_TOKEN  a token allowed to create */v* tags (the ruleset lets
-#                      only repository admins create them)
+#   W17_SIGN_TOKEN       a console token whose account may sign plugin releases
+#   W17_SIGN_DEVICE_KEY  the private key W17_SIGN_TOKEN is bound to (PKCS #8
+#                        PEM); empty while the console binds no devices
+#   RELEASE_TAG_TOKEN    a token allowed to create */v* tags (the ruleset lets
+#                        only repository admins create them)
 on:
   workflow_run:
     workflows: [CI]
@@ -100,6 +102,31 @@ jobs:
         if: steps.which.outputs.list != ''
         with:
           go-version: '1.26.x'
+
+      # A console that binds devices accepts W17_SIGN_TOKEN only with a DPoP
+      # proof signed by the key the token was issued for. w17ctl reads that
+      # key from the file W17_DPOP_KEY names, so the secret is written to a
+      # file only this user can read. With the secret empty the variable
+      # stays unset: set, it makes w17ctl send the token as DPoP, which a
+      # console that binds no devices refuses. The key is never echoed (no
+      # set -x), and RUNNER_TEMP is emptied when the job ends.
+      - name: device key
+        if: steps.which.outputs.list != ''
+        env:
+          W17_SIGN_DEVICE_KEY: ${{ secrets.W17_SIGN_DEVICE_KEY }}
+        run: |
+          if [ -z "$W17_SIGN_DEVICE_KEY" ]; then
+            echo "no W17_SIGN_DEVICE_KEY: the token goes out as a plain bearer token"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/w17-device.key"
+          (umask 077 && printf '%s\n' "$W17_SIGN_DEVICE_KEY" > "$key")
+          chmod 600 "$key"
+          if ! grep -q -- '-----BEGIN PRIVATE KEY-----' "$key"; then
+            echo "::error::W17_SIGN_DEVICE_KEY is not a PKCS #8 PEM private key (the file \`w17ctl key public\` makes, not its JWK)"
+            exit 1
+          fi
+          echo "W17_DPOP_KEY=$key" >> "$GITHUB_ENV"
 
       - name: Sign and tag
         if: steps.which.outputs.list != ''
