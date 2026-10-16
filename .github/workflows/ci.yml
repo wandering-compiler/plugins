@@ -44,7 +44,8 @@ jobs:
   # compiles, with the pinned w17ctl, which asks the console. That needs the
   # W17_TOKEN secret, which a fork's pull request does not receive; there this
   # job fails at the generate step like adoption does, and a maintainer brings
-  # the branch in.
+  # the branch in. W17_DEVICE_KEY is the key W17_TOKEN is bound to, once the
+  # console binds devices (see the device key step).
   plugin:
     needs: plugins
     runs-on: ubuntu-latest
@@ -72,6 +73,29 @@ jobs:
             tools/golangci-version
       - name: install the pinned w17ctl (generates src/gen, renders the release form)
         run: tools/w17ctl.sh
+      # A console that binds devices accepts W17_TOKEN only with a DPoP proof
+      # signed by the key the token was issued for. w17ctl reads that key from
+      # the file W17_DPOP_KEY names, so the secret is written to a file only
+      # this user can read. With the secret empty the variable stays unset:
+      # set, it makes w17ctl send the token as DPoP, which a console that
+      # binds no devices refuses. The key is never echoed (no set -x), and
+      # RUNNER_TEMP is emptied when the job ends.
+      - name: device key
+        env:
+          W17_DEVICE_KEY: ${{ secrets.W17_DEVICE_KEY }}
+        run: |
+          if [ -z "$W17_DEVICE_KEY" ]; then
+            echo "no W17_DEVICE_KEY: the token goes out as a plain bearer token"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/w17-device.key"
+          (umask 077 && printf '%s\n' "$W17_DEVICE_KEY" > "$key")
+          chmod 600 "$key"
+          if ! grep -q -- '-----BEGIN PRIVATE KEY-----' "$key"; then
+            echo "::error::W17_DEVICE_KEY is not a PKCS #8 PEM private key (the file \`w17ctl key public\` makes, not its JWK)"
+            exit 1
+          fi
+          echo "W17_DPOP_KEY=$key" >> "$GITHUB_ENV"
       - name: generate src/gen (pb, contract, feature constants)
         run: make gen PLUGIN=${{ matrix.plugin }}
       - name: gofmt
@@ -157,6 +181,8 @@ jobs:
       plugins_ref: ${{ github.event.pull_request.head.sha || github.sha }}
     secrets:
       W17_TOKEN: ${{ secrets.W17_TOKEN }}
+      # The key W17_TOKEN is bound to, once the console binds devices.
+      W17_DEVICE_KEY: ${{ secrets.W17_DEVICE_KEY }}
 
   # The one check branch protection requires: green only when every job above
   # is, whatever the plugin list grows to.
