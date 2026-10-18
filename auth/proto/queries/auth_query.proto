@@ -1288,6 +1288,8 @@ message OrgMemberRow {
   // owner — see UserOrg.owner. A member list that cannot show who owns the
   // organization makes the owner look like any other admin.
   bool   owner   = 5;
+  // The membership row's id (OrgMember.membership_id).
+  string membership_id = 6;
 }
 
 message ListOrgMembersByOrgReq {
@@ -2928,7 +2930,8 @@ service AuthQuery {
           "       u.email AS email, "
           "       m.role AS role, "
           "       (o.owner_id = m.user_id) AS owner, "
-          "       m.created_at AS joined_at "
+          "       m.created_at AS joined_at, "
+          "       m.id AS membership_id "
           "FROM @module.OrgMembership m "
           "JOIN @module.User u ON u.id = m.user_id "
           "JOIN @module.Organization o ON o.id = m.org_id "

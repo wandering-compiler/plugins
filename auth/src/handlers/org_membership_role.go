@@ -59,6 +59,9 @@ const (
 // rather than beside it. It is handed the role by ID, the role checked here:
 // a lookup by name there would let a rename between the two grant another.
 func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *pb.UpdateOrgMembershipRoleReq) (*pb.UpdateOrgMembershipRoleResp, error) {
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
 	if err := h.checkMayManageMembership(ctx, req.GetId()); err != nil {
 		return nil, err
 	}
@@ -87,6 +90,9 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 // and its grants end (removed_at / revoked_at, the caller recorded as the one
 // who removed them) and the rows stay.
 func (h *AuthServiceHandler) RemoveOrgMembership(ctx context.Context, req *pb.RemoveOrgMembershipReq) (*pb.RemoveOrgMembershipResp, error) {
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
 	if err := h.checkMayManageMembership(ctx, req.GetId()); err != nil {
 		return nil, err
 	}

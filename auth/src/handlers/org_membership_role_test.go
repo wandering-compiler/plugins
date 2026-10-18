@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
@@ -194,5 +195,46 @@ func TestUpdateOrgMembershipRole_OtherRefusals(t *testing.T) {
 				t.Fatalf("the grant was written anyway: %v", m.updated)
 			}
 		})
+	}
+}
+
+// The REST path names the organization (`/auth/orgs/{org}/members/{id}…`,
+// org_members_rest); a request naming another one than authentication
+// resolved is refused before the membership is read, for a role change and a
+// removal alike, and nothing is written.
+func TestManageMembership_RefusesAnotherOrgInTheRequest(t *testing.T) {
+	h, m := newMembershipRoleHandler()
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(principal.ScopeKey("org_slug"), "acme"))
+	_, err := h.UpdateOrgMembershipRole(ctx, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-viewer", Org: "other"})
+	if detailOf(t, err).GetCode() != CodeOrgMismatch {
+		t.Fatalf("role change in another org: %v", err)
+	}
+	_, err = h.RemoveOrgMembership(ctx, &pb.RemoveOrgMembershipReq{Id: "mem-1", Org: "other"})
+	if detailOf(t, err).GetCode() != CodeOrgMismatch {
+		t.Fatalf("removal in another org: %v", err)
+	}
+	if m.updated != nil || m.deleted != nil {
+		t.Fatal("a refused request wrote")
+	}
+}
+
+type memberListQuery struct {
+	pb.AuthQueryClient
+}
+
+func (memberListQuery) ListOrgMembersByOrg(_ context.Context, in *pb.ListOrgMembersByOrgReq, _ ...grpc.CallOption) (*pb.ListOrgMembersByOrgResp, error) {
+	return &pb.ListOrgMembersByOrgResp{Members: []*pb.OrgMemberRow{{UserId: "u2", Email: "b@x", Role: "org-viewer", MembershipId: "mem-1"}}}, nil
+}
+
+// The member list names each membership, so a UI can change or remove it.
+func TestListOrgMembers_NamesTheMembership(t *testing.T) {
+	h := &AuthServiceHandler{Query: memberListQuery{}}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(principal.ScopeKey("user_id"), "u1", principal.ScopeKey("org_id"), "org-1"))
+	resp, err := h.ListOrgMembers(ctx, &pb.ListOrgMembersReq{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.GetMembers()) != 1 || resp.GetMembers()[0].GetMembershipId() != "mem-1" {
+		t.Fatalf("members = %v, want mem-1 named", resp.GetMembers())
 	}
 }
