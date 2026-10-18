@@ -112,6 +112,21 @@ func TestIssueBotToken_ABearerTokenIsForAMachineAccountOnly(t *testing.T) {
 	}
 }
 
+// The bound path never mints without a device: with device_id nullable in
+// IssueApiTokenReq (for the bearer token), issueApiTokenTx's guard is what
+// stops an unbound person's or keyed token (device/no-unbound-credential).
+func TestIssueApiTokenTx_MintsNothingWithoutADevice(t *testing.T) {
+	s := newKeyStore()
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	_, _, err := h.issueApiTokenTx(context.Background(), &signInAttempt{}, "u1", "x", nil, nil, signInDevice{thumbprint: testJKT}, "")
+	if err != errDeviceNotRegistered {
+		t.Fatalf("err = %v, want errDeviceNotRegistered", err)
+	}
+	if len(s.minted) != 0 || len(s.bearerMinted) != 0 {
+		t.Fatalf("minted %d / bearer %d, want nothing", len(s.minted), len(s.bearerMinted))
+	}
+}
+
 // ── Authenticate ─────────────────────────────────────────────
 
 // bearerLookup resolves one token (`known`) through the realm-aware resolver

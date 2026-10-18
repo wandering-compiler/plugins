@@ -389,11 +389,13 @@ func (h *AuthServiceHandler) approverDevice(txCtx context.Context, callerID stri
 // caller that inlined them could not roll them back together, and the seam
 // is what a test can drive.
 //
-// The one minting path for every API token — a person's (CreateApiToken) and a
-// machine account's (IssueBotToken, service_account requires api_token). They
+// The one minting path for every BOUND API token — a person's (CreateApiToken)
+// and a machine account's keyed one (IssueBotToken, service_account requires
+// api_token); a machine account's bearer token is service_account.go's. They
 // were two copies of this function, which is how one of them would have been
 // left minting never-expiring tokens. No device, no token
-// (device/no-unbound-credential): IssueApiTokenReq requires it as well.
+// (device/no-unbound-credential): this guard is the only one —
+// IssueApiTokenReq.device_id is nullable for the bearer token.
 func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAttempt, userID, name string, subset []int32, expiresAt *timestamppb.Timestamp, dev signInDevice, approvedBy string) (token, tokenID string, err error) {
 	if dev.id == "" {
 		return "", "", errDeviceNotRegistered
