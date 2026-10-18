@@ -209,6 +209,28 @@ message IssueApiTokenResp {
   UserToken token = 1;
 }
 
+// IssueBotBearerTokenReq — a machine account's bearer token
+// (device/bot-bearer): no device, flagged `bearer`, always expiring.
+message IssueBotBearerTokenReq {
+  option (w17.contrib.plugin_feature) = "service_account";
+  string    user_id    = 1 [(w17.field) = { type: UUID }];
+  string    name       = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  TokenType token_type = 3;
+  // REQUIRED: a bearer token always expires; the handler decides when.
+  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
+  // sha256(token), hex — see IssueTokenReq.token_hash.
+  string    token_hash = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // See IssueApiTokenReq.approved_by_device_id: the operator's device.
+  string    approved_by_device_id = 6 [(w17.field) = { type: UUID, null: true }];
+  // event-only, for ApiTokenCreated — see IssueApiTokenReq.
+  string    thumbprint = 7;
+  string    created_by = 8;
+}
+message IssueBotBearerTokenResp {
+  option (w17.contrib.plugin_feature) = "service_account";
+  UserToken token = 1;
+}
+
 message AddTokenPermissionReq {
   option (w17.contrib.plugin_feature) = "api_token";
   string token_id      = 1 [(w17.field) = { type: UUID }];
@@ -1792,6 +1814,51 @@ service AuthMutation {
           { key: "key_thumbprint", value: "$request.key_thumbprint" },
           { key: "created_by",     value: "$request.created_by" },
           { key: "device_id", value: "$request.thumbprint" }
+        ]
+      }
+    };
+  }
+
+  // IssueBotBearerToken — INSERT a machine account's bearer token
+  // (device/bot-bearer): bound to no device (device_id NULL), flagged
+  // `bearer`, with the expires_at the handler decided. Only IssueBotToken's
+  // keyless path calls it, for an account it checked is kind BOT. Emits
+  // ApiTokenCreated like IssueApiToken, with no key thumbprint. Gated
+  // service_account.
+  rpc IssueBotBearerToken(IssueBotBearerTokenReq) returns (IssueBotBearerTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "service_account";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.UserToken SET "
+          "user_id = :user_id, "
+          "token_hash = :token_hash, "
+          "token_type = :token_type, "
+          "name = :name, "
+          "expires_at = :expires_at, "
+          "bearer = TRUE, "
+          "approved_by_device_id = :approved_by_device_id "
+          "RETURNING id AS token.id, "
+          "          user_id AS token.user_id, "
+          "          token_type AS token.token_type, "
+          "          name AS token.name, "
+          "          created_at AS token.created_at, "
+          "          expires_at AS token.expires_at, "
+          "          bearer AS token.bearer, "
+          "          approved_by_device_id AS token.approved_by_device_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "ApiTokenCreated"
+      payload: {
+        fields: [
+          { key: "token_id",   value: "$response.token.id" },
+          { key: "user_id",    value: "$response.token.user_id" },
+          { key: "created_at", value: "$response.token.created_at" },
+          { key: "name",       value: "$response.token.name" },
+          { key: "created_by", value: "$request.created_by" },
+          { key: "device_id",  value: "$request.thumbprint" }
         ]
       }
     };

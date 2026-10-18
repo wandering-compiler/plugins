@@ -35,6 +35,28 @@ func newBearerToken() (token, hash string, err error) {
 	return token, sha256Hex(token), nil
 }
 
+// botBearerPrefix starts every machine account's bearer token
+// (device/bot-bearer): Authenticate lets a proofless request reach the lookup
+// only for a token that carries it, and a secret scanner can recognise a
+// leaked one. It authorizes nothing by itself — the row's `bearer` flag does.
+const botBearerPrefix = "w17bot_"
+
+// newBotBearerToken mints a machine account's bearer token: the prefix and a
+// token of the usual shape, with the sha256 the store keeps.
+func newBotBearerToken() (token, hash string, err error) {
+	raw, err := randstr.Token(bearerTokenLen)
+	if err != nil {
+		return "", "", err
+	}
+	token = botBearerPrefix + raw
+	return token, sha256Hex(token), nil
+}
+
+// isBotBearerToken reports whether token has the bot-bearer prefix.
+func isBotBearerToken(token string) bool {
+	return len(token) > len(botBearerPrefix) && token[:len(botBearerPrefix)] == botBearerPrefix
+}
+
 // upgradeLegacyToken moves the row a bearer resolved to onto the hash when it
 // is a legacy row — minted before tokens were hashed, so found by its token
 // in the clear and reported with an empty storedHash. Authenticate calls it
@@ -61,6 +83,8 @@ type endedToken struct {
 	thumbprint string // the key it is bound to; "" = none
 	// When the device the token is bound to was revoked; nil = live.
 	deviceRevokedAt *timestamppb.Timestamp
+	// UserToken.bearer: a machine account's bearer token (device/bot-bearer).
+	bearer bool
 }
 
 // endedAt is when the token stopped being valid. The probe already decided
@@ -110,6 +134,7 @@ func expiredTokenRefusal(lookupErr error, lookupEnded func() (endedToken, error)
 		kind:          tok.kind,
 		thumbprint:    tok.thumbprint,
 		deviceRevoked: tok.deviceRevokedAt != nil,
+		bearer:        tok.bearer,
 	}
 }
 
@@ -123,6 +148,7 @@ type expiredTokenError struct {
 	kind          pb.TokenType
 	thumbprint    string
 	deviceRevoked bool
+	bearer        bool
 }
 
 func (e *expiredTokenError) Error() string { return "token expired or revoked" }
@@ -140,6 +166,18 @@ func expiredFor(ctx context.Context, err error, jkt string) error {
 	}
 	if exp.deviceRevoked {
 		return deviceRevoked(ctx)
+	}
+	return sessionExpired(ctx, exp.expiresAt, exp.kind)
+}
+
+// expiredBearer is the refusal for err when it is an ended bearer token
+// (device/bot-bearer), presented without a proof: SESSION_EXPIRED, which says
+// only what the token's holder — whoever presents it — may know. nil for
+// anything else, which stays the opaque refusal.
+func expiredBearer(ctx context.Context, err error) error {
+	var exp *expiredTokenError
+	if !errors.As(err, &exp) || !exp.bearer || exp.thumbprint != "" {
+		return nil
 	}
 	return sessionExpired(ctx, exp.expiresAt, exp.kind)
 }

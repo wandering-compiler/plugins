@@ -457,6 +457,20 @@ message UserToken {
   // other token, and when the authorizing request was bound to no device. Base
   // tier. No DB-level FK (the activation-rename caveat in the message header).
   string approved_by_device_id = 16 [(w17.field) = { type: UUID, null: true }];
+
+  // bearer — a machine account's token that works WITHOUT a proof of
+  // possession (device/bot-bearer): bound to no device, presented as
+  // `Bearer`, and recognisable by its prefix (botBearerPrefix) so that
+  // Authenticate still refuses every other proofless request before the
+  // lookup. Only IssueBotToken's keyless path sets it (IssueBotBearerToken),
+  // only for an account of kind BOT, and always with an expires_at. The flag on
+  // the row is what authorizes the request, never the prefix: a token without
+  // the flag is refused proofless whatever it looks like. FALSE on every other
+  // token. Gated service_account.
+  bool bearer = 17 [
+    (w17.field) = { default_auto: FALSE },
+    (w17.contrib.plugin_feature_field) = "service_account"
+  ];
 }
 
 // Device — one (user, device key) pair. Base tier: every session is bound

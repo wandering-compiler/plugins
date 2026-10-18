@@ -163,9 +163,12 @@ func TestIssueBotToken_RefusesADisabledBot(t *testing.T) {
 	rec := &mintRecorder{}
 	h := &AuthServiceHandler{Query: botTokenQuery{kind: pb.AccountKind_BOT, disabled: true}, Mutation: rec}
 
-	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "u1"})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("err = %v, want FailedPrecondition for a disabled bot", err)
+	// With a key and without (a bearer token, device/bot-bearer) alike.
+	for _, key := range []string{p256JWK, ""} {
+		_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-1"), &pb.IssueBotTokenReq{PublicKey: key, UserId: "u1"})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("key %q: err = %v, want FailedPrecondition for a disabled bot", key, err)
+		}
 	}
 	if rec.issued {
 		t.Error("a token was issued for a disabled bot")
@@ -479,9 +482,12 @@ func TestIssueBotToken_RefusesABotFromAnotherOrganization(t *testing.T) {
 	m := &botAdminMock{botsOrg: "org-other"}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 
-	_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-mine"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-elsewhere"})
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("code = %v, want PermissionDenied (err=%v)", status.Code(err), err)
+	// With a key and without (a bearer token, device/bot-bearer) alike.
+	for _, key := range []string{p256JWK, ""} {
+		_, err := h.IssueBotToken(ctxWithCallerInOrg("admin-1", "org-mine"), &pb.IssueBotTokenReq{PublicKey: key, UserId: "bot-elsewhere"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("key %q: code = %v, want PermissionDenied (err=%v)", key, status.Code(err), err)
+		}
 	}
 	if m.issued {
 		t.Error("a token was minted for another organization's machine account")

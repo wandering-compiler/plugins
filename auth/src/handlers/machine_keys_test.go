@@ -45,8 +45,10 @@ type keyStore struct {
 	*deviceStore
 
 	minted []*pb.IssueApiTokenReq
-	order  []string
-	bot    *pb.User
+	// IssueBotBearerToken's writes (device/bot-bearer)
+	bearerMinted []*pb.IssueBotBearerTokenReq
+	order        []string
+	bot          *pb.User
 	// a machine account's ListMachineKeys failure
 	keysErr error
 	// sessions: token id → the device that approved it (a CLI session's
@@ -468,7 +470,8 @@ func TestIssueBotToken_RefusesABadKeyAfterTheChecks(t *testing.T) {
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("an unknown account with a bad key: %v, want the account refusal", err)
 	}
-	for jwk, code := range map[string]string{"": CodeDeviceKeyRequired, `{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"` + privateD + `"}`: CodeDeviceKeyInvalid} {
+	// No key at all is a bearer token now (device/bot-bearer), not a refusal.
+	for jwk, code := range map[string]string{`{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"` + privateD + `"}`: CodeDeviceKeyInvalid} {
 		_, err := h.IssueBotToken(operatorCtx("op-1", ""), &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: jwk})
 		wantKeyRefusal(t, err, codes.InvalidArgument, code)
 	}
@@ -695,12 +698,15 @@ func TestIssueBotToken_AnAPITokenCallerIsRefused(t *testing.T) {
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		scopeUserIDKey, "op-1", "x-w17-scope-tenant_id", "tenant-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
-	_, err = h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: p256JWK})
-	if status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
-		t.Fatalf("err = %v, want PermissionDenied/%s", err, CodeSessionRequired)
+	// With a key and without (a bearer token, device/bot-bearer) alike.
+	for _, key := range []string{p256JWK, ""} {
+		_, err = h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: key})
+		if status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
+			t.Fatalf("key %q: err = %v, want PermissionDenied/%s", key, err, CodeSessionRequired)
+		}
 	}
-	if len(s.minted) != 0 || len(s.registered) != 0 {
-		t.Fatalf("minted %v, registered %v", s.minted, s.registered)
+	if len(s.minted) != 0 || len(s.registered) != 0 || len(s.bearerMinted) != 0 {
+		t.Fatalf("minted %v, registered %v, bearer %v", s.minted, s.registered, s.bearerMinted)
 	}
 }
 

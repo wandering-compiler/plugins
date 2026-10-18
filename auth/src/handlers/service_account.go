@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"errors"
+	"time"
 
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/plugins/auth/lib/devicekey"
@@ -41,6 +43,8 @@ var errAuthnBotNoPassword = errors.New("machine account: password sign-in is not
 // which is why the always-compiled handlers reach it through the seam below
 // and never name the field.
 func init() {
+	serviceAccountStaged = true // see feature_marks.go
+	isBotAccount = func(user *pb.User) bool { return user.GetKind() == pb.AccountKind_BOT }
 	signInBotGate = func(user *pb.User) error {
 		if user.GetKind() == pb.AccountKind_BOT {
 			return errAuthnBotNoPassword
@@ -168,6 +172,9 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED
 		return nil, status.Error(codes.FailedPrecondition, "machine account is disabled; enable it first")
 	}
+	if req.GetPublicKey() == "" {
+		return h.issueBotBearerToken(ctx, attempt, callerID, req)
+	}
 	key, err := parseTokenKey(ctx, req.GetPublicKey())
 	if err != nil {
 		return nil, err
@@ -210,6 +217,96 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		return nil, err
 	}
 	return &pb.IssueBotTokenResp{Token: token, TokenId: tokenID, ExpiresAt: expiresAt, DeviceId: key.Thumbprint}, nil
+}
+
+// maxBotBearerTTL is the furthest a bearer token's expiry may lie ahead
+// (device/bot-bearer): a credential that works without a key must end, and
+// rotating once a year is the least that keeps "forgot to" survivable.
+const maxBotBearerTTL = 366 * 24 * time.Hour
+
+// MsgBearerExpiryTooFar is what a person reads for a bearer token's expiry
+// beyond maxBotBearerTTL.
+//
+//w17:msgid
+const MsgBearerExpiryTooFar = "A token without a key must expire within a year. Choose an earlier date."
+
+// botBearerExpiry decides when a bearer token expires: as apiTokenExpiry
+// does, except that "never" is not an answer — the deployment's default of 0
+// becomes defaultAPITokenTTLHours — and no expiry may lie beyond
+// maxBotBearerTTL.
+func (h *AuthServiceHandler) botBearerExpiry(ctx context.Context, requested *timestamppb.Timestamp) (*timestamppb.Timestamp, error) {
+	exp, err := h.apiTokenExpiry(ctx, requested)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if exp == nil {
+		return timestamppb.New(now.Add(time.Duration(defaultAPITokenTTLHours) * time.Hour)), nil
+	}
+	if exp.AsTime().After(now.Add(maxBotBearerTTL)) {
+		if requested == nil {
+			// The deployment's default is longer than a bearer token may live:
+			// the ceiling, not a refusal the operator cannot act on.
+			return timestamppb.New(now.Add(maxBotBearerTTL)), nil
+		}
+		return nil, refusal(ctx, codes.InvalidArgument,
+			"expires_at "+exp.AsTime().UTC().Format(time.RFC3339)+" is more than a year ahead; a bearer token must expire within one",
+			"TOKEN_EXPIRY_TOO_FAR", "expires_at", MsgBearerExpiryTooFar, nil)
+	}
+	return exp, nil
+}
+
+// issueBotBearerToken is IssueBotToken without a key (device/bot-bearer),
+// once every authorization check passed: a token bound to no device, flagged
+// `bearer`, with the bot-bearer prefix and an expiry, its narrowing and the
+// history row in one transaction — the reason IssueBotToken gives for one
+// holds here unchanged. The operator's device is the approver.
+func (h *AuthServiceHandler) issueBotBearerToken(ctx context.Context, attempt *signInAttempt, callerID string, req *pb.IssueBotTokenReq) (*pb.IssueBotTokenResp, error) {
+	expiresAt, err := h.botBearerExpiry(ctx, req.GetExpiresAt())
+	if err != nil {
+		return nil, err
+	}
+	target := req.GetUserId()
+	var token, tokenID string
+	err = h.inTx(ctx, func(txCtx context.Context) error {
+		approver, err := h.approverDevice(txCtx, callerID)
+		if err != nil {
+			return err
+		}
+		var hash string
+		token, hash, err = newBotBearerToken()
+		if err != nil {
+			return err
+		}
+		creator, _ := callerUserID(txCtx)
+		issued, err := h.Mutation.IssueBotBearerToken(txCtx, &pb.IssueBotBearerTokenReq{
+			UserId:             target,
+			Name:               req.GetName(),
+			TokenType:          pb.TokenType_TOKEN_TYPE_API,
+			ExpiresAt:          expiresAt,
+			TokenHash:          hash,
+			ApprovedByDeviceId: approver,
+			Thumbprint:         requestThumbprint(txCtx),
+			CreatedBy:          creator,
+		})
+		if err != nil {
+			return err
+		}
+		tokenID = issued.GetToken().GetId()
+		for _, perm := range req.GetPermissionSubset() {
+			if _, err := h.Mutation.AddTokenPermission(txCtx, &pb.AddTokenPermissionReq{
+				TokenId:      tokenID,
+				PermissionId: perm,
+			}); err != nil {
+				return err
+			}
+		}
+		return h.recordSignInOK(txCtx, attempt, target, signInDevice{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.IssueBotTokenResp{Token: token, TokenId: tokenID, ExpiresAt: expiresAt, Bearer: true}, nil
 }
 
 // machineKeyLabel labels a machine account's device: one key for every token

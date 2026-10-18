@@ -425,7 +425,16 @@ message IssueBotTokenReq {
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
   // public_key — the PUBLIC key of the machine account — generated where it runs, as
   // the JSON of a JWK (RFC 7517): {"kty":"EC","crv":"P-256","x":…,"y":…} or
-  // {"kty":"OKP","crv":"Ed25519","x":…}. REQUIRED: the token is bound to this
+  // {"kty":"OKP","crv":"Ed25519","x":…}. OPTIONAL.
+  //
+  // Absent: the token is a BEARER token (device/bot-bearer) — it works
+  // without a proof, sent as `Bearer`, carries the `w17bot_` prefix, is bound
+  // to no key and ALWAYS expires (expires_at, or the deployment's default
+  // lifetime, or 90 days when that default is "never"; at most
+  // maxBotBearerTTL ahead). The program using it must NOT sign its requests
+  // with a key: a proof beside a bearer token is refused.
+  //
+  // Present: the token is bound to this
   // key (its RFC 7638 thumbprint, computed by the handler) and works only with
   // DPoP proofs signed by it. A JWK with any private member ("d", …) is
   // refused and never stored or logged; the private key stays where the
@@ -435,7 +444,7 @@ message IssueBotTokenReq {
   // token registers it, every later token must name the same key (its
   // replicas share it), and a different key is refused (BOT_KEY_MISMATCH)
   // until the account's device is revoked.
-  string public_key = 5 [(w17.field) = { type: CHAR, max_len: 1024 }];
+  string public_key = 5 [(w17.field) = { type: CHAR, max_len: 1024, blank: true }];
 }
 message IssueBotTokenResp {
   option (w17.contrib.plugin_feature) = "service_account";
@@ -445,8 +454,11 @@ message IssueBotTokenResp {
   // When it expires; absent = never (the deployment's default is 0).
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
   // The thumbprint of the key the token is bound to — the device id
-  // Authenticate answers for its requests.
+  // Authenticate answers for its requests. Empty for a bearer token.
   string device_id = 4;
+  // The token is a bearer token (no key; device/bot-bearer); it always has
+  // an expires_at.
+  bool bearer = 5;
 }
 
 message CreateApiTokenReq {
@@ -1142,10 +1154,12 @@ service AuthService {
   // IssueBotToken — mint an API token FOR a machine account. Refuses any
   // target that is not `kind = BOT`. Gated service_account.
   //
-  // Bound to the machine account's key (public_key), as CreateApiToken
+  // With public_key: bound to the machine account's key, as CreateApiToken
   // binds to its: the account has ONE key, registered by its first token;
-  // a later token with another key is refused (BOT_KEY_MISMATCH). The
-  // operator's device is recorded as the token's approver.
+  // a later token with another key is refused (BOT_KEY_MISMATCH). Without
+  // one: a bearer token, bound to no key and always expiring
+  // (device/bot-bearer). The operator's device is recorded as the token's
+  // approver either way.
   rpc IssueBotToken(IssueBotTokenReq) returns (IssueBotTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "service_account";
   }

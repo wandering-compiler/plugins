@@ -327,6 +327,12 @@ type authPrincipal struct {
 	// without a proof on the MCP surface and nowhere else.
 	mcpOnly bool
 
+	// bearer is UserToken.bearer and botAccount whether the owner is of kind
+	// BOT: together they are a machine account's bearer token, accepted
+	// without a proof outside the MCP surface (device/bot-bearer).
+	bearer     bool
+	botAccount bool
+
 	// legacyToken is the presented token when it resolved to a LEGACY row
 	// (stored in the clear, no hash yet), "" otherwise. The resolvers only
 	// note it; Authenticate moves the row to the hash once the request has
@@ -846,10 +852,18 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// marked it as the MCP surface (whose clients cannot sign yet), where only
 	// an MCP-flow token passes — checked after the lookup, with every other
 	// outcome the opaque refusal.
+	//
+	// The other exception is a machine account's bearer token
+	// (device/bot-bearer), told apart by its prefix alone, so every other
+	// token is still refused here unseen; whether it IS one is the row's flag,
+	// checked after the lookup (checkBotBearer). Only where machine accounts
+	// exist, and never on the admin plane: a credential that works without a
+	// key does not open the admin console.
 	jkt := req.GetHeaders()[dpopJKTKey]
 	proofed := viaDPoP && validThumbprint(jkt)
 	mcpSurface := req.GetHeaders()[surfaceKey] == surfaceMCP
-	if !proofed && !mcpSurface {
+	botBearer := serviceAccountStaged && !viaDPoP && !mcpSurface && !onAdminPlane(ctx) && isBotBearerToken(token)
+	if !proofed && !mcpSurface && !botBearer {
 		return nil, Unauthenticated(deviceProofRequired(ctx))
 	}
 
@@ -860,8 +874,14 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	if err != nil {
 		// An expired token says so only to the holder of its key; to anyone
 		// else, as an unknown one, it is the opaque refusal.
+		// A bearer token's holder is whoever presents it, so an ended one says
+		// so without a proof (expiredBearer).
 		if proofed {
 			if expired := expiredFor(ctx, err, jkt); expired != nil {
+				return nil, Unauthenticated(expired)
+			}
+		} else if botBearer {
+			if expired := expiredBearer(ctx, err); expired != nil {
 				return nil, Unauthenticated(expired)
 			}
 		}
@@ -869,9 +889,12 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	}
 	// The binding, before anything else, so nothing is decorated, narrowed or
 	// recorded as used for a request that fails it.
-	if proofed {
+	switch {
+	case proofed:
 		err = checkTokenBinding(ctx, prin, jkt)
-	} else {
+	case botBearer:
+		err = checkBotBearer(prin)
+	default:
 		err = checkMCPToken(prin)
 	}
 	if err != nil {
@@ -1105,6 +1128,14 @@ var errAuthnUserDisabled = errors.New("account disabled")
 // Returns a non-nil error so SignIn emits the opaque Unauthenticated: a caller
 // must not learn that an address belongs to a bot.
 var signInBotGate = func(user *pb.User) error { return nil }
+
+// isBotAccount reports whether user is a MACHINE account — what a bearer
+// token's owner must be (device/bot-bearer). A seam for the same reason as
+// signInBotGate: User.kind exists only under service_account, and the code
+// reading it here (apitoken.go) is staged by api_token alone, so naming the
+// field directly would not compile in a build without machine accounts.
+// service_account.go installs the real check; without it nobody is a bot.
+var isBotAccount = func(*pb.User) bool { return false }
 
 // refuseUnsignableAccount runs SignIn's account gates — disabled, machine — for
 // a path that issues a session to an EXISTING account without passing through

@@ -324,6 +324,19 @@ func checkMCPToken(p *authPrincipal) error {
 	return nil
 }
 
+// checkBotBearer is the check for a proofless request presenting a token with
+// the bot-bearer prefix (device/bot-bearer): only a token the row flags
+// `bearer`, of an API token owned by a machine account and bound to no
+// device, passes. Anything else — a person's token, a bound bot token, an MCP
+// token, a legacy unbound row — is the opaque refusal, like an unknown one:
+// the prefix authorizes nothing.
+func checkBotBearer(p *authPrincipal) error {
+	if !p.bearer || !p.botAccount || p.realm != pb.TokenType_TOKEN_TYPE_API || p.deviceThumbprint != "" || p.mcpOnly {
+		return errDeviceBindingRefused
+	}
+	return nil
+}
+
 // sameKey compares two thumbprints in constant time.
 func sameKey(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1

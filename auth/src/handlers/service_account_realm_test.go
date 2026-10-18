@@ -254,6 +254,11 @@ func TestIssueBotToken_RefusesABotAboveTheOperator(t *testing.T) {
 			if m.issued {
 				t.Error("a token was minted for a bot above the operator")
 			}
+			// Without a key (a bearer token, device/bot-bearer) the same.
+			_, err = h.IssueBotToken(withHeldPermissions(md(), "op-1", 7), &pb.IssueBotTokenReq{UserId: "bot-1"})
+			if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "machine account holds a role") {
+				t.Fatalf("keyless: err = %v, want the mint ceiling's PermissionDenied", err)
+			}
 			// The control: the same operator holding everything the role carries.
 			if _, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7, 99), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-1"}); err != nil || !m.issued {
 				t.Fatalf("an operator holding the bot's role was refused: %v", err)
