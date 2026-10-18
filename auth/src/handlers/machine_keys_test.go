@@ -698,12 +698,15 @@ func TestIssueBotToken_AnAPITokenCallerIsRefused(t *testing.T) {
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		scopeUserIDKey, "op-1", "x-w17-scope-tenant_id", "tenant-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
-	_, err = h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: p256JWK})
-	if status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
-		t.Fatalf("err = %v, want PermissionDenied/%s", err, CodeSessionRequired)
+	// With a key and without (a bearer token, device/bot-bearer) alike.
+	for _, key := range []string{p256JWK, ""} {
+		_, err = h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: key})
+		if status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
+			t.Fatalf("key %q: err = %v, want PermissionDenied/%s", key, err, CodeSessionRequired)
+		}
 	}
-	if len(s.minted) != 0 || len(s.registered) != 0 {
-		t.Fatalf("minted %v, registered %v", s.minted, s.registered)
+	if len(s.minted) != 0 || len(s.registered) != 0 || len(s.bearerMinted) != 0 {
+		t.Fatalf("minted %v, registered %v, bearer %v", s.minted, s.registered, s.bearerMinted)
 	}
 }
 

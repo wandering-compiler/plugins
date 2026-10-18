@@ -98,8 +98,10 @@ func TestIssueBotToken_ABearerTokenExpiresWithinAYear(t *testing.T) {
 	}
 }
 
-// The account checks come first without a key too: a person, an unknown
-// account and a disabled bot are refused and nothing is minted.
+// The account checks come first without a key too: a person and an unknown
+// account are refused and nothing is minted. (The disabled bot, another
+// organization's bot, a bot above the operator and an API-token caller are
+// refused keyless too — in their own tests, beside the keyed case.)
 func TestIssueBotToken_ABearerTokenIsForAMachineAccountOnly(t *testing.T) {
 	withoutOrgs(t)
 	s := newKeyStore()
@@ -128,6 +130,7 @@ type bearerLookup struct {
 	realm          pb.TokenType
 	thumb          string
 	mcp            bool
+	disabled       bool
 	lookups        int
 }
 
@@ -137,7 +140,15 @@ func (q *bearerLookup) GetTokenWithType(_ context.Context, in *pb.GetTokenWithTy
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
 	return &pb.GetTokenWithTypeResp{UserId: "bot-1", TokenId: "tok-b", TokenType: q.realm, StoredTokenHash: in.GetTokenHash(),
-		User: &pb.User{Id: "bot-1", Kind: q.kind}, DeviceThumbprint: q.thumb, McpOnly: q.mcp, Bearer: q.bearer}, nil
+		User: q.user(), DeviceThumbprint: q.thumb, McpOnly: q.mcp, Bearer: q.bearer}, nil
+}
+
+func (q *bearerLookup) user() *pb.User {
+	u := &pb.User{Id: "bot-1", Kind: q.kind}
+	if q.disabled {
+		u.DisabledAt = timestamppb.Now()
+	}
+	return u
 }
 
 func (q *bearerLookup) GetExpiredTokenWithType(_ context.Context, in *pb.GetExpiredTokenWithTypeReq, _ ...grpc.CallOption) (*pb.GetExpiredTokenWithTypeResp, error) {
@@ -162,12 +173,22 @@ func aBotBearer(token string) *bearerLookup {
 
 func bearerAuthenticate(t *testing.T, resolver func(context.Context, *AuthServiceHandler, string) (*authPrincipal, error), q pb.AuthQueryClient, req *pb.AuthReq) (*pb.AuthResp, *touchRecorder, error) {
 	t.Helper()
+	return bearerAuthenticateOn(t, false, resolver, q, req)
+}
+
+// bearerAuthenticateOn is bearerAuthenticate, on the admin plane when admin.
+func bearerAuthenticateOn(t *testing.T, admin bool, resolver func(context.Context, *AuthServiceHandler, string) (*authPrincipal, error), q pb.AuthQueryClient, req *pb.AuthReq) (*pb.AuthResp, *touchRecorder, error) {
+	t.Helper()
 	prevDec, prevNarrow, prevRes := scopeDecorators, grantNarrowers, resolvePrincipal
 	t.Cleanup(func() { scopeDecorators, grantNarrowers, resolvePrincipal = prevDec, prevNarrow, prevRes })
 	scopeDecorators, grantNarrowers, resolvePrincipal = nil, nil, resolver
 	rec := &touchRecorder{}
 	h := &AuthServiceHandler{Query: q, Mutation: rec, HeaderName: "Authorization", Scheme: "Bearer"}
-	resp, err := h.Authenticate(context.Background(), req)
+	call := h.Authenticate
+	if admin {
+		call = h.AuthenticateAdmin
+	}
+	resp, err := call(context.Background(), req)
 	return resp, rec, err
 }
 
@@ -242,6 +263,39 @@ func TestAuthenticate_ABearerTokenTakesNoOtherPath(t *testing.T) {
 	wantDeviceRefusal(t, err, CodeDeviceProofRequired)
 }
 
+// A bearer token never opens the admin plane, and a build without machine
+// accounts never looks one up: both refuse it like any proofless request,
+// before the lookup.
+func TestAuthenticate_ABearerTokenIsRefusedOnTheAdminPlaneAndWithoutMachineAccounts(t *testing.T) {
+	q := aBotBearer(botTok)
+	_, _, err := bearerAuthenticateOn(t, true, resolvePrincipalRealmAware, q, bearerReq(botTok))
+	wantDeviceRefusal(t, err, CodeDeviceProofRequired)
+	if q.lookups != 0 {
+		t.Fatalf("admin plane: looked up %d times", q.lookups)
+	}
+
+	prev := serviceAccountStaged
+	t.Cleanup(func() { serviceAccountStaged = prev })
+	serviceAccountStaged = false
+	q = aBotBearer(botTok)
+	_, _, err = bearerAuthenticate(t, resolvePrincipalRealmAware, q, bearerReq(botTok))
+	wantDeviceRefusal(t, err, CodeDeviceProofRequired)
+	if q.lookups != 0 {
+		t.Fatalf("without service_account: looked up %d times", q.lookups)
+	}
+}
+
+// A disabled machine account's bearer token is the opaque refusal.
+func TestAuthenticate_ADisabledBotsBearerTokenIsRefused(t *testing.T) {
+	q := aBotBearer(botTok)
+	q.disabled = true
+	_, rec, err := bearerAuthenticate(t, resolvePrincipalRealmAware, q, bearerReq(botTok))
+	wantOpaque(t, err)
+	if len(rec.touches) != 0 {
+		t.Error("a disabled bot's request was recorded as used")
+	}
+}
+
 // An ended bearer token says so to whoever presents it — its holder — and an
 // ended prefixed token that is not one stays the opaque refusal.
 func TestAuthenticate_AnEndedBearerTokenSaysSo(t *testing.T) {
@@ -249,9 +303,14 @@ func TestAuthenticate_AnEndedBearerTokenSaysSo(t *testing.T) {
 	_, _, err := bearerAuthenticate(t, resolvePrincipalRealmAware, q, bearerReq(botTok))
 	wantDeviceRefusal(t, err, CodeSessionExpired)
 
-	q = &bearerLookup{expired: botTok, kind: pb.AccountKind_BOT, realm: pb.TokenType_TOKEN_TYPE_API, thumb: testJKT}
-	_, _, err = bearerAuthenticate(t, resolvePrincipalRealmAware, q, bearerReq(botTok))
-	wantOpaque(t, err)
+	for name, q := range map[string]*bearerLookup{
+		"not flagged":        {expired: botTok, kind: pb.AccountKind_BOT, realm: pb.TokenType_TOKEN_TYPE_API},
+		"flagged but bound":  {expired: botTok, bearer: true, kind: pb.AccountKind_BOT, realm: pb.TokenType_TOKEN_TYPE_API, thumb: testJKT},
+		"not flagged, bound": {expired: botTok, kind: pb.AccountKind_BOT, realm: pb.TokenType_TOKEN_TYPE_API, thumb: testJKT},
+	} {
+		_, _, err = bearerAuthenticate(t, resolvePrincipalRealmAware, q, bearerReq(botTok))
+		t.Run(name, func(t *testing.T) { wantOpaque(t, err) })
+	}
 }
 
 func TestIsBotBearerToken(t *testing.T) {

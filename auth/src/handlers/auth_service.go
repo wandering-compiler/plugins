@@ -856,11 +856,13 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// The other exception is a machine account's bearer token
 	// (device/bot-bearer), told apart by its prefix alone, so every other
 	// token is still refused here unseen; whether it IS one is the row's flag,
-	// checked after the lookup (checkBotBearer).
+	// checked after the lookup (checkBotBearer). Only where machine accounts
+	// exist, and never on the admin plane: a credential that works without a
+	// key does not open the admin console.
 	jkt := req.GetHeaders()[dpopJKTKey]
 	proofed := viaDPoP && validThumbprint(jkt)
 	mcpSurface := req.GetHeaders()[surfaceKey] == surfaceMCP
-	botBearer := !viaDPoP && !mcpSurface && isBotBearerToken(token)
+	botBearer := serviceAccountStaged && !viaDPoP && !mcpSurface && !onAdminPlane(ctx) && isBotBearerToken(token)
 	if !proofed && !mcpSurface && !botBearer {
 		return nil, Unauthenticated(deviceProofRequired(ctx))
 	}
