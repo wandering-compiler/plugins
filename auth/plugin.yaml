@@ -958,6 +958,7 @@ sandboxes:
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
   - "A token cannot expire in the past. Choose a later date."
+  - "A token without a key must expire within a year. Choose an earlier date."
   - "An account with this address already exists. Sign in instead."
   - "An account with this email address exists but has not verified it. Sign in with your password and verify the address first."
   - "An account with this email address exists, and the sign-in provider has not verified the address. Sign in with your password instead."

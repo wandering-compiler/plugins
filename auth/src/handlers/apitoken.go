@@ -113,6 +113,7 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 				kind:            exp.GetTokenType(),
 				thumbprint:      exp.GetDeviceThumbprint(),
 				deviceRevokedAt: exp.GetDeviceRevokedAt(),
+				bearer:          exp.GetBearer(),
 			}, err
 		})
 	}
@@ -141,6 +142,8 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		deviceThumbprint: tok.GetDeviceThumbprint(),
 		deviceRevokedAt:  tok.GetDeviceRevokedAt(),
 		mcpOnly:          tok.GetMcpOnly(),
+		bearer:           tok.GetBearer(),
+		botAccount:       tok.GetUser().GetKind() == pb.AccountKind_BOT,
 		legacyToken:      legacyPlaintext(token, tok.GetStoredTokenHash()),
 	}
 

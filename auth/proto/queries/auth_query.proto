@@ -394,6 +394,9 @@ message GetTokenWithTypeResp {
   google.protobuf.Timestamp device_revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
   // UserToken.mcp_only: accepted without a proof on the MCP surface only.
   bool mcp_only = 11;
+  // UserToken.bearer: a machine account's token, accepted without a proof
+  // (device/bot-bearer). Under service_account only; false without it.
+  bool bearer = 12;
 }
 
 // GetExpiredTokenWithType — the lookup Authenticate runs only after
@@ -415,6 +418,9 @@ message GetExpiredTokenWithTypeResp {
   string device_thumbprint = 3;
   google.protobuf.Timestamp revoked_at = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp device_revoked_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  // UserToken.bearer: its holder is whoever presents it, so an ended bearer
+  // token says so without a proof (device/bot-bearer).
+  bool bearer = 6;
 }
 
 message GetUserRolePermissionsByRealmReq {
@@ -1916,6 +1922,7 @@ service AuthQuery {
           "       t.last_used_at AS last_used_at, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       d.revoked_at AS device_revoked_at, "
+          "       ?feature(service_account) t.bearer AS bearer, "
           "       t.mcp_only AS mcp_only "
           "FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
@@ -1938,6 +1945,7 @@ service AuthQuery {
           "       t.token_type AS token_type, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       t.revoked_at AS revoked_at, "
+          "       ?feature(service_account) t.bearer AS bearer, "
           "       d.revoked_at AS device_revoked_at "
           "FROM @module.UserToken t "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
