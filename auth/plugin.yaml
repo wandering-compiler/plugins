@@ -163,6 +163,10 @@ features:
   - name: devices
     description: "Self-service device management: ListDevices, RevokeDevice, RevokeOtherDevices, RevokeAllDevices (REST /auth/devices). Device identity itself is base tier and needs no feature: every token is bound to the device key its client signs requests with (DPoP, RFC 9449; the gateway verifies each proof and hands the plugin the key's thumbprint), the Device table is keyed by (user, thumbprint), and trust for two_factor_scope=new_devices belongs to that pair. Revoking a device here revokes its sessions and stamps Device.revoked_at: the key can never sign in to that account again (DEVICE_REVOKED), and its client generates a new key, which is a new device. Off by default."
     default: false
+    requires:
+      # devices.go names pb.AuthResp — the caller's device is read from the
+      # turnkey identity envelope (callerDeviceThumbprint).
+      - authenticate_turnkey
     go_files:
       - handlers/devices.go
   - name: oauth
