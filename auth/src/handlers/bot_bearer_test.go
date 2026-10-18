@@ -16,12 +16,6 @@ import (
 
 // device/bot-bearer: a machine account's token without a key.
 
-func (s *keyStore) IssueBotBearerToken(_ context.Context, in *pb.IssueBotBearerTokenReq, _ ...grpc.CallOption) (*pb.IssueBotBearerTokenResp, error) {
-	s.order = append(s.order, "mint-bearer")
-	s.bearerMinted = append(s.bearerMinted, in)
-	return &pb.IssueBotBearerTokenResp{Token: &pb.UserToken{Id: "tok-bearer", UserId: in.GetUserId(), Bearer: true}}, nil
-}
-
 // Without a key, IssueBotToken mints a bearer token: the bot-bearer prefix,
 // bound to no device (no key is registered, the account is not even locked
 // for one), stored as its hash only, always with an expiry — the 90-day
@@ -45,7 +39,7 @@ func TestIssueBotToken_WithoutAKeyMintsAnExpiringBearerToken(t *testing.T) {
 		t.Fatalf("bearer %d, bound %d, devices %v: want one bearer mint and no device", len(s.bearerMinted), len(s.minted), s.rows)
 	}
 	m := s.bearerMinted[0]
-	if m.GetTokenHash() != sha256Hex(resp.GetToken()) || m.GetUserId() != "bot-1" || m.GetTokenType() != pb.TokenType_TOKEN_TYPE_API || m.GetName() != "deploy" {
+	if m.GetTokenHash() != sha256Hex(resp.GetToken()) || m.GetUserId() != "bot-1" || m.GetTokenType() != pb.TokenType_TOKEN_TYPE_API || m.GetName() != "deploy" || m.GetDeviceId() != "" || m.GetKeyThumbprint() != "" {
 		t.Errorf("minted %+v", m)
 	}
 	if m.GetApprovedByDeviceId() != laptop.GetId() || m.GetCreatedBy() != "op-1" {
@@ -115,6 +109,21 @@ func TestIssueBotToken_ABearerTokenIsForAMachineAccountOnly(t *testing.T) {
 	}
 	if len(s.bearerMinted) != 0 {
 		t.Fatalf("minted %v", s.bearerMinted)
+	}
+}
+
+// The bound path never mints without a device: with device_id nullable in
+// IssueApiTokenReq (for the bearer token), issueApiTokenTx's guard is what
+// stops an unbound person's or keyed token (device/no-unbound-credential).
+func TestIssueApiTokenTx_MintsNothingWithoutADevice(t *testing.T) {
+	s := newKeyStore()
+	h := &AuthServiceHandler{Query: s, Mutation: s}
+	_, _, err := h.issueApiTokenTx(context.Background(), &signInAttempt{}, "u1", "x", nil, nil, signInDevice{thumbprint: testJKT}, "")
+	if err != errDeviceNotRegistered {
+		t.Fatalf("err = %v, want errDeviceNotRegistered", err)
+	}
+	if len(s.minted) != 0 || len(s.bearerMinted) != 0 {
+		t.Fatalf("minted %d / bearer %d, want nothing", len(s.minted), len(s.bearerMinted))
 	}
 }
 
@@ -323,17 +332,15 @@ func TestIsBotBearerToken(t *testing.T) {
 
 // ── the statements ──────────────────────────────────────────
 
-// The bearer mint is bound to no device and flagged; both lookups read the
-// flag under service_account only.
+// The bearer mint is IssueApiToken — ApiTokenCreated's one emit site — with
+// the flag written under service_account only; both lookups read it under
+// service_account only.
 func TestBotBearerStatements(t *testing.T) {
-	body := mutationRPCBody(t, "IssueBotBearerToken")
-	for _, want := range []string{`"bearer = TRUE, "`, `"expires_at = :expires_at, "`, `plugin_feature_rpc) = "service_account"`, `event: "ApiTokenCreated"`} {
+	body := mutationRPCBody(t, "IssueApiToken")
+	for _, want := range []string{`"?feature(service_account) bearer = :bearer "`, `event: "ApiTokenCreated"`} {
 		if !strings.Contains(body, want) {
-			t.Errorf("IssueBotBearerToken lacks %s", want)
+			t.Errorf("IssueApiToken lacks %s", want)
 		}
-	}
-	if strings.Contains(body, `"device_id = :device_id`) {
-		t.Error("IssueBotBearerToken binds a device")
 	}
 	for _, rpc := range []string{"GetTokenWithType", "GetExpiredTokenWithType"} {
 		if !strings.Contains(queryRPCBody(t, rpc), `?feature(service_account) t.bearer AS bearer`) {

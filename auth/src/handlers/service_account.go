@@ -279,7 +279,9 @@ func (h *AuthServiceHandler) issueBotBearerToken(ctx context.Context, attempt *s
 			return err
 		}
 		creator, _ := callerUserID(txCtx)
-		issued, err := h.Mutation.IssueBotBearerToken(txCtx, &pb.IssueBotBearerTokenReq{
+		// IssueApiToken, not a statement of its own: ApiTokenCreated has one
+		// emit site. No device, and the bearer flag only this file can set.
+		issued, err := h.Mutation.IssueApiToken(txCtx, &pb.IssueApiTokenReq{
 			UserId:             target,
 			Name:               req.GetName(),
 			TokenType:          pb.TokenType_TOKEN_TYPE_API,
@@ -288,6 +290,7 @@ func (h *AuthServiceHandler) issueBotBearerToken(ctx context.Context, attempt *s
 			ApprovedByDeviceId: approver,
 			Thumbprint:         requestThumbprint(txCtx),
 			CreatedBy:          creator,
+			Bearer:             true,
 		})
 		if err != nil {
 			return err
