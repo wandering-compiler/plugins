@@ -224,6 +224,9 @@ features:
     default: false
     requires:
       - org_membership
+      # A UI changing a role needs the role vocabulary, which is org_invite's
+      # (GET /auth/orgs/{org}/roles, ListAssignableRoles).
+      - org_invite
   - name: org_membership
     requires:
       # org_membership.go names pb.WhoAmIResp — the caller's orgs are
@@ -1001,6 +1004,7 @@ msgids:
   - "This device was signed out for good. Sign in again to use it as a new device."
   - "This email address cannot be used. Use another address."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
+  - "This is the organization's owner. Their membership cannot be changed or removed; transfer ownership first."
   - "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."

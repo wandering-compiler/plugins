@@ -24,6 +24,7 @@ type membershipRoleMock struct {
 
 	updated *pb.UpdateOrgMembershipReq
 	deleted *pb.MarkOrgMembershipRemovedReq
+	ownerID string // the organization's owner ("" = none of the test's users)
 }
 
 func (m *membershipRoleMock) GetOrgMembership(_ context.Context, in *pb.GetOrgMembershipReq, _ ...grpc.CallOption) (*pb.OrgMembership, error) {
@@ -48,6 +49,10 @@ func (m *membershipRoleMock) UpdateOrgMembership(_ context.Context, in *pb.Updat
 func (m *membershipRoleMock) MarkOrgMembershipRemoved(_ context.Context, in *pb.MarkOrgMembershipRemovedReq, _ ...grpc.CallOption) (*pb.MarkOrgMembershipRemovedResp, error) {
 	m.deleted = in
 	return &pb.MarkOrgMembershipRemovedResp{MembershipId: in.GetId()}, nil
+}
+
+func (m *membershipRoleMock) GetUserOwnsOrg(_ context.Context, in *pb.GetUserOwnsOrgReq, _ ...grpc.CallOption) (*pb.GetUserOwnsOrgResp, error) {
+	return &pb.GetUserOwnsOrgResp{Owner: m.ownerID != "" && in.GetUserId() == m.ownerID}, nil
 }
 
 func newMembershipRoleHandler(memberHolds ...string) (*AuthServiceHandler, *membershipRoleMock) {
@@ -236,5 +241,25 @@ func TestListOrgMembers_NamesTheMembership(t *testing.T) {
 	}
 	if len(resp.GetMembers()) != 1 || resp.GetMembers()[0].GetMembershipId() != "mem-1" {
 		t.Fatalf("members = %v, want mem-1 named", resp.GetMembers())
+	}
+}
+
+// The owner's membership is refused for a role change and a removal alike,
+// whatever the caller covers: ownership outlives the membership, so an owner
+// demoted or removed keeps root authority while vanishing from the list.
+func TestManageMembership_RefusesTheOwnersMembership(t *testing.T) {
+	h, m := newMembershipRoleHandler()
+	m.ownerID = "u2"
+	ctx := inOrg(withHeldPermissions(context.Background(), "u1", 1, 2, 3), "org-1")
+	_, err := h.UpdateOrgMembershipRole(ctx, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-viewer"})
+	if detailOf(t, err).GetCode() != CodeMembershipIsOwner {
+		t.Fatalf("owner's role change: %v", err)
+	}
+	_, err = h.RemoveOrgMembership(ctx, &pb.RemoveOrgMembershipReq{Id: "mem-1"})
+	if detailOf(t, err).GetCode() != CodeMembershipIsOwner {
+		t.Fatalf("owner's removal: %v", err)
+	}
+	if m.updated != nil || m.deleted != nil {
+		t.Fatal("a refused request wrote")
 	}
 }

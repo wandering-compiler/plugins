@@ -60,6 +60,7 @@ It covers plugin version 0.1.0-rc.24.
 | `admin_sign_ins` | off | `user_admin` | — |
 | `admin_devices` | off | `user_admin` | — |
 | `my_sign_ins` | off | `authenticate_turnkey` | — |
+| `org_members_rest` | off | `org_membership`, `org_invite` | — |
 | `client_secret_rotation` | off | `cli_login` | — |
 
 `go_files_combined`: `service_account_tenant.go` (`service_account` +
@@ -843,6 +844,18 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 |---|---|---|---|
 | surface/upgrade-adds-nothing | Against the last release (rc.23), no preset page, page slot, page action or REST/MCP endpoint MAY disappear, and every one added MUST be gated by a feature that release did not have and that is off by default — except an addition the README's upgrade guide names as required (`POST /auth/oauth/exchange`). A slot MAY be rebound to another method of the same request key and response shape. | Failure & configuration | `TestPresetSurface_AnUpgradeRemovesNothingAndAddsOnlyOptIn` |
 
+### org_members_rest
+
+**Purpose.** A member's management over the REST preset, beside the member list, for a UI: `PUT /auth/orgs/{org}/members/{id}/role` (`UpdateOrgMembershipRole`) and `DELETE /auth/orgs/{org}/members/{id}` (`RemoveOrgMembership`).
+
+**Adds.** The two endpoints only (the preset's `feature:`). The methods stay with `org_membership`, whose invariants cover them (`org_membership/role-change-ceiling`, `org_membership/removal-ceiling`, `org_membership/owner-membership-fixed`, `org_membership/path-header-agree`). `OrgMember.membership_id`, which a UI addresses them by, is `org_membership`'s.
+
+**Requires / conflicts / combined files.** Requires `org_membership` and `org_invite` (the role vocabulary a role picker needs, `ListAssignableRoles`). No conflicts, no Go files. Changing one's own role or removing oneself is allowed under the ceiling; the owner is the one membership the methods refuse.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| org_members_rest/opt-in | The two routes MUST be published only where `org_members_rest` is on (`surface/upgrade-adds-nothing`). | Compatibility | `TestPresetSurface_AnUpgradeRemovesNothingAndAddsOnlyOptIn` |
+
 ### org_membership
 
 **Purpose.** Adds multi-organization membership. One identity belongs to many `Organization`s through `OrgMembership`. Each request acts in one validated active organization, and the caller's grants are narrowed to that organization. Ownership (`Organization.owner_id`) grants root authority inside the owned organization to a session principal.
@@ -852,8 +865,8 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 - Columns: `UserRole.org_id` (indexed; partial unique indexes, with `ended_key`, for realm-wide and org-scoped grants), `Role.org_scoped`.
 - Queries: `ListUserOrgs`, `ListUserOrgGrants`, `GetUserOrgPermissions`, `GetUserRealmWidePermissions`, `GetUserOwnsOrg`, `GetUserOwnsAnyOrg`, `GetOwnedOrgBySlug`, `GetUserOrgBySlug`, `ListOrgScopedRoles`, `ListOrgMemberAccounts`, `GetOrgMember`, `ListOrganizations`, `GetOrganization`, `ListOrgMemberships`, `GetOrgMembership`, `ListOrgMembersByOrg`.
 - Mutations: `CreateOrganization`, `UpdateOrganization` (live organizations only), `DeleteOrganization` (stamps `deleted_at`, removes the memberships and revokes the org grants; the admin page reaches it through `AuthService.RemoveOrganization`, which also closes the organization's invitations under `org_invite`), `AddOrgMembership`, `UpdateOrgMembership` (row-locked; revokes the member's org grants, the caller as `revoked_by`, and writes the new one), `MarkOrgMembershipRemoved` (was `DeleteOrgMembership`; row-locked; stamps `removed_at` / `removed_by` and revokes the org grants).
-- Business RPCs: `ListMyOrgs`, `ListOrgMembers`, `UpdateOrgMembershipRole`, `RemoveOrgMembership` (these two are held to the role ceiling), `RemoveOrganization` (the Organizations page's delete).
-- REST: `GET /auth/orgs`, `GET /auth/orgs/{org}/members`. Both need a bearer token, and neither is `public`. The `{org}` group uses `org_from_path`, so the path slug becomes the `W17-Org` selector before authentication.
+- Business RPCs: `ListMyOrgs`, `ListOrgMembers` (each member with its `membership_id`), `UpdateOrgMembershipRole`, `RemoveOrgMembership` (these two are held to the role ceiling, refuse the owner's membership, and take the path's `org`), `RemoveOrganization` (the Organizations page's delete).
+- REST: `GET /auth/orgs`, `GET /auth/orgs/{org}/members` (and, with `org_members_rest`, the member's role change and removal). Both need a bearer token, and neither is `public`. The `{org}` group uses `org_from_path`, so the path slug becomes the `W17-Org` selector before authentication.
 - Auth header `W17-Org`. Scope keys `org_id` and `org_slug`. `WhoAmI` gains `orgs` and `active_org_id`.
 - Admin pages `Organizations` and `OrgMemberships` (update and delete go through the ceiling-checked service methods).
 - Events: `OrganizationCreated`, `OrganizationUpdated`, `OrganizationDeleted`, `OrgMembershipAdded`, `OrgMembershipUpdated`, `OrgMembershipRemoved`.
@@ -864,7 +877,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | id | invariant | category | proof |
 |---|---|---|---|
 | org_membership/selector-validated | A client-sent organization selector (header or path) MUST resolve to an organization only if the caller is a member or its owner. Otherwise authentication MUST fail with a distinct "not a member" refusal. | Security | `TestResolveOrgScope`, `TestResolveOrgScope_NonMemberNonOwnerStillRefused`, `TestOrgNotMember_SaysWhatIsWrong`, `TestResolveOrgScope_HeaderLookupIsCaseInsensitive`, `TestResolveOrgScope_SlugFromHeadersWithoutMetadata` |
-| org_membership/path-header-agree | A request whose `org` field names a different organization from the one authentication resolved MUST be refused. An empty field MUST defer to authentication. | Security | `TestRefuseOtherOrg`, `TestRefuseOtherOrgDefersWhenNoOrgWasResolved` |
+| org_membership/path-header-agree | A request whose `org` field names a different organization from the one authentication resolved MUST be refused. An empty field MUST defer to authentication. | Security | `TestRefuseOtherOrg`, `TestManageMembership_RefusesAnotherOrgInTheRequest`, `TestRefuseOtherOrgDefersWhenNoOrgWasResolved` |
 | org_membership/sole-org-inference-only | With no selector, the active organization MUST be inferred only when the caller belongs to exactly one. With zero or several it MUST stay unset. | Security | `TestResolveOrgScope_SoleOrgInference`, `TestResolveOrgScope_MultipleOrgsStayAmbiguous`, `TestResolveOrgScope_HeaderWinsOverInference`, `TestResolveOrgScope_NoSelectorFallsBackToInference`, `TestResolveOrgScope_SoleOrgInferenceAlsoStampsTheSlug` |
 | org_membership/grants-narrowed-to-active-org | With an active organization, grants MUST be limited to realm-wide non-org-scoped roles plus roles assigned in that organization. With none, they MUST be realm-wide roles only. | Security | `TestNarrowGrants_ActiveOrg`, `TestNarrowGrants_NoActiveOrg`. Unit (mock) only for the role selection itself: the `GetUserOrgPermissions` predicate is SQL. A live test must give a user an org-scoped admin role in A and show that acting in B grants nothing from it. |
 | org_membership/intersect-on-roles | A permission MUST survive only if one single role grants it and that role passes both the realm axis and the organization axis. | Security | `TestNarrowGrants_APermissionTwoDifferentRolesGrantDoesNotSurvive`, `TestNarrowGrants_WildcardRoleMustPassTheOrgAxis` |
@@ -873,6 +886,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | org_membership/owner-not-locked-out | An organization's owner MUST be able to select it even without a membership row, so removing or changing memberships cannot lock the owner out. | Security | `TestResolveOrgScope_OwnerWithoutMembership`, `TestResolveOrgScope_MembershipShortCircuitsTheOwnershipLookup` |
 | org_membership/role-change-ceiling | A role change MUST be refused unless the caller holds every permission of the new role and covers every role the member currently holds in that organization. | Security | `TestUpdateOrgMembershipRole_RefusesARoleAboveTheCaller`, `TestMembership_TheMemberAboveTheCallerIsNotTheirsToChange` |
 | org_membership/removal-ceiling | A removal MUST be refused unless the caller covers every role the member holds in that organization. | Security | `TestMembership_TheMemberAboveTheCallerIsNotTheirsToChange` |
+| org_membership/owner-membership-fixed | `UpdateOrgMembershipRole` and `RemoveOrgMembership` MUST refuse the organization owner's membership (`MEMBERSHIP_IS_OWNER`, FailedPrecondition) before anything is written, whatever the caller covers: ownership outlives the membership, so a demoted or removed owner would keep root authority while vanishing from the member list. | Security | `TestManageMembership_RefusesTheOwnersMembership` |
 | org_membership/cross-org-management-refused | A caller acting in organization A MUST NOT change or remove a membership in organization B. | Security | `TestMembership_AnotherOrganizationsMemberIsRefused` |
 | org_membership/org-scoped-roles-only | A membership MUST carry only an org-scoped role, with distinct refusals for an unknown name (`UNKNOWN_ORG_ROLE`) and a realm-wide role (`ROLE_NOT_ORG_SCOPED`). The role MUST be applied by the ID that was checked. | Security | `TestRoleIDByName_RefusesARealmRole`, `TestRoleIDByName_AnUnknownNameIsATypoNotAScopingProblem`, `TestRoleIDByName_AcceptsAnOrgScopedRole`, `TestAssignableRolesAndValidatorCannotDisagree`, `TestUpdateOrgMembershipRole_GrantsTheCheckedRoleByID`, `TestUpdateOrgMembershipRole_OtherRefusals` |
 | org_membership/ceiling-fails-closed | A grant decision with no resolved permission envelope (a direct gRPC call) MUST be refused. | Failure & configuration | `TestCheckMayGrantRole_NoEnvelopeFailsClosed`, `TestUpdateOrgMembershipRole_OtherRefusals` |

@@ -34,6 +34,7 @@ const (
 	MsgRoleNotOrgScoped     = "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."
 	MsgMembershipInOtherOrg = "This membership belongs to another organization."
 	MsgMemberAboveCaller    = "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
+	MsgMembershipIsOwner    = "This is the organization's owner. Their membership cannot be changed or removed; transfer ownership first."
 )
 
 // The codes a client branches on for the same refusals.
@@ -42,6 +43,7 @@ const (
 	CodeRoleNotOrgScoped     = "ROLE_NOT_ORG_SCOPED"
 	CodeMembershipInOtherOrg = "MEMBERSHIP_IN_ANOTHER_ORG"
 	CodeMemberAboveCaller    = "MEMBER_ABOVE_CALLER"
+	CodeMembershipIsOwner    = "MEMBERSHIP_IS_OWNER"
 )
 
 // UpdateOrgMembershipRole changes a member's role, under the role ceiling.
@@ -181,6 +183,18 @@ func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membe
 		return refusal(ctx, codes.PermissionDenied,
 			"membership "+membershipID+" is in organization "+m.GetOrgId()+", not the caller's active "+active,
 			CodeMembershipInOtherOrg, "", MsgMembershipInOtherOrg, nil)
+	}
+	// The owner's membership is not one to manage: ownership is
+	// Organization.owner_id and outlives it, so a demoted or removed owner
+	// keeps root authority while vanishing from the member list.
+	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
+	if err != nil {
+		return err
+	}
+	if owns.GetOwner() {
+		return refusal(ctx, codes.FailedPrecondition,
+			"membership "+membershipID+" is the owner's of organization "+m.GetOrgId(),
+			CodeMembershipIsOwner, "", MsgMembershipIsOwner, nil)
 	}
 	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
 	if err != nil {
