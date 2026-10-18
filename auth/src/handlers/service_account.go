@@ -44,6 +44,7 @@ var errAuthnBotNoPassword = errors.New("machine account: password sign-in is not
 // and never name the field.
 func init() {
 	serviceAccountStaged = true // see feature_marks.go
+	isBotAccount = func(user *pb.User) bool { return user.GetKind() == pb.AccountKind_BOT }
 	signInBotGate = func(user *pb.User) error {
 		if user.GetKind() == pb.AccountKind_BOT {
 			return errAuthnBotNoPassword

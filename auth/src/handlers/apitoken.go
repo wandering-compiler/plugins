@@ -143,7 +143,7 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		deviceRevokedAt:  tok.GetDeviceRevokedAt(),
 		mcpOnly:          tok.GetMcpOnly(),
 		bearer:           tok.GetBearer(),
-		botAccount:       tok.GetUser().GetKind() == pb.AccountKind_BOT,
+		botAccount:       isBotAccount(tok.GetUser()),
 		legacyToken:      legacyPlaintext(token, tok.GetStoredTokenHash()),
 	}
 

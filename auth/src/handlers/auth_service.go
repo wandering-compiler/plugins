@@ -1129,6 +1129,14 @@ var errAuthnUserDisabled = errors.New("account disabled")
 // must not learn that an address belongs to a bot.
 var signInBotGate = func(user *pb.User) error { return nil }
 
+// isBotAccount reports whether user is a MACHINE account — what a bearer
+// token's owner must be (device/bot-bearer). A seam for the same reason as
+// signInBotGate: User.kind exists only under service_account, and the code
+// reading it here (apitoken.go) is staged by api_token alone, so naming the
+// field directly would not compile in a build without machine accounts.
+// service_account.go installs the real check; without it nobody is a bot.
+var isBotAccount = func(*pb.User) bool { return false }
+
 // refuseUnsignableAccount runs SignIn's account gates — disabled, machine — for
 // a path that issues a session to an EXISTING account without passing through
 // SignIn's lookup: the second sign-in step, the OAuth callback, the CLI
