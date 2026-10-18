@@ -189,9 +189,10 @@ message IssueApiTokenReq {
   // sha256(token), hex — see IssueTokenReq.token_hash.
   string    token_hash = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
   // device_id — the Device the token is bound to: the (owner, thumbprint)
-  // row of the public key the request named (RegisterDevice). REQUIRED, as on
-  // IssueTokenReq: no API token is minted unbound.
-  string    device_id  = 6 [(w17.field) = { type: UUID }];
+  // row of the public key the request named (RegisterDevice). Empty (NULL)
+  // ONLY for a machine account's bearer token (bearer, device/bot-bearer):
+  // issueApiTokenTx refuses to mint a person's or a keyed token without one.
+  string    device_id  = 6 [(w17.field) = { type: UUID, null: true }];
   // The ROOT approver of the token (UserToken.approved_by_device_id): the
   // Device row of the creating caller's device, or — when the caller is a
   // session that was itself approved by another device (a CLI session) —
@@ -203,31 +204,15 @@ message IssueApiTokenReq {
   string    thumbprint     = 8;
   string    key_thumbprint = 9;
   string    created_by     = 10;
+  // bearer — a machine account's bearer token (UserToken.bearer,
+  // device/bot-bearer), bound to no device. Field-gated in step with the
+  // column and with the SET assignment that writes it, as
+  // CreateUserReq.tenant_id is: only service_account.go sets it, and one
+  // INSERT keeps ApiTokenCreated's one emit site.
+  bool      bearer         = 11 [(w17.contrib.plugin_feature_field) = "service_account"];
 }
 message IssueApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
-  UserToken token = 1;
-}
-
-// IssueBotBearerTokenReq — a machine account's bearer token
-// (device/bot-bearer): no device, flagged `bearer`, always expiring.
-message IssueBotBearerTokenReq {
-  option (w17.contrib.plugin_feature) = "service_account";
-  string    user_id    = 1 [(w17.field) = { type: UUID }];
-  string    name       = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
-  TokenType token_type = 3;
-  // REQUIRED: a bearer token always expires; the handler decides when.
-  google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
-  // sha256(token), hex — see IssueTokenReq.token_hash.
-  string    token_hash = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
-  // See IssueApiTokenReq.approved_by_device_id: the operator's device.
-  string    approved_by_device_id = 6 [(w17.field) = { type: UUID, null: true }];
-  // event-only, for ApiTokenCreated — see IssueApiTokenReq.
-  string    thumbprint = 7;
-  string    created_by = 8;
-}
-message IssueBotBearerTokenResp {
-  option (w17.contrib.plugin_feature) = "service_account";
   UserToken token = 1;
 }
 
@@ -1776,8 +1761,10 @@ service AuthMutation {
 
   // IssueApiToken — INSERT an API UserToken (token_type stamped by
   // the handler) with an optional label, bound to the Device of the key the
-  // request named (device_id, required) and recording the creator's device
-  // (approved_by_device_id). The handler mints the token and passes only its
+  // request named (device_id) and recording the creator's device
+  // (approved_by_device_id). A machine account's bearer token
+  // (device/bot-bearer) is the one row with no device and bearer TRUE,
+  // written under service_account only. The handler mints the token and passes only its
   // sha256. Gated api_token.
   rpc IssueApiToken(IssueApiTokenReq) returns (IssueApiTokenResp) {
     option (w17.contrib.plugin_feature_rpc) = "api_token";
@@ -1792,7 +1779,8 @@ service AuthMutation {
           "name = :name, "
           "expires_at = :expires_at, "
           "device_id = :device_id, "
-          "approved_by_device_id = :approved_by_device_id "
+          "approved_by_device_id = :approved_by_device_id, "
+          "?feature(service_account) bearer = :bearer "
           "RETURNING id AS token.id, "
           "          user_id AS token.user_id, "
           "          token_type AS token.token_type, "
@@ -1814,51 +1802,6 @@ service AuthMutation {
           { key: "key_thumbprint", value: "$request.key_thumbprint" },
           { key: "created_by",     value: "$request.created_by" },
           { key: "device_id", value: "$request.thumbprint" }
-        ]
-      }
-    };
-  }
-
-  // IssueBotBearerToken — INSERT a machine account's bearer token
-  // (device/bot-bearer): bound to no device (device_id NULL), flagged
-  // `bearer`, with the expires_at the handler decided. Only IssueBotToken's
-  // keyless path calls it, for an account it checked is kind BOT. Emits
-  // ApiTokenCreated like IssueApiToken, with no key thumbprint. Gated
-  // service_account.
-  rpc IssueBotBearerToken(IssueBotBearerTokenReq) returns (IssueBotBearerTokenResp) {
-    option (w17.contrib.plugin_feature_rpc) = "service_account";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "INSERT INTO @module.UserToken SET "
-          "user_id = :user_id, "
-          "token_hash = :token_hash, "
-          "token_type = :token_type, "
-          "name = :name, "
-          "expires_at = :expires_at, "
-          "bearer = TRUE, "
-          "approved_by_device_id = :approved_by_device_id "
-          "RETURNING id AS token.id, "
-          "          user_id AS token.user_id, "
-          "          token_type AS token.token_type, "
-          "          name AS token.name, "
-          "          created_at AS token.created_at, "
-          "          expires_at AS token.expires_at, "
-          "          bearer AS token.bearer, "
-          "          approved_by_device_id AS token.approved_by_device_id"
-      }
-    };
-    option (w17.event_emit) = {
-      event: "ApiTokenCreated"
-      payload: {
-        fields: [
-          { key: "token_id",   value: "$response.token.id" },
-          { key: "user_id",    value: "$response.token.user_id" },
-          { key: "created_at", value: "$response.token.created_at" },
-          { key: "name",       value: "$response.token.name" },
-          { key: "created_by", value: "$request.created_by" },
-          { key: "device_id",  value: "$request.thumbprint" }
         ]
       }
     };

@@ -45,8 +45,8 @@ type keyStore struct {
 	*deviceStore
 
 	minted []*pb.IssueApiTokenReq
-	// IssueBotBearerToken's writes (device/bot-bearer)
-	bearerMinted []*pb.IssueBotBearerTokenReq
+	// the bearer tokens among the IssueApiToken writes (device/bot-bearer)
+	bearerMinted []*pb.IssueApiTokenReq
 	order        []string
 	bot          *pb.User
 	// a machine account's ListMachineKeys failure
@@ -70,6 +70,11 @@ func (s *keyStore) RegisterDevice(ctx context.Context, in *pb.RegisterDeviceReq,
 }
 
 func (s *keyStore) IssueApiToken(_ context.Context, in *pb.IssueApiTokenReq, _ ...grpc.CallOption) (*pb.IssueApiTokenResp, error) {
+	if in.GetBearer() {
+		s.order = append(s.order, "mint-bearer")
+		s.bearerMinted = append(s.bearerMinted, in)
+		return &pb.IssueApiTokenResp{Token: &pb.UserToken{Id: "tok-bearer", UserId: in.GetUserId()}}, nil
+	}
 	s.order = append(s.order, "mint")
 	s.minted = append(s.minted, in)
 	return &pb.IssueApiTokenResp{Token: &pb.UserToken{Id: "tok-api", UserId: in.GetUserId(), DeviceId: in.GetDeviceId()}}, nil

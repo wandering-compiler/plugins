@@ -969,10 +969,8 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("%s's request %s declares no thumbprint", rpc, req[1])
 		}
 	}
-	// One per event, and ApiTokenCreated twice: a bound API token
-	// (IssueApiToken) and a machine account's bearer token (IssueBotBearerToken).
-	if emits != 11 {
-		t.Errorf("%d emits of a device-carrying event, want 11", emits)
+	if emits != 10 {
+		t.Errorf("%d emits of a device-carrying event, want 10 (one per event)", emits)
 	}
 }
 

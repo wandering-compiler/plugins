@@ -462,7 +462,7 @@ message UserToken {
   // possession (device/bot-bearer): bound to no device, presented as
   // `Bearer`, and recognisable by its prefix (botBearerPrefix) so that
   // Authenticate still refuses every other proofless request before the
-  // lookup. Only IssueBotToken's keyless path sets it (IssueBotBearerToken),
+  // lookup. Only IssueBotToken's keyless path sets it (through IssueApiToken's bearer),
   // only for an account of kind BOT, and always with an expires_at. The flag on
   // the row is what authorizes the request, never the prefix: a token without
   // the flag is refused proofless whatever it looks like. FALSE on every other
