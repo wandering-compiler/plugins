@@ -1,5 +1,28 @@
 # auth — changelog
 
+## 0.1.0-rc.28
+
+### `devices` requires `authenticate_turnkey`
+
+- **The `devices` feature now declares `requires: [authenticate_turnkey]`.** Its handlers read the caller's device from the turnkey identity answer (`AuthResp`), which only `authenticate_turnkey` stages. An activation that enabled `devices` without it got a bundle that did not compile (`undefined: pb.AuthResp`, in a file the project never wrote); it is now refused at activation with the missing feature named.
+- An activation that already enables both (every known one) changes nothing: the same tables, env variables and endpoints, no migration.
+
+### A member's role and membership can be managed over REST
+
+- **`OrgMember.membership_id` (6, new):** `ListOrgMembers` now names each membership. Those ids are what `UpdateOrgMembershipRole` and `RemoveOrgMembership` take.
+- **New feature `org_members_rest`** (off by default, requires `org_membership` and `org_invite`, whose role list a role picker needs). It publishes two endpoints on the preset, beside the member list:
+  - `PUT /auth/orgs/{org}/members/{id}/role` (`UpdateOrgMembershipRole`);
+  - `DELETE /auth/orgs/{org}/members/{id}` (`RemoveOrgMembership`).
+
+  Both keep the role ceiling: the caller must cover every role the member holds, plus the role they are given.
+- **`UpdateOrgMembershipRoleReq.org` (3) and `RemoveOrgMembershipReq.org` (2):** the organization the path names. A request that names a different organization from the one authentication resolved is refused with `ORG_MISMATCH`, as the other org-path calls already are.
+- **The owner's membership can no longer be changed or removed:** `UpdateOrgMembershipRole` and `RemoveOrgMembership` refuse it with `MEMBERSHIP_IS_OWNER` (`FAILED_PRECONDITION`), whatever the caller covers. Ownership outlives the membership, so a demoted or removed owner used to keep root authority while vanishing from the member list.
+
+### Built on SDK go/v0.1.0-rc.24
+
+- **The plugin's module requires `github.com/wandering-compiler/sdk/go` v0.1.0-rc.24.** A w17ctl that knows the request data annotations (`gdpr`, `sensitive`) generates a redaction plan next to every pb file of the plugin's `src/gen`, and that plan imports the SDK's `lib/redact`, which rc.24 is the first to have. The plugin's own code does not change.
+- Nothing in your project changes: the same activation, the same env variables, no migration. Your project's own `go.mod` moves to rc.24 with the same w17ctl.
+
 ## 0.1.0-rc.27
 
 ### A bearer token is written by IssueApiToken; IssueBotBearerToken is gone
