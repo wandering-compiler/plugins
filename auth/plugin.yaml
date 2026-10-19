@@ -823,8 +823,14 @@ presets:
           delete: AuthService.RemoveOrgMembership
           # Only the role is editable — moving a membership to another
           # user/org is a removal + re-add (unique (user_id, org_id,
-          # ended_key)).
-          fields: [role]
+          # ended_key)). `org` is the REST path's organization
+          # (org_members_rest), listed because the method takes it, and
+          # every field an admin update takes is one a direct call sets.
+          # It selects nothing: a value other than the caller's org is
+          # refused (refuseOtherOrg), and the membership must be in the
+          # caller's active org whatever it says (checkMayManageMembership),
+          # so it can neither move a membership nor reach another org's.
+          fields: [role, org]
           readonly_fields: [id, user_id, org_id, created_at]
       # Turnkey session/token review. Gated user_admin. Lists every
       # UserToken across users (NEVER the secret token value) so an
