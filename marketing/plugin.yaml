@@ -82,3 +82,22 @@ subscriptions:
     as: AuthMarketingConsentChanged
     feature: brevo
     optional: true
+
+sandboxes:
+  # A dev-only stand-in for the Brevo API: it answers the plugin's three calls
+  # and keeps what they said (GET /_stub/contacts/{ext_id}, /_stub/events), so
+  # a project's suite reads back what would have reached Brevo. Point the
+  # activation at it: <DOMAIN>_MARKETING_BREVO_BASE_URL=http://brevostub:8080/v3
+  # and _BREVO_API_KEY=stub-key. Built locally from a clone of this repository:
+  #   docker build -t ${W17_WORKSPACE:-w17}-w17-brevostub:dev marketing/sandboxes/brevostub
+  - name: brevostub
+    description: "Fake Brevo API (dev-only) for the brevo feature"
+    feature: brevo
+    image: ${W17_WORKSPACE:-w17}-w17-brevostub:dev
+    env:
+      - name: PORT
+        value: "8080"
+        description: "Container listen port; siblings dial http://brevostub:8080."
+      - name: API_KEY
+        value: "stub-key"
+        description: "The api-key every /v3 call must carry."

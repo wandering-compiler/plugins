@@ -52,6 +52,15 @@ them the plugin still sends events and creates contacts.
 Consent does not change what is recorded or sent: it is the tool's to read
 before it writes to anyone.
 
+## In development: the stub
+
+`sandboxes/brevostub` is a dev-only stand-in for the Brevo API (the plugin's
+`brevostub` sandbox): it answers the plugin's three calls and keeps what they
+said, readable at `GET /_stub/contacts/{ext_id}` and `GET /_stub/events`, so a
+project's suite can assert on what would have reached Brevo. Point the
+activation at it with `<DOMAIN>_MARKETING_BREVO_BASE_URL=http://brevostub:8080/v3`
+and `_BREVO_API_KEY=stub-key`.
+
 ## Delivery
 
 The stream delivers at least once and Brevo's events API has no idempotency
