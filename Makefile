@@ -23,7 +23,7 @@ GOLANGCI = $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(sh
 # gen is a prerequisite of every target that compiles a plugin's Go.
 .PHONY: check plugins-exist gen test vet fmt check-committed-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release release-pr
 
-check: fmt vet lint test check-modules check-stage check-plugin-msgids check-committed-pb check-render check-published-tests check-refs check-names check-tools check-versions
+check: fmt vet lint test check-modules check-stage check-plugin-msgids check-committed-pb check-render check-published-tests check-refs check-names check-tools check-versions check-layout
 
 # A typo in PLUGIN must not make every check pass over nothing.
 plugins-exist:
@@ -160,6 +160,20 @@ check-tools:
 		out="$$(gofmt -l $$m)"; [ -z "$$out" ] || { echo "!! not gofmt-clean: $$out"; exit 1; }; \
 		(cd $$m && $(GO) vet ./... && $(GOLANGCI) ./... && $(GO) test -count=1 ./...) || exit 1; \
 	done
+
+# A plugin's protos go in the layers a module is made of — proto/<layer>/,
+# the layers the platform reads (types, queries, mutations, business, events).
+# Staged into a domain, any other directory under proto/ becomes a module of
+# its own inside the plugin's, which a project's codegen refuses ("is a module
+# … and also a group above module"), and nothing here builds a project. The
+# marketing plugin's first release went out with proto/subscriptions/.
+check-layout:
+	@bad=0; for f in $$(find $(addsuffix /proto,$(PLUGINS)) -name '*.proto'); do \
+		rel=$${f#*/proto/}; layer=$${rel%%/*}; \
+		case "$$rel" in */*/*) bad=1; echo "!! $$f: nested below proto/$$layer — a layer holds its protos directly";; esac; \
+		case "$$layer" in types|queries|mutations|business|events) ;; \
+			*) bad=1; echo "!! $$f: proto/$$layer is not a layer (types, queries, mutations, business, events) — a project's codegen reads it as a module of its own";; esac; \
+	done; exit $$bad
 
 # Every plugin is on the one version line the platform uses: 0.1.0-rc.N, the rc
 # counter the only thing that moves. A cluster release once went to 0.2.0 — a

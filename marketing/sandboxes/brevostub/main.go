@@ -14,7 +14,7 @@
 // Every /v3 call needs the `api-key` header to equal API_KEY (default
 // stub-key). Never shipped to production.
 //
-// It behaves as Brevo was measured to (2026-10-19): an event for an unknown
+// It behaves as Brevo was measured to: an event for an unknown
 // ext_id creates the contact; an attribute the account has not created is
 // dropped silently; an upsert by POST that names a known ext_id with another
 // email is refused (duplicate_parameter) — an address changes by PUT.
