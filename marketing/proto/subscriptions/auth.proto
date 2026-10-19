@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+// Marketing plugin — its mirrors of the auth plugin's events.
+//
+// The plugin compiles on its own, so it cannot import auth's types: each
+// mirror declares the fields it reads, under auth's numbers and types, and
+// staging refuses a mirror that disagrees with the event it names
+// (plugin.yaml subscriptions). Never feature-gated: On<As> takes the type in
+// every build.
+
+package w17.contrib.marketing;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "@project;@pkg";
+
+// auth.UserCreated — a contact is created at sign-up, before the first
+// request: what an activation campaign ("signed up, did nothing") needs.
+message AuthUserCreated {
+  string user_id = 1;
+  string email   = 2;
+}
+
+// auth.UserUpdated — the contact follows a changed address.
+message AuthUserUpdated {
+  string user_id = 1;
+  string email   = 2;
+}
+
+// auth.UserDeleted — the account was erased: the contact is deleted in the
+// tool, with its history.
+message AuthUserDeleted {
+  string user_id = 1;
+}
+
+// auth.MarketingConsentChanged — the contact's consent attribute follows the
+// user's decision without waiting for a request after it.
+message AuthMarketingConsentChanged {
+  string                    user_id    = 1;
+  bool                      consent    = 2;
+  google.protobuf.Timestamp decided_at = 3;
+}

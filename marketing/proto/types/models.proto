@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+// Marketing plugin — its one table.
+//
+// SentEvent remembers the request records already sent to the marketing
+// tool. The request stream delivers at least once (a failed batch comes back
+// whole), and Brevo's events API has no idempotency key, so without it a
+// redelivered record would be a second event in the tool. Rows are forgotten
+// after the stream's redelivery window (ForgetSentEventsBefore). Tables emit
+// as `<registered_as>_<message_lower>` on the project's default connection.
+
+package w17.contrib.marketing;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message SentEvent {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "brevo";
+
+  // id — the request record's id (RequestEventMeta.id, a UUIDv7), hex.
+  string id = 1 [(w17.field) = { type: CHAR, max_len: 32, pk: true }];
+  google.protobuf.Timestamp sent_at = 2 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}

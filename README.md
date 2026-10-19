@@ -1,7 +1,7 @@
 # w17 plugins
 
 The source of the plugins the [w17](https://github.com/wandering-compiler) compiler
-installs into a project: `auth`, `agent`, `cluster` and `payment`.
+installs into a project: `auth`, `agent`, `cluster`, `marketing` and `payment`.
 
 A plugin is a directory with a `plugin.yaml` manifest, its `proto/` declarations
 and its Go handlers under `src/`. A project never imports a plugin as a Go module.

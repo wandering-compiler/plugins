@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+// Marketing plugin — MarketingMutation write primitives.
+
+package w17.contrib.marketing;
+
+import "google/protobuf/timestamp.proto";
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message RecordSentEventReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string id = 1 [(w17.field) = { type: CHAR, max_len: 32 }];
+}
+message RecordSentEventResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string id = 1;
+}
+
+message ForgetSentEventsBeforeReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  google.protobuf.Timestamp before = 1 [(w17.field) = { type: DATETIME }];
+}
+message ForgetSentEventsBeforeResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+}
+
+service MarketingMutation {
+  // RecordSentEvent — remember a record as sent, AFTER the tool accepted
+  // it: recorded first, a failed send would lose the event for good. A
+  // UNIQUE_VIOLATION is a record a concurrent replica recorded too, which is
+  // the same outcome. Gated brevo.
+  rpc RecordSentEvent(RecordSentEventReq) returns (RecordSentEventResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.SentEvent SET "
+          "id = :id "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // ForgetSentEventsBefore — drop what the stream can no longer redeliver.
+  // Gated brevo.
+  rpc ForgetSentEventsBefore(ForgetSentEventsBeforeReq) returns (ForgetSentEventsBeforeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "DELETE FROM @module.SentEvent WHERE sent_at < :before"
+      }
+    };
+  }
+}

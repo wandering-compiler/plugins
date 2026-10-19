@@ -10,6 +10,7 @@ they are measured against it. A plugin without one is not finished.
 | payment | [payment/SPEC.md](payment/SPEC.md) |
 | agent | [agent/SPEC.md](agent/SPEC.md) |
 | cluster | [cluster/SPEC.md](cluster/SPEC.md) |
+| marketing | [marketing/SPEC.md](marketing/SPEC.md) |
 
 ## What a specification contains
 
