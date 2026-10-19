@@ -79,6 +79,26 @@ message UserUpdated {
   string email   = 2;
 }
 
+// MarketingConsentChanged — emitted on AuthMutation.SetUserMarketingConsent,
+// when the user gives or withdraws their consent to marketing messages. A
+// subscriber holding a copy of it (a marketing tool's contact attribute)
+// updates that copy here, rather than on the user's next request, which may
+// never come after a withdrawal. Gated marketing_consent.
+message MarketingConsentChanged {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.user.marketing_consent_changed"
+  };
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+
+  string                    user_id    = 1;
+  bool                      consent    = 2;
+  google.protobuf.Timestamp decided_at = 3;
+  // device_id — the key thumbprint of the device the user decided from: with
+  // decided_at, the record of how the consent was given.
+  string                    device_id  = 4;
+}
+
 // UserTokenRevoked — emitted on AuthMutation.RevokeUserToken (the admin
 // Sessions page revoke) once the token is revoked (the row stays, with
 // revoked_at set). Subscribers can

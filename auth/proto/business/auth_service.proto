@@ -140,6 +140,13 @@ message AuthResp {
   // call reaches knows the verified device beside the user. Never empty on
   // a successful answer: an unbound token is refused.
   string              device_id = 6;
+
+  // marketing_consent — the user's consent to marketing messages
+  // (User.marketing_consent): false when not given. The gateway copies it
+  // into every request record (RequestEventMeta.marketing_consent) for the
+  // tool that sends the messages; nothing here acts on it. Field-gated
+  // `marketing_consent`.
+  bool                marketing_consent = 7 [(w17.contrib.plugin_feature_field) = "marketing_consent"];
 }
 
 // SignInReq / SignInResp — canonical email+password sign-in
@@ -994,6 +1001,24 @@ message ChangePasswordReq {
 }
 message ChangePasswordResp { option (w17.contrib.plugin_feature) = "password_change"; }
 
+// The caller's own consent to marketing messages. Get reads it; Set records a
+// decision (true = given, false = withdrawn) and answers what is now stored.
+// `decided_at` is unset when the caller was never asked, which is how a UI
+// knows to ask. Both act on the authenticated caller only: the request names
+// no user. Gated marketing_consent.
+message GetMarketingConsentReq {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+}
+message SetMarketingConsentReq {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  bool consent = 1;
+}
+message MarketingConsentResp {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  bool                      consent    = 1;
+  google.protobuf.Timestamp decided_at = 2;
+}
+
 service AuthService {
   // Service-level tag would cascade to SignIn / SignUp too, but
   // each turnkey has its own opt-in feature tag — the service is
@@ -1380,6 +1405,13 @@ service AuthService {
   // channel; the current password is the proof.
   rpc ChangePassword(ChangePasswordReq) returns (ChangePasswordResp) {
     option (w17.contrib.plugin_feature_rpc) = "password_change";
+  }
+
+  rpc GetMarketingConsent(GetMarketingConsentReq) returns (MarketingConsentResp) {
+    option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+  }
+  rpc SetMarketingConsent(SetMarketingConsentReq) returns (MarketingConsentResp) {
+    option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
   }
 }
 

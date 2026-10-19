@@ -672,6 +672,18 @@ message GetUserByIdResp {
   User user = 1;
 }
 
+// The caller's marketing consent, for SetMarketingConsent's reader. Gated
+// marketing_consent.
+message GetUserMarketingConsentReq {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  string user_id = 1;
+}
+message GetUserMarketingConsentResp {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  bool                      consent    = 1;
+  google.protobuf.Timestamp decided_at = 2;
+}
+
 message GetTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
@@ -1492,6 +1504,7 @@ service AuthQuery {
           "       u.password_hash AS user.password_hash, "
           "       ?feature(service_account) u.kind AS user.kind, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
           "       u.created_at AS user.created_at, "
           "       t.id AS token_id, "
           "       COALESCE(t.token_hash, '') AS stored_token_hash, "
@@ -1921,6 +1934,7 @@ service AuthQuery {
           "       u.id AS user.id, "
           "       ?feature(service_account) u.kind AS user.kind, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
           "       t.last_used_at AS last_used_at, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       d.revoked_at AS device_revoked_at, "
@@ -2345,6 +2359,22 @@ service AuthQuery {
           "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           "       u.created_at AS user.created_at "
           "FROM @module.User u WHERE u.id = :user_id"
+      }
+    };
+  }
+
+  // The user's marketing consent and when they decided it (NULL = never
+  // asked). Gated marketing_consent.
+  rpc GetUserMarketingConsent(GetUserMarketingConsentReq) returns (GetUserMarketingConsentResp) {
+    option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.marketing_consent AS consent, "
+          "       u.marketing_consent_at AS decided_at "
+          "FROM @module.User u "
+          "WHERE u.id = :user_id"
       }
     };
   }

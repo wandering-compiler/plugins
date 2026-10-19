@@ -600,6 +600,7 @@ type bindingQuery struct {
 	lookups int
 	legacy  bool           // the known token's row has no stored hash yet
 	rec     *touchRecorder // the writes Authenticate made (optional)
+	consent bool           // the account's User.marketing_consent
 }
 
 func (q *bindingQuery) stored(hash string) string {
@@ -614,7 +615,7 @@ func (q *bindingQuery) GetUserByTokenWithPermissions(_ context.Context, in *pb.G
 	if in.GetTokenHash() != sha256Hex(q.known) {
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
-	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1"}, TokenId: "tok-1", StoredTokenHash: q.stored(in.GetTokenHash()),
+	return &pb.GetUserByTokenWithPermissionsResp{User: &pb.User{Id: "u1", MarketingConsent: q.consent}, TokenId: "tok-1", StoredTokenHash: q.stored(in.GetTokenHash()),
 		DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked, McpOnly: q.mcp}, nil
 }
 
@@ -624,7 +625,7 @@ func (q *bindingQuery) GetTokenWithType(_ context.Context, in *pb.GetTokenWithTy
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
 	return &pb.GetTokenWithTypeResp{UserId: "u1", TokenId: "tok-1", TokenType: pb.TokenType_TOKEN_TYPE_SESSION, StoredTokenHash: q.stored(in.GetTokenHash()),
-		User: &pb.User{Id: "u1"}, LastUsedAt: timestamppb.Now(), DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked, McpOnly: q.mcp}, nil
+		User: &pb.User{Id: "u1", MarketingConsent: q.consent}, LastUsedAt: timestamppb.Now(), DeviceThumbprint: q.thumb, DeviceRevokedAt: q.revoked, McpOnly: q.mcp}, nil
 }
 
 func (q *bindingQuery) GetExpiredToken(_ context.Context, in *pb.GetExpiredTokenReq, _ ...grpc.CallOption) (*pb.GetExpiredTokenResp, error) {
