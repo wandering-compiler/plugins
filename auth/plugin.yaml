@@ -284,7 +284,7 @@ features:
     go_files:
       - handlers/password_change.go
   - name: step_up
-    description: "Step-up for sensitive actions: the signed-in person confirms their password in their current session (ConfirmPassword, POST /auth/password/confirm), and the session token records when (UserToken.stepped_up_at). It changes nothing else — no token is minted, no session ended. A consumer that guards an action reads the caller's own token row and asks for a recent confirmation, so a stolen token and its device key, which do not carry the password, cannot perform it. Refuses an API token (it has no session to step up). Off by default; a migration adds the column."
+    description: "Step-up for sensitive actions: the signed-in person confirms their password in their current session (ConfirmPassword, POST /auth/password/confirm), and the session token records when (UserToken.stepped_up_at). It changes nothing else — no token is minted, no session ended. A consumer that guards an action reads the caller's own token row and asks for a recent confirmation, so a stolen token and its device key, which do not carry the password, cannot perform it. Refuses an API token (it has no session to step up). Every guess is counted on the session first; five wrong passwords in a row lock its step-up for fifteen minutes (UserToken.step_up_attempts / step_up_locked_until), so a stolen session is no password oracle. Off by default; a migration adds the three columns."
     default: false
     go_files:
       - handlers/step_up.go
