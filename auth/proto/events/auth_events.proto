@@ -99,6 +99,25 @@ message MarketingConsentChanged {
   string                    device_id  = 4;
 }
 
+// BotAllowlistChanged — emitted on AuthMutation.SetBotAllowedCidrs, when an
+// operator sets or clears where a machine account's bearer tokens are
+// accepted from: widening or clearing it is a security change, so who made it
+// is part of the record. Gated bot_token_guard.
+message BotAllowlistChanged {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.bot.allowlist_changed"
+  };
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+
+  string user_id       = 1;
+  // The new list (canonical CIDRs, comma-separated); empty = anywhere.
+  string allowed_cidrs = 2;
+  // The operator who changed it, and the key thumbprint of their device.
+  string changed_by    = 3;
+  string device_id     = 4;
+}
+
 // UserTokenRevoked — emitted on AuthMutation.RevokeUserToken (the admin
 // Sessions page revoke) once the token is revoked (the row stays, with
 // revoked_at set). Subscribers can

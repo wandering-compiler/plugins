@@ -101,14 +101,14 @@ func TestAuthenticate_ABotBearerUseIsSummarised(t *testing.T) {
 // as its /32 or /128, duplicates dropped. Anything else, and more than the
 // cap, is refused on the field.
 func TestCanonicalAllowlist(t *testing.T) {
-	got, err := canonicalAllowlist(context.Background(), []string{" 203.0.113.7 ", "203.0.113.9/24", "203.0.113.0/24", "", "2001:db8::1", "::ffff:198.51.100.1"})
+	got, err := canonicalAllowlist(context.Background(), []string{" 203.0.113.7 ", "203.0.113.9/24", "203.0.113.0/24", "", "2001:db8::1", "::ffff:198.51.100.1", "::ffff:192.0.2.0/120"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, ",") != "203.0.113.7/32,203.0.113.0/24,2001:db8::1/128,198.51.100.1/32" {
+	if strings.Join(got, ",") != "203.0.113.7/32,203.0.113.0/24,2001:db8::1/128,198.51.100.1/32,192.0.2.0/24" {
 		t.Errorf("canonical = %v", got)
 	}
-	for _, bad := range [][]string{{"example.com"}, {"203.0.113.0/33"}} {
+	for _, bad := range [][]string{{"example.com"}, {"203.0.113.0/33"}, {"fe80::1%eth0"}, {"::ffff:0.0.0.0/90"}} {
 		_, err := canonicalAllowlist(context.Background(), bad)
 		if status.Code(err) != codes.InvalidArgument || detailOf(t, err).GetCode() != CodeBotAllowlistInvalid || detailOf(t, err).GetField() != "cidrs" {
 			t.Errorf("%v: %v", bad, err)
@@ -134,7 +134,7 @@ type guardStore struct {
 func (s *guardStore) SetBotAllowedCidrs(_ context.Context, in *pb.SetBotAllowedCidrsReq, _ ...grpc.CallOption) (*pb.SetBotAllowedCidrsResp, error) {
 	s.sets = append(s.sets, in)
 	s.cidrs = in.GetAllowedCidrs()
-	return &pb.SetBotAllowedCidrsResp{Id: in.GetUserId()}, nil
+	return &pb.SetBotAllowedCidrsResp{Id: in.GetUserId(), AllowedCidrs: in.GetAllowedCidrs()}, nil
 }
 
 func (s *guardStore) GetBotAllowedCidrs(context.Context, *pb.GetBotAllowedCidrsReq, ...grpc.CallOption) (*pb.GetBotAllowedCidrsResp, error) {
@@ -161,7 +161,8 @@ func TestSetBotAllowlistAndGetBotGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(resp.GetCidrs(), ",") != "203.0.113.7/32,198.51.100.0/24" || len(s.sets) != 1 || s.sets[0].GetUserId() != "bot-1" || s.cidrs != "203.0.113.7/32,198.51.100.0/24" {
+	if strings.Join(resp.GetCidrs(), ",") != "203.0.113.7/32,198.51.100.0/24" || len(s.sets) != 1 || s.sets[0].GetUserId() != "bot-1" || s.cidrs != "203.0.113.7/32,198.51.100.0/24" ||
+		s.sets[0].GetChangedBy() != "op-1" || s.sets[0].GetThumbprint() != testJKT {
 		t.Fatalf("resp %v, stored %q (%d writes)", resp.GetCidrs(), s.cidrs, len(s.sets))
 	}
 	g, err := h.GetBotGuard(op, &pb.GetBotGuardReq{UserId: "bot-1"})
@@ -177,6 +178,9 @@ func TestSetBotAllowlistAndGetBotGuard(t *testing.T) {
 	}
 
 	s.sets = nil
+	if _, err := h.SetBotAllowlist(op, &pb.SetBotAllowlistReq{Cidrs: []string{"10.0.0.1"}}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("no user_id: %v", err)
+	}
 	if _, err := h.SetBotAllowlist(op, &pb.SetBotAllowlistReq{UserId: "nobody", Cidrs: []string{"10.0.0.1"}}); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("unknown account: %v", err)
 	}

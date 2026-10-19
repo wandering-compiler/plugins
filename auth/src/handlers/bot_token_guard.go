@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -60,7 +61,7 @@ func checkBotAllowlist(_ context.Context, _ *AuthServiceHandler, p *authPrincipa
 	if err != nil {
 		return errBotAddressRefused
 	}
-	addr = addr.Unmap()
+	addr = addr.Unmap().WithZone("")
 	for _, pf := range prefixes {
 		if pf.Contains(addr) {
 			return nil
@@ -106,6 +107,15 @@ func canonicalAllowlist(ctx context.Context, entries []string) ([]string, error)
 		var pf netip.Prefix
 		if strings.Contains(e, "/") {
 			p, err := netip.ParsePrefix(e)
+			if err == nil && p.Addr().Is4In6() {
+				// The client address is matched unmapped, as IPv4: an
+				// IPv4-mapped network must be one too, or it matches nothing.
+				if p.Bits() < 96 {
+					err = errors.New("an IPv4-mapped network shorter than /96")
+				} else {
+					p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+				}
+			}
 			if err != nil {
 				return nil, refusal(ctx, codes.InvalidArgument, "allowlist entry "+strconv.Quote(e)+" is not a CIDR",
 					CodeBotAllowlistInvalid, "cidrs", MsgBotAllowlistInvalid, map[string]string{"entry": e})
@@ -113,6 +123,11 @@ func canonicalAllowlist(ctx context.Context, entries []string) ([]string, error)
 			pf = p.Masked()
 		} else {
 			a, err := netip.ParseAddr(e)
+			if err == nil && a.Zone() != "" {
+				// A zone names an interface of one machine; it is no address
+				// a request arrives from.
+				err = errors.New("a zoned address")
+			}
 			if err != nil {
 				return nil, refusal(ctx, codes.InvalidArgument, "allowlist entry "+strconv.Quote(e)+" is not an address",
 					CodeBotAllowlistInvalid, "cidrs", MsgBotAllowlistInvalid, map[string]string{"entry": e})
@@ -157,7 +172,7 @@ func recordBotTokenUse(ctx context.Context, h *AuthServiceHandler, p *authPrinci
 	surface := truncate(headers[surfaceKey], 16)
 	method := truncate(strings.ToValidUTF8(headers[methodKey], invalidUTF8), 255)
 	if a, err := netip.ParseAddr(addr); err == nil {
-		addr = a.Unmap().String()
+		addr = a.Unmap().WithZone("").String()
 	} else {
 		addr = ""
 	}
@@ -187,11 +202,15 @@ func recordBotTokenUse(ctx context.Context, h *AuthServiceHandler, p *authPrinci
 // accepted from. The operator rules of IssueBotToken: a signed-in person, a
 // bot of their organization, holding no role above their own.
 func (h *AuthServiceHandler) SetBotAllowlist(ctx context.Context, req *pb.SetBotAllowlistReq) (*pb.SetBotAllowlistResp, error) {
-	if _, err := callerUserID(ctx); err != nil {
+	callerID, err := callerUserID(ctx)
+	if err != nil {
 		return nil, Unauthenticated(err)
 	}
 	if err := requireSessionCaller(ctx); err != nil {
 		return nil, err
+	}
+	if req.GetUserId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_id is required")
 	}
 	bot, err := h.operableBot(ctx, req.GetUserId())
 	if err != nil {
@@ -201,7 +220,9 @@ func (h *AuthServiceHandler) SetBotAllowlist(ctx context.Context, req *pb.SetBot
 	if err != nil {
 		return nil, err
 	}
-	if _, err := h.Mutation.SetBotAllowedCidrs(ctx, &pb.SetBotAllowedCidrsReq{UserId: bot.GetId(), AllowedCidrs: strings.Join(cidrs, ",")}); err != nil {
+	if _, err := h.Mutation.SetBotAllowedCidrs(ctx, &pb.SetBotAllowedCidrsReq{
+		UserId: bot.GetId(), AllowedCidrs: strings.Join(cidrs, ","), ChangedBy: callerID, Thumbprint: requestThumbprint(ctx),
+	}); err != nil {
 		return nil, err
 	}
 	return &pb.SetBotAllowlistResp{Cidrs: cidrs}, nil
@@ -215,6 +236,9 @@ func (h *AuthServiceHandler) GetBotGuard(ctx context.Context, req *pb.GetBotGuar
 	}
 	if err := requireSessionCaller(ctx); err != nil {
 		return nil, err
+	}
+	if req.GetUserId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_id is required")
 	}
 	bot, err := h.operableBot(ctx, req.GetUserId())
 	if err != nil {

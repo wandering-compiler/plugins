@@ -144,10 +144,16 @@ message SetBotAllowedCidrsReq {
   option (w17.contrib.plugin_feature) = "bot_token_guard";
   string user_id       = 1 [(w17.field) = { type: UUID }];
   string allowed_cidrs = 2 [(w17.field) = { type: CHAR, max_len: 2048, blank: true }];
+  // event-only (no w17.field: not persisted, not validated): the operator
+  // and their device's key thumbprint, BotAllowlistChanged's changed_by and
+  // device_id.
+  string changed_by = 3;
+  string thumbprint = 4;
 }
 message SetBotAllowedCidrsResp {
   option (w17.contrib.plugin_feature) = "bot_token_guard";
-  string id = 1;
+  string id            = 1;
+  string allowed_cidrs = 2;
 }
 // RecordBotTokenUse stamps one (token, address, surface, method) as used.
 message RecordBotTokenUseReq {
@@ -1794,7 +1800,18 @@ service AuthMutation {
         dql:
           "UPDATE @module.User SET allowed_cidrs = :allowed_cidrs "
           "WHERE id = :user_id AND kind = 1 "
-          "RETURNING id"
+          "RETURNING id, allowed_cidrs"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "BotAllowlistChanged"
+      payload: {
+        fields: [
+          { key: "user_id",       value: "$response.id" },
+          { key: "allowed_cidrs", value: "$response.allowed_cidrs" },
+          { key: "changed_by",    value: "$request.changed_by" },
+          { key: "device_id",     value: "$request.thumbprint" }
+        ]
       }
     };
   }
