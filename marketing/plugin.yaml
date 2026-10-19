@@ -1,5 +1,5 @@
 name: marketing
-version: 0.1.0-rc.1
+version: 0.1.0-rc.2
 # 1.13: request_consumers and subscriptions.
 requires_w17: ">=1.13"
 
