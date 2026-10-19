@@ -145,6 +145,8 @@ jobs:
         run: make check-refs
       - name: every plugin is on the 0.1.0-rc.N version line
         run: make check-versions
+      - name: every plugin proto is in a layer a project's codegen reads
+        run: make check-layout
       - name: tools and sandboxes build, lint clean and pass
         run: make check-tools
       # The list of names this public repository must not carry is a secret. A
