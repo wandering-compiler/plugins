@@ -1,3 +1,7 @@
+# marketing — changelog
+
+## 0.1.0-rc.1
+
 ### A new plugin: marketing, Brevo first
 
 - **The gateway's marketing records as Brevo events** on the user's contact (feature `brevo`): the method as the event name, the record's own properties (status, duration, surface, route, UTM, referrer), the org and the consent on the contact. Choose with `send` (mutations, queries, all, off), `include` and `exclude`.
