@@ -1014,6 +1014,39 @@ message ConfirmPasswordResp {
   google.protobuf.Timestamp stepped_up_at = 1;
 }
 
+// SetBotAllowlist — where a machine account's bearer tokens are accepted
+// from (User.allowed_cidrs). Each entry is a CIDR or a bare address; the
+// list is answered back canonical. Empty = anywhere. Gated bot_token_guard.
+message SetBotAllowlistReq {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  repeated string cidrs = 2;
+}
+message SetBotAllowlistResp {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  repeated string cidrs = 1;
+}
+// GetBotGuard — a machine account's allowlist and where its bearer tokens
+// were used (BotTokenUse), the latest first. Gated bot_token_guard.
+message GetBotGuardReq {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message BotTokenUseSummary {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string token_id = 1;
+  string address  = 2;
+  string surface  = 3;
+  string method   = 4;
+  google.protobuf.Timestamp first_used_at = 5;
+  google.protobuf.Timestamp last_used_at  = 6;
+}
+message GetBotGuardResp {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  repeated string cidrs = 1;
+  repeated BotTokenUseSummary uses = 2;
+}
+
 // The caller's own consent to marketing messages. Get reads it; Set records a
 // decision (true = given, false = withdrawn) and answers what is now stored.
 // `decided_at` is unset when the caller was never asked, which is how a UI
@@ -1424,6 +1457,15 @@ service AuthService {
   // and record when (UserToken.stepped_up_at). Changes nothing else.
   rpc ConfirmPassword(ConfirmPasswordReq) returns (ConfirmPasswordResp) {
     option (w17.contrib.plugin_feature_rpc) = "step_up";
+  }
+
+  // SetBotAllowlist / GetBotGuard — a machine account's address allowlist
+  // and its use summary. The operator rules of IssueBotToken apply.
+  rpc SetBotAllowlist(SetBotAllowlistReq) returns (SetBotAllowlistResp) {
+    option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
+  }
+  rpc GetBotGuard(GetBotGuardReq) returns (GetBotGuardResp) {
+    option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
   }
 
   rpc GetMarketingConsent(GetMarketingConsentReq) returns (MarketingConsentResp) {

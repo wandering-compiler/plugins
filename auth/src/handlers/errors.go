@@ -184,6 +184,9 @@ const (
 	// CodePasswordStepUpLocked: too many wrong passwords to ConfirmPassword
 	// in this session (step_up); it is locked for a while.
 	CodePasswordStepUpLocked = "PASSWORD_STEP_UP_LOCKED"
+	// CodeBotAllowlistInvalid: an entry of a machine account's allowlist is
+	// neither a CIDR nor an address, or the list is too long (bot_token_guard).
+	CodeBotAllowlistInvalid = "BOT_ALLOWLIST_INVALID"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -355,6 +358,8 @@ const (
 	MsgPasswordNotConfirmed = "That is not your password. Type the password you sign in with."
 
 	MsgPasswordStepUpLocked = "Too many wrong passwords. Wait 15 minutes and try again." //nolint:gosec // G101: a message about passwords, not one
+	MsgBotAllowlistInvalid  = "{entry} is not an address or a network (for example 203.0.113.7 or 203.0.113.0/24)."
+	MsgBotAllowlistTooLong  = "The list is too long: at most {max} entries."
 
 	// {date} is the expiry, UTC. Names the remedy, which differs by kind: a
 	// session is renewed by signing in, an API token only by minting another.

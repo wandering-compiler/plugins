@@ -58,6 +58,7 @@ It covers plugin version 0.1.0-rc.24.
 | `password_change` | off | — | — |
 | `step_up` | off | — | — |
 | `service_account` | off | `api_token`, `user_admin`, `rbac`, `authenticate_turnkey` | — |
+| `bot_token_guard` | off | `service_account` | — |
 | `user_admin` | off | — | — |
 | `admin_sign_ins` | off | `user_admin` | — |
 | `admin_devices` | off | `user_admin` | — |
@@ -737,6 +738,22 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 8. **A personal token is not bound to an organization.** With `org_membership`, an API token can select any organization its holder belongs to through `W17-Org`. A token minted "for" one company acts in all of the holder's companies. This is undocumented.
 
 ---
+
+### bot_token_guard
+
+- **Purpose.** A machine account's bearer token is the whole credential: whoever holds it acts. For a bot on a server with a fixed address, an allowlist makes a copied token worthless anywhere else. The use summary shows where and for what a bot's tokens are used, so an unexpected address or method is visible.
+- **Adds.** Column `User.allowed_cidrs` (comma-separated canonical CIDRs, empty = anywhere). Table `BotTokenUse` (token, client address, surface, method, first and latest use; unique per combination). Queries `GetBotAllowedCidrs`, `ListBotTokenUses`; mutations `SetBotAllowedCidrs` (emits `BotAllowlistChanged` with the operator and their device), `RecordBotTokenUse` (an upsert). Service methods `SetBotAllowlist`, `GetBotGuard`. REST endpoints `PUT /auth/bots/{user_id}/allowlist` and `GET /auth/bots/{user_id}/guard` (bearer). `GetTokenWithType` projects `allowed_cidrs`.
+- **Reads from the gateway.** `x-w17-client-addr` (the client address resolved through the surface's trusted proxies), `x-w17-surface` and `x-w17-method`. The gateway strips client-sent `x-w17-*` headers, so none of them is the client's word.
+- **Requires / conflicts / combined files.** Requires `service_account`. Default off.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `bot_token_guard/allowlist` | With an allowlist set, a bot's bearer token MUST be accepted only from a client address inside it (an IPv4-mapped address read as IPv4), and refused from any other with the opaque refusal, recording nothing. | Security | `TestAuthenticate_ABotBearerTokenIsHeldToItsAllowlist` |
+| `bot_token_guard/fail-closed` | With an allowlist set, a request whose gateway resolved no client address MUST be refused, and a stored list that no longer parses MUST match nothing rather than anywhere. | Security | `TestAuthenticate_ABotBearerTokenIsHeldToItsAllowlist` |
+| `bot_token_guard/bearer-only` | The allowlist MUST apply to bearer tokens only: a bound token proves its key and a person is never limited by address. | Security | `checkBotAllowlist` runs only on the bot-bearer branch of `authenticate` (after `checkBotBearer`). |
+| `bot_token_guard/summary` | An accepted bearer request MUST be recorded with its token, address, surface and method, at most once a minute per combination and process; a refused one MUST NOT. A failed write MUST NOT fail the request. | Audit | `TestAuthenticate_ABotBearerUseIsSummarised`, `TestAuthenticate_ABotBearerTokenIsHeldToItsAllowlist` |
+| `bot_token_guard/canonical` | An allowlist entry MUST be a CIDR or an address, stored masked (an address as its /32 or /128, an IPv4-mapped network as the IPv4 one), duplicates dropped, at most 32 entries; anything else, a zoned address included, MUST be refused on the field. | Validation | `TestCanonicalAllowlist` |
+| `bot_token_guard/operator` | Setting and reading a bot's guard MUST follow IssueBotToken's operator rules: a signed-in person (never an API token), a bot of the caller's organization, holding no role above the caller's. A change MUST be announced (`BotAllowlistChanged`) with the operator who made it. | Security | `TestSetBotAllowlistAndGetBotGuard`, `TestBotGuard_AnAPITokenCallerIsRefused` |
 
 ### service_account
 

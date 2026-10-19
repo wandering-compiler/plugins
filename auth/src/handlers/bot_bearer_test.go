@@ -140,6 +140,7 @@ type bearerLookup struct {
 	thumb          string
 	mcp            bool
 	disabled       bool
+	cidrs          string
 	lookups        int
 }
 
@@ -153,7 +154,7 @@ func (q *bearerLookup) GetTokenWithType(_ context.Context, in *pb.GetTokenWithTy
 }
 
 func (q *bearerLookup) user() *pb.User {
-	u := &pb.User{Id: "bot-1", Kind: q.kind}
+	u := &pb.User{Id: "bot-1", Kind: q.kind, AllowedCidrs: q.cidrs}
 	if q.disabled {
 		u.DisabledAt = timestamppb.Now()
 	}

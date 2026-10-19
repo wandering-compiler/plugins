@@ -943,7 +943,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("event %s names a user and no device_id", name)
 		}
 	}
-	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled", "ApiTokenCreated", "MarketingConsentChanged"} {
+	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled", "ApiTokenCreated", "MarketingConsentChanged", "BotAllowlistChanged"} {
 		if !withDevice[ev] {
 			t.Errorf("%s carries no device_id", ev)
 		}
@@ -969,8 +969,8 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("%s's request %s declares no thumbprint", rpc, req[1])
 		}
 	}
-	if emits != 11 {
-		t.Errorf("%d emits of a device-carrying event, want 11 (one per event)", emits)
+	if emits != 12 {
+		t.Errorf("%d emits of a device-carrying event, want 12 (one per event)", emits)
 	}
 }
 
