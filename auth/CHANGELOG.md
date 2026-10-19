@@ -102,6 +102,7 @@ This release binds every token to a device key and stops deleting rows from the 
    - `org_invite`: `OrgInvite.closed_at`, `closed_by`.
    - `sign_up_confirmation`: `PendingSignUp.claimed_at`, `superseded_at`.
    - Unique indexes: `ended_key` joins the unique keys of `Role`, `Organization`, `OrgMembership`, `UserRole` and `UserTotpSecret`. `Role.name` and `Organization.slug` are unique among live rows only. The pending-invitation index also skips closed rows.
+   - An upsert keyed on one of those columns alone now fails with "there is no unique or exclusion constraint matching the ON CONFLICT specification". That covers a fixture with `upsert_on: ["slug"]` (or `["name"]` on a role) and a hand-written `ON CONFLICT (slug)`. Key it on the new index instead: `["slug", "ended_key"]`, with `ended_key: ""` on the row. Codegen does not catch this; the seed fails at `stack build`.
 4. **Sign in again and re-issue tokens.**
    - Every existing session is refused once, so everyone signs in again, one time. A pending second-factor challenge has to be started over.
    - API tokens and machine-account tokens issued before this release are refused. Issue them again with the public JWK of the program that uses them: `w17ctl key public`, or the SDKs' keygen helper. The program then signs every request with that key.
