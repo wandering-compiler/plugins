@@ -1,5 +1,22 @@
 # auth — changelog
 
+## 0.1.0-rc.29
+
+### The user's consent to marketing messages (`marketing_consent`, new, off by default)
+
+- **New feature `marketing_consent`** (requires `authenticate_turnkey`). The user reads and sets their own consent on the REST preset: `GET /auth/marketing-consent` and `PUT /auth/marketing-consent` with `{"consent": true|false}` (`GetMarketingConsent`, `SetMarketingConsent`). Both act on the caller only.
+- **Stored on the user:** `User.marketing_consent` (FALSE until given) and `User.marketing_consent_at`, the time of the latest decision (NULL = never asked, which a UI reads to know whether to ask). A withdrawal is recorded like a consent.
+- **`AuthResp.marketing_consent` (7):** the gateway copies it into every request record, so the tool that sends the messages has it. Nothing in w17 acts on it; what is recorded does not depend on it.
+- **New event `MarketingConsentChanged`** (`auth.user.marketing_consent_changed`: `user_id`, `consent`, `decided_at`, `device_id` of the device the user decided from), for a subscriber that keeps a copy (a marketing tool's contact).
+- **Migration** (only with the feature): two new columns on `User`, nothing changed or removed.
+
+### A session's password confirmation (`step_up`, new, off by default)
+
+- **New feature `step_up`.** `ConfirmPassword` (`POST /auth/password/confirm` with `{"password": "…"}`) verifies the caller's password and stamps their session: `UserToken.stepped_up_at`. A consumer that guards a sensitive action reads the caller's own token row and asks for a recent confirmation. A stolen token and its device key do not carry the password, so they cannot pass.
+- **A session only.** An API token is refused (`SESSION_REQUIRED`).
+- **Guess budget.** Every guess is counted on the session in one statement. After five wrong passwords in a row the step-up is locked for fifteen minutes (`PASSWORD_STEP_UP_LOCKED`), and a confirmation resets the count. A wrong password is `PASSWORD_NOT_CONFIRMED`.
+- **Migration** (only with the feature): three new columns on `UserToken`, nothing changed or removed.
+
 ## 0.1.0-rc.28
 
 ### `devices` requires `authenticate_turnkey`
