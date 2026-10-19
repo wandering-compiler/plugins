@@ -42,7 +42,7 @@ stub of the Brevo API.
    bundle, which does not link the project's business services, so their
    requests arrive undecoded; linking them there is platform work.
 
-## Measured against a Brevo account (2026-10-19)
+## Measured against a Brevo account
 
 The client (`lib/brevo`) was run against a real account, with throwaway data
 deleted afterwards. What it showed, and what the plugin does about it:
