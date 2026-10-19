@@ -759,6 +759,10 @@ message UpdateOrgMembershipRoleReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string id   = 1 [(w17.field) = { type: UUID }];
   string role = 2 [(w17.field) = { type: CHAR, max_len: 100 }];
+  // org — the organization's slug, as the REST path names it
+  // (`/auth/orgs/{org}/members/{id}/role`); see ListOrgMembersReq.org. Empty =
+  // the org comes from W17-Org alone.
+  string org  = 3 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
 }
 message UpdateOrgMembershipRoleResp {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -771,7 +775,9 @@ message UpdateOrgMembershipRoleResp {
 // deletes through this.
 message RemoveOrgMembershipReq {
   option (w17.contrib.plugin_feature) = "org_membership";
-  string id = 1 [(w17.field) = { type: UUID }];
+  string id  = 1 [(w17.field) = { type: UUID }];
+  // org — see UpdateOrgMembershipRoleReq.org.
+  string org = 2 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
 }
 message RemoveOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -816,6 +822,9 @@ message OrgMember {
   // a property of the organization. Without it the founder is
   // indistinguishable from anyone they promoted.
   bool   owner   = 5;
+  // membership_id — the OrgMembership row, what UpdateOrgMembershipRole and
+  // RemoveOrgMembership take: a member list a UI manages from has to name it.
+  string membership_id = 6;
 }
 
 message ListAssignableRolesReq {

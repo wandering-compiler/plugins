@@ -219,6 +219,14 @@ features:
     default: false
     go_files:
       - handlers/cli_login.go
+  - name: org_members_rest
+    description: "Publishes a member's management on the REST preset beside the member list: PUT /auth/orgs/{org}/members/{id}/role (UpdateOrgMembershipRole) and DELETE /auth/orgs/{org}/members/{id} (RemoveOrgMembership), both under the role ceiling — the caller must cover every role the member holds and the one they are given — and in the organization the path names. The member list carries each membership's id for them. Off by default: an upgrade adds no route an activation did not ask for."
+    default: false
+    requires:
+      - org_membership
+      # A UI changing a role needs the role vocabulary, which is org_invite's
+      # (GET /auth/orgs/{org}/roles, ListAssignableRoles).
+      - org_invite
   - name: org_membership
     requires:
       # org_membership.go names pb.WhoAmIResp — the caller's orgs are
@@ -566,6 +574,11 @@ presets:
         org_from_path: org
         endpoints:
           - { ref: AuthService.ListOrgMembers,   method: GET,    path: /members,               feature: org_membership }
+          # A member's role, and the member itself, managed under the role
+          # ceiling (checkMayManageMembership): the caller must cover every
+          # role the member holds and the one they are given.
+          - { ref: AuthService.UpdateOrgMembershipRole, method: PUT, path: "/members/{id}/role", feature: org_members_rest }
+          - { ref: AuthService.RemoveOrgMembership,     method: DELETE, path: "/members/{id}",   feature: org_members_rest }
           # The role vocabulary an invitation may use. Org-scoped (realm
           # roles are filtered out), and GET because a picker reads it
           # before anything is submitted.
@@ -810,8 +823,14 @@ presets:
           delete: AuthService.RemoveOrgMembership
           # Only the role is editable — moving a membership to another
           # user/org is a removal + re-add (unique (user_id, org_id,
-          # ended_key)).
-          fields: [role]
+          # ended_key)). `org` is the REST path's organization
+          # (org_members_rest), listed because the method takes it, and
+          # every field an admin update takes is one a direct call sets.
+          # It selects nothing: a value other than the caller's org is
+          # refused (refuseOtherOrg), and the membership must be in the
+          # caller's active org whatever it says (checkMayManageMembership),
+          # so it can neither move a membership nor reach another org's.
+          fields: [role, org]
           readonly_fields: [id, user_id, org_id, created_at]
       # Turnkey session/token review. Gated user_admin. Lists every
       # UserToken across users (NEVER the secret token value) so an
@@ -991,6 +1010,7 @@ msgids:
   - "This device was signed out for good. Sign in again to use it as a new device."
   - "This email address cannot be used. Use another address."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
+  - "This is the organization's owner. Their membership cannot be changed or removed; transfer ownership first."
   - "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."

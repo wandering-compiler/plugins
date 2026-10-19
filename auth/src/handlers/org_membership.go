@@ -418,6 +418,8 @@ func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrg
 			Role:     m.GetRole(),
 			Owner:    m.GetOwner(),
 			JoinedAt: m.GetJoinedAt(),
+
+			MembershipId: m.GetMembershipId(),
 		})
 	}
 	return &pb.ListOrgMembersResp{Members: out}, nil
