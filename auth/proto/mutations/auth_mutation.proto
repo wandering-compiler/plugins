@@ -693,6 +693,37 @@ message SetUserMarketingConsentResp {
 // held the old password may hold a session too. API tokens are kept — they
 // are credentials the person minted on purpose, for CI and scripts. Gated
 // `password_change`.
+// MarkSessionSteppedUp — the caller's own, live session token, stamped with
+// the moment its password was confirmed. Gated `step_up`.
+message MarkSessionSteppedUpReq {
+  option (w17.contrib.plugin_feature) = "step_up";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+}
+message MarkSessionSteppedUpResp {
+  option (w17.contrib.plugin_feature) = "step_up";
+  string id = 1;
+  google.protobuf.Timestamp stepped_up_at = 2;
+}
+message RecordPasswordStepUpAttemptReq {
+  option (w17.contrib.plugin_feature) = "step_up";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+}
+message RecordPasswordStepUpAttemptResp {
+  option (w17.contrib.plugin_feature) = "step_up";
+  int64 attempts = 1;
+}
+message LockPasswordStepUpReq {
+  option (w17.contrib.plugin_feature) = "step_up";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp until = 2;
+}
+message LockPasswordStepUpResp {
+  option (w17.contrib.plugin_feature) = "step_up";
+  string id = 1;
+}
+
 message RevokeOtherSessionTokensReq {
   option (w17.contrib.plugin_feature) = "password_change";
   string    user_id       = 1 [(w17.field) = { type: UUID }];
@@ -3290,6 +3321,48 @@ service AuthMutation {
   // RevokeOtherSessionTokens — see the request. The person changing the
   // password is the actor; reason PASSWORD_CHANGED. No RETURNING: a person
   // with no other session revokes nothing, and that is no failure.
+  rpc MarkSessionSteppedUp(MarkSessionSteppedUpReq) returns (MarkSessionSteppedUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET stepped_up_at = NOW(), step_up_attempts = 0 "
+          "WHERE id = :token_id AND user_id = :user_id AND revoked_at IS NULL "
+          "RETURNING id, stepped_up_at"
+      }
+    };
+  }
+
+  // RecordPasswordStepUpAttempt — count a ConfirmPassword guess on the
+  // caller's session, refusing (no row back) while it is locked. One
+  // statement, so concurrent guesses get distinct counts.
+  rpc RecordPasswordStepUpAttempt(RecordPasswordStepUpAttemptReq) returns (RecordPasswordStepUpAttemptResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET step_up_attempts = step_up_attempts + 1 "
+          "WHERE id = :token_id AND user_id = :user_id AND revoked_at IS NULL "
+          "AND (step_up_locked_until IS NULL OR step_up_locked_until < NOW()) "
+          "RETURNING step_up_attempts AS attempts"
+      }
+    };
+  }
+  rpc LockPasswordStepUp(LockPasswordStepUpReq) returns (LockPasswordStepUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET step_up_attempts = 0, step_up_locked_until = :until "
+          "WHERE id = :token_id "
+          "RETURNING id"
+      }
+    };
+  }
+
   rpc RevokeOtherSessionTokens(RevokeOtherSessionTokensReq) returns (RevokeOtherSessionTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "password_change";
     option (w17.db.method) = {

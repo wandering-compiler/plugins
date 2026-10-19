@@ -56,6 +56,7 @@ It covers plugin version 0.1.0-rc.24.
 | `org_invite` | off | `org_membership`, `rbac` | — |
 | `marketing_consent` | off | `authenticate_turnkey` | — |
 | `password_change` | off | — | — |
+| `step_up` | off | — | — |
 | `service_account` | off | `api_token`, `user_admin`, `rbac`, `authenticate_turnkey` | — |
 | `user_admin` | off | — | — |
 | `admin_sign_ins` | off | `user_admin` | — |
@@ -384,6 +385,21 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 **Gaps / suspected defects**
 
 1. **No admin view.** The admin `Users` page cannot gate a column per feature, so an operator does not see the consent. A support case reads it from the database.
+
+---
+
+### step_up
+
+- **Purpose.** The signed-in person confirms their password in their current session, so a sensitive action can require a recent proof that the person is themselves. A valid token alone does not show that: a token and its device key can be copied off a machine, and the password is not on it. The feature records the confirmation and does not decide what it guards. The console's secret write grants are its first consumer, and they read `UserToken.stepped_up_at` of the caller's session.
+- **Adds.** Columns `UserToken.stepped_up_at` (NULL until the first confirmation), `UserToken.step_up_attempts` (COUNTER) and `UserToken.step_up_locked_until`. Mutations `MarkSessionSteppedUp`, `RecordPasswordStepUpAttempt` and `LockPasswordStepUp`. Service method `ConfirmPassword`. REST endpoint `POST /auth/password/confirm` (bearer).
+- **Requires / conflicts / combined files.** None. Default off.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `step_up/own-session` | The confirmation MUST stamp the caller's own session token, keyed on the authenticated user. The request MUST NOT be able to name another session. | Security | `TestConfirmPassword_StampsTheCallersSession` |
+| `step_up/session-only` | An API token MUST be refused before the password is checked: it has no session to step up, and it must not vouch for a person. | Security | `TestConfirmPassword_RefusesAWrongPasswordAndAnAPIToken` |
+| `step_up/wrong-password-stamps-nothing` | A wrong password MUST stamp nothing. | Security | `TestConfirmPassword_RefusesAWrongPasswordAndAnAPIToken` |
+| `step_up/guess-budget` | Every guess MUST be counted before it is checked, in one statement. Five wrong ones in a row MUST lock the session's step-up for fifteen minutes, the right password included. A confirmation MUST reset the count. | Security | `TestConfirmPassword_LocksAfterFiveWrongPasswords`. **Unit (mock) only:** a live test would run six concurrent wrong guesses and assert one is refused as locked. |
 
 ---
 

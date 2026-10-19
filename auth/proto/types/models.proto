@@ -491,6 +491,29 @@ message UserToken {
     (w17.field) = { default_auto: FALSE },
     (w17.contrib.plugin_feature_field) = "service_account"
   ];
+
+  // stepped_up_at — when the person last confirmed their password IN THIS
+  // SESSION (ConfirmPassword), so a sensitive action can ask "did they prove
+  // they are themselves just now?" rather than only "is the token valid?". A
+  // stolen token and its key do not carry the password. NULL until the first
+  // confirmation. Gated step_up.
+  google.protobuf.Timestamp stepped_up_at = 18 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "step_up"
+  ];
+  // step_up_attempts / step_up_locked_until — the guess budget of
+  // ConfirmPassword in this session. The step-up exists for the case where
+  // the token is in the wrong hands, and those hands would otherwise have an
+  // unbounded online oracle for the password: five wrong ones in a row lock
+  // it for fifteen minutes; a confirmation resets the count. Gated step_up.
+  int64 step_up_attempts = 19 [
+    (w17.field) = { type: COUNTER, default_int: 0 },
+    (w17.contrib.plugin_feature_field) = "step_up"
+  ];
+  google.protobuf.Timestamp step_up_locked_until = 20 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "step_up"
+  ];
 }
 
 // Device — one (user, device key) pair. Base tier: every session is bound
