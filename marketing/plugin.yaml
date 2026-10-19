@@ -1,0 +1,84 @@
+name: marketing
+version: 0.1.0-rc.1
+# 1.13: request_consumers and subscriptions.
+requires_w17: ">=1.13"
+
+# Explicit Go module anchor — staging text-rewrites this prefix in
+# src/handlers/ + src/lib/ + plugin.go to the per-activation paths.
+go_module: github.com/wandering-compiler/plugins/marketing
+
+description: "The request stream into a marketing tool: every signed-in request of a marketing surface becomes an event on the user's contact, contacts follow the auth plugin's accounts, consent and erasure. Brevo first."
+license: "Apache-2.0"
+
+# The accounts, consent and erasure come from auth's events; the publisher
+# has to be activated beside this plugin, in the same domain.
+requires_plugins:
+  - name: auth
+
+env:
+  - name: brevo_api_key
+    type: string
+    secret: true
+    description: "Brevo API key (the `api-key` header). Required with the brevo feature."
+  - name: brevo_base_url
+    type: string
+    default: "https://api.brevo.com/v3"
+    description: "Root of the Brevo API — a stub's address in a test suite. Never set in production."
+  - name: brevo_rps
+    type: int
+    default: "8"
+    description: "Requests per second this activation sends to Brevo. Brevo allows 10 per second per account (20 on Professional), shared with every other use of the same account."
+  - name: brevo_consent_attribute
+    type: string
+    default: "W17_MARKETING_CONSENT"
+    description: "The contact attribute the user's marketing consent is written to (true / false; absent when unknown). Brevo's automations filter on it; this plugin sends events whatever it says."
+  - name: send
+    type: string
+    default: "mutations"
+    description: "Which recorded requests become events: mutations (default), queries, all, or off. A method reads when it is served as GET or belongs to a Query service; everything else is a mutation."
+  - name: include
+    type: string
+    description: "Comma-separated methods sent whatever `send` says (`/<package>.<Service>/<Method>`, as a record names them). A name the stream does not record is refused at boot."
+  - name: exclude
+    type: string
+    description: "Comma-separated methods never sent; wins over send and include. A name the stream does not record is refused at boot."
+
+features:
+  - name: brevo
+    default: false
+    description: "The Brevo integration: the gateway's marketing records become Brevo events on the user's contact (POST /v3/events/batch), contacts are created and updated from auth's UserCreated / UserUpdated (POST /v3/contacts) with the consent attribute from MarketingConsentChanged, and deleted on UserDeleted (DELETE /v3/contacts/{id}?identifierType=ext_id). Adds the SentEvent table, which keeps a redelivered record from becoming a second event."
+    go_files:
+      - handlers/brevo.go
+      - handlers/brevo_events.go
+      - handlers/brevo_contacts.go
+
+# The gateway's marketing records, in Brevo as events.
+request_consumers:
+  - name: brevo
+    purpose: marketing
+    feature: brevo
+    description: "Every marketing record of a signed-in user (per send / include / exclude) to Brevo, as an event on the contact keyed by the user's id (ext_id): the method as the event name, its status, duration, surface, route, UTM tags and referrer as properties. The request's own fields are not sent."
+
+# auth's events, for the contacts. UserUpdated and UserDeleted are auth's
+# user_admin events, MarketingConsentChanged its marketing_consent one: an
+# auth activation without them simply sends none.
+subscriptions:
+  - plugin: auth
+    event: UserCreated
+    as: AuthUserCreated
+    feature: brevo
+  - plugin: auth
+    event: UserUpdated
+    as: AuthUserUpdated
+    feature: brevo
+    optional: true
+  - plugin: auth
+    event: UserDeleted
+    as: AuthUserDeleted
+    feature: brevo
+    optional: true
+  - plugin: auth
+    event: MarketingConsentChanged
+    as: AuthMarketingConsentChanged
+    feature: brevo
+    optional: true

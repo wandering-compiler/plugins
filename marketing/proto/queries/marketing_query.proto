@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+// Marketing plugin — MarketingQuery read primitives.
+
+package w17.contrib.marketing;
+
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+
+option go_package = "@project;@pkg";
+
+message ListSentEventsReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  repeated string ids = 1;
+}
+message ListSentEventsResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+  repeated string ids = 1;
+}
+
+service MarketingQuery {
+  // ListSentEvents — which of these record ids were sent already: the
+  // consumer skips them on a redelivered batch. Gated brevo.
+  rpc ListSentEvents(ListSentEventsReq) returns (ListSentEventsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT ROWS_TO_ARRAY(s.id) AS ids FROM @module.SentEvent s WHERE s.id IN (:ids)"
+      }
+    };
+  }
+}
