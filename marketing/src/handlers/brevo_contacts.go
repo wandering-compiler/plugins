@@ -9,9 +9,11 @@ import (
 	"github.com/wandering-compiler/plugins/marketing/lib/brevo"
 )
 
-// The contacts follow the auth plugin's accounts. A transient failure
-// returns an error, and the event is redelivered (then dead-lettered); a
-// refusal for the content is logged and not retried.
+// The contacts follow the auth plugin's accounts. A call Brevo refuses for its
+// content is logged and not retried; any other failure — the network, a rate
+// limit, a key or a server address the account does not accept — returns an
+// error, so the event is redelivered and then dead-lettered, to be replayed
+// once it is fixed.
 
 func (t *brevoTool) onUserCreated(ctx context.Context, ev *pb.AuthUserCreated) error {
 	return t.contactCall("create the contact of", ev.GetUserId(), t.client.UpsertContact(ctx, ev.GetUserId(), ev.GetEmail(), nil))
@@ -36,7 +38,7 @@ func (t *brevoTool) contactCall(what, user string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if user == "" || !brevo.Retryable(err) {
+	if user == "" || brevo.Refused(err) {
 		log.Printf("marketing plugin: Brevo refused to %s user %s: %v", what, user, err)
 		return nil
 	}

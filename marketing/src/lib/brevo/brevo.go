@@ -91,13 +91,24 @@ func (e *Error) Error() string {
 
 // Retryable reports whether a call that failed with err may succeed later:
 // the network, a rate limit, or Brevo's own failure. A 4xx other than 429
-// (a bad key, a refused event) fails the same way every time.
+// fails the same way until something changes.
 func Retryable(err error) bool {
 	var e *Error
 	if errors.As(err, &e) {
 		return e.Status == http.StatusTooManyRequests || e.Status >= 500
 	}
 	return err != nil && !errors.Is(err, context.Canceled)
+}
+
+// Refused reports whether Brevo refused the call for what it said — a value
+// it does not accept (400, 422) — so sending the same again is refused again,
+// and the call is dropped rather than retried. Any other failure keeps it: a
+// key Brevo does not know, or a server address the account does not allow
+// (401, 403, "unrecognised IP address"), is fixed by its operator, and what
+// was sent meanwhile must reach Brevo then, from the dead letters.
+func Refused(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && (e.Status == http.StatusBadRequest || e.Status == http.StatusUnprocessableEntity)
 }
 
 // Identifiers names the contact an event belongs to. The plugin keys contacts

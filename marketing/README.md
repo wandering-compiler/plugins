@@ -33,6 +33,13 @@ them the plugin still sends events and creates contacts.
 | `BREVO_RPS` | requests per second to Brevo (default 8 of the account's 10) |
 | `PLUGINS_DURABLE_PREFIX` (`<DOMAIN>_`) | the bundle's prefix for the plugins' delivery progress; set it when two deployments share a broker |
 
+**The calls leave from the storage bundle**, where the plugin runs. A Brevo
+account with *Authorised IPs* on (Security → Authorised IPs) refuses every call
+from an address it does not list (401 "unrecognised IP address"): list the
+storage servers' addresses, IPv6 included. Until then nothing is lost — the
+calls fail, and the records and contact changes end in the stream's dead
+letters, to be replayed once the account allows them.
+
 ## What reaches Brevo
 
 - **Events** (`POST /v3/events/batch`): the method as the event name

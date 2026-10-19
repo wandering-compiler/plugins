@@ -301,6 +301,14 @@ func TestContacts_RetryOnlyWhatMaySucceed(t *testing.T) {
 	if err := refused.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "bad"}); err != nil {
 		t.Errorf("a refusal = %v, want nil (retrying it fails the same way)", err)
 	}
+	// A key or a server address the account does not accept is the
+	// operator's to fix; what was sent meanwhile is kept for the replay.
+	for _, st := range []int{401, 403} {
+		denied := tool(t, &fakeBrevo{callErr: &brevo.Error{Status: st, Message: "We have detected you are using an unrecognised IP address"}}, &ledger{}, "all", "", "")
+		if err := denied.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "a@x.example"}); err == nil {
+			t.Errorf("a %d was dropped — the contact would never reach Brevo once the account allows the server", st)
+		}
+	}
 }
 
 func TestIsUniqueViolation(t *testing.T) {

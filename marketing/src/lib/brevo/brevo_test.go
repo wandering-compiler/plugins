@@ -250,3 +250,22 @@ func TestNew_RefusesAConfigurationThatCannotWork(t *testing.T) {
 		}
 	}
 }
+
+func TestRefused_OnlyWhatTheContentCauses(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{&Error{Status: 400}, true},
+		{&Error{Status: 422}, true},
+		{&Error{Status: 401}, false},
+		{&Error{Status: 403}, false},
+		{&Error{Status: 429}, false},
+		{&Error{Status: 500}, false},
+		{errors.New("connection reset"), false},
+	} {
+		if got := Refused(c.err); got != c.want {
+			t.Errorf("Refused(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
