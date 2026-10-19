@@ -144,6 +144,7 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		mcpOnly:          tok.GetMcpOnly(),
 		bearer:           tok.GetBearer(),
 		botAccount:       isBotAccount(tok.GetUser()),
+		user:             tok.GetUser(),
 		legacyToken:      legacyPlaintext(token, tok.GetStoredTokenHash()),
 	}
 

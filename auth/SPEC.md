@@ -54,6 +54,7 @@ It covers plugin version 0.1.0-rc.24.
 | `cli_login` | off | — | — |
 | `org_membership` | off | `authenticate_turnkey`, `rbac` | — |
 | `org_invite` | off | `org_membership`, `rbac` | — |
+| `marketing_consent` | off | `authenticate_turnkey` | — |
 | `password_change` | off | — | — |
 | `service_account` | off | `api_token`, `user_admin`, `rbac`, `authenticate_turnkey` | — |
 | `user_admin` | off | — | — |
@@ -365,6 +366,24 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 2. **Any caller can register into any tenant.** The tenant is chosen by a client-supplied slug or Host. Without `sign_up_allowlist` or `invite_only`, every tenant accepts open self-registration. That should be stated as a property of the feature.
 3. **An empty tenant fails open.** When `GetUserTenant` returns an empty id, `resolveTenantScope` (`tenant.go:165`) stamps nothing and `Authenticate` succeeds. `NOT NULL` makes the case unlikely, but a scope that is required for isolation should refuse instead of returning an unscoped principal. Whether the gateway then refuses a `tenant_id`-scoped model is outside the plugin.
 4. **Bootstrap roles are global.** `CountUsers` counts every tenant, so the bootstrap-admin roles go to the first user of the deployment. Each tenant's first user receives only the default roles. That is defensible, but undocumented.
+
+---
+
+### marketing_consent
+
+- **Purpose.** The user's own consent to marketing messages, kept as a value of the identity and answered by Authenticate, so the gateway's request stream carries it to the tool that sends the messages. It changes nothing about what is recorded.
+- **Adds.** Columns `User.marketing_consent` (bool, FALSE) and `User.marketing_consent_at` (NULL = never asked). Query `GetUserMarketingConsent`. Mutation `SetUserMarketingConsent`, which emits `MarketingConsentChanged` (`auth.user.marketing_consent_changed`: `user_id`, `consent`, `decided_at`, `device_id`). Service methods `GetMarketingConsent` and `SetMarketingConsent`. REST endpoints `GET` and `PUT /auth/marketing-consent` (bearer). `AuthResp.marketing_consent` (7).
+- **Requires / conflicts / combined files.** `authenticate_turnkey`. Default off.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `marketing_consent/caller-only` | Both calls MUST act on the authenticated caller. The request MUST NOT be able to name another user, and no admin path MUST write it. | Security | `TestSetMarketingConsent_RecordsTheCallersDecision`, `TestGetMarketingConsent_NeverAskedHasNoDecisionTime`, `TestMarketingConsent_NeedsACaller` |
+| `marketing_consent/one-statement` | A decision MUST be stored with its time and announced (`MarketingConsentChanged`) in one statement. A withdrawal MUST be recorded like a consent. | Consistency & concurrency | `TestSetUserMarketingConsent_StampsAndAnnouncesInOneStatement` |
+| `marketing_consent/answered-by-authenticate` | `AuthResp.marketing_consent` MUST be the stored consent, through either token lookup. An account never asked MUST answer false. | Consistency & concurrency | `TestAuthenticate_AnswersTheMarketingConsent`, `TestTokenLookupsProjectTheMarketingConsent` |
+
+**Gaps / suspected defects**
+
+1. **No admin view.** The admin `Users` page cannot gate a column per feature, so an operator does not see the consent. A support case reads it from the database.
 
 ---
 

@@ -670,6 +670,24 @@ message UpdateUserPasswordIfUnchangedResp {
   string user_id = 1;
 }
 
+// The user's own marketing consent: set, stamped and announced in one
+// statement. Gated marketing_consent.
+message SetUserMarketingConsentReq {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  bool   consent = 2;
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the device the decision was made from,
+  // MarketingConsentChanged's device_id.
+  string thumbprint = 3;
+}
+message SetUserMarketingConsentResp {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  string                    user_id    = 1;
+  bool                      consent    = 2;
+  google.protobuf.Timestamp decided_at = 3;
+}
+
 // RevokeOtherSessionTokens ends every SESSION of a user but the one named:
 // a password change signs the person out everywhere else, because whoever
 // held the old password may hold a session too. API tokens are kept — they
@@ -3218,6 +3236,36 @@ service AuthMutation {
           "device_trust_revoked_at = NOW() "
           "WHERE id = :user_id AND password_hash = :current_hash "
           "RETURNING id AS user_id"
+      }
+    };
+  }
+
+  // SetUserMarketingConsent records the user's decision and when it was made
+  // — a withdrawal as much as a consent, because the time a consent ended is
+  // part of the record too. MarketingConsentChanged tells whoever keeps a copy
+  // (a marketing tool's contact) without waiting for the user's next request.
+  rpc SetUserMarketingConsent(SetUserMarketingConsentReq) returns (SetUserMarketingConsentResp) {
+    option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "marketing_consent = :consent, "
+          "marketing_consent_at = NOW() "
+          "WHERE id = :user_id "
+          "RETURNING id AS user_id, marketing_consent AS consent, marketing_consent_at AS decided_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "MarketingConsentChanged"
+      payload: {
+        fields: [
+          { key: "user_id",    value: "$response.user_id" },
+          { key: "consent",    value: "$response.consent" },
+          { key: "decided_at", value: "$response.decided_at" },
+          { key: "device_id",  value: "$request.thumbprint" }
+        ]
       }
     };
   }

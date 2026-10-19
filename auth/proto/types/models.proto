@@ -192,6 +192,26 @@ message User {
     (w17.field) = { type: DATETIME, null: true },
     (w17.contrib.plugin_feature_field) = "user_admin"
   ];
+
+  // marketing_consent — whether the user agreed to marketing messages. FALSE
+  // until they say yes: an account that was never asked has not consented.
+  // Set only by the user themselves (AuthService.SetMarketingConsent); it
+  // says nothing about what is recorded about them, only whether they may be
+  // written to. Authenticate answers it (AuthResp.marketing_consent), so the
+  // request stream carries it to whoever sends the messages. Field-gated
+  // `marketing_consent`.
+  bool marketing_consent = 12 [
+    (w17.field) = { default_auto: FALSE },
+    (w17.contrib.plugin_feature_field) = "marketing_consent"
+  ];
+
+  // marketing_consent_at — when the user last gave or withdrew it: the
+  // record of WHEN, which consent law asks a controller to be able to show.
+  // NULL = never asked, which a UI reads to know whether to ask.
+  google.protobuf.Timestamp marketing_consent_at = 13 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "marketing_consent"
+  ];
 }
 
 // RevokeReason — why a UserToken stopped being valid before its expiry. The

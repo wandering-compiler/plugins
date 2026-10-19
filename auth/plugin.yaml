@@ -283,6 +283,14 @@ features:
     default: false
     go_files:
       - handlers/password_change.go
+  - name: marketing_consent
+    description: "The user's own consent to marketing messages: User.marketing_consent and when it was decided (marketing_consent_at, NULL = never asked), read and set by the user on the REST preset (GET / PUT /auth/marketing-consent), announced as MarketingConsentChanged, and answered by Authenticate (AuthResp.marketing_consent), so the gateway's request stream carries it to the tool that sends the messages. It changes nothing about what is recorded. Off by default; a migration adds the two columns."
+    default: false
+    requires:
+      # AuthResp, which carries the consent, is authenticate_turnkey's.
+      - authenticate_turnkey
+    go_files:
+      - handlers/marketing_consent.go
   - name: service_account
     description: "Machine accounts — a BOT user that cannot sign in with a password and acts only through an API token an admin minted for it. Adds User.kind, the admin mint/revoke endpoints, and the SignIn refusal that makes the distinction enforceable rather than descriptive. IssueBotToken binds the token to the machine account's one key when given public_key, and otherwise mints a bearer token (UserToken.bearer, prefix w17bot_): no key, no proof, always expiring within 366 days, refused on the admin plane and the MCP surface; revoke it on the admin Sessions page (user_admin, which this feature requires). Requires api_token (the token machinery) — without it there is no credential for a bot to hold. Works in a realm with or without org_membership: with it, a machine account belongs to the operator's active organization, is listed and minted for only there, and holds its role inside it (handlers/service_account_org.go); without it the realm is one organization (a platform's own backoffice), and its machine accounts hold realm-wide roles and are every operator's."
     default: false
@@ -416,6 +424,10 @@ presets:
           # endpoint added to a feature that already has adopters scaffolds a
           # new e2e test into every one of them on upgrade.
           - { ref: AuthService.ListMySignInEvents, method: GET, path: /sign-ins,           feature: my_sign_ins }
+          # The caller's own consent to marketing messages. Opt-in
+          # (marketing_consent), for the same reason as my_sign_ins.
+          - { ref: AuthService.GetMarketingConsent, method: GET, path: /marketing-consent, feature: marketing_consent }
+          - { ref: AuthService.SetMarketingConsent, method: PUT, path: /marketing-consent, feature: marketing_consent }
       # API/MCP token management — the caller manages their OWN tokens,
       # authenticated by their browser-session bearer (no exclude_auth).
       # Gated api_token: the whole group drops when the feature is off.

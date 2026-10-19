@@ -333,6 +333,10 @@ type authPrincipal struct {
 	bearer     bool
 	botAccount bool
 
+	// user is the account the token belongs to, as the token lookup read it:
+	// the columns a feature answers in AuthResp ride it (authRespEnrich).
+	user *pb.User
+
 	// legacyToken is the presented token when it resolved to a LEGACY row
 	// (stored in the clear, no hash yet), "" otherwise. The resolvers only
 	// note it; Authenticate moves the row to the hash once the request has
@@ -433,6 +437,7 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 		deviceThumbprint: resp.GetDeviceThumbprint(),
 		deviceRevokedAt:  resp.GetDeviceRevokedAt(),
 		mcpOnly:          resp.GetMcpOnly(),
+		user:             resp.GetUser(),
 		legacyToken:      legacyPlaintext(token, resp.GetStoredTokenHash()),
 	}, nil
 }
@@ -942,15 +947,22 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// wildcard expands only if the role carrying it survived all of them —
 	// which is what stops a superadmin of one organization passing checks in
 	// the next.
-	return &pb.AuthResp{
+	resp := &pb.AuthResp{
 		PermissionIds:  prin.effectivePermissions(h.Lock),
 		UserId:         userID,
 		Scopes:         scopes,
 		Labels:         labels,
 		SessionTokenId: prin.tokenID,
 		DeviceId:       prin.deviceThumbprint,
-	}, nil
+	}
+	authRespEnrich(prin, resp)
+	return resp, nil
 }
+
+// authRespEnrich fills the AuthResp fields a feature adds (marketing_consent)
+// from what the token lookup already read. Base tier: a no-op, because those
+// fields exist only in a build with the feature.
+var authRespEnrich = func(*authPrincipal, *pb.AuthResp) {}
 
 // presentedToken strips the scheme off the auth header. A token may come
 // under DPoP (RFC 9449, a bound token with a proof — viaDPoP) or under the
