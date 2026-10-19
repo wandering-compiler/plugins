@@ -10,6 +10,12 @@ that changes a plugin without a fragment, unless it carries the `no-changelog`
 label (tests, comments: nothing a user of the plugin can notice). A fragment
 sits directly in `changes/`, ends in `.md` and does not start with a dot;
 anything else is never collected.
+
+A change a project has to act on before anything else (a breaking change, a
+step every client must take) gets a fragment whose heading ends in
+`(read first)`, as `### Upgrading to device identity (read first)` does in
+auth 0.1.0-rc.25. `w17ctl plugin update` prints every such section the update
+crosses, so a project moving across that release sees it before it builds.
 A release pull request (branch `release/<plugin>-v0.1.0-rc.N`) is exempt only
 in the shape `tools/release-pr.sh` gives it: the manifest says that version, and
 it changes the version in `plugin.yaml`, `CHANGELOG.md`, and deletes fragments,
