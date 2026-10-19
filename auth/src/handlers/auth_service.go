@@ -360,6 +360,19 @@ func legacyPlaintext(token, storedHash string) string {
 // request it rides on.
 var recordTokenUse = func(ctx context.Context, h *AuthServiceHandler, p *authPrincipal) {}
 
+// botBearerGuard is the address check of a machine account's bearer token,
+// after checkBotBearer accepted it. Base: no check — the allowlist exists only
+// under `bot_token_guard`, whose file (handlers/bot_token_guard.go) installs
+// the real one via init(). A refusal is the opaque one, like every other.
+var botBearerGuard = func(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, headers map[string]string) error {
+	return nil
+}
+
+// recordBotUse adds an accepted bearer request to the bot's use summary.
+// Base no-op, installed by bot_token_guard like botBearerGuard. Must never
+// fail the request it rides on.
+var recordBotUse = func(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, headers map[string]string) {}
+
 // effectivePermissions flattens the surviving grants into the permission set
 // Authenticate answers with. A wildcard grant that survived every axis expands
 // from the DEPLOYED LOCK, never from RolePermission rows — a wildcard role
@@ -898,7 +911,9 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	case proofed:
 		err = checkTokenBinding(ctx, prin, jkt)
 	case botBearer:
-		err = checkBotBearer(prin)
+		if err = checkBotBearer(prin); err == nil {
+			err = botBearerGuard(ctx, h, prin, req.GetHeaders())
+		}
 	default:
 		err = checkMCPToken(prin)
 	}
@@ -942,6 +957,9 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 		h.upgradeLegacyToken(ctx, prin.legacyToken, sha256Hex(prin.legacyToken), "")
 	}
 	recordTokenUse(ctx, h, prin)
+	if botBearer {
+		recordBotUse(ctx, h, prin, req.GetHeaders())
+	}
 
 	// Flatten LAST. Every axis has had its say on the roles by now, so a
 	// wildcard expands only if the role carrying it survived all of them —

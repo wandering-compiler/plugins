@@ -212,6 +212,48 @@ message User {
     (w17.field) = { type: DATETIME, null: true },
     (w17.contrib.plugin_feature_field) = "marketing_consent"
   ];
+
+  // allowed_cidrs — where a machine account's bearer tokens are accepted
+  // from: comma-separated CIDRs (an address alone is its /32 or /128), as
+  // SetBotAllowlist canonicalised them. Empty = anywhere. Checked against the
+  // client address the gateway resolved through its trusted proxies
+  // (x-w17-client-addr), never against a header the client wrote; a request
+  // with no resolved address is refused while a list is set. Only a bot's
+  // BEARER tokens: a bound token proves its key, and a person is never
+  // limited by address. Field-gated `bot_token_guard`.
+  string allowed_cidrs = 14 [
+    (w17.field) = { type: CHAR, max_len: 2048, blank: true },
+    (w17.contrib.plugin_feature_field) = "bot_token_guard"
+  ];
+}
+
+// BotTokenUse — where and for what a machine account's bearer token is used:
+// one row per (token, client address, surface, method), with the first and
+// the latest use. A summary, not a request log: it grows only with a new
+// combination, so a bot calling the same method from the same place in a loop
+// keeps one row. last_used_at is written at most once a minute per row (like
+// UserToken.last_used_at). Nothing is deleted. Gated `bot_token_guard`.
+message BotTokenUse {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [ { name: "token_id" }, { name: "address" }, { name: "surface" }, { name: "method" } ] },
+      { fields: [ { name: "user_id" }, { name: "last_used_at" } ] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+
+  string id       = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string token_id = 2 [(w17.field) = { type: UUID }];
+  string user_id  = 3 [(w17.field) = { type: UUID }];
+  // The client address the gateway resolved; empty where it has none (the
+  // CLI surface, MCP over stdio).
+  string address  = 4 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  // rest | events | rpc | mcp | admin | cli (x-w17-surface).
+  string surface  = 5 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  // The called RPC's full method, or the route (x-w17-method).
+  string method   = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  google.protobuf.Timestamp first_used_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp last_used_at  = 8 [(w17.field) = { type: DATETIME, default_auto: NOW }];
 }
 
 // RevokeReason — why a UserToken stopped being valid before its expiry. The

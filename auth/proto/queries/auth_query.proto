@@ -541,6 +541,37 @@ message ListMachineKeysResp {
   repeated MachineKey keys = 1;
 }
 
+// --- bot_token_guard: a machine account's allowlist and where it is used ---
+// GetBotAllowedCidrs — a machine account's allowlist (User.allowed_cidrs).
+// NotFound for an account that is not a bot.
+message GetBotAllowedCidrsReq {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetBotAllowedCidrsResp {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string allowed_cidrs = 1;
+}
+// ListBotTokenUses — every (token, address, surface, method) a machine
+// account's bearer tokens were used with, the latest first.
+message ListBotTokenUsesReq {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message BotTokenUseRow {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string token_id = 1;
+  string address  = 2;
+  string surface  = 3;
+  string method   = 4;
+  google.protobuf.Timestamp first_used_at = 5;
+  google.protobuf.Timestamp last_used_at  = 6;
+}
+message ListBotTokenUsesResp {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  repeated BotTokenUseRow rows = 1;
+}
+
 // --- oauth feature: provider + identity lookups ---
 // GetProviderByName resolves the provider the authorize/callback URL keys
 // on (the handler checks `enabled` + does the token exchange + state HMAC
@@ -1935,6 +1966,7 @@ service AuthQuery {
           "       ?feature(service_account) u.kind AS user.kind, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS user.allowed_cidrs, "
           "       t.last_used_at AS last_used_at, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       d.revoked_at AS device_revoked_at, "
@@ -2110,6 +2142,37 @@ service AuthQuery {
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "service_account";
+  }
+
+  // GetBotAllowedCidrs — see the request. Gated bot_token_guard.
+  rpc GetBotAllowedCidrs(GetBotAllowedCidrsReq) returns (GetBotAllowedCidrsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.allowed_cidrs AS allowed_cidrs "
+          "FROM @module.User u "
+          "WHERE u.id = :user_id AND u.kind = 1"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
+  }
+
+  // ListBotTokenUses — see the request. Unpaged: the rows grow with new
+  // combinations only. Gated bot_token_guard.
+  rpc ListBotTokenUses(ListBotTokenUsesReq) returns (ListBotTokenUsesResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT b.token_id AS token_id, b.address AS address, b.surface AS surface, "
+          "       b.method AS method, b.first_used_at AS first_used_at, b.last_used_at AS last_used_at "
+          "FROM @module.BotTokenUse b "
+          "WHERE b.user_id = :user_id "
+          "ORDER BY b.last_used_at DESC, b.id DESC"
+      }
+    };
+    option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
   }
 
   // GetUserTenant — resolves the principal's tenant_id (the

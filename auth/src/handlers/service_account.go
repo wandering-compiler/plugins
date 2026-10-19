@@ -111,53 +111,8 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		return nil, status.Error(codes.InvalidArgument, "user_id is required")
 	}
 
-	// The target must be a bot IN THE CALLER'S ORGANIZATION, where the realm
-	// has organizations. Both halves are load-bearing and the second was
-	// missing: `user_id` arrives on the wire, so an operator in one company
-	// could name a machine account in another and mint a working credential
-	// for it. The listing that leaked those ids made that a two-step attack
-	// with no barrier between the steps. A realm without organizations is one
-	// organization, and every machine account in it is the operator's.
-	orgs, err := botOrgScopeOrNil()
+	bot, err := h.operableBot(ctx, target)
 	if err != nil {
-		return nil, err
-	}
-	if orgs != nil {
-		inOrg, err := orgs.isMember(ctx, h, target)
-		if err != nil {
-			return nil, err
-		}
-		if !inOrg {
-			// One message for "not a bot", "not here", and "does not exist":
-			// the caller must not learn which, or the refusal becomes a
-			// directory of other companies' accounts.
-			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
-		}
-	}
-
-	// Read the target and refuse a person. Read FIRST: minting and then
-	// checking would leave a live credential behind on the refusal path.
-	userResp, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: target})
-	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			// Does not exist reads like "not a bot" — see above.
-			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
-		}
-		return nil, err
-	}
-	if userResp.GetUser().GetKind() != pb.AccountKind_BOT || !visibleBot(ctx, userResp.GetUser()) {
-		// The message names the RULE, not the account: a caller must not
-		// learn from the refusal whether the id belongs to a person, a bot it
-		// may not touch, or nothing at all.
-		return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
-	}
-	// Not above the minting operator. A token acts with the bot's roles, so
-	// minting for a bot whose role the operator could not have GRANTED is
-	// handing out what they themselves may not do — the rule CreateBot holds
-	// at creation, held here too, because the bot may have been created by
-	// someone with more. (The token's subset only narrows the bot; it cannot
-	// lift this.)
-	if err := h.checkMayActAsBot(ctx, target); err != nil {
 		return nil, err
 	}
 
@@ -165,7 +120,6 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	// anyway, and the admin should hear why instead of receiving a dead one.
 	// After the ceiling, so an operator who may not act as the bot does not
 	// learn its state either.
-	bot := userResp.GetUser()
 	attempt.userID, attempt.account = bot.GetId(), bot
 	attempt.named(bot.GetEmail())
 	if err := signInDisabledGate(bot); err != nil {
@@ -641,6 +595,64 @@ func (h *AuthServiceHandler) ListBotRoles(ctx context.Context, _ *pb.ListBotRole
 		out = append(out, &pb.BotRole{Id: r.GetId(), Name: r.GetName(), Description: r.GetDescription()})
 	}
 	return &pb.ListBotRolesResp{Roles: out}, nil
+}
+
+// operableBot is the machine account target an operator may act on: a bot of
+// the caller's organization (where the realm has organizations), visible to
+// them, and holding no role above their own ceiling. Every refusal but the
+// ceiling is the one opaque "not a machine account" answer. IssueBotToken and
+// the bot_token_guard endpoints share it.
+func (h *AuthServiceHandler) operableBot(ctx context.Context, target string) (*pb.User, error) {
+	// The target must be a bot IN THE CALLER'S ORGANIZATION, where the realm
+	// has organizations. Both halves are load-bearing and the second was
+	// missing: `user_id` arrives on the wire, so an operator in one company
+	// could name a machine account in another and mint a working credential
+	// for it. The listing that leaked those ids made that a two-step attack
+	// with no barrier between the steps. A realm without organizations is one
+	// organization, and every machine account in it is the operator's.
+	orgs, err := botOrgScopeOrNil()
+	if err != nil {
+		return nil, err
+	}
+	if orgs != nil {
+		inOrg, err := orgs.isMember(ctx, h, target)
+		if err != nil {
+			return nil, err
+		}
+		if !inOrg {
+			// One message for "not a bot", "not here", and "does not exist":
+			// the caller must not learn which, or the refusal becomes a
+			// directory of other companies' accounts.
+			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+		}
+	}
+
+	// Read the target and refuse a person. Read FIRST: minting and then
+	// checking would leave a live credential behind on the refusal path.
+	userResp, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: target})
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			// Does not exist reads like "not a bot" — see above.
+			return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+		}
+		return nil, err
+	}
+	if userResp.GetUser().GetKind() != pb.AccountKind_BOT || !visibleBot(ctx, userResp.GetUser()) {
+		// The message names the RULE, not the account: a caller must not
+		// learn from the refusal whether the id belongs to a person, a bot it
+		// may not touch, or nothing at all.
+		return nil, status.Error(codes.PermissionDenied, errNotABotAccount.Error())
+	}
+	// Not above the minting operator. A token acts with the bot's roles, so
+	// minting for a bot whose role the operator could not have GRANTED is
+	// handing out what they themselves may not do — the rule CreateBot holds
+	// at creation, held here too, because the bot may have been created by
+	// someone with more. (The token's subset only narrows the bot; it cannot
+	// lift this.)
+	if err := h.checkMayActAsBot(ctx, target); err != nil {
+		return nil, err
+	}
+	return userResp.GetUser(), nil
 }
 
 // errBotAboveCaller is the refusal for minting for a machine account that holds

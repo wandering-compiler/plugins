@@ -138,6 +138,31 @@ message TouchTokenLastUsedReq {
 message TouchTokenLastUsedResp {
   option (w17.contrib.plugin_feature) = "api_token";
 }
+// SetBotAllowedCidrs writes a machine account's allowlist (canonical, see
+// User.allowed_cidrs). NotFound for an account that is not a bot.
+message SetBotAllowedCidrsReq {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string user_id       = 1 [(w17.field) = { type: UUID }];
+  string allowed_cidrs = 2 [(w17.field) = { type: CHAR, max_len: 2048, blank: true }];
+}
+message SetBotAllowedCidrsResp {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string id = 1;
+}
+// RecordBotTokenUse stamps one (token, address, surface, method) as used.
+message RecordBotTokenUseReq {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+  string address  = 3 [(w17.field) = { type: CHAR, max_len: 45, blank: true }];
+  string surface  = 4 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string method   = 5 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  google.protobuf.Timestamp used_at = 6 [(w17.field) = { type: DATETIME }];
+}
+message RecordBotTokenUseResp {
+  option (w17.contrib.plugin_feature) = "bot_token_guard";
+}
+
 // RevokeToken returns the revoked row's identifiers for the
 // caller's response. Consumers that don't need the IDs ignore the
 // response (or pin a `_ = resp` discard). (TokenRevoked is emitted
@@ -1756,6 +1781,37 @@ service AuthMutation {
         dql:
           "UPDATE @module.UserToken SET last_used_at = :used_at "
           "WHERE id = :token_id AND (last_used_at IS NULL OR last_used_at < :cutoff)"
+      }
+    };
+  }
+
+  // SetBotAllowedCidrs — see the request. Gated bot_token_guard.
+  rpc SetBotAllowedCidrs(SetBotAllowedCidrsReq) returns (SetBotAllowedCidrsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET allowed_cidrs = :allowed_cidrs "
+          "WHERE id = :user_id AND kind = 1 "
+          "RETURNING id"
+      }
+    };
+  }
+
+  // RecordBotTokenUse — the use summary's upsert: a new combination is a
+  // new row, a known one moves its last_used_at. Throttled by the caller
+  // (once a minute per combination and process). Gated bot_token_guard.
+  rpc RecordBotTokenUse(RecordBotTokenUseReq) returns (RecordBotTokenUseResp) {
+    option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.BotTokenUse SET "
+          "token_id = :token_id, user_id = :user_id, address = :address, surface = :surface, method = :method, "
+          "first_used_at = :used_at, last_used_at = :used_at "
+          "ON CONFLICT (token_id, address, surface, method) DO UPDATE SET last_used_at = :used_at"
       }
     };
   }

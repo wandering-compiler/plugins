@@ -288,6 +288,13 @@ features:
     default: false
     go_files:
       - handlers/step_up.go
+  - name: bot_token_guard
+    description: "Guards for machine accounts' bearer tokens. An address allowlist per bot (User.allowed_cidrs, set with SetBotAllowlist, PUT /auth/bots/{user_id}/allowlist): a bearer token is accepted only from a client address inside it — the address the gateway resolved through its trusted proxies (x-w17-client-addr), never a header the client wrote; with a list set, a request with no resolved address is refused. Empty = anywhere; bound tokens and people are never limited by address. And a use summary (BotTokenUse): one row per token, client address, surface and method, with the first and the latest use (written at most once a minute per row), read with GetBotGuard (GET /auth/bots/{user_id}/guard) beside the allowlist. Nothing is deleted. The operator rules of IssueBotToken apply to both. Off by default; a migration adds the column and the table."
+    default: false
+    requires:
+      - service_account
+    go_files:
+      - handlers/bot_token_guard.go
   - name: marketing_consent
     description: "The user's own consent to marketing messages: User.marketing_consent and when it was decided (marketing_consent_at, NULL = never asked), read and set by the user on the REST preset (GET / PUT /auth/marketing-consent), announced as MarketingConsentChanged, and answered by Authenticate (AuthResp.marketing_consent), so the gateway's request stream carries it to the tool that sends the messages. It changes nothing about what is recorded. Off by default; a migration adds the two columns."
     default: false
@@ -453,6 +460,8 @@ presets:
           - { ref: AuthService.ListBots,      method: GET,  path: "",              feature: service_account }
           - { ref: AuthService.ListBotRoles,  method: GET,  path: /roles,          feature: service_account }
           - { ref: AuthService.IssueBotToken, method: POST, path: "/{user_id}/token", feature: service_account }
+          - { ref: AuthService.SetBotAllowlist, method: PUT, path: "/{user_id}/allowlist", feature: bot_token_guard }
+          - { ref: AuthService.GetBotGuard,     method: GET, path: "/{user_id}/guard",     feature: bot_token_guard }
       # OAuth2/OIDC sign-in — provider redirect + callback. Both
       # unauthenticated (the caller has no token yet). Gated oauth.
       - prefix: /auth/oauth
@@ -1022,6 +1031,7 @@ msgids:
   - "That key contains its private part. Give only the public key, and keep the private key where the program runs."
   - "That public key cannot be used. Give a P-256 or Ed25519 public key as a JWK."
   - "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
+  - "The list is too long: at most {max} entries."
   - "There is no organization role named {role}."
   - "This API token expired on {date}. Create a new token."
   - "This account has been disabled."
@@ -1043,4 +1053,5 @@ msgids:
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
   - "Your session expired on {date}. Sign in again."
+  - "{entry} is not an address or a network (for example 203.0.113.7 or 203.0.113.0/24)."
   - "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."

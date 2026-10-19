@@ -96,6 +96,7 @@ func (q *expiryLookupQuery) GetTokenPermissionSubset(context.Context, *pb.GetTok
 type touchRecorder struct {
 	pb.AuthMutationClient
 	touches  []*pb.TouchTokenLastUsedReq
+	botUses  []*pb.RecordBotTokenUseReq
 	upgrades int
 	touchErr error
 }

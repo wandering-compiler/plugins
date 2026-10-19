@@ -1,0 +1,3 @@
+### Added
+
+- **`bot_token_guard`: an address allowlist and a use summary for machine accounts' bearer tokens.** `SetBotAllowlist` (`PUT /auth/bots/{user_id}/allowlist`) holds a bot's bearer tokens to CIDRs: from any other client address they are refused like an unknown token. The address is the one the gateway resolved through its trusted proxies (`x-w17-client-addr`), never one the client wrote; a gateway that sends none fails closed while a list is set. `GetBotGuard` (`GET /auth/bots/{user_id}/guard`) answers the list and where the bot's tokens were used: one row per token, address, surface and method, with the first and the latest use. Off by default; requires `service_account`; a migration adds `User.allowed_cidrs` and the `BotTokenUse` table.
