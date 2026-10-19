@@ -283,6 +283,11 @@ features:
     default: false
     go_files:
       - handlers/password_change.go
+  - name: step_up
+    description: "Step-up for sensitive actions: the signed-in person confirms their password in their current session (ConfirmPassword, POST /auth/password/confirm), and the session token records when (UserToken.stepped_up_at). It changes nothing else — no token is minted, no session ended. A consumer that guards an action reads the caller's own token row and asks for a recent confirmation, so a stolen token and its device key, which do not carry the password, cannot perform it. Refuses an API token (it has no session to step up). Every guess is counted on the session first; five wrong passwords in a row lock its step-up for fifteen minutes (UserToken.step_up_attempts / step_up_locked_until), so a stolen session is no password oracle. Off by default; a migration adds the three columns."
+    default: false
+    go_files:
+      - handlers/step_up.go
   - name: marketing_consent
     description: "The user's own consent to marketing messages: User.marketing_consent and when it was decided (marketing_consent_at, NULL = never asked), read and set by the user on the REST preset (GET / PUT /auth/marketing-consent), announced as MarketingConsentChanged, and answered by Authenticate (AuthResp.marketing_consent), so the gateway's request stream carries it to the tool that sends the messages. It changes nothing about what is recorded. Off by default; a migration adds the two columns."
     default: false
@@ -517,6 +522,10 @@ presets:
           # deployment with no way to send mail still gets this one — and
           # NOT exclude_auth: it acts on the caller's own account.
           - { ref: AuthService.ChangePassword,       method: POST, path: /change,                            feature: password_change }
+          # The step-up: the caller's password, confirmed in their current
+          # session. A guessable secret behind a credential — charged like
+          # ChangePassword, by the gateway's per-client limit.
+          - { ref: AuthService.ConfirmPassword,      method: POST, path: /confirm,                           feature: step_up }
       # E-mail verification — request is bearer-authenticated (verify
       # your own address); the verify link click is unauthenticated. Gated
       # email_verification.
@@ -1007,6 +1016,7 @@ msgids:
   - "Sign in to do this. An API token cannot create credentials."
   - "Signing in with the provider did not complete. Please start again."
   - "That expiry date is not a valid date."
+  - "That is not your password. Type the password you sign in with."
   - "That key belongs to a device that was revoked. Generate a new key for the program."
   - "That key belongs to a device you sign in with. Generate a separate key for the program."
   - "That key contains its private part. Give only the public key, and keep the private key where the program runs."
@@ -1029,6 +1039,7 @@ msgids:
   - "This membership belongs to another organization."
   - "This request names two different organizations. Name one."
   - "Too many wrong codes. Wait 15 minutes and try again."
+  - "Too many wrong passwords. Wait 15 minutes and try again."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
   - "Your session expired on {date}. Sign in again."

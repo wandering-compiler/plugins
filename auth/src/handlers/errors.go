@@ -177,6 +177,14 @@ const (
 	// callback) called with an API token. It needs a signed-in session.
 	CodeSessionRequired = "SESSION_REQUIRED"
 
+	// CodePasswordNotConfirmed: ConfirmPassword (step_up) was given a password
+	// that is not the caller's.
+	CodePasswordNotConfirmed = "PASSWORD_NOT_CONFIRMED"
+
+	// CodePasswordStepUpLocked: too many wrong passwords to ConfirmPassword
+	// in this session (step_up); it is locked for a while.
+	CodePasswordStepUpLocked = "PASSWORD_STEP_UP_LOCKED"
+
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
 	CodeSignUpNotInvited = "SIGNUP_NOT_INVITED"
@@ -341,6 +349,12 @@ const (
 	// Names what to do instead: the caller holds a working credential, just
 	// not one this operation accepts.
 	MsgSessionRequired = "Sign in to do this. An API token cannot create credentials."
+
+	// step_up: the password the caller typed to confirm it is them is not
+	// theirs. Says no more than that — they are signed in already.
+	MsgPasswordNotConfirmed = "That is not your password. Type the password you sign in with."
+
+	MsgPasswordStepUpLocked = "Too many wrong passwords. Wait 15 minutes and try again." //nolint:gosec // G101: a message about passwords, not one
 
 	// {date} is the expiry, UTC. Names the remedy, which differs by kind: a
 	// session is renewed by signing in, an API token only by minting another.
