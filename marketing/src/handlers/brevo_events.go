@@ -159,7 +159,7 @@ func eventFor(meta *w17pb.RequestEventMeta, consentAttr string) (brevo.Event, bo
 	}
 	contact := map[string]any{}
 	if org := meta.GetOrgId(); org != "" {
-		contact["W17_ORG_ID"] = org
+		contact[orgAttribute] = org
 	}
 	if meta.MarketingConsent != nil {
 		contact[consentAttr] = meta.GetMarketingConsent()

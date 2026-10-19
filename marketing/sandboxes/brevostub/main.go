@@ -5,12 +5,19 @@
 //
 //	POST   /v3/events/batch                         → 204 (207 for an event named *Refused*)
 //	POST   /v3/contacts                             → 201 / 204, upsert by ext_id
+//	PUT    /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
 //	DELETE /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
+//	POST   /v3/contacts/attributes/normal/{name}    → 201, 400 when it exists
 //	GET    /_stub/contacts/{ext_id}                 → the contact and its events, 404 when none
 //	GET    /_stub/events                            → every event received, in order
 //
 // Every /v3 call needs the `api-key` header to equal API_KEY (default
 // stub-key). Never shipped to production.
+//
+// It behaves as Brevo was measured to (2026-10-19): an event for an unknown
+// ext_id creates the contact; an attribute the account has not created is
+// dropped silently; an upsert by POST that names a known ext_id with another
+// email is refused (duplicate_parameter) — an address changes by PUT.
 package main
 
 import (
@@ -39,10 +46,27 @@ type contact struct {
 }
 
 type stub struct {
-	key      string
-	mu       sync.Mutex
-	contacts map[string]*contact
-	events   []event
+	key        string
+	mu         sync.Mutex
+	contacts   map[string]*contact
+	events     []event
+	attributes map[string]bool
+}
+
+// set copies the attributes the account knows; the others are dropped, as
+// Brevo drops them.
+func (s *stub) set(c *contact, attrs map[string]any) {
+	for k, v := range attrs {
+		if k == "EMAIL" {
+			if e, _ := v.(string); e != "" {
+				c.Email = e
+			}
+			continue
+		}
+		if s.attributes[k] {
+			c.Attributes[k] = v
+		}
+	}
 }
 
 func (s *stub) contact(ext string) *contact {
@@ -98,9 +122,7 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			c := s.contact(ext)
-			for k, v := range ev.ContactProperties {
-				c.Attributes[k] = v
-			}
+			s.set(c, ev.ContactProperties)
 			c.Events = append(c.Events, ev)
 			s.events = append(s.events, ev)
 		}
@@ -121,19 +143,46 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			refuse(w, http.StatusBadRequest, "missing_parameter", "ext_id is required")
 			return
 		}
-		_, existed := s.contacts[body.ExtID]
+		prev, existed := s.contacts[body.ExtID]
+		if existed && body.Email != "" && prev.Email != "" && prev.Email != body.Email {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "duplicate_parameter",
+				"message": "Unable to update contact, ext_id is already associated with another Contact"})
+			return
+		}
 		c := s.contact(body.ExtID)
 		if body.Email != "" {
 			c.Email = body.Email
 		}
-		for k, v := range body.Attributes {
-			c.Attributes[k] = v
-		}
+		s.set(c, body.Attributes)
 		if existed {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]int{"id": len(s.contacts)})
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v3/contacts/attributes/normal/"):
+		name := strings.TrimPrefix(r.URL.Path, "/v3/contacts/attributes/normal/")
+		if s.attributes[name] {
+			refuse(w, http.StatusBadRequest, "invalid_parameter", "Attribute name must be unique")
+			return
+		}
+		s.attributes[name] = true
+		writeJSON(w, http.StatusCreated, map[string]any{})
+	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v3/contacts/"):
+		ext := strings.TrimPrefix(r.URL.Path, "/v3/contacts/")
+		c, ok := s.contacts[ext]
+		if r.URL.Query().Get("identifierType") != "ext_id" || !ok {
+			refuse(w, http.StatusNotFound, "document_not_found", "Contact does not exist")
+			return
+		}
+		var body struct {
+			Attributes map[string]any `json:"attributes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			refuse(w, http.StatusBadRequest, "invalid_parameter", "body")
+			return
+		}
+		s.set(c, body.Attributes)
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v3/contacts/"):
 		ext := strings.TrimPrefix(r.URL.Path, "/v3/contacts/")
 		if r.URL.Query().Get("identifierType") != "ext_id" {
@@ -180,7 +229,7 @@ func main() {
 	}
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           &stub{key: key, contacts: map[string]*contact{}},
+		Handler:           &stub{key: key, contacts: map[string]*contact{}, attributes: map[string]bool{}},
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

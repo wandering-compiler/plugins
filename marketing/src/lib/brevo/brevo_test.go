@@ -269,3 +269,36 @@ func TestRefused_OnlyWhatTheContentCauses(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateContact_ByTheUsersID(t *testing.T) {
+	s := newStub(t, status(http.StatusNoContent, ""), status(http.StatusNotFound, `{"code":"document_not_found","message":"Contact does not exist"}`))
+	c, _ := client(t, s)
+	if err := c.UpdateContact(context.Background(), "u1", map[string]any{"EMAIL": "b@x.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if s.calls[0].method != http.MethodPut || s.calls[0].path != "/contacts/u1" || s.calls[0].query != "identifierType=ext_id" ||
+		s.calls[0].body["attributes"].(map[string]any)["EMAIL"] != "b@x.example" {
+		t.Errorf("call = %+v", s.calls[0])
+	}
+	if err := c.UpdateContact(context.Background(), "u2", nil); !IsNotFound(err) {
+		t.Errorf("unknown contact = %v, want not found", err)
+	}
+}
+
+func TestEnsureAttribute_AnExistingOneIsFine(t *testing.T) {
+	s := newStub(t, status(http.StatusCreated, "{}"), status(http.StatusBadRequest, `{"code":"invalid_parameter","message":"Attribute name must be unique"}`), status(http.StatusBadRequest, `{"code":"invalid_parameter","message":"type is invalid"}`))
+	c, _ := client(t, s)
+	ctx := context.Background()
+	if err := c.EnsureAttribute(ctx, "W17_ORG_ID", "text"); err != nil {
+		t.Fatal(err)
+	}
+	if s.calls[0].path != "/contacts/attributes/normal/W17_ORG_ID" || s.calls[0].body["type"] != "text" {
+		t.Errorf("call = %+v", s.calls[0])
+	}
+	if err := c.EnsureAttribute(ctx, "W17_ORG_ID", "text"); err != nil {
+		t.Errorf("an existing attribute = %v", err)
+	}
+	if err := c.EnsureAttribute(ctx, "W17_ORG_ID", "nope"); err == nil {
+		t.Error("another refusal was swallowed")
+	}
+}

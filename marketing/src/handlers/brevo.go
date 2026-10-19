@@ -35,8 +35,13 @@ type brevoTool struct {
 type brevoAPI interface {
 	SendEvents(ctx context.Context, events []brevo.Event) (brevo.BatchResult, error)
 	UpsertContact(ctx context.Context, extID, email string, attributes map[string]any) error
+	UpdateContact(ctx context.Context, extID string, attributes map[string]any) error
+	EnsureAttribute(ctx context.Context, name, typ string) error
 	DeleteContact(ctx context.Context, extID string) error
 }
+
+// orgAttribute is the contact attribute an event's organization goes to.
+const orgAttribute = "W17_ORG_ID"
 
 func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.ClientSet) error {
 	if !gen.FeatureBrevo {
@@ -74,9 +79,36 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 			return err
 		}
 	}
-	stop := t.forgetPeriodically(time.Hour)
-	registry.RegisterShutdown(func(context.Context) error { stop(); return nil })
+	stopForget := t.forgetPeriodically(time.Hour)
+	stopAttrs := t.ensureAttributes(time.Minute)
+	registry.RegisterShutdown(func(context.Context) error { stopForget(); stopAttrs(); return nil })
 	return nil
+}
+
+// ensureAttributes creates the contact attributes the plugin writes, in the
+// background and again every interval until Brevo has them: without them
+// Brevo drops the consent and the organization silently, and the bundle's
+// boot must not wait on Brevo being reachable.
+func (t *brevoTool) ensureAttributes(every time.Duration) (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			err := t.client.EnsureAttribute(ctx, t.consentAttr, "boolean")
+			if err == nil {
+				err = t.client.EnsureAttribute(ctx, orgAttribute, "text")
+			}
+			if err == nil || ctx.Err() != nil {
+				return
+			}
+			log.Printf("marketing plugin: creating the Brevo contact attributes %s, %s: %v", t.consentAttr, orgAttribute, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(every):
+			}
+		}
+	}()
+	return cancel
 }
 
 // forgetPeriodically drops sent ids past their retention every interval,

@@ -36,7 +36,7 @@ them the plugin still sends events and creates contacts.
 **The calls leave from the storage bundle**, where the plugin runs. A Brevo
 account with *Authorised IPs* on (Security → Authorised IPs) refuses every call
 from an address it does not list (401 "unrecognised IP address"): list the
-storage servers' addresses, IPv6 included. Until then nothing is lost — the
+storage servers' addresses, IPv4 and IPv6 each. Until then nothing is lost — the
 calls fail, and the records and contact changes end in the stream's dead
 letters, to be replayed once the account allows them.
 
@@ -55,6 +55,10 @@ letters, to be replayed once the account allows them.
   attribute set on `MarketingConsentChanged`.
 - **Erasure** (`DELETE /v3/contacts/{id}?identifierType=ext_id`) on
   `UserDeleted`: the contact and its history.
+
+The plugin creates the two contact attributes it writes
+(`W17_MARKETING_CONSENT`, or `BREVO_CONSENT_ATTRIBUTE`; and `W17_ORG_ID`) when it
+starts: Brevo drops an attribute the account does not have, silently.
 
 Consent does not change what is recorded or sent: it is the tool's to read
 before it writes to anyone.

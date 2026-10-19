@@ -171,6 +171,41 @@ func (c *Client) SendEvents(ctx context.Context, events []Event) (BatchResult, e
 	return out, nil
 }
 
+// UpdateContact sets attributes of the contact keyed by extID (EMAIL among
+// them changes its address). A contact that does not exist answers 404: an
+// upsert by POST cannot change an address — Brevo resolves it by the new
+// email, finds none, and refuses the ext_id as taken (duplicate_parameter).
+func (c *Client) UpdateContact(ctx context.Context, extID string, attributes map[string]any) error {
+	body, err := json.Marshal(map[string]any{"attributes": attributes})
+	if err != nil {
+		return err
+	}
+	_, _, err = c.do(ctx, http.MethodPut, "/contacts/"+url.PathEscape(extID)+"?identifierType=ext_id", body)
+	return err
+}
+
+// EnsureAttribute creates a contact attribute of typ (boolean, text, …);
+// one that exists already is fine. Brevo drops an attribute a call names
+// that the account has not created, silently.
+func (c *Client) EnsureAttribute(ctx context.Context, name, typ string) error {
+	body, err := json.Marshal(map[string]any{"type": typ})
+	if err != nil {
+		return err
+	}
+	_, _, err = c.do(ctx, http.MethodPost, "/contacts/attributes/normal/"+url.PathEscape(name), body)
+	var e *Error
+	if errors.As(err, &e) && e.Status == http.StatusBadRequest && strings.Contains(e.Message, "must be unique") {
+		return nil
+	}
+	return err
+}
+
+// IsNotFound reports whether Brevo answered that the thing does not exist.
+func IsNotFound(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == http.StatusNotFound
+}
+
 // UpsertContact creates the contact keyed by extID, or updates it: its email
 // (when given) and attributes.
 func (c *Client) UpsertContact(ctx context.Context, extID, email string, attributes map[string]any) error {

@@ -32,6 +32,8 @@ stub of the Brevo API.
 | `brevo/no-personal-extras` | An event MUST NOT carry the IP address, the user agent or the request's fields; an unknown consent MUST NOT be written as false. | Security | `TestEventFor` |
 | `brevo/erasure` | `UserDeleted` MUST delete the contact and its history; a transient failure MUST be retried, a missing contact counts as deleted. | Security | `TestContacts_FollowTheAccounts`, `TestContacts_RetryOnlyWhatMaySucceed`, `TestDeleteContact_AMissingContactIsDeleted` |
 | `brevo/rate` | Requests MUST leave at most `brevo_rps` per second; a 429 MUST be waited out as `x-sib-ratelimit-reset` says. | Performance | `TestPace_SpacesTheRequests`, `TestDo_WaitsOutARateLimit` |
+| `brevo/contact-write` | A contact MUST be written by its `ext_id` (PUT), and created only when Brevo has none; an address change MUST reach Brevo. | Consistency & concurrency | `TestContacts_FollowTheAccounts`, `TestContacts_ConsentBeforeTheContactCreatesIt`, `TestUpdateContact_ByTheUsersID` |
+| `brevo/attributes` | The consent and organization attributes MUST exist in the account before they are written, created without holding up the bundle's boot. | Failure & configuration | `TestEnsureAttributes`, `TestEnsureAttribute_AnExistingOneIsFine` |
 | `brevo/batch-limits` | A batch MUST hold at most 200 events and 512 KB. | Failure & configuration | `TestConsumeMarketing_SplitsAtTheBatchLimit`, `TestSendEvents_RefusesWhatBrevoWould` |
 
 **Gaps / suspected defects**
@@ -39,6 +41,26 @@ stub of the Brevo API.
 1. **The request's fields are not sent.** The consumer runs in the storage
    bundle, which does not link the project's business services, so their
    requests arrive undecoded; linking them there is platform work.
-2. **Not yet checked against a Brevo account:** whether an event for an
-   unknown `ext_id` creates the contact, and how an upsert with both `ext_id`
-   and a changed `email` resolves.
+
+## Measured against a Brevo account (2026-10-19)
+
+The client (`lib/brevo`) was run against a real account, with throwaway data
+deleted afterwards. What it showed, and what the plugin does about it:
+
+- **An event for an `ext_id` Brevo does not know creates the contact** (no
+  email, `emailBlacklisted: true`): an event may arrive before the contact.
+- **An address cannot change by upsert.** `POST /contacts` with a known `ext_id`
+  and another email is refused, `400 duplicate_parameter` ("ext_id is already
+  associated with another Contact"). The plugin writes a contact by
+  `PUT /contacts/{ext_id}?identifierType=ext_id` (`EMAIL` among the attributes)
+  and creates it by `POST` only when that answers 404 (`brevo/contact-write`).
+- **An attribute the account has not created is dropped silently** — on an
+  upsert and in an event's `contact_properties`. The plugin creates its two
+  (`brevo_consent_attribute`, boolean; `W17_ORG_ID`, text) in the background,
+  retrying until Brevo has them (`brevo/attributes`).
+- **Authorised IPs**: an account that lists addresses answers `401
+  "unrecognised IP address"` to any other, IPv4 and IPv6 separately. The call
+  fails and is kept for a replay (`brevo/transient-is-redelivered`).
+- **Rate limits as documented**: `/events` 10 per second, `/contacts` 20 on that
+  account, both reported in `x-sib-ratelimit-*`.
+- A batch with an invalid event name answers `207 partiallyQueued` with its index.

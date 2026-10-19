@@ -16,11 +16,30 @@ import (
 // once it is fixed.
 
 func (t *brevoTool) onUserCreated(ctx context.Context, ev *pb.AuthUserCreated) error {
-	return t.contactCall("create the contact of", ev.GetUserId(), t.client.UpsertContact(ctx, ev.GetUserId(), ev.GetEmail(), nil))
+	return t.contactCall("create the contact of", ev.GetUserId(), t.setContact(ctx, ev.GetUserId(), ev.GetEmail(), nil))
 }
 
 func (t *brevoTool) onUserUpdated(ctx context.Context, ev *pb.AuthUserUpdated) error {
-	return t.contactCall("update the contact of", ev.GetUserId(), t.client.UpsertContact(ctx, ev.GetUserId(), ev.GetEmail(), nil))
+	return t.contactCall("update the contact of", ev.GetUserId(), t.setContact(ctx, ev.GetUserId(), ev.GetEmail(), nil))
+}
+
+// setContact writes the contact keyed by user: an update by its id (an
+// address change included), or, when Brevo has no such contact yet, its
+// creation. An event creates a contact too, without an address, so either
+// may come first.
+func (t *brevoTool) setContact(ctx context.Context, user, email string, attrs map[string]any) error {
+	update := map[string]any{}
+	for k, v := range attrs {
+		update[k] = v
+	}
+	if email != "" {
+		update["EMAIL"] = email
+	}
+	err := t.client.UpdateContact(ctx, user, update)
+	if brevo.IsNotFound(err) {
+		return t.client.UpsertContact(ctx, user, email, attrs)
+	}
+	return err
 }
 
 // onUserDeleted deletes the contact and its history in Brevo: the account
@@ -31,7 +50,7 @@ func (t *brevoTool) onUserDeleted(ctx context.Context, ev *pb.AuthUserDeleted) e
 
 func (t *brevoTool) onConsentChanged(ctx context.Context, ev *pb.AuthMarketingConsentChanged) error {
 	attrs := map[string]any{t.consentAttr: ev.GetConsent()}
-	return t.contactCall("set the consent of", ev.GetUserId(), t.client.UpsertContact(ctx, ev.GetUserId(), "", attrs))
+	return t.contactCall("set the consent of", ev.GetUserId(), t.setContact(ctx, ev.GetUserId(), "", attrs))
 }
 
 func (t *brevoTool) contactCall(what, user string, err error) error {

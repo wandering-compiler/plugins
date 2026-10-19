@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,10 @@ type fakeBrevo struct {
 	failed  map[int]string
 	sendErr error
 	upserts []string // "<ext>|<email>|<attrs>"
+	updates []string // "<ext>|<attrs>"
+	known   map[string]bool
+	mu      sync.Mutex // guards ensured (written by a goroutine)
+	ensured []string
 	deletes []string
 	callErr error
 }
@@ -41,7 +46,37 @@ func (f *fakeBrevo) SendEvents(_ context.Context, events []brevo.Event) (brevo.B
 
 func (f *fakeBrevo) UpsertContact(_ context.Context, ext, email string, attrs map[string]any) error {
 	f.upserts = append(f.upserts, fmt.Sprintf("%s|%s|%v", ext, email, attrs))
+	if f.callErr == nil {
+		if f.known == nil {
+			f.known = map[string]bool{}
+		}
+		f.known[ext] = true
+	}
 	return f.callErr
+}
+
+func (f *fakeBrevo) UpdateContact(_ context.Context, ext string, attrs map[string]any) error {
+	if f.callErr != nil {
+		return f.callErr
+	}
+	if !f.known[ext] {
+		return &brevo.Error{Status: 404, Message: "Contact does not exist"}
+	}
+	f.updates = append(f.updates, fmt.Sprintf("%s|%v", ext, attrs))
+	return nil
+}
+
+func (f *fakeBrevo) EnsureAttribute(_ context.Context, name, typ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensured = append(f.ensured, name+":"+typ)
+	return f.callErr
+}
+
+func (f *fakeBrevo) ensuredSoFar() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ensured...)
 }
 
 func (f *fakeBrevo) DeleteContact(_ context.Context, ext string) error {
@@ -280,12 +315,42 @@ func TestContacts_FollowTheAccounts(t *testing.T) {
 	_ = tl.onUserUpdated(ctx, &pb.AuthUserUpdated{UserId: "u1", Email: "b@x.example"})
 	_ = tl.onConsentChanged(ctx, &pb.AuthMarketingConsentChanged{UserId: "u1", Consent: false})
 	_ = tl.onUserDeleted(ctx, &pb.AuthUserDeleted{UserId: "u1"})
-	want := []string{"u1|a@x.example|map[]", "u1|b@x.example|map[]", "u1||map[W17_MARKETING_CONSENT:false]"}
-	if strings.Join(f.upserts, ";") != strings.Join(want, ";") {
-		t.Errorf("upserts = %v\nwant      %v", f.upserts, want)
+	// Unknown at sign-up: created. Known: updated by its id, the address as
+	// EMAIL — an upsert by POST cannot change an address (Brevo refuses the
+	// ext_id as taken).
+	if strings.Join(f.upserts, ";") != "u1|a@x.example|map[]" {
+		t.Errorf("upserts = %v", f.upserts)
+	}
+	want := []string{"u1|map[EMAIL:b@x.example]", "u1|map[W17_MARKETING_CONSENT:false]"}
+	if strings.Join(f.updates, ";") != strings.Join(want, ";") {
+		t.Errorf("updates = %v\nwant      %v", f.updates, want)
 	}
 	if len(f.deletes) != 1 || f.deletes[0] != "u1" {
 		t.Errorf("deletes = %v", f.deletes)
+	}
+}
+
+// The consent for a user Brevo does not know yet creates the contact with it.
+func TestContacts_ConsentBeforeTheContactCreatesIt(t *testing.T) {
+	f := &fakeBrevo{}
+	_ = tool(t, f, &ledger{}, "all", "", "").onConsentChanged(context.Background(), &pb.AuthMarketingConsentChanged{UserId: "u2", Consent: true})
+	if strings.Join(f.upserts, ";") != "u2||map[W17_MARKETING_CONSENT:true]" {
+		t.Errorf("upserts = %v", f.upserts)
+	}
+}
+
+// The attributes the plugin writes are created, retried until they are: Brevo
+// drops an attribute the account has not created, silently.
+func TestEnsureAttributes(t *testing.T) {
+	f := &fakeBrevo{}
+	stop := tool(t, f, &ledger{}, "all", "", "").ensureAttributes(time.Millisecond)
+	defer stop()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(f.ensuredSoFar()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := strings.Join(f.ensuredSoFar(), ","); got != "W17_MARKETING_CONSENT:boolean,W17_ORG_ID:text" {
+		t.Errorf("ensured = %v", got)
 	}
 }
 
