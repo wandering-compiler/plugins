@@ -75,7 +75,7 @@ func TestRoleIDByName_RefusesARealmRole(t *testing.T) {
 	// a realm role is not scoped to one. Before this, roleIDByName read
 	// ListRoles and happily returned "r-account" — the picker refused to
 	// offer it and the API accepted it, which is the worst pairing of the two.
-	id, err := h.roleIDByName(context.Background(), "account")
+	id, err := h.roleIDByName(context.Background(), "org-1", "account")
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("realm role must be refused with InvalidArgument, got %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRoleIDByName_AnUnknownNameIsATypoNotAScopingProblem(t *testing.T) {
 	m := newRoleCatalogue()
 	h := &AuthServiceHandler{Query: m}
 
-	id, err := h.roleIDByName(context.Background(), "org-adminn")
+	id, err := h.roleIDByName(context.Background(), "org-1", "org-adminn")
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("an unknown role must be refused with InvalidArgument, got %v", err)
 	}
@@ -132,7 +132,7 @@ func TestRoleIDByName_AnUnknownNameIsATypoNotAScopingProblem(t *testing.T) {
 func TestRoleIDByName_AcceptsAnOrgScopedRole(t *testing.T) {
 	h := &AuthServiceHandler{Query: newRoleCatalogue()}
 
-	id, err := h.roleIDByName(context.Background(), "org-worker")
+	id, err := h.roleIDByName(context.Background(), "org-1", "org-worker")
 	if err != nil {
 		t.Fatalf("org-scoped role must resolve: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestAssignableRolesAndValidatorCannotDisagree(t *testing.T) {
 		t.Fatal("picker offered nothing — an empty list passes every 'offered implies accepted' check vacuously")
 	}
 	for _, r := range offered.GetRoles() {
-		if _, err := h.roleIDByName(ctx, r.GetName()); err != nil {
+		if _, err := h.roleIDByName(ctx, "org-1", r.GetName()); err != nil {
 			t.Fatalf("picker offers %q but the validator refuses it: %v", r.GetName(), err)
 		}
 	}
@@ -170,7 +170,26 @@ func TestAssignableRolesAndValidatorCannotDisagree(t *testing.T) {
 			t.Fatal("fixture no longer holds a realm role the picker excludes — the decoy is gone")
 		}
 	}
-	if _, err := h.roleIDByName(ctx, "account"); err == nil {
+	if _, err := h.roleIDByName(ctx, "org-1", "account"); err == nil {
 		t.Fatal("validator accepts a role the picker does not offer")
 	}
+}
+
+// ListOrgRoleRows serves the org_roles catalogue from the same fixture as
+// ListOrgScopedRoles: the tests here are about the grant paths, not about
+// whose roles an organization sees (org_roles_test.go).
+func (m *roleCatalogueMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq, _ ...grpc.CallOption) (*pb.ListOrgRoleRowsResp, error) {
+	return rowsFromScoped(m.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}))
+}
+
+// rowsFromScoped turns a ListOrgScopedRoles fixture into the org_roles shape.
+func rowsFromScoped(resp *pb.ListOrgScopedRolesResp, err error) (*pb.ListOrgRoleRowsResp, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := &pb.ListOrgRoleRowsResp{}
+	for _, r := range resp.GetRoles() {
+		out.Roles = append(out.Roles, &pb.OrgRoleRow{Id: r.GetId(), Name: r.GetName(), Description: r.GetDescription(), DisplayName: r.GetDisplayName(), TokenType: r.GetTokenType()})
+	}
+	return out, nil
 }

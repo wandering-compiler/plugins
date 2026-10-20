@@ -600,3 +600,17 @@ func TestClaimOpenInvite_WithoutInviteOnlyNothingIsRefused(t *testing.T) {
 		t.Errorf("a registration with no link claimed something: %v %+v", err, m.binds)
 	}
 }
+
+// ListOrgRoleRows serves the org_roles catalogue from the same fixture as
+// ListOrgScopedRoles: the tests here are about the grant paths, not about
+// whose roles an organization sees (org_roles_test.go).
+func (m *inviteTokenMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq, _ ...grpc.CallOption) (*pb.ListOrgRoleRowsResp, error) {
+	return rowsFromScoped(m.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}))
+}
+
+// ListOrgRoleRows serves the org_roles catalogue from the same fixture as
+// ListOrgScopedRoles: the tests here are about the grant paths, not about
+// whose roles an organization sees (org_roles_test.go).
+func (m *mintMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq, _ ...grpc.CallOption) (*pb.ListOrgRoleRowsResp, error) {
+	return rowsFromScoped(m.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}))
+}

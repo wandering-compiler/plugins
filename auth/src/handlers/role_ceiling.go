@@ -66,13 +66,9 @@ var errRoleMovedSinceInvite = errors.New("this invitation's role has changed sin
 // One function for both questions — "which roles may I be offered" and "may I
 // grant this one" — so a picker and the endpoint behind it cannot disagree.
 func (h *AuthServiceHandler) grantableRoleIDs(ctx context.Context) (map[string]bool, error) {
-	var who pb.AuthResp
-	if err := principal.Envelope(ctx, &who); err != nil {
-		return nil, status.Error(codes.PermissionDenied, errCallerPermissionsUnknown.Error())
-	}
-	held := make(map[int32]bool, len(who.GetPermissionIds()))
-	for _, id := range who.GetPermissionIds() {
-		held[id] = true
+	held, err := callerHeldPermissions(ctx)
+	if err != nil {
+		return nil, err
 	}
 	catalogue, err := h.roleCatalogue(ctx)
 	if err != nil {
@@ -85,6 +81,20 @@ func (h *AuthServiceHandler) grantableRoleIDs(ctx context.Context) (map[string]b
 		}
 	}
 	return out, nil
+}
+
+// callerHeldPermissions is the permission set Authenticate resolved for this
+// request, off the envelope — what every ceiling compares against.
+func callerHeldPermissions(ctx context.Context) (map[int32]bool, error) {
+	var who pb.AuthResp
+	if err := principal.Envelope(ctx, &who); err != nil {
+		return nil, status.Error(codes.PermissionDenied, errCallerPermissionsUnknown.Error())
+	}
+	held := make(map[int32]bool, len(who.GetPermissionIds()))
+	for _, id := range who.GetPermissionIds() {
+		held[id] = true
+	}
+	return held, nil
 }
 
 // roleCatalogue maps every role id to the permissions it carries, a wildcard

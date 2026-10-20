@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 
@@ -265,7 +266,10 @@ func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.Li
 	// projects without it — the query's own comment says so). Filtering in Go
 	// on a field that is never populated silently returned an EMPTY list,
 	// which is how this was found.
-	roles, err := h.assignableRoles(ctx)
+	// No active organization (a direct call): the shared catalogue, no
+	// organization's own roles.
+	orgID, _ := principal.Scope(ctx, "org_id")
+	roles, err := h.assignableRoles(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +287,7 @@ func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.Li
 		out.Roles = append(out.Roles, &pb.AssignableRole{
 			Name:        r.GetName(),
 			Description: r.GetDescription(),
+			DisplayName: r.GetDisplayName(),
 		})
 	}
 	return out, nil
@@ -329,7 +334,7 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	// address later, because only there does "the invitation named it" say
 	// anything about what the registrant types.
 	email := normalizeEmail(req.GetEmail())
-	roleID, err := h.roleIDByName(ctx, req.GetRole())
+	roleID, err := h.roleIDByName(ctx, orgID, req.GetRole())
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +631,7 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 	// The role is resolved from the CLAIMED row, not from anything the
 	// request said: the invitation decides the role, the acceptor only
 	// decides whether to take it.
-	roleID, err := h.roleIDByName(txCtx, roleName)
+	roleID, err := h.roleIDByName(txCtx, orgID, roleName)
 	if err != nil {
 		return nil, err
 	}

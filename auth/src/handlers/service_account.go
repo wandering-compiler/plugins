@@ -564,14 +564,24 @@ func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*
 		if u.GetKind() != pb.AccountKind_BOT || !visibleBot(ctx, u) {
 			continue
 		}
-		out = append(out, &pb.BotSummary{
+		bot := &pb.BotSummary{
 			Id:       u.GetId(),
 			Email:    u.GetEmail(),
 			Disabled: u.GetDisabledAt() != nil,
-		})
+		}
+		if botSummaryFill != nil {
+			if err := botSummaryFill(ctx, h, bot); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, bot)
 	}
 	return &pb.ListBotsResp{Bots: out}, nil
 }
+
+// botSummaryFill, set by bot_roles, adds what a feature knows about a bot to
+// its directory entry (the roles it holds).
+var botSummaryFill func(ctx context.Context, h *AuthServiceHandler, bot *pb.BotSummary) error
 
 // ListBotRoles returns the roles a machine account may hold — API-realm only.
 func (h *AuthServiceHandler) ListBotRoles(ctx context.Context, _ *pb.ListBotRolesReq) (*pb.ListBotRolesResp, error) {

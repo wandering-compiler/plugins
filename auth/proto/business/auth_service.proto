@@ -398,6 +398,23 @@ message BotSummary {
   string id = 1 [(w17.field) = { type: UUID }];
   string email = 2;
   bool disabled = 3;
+  // role_ids — the roles the bot holds (with organizations: in the caller's
+  // organization). Gated bot_roles, which is where they are changed.
+  repeated string role_ids = 4 [(w17.contrib.plugin_feature_field) = "bot_roles"];
+}
+
+// SetBotRoles — replace the roles a machine account holds with role_ids
+// (bot_roles). Each must be an API-realm role (ListBotRoles) the caller could
+// grant, and the operator rules of IssueBotToken apply to the bot. At least
+// one: a bot with no role holds tokens that do nothing.
+message SetBotRolesReq {
+  option (w17.contrib.plugin_feature) = "bot_roles";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  repeated string role_ids = 2;
+}
+message SetBotRolesResp {
+  option (w17.contrib.plugin_feature) = "bot_roles";
+  repeated string role_ids = 1;
 }
 
 message ListBotRolesReq {
@@ -858,6 +875,92 @@ message AssignableRole {
   // was declared without one, which a UI should render as just the name
   // rather than as a blank line.
   string description = 2;
+  // display_name — the label to show; blank falls back to name. An
+  // organization's custom role (org_roles) has a generated name and the label
+  // its creator typed.
+  string display_name = 3;
+}
+
+// ── org_roles: an organization's own roles ──
+//
+// A custom role is ACL permissions, composed by the organization and offered
+// only inside it. Every call acts in the caller's ACTIVE organization (`org`
+// only has to agree with it, as on the member endpoints), and the role ceiling
+// holds: a role may carry only permissions its editor holds, and an existing
+// one may be changed only by someone who covers what it carries now.
+
+// ListOrgRoles — every role an organization's members may hold: the shared
+// org roles (custom = false, read-only) and the organization's own.
+message ListOrgRolesReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
+message ListOrgRolesResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  repeated OrgRole roles = 1;
+}
+message OrgRole {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string id           = 1;
+  // name — what an invitation and a membership's role change carry.
+  string name         = 2;
+  string display_name = 3;
+  string description  = 4;
+  // custom — the organization's own role, which it may edit and delete.
+  bool   custom       = 5;
+  // all_permissions — a wildcard role (a superadmin): permission_ids is empty
+  // and the role grants everything the deployed lock allocates.
+  bool   all_permissions = 6;
+  repeated int32 permission_ids = 7;
+  // grantable — the caller holds everything the role carries, so they may
+  // hand it out (and, for a custom role, edit it).
+  bool   grantable    = 8;
+}
+
+message CreateOrgRoleReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string org          = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string display_name = 2 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description  = 3 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+  // permission_ids — ids of the deployed lock's AclPermission catalogue, every
+  // one held by the caller. At least one.
+  repeated int32 permission_ids = 4;
+}
+message CreateOrgRoleResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id = 1;
+  string name    = 2;
+}
+
+// UpdateOrgRole — rename a custom role and set what it carries (the whole
+// set; the difference is applied permission by permission, each logged in
+// RolePermissionChange). The caller covers the role as it is AND as it will be.
+// A pending invitation to a role that grew is refused at acceptance (its
+// snapshot), so the inviter re-sends it.
+message UpdateOrgRoleReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string org          = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string role_id      = 2 [(w17.field) = { type: UUID }];
+  string display_name = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description  = 4 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+  repeated int32 permission_ids = 5;
+}
+message UpdateOrgRoleResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id = 1;
+}
+
+// DeleteOrgRole — retire a custom role nobody holds any more (the row stays,
+// deleted_at). One still held is refused: move its holders to another role
+// first, so nobody loses their permissions as a side effect.
+message DeleteOrgRoleReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string org     = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string role_id = 2 [(w17.field) = { type: UUID }];
+}
+message DeleteOrgRoleResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id = 1;
 }
 
 message InviteToOrgReq {
@@ -1466,6 +1569,26 @@ service AuthService {
   }
   rpc GetBotGuard(GetBotGuardReq) returns (GetBotGuardResp) {
     option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
+  }
+
+  // SetBotRoles — a machine account's roles, any combination of the
+  // API-realm ones (handlers/bot_roles.go).
+  rpc SetBotRoles(SetBotRolesReq) returns (SetBotRolesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "bot_roles";
+  }
+
+  // An organization's own roles (handlers/org_roles.go).
+  rpc ListOrgRoles(ListOrgRolesReq) returns (ListOrgRolesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
+  }
+  rpc CreateOrgRole(CreateOrgRoleReq) returns (CreateOrgRoleResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
+  }
+  rpc UpdateOrgRole(UpdateOrgRoleReq) returns (UpdateOrgRoleResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
+  }
+  rpc DeleteOrgRole(DeleteOrgRoleReq) returns (DeleteOrgRoleResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
   }
 
   rpc GetMarketingConsent(GetMarketingConsentReq) returns (MarketingConsentResp) {

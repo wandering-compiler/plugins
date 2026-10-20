@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
@@ -35,6 +37,8 @@ const (
 	MsgMembershipInOtherOrg = "This membership belongs to another organization."
 	MsgMemberAboveCaller    = "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
 	MsgMembershipIsOwner    = "This is the organization's owner. Their membership cannot be changed or removed; transfer ownership first."
+	MsgLastSuperadmin       = "This is the organization's last superadmin. Make someone else a superadmin first."
+	MsgRoleIsForBots        = "{role} is a role for machine accounts. A person's membership carries a person's role."
 )
 
 // The codes a client branches on for the same refusals.
@@ -44,6 +48,8 @@ const (
 	CodeMembershipInOtherOrg = "MEMBERSHIP_IN_ANOTHER_ORG"
 	CodeMemberAboveCaller    = "MEMBER_ABOVE_CALLER"
 	CodeMembershipIsOwner    = "MEMBERSHIP_IS_OWNER"
+	CodeLastSuperadmin       = "LAST_SUPERADMIN"
+	CodeRoleIsForBots        = "ROLE_IS_FOR_BOTS"
 )
 
 // UpdateOrgMembershipRole changes a member's role, under the role ceiling.
@@ -64,11 +70,15 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
-	if err := h.checkMayManageMembership(ctx, req.GetId()); err != nil {
+	m, err := h.checkMayManageMembership(ctx, req.GetId())
+	if err != nil {
 		return nil, err
 	}
-	roleID, err := h.roleIDByName(ctx, req.GetRole())
+	roleID, err := h.roleIDByName(ctx, m.GetOrgId(), req.GetRole())
 	if err != nil {
+		return nil, err
+	}
+	if err := h.refuseLastSuperadmin(ctx, m, roleID); err != nil {
 		return nil, err
 	}
 	// The snapshot is for a grant written LATER (an invitation's acceptance);
@@ -95,7 +105,11 @@ func (h *AuthServiceHandler) RemoveOrgMembership(ctx context.Context, req *pb.Re
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
-	if err := h.checkMayManageMembership(ctx, req.GetId()); err != nil {
+	m, err := h.checkMayManageMembership(ctx, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	if err := h.refuseLastSuperadmin(ctx, m, ""); err != nil {
 		return nil, err
 	}
 	callerID, _ := callerUserID(ctx)
@@ -174,13 +188,15 @@ func (h *AuthServiceHandler) inOrgTx(ctx context.Context, fn func(txCtx context.
 //   - the caller covers every role the member holds in that organization —
 //     exactly the grants the change or removal revokes. Realm-wide grants stay
 //     with the member and are not asked about.
-func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membershipID string) error {
+//
+// It returns the membership, read once, for the caller to act on.
+func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membershipID string) (*pb.OrgMembership, error) {
 	m, err := h.Query.GetOrgMembership(ctx, &pb.GetOrgMembershipReq{Id: membershipID})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if active, ok := principal.Scope(ctx, "org_id"); ok && active != "" && active != m.GetOrgId() {
-		return refusal(ctx, codes.PermissionDenied,
+		return nil, refusal(ctx, codes.PermissionDenied,
 			"membership "+membershipID+" is in organization "+m.GetOrgId()+", not the caller's active "+active,
 			CodeMembershipInOtherOrg, "", MsgMembershipInOtherOrg, nil)
 	}
@@ -189,32 +205,32 @@ func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membe
 	// keeps root authority while vanishing from the member list.
 	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if owns.GetOwner() {
-		return refusal(ctx, codes.FailedPrecondition,
+		return nil, refusal(ctx, codes.FailedPrecondition,
 			"membership "+membershipID+" is the owner's of organization "+m.GetOrgId(),
 			CodeMembershipIsOwner, "", MsgMembershipIsOwner, nil)
 	}
 	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(held.GetRoleIds()) == 0 {
-		return nil
+		return m, nil
 	}
 	grantable, err := h.grantableRoleIDs(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, roleID := range held.GetRoleIds() {
 		if !grantable[roleID] {
-			return refusal(ctx, codes.PermissionDenied,
+			return nil, refusal(ctx, codes.PermissionDenied,
 				"the member of "+membershipID+" holds role "+roleID+", which the caller does not cover",
 				CodeMemberAboveCaller, "", MsgMemberAboveCaller, nil)
 		}
 	}
-	return nil
+	return m, nil
 }
 
 // Two refusals for the two reasons a role name is not org-assignable, a typo
@@ -238,12 +254,92 @@ func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membe
 // to. The picker's comment claimed the two could not disagree, which is why
 // nothing caught it — a comment is not a check. They cannot disagree now
 // because there is only one of them.
-func (h *AuthServiceHandler) assignableRoles(ctx context.Context) ([]*pb.OrgScopedRole, error) {
+func (h *AuthServiceHandler) assignableRoles(ctx context.Context, orgID string) ([]*pb.OrgScopedRole, error) {
+	roles, err := h.orgScopedRoles(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	// A membership carries a SESSION-realm role. An API-realm role (a bot's)
+	// may be org-scoped too, and offered to a person it replaced their session
+	// role with one their browser cannot use.
+	out := roles[:0:0]
+	for _, r := range roles {
+		if !isAPIRealmRow(r) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// orgScopedRoles is every org-scoped role the organization may see, of
+// either realm.
+func (h *AuthServiceHandler) orgScopedRoles(ctx context.Context, orgID string) ([]*pb.OrgScopedRole, error) {
+	if orgRoleCatalogue != nil {
+		return orgRoleCatalogue(ctx, h, orgID)
+	}
 	resp, err := h.Query.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{})
 	if err != nil {
 		return nil, err
 	}
 	return resp.GetRoles(), nil
+}
+
+// orgRoleCatalogue, set by org_roles, is the catalogue of ONE organization:
+// the shared org roles plus its own. Without org_roles there are no custom
+// roles and every organization shares ListOrgScopedRoles.
+var orgRoleCatalogue func(ctx context.Context, h *AuthServiceHandler, orgID string) ([]*pb.OrgScopedRole, error)
+
+// isAPIRealmRow reports whether a role row read off the catalogue belongs to
+// the API realm. By reflection, because its token_type field exists only with
+// api_token: without it there is one realm and no row is an API one.
+func isAPIRealmRow(m proto.Message) bool {
+	fd := m.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("token_type"))
+	if fd == nil {
+		return false
+	}
+	return m.ProtoReflect().Get(fd).Enum() == protoreflect.EnumNumber(pb.TokenType_TOKEN_TYPE_API)
+}
+
+// refuseLastSuperadmin keeps an organization from losing its last
+// superadmin — a member holding a wildcard (all_permissions) role there. A
+// role change to another wildcard role (newRoleID) keeps them one; a removal
+// passes "". The owner counts: ownership grants everything in the
+// organization, whatever its membership says.
+func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.OrgMembership, newRoleID string) error {
+	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
+	if err != nil {
+		return err
+	}
+	catalogue, err := h.Query.ListRoleGrants(ctx, &pb.ListRoleGrantsReq{})
+	if err != nil {
+		return err
+	}
+	wildcard := map[string]bool{}
+	for _, g := range catalogue.GetGrants() {
+		if g.GetAllPermissions() {
+			wildcard[g.GetRoleId()] = true
+		}
+	}
+	isSuper := false
+	for _, id := range held.GetRoleIds() {
+		isSuper = isSuper || wildcard[id]
+	}
+	if !isSuper || wildcard[newRoleID] {
+		return nil
+	}
+	others, err := h.Query.CountOtherOrgSuperadmins(ctx, &pb.CountOtherOrgSuperadminsReq{OrgId: m.GetOrgId(), UserId: m.GetUserId()})
+	if err != nil {
+		return err
+	}
+	if others.GetCount() > 0 {
+		return nil
+	}
+	if owner, err := h.orgHasOwner(ctx, m.GetOrgId()); err != nil || owner {
+		return err
+	}
+	return refusal(ctx, codes.FailedPrecondition,
+		"member "+m.GetUserId()+" is the last superadmin of organization "+m.GetOrgId(),
+		CodeLastSuperadmin, "", MsgLastSuperadmin, nil)
 }
 
 // roleIDByName resolves an assignable Role.name to its id.
@@ -259,19 +355,39 @@ func (h *AuthServiceHandler) assignableRoles(ctx context.Context) ([]*pb.OrgScop
 //
 // Its refusals name the `role` field and the value — the request field every
 // caller of this names `role`, invitation and membership change alike.
-func (h *AuthServiceHandler) roleIDByName(ctx context.Context, name string) (string, error) {
-	roles, err := h.assignableRoles(ctx)
+func (h *AuthServiceHandler) roleIDByName(ctx context.Context, orgID, name string) (string, error) {
+	roles, err := h.orgScopedRoles(ctx, orgID)
 	if err != nil {
 		return "", err
 	}
 	for _, r := range roles {
-		if r.GetName() == name {
-			return r.GetId(), nil
+		if r.GetName() != name {
+			continue
 		}
+		if isAPIRealmRow(r) {
+			return "", refusal(ctx, codes.InvalidArgument,
+				"role "+name+" belongs to the API realm (a machine account's), and a person's membership carries a session-realm role",
+				CodeRoleIsForBots, "role", MsgRoleIsForBots, map[string]string{"role": name})
+		}
+		return r.GetId(), nil
 	}
 	// Not org-assignable — and the two reasons for that are a typo and a realm
 	// role, which a caller fixes in completely different ways. The full catalogue
 	// tells them apart; `org_membership` requires `rbac`, so ListRoles is always here.
+	//
+	// Another organization's own role (org_roles) is org-scoped and so in
+	// ListOrgScopedRoles; for this organization it is the typo answer, never
+	// "realm-wide" — the refusal must not say that some other company has a
+	// role by that name.
+	if scoped, serr := h.Query.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}); serr == nil {
+		for _, r := range scoped.GetRoles() {
+			if r.GetName() == name {
+				return "", refusal(ctx, codes.InvalidArgument,
+					"no role by that name exists in this organization's role catalogue: "+name,
+					CodeUnknownOrgRole, "role", MsgUnknownOrgRole, map[string]string{"role": name})
+			}
+		}
+	}
 	if all, lerr := h.Query.ListRoles(ctx, &pb.ListRolesReq{}); lerr == nil {
 		for _, r := range all.GetRoles() {
 			if r.GetName() == name {
@@ -286,4 +402,14 @@ func (h *AuthServiceHandler) roleIDByName(ctx context.Context, name string) (str
 	return "", refusal(ctx, codes.InvalidArgument,
 		"no role by that name exists in this project's role catalogue: "+name,
 		CodeUnknownOrgRole, "role", MsgUnknownOrgRole, map[string]string{"role": name})
+}
+
+// orgHasOwner reports whether the organization has an owner
+// (Organization.owner_id), who holds every permission in it.
+func (h *AuthServiceHandler) orgHasOwner(ctx context.Context, orgID string) (bool, error) {
+	o, err := h.Query.GetOrganization(ctx, &pb.GetOrganizationReq{Id: orgID})
+	if err != nil {
+		return false, err
+	}
+	return o.GetOwnerId() != "", nil
 }

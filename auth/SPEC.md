@@ -59,6 +59,8 @@ It covers plugin version 0.1.0-rc.24.
 | `step_up` | off | — | — |
 | `service_account` | off | `api_token`, `user_admin`, `rbac`, `authenticate_turnkey` | — |
 | `bot_token_guard` | off | `service_account` | — |
+| `bot_roles` | off | `service_account`, `org_membership` | — |
+| `org_roles` | off | `org_membership` | — |
 | `user_admin` | off | — | — |
 | `admin_sign_ins` | off | `user_admin` | — |
 | `admin_devices` | off | `user_admin` | — |
@@ -755,6 +757,31 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `bot_token_guard/canonical` | An allowlist entry MUST be a CIDR or an address, stored masked (an address as its /32 or /128, an IPv4-mapped network as the IPv4 one), duplicates dropped, at most 32 entries; anything else, a zoned address included, MUST be refused on the field. | Validation | `TestCanonicalAllowlist` |
 | `bot_token_guard/operator` | Setting and reading a bot's guard MUST follow IssueBotToken's operator rules: a signed-in person (never an API token), a bot of the caller's organization, holding no role above the caller's. A change MUST be announced (`BotAllowlistChanged`) with the operator who made it. | Security | `TestSetBotAllowlistAndGetBotGuard`, `TestBotGuard_AnAPITokenCallerIsRefused` |
 
+### org_roles
+
+- **Purpose.** An organization composes roles of its own from the deployed lock's permissions, the way GitHub offers custom roles, without a role of one company reaching another's pickers.
+- **Adds.** Column `Role.org_id` (the owning organization; NULL for every seeded role). Queries `ListOrgRoleRows`, `CountRoleGrants`; mutations `ClaimRoleForOrg`, `UpdateOrgRoleLabel` (emits `OrgRoleUpdated`). Service methods `ListOrgRoles`, `CreateOrgRole`, `UpdateOrgRole`, `DeleteOrgRole`. REST endpoints `GET` / `POST /auth/orgs/{org}/org-roles`, `PUT` / `DELETE /auth/orgs/{org}/org-roles/{role_id}` (bearer, the org in the path). Creating reuses `CreateRole` (`RoleCreated`); permissions go through `AddPermissionToRole` / `RemovePermissionFromRole`, each logged in `RolePermissionChange`; deleting reuses `DeleteRole`.
+- **Changes.** The org-role catalogue every grant reads (`assignableRoles`: invitation, acceptance, membership role change, `ListAssignableRoles`) becomes `ListOrgRoleRows` for the organization: shared org roles plus its own.
+- **Requires / conflicts / combined files.** Requires `org_membership`. Default off.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `org_roles/own-org` | A custom role MUST be offered, accepted and editable only in the organization that owns it; a shared (seeded) role MUST NOT be edited or deleted here. | Isolation | `TestOrgRoleCatalogue_IsTheOrganizationsAndHoldsNoBotRole`, `TestUpdateOrgRole`, `TestDeleteOrgRole` |
+| `org_roles/ceiling` | A role MUST carry only permissions its author holds and the deployed lock allocates, at least one; an existing role MUST be changed or deleted only by a caller who covers what it carries now. | Security | `TestCreateOrgRole`, `TestUpdateOrgRole` |
+| `org_roles/in-use` | A role still granted to anyone MUST NOT be deleted. | Integrity | `TestDeleteOrgRole` |
+| `org_roles/no-deletes` | Nothing is deleted: a permission is removed by `removed_at`, a role by `deleted_at`. | Audit | `no_deletes_test.go` |
+
+### bot_roles
+
+- **Purpose.** A pipeline that pushes and deploys holds both bot roles, instead of a combined role declared for every pairing.
+- **Adds.** Field `BotSummary.role_ids`. Service method `SetBotRoles`. REST endpoint `PUT /auth/bots/{user_id}/roles` (bearer).
+- **Requires / conflicts / combined files.** Requires `service_account` and `org_membership`. Default off.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `bot_roles/replace` | `SetBotRoles` MUST leave the bot holding exactly the named roles in the caller's organization, in one transaction, at least one. | Integrity | `TestSetBotRoles_ReplacesTheSetInTheCallersOrganization` |
+| `bot_roles/operator` | Every role MUST be an API-realm role the caller could grant, and the bot MUST pass IssueBotToken's operator rules; a refusal MUST write nothing. | Security | `TestSetBotRoles_Refusals` |
+
 ### service_account
 
 **Purpose.** Adds machine accounts (`User.kind = BOT`). A machine account has no usable password and acts only through API tokens that an operator mints for it. Creating one and minting a token for one are both held to the operator's role ceiling.
@@ -939,6 +966,8 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | org_membership/role-change-ceiling | A role change MUST be refused unless the caller holds every permission of the new role and covers every role the member currently holds in that organization. | Security | `TestUpdateOrgMembershipRole_RefusesARoleAboveTheCaller`, `TestMembership_TheMemberAboveTheCallerIsNotTheirsToChange` |
 | org_membership/removal-ceiling | A removal MUST be refused unless the caller covers every role the member holds in that organization. | Security | `TestMembership_TheMemberAboveTheCallerIsNotTheirsToChange` |
 | org_membership/owner-membership-fixed | `UpdateOrgMembershipRole` and `RemoveOrgMembership` MUST refuse the organization owner's membership (`MEMBERSHIP_IS_OWNER`, FailedPrecondition) before anything is written, whatever the caller covers: ownership outlives the membership, so a demoted or removed owner would keep root authority while vanishing from the member list. | Security | `TestManageMembership_RefusesTheOwnersMembership` |
+| org_membership/no-bot-role-for-a-person | A membership MUST NOT carry an API-realm role: the org-role catalogue MUST NOT offer one, and naming one MUST be refused (`ROLE_IS_FOR_BOTS`). | Security | `TestOrgRoleCatalogue_IsTheOrganizationsAndHoldsNoBotRole` |
+| org_membership/last-superadmin | A member holding a wildcard role MUST NOT be removed or moved to a non-wildcard role when no other member holds one there and the organization has no owner (`LAST_SUPERADMIN`). | Integrity | `TestRefuseLastSuperadmin` |
 | org_membership/cross-org-management-refused | A caller acting in organization A MUST NOT change or remove a membership in organization B. | Security | `TestMembership_AnotherOrganizationsMemberIsRefused` |
 | org_membership/org-scoped-roles-only | A membership MUST carry only an org-scoped role, with distinct refusals for an unknown name (`UNKNOWN_ORG_ROLE`) and a realm-wide role (`ROLE_NOT_ORG_SCOPED`). The role MUST be applied by the ID that was checked. | Security | `TestRoleIDByName_RefusesARealmRole`, `TestRoleIDByName_AnUnknownNameIsATypoNotAScopingProblem`, `TestRoleIDByName_AcceptsAnOrgScopedRole`, `TestAssignableRolesAndValidatorCannotDisagree`, `TestUpdateOrgMembershipRole_GrantsTheCheckedRoleByID`, `TestUpdateOrgMembershipRole_OtherRefusals` |
 | org_membership/ceiling-fails-closed | A grant decision with no resolved permission envelope (a direct gRPC call) MUST be refused. | Failure & configuration | `TestCheckMayGrantRole_NoEnvelopeFailsClosed`, `TestUpdateOrgMembershipRole_OtherRefusals` |
