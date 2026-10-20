@@ -17,12 +17,14 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/wandering-compiler/plugins/agent/gen"
 	"github.com/wandering-compiler/plugins/agent/handlers"
 	"github.com/wandering-compiler/plugins/agent/lib/llm"
+	"github.com/wandering-compiler/plugins/agent/lib/textfilter"
 )
 
 // defaultMaxOutputTokens mirrors plugin.yaml's default so a bundle whose env
@@ -73,6 +75,10 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	if err := handlers.VerifyLimiterWiring(limiter); err != nil {
 		return err
 	}
+	finalText, err := finalTextFilters(gen.FeatureFinalTextScripts, gen.FeatureFinalTextInvisible, cfg.AllowedScripts)
+	if err != nil {
+		return err
+	}
 
 	// Drain the usage queue at teardown.
 	//
@@ -99,6 +105,23 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		StreamClient:     client,
 		DefaultModel:     strings.TrimSpace(cfg.DefaultModel),
 		DefaultMaxTokens: maxTokens,
+		FinalText:        finalText,
 	})
 	return nil
+}
+
+// finalTextFilters are the activation's final-text filters: the features it
+// switched on, the scripts from <DOMAIN>_AGENT_ALLOWED_SCRIPTS. A script
+// list the filter cannot use refuses the boot rather than the first answer —
+// an unknown name, or none with the filter on.
+func finalTextFilters(scripts, invisible bool, allowed string) (handlers.FinalTextFilters, error) {
+	f := handlers.FinalTextFilters{Invisible: invisible}
+	if scripts {
+		s, err := textfilter.NewScripts(strings.Split(allowed, ","))
+		if err != nil {
+			return f, fmt.Errorf("agent: allowed_scripts: %w", err)
+		}
+		f.Scripts = s
+	}
+	return f, nil
 }

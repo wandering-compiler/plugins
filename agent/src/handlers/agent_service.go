@@ -48,12 +48,21 @@ type AgentServiceHandler struct {
 	// without every caller repeating it.
 	DefaultModel     string
 	DefaultMaxTokens int64
+
+	// FinalText cleans the final text of every answer (FinalTextFilters):
+	// the activation's `final_text_*` filters. The zero value filters
+	// nothing.
+	FinalText FinalTextFilters
 }
 
 // Complete runs one model call.
 func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq) (*pb.CompleteResp, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "agent: empty request")
+	}
+	clean, err := h.FinalText.chain(req.GetFinalText())
+	if err != nil {
+		return nil, err
 	}
 
 	if err := h.admitSpend(ctx, req.GetUsageScope(), req.GetUsageLabels()); err != nil {
@@ -121,7 +130,7 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 	h.recordUsage(req, m.ID, out, OutcomeOK, startedAt)
 
 	return &pb.CompleteResp{
-		Text:             out.Text,
+		Text:             clean.Apply(out.Text),
 		Status:           statusOf(out.Status),
 		IncompleteReason: reasonOf(out.IncompleteReason),
 		Usage:            usageOf(out.Usage),

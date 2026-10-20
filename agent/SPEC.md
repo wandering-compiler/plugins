@@ -50,9 +50,12 @@ engine must not do to weaken them, and lists them under the trust boundary in
 |---|---|---|---|
 | (base tier) | always | — | — |
 | `usage_persistence` | off | — | — |
+| `final_text_scripts` | off | — | — |
+| `final_text_invisible` | off | — | — |
 
 `go_files` of `usage_persistence`: `handlers/usage_enabled.go`,
-`handlers/limits_enabled.go`. No `go_files_combined`. No REST, MCP or admin
+`handlers/limits_enabled.go`. The `final_text_*` features have no `go_files`:
+they are runtime filters read from their feature constants. No `go_files_combined`. No REST, MCP or admin
 preset, no sandbox, no events.
 
 ## Verified findings
@@ -245,6 +248,40 @@ which.
 
 ---
 
+### final_text_scripts
+
+- **Purpose.** Clean the final text of every answer — `CompleteResp.text` and
+  `Finished.text` of `CompleteStream` and `RunAgent`, never a `TextDelta` — of
+  letters in a Unicode script the activation does not allow. A model leaks
+  tokens in another script (a Thai word glued to a Czech sentence); a caller
+  that swaps the streamed text for the final one gets a clean answer.
+- **Adds.** No table, RPC or message of its own. Env `allowed_scripts`
+  (`<DOMAIN>_AGENT_ALLOWED_SCRIPTS`, default `Latin`): Go's `unicode.Scripts`
+  names, comma-separated, case-insensitive. The wire field
+  `FinalText.allowed_scripts` (on `CompleteReq` and `RunAgentReq.Start`) is
+  ungated.
+- **Mechanics.** `lib/textfilter.Scripts`: a rune of a script not allowed is
+  dropped, and so are the `Inherited` marks and the zero-width joiner /
+  non-joiner right after it; `Common` and `Inherited` are always allowed. At
+  the removal site only, a space left doubled, before `.,;:!?)]}`, before a
+  line break or at the end of the text is dropped; nothing else of the text
+  changes, and a text with nothing to remove is returned as it came.
+- **MUST.** An unknown script, or none, in `allowed_scripts` refuses the boot.
+  `FinalText.allowed_scripts` replaces the activation's scripts for the call;
+  an unknown name is `InvalidArgument` and any name to an activation without
+  the feature is `FailedPrecondition`, both before the model is called.
+  `FinalText.raw` returns the deltas unfiltered.
+
+### final_text_invisible
+
+- **Purpose.** Clean the final text of characters a reader cannot see.
+- **Adds.** Nothing but the feature constant.
+- **Mechanics.** `lib/textfilter.Invisible` removes control characters other
+  than tab, LF and CR, U+FFFD, U+200B, U+2060, U+FEFF and the bidi controls
+  U+202A–U+202E and U+2066–U+2069. U+200C/U+200D (emoji sequences, several
+  scripts) and U+200E/U+200F stay. It runs before `final_text_scripts`.
+- **MUST.** `FinalText.raw` skips it.
+
 ## Across features
 
 Every interaction goes through one of these mechanisms:
@@ -253,21 +290,29 @@ Every interaction goes through one of these mechanisms:
 |---|---|---|
 | **Seam variable** (a single `var` replaced in `init()`) | `handlers/usage.go`: `newUsageSink`; `handlers/limits.go`: `newLimiter` | Only `usage_persistence` assigns them. The default (no-op sink, allow-all limiter) is the behaviour with the feature off. |
 | **Feature constant** | `gen.FeatureUsagePersistence` | Read by `VerifyUsageWiring` at boot. |
+| **Feature constant** | `gen.FeatureFinalTextScripts`, `gen.FeatureFinalTextInvisible` | Read once by `RegisterPlugin` into `handlers.FinalTextFilters`; every entry point applies the chain unconditionally (the zero value filters nothing). |
 | **Always-present call sites** | `recordUsage` / `recordUsageFor`, `Limits.Allow` | Every entry point records and asks unconditionally; whether anything happens is decided once, at wiring. |
 | **Ungated wire fields** | `CompleteReq.usage_scope` / `usage_labels`, `RunAgentReq.Start.usage_scope` / `usage_labels` | The business contract is identical with the feature on or off. |
 | **Message / RPC / table gates** | `(w17.contrib.plugin_feature)` on every usage message, `plugin_feature_svc` on both usage services | With the feature off, no usage table, message or RPC exists, and the proto files drop out whole. |
 
 ### Feature interaction matrix
 
-Abbreviations: **b** base tier, **up** usage_persistence.
+Abbreviations: **b** base tier, **up** usage_persistence, **fs**
+final_text_scripts, **fi** final_text_invisible.
 
 Cell codes: **H** one overrides the other's seam · **T** shared table · **Q**
 shared RPC or helper · **O** ordering constraint inside one request · **·** no
 interaction.
 
-|    | b | up |
-|----|----|----|
-| **b** | — | H Q O |
+|    | b | up | fs | fi |
+|----|----|----|----|----|
+| **b** | — | H Q O | O | O |
+| **up** | | — | · | · |
+| **fs** | | | — | O |
+
+The final-text filters run after the answer is complete and before
+`CompleteResp` / `Finished` is sent (**O**), invisible before scripts; usage is
+recorded from the model's own output and never sees the filtered text.
 
 ### Interaction invariants
 

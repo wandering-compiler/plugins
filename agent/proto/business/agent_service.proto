@@ -77,6 +77,10 @@ message CompleteReq {
   // Keys are at most 64 characters and values at most 256, neither with a
   // NUL; any other is refused with InvalidArgument before the model is called.
   map<string, string> usage_labels = 6;
+
+  // How the answer's final text is cleaned (FinalText); unset keeps the
+  // activation's filters.
+  FinalText final_text = 7;
 }
 
 enum ResponseFormat {
@@ -93,7 +97,8 @@ enum ResponseFormat {
 message CompleteResp {
   // What the model said. May be non-empty even when the response is
   // INCOMPLETE — a truncated answer is still an answer, and the caller decides
-  // whether to keep it. Read `status` before showing it.
+  // whether to keep it. Read `status` before showing it. Cleaned by the
+  // activation's final-text filters (FinalText), when it has any.
   string text = 1;
 
   // How it ended, and the detail beneath that. Checking these is not optional:
@@ -125,10 +130,35 @@ message TextDelta {
   string text = 1;
 }
 
+// FinalText is a call's say over the filters that clean the final text — the
+// one a caller keeps (CompleteResp.text, Finished.text); the deltas are never
+// filtered, so a stream stays as fast as the model. The filters themselves are
+// the activation's: `final_text_scripts` drops the letters of every Unicode
+// script the activation does not allow (`<DOMAIN>_AGENT_ALLOWED_SCRIPTS`,
+// default Latin) — a token in Thai a model leaked into a Czech answer —
+// and `final_text_invisible` drops control and invisible characters
+// (zero-width spaces, bidi overrides, U+FFFD). A filter only removes; it never
+// writes text of its own.
+message FinalText {
+  // The scripts this call allows instead of the activation's (Go's Unicode
+  // script names: Latin, Cyrillic, Greek, Han, Thai, …; case-insensitive) —
+  // an answer that has to be in another language. Common (digits,
+  // punctuation, emoji) and Inherited (combining marks) are always allowed.
+  // Refused (InvalidArgument) when a name is unknown, and (FailedPrecondition)
+  // when the activation does not filter scripts.
+  repeated string allowed_scripts = 1;
+
+  // No filter for this call: the final text is the deltas, as without filters.
+  bool raw = 2;
+}
+
 message Finished {
   // The whole answer: every delta concatenated, and what the reader was
-  // actually shown. Present so a consumer who only persists the final text does
-  // not have to accumulate the deltas themselves.
+  // actually shown — then cleaned by the activation's final-text filters
+  // (FinalText), when it has any. A consumer that shows the deltas as they
+  // come replaces them with this text at the end; one that only persists the
+  // final text does not have to accumulate the deltas itself. Without
+  // filters it is exactly the deltas.
   string text = 1;
 
   Status           status            = 2;
@@ -258,6 +288,10 @@ message RunAgentReq {
     // turn ran; a turn that never reached the provider writes none.
     string usage_scope = 6;
     map<string, string> usage_labels = 7;
+
+    // How Finished.text is cleaned (FinalText); unset keeps the
+    // activation's filters.
+    FinalText final_text = 8;
   }
 
   // ToolResult answers exactly one ToolCall, by its id.

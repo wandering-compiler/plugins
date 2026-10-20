@@ -35,6 +35,10 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	if start == nil {
 		return status.Error(codes.InvalidArgument, "agent: the first message must be Start")
 	}
+	clean, err := h.FinalText.chain(start.GetFinalText())
+	if err != nil {
+		return err
+	}
 
 	// sends is serialised: the loop runs read-only tools in parallel, so
 	// several goroutines reach Send at once and a gRPC stream is not safe for
@@ -181,7 +185,7 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		return mapped
 	}
 	return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Finished{Finished: &pb.Finished{
-		Text:             out.Text,
+		Text:             clean.Apply(out.Text),
 		Status:           statusOf(out.Status),
 		IncompleteReason: reasonOf(out.IncompleteReason),
 		Usage:            usageOf(out.Usage),

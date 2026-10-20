@@ -119,3 +119,22 @@ func TestRegisterPlugin_TheRegisteredServiceCallsTheConfiguredProvider(t *testin
 		t.Errorf("model/budget = %v / %v, want the deployment defaults", got["model"], got["max_output_tokens"])
 	}
 }
+
+// The activation's script list is checked at boot: a filter that cannot run
+// refuses the bundle rather than the first answer.
+func TestFinalTextFilters_FromTheActivation(t *testing.T) {
+	f, err := finalTextFilters(true, true, " Latin, Cyrillic ")
+	if err != nil || f.Scripts == nil || !f.Invisible || f.Scripts.Name() != "scripts(Latin,Cyrillic)" {
+		t.Fatalf("finalTextFilters = %+v, %v", f, err)
+	}
+	for _, allowed := range []string{"Latn", "", " , "} {
+		if _, err := finalTextFilters(true, false, allowed); err == nil {
+			t.Errorf("allowed_scripts %q was accepted", allowed)
+		}
+	}
+	// The feature off: the list is not read at all, so a bad one is no
+	// reason to refuse a bundle that does not filter scripts.
+	if f, err := finalTextFilters(false, false, "Latn"); err != nil || f.Scripts != nil {
+		t.Errorf("feature off: %+v, %v", f, err)
+	}
+}
