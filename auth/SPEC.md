@@ -67,11 +67,12 @@ It covers plugin version 0.1.0-rc.24.
 | `my_sign_ins` | off | `authenticate_turnkey` | — |
 | `org_members_rest` | off | `org_membership`, `org_invite` | — |
 | `client_secret_rotation` | off | `cli_login` | — |
+| `oauth_server` | off | `api_token`, `authenticate_turnkey` | — |
 
 `go_files_combined`: `service_account_tenant.go` (`service_account` +
 `tenant_scope`), `service_account_org.go` (`service_account` +
 `org_membership`), `signup_confirm_tenant.go` (`sign_up_confirmation` +
-`tenant_scope`).
+`tenant_scope`), `oauth_server_org.go` (`oauth_server` + `org_membership`).
 
 ## Verified findings
 
@@ -687,6 +688,40 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 3. `cli_login.go:69`: `code_challenge` is checked only for being non-empty. No length or charset check, and no `code_challenge_method` (S256 is implied). A malformed challenge mints a code that can never be redeemed, instead of being refused up front.
 4. Mutation proto, `RegisterAuthClient`: the comment says a repeat registration is a no-op, but the unique index makes it an AlreadyExists error. Fixed: a lost secret is replaced with `RotateClientSecret`, keeping the client_id; revoking is for good.
 5. No retention: `CliAuthCode` rows are never deleted. No events: there is no audit trail for client registration or CLI token issuance.
+
+---
+
+### oauth_server
+
+**Purpose.** An OAuth 2.1 authorization server (the MCP authorization specification, 2025-11-25) for MCP clients — Claude, Cursor, ChatGPT — and for w17ctl's browser login. The OAuth wire (RFC 8414 metadata, `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/revoke`) is the SDK's `lib/oauthas`, mounted by the generated REST gateway at the root of the issuer; this feature is every decision behind it. Design: platform `docs/specs/plugins/mcp-oauth-resource-server.md`.
+
+**Adds.**
+- Tables: `OAuthClient` (public clients: `client_id` and its unique hash, kind DCR / CIMD, the name and links the client states, `redirect_uris` one per line, `metadata_fetched_at`, `disabled_at`), `OAuthAuthorization` (one request from the authorization endpoint to the decision and the code: the hashed request id, client, redirect, state, PKCE challenge, scope, resource, issuer, `expires_at` = now + 10 min, the decision with who / which org / which device / the approving session's expiry, the hashed code with `code_expires_at` = 60 s and `code_consumed_at`), `OAuthGrant` (a connected app: user, org, client, resource, approving device, `expires_at` = oauth_grant_max_days, `last_used_at`, `revoked_at` / `revoked_by` / `revoke_reason`), `OAuthRefreshToken` (hashed, per grant, `expires_at`, `used_at`). `UserToken` gains `oauth_grant_id`, `resource`, `oauth_org_id` (field-gated). Enum values: `TokenType.MCP`, `RevokeReason.REFRESH_REUSED` / `GRANT_REVOKED`, `SignInMethod.AUTHORIZED_APP`.
+- Business RPCs: `GetOAuthServerSettings`, `RegisterOAuthClient`, `BeginOAuthAuthorization`, `ExchangeOAuthToken`, `RevokeOAuthToken` (the wire's, unauthenticated; a refusal travels as `oauth_error` in the response, a failure as a gRPC error); `GetOAuthAuthorization`, `ApproveOAuthAuthorization`, `DenyOAuthAuthorization` (the consent page's), `ListMyOAuthGrants`, `RevokeMyOAuthGrant` (connected apps) — the last five need a session.
+- REST: `GET /auth/oauth/authorizations/{request_id}`, `POST …/approve`, `POST …/deny`, `GET /auth/oauth/connected-apps`, `DELETE /auth/oauth/connected-apps/{grant_id}`.
+- Events: `OAuthGrantApproved`. Settings: `oauth_access_ttl_seconds` (3600), `oauth_refresh_ttl_days` (30), `oauth_grant_max_days` (365), `oauth_dynamic_registration` (true), `oauth_redirect_hosts` (empty = any https host), `oauth_resources` (empty = any https resource).
+- Eraser: the user's grants end. Revocations: `RevokeDeviceTokens` ends the access tokens a device approved; every revocation that reaches a grant's newest access token ends the grant at its next refresh.
+
+**Requires:** `api_token` (the realm-aware resolver and `token_type`), `authenticate_turnkey`. **Combined files:** `oauth_server_org.go` with `org_membership`: the consent page offers the user's organizations, the grant and its tokens carry the chosen one, and `Authenticate` scopes an access token into it (a `W17-Org` naming another is refused).
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `oauth_server/client-and-redirect-first` | The authorization endpoint MUST check the client and its redirect before anything else, and a refusal about either MUST be shown, never redirected (RFC 6749 §4.1.2.1). | Security | `TestBeginOAuthAuthorization_Refusals` |
+| `oauth_server/exact-redirect` | A redirect MUST equal one the client registered as a whole string, except a loopback redirect's port (RFC 8252 §7.3). Registration MUST refuse a non-https non-loopback redirect, a fragment, credentials, a custom scheme, and (with `oauth_redirect_hosts`) another host. | Security | `TestRedirectRegistered`, `TestRegisterOAuthClient_Rules` |
+| `oauth_server/pkce-s256` | PKCE S256 with a 43-character challenge MUST be required; plain MUST be refused. | Security | `TestBeginOAuthAuthorization_Refusals` |
+| `oauth_server/one-resource` | An MCP grant MUST name exactly one https resource (http only on loopback, no fragment), within `oauth_resources` when set. No resource is a session grant, allowed only to a loopback redirect. | Security | `TestBeginOAuthAuthorization_Refusals` |
+| `oauth_server/consent-is-a-session` | Reading, approving and denying a request MUST need a session (an API or MCP token MUST NOT approve), and a request MUST be decided once, while live. | Security | `TestConsent_ShowsTheRequestAndNeedsASession`, `TestConsent_DecidedOnce` |
+| `oauth_server/code-single-use` | A code MUST be spent before it is checked (a wrong verifier burns it), redeemable once within 60 s, by its client, at its redirect, for its resource. | Security | `TestOAuthServer_WrongVerifierBurnsTheCode`, `TestOAuthServer_CodeIsBoundToClientRedirectAndResource`, `TestOAuthServer_MCPFlow` |
+| `oauth_server/mcp-token-shape` | An MCP grant's access token MUST be `mcp_only`, of type MCP, for the grant's resource and organization, bound to no device, with the approving device recorded; its permissions are the user's realm-`mcp` roles. | Security | `TestOAuthServer_MCPFlow` |
+| `oauth_server/audience` | `Authenticate` MUST accept an MCP token only on the MCP surface naming its resource (`x-w17-mcp-resource`), refuse it on another resource and on a surface naming none, and refuse an `mcp_only` token issued for no resource on a surface that names one. | Security | `TestCheckMCPToken_Resource` |
+| `oauth_server/refresh-rotation` | A refresh MUST spend the refresh token and issue a new pair; a spent one presented again MUST end the grant and its access tokens (`REFRESH_REUSED`). | Security | `TestOAuthServer_RefreshRotatesAndReuseEndsTheGrant`, `TestOAuthServer_RefreshByAnotherClient` |
+| `oauth_server/revocations-reach-grants` | Revoking the approving device, every token of the user, or disabling the account MUST end the grant at its next refresh; erasure MUST end every grant. | Security | `TestOAuthServer_RevocationsReachTheGrant`, `TestEraseUsers_PseudonymisesAndKeepsEveryRow` |
+| `oauth_server/session-grant-bound` | A session grant MUST be issued only to a token request with a DPoP proof, bound to its key, no later than the approving session. | Security | **live only** (w17ctl login, platform `w17ctl/cmd/login` tests on a fake server) |
+| `oauth_server/cimd-safe-fetch` | A metadata document MUST be fetched over https from a public address checked at the dial (no redirects, 5 s, 16 KiB), MUST name itself, and is read again after a day; a known client keeps working on its last document for a week while its host is down. | Security | `TestResolveOAuthClient_CIMD`, `lib/safefetch` tests |
+| `oauth_server/revocation-endpoint` | RFC 7009: an access or refresh token MUST end its grant; an unknown token, or another client's, MUST answer the same success. | Security | `TestRevokeOAuthToken` |
+| `oauth_server/boot-checks` | `oauth_redirect_hosts` and `oauth_resources` entries that are not a host / an absolute URL MUST fail the boot. | Failure & configuration | `TestCheckOAuthServerConfig` |
+
+**Gaps.** No admin pages for clients and grants yet (an MCP access token is listed on the Sessions page under its client's name). DPoP-bound MCP tokens are not issued (no MCP client signs proofs).
 
 ---
 
