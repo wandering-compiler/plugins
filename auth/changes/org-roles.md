@@ -5,6 +5,6 @@
 
 ### Fixed
 
-- **A machine account's role is no longer offered to a person.** An org-scoped API-realm role (a bot's) was listed by `ListAssignableRoles` and accepted by an invitation and a membership's role change, replacing the person's session role with one their browser cannot use. It is now filtered out of the org-role catalogue and refused by name (`ROLE_IS_FOR_BOTS`).
+- **A machine account's role is no longer offered to a person.** An org-scoped API-realm role (a bot's) was listed by `ListAssignableRoles` and accepted by an invitation and a membership's role change, replacing the person's session role with one their browser cannot use. It is now filtered out of the org-role catalogue and refused by name (`ROLE_IS_FOR_BOTS`). With it, a person in an organization holds no API-realm role at all, so a personal API token (`CreateApiToken`) authenticates and is granted nothing: automation — CI, scripts, integrations — runs as a machine account (`CreateBot`, `IssueBotToken`).
 - **An organization keeps its last superadmin.** A member holding a wildcard (`all_permissions`) role who is the organization's last — no other member holds one and the organization has no owner — can no longer be removed or moved to a lesser role (`LAST_SUPERADMIN`).
 - `AssignableRole` and `OrgScopedRole` carry `display_name`; `GetOrganization` projects `owner_id`.
