@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -83,7 +85,7 @@ func (h *AuthServiceHandler) exchangeOAuthCode(ctx context.Context, req *pb.Exch
 	code, err := h.Mutation.ConsumeOAuthCode(ctx, &pb.ConsumeOAuthCodeReq{CodeHash: sha256Hex(req.GetCode())})
 	if err != nil {
 		if notFoundOK(err) == nil {
-			return nil, oauthRefuse(oauthInvalidGrant, "the code is unknown, spent or expired")
+			return nil, h.codeRefused(ctx, sha256Hex(req.GetCode()))
 		}
 		return nil, err
 	}
@@ -97,7 +99,7 @@ func (h *AuthServiceHandler) exchangeOAuthCode(ctx context.Context, req *pb.Exch
 		return nil, oauthRefuse(oauthInvalidGrant, "the code verifier does not match")
 	case req.GetRedirectUri() != "" && !hmac.Equal([]byte(req.GetRedirectUri()), []byte(code.GetRedirectUri())):
 		return nil, oauthRefuse(oauthInvalidGrant, "the redirect_uri is not the one the code was issued for")
-	case len(req.GetResources()) > 1 || (len(req.GetResources()) == 1 && req.GetResources()[0] != code.GetResource()):
+	case len(req.GetResources()) > 1 || (len(req.GetResources()) == 1 && normalizeResource(req.GetResources()[0]) != code.GetResource()):
 		return nil, oauthRefuse(oauthInvalidTarget, "the resource is not the one the user approved")
 	}
 	if err := h.refuseRevokedOAuthApprover(ctx, code.GetApprovedByDeviceId()); err != nil {
@@ -119,6 +121,25 @@ func (h *AuthServiceHandler) exchangeOAuthCode(ctx context.Context, req *pb.Exch
 		return h.issueSessionGrant(ctx, attempt, code)
 	}
 	return nil, oauthRefuse(oauthInvalidGrant, "the code is of no known kind")
+}
+
+// codeRefused answers a code that did not redeem. One already redeemed is a
+// copy in someone else's hands: the grant it bought ends with its tokens
+// (OAuth 2.1 §4.1.3). A read that fails leaves the refusal as it is.
+func (h *AuthServiceHandler) codeRefused(ctx context.Context, codeHash string) error {
+	refused := oauthRefuse(oauthInvalidGrant, "the code is unknown, spent or expired")
+	use, err := h.Query.GetOAuthCodeUse(ctx, &pb.GetOAuthCodeUseReq{CodeHash: codeHash})
+	if err != nil || use.GetCodeConsumedAt() == nil {
+		return refused
+	}
+	g, err := h.Query.GetOAuthGrantByAuthorization(ctx, &pb.GetOAuthGrantByAuthorizationReq{AuthorizationId: use.GetId()})
+	if err != nil || g.GetId() == "" {
+		return refused
+	}
+	if _, err := h.Mutation.RevokeOAuthGrant(ctx, &pb.RevokeOAuthGrantReq{Id: g.GetId(), Reason: pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED}); err != nil {
+		return err
+	}
+	return refused
 }
 
 // refuseRevokedOAuthApprover: the device that approved a grant was revoked
@@ -282,6 +303,13 @@ func capSessionExpiry(normal, approving *timestamppb.Timestamp) *timestamppb.Tim
 // revocation that reached the grant's newest access token — logging out
 // everywhere, a password change, a disabled account, an operator — ends the
 // grant here too, so the user's other controls reach their connected apps.
+//
+// One transaction spends the token, checks the grant and mints the next
+// pair, and it holds the grant's row from its first statement: a failure of
+// the store rolls the spend back (the client's retry is not a reuse), and a
+// revocation racing the refresh either waits for it — and then ends the
+// tokens it minted — or wins, and the refresh mints nothing. A refusal that
+// ends the grant is written after the rollback, so it stands.
 func (h *AuthServiceHandler) refreshOAuthToken(ctx context.Context, req *pb.ExchangeOAuthTokenReq) (*pb.ExchangeOAuthTokenResp, error) {
 	client, err := h.oauthClientByID(ctx, req.GetClientId())
 	if err != nil {
@@ -291,74 +319,126 @@ func (h *AuthServiceHandler) refreshOAuthToken(ctx context.Context, req *pb.Exch
 		return nil, oauthRefuse(oauthInvalidClient, "unknown client")
 	}
 	hash := sha256Hex(req.GetRefreshToken())
-	used, err := h.Mutation.UseOAuthRefreshToken(ctx, &pb.UseOAuthRefreshTokenReq{TokenHash: hash})
+	var (
+		resp *pb.ExchangeOAuthTokenResp
+		end  *grantEndError
+	)
+	err = h.inTx(ctx, func(txCtx context.Context) error {
+		var err error
+		resp, end, err = h.rotateRefreshToken(txCtx, client, hash, req.GetResources())
+		if err == nil && end != nil {
+			err = end // roll back: the grant ends below, outside the transaction
+		}
+		return err
+	})
+	if end != nil {
+		if _, rerr := h.Mutation.RevokeOAuthGrant(ctx, &pb.RevokeOAuthGrantReq{Id: end.grantID, Reason: end.reason}); rerr != nil {
+			return nil, rerr
+		}
+		return nil, oauthRefuse(oauthInvalidGrant, end.desc)
+	}
+	if errors.Is(err, errRefreshNotLive) {
+		return nil, h.refreshRefused(ctx, hash)
+	}
+	return resp, err
+}
+
+// grantEndError is a refusal that ends the grant: a refresh that found it may
+// not continue. An error only so the transaction rolls back.
+type grantEndError struct {
+	grantID, desc string
+	reason        pb.RevokeReason
+}
+
+func (e *grantEndError) Error() string { return "oauth: the grant ends: " + e.desc }
+
+// errRefreshNotLive: the refresh token is unknown, expired or spent.
+var errRefreshNotLive = errors.New("oauth: the refresh token is not live")
+
+// rotateRefreshToken is the refresh, on txCtx.
+func (h *AuthServiceHandler) rotateRefreshToken(txCtx context.Context, client *pb.OAuthClientRow, hash string, resources []string) (*pb.ExchangeOAuthTokenResp, *grantEndError, error) {
+	used, err := h.Mutation.UseOAuthRefreshToken(txCtx, &pb.UseOAuthRefreshTokenReq{TokenHash: hash})
 	if err != nil {
 		if notFoundOK(err) != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, h.refreshRefused(ctx, hash)
+		return nil, nil, errRefreshNotLive
 	}
 	if used.GetGrantId() == "" {
-		return nil, h.refreshRefused(ctx, hash)
+		return nil, nil, errRefreshNotLive
 	}
-	g, err := h.Query.GetOAuthGrant(ctx, &pb.GetOAuthGrantReq{Id: used.GetGrantId()})
-	if err != nil {
-		return nil, err
-	}
-	end := func(reason pb.RevokeReason, desc string) error {
-		if _, err := h.Mutation.RevokeOAuthGrant(ctx, &pb.RevokeOAuthGrantReq{Id: g.GetId(), Reason: reason}); err != nil {
-			return err
+	// The grant's row, held for the rest of the transaction: live only.
+	if _, err := h.Mutation.TouchOAuthGrant(txCtx, &pb.TouchOAuthGrantReq{Id: used.GetGrantId()}); err != nil {
+		if notFoundOK(err) == nil {
+			return nil, nil, oauthRefuse(oauthInvalidGrant, "the grant was revoked")
 		}
-		return oauthRefuse(oauthInvalidGrant, desc)
+		return nil, nil, err
+	}
+	g, err := h.Query.GetOAuthGrant(txCtx, &pb.GetOAuthGrantReq{Id: used.GetGrantId()})
+	if err != nil {
+		return nil, nil, err
+	}
+	end := func(reason pb.RevokeReason, desc string) (*pb.ExchangeOAuthTokenResp, *grantEndError, error) {
+		return nil, &grantEndError{grantID: g.GetId(), reason: reason, desc: desc}, nil
 	}
 	switch {
 	case g.GetClientRowId() != client.GetId():
-		return nil, oauthRefuse(oauthInvalidGrant, "the refresh token was issued to another client")
+		return nil, nil, oauthRefuse(oauthInvalidGrant, "the refresh token was issued to another client")
 	case g.GetRevokedAt() != nil:
-		return nil, oauthRefuse(oauthInvalidGrant, "the grant was revoked")
+		return nil, nil, oauthRefuse(oauthInvalidGrant, "the grant was revoked")
 	case !g.GetExpiresAt().AsTime().After(time.Now()):
-		return nil, oauthRefuse(oauthInvalidGrant, "the grant has ended; sign in again")
+		return nil, nil, oauthRefuse(oauthInvalidGrant, "the grant has ended; sign in again")
 	case g.GetClientDisabledAt() != nil:
-		return nil, end(pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, "the client was disabled")
-	case len(req.GetResources()) > 1 || (len(req.GetResources()) == 1 && req.GetResources()[0] != g.GetResource()):
-		return nil, oauthRefuse(oauthInvalidTarget, "the resource is not the grant's")
+		return end(pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, "the client was disabled")
+	case len(resources) > 1 || (len(resources) == 1 && normalizeResource(resources[0]) != g.GetResource()):
+		return nil, nil, oauthRefuse(oauthInvalidTarget, "the resource is not the grant's")
 	}
-	if err := h.refuseRevokedOAuthApprover(ctx, g.GetApprovedByDeviceId()); err != nil {
+	if err := h.refuseRevokedOAuthApprover(txCtx, g.GetApprovedByDeviceId()); err != nil {
 		if _, ok := asOAuthError(err); ok {
-			return nil, end(pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED, "the approving device was revoked")
+			return end(pb.RevokeReason_REVOKE_REASON_DEVICE_REVOKED, "the approving device was revoked")
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	last, err := h.Query.GetOAuthGrantLastToken(ctx, &pb.GetOAuthGrantLastTokenReq{GrantId: g.GetId()})
+	last, err := h.Query.GetOAuthGrantLastToken(txCtx, &pb.GetOAuthGrantLastTokenReq{GrantId: g.GetId()})
 	if err != nil && notFoundOK(err) != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if last.GetRevokedAt() != nil {
-		return nil, end(pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, "the user's sessions were ended")
+		return end(pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, "the user's sessions were ended")
 	}
-	if _, err := refuseUnsignableAccount(ctx, h, g.GetUserId()); err != nil {
-		return nil, end(pb.RevokeReason_REVOKE_REASON_USER_DISABLED, "the account cannot sign in")
+	// A refusal of the account ends the grant; a read that failed is a
+	// failure, retried.
+	if _, err := refuseUnsignableAccount(txCtx, h, g.GetUserId()); err != nil {
+		if isRefusalNotFailure(err) {
+			return end(pb.RevokeReason_REVOKE_REASON_USER_DISABLED, "the account cannot sign in")
+		}
+		return nil, nil, err
 	}
 	if oauthCheckOrg != nil {
-		if err := oauthCheckOrg(ctx, h, g.GetUserId(), g.GetOrgId()); err != nil {
-			return nil, end(pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, "the organization is no longer the user's")
+		if err := oauthCheckOrg(txCtx, h, g.GetUserId(), g.GetOrgId()); err != nil {
+			if status.Code(err) == codes.InvalidArgument {
+				return end(pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, "the organization is no longer the user's")
+			}
+			return nil, nil, err
 		}
 	}
-	var resp *pb.ExchangeOAuthTokenResp
-	err = h.inTx(ctx, func(txCtx context.Context) error {
-		var err error
-		resp, err = h.issueMCPTokens(txCtx, mcpGrant{
-			id: g.GetId(), userID: g.GetUserId(), orgID: g.GetOrgId(), resource: g.GetResource(),
-			scope: g.GetScope(), approvedBy: g.GetApprovedByDeviceId(), clientName: client.GetClientName(),
-			expiresAt: g.GetExpiresAt().AsTime(),
-		})
-		if err != nil {
-			return err
-		}
-		_, err = h.Mutation.TouchOAuthGrant(txCtx, &pb.TouchOAuthGrantReq{Id: g.GetId()})
-		return err
+	resp, err := h.issueMCPTokens(txCtx, mcpGrant{
+		id: g.GetId(), userID: g.GetUserId(), orgID: g.GetOrgId(), resource: g.GetResource(),
+		scope: g.GetScope(), approvedBy: g.GetApprovedByDeviceId(), clientName: client.GetClientName(),
+		expiresAt: g.GetExpiresAt().AsTime(),
 	})
-	return resp, err
+	return resp, nil, err
+}
+
+// isRefusalNotFailure tells a refusal (the account is disabled, a machine)
+// from a store that did not answer: the opaque refusal of an outage is
+// Unavailable.
+func isRefusalNotFailure(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.Internal, codes.Unknown, codes.DeadlineExceeded, codes.Canceled:
+		return false
+	}
+	return true
 }
 
 // refreshRefused answers a refresh token that did not rotate: unknown or

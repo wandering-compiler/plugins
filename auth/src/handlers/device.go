@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -328,10 +329,38 @@ func checkMCPToken(p *authPrincipal, served string) error {
 	if !p.mcpOnly {
 		return errDeviceBindingRefused
 	}
-	if p.oauthResource != served {
+	if normalizeResource(p.oauthResource) != normalizeResource(served) {
 		return errMCPResourceMismatch
 	}
 	return nil
+}
+
+// normalizeResource is the comparable form of a resource identifier (RFC
+// 8707): scheme and host lower-cased, a default port dropped, a trailing
+// slash dropped — so `https://MCP.example.com:443/mcp/` and
+// `https://mcp.example.com/mcp` name one resource and a client that spells
+// it the other way does not loop on 401s. Anything unparsable is compared as
+// written.
+func normalizeResource(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	u.Host = host
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	u.RawPath = ""
+	return u.String()
 }
 
 // errMCPResourceMismatch is the cause behind the opaque refusal of an MCP

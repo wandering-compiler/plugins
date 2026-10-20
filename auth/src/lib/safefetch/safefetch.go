@@ -117,6 +117,17 @@ func Get(ctx context.Context, rawURL string, opt Options) ([]byte, error) {
 // cgnat is the shared address space (RFC 6598), private in all but name.
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
+// translated are the IPv6 ranges that reach an IPv4 address through a
+// translator or tunnel — NAT64 (RFC 6052, RFC 8215), 6to4 (RFC 3056) and
+// Teredo (RFC 4380) — so a private IPv4 address hides behind a global-looking
+// IPv6 one.
+var translated = []netip.Prefix{
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("2001::/32"),
+}
+
 // Public reports whether a is an address on the public internet: not
 // loopback, private, link-local, multicast, unspecified, shared (CGNAT) or
 // reserved (IPv4 240/4, the IPv6 documentation and ULA ranges are covered by
@@ -129,6 +140,11 @@ func Public(a netip.Addr) bool {
 		return false
 	case a.Is4() && (cgnat.Contains(a) || a.As4()[0] >= 240 || a.As4()[0] == 0):
 		return false
+	}
+	for _, p := range translated {
+		if p.Contains(a) {
+			return false
+		}
 	}
 	return true
 }

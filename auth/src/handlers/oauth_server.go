@@ -137,7 +137,7 @@ func parseOAuthResources(raw string) (map[string]bool, error) {
 		if err := checkResourceURL(f); err != nil {
 			return nil, fmt.Errorf("auth plugin: oauth_resources entry %q: %w", f, err)
 		}
-		out[f] = true
+		out[normalizeResource(f)] = true
 	}
 	return out, nil
 }
@@ -231,7 +231,7 @@ func (h *AuthServiceHandler) beginOAuthAuthorization(ctx context.Context, req *p
 	if err != nil {
 		return "", err
 	}
-	kind, resource, err := h.oauthGrantKind(req.GetResources(), req.GetRedirectUri())
+	kind, resource, err := h.oauthGrantKind(client, req.GetResources(), req.GetRedirectUri())
 	if err != nil {
 		return "", err
 	}
@@ -268,13 +268,18 @@ func oauthRequestedScope(raw string) (string, error) {
 }
 
 // oauthGrantKind decides what the authorization yields. A resource named:
-// an MCP grant for it. None: a session grant, which only a program on the
-// user's own computer (a loopback redirect) may ask for — a web client never
-// gets a whole session from this server.
-func (h *AuthServiceHandler) oauthGrantKind(resources []string, redirectURI string) (pb.OAuthGrantKind, string, error) {
+// an MCP grant for it. None: a session grant — the whole account, bound to a
+// program's key — which only w17ctl asks for: a client that registered as it
+// (software_id), on the user's own computer (a loopback redirect). Every
+// other client without a resource is refused, so an MCP client that forgot
+// the parameter is not offered a whole session on the consent page. The
+// software_id is the client's own claim; what bounds a false one is the
+// loopback redirect (a program already on the user's computer) and the
+// consent page, which says plainly that the program signs in as the user.
+func (h *AuthServiceHandler) oauthGrantKind(client *pb.OAuthClientRow, resources []string, redirectURI string) (pb.OAuthGrantKind, string, error) {
 	switch len(resources) {
 	case 0:
-		if !isLoopbackRedirect(redirectURI) {
+		if !isLoopbackRedirect(redirectURI) || client.GetSoftwareId() != sessionGrantSoftwareID {
 			return 0, "", oauthRefuse(oauthInvalidTarget, "a resource is required")
 		}
 		return pb.OAuthGrantKind_OAUTH_GRANT_KIND_SESSION, "", nil
@@ -286,12 +291,17 @@ func (h *AuthServiceHandler) oauthGrantKind(resources []string, redirectURI stri
 	if err := checkResourceURL(res); err != nil {
 		return 0, "", oauthRefuse(oauthInvalidTarget, "the resource is "+err.Error())
 	}
+	res = normalizeResource(res)
 	allowed, _ := parseOAuthResources(h.OAuthResources)
 	if len(allowed) > 0 && !allowed[res] {
 		return 0, "", oauthRefuse(oauthInvalidTarget, "this server issues no tokens for that resource")
 	}
 	return pb.OAuthGrantKind_OAUTH_GRANT_KIND_MCP, res, nil
 }
+
+// sessionGrantSoftwareID is the software_id w17ctl registers under: the only
+// client a session grant is issued to.
+const sessionGrantSoftwareID = "w17ctl"
 
 // errOAuthRequestGone is the consent page's answer for a request that is
 // unknown, decided or expired: the user starts again from the application.
@@ -485,8 +495,13 @@ func redirectHost(redirectURI string) string {
 	if err != nil {
 		return ""
 	}
-	if isLoopbackHost(u.Hostname()) {
+	switch {
+	case isLoopbackHost(u.Hostname()) && u.Scheme == "http":
 		return "this computer"
+	case u.Scheme != "http" && u.Scheme != "https":
+		// A private-use scheme (RFC 8252 §7.1): an app on this device that
+		// claims it.
+		return "the " + u.Scheme + " app on this device"
 	}
 	return u.Host
 }

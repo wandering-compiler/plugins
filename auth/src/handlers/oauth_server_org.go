@@ -56,6 +56,18 @@ func orgOfUser(ctx context.Context, h *AuthServiceHandler, userID, orgID string)
 // checkConsentOrg: the organization named for a grant is one the user
 // belongs to.
 func checkConsentOrg(ctx context.Context, h *AuthServiceHandler, userID, orgID string) error {
+	if orgID == "" {
+		// A user of no organization grants with their realm-wide roles; one
+		// who has organizations names the one the app acts in.
+		got, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
+		if err != nil {
+			return err
+		}
+		if len(got.GetOrgs()) == 0 {
+			return nil
+		}
+		return refusal(ctx, codes.InvalidArgument, errOAuthOrgNotMember.Error(), CodeOAuthOrgRequired, "org_id", MsgOAuthOrgRequired, nil)
+	}
 	slug, err := orgOfUser(ctx, h, userID, orgID)
 	if err != nil {
 		return err

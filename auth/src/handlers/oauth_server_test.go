@@ -109,7 +109,7 @@ func (s *oauthStore) CreateOAuthClient(_ context.Context, in *pb.CreateOAuthClie
 	}
 	id := s.next("c")
 	s.clients[in.GetClientIdHash()] = &pb.OAuthClientRow{
-		Id: id, ClientId: in.GetClientId(), Kind: in.GetKind(), ClientName: in.GetClientName(),
+		Id: id, ClientId: in.GetClientId(), Kind: in.GetKind(), ClientName: in.GetClientName(), SoftwareId: in.GetSoftwareId(),
 		ClientUri: in.GetClientUri(), LogoUri: in.GetLogoUri(), RedirectUris: in.GetRedirectUris(),
 		MetadataFetchedAt: in.GetMetadataFetchedAt(),
 	}
@@ -274,10 +274,34 @@ func (s *oauthStore) GetOAuthAccessTokenGrant(_ context.Context, in *pb.GetOAuth
 }
 
 func (s *oauthStore) TouchOAuthGrant(_ context.Context, in *pb.TouchOAuthGrantReq, _ ...grpc.CallOption) (*pb.TouchOAuthGrantResp, error) {
-	if g, ok := s.grants[in.GetId()]; ok {
-		g.touched++
+	g, ok := s.grants[in.GetId()]
+	if !ok || g.revoked {
+		return nil, errNoRow
 	}
-	return &pb.TouchOAuthGrantResp{}, nil
+	g.touched++
+	return &pb.TouchOAuthGrantResp{Id: g.id}, nil
+}
+
+func (s *oauthStore) GetOAuthCodeUse(_ context.Context, in *pb.GetOAuthCodeUseReq, _ ...grpc.CallOption) (*pb.GetOAuthCodeUseResp, error) {
+	for _, a := range s.auths {
+		if a.codeHash != "" && a.codeHash == in.GetCodeHash() {
+			resp := &pb.GetOAuthCodeUseResp{Id: a.id}
+			if a.codeConsumed {
+				resp.CodeConsumedAt = timestamppb.Now()
+			}
+			return resp, nil
+		}
+	}
+	return nil, errNoRow
+}
+
+func (s *oauthStore) GetOAuthGrantByAuthorization(_ context.Context, in *pb.GetOAuthGrantByAuthorizationReq, _ ...grpc.CallOption) (*pb.GetOAuthGrantByAuthorizationResp, error) {
+	for _, g := range s.grants {
+		if g.req.GetAuthorizationId() == in.GetAuthorizationId() {
+			return &pb.GetOAuthGrantByAuthorizationResp{Id: g.id}, nil
+		}
+	}
+	return nil, errNoRow
 }
 
 func (s *oauthStore) RevokeOAuthGrant(_ context.Context, in *pb.RevokeOAuthGrantReq, _ ...grpc.CallOption) (*pb.RevokeOAuthGrantResp, error) {
@@ -398,9 +422,18 @@ func TestOAuthServer_MCPFlow(t *testing.T) {
 	if len(s.grants) != 1 {
 		t.Fatalf("grants = %d", len(s.grants))
 	}
-	// The code is single-use.
+	// The code is single-use; presented again, it ends what it bought
+	// (OAuth 2.1 §4.1.3).
 	if again := exchange(h, cid, code); again.GetOauthError() != oauthInvalidGrant {
 		t.Errorf("a spent code redeemed again: %v", again)
+	}
+	for _, g := range s.grants {
+		if !g.revoked {
+			t.Error("a replayed code left its grant live")
+		}
+	}
+	if !s.access[0].revoked {
+		t.Error("a replayed code left its access token live")
 	}
 }
 
@@ -559,10 +592,24 @@ func TestBeginOAuthAuthorization_Refusals(t *testing.T) {
 			t.Errorf("%s: %v %v", c.name, err, resp)
 		}
 	}
-	// A loopback redirect with any port and no resource is a session grant.
+	// No resource on a loopback redirect is a session grant — for w17ctl
+	// only; any other client is told a resource is required.
 	r := beginReq(cid, "http://127.0.0.1:49152/callback")
-	if resp, _ := h.BeginOAuthAuthorization(context.Background(), r); resp.GetRequestId() == "" {
-		t.Errorf("loopback session grant refused: %v", resp)
+	if resp, _ := h.BeginOAuthAuthorization(context.Background(), r); resp.GetOauthError() != oauthInvalidTarget {
+		t.Errorf("a session grant offered to a client that is not w17ctl: %v", resp)
+	}
+	w, err := h.RegisterOAuthClient(context.Background(), &pb.RegisterOAuthClientReq{RedirectUris: []string{"http://127.0.0.1/callback"}, ClientName: "w17ctl", SoftwareId: "w17ctl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := h.BeginOAuthAuthorization(context.Background(), beginReq(w.GetClientId(), "http://127.0.0.1:49152/callback")); resp.GetRequestId() == "" {
+		t.Errorf("w17ctl's session grant refused: %v", resp)
+	}
+	// A resource is compared normalised: host case, default port, trailing
+	// slash.
+	h.OAuthResources = testResource
+	if resp, _ := h.BeginOAuthAuthorization(context.Background(), beginReq(cid, "http://127.0.0.1:49152/callback", "https://MCP.example.com:443/mcp/")); resp.GetRequestId() == "" {
+		t.Errorf("a differently spelled resource refused: %v", resp)
 	}
 }
 
@@ -680,12 +727,13 @@ func TestRegisterOAuthClient_Rules(t *testing.T) {
 	h, _ := oauthHandler()
 	h.OAuthRedirectHosts = "claude.ai"
 	for name, uris := range map[string][]string{
-		"none":          nil,
-		"http":          {"http://claude.ai/cb"},
-		"custom scheme": {"cursor://callback"},
-		"fragment":      {"https://claude.ai/cb#x"},
-		"other host":    {"https://evil.example/cb"},
-		"credentials":   {"https://u:p@claude.ai/cb"},
+		"none":        nil,
+		"http":        {"http://claude.ai/cb"},
+		"javascript":  {"javascript:alert(1)"},
+		"file":        {"file:///etc/passwd"},
+		"fragment":    {"https://claude.ai/cb#x"},
+		"other host":  {"https://evil.example/cb"},
+		"credentials": {"https://u:p@claude.ai/cb"},
 	} {
 		resp, err := h.RegisterOAuthClient(context.Background(), &pb.RegisterOAuthClientReq{RedirectUris: uris})
 		if err != nil || resp.GetOauthError() == "" || resp.GetClientId() != "" {
@@ -694,6 +742,13 @@ func TestRegisterOAuthClient_Rules(t *testing.T) {
 	}
 	if resp, _ := h.RegisterOAuthClient(context.Background(), &pb.RegisterOAuthClientReq{RedirectUris: []string{"http://localhost:1234/cb"}}); resp.GetClientId() == "" {
 		t.Errorf("loopback refused under a host allowlist: %v", resp)
+	}
+	// A native app's private-use scheme (RFC 8252 §7.1) — Cursor's.
+	if resp, _ := h.RegisterOAuthClient(context.Background(), &pb.RegisterOAuthClientReq{RedirectUris: []string{"cursor://anysphere.cursor-mcp/oauth/callback"}}); resp.GetClientId() == "" {
+		t.Errorf("a private-use scheme refused: %v", resp)
+	}
+	if got := redirectHost("cursor://anysphere.cursor-mcp/oauth/callback"); got != "the cursor app on this device" {
+		t.Errorf("redirectHost = %q", got)
 	}
 	h.OAuthDynamicRegistration = false
 	if resp, _ := h.RegisterOAuthClient(context.Background(), &pb.RegisterOAuthClientReq{RedirectUris: []string{claudeCB}}); resp.GetOauthError() == "" {
@@ -801,5 +856,60 @@ func TestCheckOAuthServerConfig(t *testing.T) {
 	}
 	if err := checkOAuthServerConfig(&AuthServiceHandler{OAuthRedirectHosts: "claude.ai, cursor.com", OAuthResources: testResource + " http://localhost:8081/mcp"}); err != nil {
 		t.Error(err)
+	}
+}
+
+// A refresh that fails on the store spends nothing: the client's retry is
+// not a reuse, and the grant stays.
+func TestOAuthServer_RefreshFailureIsNotAReuse(t *testing.T) {
+	h, s := oauthHandler()
+	cid := register(t, h, claudeCB)
+	first := exchange(h, cid, approve(t, h, cid, claudeCB, testResource))
+	flaky := &flakyRefreshStore{oauthStore: s, failures: 1}
+	h.Query, h.Mutation = flaky, flaky
+	if _, err := h.ExchangeOAuthToken(context.Background(), &pb.ExchangeOAuthTokenReq{GrantType: "refresh_token", ClientId: cid, RefreshToken: first.GetRefreshToken()}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("the failing refresh: %v", err)
+	}
+	// Without a coordinator the test store cannot roll back; restore the
+	// spend as the transaction would have.
+	for _, r := range s.refresh {
+		r.used = false
+	}
+	if r := refreshWith(h, cid, first.GetRefreshToken()); r.GetOauthError() != "" || r.GetAccessToken() == "" {
+		t.Fatalf("the retry: %v", r)
+	}
+	for _, g := range s.grants {
+		if g.revoked {
+			t.Error("a store failure ended the grant")
+		}
+	}
+}
+
+// flakyRefreshStore fails the account read of a refresh once.
+type flakyRefreshStore struct {
+	*oauthStore
+	failures int
+}
+
+func (f *flakyRefreshStore) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, o ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	if f.failures > 0 {
+		f.failures--
+		return nil, status.Error(codes.Unavailable, "db down")
+	}
+	return f.oauthStore.GetUserById(ctx, in, o...)
+}
+
+// A grant revoked while a refresh runs yields no token: the refresh holds
+// the live row first.
+func TestOAuthServer_RefreshOfARevokedGrantMintsNothing(t *testing.T) {
+	h, s := oauthHandler()
+	cid := register(t, h, claudeCB)
+	first := exchange(h, cid, approve(t, h, cid, claudeCB, testResource))
+	for _, g := range s.grants {
+		g.revoked = true
+	}
+	n := len(s.access)
+	if r := refreshWith(h, cid, first.GetRefreshToken()); r.GetOauthError() != oauthInvalidGrant || len(s.access) != n {
+		t.Errorf("refresh of a revoked grant: %v, %d new tokens", r, len(s.access)-n)
 	}
 }

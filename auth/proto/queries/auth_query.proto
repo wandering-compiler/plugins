@@ -1470,6 +1470,7 @@ message OAuthClientRow {
   string redirect_uris = 7;
   google.protobuf.Timestamp metadata_fetched_at = 8 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp disabled_at = 9 [(w17.field) = { type: DATETIME, null: true }];
+  string software_id = 10;
 }
 
 message GetOAuthClientByHashReq {
@@ -1505,6 +1506,29 @@ message GetPendingOAuthAuthorizationResp {
   string resource = 5;
   google.protobuf.Timestamp expires_at = 6 [(w17.field) = { type: DATETIME }];
   OAuthClientRow client = 7;
+}
+
+// GetOAuthCodeUse — an approved code by its hash, spent or not: a code
+// presented after it was redeemed ends the grant it bought (OAuth 2.1
+// §4.1.3).
+message GetOAuthCodeUseReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string code_hash = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message GetOAuthCodeUseResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  google.protobuf.Timestamp code_consumed_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// GetOAuthGrantByAuthorization — the grant an authorization's code bought.
+message GetOAuthGrantByAuthorizationReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string authorization_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetOAuthGrantByAuthorizationResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
 }
 
 // GetOAuthApprovingSession — the session approving an authorization: its
@@ -3416,7 +3440,8 @@ service AuthQuery {
           "SELECT c.id AS client.id, c.client_id AS client.client_id, c.kind AS client.kind, "
           "       c.client_name AS client.client_name, c.client_uri AS client.client_uri, "
           "       c.logo_uri AS client.logo_uri, c.redirect_uris AS client.redirect_uris, "
-          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at "
+          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at, "
+          "       c.software_id AS client.software_id "
           "FROM @module.OAuthClient c WHERE c.client_id_hash = :client_id_hash"
       }
     };
@@ -3544,6 +3569,26 @@ service AuthQuery {
           "WHERE g.user_id = :user_id AND g.revoked_at IS NULL AND g.expires_at > NOW() "
           "ORDER BY g.created_at DESC "
           "LIMIT 200"
+      }
+    };
+  }
+
+  rpc GetOAuthCodeUse(GetOAuthCodeUseReq) returns (GetOAuthCodeUseResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT a.id AS id, a.code_consumed_at AS code_consumed_at FROM @module.OAuthAuthorization a WHERE a.code_hash = :code_hash"
+      }
+    };
+  }
+
+  rpc GetOAuthGrantByAuthorization(GetOAuthGrantByAuthorizationReq) returns (GetOAuthGrantByAuthorizationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT g.id AS id FROM @module.OAuthGrant g WHERE g.authorization_id = :authorization_id"
       }
     };
   }

@@ -150,13 +150,16 @@ func (h *AuthServiceHandler) checkClientMetadata(md *clientMetadata) error {
 }
 
 // checkClientRedirect: an https URL (on an allowed host, when the
-// deployment lists them) or a loopback one — a program on the user's
-// computer. Never a fragment (RFC 6749 §3.1.2), never credentials, never a
-// custom scheme: a custom scheme can be claimed by any app on the device.
+// deployment lists them), a loopback one — a program on the user's
+// computer — or a private-use scheme of a native app (RFC 8252 §7.1:
+// `cursor://…`, `com.example.app:/cb`), which PKCE binds to the app that
+// started the flow and the consent page names. Never a fragment (RFC 6749
+// §3.1.2), never credentials, never a scheme a browser treats as content or
+// navigation of its own.
 func checkClientRedirect(raw string, hosts map[string]bool) error {
 	u, err := url.Parse(raw)
 	switch {
-	case err != nil || !u.IsAbs() || u.Host == "" || len(raw) > 2048:
+	case err != nil || !u.IsAbs() || len(raw) > 2048:
 		return redirectError("not an absolute URL")
 	case u.Fragment != "" || strings.Contains(raw, "#"):
 		return redirectError("has a fragment")
@@ -164,12 +167,40 @@ func checkClientRedirect(raw string, hosts map[string]bool) error {
 		return redirectError("carries credentials")
 	case isLoopbackRedirect(raw):
 		return nil
-	case u.Scheme != "https":
+	case u.Scheme == "https":
+		if u.Host == "" {
+			return redirectError("not an absolute URL")
+		}
+		if len(hosts) > 0 && !hosts[strings.ToLower(u.Hostname())] {
+			return redirectError("its host is not one this server sends codes to")
+		}
+		return nil
+	case u.Scheme == "http":
 		return redirectError("must be https, or http on a loopback address")
-	case len(hosts) > 0 && !hosts[strings.ToLower(u.Hostname())]:
-		return redirectError("its host is not one this server sends codes to")
+	case refusedRedirectSchemes[u.Scheme] || !privateUseScheme(u.Scheme):
+		return redirectError("its scheme is not one a native app can claim")
 	}
 	return nil
+}
+
+// refusedRedirectSchemes are schemes a browser handles itself.
+var refusedRedirectSchemes = map[string]bool{
+	"javascript": true, "data": true, "file": true, "vbscript": true, "about": true, "blob": true,
+	"ws": true, "wss": true, "ftp": true, "chrome": true, "chrome-extension": true, "moz-extension": true,
+	"view-source": true, "intent": true,
+}
+
+// privateUseScheme: a scheme as RFC 3986 spells one, lower-case.
+func privateUseScheme(s string) bool {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '+' || r == '.' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 type redirectError string
