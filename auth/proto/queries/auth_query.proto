@@ -1519,6 +1519,8 @@ message GetOAuthCodeUseResp {
   option (w17.contrib.plugin_feature) = "oauth_server";
   string id = 1;
   google.protobuf.Timestamp code_consumed_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+  // The session the code minted (a session-kind code), empty otherwise.
+  string session_token_hash = 3 [(w17.field) = { type: CHAR, max_len: 64, null: true }];
 }
 
 // GetOAuthGrantByAuthorization — the grant an authorization's code bought.
@@ -3578,7 +3580,7 @@ service AuthQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT a.id AS id, a.code_consumed_at AS code_consumed_at FROM @module.OAuthAuthorization a WHERE a.code_hash = :code_hash"
+        dql: "SELECT a.id AS id, a.code_consumed_at AS code_consumed_at, a.session_token_hash AS session_token_hash FROM @module.OAuthAuthorization a WHERE a.code_hash = :code_hash"
       }
     };
   }

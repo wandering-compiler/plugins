@@ -306,6 +306,10 @@ enum RevokeReason {
   // The OAuth grant the token belongs to was revoked — by the user
   // ("connected apps"), an operator, or the client (RFC 7009).
   REVOKE_REASON_GRANT_REVOKED = 13;
+  // The authorization code that minted the session was presented again
+  // after it was redeemed: a copy in someone else's hands (OAuth 2.1
+  // §4.1.3).
+  REVOKE_REASON_CODE_REPLAYED = 14;
 }
 
 // AccountKind separates people from machines.
@@ -1784,6 +1788,10 @@ message OAuthAuthorization {
   string code_hash = 20 [(w17.field) = { type: CHAR, max_len: 64, null: true, unique: true }];
   google.protobuf.Timestamp code_expires_at = 21 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp code_consumed_at = 22 [(w17.field) = { type: DATETIME, null: true }];
+  // The session a session-kind code minted (its token hash), so a replay of
+  // the code ends it (OAuth 2.1 §4.1.3). An MCP code's grant is found by
+  // OAuthGrant.authorization_id instead.
+  string session_token_hash = 23 [(w17.field) = { type: CHAR, max_len: 64, null: true }];
 }
 
 // OAuthGrant — what the user approved for an MCP client: a "connected app".

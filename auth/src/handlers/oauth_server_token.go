@@ -61,6 +61,11 @@ func init() {
 // exchangeOAuthCode redeems a code. It is spent before anything else is
 // checked — a wrong verifier still burns it, so it cannot be guessed at —
 // and every way it fails is the same invalid_grant.
+//
+// The spend and what the code buys are ONE transaction: a replay of the code
+// waits on the authorization row until it ends, so it finds the grant or the
+// session the redemption issued and ends it. A refusal commits (the code stays
+// spent); only a failure of the store rolls the spend back.
 func (h *AuthServiceHandler) exchangeOAuthCode(ctx context.Context, req *pb.ExchangeOAuthTokenReq) (_ *pb.ExchangeOAuthTokenResp, err error) {
 	attempt := beginSignIn(ctx, pb.SignInMethod_SIGN_IN_METHOD_AUTHORIZED_APP)
 	defer func() {
@@ -82,6 +87,31 @@ func (h *AuthServiceHandler) exchangeOAuthCode(ctx context.Context, req *pb.Exch
 	if len(req.GetCodeVerifier()) < pkceMinVerifierLen || req.GetCode() == "" {
 		return nil, oauthRefuse(oauthInvalidGrant, "the code or its verifier is invalid")
 	}
+	var (
+		resp    *pb.ExchangeOAuthTokenResp
+		refusal error
+	)
+	err = h.inTx(ctx, func(txCtx context.Context) error {
+		r, err := h.redeemOAuthCode(txCtx, attempt, client, req)
+		if _, ok := asOAuthError(err); ok {
+			refusal = err
+			return nil
+		}
+		resp = r
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if refusal != nil {
+		return nil, refusal
+	}
+	return resp, nil
+}
+
+// redeemOAuthCode spends the code and issues what it buys, inside the
+// exchange's transaction.
+func (h *AuthServiceHandler) redeemOAuthCode(ctx context.Context, attempt *signInAttempt, client *pb.OAuthClientRow, req *pb.ExchangeOAuthTokenReq) (*pb.ExchangeOAuthTokenResp, error) {
 	code, err := h.Mutation.ConsumeOAuthCode(ctx, &pb.ConsumeOAuthCodeReq{CodeHash: sha256Hex(req.GetCode())})
 	if err != nil {
 		if notFoundOK(err) == nil {
@@ -124,12 +154,19 @@ func (h *AuthServiceHandler) exchangeOAuthCode(ctx context.Context, req *pb.Exch
 }
 
 // codeRefused answers a code that did not redeem. One already redeemed is a
-// copy in someone else's hands: the grant it bought ends with its tokens
-// (OAuth 2.1 §4.1.3). A read that fails leaves the refusal as it is.
+// copy in someone else's hands: what it bought ends — an MCP grant with its
+// tokens, or the session a w17ctl login minted (OAuth 2.1 §4.1.3). A read
+// that fails leaves the refusal as it is.
 func (h *AuthServiceHandler) codeRefused(ctx context.Context, codeHash string) error {
 	refused := oauthRefuse(oauthInvalidGrant, "the code is unknown, spent or expired")
 	use, err := h.Query.GetOAuthCodeUse(ctx, &pb.GetOAuthCodeUseReq{CodeHash: codeHash})
 	if err != nil || use.GetCodeConsumedAt() == nil {
+		return refused
+	}
+	if hash := use.GetSessionTokenHash(); hash != "" {
+		if _, err := h.Mutation.RevokeOAuthCodeSession(ctx, &pb.RevokeOAuthCodeSessionReq{TokenHash: hash}); notFoundOK(err) != nil {
+			return err
+		}
 		return refused
 	}
 	g, err := h.Query.GetOAuthGrantByAuthorization(ctx, &pb.GetOAuthGrantByAuthorizationReq{AuthorizationId: use.GetId()})
@@ -274,12 +311,16 @@ func (h *AuthServiceHandler) issueSessionGrant(ctx context.Context, attempt *sig
 		// The key is this account's revoked device, or a program's key: no
 		// session is bound to it. Said in OAuth terms, so the client makes a
 		// new key and signs in again rather than reading a server failure.
-		return nil, oauthRefuse(oauthInvalidDPoPProof, "this key cannot sign in for the account (revoked, or a program's key): sign in again with a new key")
+		return nil, oauthRefuse(oauthDeviceKeyRefused, "this key cannot sign in for the account (revoked, or a program's key): sign in again with a new key")
 	case err != nil:
 		return nil, err
 	}
 	token, err := h.mintSession(ctx, attempt, code.GetUserId(), dev, expiresAt, code.GetApprovedByDeviceId())
 	if err != nil {
+		return nil, err
+	}
+	// In the exchange's transaction: a replay of this code finds the session.
+	if _, err := h.Mutation.LinkOAuthSession(ctx, &pb.LinkOAuthSessionReq{Id: code.GetId(), SessionTokenHash: sha256Hex(token)}); err != nil {
 		return nil, err
 	}
 	return &pb.ExchangeOAuthTokenResp{

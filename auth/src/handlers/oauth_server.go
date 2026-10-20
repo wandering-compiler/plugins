@@ -68,6 +68,12 @@ const (
 	oauthInvalidRedirectURI      = "invalid_redirect_uri"
 	oauthInvalidClientMetadata   = "invalid_client_metadata"
 	oauthInvalidDPoPProof        = "invalid_dpop_proof"
+	// oauthDeviceKeyRefused: the proof is valid but its key cannot sign in for
+	// the account (a revoked device, a program's key). An extension error
+	// (RFC 6749 §8.5) heard only by w17ctl — session grants are its alone —
+	// which then discards the key: an invalid_dpop_proof from the gateway's
+	// own checks (clock skew, a replayed proof) must not cost it its key.
+	oauthDeviceKeyRefused = "w17_device_key_refused"
 )
 
 // oauthError is a refusal the OAuth client hears: it travels in the response

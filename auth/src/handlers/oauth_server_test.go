@@ -31,6 +31,7 @@ type oauthStore struct {
 	access   []*oauthAccessRow
 	sessions map[string]*pb.GetOAuthApprovingSessionResp // by token id
 	revoked  map[string]bool                             // device ids
+	ended    map[string]bool                             // session token hashes ended by a replay
 	users    map[string]*pb.User
 	n        int
 }
@@ -44,6 +45,7 @@ type oauthAuthRow struct {
 	codeHash              string
 	codeExpires           time.Time
 	codeConsumed          bool
+	sessionHash           string
 }
 
 type oauthGrantRow struct {
@@ -70,7 +72,7 @@ func newOAuthStore() *oauthStore {
 	return &oauthStore{
 		clients: map[string]*pb.OAuthClientRow{}, auths: map[string]*oauthAuthRow{}, grants: map[string]*oauthGrantRow{},
 		refresh: map[string]*oauthRefreshRow{}, sessions: map[string]*pb.GetOAuthApprovingSessionResp{},
-		revoked: map[string]bool{}, users: map[string]*pb.User{"u1": {Id: "u1", Email: "a@example.com"}},
+		revoked: map[string]bool{}, ended: map[string]bool{}, users: map[string]*pb.User{"u1": {Id: "u1", Email: "a@example.com"}},
 	}
 }
 
@@ -285,7 +287,7 @@ func (s *oauthStore) TouchOAuthGrant(_ context.Context, in *pb.TouchOAuthGrantRe
 func (s *oauthStore) GetOAuthCodeUse(_ context.Context, in *pb.GetOAuthCodeUseReq, _ ...grpc.CallOption) (*pb.GetOAuthCodeUseResp, error) {
 	for _, a := range s.auths {
 		if a.codeHash != "" && a.codeHash == in.GetCodeHash() {
-			resp := &pb.GetOAuthCodeUseResp{Id: a.id}
+			resp := &pb.GetOAuthCodeUseResp{Id: a.id, SessionTokenHash: a.sessionHash}
 			if a.codeConsumed {
 				resp.CodeConsumedAt = timestamppb.Now()
 			}
@@ -293,6 +295,24 @@ func (s *oauthStore) GetOAuthCodeUse(_ context.Context, in *pb.GetOAuthCodeUseRe
 		}
 	}
 	return nil, errNoRow
+}
+
+func (s *oauthStore) LinkOAuthSession(_ context.Context, in *pb.LinkOAuthSessionReq, _ ...grpc.CallOption) (*pb.LinkOAuthSessionResp, error) {
+	for _, a := range s.auths {
+		if a.id == in.GetId() && a.sessionHash == "" {
+			a.sessionHash = in.GetSessionTokenHash()
+			return &pb.LinkOAuthSessionResp{Id: a.id}, nil
+		}
+	}
+	return nil, errNoRow
+}
+
+func (s *oauthStore) RevokeOAuthCodeSession(_ context.Context, in *pb.RevokeOAuthCodeSessionReq, _ ...grpc.CallOption) (*pb.RevokeOAuthCodeSessionResp, error) {
+	if s.ended[in.GetTokenHash()] {
+		return nil, errNoRow
+	}
+	s.ended[in.GetTokenHash()] = true
+	return &pb.RevokeOAuthCodeSessionResp{TokenId: "t-" + in.GetTokenHash()[:4], UserId: "u1"}, nil
 }
 
 func (s *oauthStore) GetOAuthGrantByAuthorization(_ context.Context, in *pb.GetOAuthGrantByAuthorizationReq, _ ...grpc.CallOption) (*pb.GetOAuthGrantByAuthorizationResp, error) {
@@ -434,6 +454,33 @@ func TestOAuthServer_MCPFlow(t *testing.T) {
 	}
 	if !s.access[0].revoked {
 		t.Error("a replayed code left its access token live")
+	}
+}
+
+// A replayed w17ctl login code ends the session the first redemption minted:
+// a session-kind code buys no grant row, so the link on its authorization is
+// what the replay follows.
+func TestOAuthServer_ReplayedSessionCodeEndsTheSession(t *testing.T) {
+	h, s := oauthHandler()
+	cid := register(t, h, claudeCB)
+	code := approve(t, h, cid, claudeCB, testResource)
+	var auth *oauthAuthRow
+	for _, a := range s.auths {
+		auth = a
+	}
+	// What issueSessionGrant records in the exchange's transaction.
+	auth.codeConsumed = true
+	if _, err := s.LinkOAuthSession(context.Background(), &pb.LinkOAuthSessionReq{Id: auth.id, SessionTokenHash: sha256Hex("w17ctl-session")}); err != nil {
+		t.Fatal(err)
+	}
+	if again := exchange(h, cid, code); again.GetOauthError() != oauthInvalidGrant {
+		t.Fatalf("a spent code redeemed again: %v", again)
+	}
+	if !s.ended[sha256Hex("w17ctl-session")] {
+		t.Error("a replayed session code left its session live")
+	}
+	if _, err := s.LinkOAuthSession(context.Background(), &pb.LinkOAuthSessionReq{Id: auth.id, SessionTokenHash: "other"}); err == nil {
+		t.Error("an authorization took a second session")
 	}
 }
 

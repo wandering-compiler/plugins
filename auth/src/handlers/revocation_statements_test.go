@@ -165,6 +165,7 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 		"DisableUsers":             {pb.RevokeReason_REVOKE_REASON_USER_DISABLED, ""},
 		"BeginUserErasure":         {pb.RevokeReason_REVOKE_REASON_USER_ERASED, ":revoked_by"},
 		"RevokeOAuthGrant":         {pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, ":revoked_by"},
+		"RevokeOAuthCodeSession":   {pb.RevokeReason_REVOKE_REASON_CODE_REPLAYED, ""},
 	}
 	setRe := regexp.MustCompile(`UPDATE @module\.UserToken SET revoked_at = NOW\(\), (?:revoked_by = (:\w+), )?revoke_reason = (\d+) WHERE ([^"]*)"`)
 	seen := map[string]bool{}

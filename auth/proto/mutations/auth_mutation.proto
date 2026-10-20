@@ -1777,6 +1777,31 @@ message UseOAuthRefreshTokenResp {
   string grant_id = 2;
 }
 
+// LinkOAuthSession — the session a session-kind code minted, recorded on its
+// authorization in the exchange's transaction, so a replay of the code (which
+// waits on the authorization row until that transaction ends) finds it.
+message LinkOAuthSessionReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1 [(w17.field) = { type: UUID }];
+  string session_token_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message LinkOAuthSessionResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+}
+
+// RevokeOAuthCodeSession — end the session a replayed code minted (reason
+// CODE_REPLAYED).
+message RevokeOAuthCodeSessionReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message RevokeOAuthCodeSessionResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string token_id = 1;
+  string user_id = 2;
+}
+
 message TouchOAuthGrantReq {
   option (w17.contrib.plugin_feature) = "oauth_server";
   string id = 1 [(w17.field) = { type: UUID }];
@@ -4751,6 +4776,31 @@ service AuthMutation {
           "UPDATE @module.OAuthRefreshToken SET used_at = NOW() "
           "WHERE token_hash = :token_hash AND used_at IS NULL AND expires_at > NOW() "
           "RETURNING id, grant_id"
+      }
+    };
+  }
+
+  rpc LinkOAuthSession(LinkOAuthSessionReq) returns (LinkOAuthSessionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OAuthAuthorization SET session_token_hash = :session_token_hash "
+          "WHERE id = :id AND session_token_hash IS NULL RETURNING id"
+      }
+    };
+  }
+
+  rpc RevokeOAuthCodeSession(RevokeOAuthCodeSessionReq) returns (RevokeOAuthCodeSessionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET revoked_at = NOW(), revoke_reason = 14 "
+          "WHERE token_hash = :token_hash AND revoked_at IS NULL "
+          "RETURNING id AS token_id, user_id"
       }
     };
   }
