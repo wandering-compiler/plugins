@@ -49,7 +49,7 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 	}
 	client, err := brevo.New(cfg.BrevoBaseURL, cfg.BrevoAPIKey.Reveal(), cfg.BrevoRps)
 	if err != nil {
-		return fmt.Errorf("marketing plugin: <DOMAIN>_MARKETING_BREVO_API_KEY / _BREVO_BASE_URL / _BREVO_RPS: %w", err)
+		return fmt.Errorf("marketing plugin: brevo_api_key / brevo_base_url / brevo_rps: %w", err)
 	}
 	reads := map[string]bool{}
 	for m, k := range clients.RequestMethods() {
