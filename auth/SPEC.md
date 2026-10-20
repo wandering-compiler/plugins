@@ -59,8 +59,8 @@ It covers plugin version 0.1.0-rc.24.
 | `step_up` | off | — | — |
 | `service_account` | off | `api_token`, `user_admin`, `rbac`, `authenticate_turnkey` | — |
 | `bot_token_guard` | off | `service_account` | — |
-| `bot_roles` | off | `service_account`, `org_membership` | — |
-| `org_roles` | off | `org_membership` | — |
+| `bot_roles` | off | `rbac`, `service_account`, `org_membership` | — |
+| `org_roles` | off | `rbac`, `org_membership` | — |
 | `user_admin` | off | — | — |
 | `admin_sign_ins` | off | `user_admin` | — |
 | `admin_devices` | off | `user_admin` | — |

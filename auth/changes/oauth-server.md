@@ -4,5 +4,7 @@
 
 ### Changed
 
+- `bot_roles` and `org_roles` declare `rbac`, whose role writes their handlers make (they held it only through `service_account` / `org_membership`).
+
 - `RevokeDeviceTokens` also ends the OAuth access tokens (type MCP) the revoked device approved, beside the CLI sessions it approved.
 - `isLoopbackRedirect` moved to the always-compiled handlers file (cli_login and oauth_server both use it).

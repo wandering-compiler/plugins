@@ -337,6 +337,9 @@ features:
     description: "A machine account holds any combination of the API-realm roles: SetBotRoles (PUT /auth/bots/{user_id}/roles) replaces the set in one transaction — at least one role, each an API-realm role the caller could grant, under the operator rules of IssueBotToken — and the bot directory (ListBots) carries the roles each bot holds (BotSummary.role_ids). CreateBot still grants one role in the same call. Off by default; no migration."
     default: false
     requires:
+      # The role writes it makes (pb.AssignRoleToUserReq, CreateRoleReq …)
+      # are rbac's: declared here, not held through another feature.
+      - rbac
       - service_account
       - org_membership
     go_files:
@@ -345,6 +348,9 @@ features:
     description: "An organization composes roles of its own from the deployed lock's permissions (Role.org_id): ListOrgRoles / CreateOrgRole / UpdateOrgRole / DeleteOrgRole (GET / POST /auth/orgs/{org}/org-roles, PUT / DELETE /auth/orgs/{org}/org-roles/{role_id}). A custom role is an ordinary org-scoped role with RolePermission rows, offered, granted and edited only in its own organization: with the feature on, the catalogue every org-role grant reads (invitation, acceptance, role change, ListAssignableRoles) is the organization's — the shared org roles plus its own. The role ceiling applies to composing as to granting: a role carries only permissions its author holds, and an existing one is changed or deleted only by someone who covers it. A role still held is not deleted. Seeded roles are never edited here. Off by default; a migration adds the column."
     default: false
     requires:
+      # The role writes it makes (pb.AssignRoleToUserReq, CreateRoleReq …)
+      # are rbac's: declared here, not held through another feature.
+      - rbac
       - org_membership
     go_files:
       - handlers/org_roles.go
