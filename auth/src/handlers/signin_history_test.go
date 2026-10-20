@@ -917,6 +917,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 		"EmailVerificationRequested": "mail delivery hint",
 		"OrgMembershipAdded":         "membership grant",
 		"OrgInviteAccepted":          "membership grant",
+		"OAuthGrantApproved":         "grant (redeemed by an MCP client, which signs no proofs; the approving device is on the grant)",
 	}
 	events := readProto(t, "../../proto/events/auth_events.proto")
 	msgRe := regexp.MustCompile(`(?s)message (\w+) \{(.*?)\n\}`)

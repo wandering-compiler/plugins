@@ -341,7 +341,9 @@ func TestDeviceManagement_LeavesAPITokensAlone(t *testing.T) {
 	}
 	body := mutationRPCBody(t, "RevokeDeviceTokens")
 	approved, _, _ := strings.Cut(body[strings.Index(body, `name: "approved"`):], `name: "main"`)
-	if !strings.Contains(approved, `"AND ?feature(api_token) token_type = 1"`) {
+	// Sessions (1) and OAuth access tokens (3, oauth_server) the device
+	// approved; never API tokens (2).
+	if !strings.Contains(approved, `"AND ?feature(api_token) token_type IN (1, 3)"`) {
 		t.Errorf("the approved op revokes API tokens the device created:\n%s", approved)
 	}
 }

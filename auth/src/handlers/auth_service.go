@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,28 @@ func randomURLToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// isLoopbackRedirect reports whether a redirect_uri is a safe loopback
+// callback (RFC 8252 §7.3): http scheme, host 127.0.0.1 / ::1 / localhost,
+// any port + path. A non-loopback target would let a stolen authorize link
+// redirect the code to an attacker-controlled origin. Lives here (always
+// compiled): cli_login and oauth_server both send codes to a loopback
+// redirect, and stage independently.
+func isLoopbackRedirect(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	default:
+		return false
+	}
 }
 
 // pkceMinVerifierLen is RFC 7636 §4.1's minimum code_verifier length (the
@@ -241,7 +264,22 @@ type AuthServiceHandler struct {
 	// sign_up_confirmation_ttl_seconds (read only by handlers/signup_confirm.go).
 	// <= 0 → the file's default.
 	SignUpConfirmationTTLSeconds int
+
+	// oauth_server knobs (read only by handlers/oauth_server*.go). <= 0 →
+	// the file's defaults; the two lists are checked at boot
+	// (checkOAuthServerConfig).
+	OAuthAccessTTLSeconds    int    // oauth_access_ttl_seconds
+	OAuthRefreshTTLDays      int    // oauth_refresh_ttl_days
+	OAuthGrantMaxDays        int    // oauth_grant_max_days
+	OAuthDynamicRegistration bool   // oauth_dynamic_registration
+	OAuthRedirectHosts       string // oauth_redirect_hosts
+	OAuthResources           string // oauth_resources
 }
+
+// configChecks are the boot checks of feature-owned settings: a feature file
+// appends its own from init(), so ValidateConfig checks exactly what the
+// activation compiles.
+var configChecks []func(h *AuthServiceHandler) error
 
 // scopeDecorator augments the AuthResp scope + label maps for an
 // authenticated principal. Feature-gated handler files register
@@ -326,6 +364,12 @@ type authPrincipal struct {
 	// mcpOnly is UserToken.mcp_only: a token of the MCP OAuth flow, accepted
 	// without a proof on the MCP surface and nowhere else.
 	mcpOnly bool
+
+	// oauthResource / oauthOrgID are an OAuth access token's resource and
+	// organization (oauth_server): the token works on that resource's MCP
+	// surface only, and acts in that organization.
+	oauthResource string
+	oauthOrgID    string
 
 	// bearer is UserToken.bearer and botAccount whether the owner is of kind
 	// BOT: together they are a machine account's bearer token, accepted
@@ -549,6 +593,11 @@ func ValidateConfig(h *AuthServiceHandler) error {
 	// fills in when the variable is unset — means "8 hours, capped at the
 	// session lifetime" (sessionExpiry), so a deployment with sessions
 	// shorter than 8 hours boots without setting it.
+	for _, check := range configChecks {
+		if err := check(h); err != nil {
+			return err
+		}
+	}
 	if h.PublicSessionTTLSeconds > h.sessionTTLSeconds() {
 		return fmt.Errorf("auth plugin: public_session_ttl_seconds=%d is longer than the session lifetime (session_token_ttl_seconds=%d) — a public-computer session must not outlive a normal one; lower public_session_ttl_seconds", h.PublicSessionTTLSeconds, h.sessionTTLSeconds())
 	}
@@ -851,6 +900,16 @@ func (h *AuthServiceHandler) AuthenticateAdmin(ctx context.Context, req *pb.Auth
 // AuthenticateAdmin.
 type adminPlaneKey struct{}
 
+// oauthTokenOrgKey carries the organization of the OAuth access token being
+// authenticated (oauth_server) to the organization decorator. Set only by
+// Authenticate, from the token's own row.
+type oauthTokenOrgKey struct{}
+
+func oauthTokenOrg(ctx context.Context) string {
+	v, _ := ctx.Value(oauthTokenOrgKey{}).(string)
+	return v
+}
+
 func onAdminPlane(ctx context.Context) bool {
 	v, _ := ctx.Value(adminPlaneKey{}).(bool)
 	return v
@@ -915,7 +974,7 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 			err = botBearerGuard(ctx, h, prin, req.GetHeaders())
 		}
 	default:
-		err = checkMCPToken(prin)
+		err = checkMCPToken(prin, req.GetHeaders()[mcpResourceKey])
 	}
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -933,6 +992,9 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// Feature-gated scope decorators (e.g. tenant_scope) append
 	// their own scopes here. Empty when no feature file is staged.
 	labels := map[string]string{}
+	if prin.oauthOrgID != "" {
+		ctx = context.WithValue(ctx, oauthTokenOrgKey{}, prin.oauthOrgID)
+	}
 	if err := runScopeDecorators(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
 		return nil, err
 	}

@@ -458,6 +458,11 @@ message GetTokenWithTypeResp {
   // UserToken.bearer: a machine account's token, accepted without a proof
   // (device/bot-bearer). Under service_account only; false without it.
   bool bearer = 12;
+  // An OAuth access token's resource, organization and grant (oauth_server);
+  // empty on every other token and without the feature.
+  string oauth_resource = 13;
+  string oauth_org_id = 14 [(w17.field) = { type: UUID, null: true }];
+  string oauth_grant_id = 15 [(w17.field) = { type: UUID, null: true }];
 }
 
 // GetExpiredTokenWithType — the lookup Authenticate runs only after
@@ -1451,6 +1456,168 @@ message ListPendingInvitesForEmailResp {
   repeated PendingInviteRow invites = 1;
 }
 
+// ── oauth_server reads ─────────────────────────────────────────
+
+// The client columns every oauth_server read of a client projects.
+message OAuthClientRow {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  string client_id = 2;
+  OAuthClientKind kind = 3;
+  string client_name = 4;
+  string client_uri = 5;
+  string logo_uri = 6;
+  string redirect_uris = 7;
+  google.protobuf.Timestamp metadata_fetched_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp disabled_at = 9 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+message GetOAuthClientByHashReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string client_id_hash = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message GetOAuthClientByHashResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  OAuthClientRow client = 1;
+}
+
+message GetOAuthClientByRowIDReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message GetOAuthClientByRowIDResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  OAuthClientRow client = 1;
+}
+
+// GetPendingOAuthAuthorization — an authorization request the consent page
+// is deciding: live (not expired) and undecided only, with its client.
+message GetPendingOAuthAuthorizationReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string request_hash = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message GetPendingOAuthAuthorizationResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  OAuthGrantKind kind = 2;
+  string redirect_uri = 3;
+  string scope = 4;
+  string resource = 5;
+  google.protobuf.Timestamp expires_at = 6 [(w17.field) = { type: DATETIME }];
+  OAuthClientRow client = 7;
+}
+
+// GetOAuthApprovingSession — the session approving an authorization: its
+// expiry (a session grant mints no later) and its device (the approver).
+// Live sessions of the caller only.
+message GetOAuthApprovingSessionReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+}
+message GetOAuthApprovingSessionResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  // Echoed so "found, never expires" is told apart from "no row".
+  string token_id = 1;
+  google.protobuf.Timestamp expires_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+  string device_id = 3 [(w17.field) = { type: UUID, null: true }];
+}
+
+// GetOAuthDeviceRevocation — whether the device that approved a grant was
+// revoked since: the approval ends with it.
+message GetOAuthDeviceRevocationReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string device_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetOAuthDeviceRevocationResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string device_id = 1;
+  google.protobuf.Timestamp revoked_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// GetOAuthRefreshToken — a refresh token by its hash, in any state: a spent
+// one presented again is the reuse that ends its grant.
+message GetOAuthRefreshTokenReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message GetOAuthRefreshTokenResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  string grant_id = 2;
+  google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp used_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// GetOAuthGrant — a grant with its client's state, for a refresh.
+message GetOAuthGrantReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message GetOAuthGrantResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  string user_id = 2;
+  string org_id = 3 [(w17.field) = { type: UUID, null: true }];
+  string client_row_id = 4;
+  string client_id = 5;
+  string resource = 6;
+  string scope = 7;
+  string approved_by_device_id = 8 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp expires_at = 9 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp client_disabled_at = 11 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// GetOAuthGrantLastToken — the newest access token of a grant: one ended by
+// a revocation (logout everywhere, a password change, an operator, the
+// account disabled) ends the grant at its next refresh, so every path that
+// revokes a user's tokens reaches their connected apps too.
+message GetOAuthGrantLastTokenReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string grant_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetOAuthGrantLastTokenResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string token_id = 1;
+  google.protobuf.Timestamp revoked_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// GetOAuthAccessTokenGrant — the grant an access token belongs to, by the
+// token's hash (the revocation endpoint). Empty for any other token.
+message GetOAuthAccessTokenGrantReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message GetOAuthAccessTokenGrantResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string grant_id = 1 [(w17.field) = { type: UUID, null: true }];
+}
+
+// ListUserOAuthGrants — a user's live connected apps.
+message ListUserOAuthGrantsReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message OAuthGrantRow {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  string org_id = 2 [(w17.field) = { type: UUID, null: true }];
+  string resource = 3;
+  string scope = 4;
+  google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp last_used_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp expires_at = 7 [(w17.field) = { type: DATETIME }];
+  string client_id = 8;
+  string client_name = 9;
+  string client_uri = 10;
+  string logo_uri = 11;
+}
+message ListUserOAuthGrantsResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  repeated OAuthGrantRow grants = 1;
+}
+
 service AuthQuery {
   rpc GetUserByEmail(GetUserByEmailReq) returns (GetUserByEmailResp) {
     option (w17.db.method) = {
@@ -2085,6 +2252,9 @@ service AuthQuery {
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       d.revoked_at AS device_revoked_at, "
           "       ?feature(service_account) t.bearer AS bearer, "
+          "       ?feature(oauth_server) COALESCE(t.resource, '') AS oauth_resource, "
+          "       ?feature(oauth_server) t.oauth_org_id AS oauth_org_id, "
+          "       ?feature(oauth_server) t.oauth_grant_id AS oauth_grant_id, "
           "       t.mcp_only AS mcp_only "
           "FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
@@ -3231,6 +3401,149 @@ service AuthQuery {
           "JOIN @module.Organization o ON o.id = i.org_id "
           "WHERE i.email = :email AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
           "ORDER BY i.created_at DESC"
+      }
+    };
+  }
+
+  // ── oauth_server reads ──
+
+  rpc GetOAuthClientByHash(GetOAuthClientByHashReq) returns (GetOAuthClientByHashResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS client.id, c.client_id AS client.client_id, c.kind AS client.kind, "
+          "       c.client_name AS client.client_name, c.client_uri AS client.client_uri, "
+          "       c.logo_uri AS client.logo_uri, c.redirect_uris AS client.redirect_uris, "
+          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at "
+          "FROM @module.OAuthClient c WHERE c.client_id_hash = :client_id_hash"
+      }
+    };
+  }
+
+  rpc GetOAuthClientByRowID(GetOAuthClientByRowIDReq) returns (GetOAuthClientByRowIDResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.id AS client.id, c.client_id AS client.client_id, c.kind AS client.kind, "
+          "       c.client_name AS client.client_name, c.client_uri AS client.client_uri, "
+          "       c.logo_uri AS client.logo_uri, c.redirect_uris AS client.redirect_uris, "
+          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at "
+          "FROM @module.OAuthClient c WHERE c.id = :id"
+      }
+    };
+  }
+
+  rpc GetPendingOAuthAuthorization(GetPendingOAuthAuthorizationReq) returns (GetPendingOAuthAuthorizationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT a.id AS id, a.kind AS kind, a.redirect_uri AS redirect_uri, a.scope AS scope, "
+          "       a.resource AS resource, a.expires_at AS expires_at, "
+          "       c.id AS client.id, c.client_id AS client.client_id, c.kind AS client.kind, "
+          "       c.client_name AS client.client_name, c.client_uri AS client.client_uri, "
+          "       c.logo_uri AS client.logo_uri, c.redirect_uris AS client.redirect_uris, "
+          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at "
+          "FROM @module.OAuthAuthorization a JOIN @module.OAuthClient c ON c.id = a.client_row_id "
+          "WHERE a.request_hash = :request_hash AND a.decided_at IS NULL AND a.expires_at > NOW() AND c.disabled_at IS NULL"
+      }
+    };
+  }
+
+  rpc GetOAuthApprovingSession(GetOAuthApprovingSessionReq) returns (GetOAuthApprovingSessionResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS token_id, t.expires_at AS expires_at, t.device_id AS device_id "
+          "FROM @module.UserToken t "
+          "WHERE t.id = :token_id AND t.user_id = :user_id "
+          "AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
+      }
+    };
+  }
+
+  rpc GetOAuthDeviceRevocation(GetOAuthDeviceRevocationReq) returns (GetOAuthDeviceRevocationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT d.id AS device_id, d.revoked_at AS revoked_at FROM @module.Device d WHERE d.id = :device_id"
+      }
+    };
+  }
+
+  rpc GetOAuthRefreshToken(GetOAuthRefreshTokenReq) returns (GetOAuthRefreshTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, r.grant_id AS grant_id, r.expires_at AS expires_at, r.used_at AS used_at "
+          "FROM @module.OAuthRefreshToken r WHERE r.token_hash = :token_hash"
+      }
+    };
+  }
+
+  rpc GetOAuthGrant(GetOAuthGrantReq) returns (GetOAuthGrantResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT g.id AS id, g.user_id AS user_id, g.org_id AS org_id, g.client_row_id AS client_row_id, "
+          "       c.client_id AS client_id, g.resource AS resource, g.scope AS scope, "
+          "       g.approved_by_device_id AS approved_by_device_id, g.expires_at AS expires_at, "
+          "       g.revoked_at AS revoked_at, c.disabled_at AS client_disabled_at "
+          "FROM @module.OAuthGrant g JOIN @module.OAuthClient c ON c.id = g.client_row_id "
+          "WHERE g.id = :id"
+      }
+    };
+  }
+
+  rpc GetOAuthGrantLastToken(GetOAuthGrantLastTokenReq) returns (GetOAuthGrantLastTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS token_id, t.revoked_at AS revoked_at FROM @module.UserToken t "
+          "WHERE t.oauth_grant_id = :grant_id ORDER BY t.created_at DESC, t.id DESC LIMIT 1"
+      }
+    };
+  }
+
+  rpc GetOAuthAccessTokenGrant(GetOAuthAccessTokenGrantReq) returns (GetOAuthAccessTokenGrantResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT t.oauth_grant_id AS grant_id FROM @module.UserToken t WHERE t.token_hash = :token_hash"
+      }
+    };
+  }
+
+  rpc ListUserOAuthGrants(ListUserOAuthGrantsReq) returns (ListUserOAuthGrantsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT g.id AS grants.id, g.org_id AS grants.org_id, g.resource AS grants.resource, "
+          "       g.scope AS grants.scope, g.created_at AS grants.created_at, "
+          "       g.last_used_at AS grants.last_used_at, g.expires_at AS grants.expires_at, "
+          "       c.client_id AS grants.client_id, c.client_name AS grants.client_name, "
+          "       c.client_uri AS grants.client_uri, c.logo_uri AS grants.logo_uri "
+          "FROM @module.OAuthGrant g JOIN @module.OAuthClient c ON c.id = g.client_row_id "
+          "WHERE g.user_id = :user_id AND g.revoked_at IS NULL AND g.expires_at > NOW() "
+          "ORDER BY g.created_at DESC "
+          "LIMIT 200"
       }
     };
   }

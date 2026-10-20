@@ -56,6 +56,10 @@ const (
 	// it, a proofless request may present an mcp_only token.
 	surfaceKey = "x-w17-surface"
 	surfaceMCP = "mcp"
+	// mcpResourceKey is the OAuth resource the MCP surface serves, stamped
+	// by the gateway on a surface that is a protected resource
+	// (principal.MCPResourceKey).
+	mcpResourceKey = "x-w17-mcp-resource"
 
 	// thumbprintLen is the length of an RFC 7638 SHA-256 thumbprint in
 	// base64url without padding (32 bytes → 43 characters).
@@ -315,14 +319,24 @@ func checkTokenBinding(ctx context.Context, p *authPrincipal, jkt string) error 
 }
 
 // checkMCPToken is the check for a proofless request on the MCP surface: only
-// a token of the MCP OAuth flow passes (mcp_only), bound to no device. Any
-// other token is the opaque refusal, like an unknown one.
-func checkMCPToken(p *authPrincipal) error {
+// a token of the MCP OAuth flow passes (mcp_only), bound to no device, and
+// only on the resource it was issued for (RFC 8707: served is the resource the
+// gateway names). A token issued for one resource is refused on another and on
+// a surface that names none; a surface that names one refuses a token issued
+// for none. Any other token is the opaque refusal, like an unknown one.
+func checkMCPToken(p *authPrincipal, served string) error {
 	if !p.mcpOnly {
 		return errDeviceBindingRefused
 	}
+	if p.oauthResource != served {
+		return errMCPResourceMismatch
+	}
 	return nil
 }
+
+// errMCPResourceMismatch is the cause behind the opaque refusal of an MCP
+// token on a resource it was not issued for. Never on the wire.
+var errMCPResourceMismatch = errors.New("the MCP token was issued for another resource")
 
 // checkBotBearer is the check for a proofless request presenting a token with
 // the bot-bearer prefix (device/bot-bearer): only a token the row flags

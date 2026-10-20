@@ -187,6 +187,14 @@ const (
 	// CodeBotAllowlistInvalid: an entry of a machine account's allowlist is
 	// neither a CIDR nor an address, or the list is too long (bot_token_guard).
 	CodeBotAllowlistInvalid = "BOT_ALLOWLIST_INVALID"
+	// An OAuth sign-in request the consent page names is unknown, already
+	// decided or expired (oauth_server).
+	CodeOAuthRequestGone = "OAUTH_REQUEST_GONE"
+	// A connected app the caller names is not theirs, or not there.
+	CodeOAuthAppUnknown = "OAUTH_APP_UNKNOWN"
+	// The consent page must name one of the user's organizations for an
+	// app's grant (oauth_server with org_membership).
+	CodeOAuthOrgRequired = "OAUTH_ORG_REQUIRED"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -380,6 +388,10 @@ const (
 	MsgClientKeyRevoked = "That key belongs to a device that was revoked. Generate a new key for the program."
 	MsgClientKeySignsIn = "That key belongs to a device you sign in with. Generate a separate key for the program."
 	MsgBotKeyMismatch   = "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
+
+	MsgOAuthRequestGone = "This sign-in request has expired or was already answered. Start again from the application."
+	MsgOAuthAppUnknown  = "This connected app is not one of yours, or was already disconnected."
+	MsgOAuthOrgRequired = "Choose one of your organizations for this application."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

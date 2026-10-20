@@ -50,6 +50,11 @@ enum TokenType {
   TOKEN_TYPE_UNSPECIFIED = 0;
   TOKEN_TYPE_SESSION     = 1;
   TOKEN_TYPE_API         = 2;
+  // An access token the OAuth authorization server issued an MCP client
+  // (oauth_server): mcp_only, for one resource. Its permissions are the
+  // user's roles of realm `mcp`, so a bot's `api` roles never reach an MCP
+  // client and an MCP client never holds a person's session roles.
+  TOKEN_TYPE_MCP         = 3;
 }
 
 // User — the project-wide identity record. One row per
@@ -294,6 +299,13 @@ enum RevokeReason {
   // Project code revoked every token of the account through
   // AuthMutation.RevokeAllUserTokens.
   REVOKE_REASON_ALL_TOKENS_REVOKED = 11;
+  // A refresh token of an OAuth grant was presented after it had been used:
+  // a copy is in someone else's hands, so the whole grant ends
+  // (oauth_server, OAuth 2.1 §4.3.1).
+  REVOKE_REASON_REFRESH_REUSED = 12;
+  // The OAuth grant the token belongs to was revoked — by the user
+  // ("connected apps"), an operator, or the client (RFC 7009).
+  REVOKE_REASON_GRANT_REVOKED = 13;
 }
 
 // AccountKind separates people from machines.
@@ -556,6 +568,30 @@ message UserToken {
     (w17.field) = { type: DATETIME, null: true },
     (w17.contrib.plugin_feature_field) = "step_up"
   ];
+
+  // --- oauth_server: an access token the authorization server issued ---
+  // oauth_grant_id — the OAuth grant (a "connected app") the token belongs
+  // to; revoking the grant revokes it. NULL on every other token.
+  string oauth_grant_id = 21 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.db.column) = { index: true },
+    (w17.contrib.plugin_feature_field) = "oauth_server"
+  ];
+  // resource — the protected resource (RFC 8707) the token is for: an MCP
+  // surface's public URL. Authenticate refuses it on any other resource
+  // (the gateway names the one it serves, x-w17-mcp-resource). NULL on every
+  // other token.
+  string resource = 22 [
+    (w17.field) = { type: URL, max_len: 2048, null: true },
+    (w17.contrib.plugin_feature_field) = "oauth_server"
+  ];
+  // org_id — the organization the user chose on the consent page: an MCP
+  // client sends no W17-Org, so the token carries its organization, and a
+  // W17-Org naming another is refused. NULL without organizations.
+  string oauth_org_id = 23 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.contrib.plugin_feature_field) = "oauth_server"
+  ];
 }
 
 // Device — one (user, device key) pair. Base tier: every session is bound
@@ -661,6 +697,10 @@ enum SignInMethod {
   // key (service_account). The row names the machine account and its device,
   // and the operator's client address and user agent.
   SIGN_IN_METHOD_BOT_TOKEN = 8;
+  // ExchangeOAuthToken: an application the user approved on the consent
+  // page redeems its code or refreshes its token (oauth_server) — an MCP
+  // client, or w17ctl's browser login. The row names the client.
+  SIGN_IN_METHOD_AUTHORIZED_APP = 9;
 }
 
 // SignInOutcome — how a sign-in attempt ended. One value per refusal the mint
@@ -1627,6 +1667,164 @@ message CliAuthCode {
   // bound to the CLI's own key, never to this one. NULL when the approving
   // session is bound to no device, and on a code minted before this column.
   string approved_by_device_id = 11 [(w17.field) = { type: UUID, null: true }];
+}
+
+// ── oauth_server — the OAuth 2.1 authorization server ─────────
+//
+// MCP clients (Claude, Cursor, …) and w17ctl sign a user in here: the client
+// registers (RFC 7591) or names a metadata document (CIMD), sends the user's
+// browser to the authorization endpoint, the user approves on the project's
+// consent page, and the client exchanges the code (PKCE) for a token. The
+// wire is SDK lib/oauthas in the REST gateway; these rows are the state.
+// Nothing here is deleted: an ended row is stamped.
+
+// OAuthClientKind — how a client came to be known.
+enum OAuthClientKind {
+  OAUTH_CLIENT_KIND_UNSPECIFIED = 0;
+  // Registered itself at the registration endpoint (RFC 7591); its
+  // client_id is one this server minted.
+  OAUTH_CLIENT_KIND_DCR = 1;
+  // Its client_id is an https URL serving its metadata (Client ID Metadata
+  // Document), fetched by this server.
+  OAUTH_CLIENT_KIND_CIMD = 2;
+}
+
+// OAuthGrantKind — what an authorization yields.
+enum OAuthGrantKind {
+  OAUTH_GRANT_KIND_UNSPECIFIED = 0;
+  // An mcp_only access token for one resource, with a refresh token: what an
+  // MCP client asks for (a `resource` on the request).
+  OAUTH_GRANT_KIND_MCP = 1;
+  // A session bound to the key of the program redeeming the code (DPoP),
+  // with no refresh token: w17ctl's browser login (no `resource`, a loopback
+  // redirect, a DPoP proof at the token endpoint).
+  OAUTH_GRANT_KIND_SESSION = 2;
+}
+
+// OAuthDecision — what the user decided on the consent page.
+enum OAuthDecision {
+  OAUTH_DECISION_UNDECIDED = 0;
+  OAUTH_DECISION_APPROVED = 1;
+  OAUTH_DECISION_DENIED = 2;
+}
+
+// OAuthClient — a public OAuth client (no secret: token_endpoint_auth_method
+// none, PKCE is the binding). A confidential client is an AuthClient.
+message OAuthClient {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "oauth_server";
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  // client_id — what the client sends: an id this server minted (DCR) or
+  // the https URL of its metadata document (CIMD). Looked up by its hash, so
+  // the unique index stays small whatever the URL's length.
+  string client_id = 2 [(w17.field) = { type: CHAR, max_len: 2048 }];
+  string client_id_hash = 3 [(w17.field) = { type: CHAR, max_len: 64, unique: true }];
+  OAuthClientKind kind = 4 [(w17.field) = { type: ENUM }];
+  // The name and links the consent page shows, as the client stated them.
+  // Unverified: the page shows the redirect's host beside them, which is
+  // the one thing the client cannot choose freely.
+  string client_name = 5 [(w17.field) = { type: CHAR, max_len: 200, blank: true, default_string: "" }];
+  string client_uri = 6 [(w17.field) = { type: CHAR, max_len: 2048, blank: true, default_string: "" }];
+  string logo_uri = 7 [(w17.field) = { type: CHAR, max_len: 2048, blank: true, default_string: "" }];
+  // redirect_uris — every redirect the client may use, one per line; an
+  // authorization request's redirect must equal one of them (a loopback one
+  // with any port, RFC 8252 §7.3).
+  string redirect_uris = 8 [(w17.field) = { type: TEXT, max_len: 20000 }];
+  string software_id = 9 [(w17.field) = { type: CHAR, max_len: 200, blank: true, default_string: "" }];
+  // created_ip — the address that registered it (DCR), for the operator.
+  string created_ip = 10 [(w17.field) = { type: CHAR, max_len: 64, blank: true, default_string: "" }];
+  google.protobuf.Timestamp created_at = 11 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // metadata_fetched_at — when a CIMD client's document was last read; it is
+  // read again once it is a day old.
+  google.protobuf.Timestamp metadata_fetched_at = 12 [(w17.field) = { type: DATETIME, null: true }];
+  // disabled_at — an operator disabled the client: no new authorization,
+  // and its grants stop refreshing.
+  google.protobuf.Timestamp disabled_at = 13 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// OAuthAuthorization — one authorization request, from the authorization
+// endpoint to the consent page's decision and the code's redemption. The
+// opaque request id the consent page carries and the code are stored as
+// hashes only.
+message OAuthAuthorization {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "oauth_server";
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string request_hash = 2 [(w17.field) = { type: CHAR, max_len: 64, unique: true }];
+  string client_row_id = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  OAuthGrantKind kind = 4 [(w17.field) = { type: ENUM }];
+  string redirect_uri = 5 [(w17.field) = { type: CHAR, max_len: 2048 }];
+  string state = 6 [(w17.field) = { type: CHAR, max_len: 1024, blank: true, default_string: "" }];
+  string code_challenge = 7 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string scope = 8 [(w17.field) = { type: CHAR, max_len: 200, blank: true, default_string: "" }];
+  // resource — the protected resource the token will be for (an MCP grant);
+  // blank for a session grant.
+  string resource = 9 [(w17.field) = { type: CHAR, max_len: 2048, blank: true, default_string: "" }];
+  // issuer — the server's issuer, sent back with the code (RFC 9207 iss).
+  string issuer = 10 [(w17.field) = { type: CHAR, max_len: 2048 }];
+  string created_ip = 11 [(w17.field) = { type: CHAR, max_len: 64, blank: true, default_string: "" }];
+  google.protobuf.Timestamp created_at = 12 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // expires_at — the request must be decided before this (10 minutes).
+  google.protobuf.Timestamp expires_at = 13 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp decided_at = 14 [(w17.field) = { type: DATETIME, null: true }];
+  OAuthDecision decision = 15 [(w17.field) = { type: ENUM, zero_is_value: true, default_int: 0 }];
+  // Who decided, in which organization, from which device and session.
+  string user_id = 16 [(w17.field) = { type: UUID, null: true }, (w17.db.column) = { index: true }];
+  string org_id = 17 [(w17.field) = { type: UUID, null: true }];
+  string approved_by_device_id = 18 [(w17.field) = { type: UUID, null: true }];
+  // session_expires_at — when the approving session expires: a session
+  // grant mints no later than this (as a CLI login does), so a session
+  // cannot renew itself through this server. NULL = that session never
+  // expires.
+  google.protobuf.Timestamp session_expires_at = 19 [(w17.field) = { type: DATETIME, null: true }];
+  // The code, once approved: its hash, its expiry (60 s) and its
+  // redemption. Burned before PKCE is checked.
+  string code_hash = 20 [(w17.field) = { type: CHAR, max_len: 64, null: true, unique: true }];
+  google.protobuf.Timestamp code_expires_at = 21 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp code_consumed_at = 22 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// OAuthGrant — what the user approved for an MCP client: a "connected app".
+// Its access tokens are UserToken rows (mcp_only, oauth_grant_id); its
+// refresh tokens OAuthRefreshToken rows. Revoking it ends both.
+message OAuthGrant {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "oauth_server";
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string org_id = 3 [(w17.field) = { type: UUID, null: true }];
+  string client_row_id = 4 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string authorization_id = 5 [(w17.field) = { type: UUID }];
+  string resource = 6 [(w17.field) = { type: CHAR, max_len: 2048 }];
+  string scope = 7 [(w17.field) = { type: CHAR, max_len: 200, blank: true, default_string: "" }];
+  // The device of the approving session: revoking it revokes the grant.
+  string approved_by_device_id = 8 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 9 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // expires_at — the grant's own end (oauth_grant_max_days); no refresh
+  // outlives it.
+  google.protobuf.Timestamp expires_at = 10 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp last_used_at = 11 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp revoked_at = 12 [(w17.field) = { type: DATETIME, null: true }];
+  string revoked_by = 13 [(w17.field) = { type: UUID, null: true }];
+  RevokeReason revoke_reason = 14 [(w17.field) = { type: ENUM, zero_is_value: true, default_int: 0 }];
+}
+
+// OAuthRefreshToken — one refresh token of a grant, stored as its hash.
+// Each use spends it and issues the next (rotation); a spent one presented
+// again ends the grant.
+message OAuthRefreshToken {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "oauth_server";
+
+  string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string grant_id = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string token_hash = 3 [(w17.field) = { type: CHAR, max_len: 64, unique: true }];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp expires_at = 5 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp used_at = 6 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // Organization is a GitHub-style org — a membership boundary an identity
