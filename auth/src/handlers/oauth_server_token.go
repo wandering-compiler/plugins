@@ -248,7 +248,13 @@ func (h *AuthServiceHandler) issueSessionGrant(ctx context.Context, attempt *sig
 	}
 	dev, err := mintDevice(ctx, h, code.GetUserId(), thumbprint)
 	attempt.deviceID = dev.id
-	if err != nil {
+	switch {
+	case dev.id != "" && err != nil:
+		// The key is this account's revoked device, or a program's key: no
+		// session is bound to it. Said in OAuth terms, so the client makes a
+		// new key and signs in again rather than reading a server failure.
+		return nil, oauthRefuse(oauthInvalidDPoPProof, "this key cannot sign in for the account (revoked, or a program's key): sign in again with a new key")
+	case err != nil:
 		return nil, err
 	}
 	token, err := h.mintSession(ctx, attempt, code.GetUserId(), dev, expiresAt, code.GetApprovedByDeviceId())
