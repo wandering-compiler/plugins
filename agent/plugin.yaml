@@ -43,12 +43,36 @@ env:
     default: 4096
     description: "Ceiling applied when a request leaves ModelSpec.max_tokens at zero. A cap the caller cannot exceed is NOT this value — this is a default, and a deployment that needs a hard limit enforces it on its own side."
 
+  - name: allowed_scripts
+    type: string
+    default: "Latin"
+    description: "The Unicode scripts the final text may contain with the `final_text_scripts` filter on, comma-separated (Go's script names: Latin, Cyrillic, Greek, Arabic, Hebrew, Han, Hiragana, Katakana, Hangul, Thai, …; case-insensitive). Common and Inherited — digits, punctuation, emoji, combining marks — are always allowed. An unknown name, or none, refuses the boot. A call can name its own (FinalText.allowed_scripts)."
+
   - name: request_timeout_seconds
     type: int
     default: 120
     description: "Per-call deadline. A reasoning model with a large budget can legitimately think for a minute; the default is generous on purpose, and the caller's own context deadline still wins when it is shorter."
 
 features:
+  - name: final_text_scripts
+    description: >-
+      Cleans the final text of every answer (CompleteResp.text, Finished.text;
+      never the deltas) of letters in a Unicode script the activation does not
+      allow — `allowed_scripts`, default Latin. A model leaks tokens: a Thai word
+      glued to the end of a Czech sentence. The run is removed with its
+      combining marks, and a space the removal leaves doubled or before
+      punctuation goes with it; the rest of the text is untouched. A call can
+      allow other scripts or opt out (FinalText). Off by default.
+    default: false
+  - name: final_text_invisible
+    description: >-
+      Cleans the final text of every answer of characters a reader cannot see:
+      control characters other than tab and line breaks, U+FFFD, zero-width
+      spaces, the byte-order mark and the bidi embedding, override and isolate
+      controls. The zero-width joiner and non-joiner (emoji, several scripts)
+      and the left/right-to-left marks stay. A call can opt out (FinalText.raw).
+      Off by default.
+    default: false
   - name: usage_persistence
     description: >-
       Records what every model call spent — tokens by kind, wall time, outcome —
