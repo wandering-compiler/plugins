@@ -334,9 +334,70 @@ message ListOrgScopedRolesResp {
 // flags are not a chooser's business.
 message OrgScopedRole {
   option (w17.contrib.plugin_feature) = "org_membership";
-  string id          = 1;
-  string name        = 2;
-  string description = 3;
+  string id           = 1;
+  string name         = 2;
+  string description  = 3;
+  // display_name — the label to show; blank falls back to name (Role.display_name).
+  string display_name = 4;
+  // token_type — the role's realm. A membership carries a SESSION-realm role:
+  // an API-realm one (a bot's) is filtered out of every org-role catalogue in
+  // Go (assignableRoles), because the column exists only with api_token.
+  TokenType token_type = 5 [(w17.contrib.plugin_feature_field) = "api_token"];
+}
+
+// ListOrgRoleRows — the org-scoped roles ONE organization may use: every shared
+// (seeded) org role plus the custom roles that organization composed
+// (Role.org_id). With `org_roles` on, this replaces ListOrgScopedRoles as the
+// catalogue every org-role grant reads (handlers/org_roles.go), because that
+// one cannot tell one company's custom roles from another's.
+message ListOrgRoleRowsReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgRoleRowsResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  repeated OrgRoleRow roles = 1;
+}
+message OrgRoleRow {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string id              = 1;
+  string name            = 2;
+  string description     = 3;
+  string display_name    = 4;
+  // custom — the organization's own role (Role.org_id set): editable by it.
+  // FALSE for a shared role, which the seed owns.
+  bool   custom          = 5;
+  bool   all_permissions = 6;
+  // token_type — the role's realm. A membership carries a SESSION-realm role:
+  // an API-realm one (a bot's) is filtered out of every org-role catalogue in
+  // Go (assignableRoles), because the column exists only with api_token.
+  TokenType token_type = 7 [(w17.contrib.plugin_feature_field) = "api_token"];
+}
+
+// CountRoleGrants — the live grants of one role, wherever they apply. A custom
+// role still held by someone is not deleted (DeleteOrgRole): deleting it would
+// silently take every holder's permissions away.
+message CountRoleGrantsReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id = 1 [(w17.field) = { type: UUID }];
+}
+message CountRoleGrantsResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  int64 count = 1;
+}
+
+// CountOtherOrgSuperadmins — how many live grants of a wildcard role
+// (all_permissions) members of the organization OTHER than user_id hold there.
+// Zero means user_id is the organization's last superadmin, whom a role change
+// or a removal must not take away (handlers/org_membership_role.go).
+message CountOtherOrgSuperadminsReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string org_id  = 1 [(w17.field) = { type: UUID }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+}
+message CountOtherOrgSuperadminsResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  int64 count = 1;
 }
 
 message ListRolesResp {
@@ -1901,9 +1962,62 @@ service AuthQuery {
       ops: {
         name: "main"
         dql:
-          "SELECT r.id AS id, r.name AS name, r.description AS description "
+          "SELECT r.id AS id, r.name AS name, r.description AS description, "
+          "       r.display_name AS display_name, "
+          "       ?feature(api_token) r.token_type AS token_type "
           "FROM @module.Role r WHERE r.org_scoped = TRUE AND r.deleted_at IS NULL "
           "ORDER BY r.name ASC, r.id ASC"
+      }
+    };
+  }
+
+  // ListOrgRoleRows — see its request message.
+  rpc ListOrgRoleRows(ListOrgRoleRowsReq) returns (ListOrgRoleRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, r.name AS name, r.description AS description, "
+          "       r.display_name AS display_name, "
+          "       (r.org_id IS NOT NULL) AS custom, "
+          "       r.all_permissions AS all_permissions, "
+          "       ?feature(api_token) r.token_type AS token_type "
+          "FROM @module.Role r "
+          "WHERE r.org_scoped = TRUE AND r.deleted_at IS NULL "
+          "  AND (r.org_id IS NULL OR r.org_id = :org_id) "
+          "ORDER BY r.name ASC, r.id ASC"
+      }
+    };
+  }
+
+  // CountRoleGrants — see its request message.
+  rpc CountRoleGrants(CountRoleGrantsReq) returns (CountRoleGrantsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT COUNT(*) AS count FROM @module.UserRole ur "
+          "WHERE ur.role_id = :role_id AND ur.revoked_at IS NULL"
+      }
+    };
+  }
+
+  // CountOtherOrgSuperadmins — see its request message. Only grants of a live
+  // membership count: a removed member's grants are revoked with it, but the
+  // join says so rather than relying on it.
+  rpc CountOtherOrgSuperadmins(CountOtherOrgSuperadminsReq) returns (CountOtherOrgSuperadminsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT COUNT(*) AS count FROM @module.UserRole ur "
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "JOIN @module.OrgMembership m ON m.user_id = ur.user_id AND m.org_id = ur.org_id AND m.removed_at IS NULL "
+          "WHERE ur.org_id = :org_id AND ur.user_id <> :user_id AND ur.revoked_at IS NULL "
+          "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL"
       }
     };
   }
@@ -2773,7 +2887,8 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
-          "       o.kind AS kind, o.created_at AS created_at "
+          "       o.kind AS kind, o.created_at AS created_at, "
+          "       o.owner_id AS owner_id "
           "FROM @module.Organization o WHERE o.id = :id AND o.deleted_at IS NULL"
       }
     };

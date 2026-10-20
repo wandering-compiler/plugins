@@ -1220,6 +1220,22 @@ message Role {
   // plain INSERT of a new row, so no row is ever rewritten back to live and the
   // ended rows are the history.
   string ended_key = 13 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+
+  // org_id — the organization that OWNS this role: a custom role one
+  // organization composed for itself (AuthService.CreateOrgRole). NULL for
+  // every role the seed declares, and for a realm's own roles, which every
+  // organization shares.
+  //
+  // It decides who SEES the role, not where a grant of it applies: that stays
+  // UserRole.org_id, read by the permission queries as before. A custom role
+  // is org-scoped (org_scoped = TRUE) and is offered, accepted and edited only
+  // in its own organization (ListOrgRoleRows), so one company's roles never
+  // appear in another's pickers. Gated org_roles; app-enforced, no DB-level FK.
+  string org_id = 14 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.db.column) = { index: true },
+    (w17.contrib.plugin_feature_field) = "org_roles"
+  ];
 }
 
 // RolePermission — M2M link tuple (role_id, permission_id).

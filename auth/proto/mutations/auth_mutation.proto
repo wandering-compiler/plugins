@@ -1015,6 +1015,33 @@ message UpdateRoleResp {
   string role_id = 1;
 }
 
+// ClaimRoleForOrg — make a role CreateRole just inserted one organization's
+// custom role (AuthService.CreateOrgRole, in the same transaction).
+message ClaimRoleForOrgReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id      = 1 [(w17.field) = { type: UUID }];
+  string org_id       = 2 [(w17.field) = { type: UUID }];
+  string display_name = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
+}
+message ClaimRoleForOrgResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id = 1;
+}
+
+// UpdateOrgRoleLabel — rename a custom role or change its description, only
+// in the organization that owns it (AuthService.UpdateOrgRole).
+message UpdateOrgRoleLabelReq {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id      = 1 [(w17.field) = { type: UUID }];
+  string org_id       = 2 [(w17.field) = { type: UUID }];
+  string display_name = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description  = 4 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+}
+message UpdateOrgRoleLabelResp {
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id = 1;
+}
+
 // --- user_admin feature: turnkey admin user management ---
 // Erasing an account (GDPR) is three steps, run by AuthService.EraseUsers in
 // this order (one transaction with a coordinator; without one, a retry
@@ -2804,6 +2831,50 @@ service AuthMutation {
     };
     option (w17.event_emit) = {
       event: "RoleUpdated"
+      payload: {
+        fields: [
+          { key: "role_id", value: "$response.role_id" }
+        ]
+      }
+    };
+  }
+
+  // ClaimRoleForOrg — see its request message. Only a role nobody has claimed
+  // and the seed does not own (org_id and preset_key both NULL): a preset or
+  // another organization's role matches nothing (NotFound).
+  rpc ClaimRoleForOrg(ClaimRoleForOrgReq) returns (ClaimRoleForOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Role SET "
+          "org_id = :org_id, "
+          "org_scoped = TRUE, "
+          "display_name = :display_name "
+          "WHERE id = :role_id AND org_id IS NULL AND preset_key IS NULL AND deleted_at IS NULL "
+          "RETURNING id AS role_id"
+      }
+    };
+  }
+
+  // UpdateOrgRoleLabel — see its request message. A role of another
+  // organization, or a shared one, matches nothing (NotFound).
+  rpc UpdateOrgRoleLabel(UpdateOrgRoleLabelReq) returns (UpdateOrgRoleLabelResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Role SET "
+          "display_name = :display_name, "
+          "description = :description "
+          "WHERE id = :role_id AND org_id = :org_id AND deleted_at IS NULL "
+          "RETURNING id AS role_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "OrgRoleUpdated"
       payload: {
         fields: [
           { key: "role_id", value: "$response.role_id" }

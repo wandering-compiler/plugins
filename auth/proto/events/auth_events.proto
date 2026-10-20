@@ -250,6 +250,15 @@ message RoleUpdated {
   string role_id = 1;
 }
 
+// OrgRoleUpdated — emitted on AuthMutation.UpdateOrgRoleLabel: an
+// organization renamed one of its custom roles or changed its description.
+// Copy only; a permission change has its own RolePermissionAdded / Removed.
+message OrgRoleUpdated {
+  option (w17.event) = { channel: "events", topic: "auth.org_role.updated" };
+  option (w17.contrib.plugin_feature) = "org_roles";
+  string role_id = 1;
+}
+
 // Permission table is gone — the activating domain's
 // AclPermission proto enum (w17.lock.acl.proto) is now the
 // catalog. PermissionCreated / PermissionDeleted events were

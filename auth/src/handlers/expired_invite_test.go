@@ -126,3 +126,10 @@ func TestInviteToOrg_AnOpenInvitationSkipsTheClear(t *testing.T) {
 		t.Fatalf("clear ran %d, create ran %d — want 0 and 1", m.clearCalls, m.createCalls)
 	}
 }
+
+// ListOrgRoleRows serves the org_roles catalogue from the same fixture as
+// ListOrgScopedRoles: the tests here are about the grant paths, not about
+// whose roles an organization sees (org_roles_test.go).
+func (m *inviteMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq, _ ...grpc.CallOption) (*pb.ListOrgRoleRowsResp, error) {
+	return rowsFromScoped(m.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}))
+}

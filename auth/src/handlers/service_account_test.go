@@ -210,6 +210,12 @@ func (m *botAdminMock) GetUserRoleGrants(ctx context.Context, in *pb.GetUserRole
 	return out, nil
 }
 
+// ListUserOrgGrants answers the target bot's grants in the organization
+// (bot_roles reads them for the directory).
+func (m *botAdminMock) ListUserOrgGrants(context.Context, *pb.ListUserOrgGrantsReq, ...grpc.CallOption) (*pb.ListUserOrgGrantsResp, error) {
+	return &pb.ListUserOrgGrantsResp{RoleIds: m.botRoles}, nil
+}
+
 func (m *botAdminMock) ListRoleGrants(ctx context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
 	out := &pb.ListRoleGrantsResp{}
 	for _, r := range m.apiRoles {
