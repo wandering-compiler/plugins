@@ -3535,11 +3535,11 @@ service AuthQuery {
       ops: {
         name: "main"
         dql:
-          "SELECT g.id AS grants.id, g.org_id AS grants.org_id, g.resource AS grants.resource, "
-          "       g.scope AS grants.scope, g.created_at AS grants.created_at, "
-          "       g.last_used_at AS grants.last_used_at, g.expires_at AS grants.expires_at, "
-          "       c.client_id AS grants.client_id, c.client_name AS grants.client_name, "
-          "       c.client_uri AS grants.client_uri, c.logo_uri AS grants.logo_uri "
+          "SELECT g.id AS id, g.org_id AS org_id, g.resource AS resource, "
+          "       g.scope AS scope, g.created_at AS created_at, "
+          "       g.last_used_at AS last_used_at, g.expires_at AS expires_at, "
+          "       c.client_id AS client_id, c.client_name AS client_name, "
+          "       c.client_uri AS client_uri, c.logo_uri AS logo_uri "
           "FROM @module.OAuthGrant g JOIN @module.OAuthClient c ON c.id = g.client_row_id "
           "WHERE g.user_id = :user_id AND g.revoked_at IS NULL AND g.expires_at > NOW() "
           "ORDER BY g.created_at DESC "
