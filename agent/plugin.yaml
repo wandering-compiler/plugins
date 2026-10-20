@@ -1,6 +1,6 @@
 name: agent
 version: 0.1.0-rc.5
-requires_w17: ">=1.5"
+requires_w17: ">=1.14"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -48,10 +48,25 @@ env:
     default: "Latin"
     description: "The Unicode scripts the final text may contain with the `final_text_scripts` filter on, comma-separated (Go's script names: Latin, Cyrillic, Greek, Arabic, Hebrew, Han, Hiragana, Katakana, Hangul, Thai, …; case-insensitive). Common and Inherited — digits, punctuation, emoji, combining marks — are always allowed. An unknown name, or none, refuses the boot. A call can name its own (FinalText.allowed_scripts)."
 
+  - name: text_filter_timeout_seconds
+    type: int
+    default: 5
+    description: "How long one of the project's own final-text filters (the `text_filter` hook) may take. One that does not answer in time is skipped and logged, like one that fails: the answer still reaches the caller, cleaned by the filters before it. <=0 means the call's own deadline only."
+
   - name: request_timeout_seconds
     type: int
     default: 120
     description: "Per-call deadline. A reasoning model with a large budget can legitimately think for a minute; the default is generous on purpose, and the caller's own context deadline still wins when it is shorter."
+
+# The project's own say over the final text: business methods of the domain
+# the activation binds (PluginActivation.hooks) run on it after the built-in
+# filters, in order.
+hooks:
+  - name: text_filter
+    request: TextFilterReq
+    response: TextFilterResp
+    repeated: true
+    description: "The project's own final-text filters: business methods taking TextFilterReq and returning TextFilterResp, run in the order bound on the final text (CompleteResp.text, Finished.text; never the deltas), after the built-in final_text_* filters. One that fails or times out (text_filter_timeout_seconds) is skipped and logged. FinalText.raw skips them too."
 
 features:
   - name: final_text_scripts

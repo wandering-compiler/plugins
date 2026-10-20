@@ -79,6 +79,12 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	if err != nil {
 		return err
 	}
+	// The project's own filters, bound to the text_filter hook: none unless
+	// the activation binds some.
+	if clients != nil {
+		finalText.Hooks = clients.TextFilterHooks()
+	}
+	finalText.HookTimeout = time.Duration(cfg.TextFilterTimeoutSeconds) * time.Second
 
 	// Drain the usage queue at teardown.
 	//

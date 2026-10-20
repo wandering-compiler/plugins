@@ -60,7 +60,7 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "agent: empty request")
 	}
-	clean, err := h.FinalText.chain(req.GetFinalText())
+	clean, err := h.FinalText.run(req.GetFinalText())
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ func (h *AgentServiceHandler) Complete(ctx context.Context, req *pb.CompleteReq)
 	h.recordUsage(req, m.ID, out, OutcomeOK, startedAt)
 
 	return &pb.CompleteResp{
-		Text:             clean.Apply(out.Text),
+		Text:             clean.apply(ctx, out.Text, textOrigin{"Complete", m.ID, req.GetUsageScope(), req.GetUsageLabels()}),
 		Status:           statusOf(out.Status),
 		IncompleteReason: reasonOf(out.IncompleteReason),
 		Usage:            usageOf(out.Usage),

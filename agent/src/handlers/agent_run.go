@@ -35,7 +35,7 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 	if start == nil {
 		return status.Error(codes.InvalidArgument, "agent: the first message must be Start")
 	}
-	clean, err := h.FinalText.chain(start.GetFinalText())
+	clean, err := h.FinalText.run(start.GetFinalText())
 	if err != nil {
 		return err
 	}
@@ -185,7 +185,7 @@ func (h *AgentServiceHandler) RunAgent(srv grpc.BidiStreamingServer[pb.RunAgentR
 		return mapped
 	}
 	return send(&pb.RunAgentEvent{Event: &pb.RunAgentEvent_Finished{Finished: &pb.Finished{
-		Text:             clean.Apply(out.Text),
+		Text:             clean.apply(srv.Context(), out.Text, textOrigin{"RunAgent", model.ID, start.GetUsageScope(), start.GetUsageLabels()}),
 		Status:           statusOf(out.Status),
 		IncompleteReason: reasonOf(out.IncompleteReason),
 		Usage:            usageOf(out.Usage),

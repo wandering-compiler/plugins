@@ -21,7 +21,7 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 	if h.StreamClient == nil {
 		return status.Error(codes.Unimplemented, "agent: this deployment has no streaming client")
 	}
-	clean, err := h.FinalText.chain(req.GetFinalText())
+	clean, err := h.FinalText.run(req.GetFinalText())
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (h *AgentServiceHandler) CompleteStream(req *pb.CompleteReq, srv grpc.Serve
 
 	return srv.Send(&pb.CompleteEvent{
 		Event: &pb.CompleteEvent_Finished{Finished: &pb.Finished{
-			Text:             clean.Apply(out.Text),
+			Text:             clean.apply(srv.Context(), out.Text, textOrigin{"CompleteStream", m.ID, req.GetUsageScope(), req.GetUsageLabels()}),
 			Status:           statusOf(out.Status),
 			IncompleteReason: reasonOf(out.IncompleteReason),
 			Usage:            usageOf(out.Usage),
