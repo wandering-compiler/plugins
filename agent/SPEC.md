@@ -282,6 +282,24 @@ which.
   scripts) and U+200E/U+200F stay. It runs before `final_text_scripts`.
 - **MUST.** `FinalText.raw` skips it.
 
+### The `text_filter` hook (all activations)
+
+- **Purpose.** The project's own final-text filters: what only one project
+  knows (a brand's spelling, a word it must never show).
+- **Adds.** Hook `text_filter` (`repeated`), messages `TextFilterReq` (`text`,
+  `method`, `model`, `usage_scope`, `usage_labels`) and `TextFilterResp`
+  (`text`), env `text_filter_timeout_seconds` (default 5). Needs platform 1.14.
+  An activation binds it to business methods of its domain
+  (`PluginActivation.hooks`); `gen.ClientSet.TextFilterHooks()` hands the
+  plugin one function per method.
+- **Mechanics.** `handlers/final_text.go`: after the built-in filters, each
+  bound method runs in order on the previous one's text, bounded by the
+  timeout; its response text replaces the text.
+- **MUST.** A hook that fails or times out is skipped and logged (its gRPC
+  code, never the text); the next one still runs and the answer still reaches
+  the caller. `FinalText.raw` skips the hooks with the built-ins. An
+  activation that binds none behaves as without the hook.
+
 ## Across features
 
 Every interaction goes through one of these mechanisms:

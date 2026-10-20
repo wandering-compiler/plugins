@@ -139,6 +139,32 @@ message TextDelta {
 // and `final_text_invisible` drops control and invisible characters
 // (zero-width spaces, bidi overrides, U+FFFD). A filter only removes; it never
 // writes text of its own.
+// TextFilterReq is what the plugin sends a project's own final-text filter —
+// a method the activation binds to the `text_filter` hook (plugin.yaml
+// hooks; PluginActivation.hooks): a business method of the domain taking
+// this message and returning TextFilterResp. The filters bound run in order,
+// after the built-in ones, each on the previous one's text.
+message TextFilterReq {
+  // The final text as the filters before this one left it.
+  string text = 1;
+  // The plugin method that produced it: Complete, CompleteStream or RunAgent.
+  string method = 2;
+  // The model that wrote it (ModelSpec.id, or the activation's default).
+  string model = 3;
+  // The call's usage scope and labels, as the caller sent them.
+  string usage_scope = 4;
+  map<string, string> usage_labels = 5;
+}
+
+// TextFilterResp is a project filter's answer: the text that replaces the
+// final text (return the request's text to leave it as it was). A filter
+// that fails or does not answer within the activation's
+// `text_filter_timeout_seconds` is skipped, and logged: the answer the
+// model wrote, and was paid for, still reaches the caller.
+message TextFilterResp {
+  string text = 1;
+}
+
 message FinalText {
   // The scripts this call allows instead of the activation's (Go's Unicode
   // script names: Latin, Cyrillic, Greek, Han, Thai, …; case-insensitive) —
@@ -148,7 +174,8 @@ message FinalText {
   // when the activation does not filter scripts.
   repeated string allowed_scripts = 1;
 
-  // No filter for this call: the final text is the deltas, as without filters.
+  // No filter for this call — built-in or the project's own (the
+  // `text_filter` hook): the final text is the deltas, as without filters.
   bool raw = 2;
 }
 

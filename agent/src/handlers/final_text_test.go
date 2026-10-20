@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v2/responses"
 	"google.golang.org/grpc/codes"
@@ -149,5 +150,78 @@ func TestFinalText_RefusedBeforeTheModelIsCalled(t *testing.T) {
 				t.Errorf("RunAgent sent %d events before refusing", len(b.events()))
 			}
 		})
+	}
+}
+
+// The project's own filters run after the built-in ones, in order, each on
+// the previous one's text, and are told where the text came from.
+func TestFinalText_HooksRunInOrderAfterTheBuiltIns(t *testing.T) {
+	var got []*pb.TextFilterReq
+	hook := func(suffix string) TextFilterHook {
+		return func(_ context.Context, req *pb.TextFilterReq) (*pb.TextFilterResp, error) {
+			got = append(got, req)
+			return &pb.TextFilterResp{Text: req.GetText() + suffix}, nil
+		}
+	}
+	f := activationFilters(t)
+	f.Hooks = []TextFilterHook{hook(" [a]"), hook(" [b]")}
+	h := &AgentServiceHandler{Client: &fakeCompleter{res: textResponse(t, leaked)}, DefaultModel: "m1", DefaultMaxTokens: 100, FinalText: f}
+	resp, err := h.Complete(context.Background(), &pb.CompleteReq{UsageScope: "acct-7", UsageLabels: map[string]string{"app": "chat"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetText() != cleaned+" [a] [b]" {
+		t.Fatalf("text = %q", resp.GetText())
+	}
+	if len(got) != 2 || got[0].GetText() != cleaned || got[1].GetText() != cleaned+" [a]" {
+		t.Fatalf("the hooks were given %v", got)
+	}
+	if r := got[0]; r.GetMethod() != "Complete" || r.GetModel() != "m1" || r.GetUsageScope() != "acct-7" || r.GetUsageLabels()["app"] != "chat" {
+		t.Fatalf("origin = %v", r)
+	}
+}
+
+// A filter that fails, or does not answer in time, is skipped: the answer
+// goes on with the text as it stood, and the next filter still runs.
+func TestFinalText_AFailedHookIsSkipped(t *testing.T) {
+	fail := func(context.Context, *pb.TextFilterReq) (*pb.TextFilterResp, error) {
+		return nil, status.Error(codes.Unavailable, "business tier down")
+	}
+	slow := func(ctx context.Context, _ *pb.TextFilterReq) (*pb.TextFilterResp, error) {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	mark := func(_ context.Context, req *pb.TextFilterReq) (*pb.TextFilterResp, error) {
+		return &pb.TextFilterResp{Text: req.GetText() + " ✓"}, nil
+	}
+	f := FinalTextFilters{Hooks: []TextFilterHook{fail, slow, mark}, HookTimeout: 20 * time.Millisecond}
+	h := streamHandler([]map[string]any{delta("Hotovo."), completedEvent(3)})
+	h.FinalText = f
+	rec := &recorder{}
+	if err := h.CompleteStream(&pb.CompleteReq{}, rec); err != nil {
+		t.Fatal(err)
+	}
+	var finished *pb.Finished
+	for _, e := range rec.sent {
+		if fin := e.GetFinished(); fin != nil {
+			finished = fin
+		}
+	}
+	if finished.GetText() != "Hotovo. ✓" {
+		t.Fatalf("finished = %q, want the text past the failed and the slow filter", finished.GetText())
+	}
+}
+
+// raw skips the project's filters as well as the built-in ones.
+func TestFinalText_RawSkipsTheHooks(t *testing.T) {
+	called := false
+	f := FinalTextFilters{Hooks: []TextFilterHook{func(context.Context, *pb.TextFilterReq) (*pb.TextFilterResp, error) {
+		called = true
+		return &pb.TextFilterResp{Text: "x"}, nil
+	}}}
+	h := &AgentServiceHandler{Client: &fakeCompleter{res: textResponse(t, leaked)}, DefaultModel: "m", DefaultMaxTokens: 100, FinalText: f}
+	resp, err := h.Complete(context.Background(), &pb.CompleteReq{FinalText: &pb.FinalText{Raw: true}})
+	if err != nil || resp.GetText() != leaked || called {
+		t.Fatalf("raw: %q, %v, hook called %v", resp.GetText(), err, called)
 	}
 }
