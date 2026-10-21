@@ -991,6 +991,14 @@ message InviteToOrgReq {
   // naming one org in this field and another in its metadata). Empty = the
   // org comes from W17-Org alone.
   string org = 4 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  // kind — the kind of membership accepting creates (membership_kinds):
+  // `staff`, `client`, … — the project names them. An audience gateway admits
+  // the invitee only through a membership of a kind it accepts. Empty = a
+  // membership of no kind.
+  string kind = 5 [
+    (w17.field) = { type: SLUG, max_len: 32, blank: true },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 message InviteToOrgResp {
   option (w17.contrib.plugin_feature) = "org_invite";

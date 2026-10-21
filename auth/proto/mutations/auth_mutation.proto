@@ -1249,6 +1249,13 @@ message AssignRoleToUserReq {
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "org_membership"
   ];
+  // membership_kind — the kind of membership this grant comes with
+  // (membership_kinds); '' = a grant of no kind, which counts on every
+  // audience. See UserRole.membership_kind.
+  string membership_kind = 4 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 message AssignRoleToUserResp {
   option (w17.contrib.plugin_feature) = "rbac";
@@ -1501,6 +1508,11 @@ message AddOrgMembershipReq {
   // role: owner | admin | member. Free-form CHAR — project policy owns
   // the vocabulary; the plugin passes it through (mirrors OrgMembership.role).
   string role    = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
+  // kind — the kind of membership (membership_kinds); '' = none.
+  string kind = 4 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 message AddOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -1616,6 +1628,11 @@ message CreateOrgInviteReq {
   string metadata   = 7 [(w17.field) = { type: JSON, blank: true }];
   // See OrgInvite.role_snapshot.
   string role_snapshot = 8 [(w17.field) = { type: TEXT, blank: true }];
+  // kind — the kind of membership accepting creates (membership_kinds).
+  string kind = 9 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 message CreateOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -1676,6 +1693,8 @@ message ConsumeOrgInviteByTokenResp {
   // What the inviter was checked against — accept refuses a role that has
   // moved past it. See OrgInvite.role_snapshot.
   string role_snapshot = 5;
+  // The kind of membership the invitation creates (membership_kinds).
+  string kind = 7 [(w17.contrib.plugin_feature_field) = "membership_kinds"];
 }
 
 // CloseOrgInvitesOfOrg — the invitations of an organization being deleted
@@ -3597,7 +3616,8 @@ service AuthMutation {
           "INSERT INTO @module.UserRole SET "
           "user_id = :user_id, "
           "role_id = :role.id, "
-          "?feature(org_membership) org_id = :org_id "
+          "?feature(org_membership) org_id = :org_id, "
+          "?feature(membership_kinds) membership_kind = :membership_kind "
           "RETURNING id AS user_role.id, "
           "          user_id AS user_role.user_id, "
           "          role_id AS user_role.role_id, "
@@ -4370,11 +4390,13 @@ service AuthMutation {
           "INSERT INTO @module.OrgMembership SET "
           "user_id = :user_id, "
           "org_id = :org_id, "
-          "role = :role "
+          "role = :role, "
+          "?feature(membership_kinds) kind = :kind "
           "RETURNING id AS membership.id, "
           "          user_id AS membership.user_id, "
           "          org_id AS membership.org_id, "
           "          role AS membership.role, "
+          "          ?feature(membership_kinds) kind AS membership.kind, "
           "          created_at AS membership.created_at"
       }
     };
@@ -4773,7 +4795,8 @@ service AuthMutation {
           "expires_at = :expires_at, "
           "token_hash = :token_hash, "
           "metadata = :metadata, "
-          "role_snapshot = :role_snapshot "
+          "role_snapshot = :role_snapshot, "
+          "?feature(membership_kinds) kind = :kind "
           "RETURNING id AS invite.id, "
           "          org_id AS invite.org_id, "
           "          email AS invite.email, "
@@ -4839,7 +4862,8 @@ service AuthMutation {
           "accepted_at = NOW() "
           "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
           "AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL) "
-          "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot"
+          "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot, "
+          "          ?feature(membership_kinds) kind"
       }
     };
     // The acceptance's announcement. OrgInviteAccepted was declared and nothing

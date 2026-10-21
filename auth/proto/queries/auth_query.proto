@@ -932,6 +932,10 @@ message UserOrg {
   // organization. Without this the person who created an org is
   // indistinguishable from anyone they promoted.
   bool   owner  = 6;
+  // membership_kind — the kind of this membership (membership_kinds):
+  // `staff`, `client`, … A person who is both in one organization is listed
+  // once per kind.
+  string membership_kind = 7 [(w17.contrib.plugin_feature_field) = "membership_kinds"];
 }
 
 message ListUserOrgsReq {
@@ -966,6 +970,23 @@ message ListUserOrgGrantsReq {
 message ListUserOrgGrantsResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   repeated string role_ids = 1;
+}
+
+message ListUserRoleKindsReq {
+  option (w17.contrib.plugin_feature) = "membership_kinds";
+  string user_id = 1;
+  string org_id  = 2;
+}
+
+message ListUserRoleKindsResp {
+  option (w17.contrib.plugin_feature) = "membership_kinds";
+  repeated UserRoleKind roles = 1;
+}
+
+message UserRoleKind {
+  option (w17.contrib.plugin_feature) = "membership_kinds";
+  string role_id         = 1;
+  string membership_kind = 2;
 }
 
 message GetUserOrgPermissionsReq {
@@ -3078,7 +3099,8 @@ service AuthQuery {
           "       o.slug AS slug, "
           "       o.name AS name, "
           "       o.kind AS kind, "
-          "       m.role AS role "
+          "       m.role AS role, "
+          "       ?feature(membership_kinds) m.kind AS membership_kind "
           "FROM @module.OrgMembership m "
           "JOIN @module.Organization o ON o.id = m.org_id "
           "WHERE m.user_id = :user_id AND m.removed_at IS NULL AND o.deleted_at IS NULL "
@@ -3139,6 +3161,23 @@ service AuthQuery {
   //     organization grants itself in every one of them. Enforced HERE
   //     rather than on the write side, because the read decides what an
   //     existing row MEANS — whatever wrote it, and whenever.
+  // ListUserRoleKinds — the kind of membership each of the user's live
+  // grants in one organization came with (membership_kinds). An audience
+  // gateway counts only the roles of the kinds it accepts; a grant of no kind
+  // ('') counts on every audience.
+  rpc ListUserRoleKinds(ListUserRoleKindsReq) returns (ListUserRoleKindsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "membership_kinds";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT ur.role_id AS role_id, ur.membership_kind AS membership_kind "
+          "FROM @module.UserRole ur "
+          "WHERE ur.user_id = :user_id AND ur.org_id = :org_id AND ur.revoked_at IS NULL "
+          "ORDER BY ur.role_id ASC"
+      }
+    };
+  }
   rpc GetUserOrgPermissions(GetUserOrgPermissionsReq) returns (GetUserOrgPermissionsResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {

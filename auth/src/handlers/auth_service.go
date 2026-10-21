@@ -346,6 +346,38 @@ type scopeDecorator func(ctx context.Context, h *AuthServiceHandler, userID stri
 
 var scopeDecorators []scopeDecorator
 
+// membershipKindsHeader is where an audience gateway names the membership
+// kinds it admits — principal.MembershipKindsKey of the SDK that ships audience
+// surfaces, spelled here so the plugin builds against the SDK it pins. It is
+// gateway-owned (`x-w17-*`): a client's copy never reaches Authenticate.
+const membershipKindsHeader = "x-w17-membership-kinds"
+
+// authHeadersKey carries the AuthReq headers on the context, for a narrower.
+type authHeadersKey struct{}
+
+// admittedKinds are the membership kinds the request's audience gateway
+// admits (x-w17-membership-kinds, which only a gateway writes); nil when it
+// came through a gateway that admits any.
+func admittedKinds(ctx context.Context) []string {
+	headers, _ := ctx.Value(authHeadersKey{}).(map[string]string)
+	return kindsFromHeaders(headers)
+}
+
+// kindsFromHeaders reads the admitted membership kinds off AuthReq headers.
+func kindsFromHeaders(headers map[string]string) []string {
+	raw := headers[membershipKindsHeader]
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, k := range strings.Split(raw, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // grantNarrower rewrites the principal's permission set AFTER the scope
 // decorators have run, so a feature that resolves a request-scoped
 // context can restrict the grants to it. `org_membership` registers one:
@@ -1033,6 +1065,10 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	if prin.oauthOrgID != "" {
 		ctx = context.WithValue(ctx, oauthTokenOrgKey{}, prin.oauthOrgID)
 	}
+	// The request's headers ride the context too, for the narrowers below:
+	// an audience gateway's admitted membership kinds decide which roles
+	// count (membership_kinds), and a narrower is handed no headers.
+	ctx = context.WithValue(ctx, authHeadersKey{}, req.GetHeaders())
 	if err := runScopeDecorators(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
 		return nil, err
 	}

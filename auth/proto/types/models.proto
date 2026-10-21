@@ -1503,6 +1503,17 @@ message UserRole {
   string revoked_by = 7 [(w17.field) = { type: UUID, null: true }];
   // ended_key — '' while live, the row's own id once revoked (Role.ended_key).
   string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+  // membership_kind — the kind of membership this grant came with
+  // (membership_kinds): an invitation of kind `client` grants its role as a
+  // client. An audience gateway counts only the roles of the kinds it
+  // accepts, so a person who is staff and client of one organization holds
+  // the staff roles on the staff audience and the client roles on the
+  // client's. '' — a grant of no kind (an admin's binding, from before the
+  // feature) — counts on every audience.
+  string membership_kind = 9 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 
 // TokenPermission — the per-API-token permission subset (least-privilege
@@ -1934,7 +1945,12 @@ message Organization {
 message OrgMembership {
   option (w17.db.table) = {
     indexes: [
-      { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "ended_key" }] }
+      { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "ended_key" }],
+        plugin_feature_unless: "membership_kinds" },
+      // membership_kinds: one live membership per (user, org, KIND) — a
+      // person can be an organization's staff and its client at once.
+      { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "kind" }, { name: "ended_key" }],
+        plugin_feature: "membership_kinds" }
     ]
   };
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -1953,6 +1969,14 @@ message OrgMembership {
   string removed_by = 7 [(w17.field) = { type: UUID, null: true }];
   // ended_key — '' while live, the row's own id once removed (Role.ended_key).
   string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+  // kind — which kind of member this is (membership_kinds): `staff`,
+  // `client`, … The project names the kinds, the plugin carries them. An
+  // audience gateway admits a caller only through a membership of a kind it
+  // accepts. '' is a membership of no kind, from before the feature.
+  string kind = 9 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 
 // OrgInvite — a pending invitation for an EMAIL to join an Organization
@@ -2000,7 +2024,10 @@ message OrgInvite {
       // assume (org_invite requires org_membership, whose UserRole indexes
       // are partial too).
       { unique: true, fields: [{ name: "org_id" }, { name: "email" }],
-        where: "accepted_at IS NULL AND closed_at IS NULL" }
+        where: "accepted_at IS NULL AND closed_at IS NULL", plugin_feature_unless: "membership_kinds" },
+      // membership_kinds: one pending invite per (org, email, kind).
+      { unique: true, fields: [{ name: "org_id" }, { name: "email" }, { name: "kind" }],
+        where: "accepted_at IS NULL AND closed_at IS NULL", plugin_feature: "membership_kinds" }
     ]
   };
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -2092,6 +2119,11 @@ message OrgInvite {
   // pending invitations, and out of the pending index above.
   google.protobuf.Timestamp closed_at = 12 [(w17.field) = { type: DATETIME, null: true }];
   string closed_by = 13 [(w17.field) = { type: UUID, null: true }];
+  // kind — the kind of membership accepting creates (membership_kinds).
+  string kind = 14 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 
 // ── teams — groups of an organization's members that hold roles ──

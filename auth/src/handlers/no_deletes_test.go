@@ -281,9 +281,14 @@ func TestUniqueIndexesLetAnEndedKeyBeReused(t *testing.T) {
 		return models[i : i+strings.Index(models[i:], "\n}\n")]
 	}
 	for msg, wants := range map[string][]string{
-		"Role":           {`{ unique: true, fields: [{ name: "name" }, { name: "ended_key" }] }`},
-		"Organization":   {`{ unique: true, fields: [{ name: "slug" }, { name: "ended_key" }] }`},
-		"OrgMembership":  {`{ unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "ended_key" }] }`},
+		"Role":         {`{ unique: true, fields: [{ name: "name" }, { name: "ended_key" }] }`},
+		"Organization": {`{ unique: true, fields: [{ name: "slug" }, { name: "ended_key" }] }`},
+		"OrgMembership": {
+			`{ unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "ended_key" }],
+        plugin_feature_unless: "membership_kinds" }`,
+			`{ unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "kind" }, { name: "ended_key" }],
+        plugin_feature: "membership_kinds" }`,
+		},
 		"UserTotpSecret": {`{ unique: true, fields: [{ name: "user_id" }, { name: "ended_key" }] }`},
 		"UserRole": {
 			`{ unique: true, fields: [{ name: "user_id" }, { name: "role_id" }, { name: "ended_key" }],
