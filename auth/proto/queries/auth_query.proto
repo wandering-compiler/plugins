@@ -932,6 +932,9 @@ message UserOrg {
   // organization. Without this the person who created an org is
   // indistinguishable from anyone they promoted.
   bool   owner  = 6;
+  // membership_kind — the kind of this membership (membership_kinds):
+  // `staff`, `client`, … One membership per organization, so one kind.
+  string membership_kind = 7 [(w17.contrib.plugin_feature_field) = "membership_kinds"];
 }
 
 message ListUserOrgsReq {
@@ -3078,7 +3081,8 @@ service AuthQuery {
           "       o.slug AS slug, "
           "       o.name AS name, "
           "       o.kind AS kind, "
-          "       m.role AS role "
+          "       m.role AS role, "
+          "       ?feature(membership_kinds) m.kind AS membership_kind "
           "FROM @module.OrgMembership m "
           "JOIN @module.Organization o ON o.id = m.org_id "
           "WHERE m.user_id = :user_id AND m.removed_at IS NULL AND o.deleted_at IS NULL "

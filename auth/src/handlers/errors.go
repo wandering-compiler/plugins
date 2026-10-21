@@ -195,6 +195,13 @@ const (
 	// The consent page must name one of the user's organizations for an
 	// app's grant (oauth_server with org_membership).
 	CodeOAuthOrgRequired = "OAUTH_ORG_REQUIRED"
+	// The audience gateway the request came through admits none of the
+	// caller's memberships (membership_kinds): a client calling the staff
+	// surface, or anyone without a membership of an admitted kind.
+	CodeMembershipNotAdmitted = "MEMBERSHIP_NOT_ADMITTED"
+	// The inviter's kind of membership may not hand out the invitation's
+	// kind (membership_kinds): a client inviting staff.
+	CodeInviteKindNotAllowed = "INVITE_KIND_NOT_ALLOWED"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -389,9 +396,11 @@ const (
 	MsgClientKeySignsIn = "That key belongs to a device you sign in with. Generate a separate key for the program."
 	MsgBotKeyMismatch   = "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
 
-	MsgOAuthRequestGone = "This sign-in request has expired or was already answered. Start again from the application."
-	MsgOAuthAppUnknown  = "This connected app is not one of yours, or was already disconnected."
-	MsgOAuthOrgRequired = "Choose one of your organizations for this application."
+	MsgOAuthRequestGone      = "This sign-in request has expired or was already answered. Start again from the application."
+	MsgOAuthAppUnknown       = "This connected app is not one of yours, or was already disconnected."
+	MsgOAuthOrgRequired      = "Choose one of your organizations for this application."
+	MsgMembershipNotAdmitted = "This part of the service is not open to you: none of your memberships is of a kind it admits."
+	MsgInviteKindNotAllowed  = "You cannot invite someone as this kind of member."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

@@ -313,6 +313,15 @@ func metadataOrEmptyObject(m string) string {
 
 // InviteToOrg records an invitation for an address to join the caller's
 // active organization with a named role.
+// kindOfInvite / kindOfClaim carry an invitation's membership kind into the
+// rows it writes; set by membership_kinds.go, nil without it.
+var (
+	// kindOfInvite checks the invitation's kind and returns what writes it onto
+	// the create request (the field exists only with membership_kinds).
+	kindOfInvite func(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (func(*pb.CreateOrgInviteReq), error)
+	kindOfClaim  func(claimed *pb.ConsumeOrgInviteByTokenResp, add *pb.AddOrgMembershipReq)
+)
+
 func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
@@ -344,6 +353,15 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	snapshot, err := h.checkMayGrantRole(ctx, roleID)
 	if err != nil {
 		return nil, err
+	}
+	// The invitation's kind (membership_kinds), held to what the inviter may
+	// invite — before anything is written, so a refused request changes
+	// nothing.
+	var writeKind func(*pb.CreateOrgInviteReq)
+	if kindOfInvite != nil {
+		if writeKind, err = kindOfInvite(ctx, h, inviter, orgID, req); err != nil {
+			return nil, err
+		}
 	}
 	// The link's secret. Minted here, stored hashed, returned once — the same
 	// three steps a password reset takes, and for the same reason: a stored
@@ -381,7 +399,7 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		}
 	}
 
-	created, err := h.Mutation.CreateOrgInvite(ctx, &pb.CreateOrgInviteReq{
+	createReq := &pb.CreateOrgInviteReq{
 		OrgId:     orgID,
 		Email:     email,
 		Role:      req.GetRole(),
@@ -411,7 +429,11 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		Metadata: metadataOrEmptyObject(req.GetMetadata()),
 		// What the ceiling checked — accept holds the grant to it.
 		RoleSnapshot: snapshot,
-	})
+	}
+	if writeKind != nil {
+		writeKind(createReq)
+	}
+	created, err := h.Mutation.CreateOrgInvite(ctx, createReq)
 	if err != nil {
 		return nil, err
 	}
@@ -642,21 +664,29 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 		return nil, err
 	}
 
-	if _, err := h.Mutation.AddOrgMembership(txCtx, &pb.AddOrgMembershipReq{
+	addReq := &pb.AddOrgMembershipReq{
 		UserId: userID,
 		OrgId:  orgID,
 		Role:   roleName,
-	}); err != nil {
+	}
+	grantReq := &pb.AssignRoleToUserReq{
+		UserId: userID,
+		RoleId: roleID,
+		OrgId:  orgID,
+	}
+	// The invitation's kind becomes the membership's (membership_kinds). A
+	// person who is already a member — of any kind — is refused by the
+	// membership's unique index: a membership has one kind.
+	if kindOfClaim != nil {
+		kindOfClaim(claimed, addReq)
+	}
+	if _, err := h.Mutation.AddOrgMembership(txCtx, addReq); err != nil {
 		return nil, err
 	}
 	// org_id on the grant is what scopes it. Empty would mean REALM-WIDE
 	// — the role would count in every organization the person belongs to,
 	// which is the one outcome an org invitation must never produce.
-	if _, err := h.Mutation.AssignRoleToUser(txCtx, &pb.AssignRoleToUserReq{
-		UserId: userID,
-		RoleId: roleID,
-		OrgId:  orgID,
-	}); err != nil {
+	if _, err := h.Mutation.AssignRoleToUser(txCtx, grantReq); err != nil {
 		return nil, err
 	}
 	// A BOUND invitation proved the address by being accepted, so record HOW —

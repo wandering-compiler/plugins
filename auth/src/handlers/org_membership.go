@@ -188,6 +188,12 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 	if orgID == "" || p.realm != pb.TokenType_TOKEN_TYPE_SESSION {
 		return nil
 	}
+	// Not through an audience that admits only some memberships: ownership
+	// is root authority over the organization, which its staff exercise —
+	// an owner who is also a client is a client on the client's surface.
+	if len(admittedKinds(ctx)) > 0 {
+		return nil
+	}
 	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: p.userID, OrgId: orgID})
 	if err != nil {
 		return err
@@ -197,6 +203,15 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 	}
 	return nil
 }
+
+// oauthOrgScope resolves the organization of an OAuth access token; set by
+// the oauth_server + org_membership file (oauth_server_org.go), nil without
+// it — and then no token carries an organization.
+var oauthOrgScope func(ctx context.Context, h *AuthServiceHandler, userID, orgID string, headers, scopes, labels map[string]string) error
+
+// orgScopeByKind replaces resolveOrgScope's resolution when membership
+// kinds are staged (membership_kinds.go); nil without them.
+var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
 
 // resolveOrgScope stamps scopes[org_id] for the request's ACTIVE org. The
 // active org is a client-selected slug (w17-org metadata), but it is
@@ -225,16 +240,18 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 // org_id is the data-scope key: a project scoping its rows by
 // name: "org_id" then gets per-org isolation (auto-WHERE / owner-stamp)
 // with no hand-written facade, exactly like tenant_scope's tenant_id.
-// oauthOrgScope resolves the organization of an OAuth access token; set by
-// the oauth_server + org_membership file (oauth_server_org.go), nil without
-// it — and then no token carries an organization.
-var oauthOrgScope func(ctx context.Context, h *AuthServiceHandler, userID, orgID string, headers, scopes, labels map[string]string) error
-
 func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
 	// The admin plane is realm-wide: no organization is selected, so only
 	// realm-wide roles survive the narrowing (see AuthenticateAdmin).
 	if onAdminPlane(ctx) {
 		return nil
+	}
+	// Through an audience gateway that admits only some kinds of membership,
+	// the resolution is membership_kinds.go's: it runs over the admitted
+	// memberships alone. Any other gateway admits every membership, and the
+	// resolution below is the same with or without kinds.
+	if orgScopeByKind != nil && len(kindsFromHeaders(headers)) > 0 {
+		return orgScopeByKind(ctx, h, userID, headers, scopes, labels)
 	}
 	// An OAuth access token belongs to the organization the user chose on
 	// the consent page (oauth_server); its client names none.

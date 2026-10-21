@@ -106,6 +106,10 @@ env:
     type: string
     default: ""
     description: "The resources (MCP surface URLs) this server issues tokens for (oauth_server): a comma- or space-separated list of absolute URLs. Empty = any https URL — the consent page shows the user which one. Set it to your MCP surfaces so no client can have a token minted for another server's name. An entry that is not an absolute URL fails the boot."
+  - name: w17_audiences
+    type: string
+    default: ""
+    description: "GENERATED — do not set it: codegen fills it from the domain's audience surfaces (membership_kinds). Who each audience admits and the variable carrying its MCP surface's public URL, as <audience>:<kind>|<kind>:<URL variable>:<kind>|<kind> entries joined by ';' — the last field the kinds a caller it admits may invite. With oauth_server, the consent page offers an MCP client only the organizations where the user holds a membership of a kind the client's audience admits; with org_invite, an invitation's kind is held to what the inviter may invite. Checked at boot."
   - name: totp_issuer
     type: string
     default: ""
@@ -340,6 +344,15 @@ features:
       - rbac
     go_files:
       - handlers/org_invite.go
+  - name: membership_kinds
+    description: "Memberships of several KINDS — the auth half of audience surfaces (a domain publishing one REST / MCP / gRPC surface per audience, each on its own gateway). OrgMembership and OrgInvite gain a kind (`staff`, `client`, … — the project names them, the plugin carries them); a membership has one kind, so a person is an organization's staff or its client, and may be staff of one and client of another. An audience gateway names the kinds it admits in every Authenticate (x-w17-membership-kinds, which only a gateway writes): the organization a request acts in is resolved among the caller's memberships of an admitted kind, a caller holding none is refused 403 (MEMBERSHIP_NOT_ADMITTED) before any handler, and ownership does not widen. A gateway that names no kinds admits every membership. InviteToOrg takes the kind of membership accepting creates, held to the kinds the inviter may invite (INVITE_KIND_NOT_ALLOWED). Off by default; a migration adds the columns."
+    default: false
+    requires:
+      # The memberships, organizations and org-scoped grants it narrows are
+      # org_membership's.
+      - org_membership
+    go_files:
+      - handlers/membership_kinds.go
   - name: password_change
     description: "Authenticated password change — the signed-in principal supplies its current password and a new one. Distinct from `password_reset`, which is the FORGOTTEN-password flow and needs a mail channel to deliver a token; this one needs no channel at all, because the proof is the current password. A deployment that cannot send mail can still let people rotate their own credentials. Adds the ChangePassword business RPC over AuthMutation.UpdateUserPasswordIfUnchanged, and AuthMutation.RevokeOtherSessionTokens, which signs the person out of every other session in the same unit of work (API tokens are kept; the sessions are revoked, not deleted). With `password_reset` staged too, the change also spends every live reset link of the account in that unit of work. Off by default."
     default: false
@@ -494,6 +507,14 @@ go_files_combined:
   # that hold it exist only when both features do.
   - features: [sign_up_confirmation, tenant_scope]
     files: [handlers/signup_confirm_tenant.go]
+  # An invitation names the kind of membership accepting creates; the
+  # invitation calls exist only with org_invite.
+  - features: [membership_kinds, org_invite]
+    files: [handlers/membership_kinds_invite.go]
+  # The consent page offers an MCP client only the organizations its
+  # audience admits; the grant calls exist only with oauth_server.
+  - features: [oauth_server, membership_kinds]
+    files: [handlers/oauth_server_kinds.go]
 
 # Preset surfaces this plugin injects into a consuming project's
 # gateway at activation time. On by default when the gating feature
@@ -1248,6 +1269,7 @@ msgids:
   - "This membership belongs to another organization."
   - "This organization already has a team named {name}."
   - "This person is already in the team."
+  - "This part of the service is not open to you: none of your memberships is of a kind it admits."
   - "This request names two different organizations. Name one."
   - "This sign-in request has expired or was already answered. Start again from the application."
   - "This team holds a role with permissions you do not have, so you cannot change its members or delete it."
@@ -1255,6 +1277,7 @@ msgids:
   - "Too many wrong passwords. Wait 15 minutes and try again."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
+  - "You cannot invite someone as this kind of member."
   - "Your session expired on {date}. Sign in again."
   - "{entry} is not an address or a network (for example 203.0.113.7 or 203.0.113.0/24)."
   - "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."

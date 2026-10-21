@@ -1934,6 +1934,10 @@ message Organization {
 message OrgMembership {
   option (w17.db.table) = {
     indexes: [
+      // One live membership per (user, org) — with membership_kinds too: a
+      // membership has ONE kind, so a person is an organization's staff or
+      // its client, never both (they may be staff of one and client of
+      // another).
       { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "ended_key" }] }
     ]
   };
@@ -1953,6 +1957,14 @@ message OrgMembership {
   string removed_by = 7 [(w17.field) = { type: UUID, null: true }];
   // ended_key — '' while live, the row's own id once removed (Role.ended_key).
   string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+  // kind — which kind of member this is (membership_kinds): `staff`,
+  // `client`, … The project names the kinds, the plugin carries them. An
+  // audience gateway admits a caller only through a membership of a kind it
+  // accepts. '' is a membership of no kind, from before the feature.
+  string kind = 9 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 
 // OrgInvite — a pending invitation for an EMAIL to join an Organization
@@ -2092,6 +2104,11 @@ message OrgInvite {
   // pending invitations, and out of the pending index above.
   google.protobuf.Timestamp closed_at = 12 [(w17.field) = { type: DATETIME, null: true }];
   string closed_by = 13 [(w17.field) = { type: UUID, null: true }];
+  // kind — the kind of membership accepting creates (membership_kinds).
+  string kind = 14 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "membership_kinds"
+  ];
 }
 
 // ── teams — groups of an organization's members that hold roles ──

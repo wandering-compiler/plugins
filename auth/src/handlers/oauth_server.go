@@ -104,6 +104,15 @@ var (
 	oauthCheckOrg    func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) error
 )
 
+// Hooks the oauth_server + membership_kinds file (oauth_server_kinds.go) sets:
+// the organizations a grant for one resource may go to — those where the user
+// holds a membership of a kind that resource's audience admits — and the
+// check at approval. Nil without membership kinds.
+var (
+	oauthOrgsForResource  func(ctx context.Context, h *AuthServiceHandler, userID, resource string, orgs []*pb.OAuthConsentOrg) ([]*pb.OAuthConsentOrg, error)
+	oauthCheckOrgResource func(ctx context.Context, h *AuthServiceHandler, userID, orgID, resource string) error
+)
+
 func init() {
 	erasers = append(erasers, eraseOAuthGrants)
 	configChecks = append(configChecks, checkOAuthServerConfig)
@@ -342,6 +351,11 @@ func (h *AuthServiceHandler) GetOAuthAuthorization(ctx context.Context, req *pb.
 		if resp.Orgs, err = oauthConsentOrgs(ctx, h, userID); err != nil {
 			return nil, err
 		}
+		if oauthOrgsForResource != nil {
+			if resp.Orgs, err = oauthOrgsForResource(ctx, h, userID, pending.GetResource(), resp.GetOrgs()); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return resp, nil
 }
@@ -393,6 +407,11 @@ func (h *AuthServiceHandler) ApproveOAuthAuthorization(ctx context.Context, req 
 		orgID = req.GetOrgId()
 		if err := oauthCheckOrg(ctx, h, userID, orgID); err != nil {
 			return nil, err
+		}
+		if oauthCheckOrgResource != nil {
+			if err := oauthCheckOrgResource(ctx, h, userID, orgID, pending.GetResource()); err != nil {
+				return nil, err
+			}
 		}
 	}
 	approving, err := h.oauthApprovingSession(ctx, userID)

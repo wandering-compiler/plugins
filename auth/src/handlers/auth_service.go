@@ -292,6 +292,19 @@ type AuthServiceHandler struct {
 	OAuthDynamicRegistration bool   // oauth_dynamic_registration
 	OAuthRedirectHosts       string // oauth_redirect_hosts
 	OAuthResources           string // oauth_resources
+	Audiences                string // w17_audiences (generated)
+	// audiences is Audiences parsed at boot (membership_kinds; nil without
+	// it); audiencesRead says ValidateConfig did it.
+	audiences     []audienceEntry
+	audiencesRead bool
+}
+
+// audienceEntry is one audience of the domain's generated table
+// (w17_audiences): the kinds it admits, its MCP surface's public URL (from
+// the variable the table names), and the kinds a caller it admits may invite.
+type audienceEntry struct {
+	name, url      string
+	kinds, invites []string
 }
 
 // apiTokenStepUpChecks run before CreateApiToken (api_token) mints: step_up.go
@@ -345,6 +358,56 @@ var configChecks []func(h *AuthServiceHandler) error
 type scopeDecorator func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
 
 var scopeDecorators []scopeDecorator
+
+// notAdmittedError is a decorator's refusal of an AUTHENTICATED caller the
+// surface does not admit (membership_kinds: no membership of a kind the
+// audience accepts). It reaches the gateway as the PermissionDenied (403) it
+// carries instead of being folded into the opaque Unauthenticated: the
+// credential is fine, and "sign in again" would be the wrong advice. It
+// tells the caller nothing about anyone else — only that this door is not
+// theirs.
+type notAdmittedError struct{ err error }
+
+func (e *notAdmittedError) Error() string { return e.err.Error() }
+func (e *notAdmittedError) Unwrap() error { return e.err }
+
+// GRPCStatus is the status the wrapped refusal carries.
+func (e *notAdmittedError) GRPCStatus() *status.Status {
+	st, _ := status.FromError(e.err)
+	return st
+}
+
+// membershipKindsHeader is where an audience gateway names the membership
+// kinds it admits — principal.MembershipKindsKey of the SDK that ships audience
+// surfaces, spelled here so the plugin builds against the SDK it pins. It is
+// gateway-owned (`x-w17-*`): a client's copy never reaches Authenticate.
+const membershipKindsHeader = "x-w17-membership-kinds"
+
+// authHeadersKey carries the AuthReq headers on the context, for a narrower.
+type authHeadersKey struct{}
+
+// admittedKinds are the membership kinds the request's audience gateway
+// admits (x-w17-membership-kinds, which only a gateway writes); nil when it
+// came through a gateway that admits any.
+func admittedKinds(ctx context.Context) []string {
+	headers, _ := ctx.Value(authHeadersKey{}).(map[string]string)
+	return kindsFromHeaders(headers)
+}
+
+// kindsFromHeaders reads the admitted membership kinds off AuthReq headers.
+func kindsFromHeaders(headers map[string]string) []string {
+	raw := headers[membershipKindsHeader]
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, k := range strings.Split(raw, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
 
 // grantNarrower rewrites the principal's permission set AFTER the scope
 // decorators have run, so a feature that resolves a request-scoped
@@ -1033,6 +1096,10 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	if prin.oauthOrgID != "" {
 		ctx = context.WithValue(ctx, oauthTokenOrgKey{}, prin.oauthOrgID)
 	}
+	// The request's headers ride the context too, for the narrowers below:
+	// an audience gateway's admitted membership kinds decide which roles
+	// count (membership_kinds), and a narrower is handed no headers.
+	ctx = context.WithValue(ctx, authHeadersKey{}, req.GetHeaders())
 	if err := runScopeDecorators(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
 		return nil, err
 	}
@@ -1566,6 +1633,10 @@ func runScopeDecorators(ctx context.Context, h *AuthServiceHandler, userID strin
 			var classified *authnError
 			if errors.As(err, &classified) {
 				return classified
+			}
+			var refused *notAdmittedError
+			if errors.As(err, &refused) {
+				return refused
 			}
 			return Unauthenticated(err)
 		}

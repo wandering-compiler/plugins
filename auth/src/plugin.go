@@ -119,6 +119,9 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		SignInFailureBudget:        cfg.SignInFailureBudget,
 		SignInDeviceFailureBudget:  cfg.SignInDeviceFailureBudget,
 		SignInFailureWindowSeconds: cfg.SignInFailureWindowSeconds,
+		// membership_kinds: the domain's audience table, generated from the
+		// protos (ignored unless the feature is staged).
+		Audiences: cfg.W17Audiences,
 	}
 	if err := handlers.ValidateConfig(h); err != nil {
 		return err
