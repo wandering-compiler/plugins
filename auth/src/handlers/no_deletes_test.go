@@ -223,7 +223,15 @@ func TestEveryReaderSkipsEndedRows(t *testing.T) {
 	// ListOrgMemberships LEFT JOINs the organization only for its display
 	// name; a deleted organization's memberships are removed with it, and the
 	// membership's own removed_at is tested.
-	exempt := map[string]bool{"ListOrgMemberships/Organization": true}
+	//
+	// The admin Authenticators page (admin_mfa) lists every enrolment, ended
+	// ones included, on purpose — as the Devices page lists revoked devices —
+	// and shows revoked_at; Reset skips an ended one.
+	exempt := map[string]bool{
+		"ListOrgMemberships/Organization":   true,
+		"ListAuthenticators/UserTotpSecret": true,
+		"GetAuthenticator/UserTotpSecret":   true,
+	}
 	aliasRe := regexp.MustCompile(`@module\.(\w+)\s+(\w+)`)
 	readers := 0
 	for name, body := range rpcBodies(dqlText(authProtos(t)["queries/auth_query.proto"])) {

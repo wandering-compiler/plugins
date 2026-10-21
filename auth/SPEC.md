@@ -57,6 +57,7 @@ It covers plugin version 0.1.0-rc.24.
 | `marketing_consent` | off | `authenticate_turnkey` | — |
 | `password_change` | off | — | — |
 | `step_up` | off | — | — |
+| `step_up_code` | off | `step_up`, `two_factor` | — |
 | `service_account` | off | `api_token`, `user_admin`, `rbac`, `authenticate_turnkey` | — |
 | `bot_token_guard` | off | `service_account` | — |
 | `bot_roles` | off | `rbac`, `service_account`, `org_membership` | — |
@@ -65,6 +66,7 @@ It covers plugin version 0.1.0-rc.24.
 | `user_admin` | off | — | — |
 | `admin_sign_ins` | off | `user_admin` | — |
 | `admin_devices` | off | `user_admin` | — |
+| `admin_mfa` | off | `user_admin`, `two_factor` | — |
 | `my_sign_ins` | off | `authenticate_turnkey` | — |
 | `org_members_rest` | off | `org_membership`, `org_invite` | — |
 | `client_secret_rotation` | off | `cli_login` | — |
@@ -409,6 +411,25 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `step_up/session-only` | An API token MUST be refused before the password is checked: it has no session to step up, and it must not vouch for a person. | Security | `TestConfirmPassword_RefusesAWrongPasswordAndAnAPIToken` |
 | `step_up/wrong-password-stamps-nothing` | A wrong password MUST stamp nothing. | Security | `TestConfirmPassword_RefusesAWrongPasswordAndAnAPIToken` |
 | `step_up/guess-budget` | Every guess MUST be counted before it is checked, in one statement. Five wrong ones in a row MUST lock the session's step-up for fifteen minutes, the right password included. A confirmation MUST reset the count. | Security | `TestConfirmPassword_LocksAfterFiveWrongPasswords`. **Unit (mock) only:** a live test would run six concurrent wrong guesses and assert one is refused as locked. |
+| `step_up/api-token-asks-for-it` | With `api_token_step_up_seconds` > 0, `CreateApiToken` MUST refuse (`API_TOKEN_NEEDS_STEP_UP`) unless the caller's own session stepped up no longer ago than that. A token outlives the session that mints it, so minting one is what a stolen session would do. 0 MUST ask nothing. Without `step_up` staged, a value > 0 MUST fail the boot: no session could step up, so no person could create a token. | Security | `TestRequireRecentStepUp`, `TestCheckAPITokenConfig` |
+
+---
+
+### step_up_code
+
+- **Purpose.** A session steps up with the second factor instead of the password: the person's authenticator when one is confirmed, otherwise a code mailed to the account's address. The stamp is `step_up`'s (`UserToken.stepped_up_at`), so a consumer asking for a recent step-up does not care which proof gave it. With `step_up_password=false` the second factor is the ONLY step-up, and a stolen session plus a phished password is not enough.
+- **Adds.** Columns `UserToken.step_up_code_hash` and `UserToken.step_up_code_sent_at`. Query `GetSessionStepUp`. Mutations `SetStepUpCode` (emits `StepUpCodeRequested`, topic `auth.step_up.code_requested`, carrying the plaintext code for a hand-written delivery channel, like `MfaChallengeRequested`) and `ConsumeStepUpCode`. Service methods `RequestStepUpCode` and `ConfirmStepUp`. REST `POST /auth/step-up/code` and `POST /auth/step-up/confirm` (bearer). Env `step_up_password` (default true).
+- **Requires / conflicts / combined files.** Requires `step_up` and `two_factor`. Go file: `handlers/step_up_code.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `step_up_code/proof-is-the-sign-ins` | `RequestStepUpCode` MUST name the authenticator, and mail nothing, for a person with a confirmed one (built-in TOTP on); otherwise it MUST mail a six-digit code. An unreadable enrolment MUST refuse rather than mail. | Security | `TestRequestStepUpCode_AuthenticatorOrMailedCode` |
+| `step_up_code/own-session` | A mailed code's hash MUST be stamped on the caller's own session row, and only that session MUST be able to spend it. The plaintext MUST travel only in the event, never stored. | Security | `TestRequestStepUpCode_AuthenticatorOrMailedCode`, `TestConfirmStepUp_MailedCode` |
+| `step_up_code/no-flood` | A session MUST get a new mailed code at most once a minute; asking again within it MUST answer the code already out, with its expiry. | Security | `TestRequestStepUpCode_DoesNotResendWithinAMinute` |
+| `step_up_code/session-only` | An API token MUST be refused by both methods before anything is mailed or counted. | Security | `TestStepUpCode_RefusesAnAPIToken` |
+| `step_up_code/single-use-and-expiry` | A mailed code MUST stamp the session once (spent in the same statement, and only while it is still the live code) and MUST be refused after `mfa_code_ttl_seconds`. An authenticator code MUST be claimed (its time step), so it too works once. | Security | `TestConfirmStepUp_MailedCode`, `TestConfirmStepUp_ExpiredMailedCode`, `TestConfirmStepUp_Authenticator` |
+| `step_up_code/one-budget` | Every guess MUST be counted before it is checked, in the session budget `ConfirmPassword` spends: five wrong in a row lock the session's step-up for fifteen minutes, the right code included. | Security | `TestConfirmStepUp_LocksAfterFiveWrongCodes` |
+| `step_up_code/password-off` | With `step_up_password=false`, `ConfirmPassword` MUST refuse (`STEP_UP_PASSWORD_OFF`) before it counts or checks anything. | Security | `TestConfirmPassword_OffWhenTheSecondFactorIsTheOnlyProof` |
 
 ---
 
@@ -515,6 +536,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 |---|---|---|---|
 | `two_factor/no-session-while-challenged` | When the gate raises a challenge, SignIn MUST return `mfa_required` + `challenge_id` and MUST NOT issue a session token. | Security | TestMfaGate_AllLogins_NoTotp_GeneratesCode, TestMfaGate_TotpEnrolled_NoCode, TestMfaGate_NewDevices_ChallengesUntrusted |
 | `two_factor/new-devices-needs-proven-trust` | Under `new_devices`, a challenge MUST be skipped only for a device whose key signed the request (the gateway-verified thumbprint) and whose (user, device) row holds trust later than the account's last trust revocation. Nothing a client sends besides the proof MUST count. | Security | TestMfaGate_NewDevices_SkipsTrusted, TestMfaGate_NewDevices_ChallengesUntrusted, TestSignIn_TrustIsPerUserAndDeviceOnASharedDevice, TestMintDevice_TrustRevokedByACredentialChange_NotTrusted |
+| `two_factor/scope-off-is-dev-only` | `two_factor_scope=off` MUST spare the challenge only with `W17_ENV=dev`. Anywhere else the boot MUST refuse it, and a handler that skipped the boot check MUST challenge anyway. | Security | TestTwoFactorScopeOff_DevelopmentOnly |
 | `two_factor/seed-encrypted-at-rest` | The TOTP seed MUST be stored only encrypted with the project field keyring. It MUST NOT be stored or logged in plaintext. | Security | none. Encryption is done by the storage layer. A live test must read the raw `seed` column and show ciphertext that decrypts only with the keyring. |
 | `two_factor/legacy-seed-moved-once` | A seed sealed under `two_factor_secret_key` MUST verify with that key, then be moved into `seed` and cleared from the legacy column. If the key is unusable, verification MUST be refused (FailedPrecondition), never accepted. | Security | TestLegacySeed_VerifiesAndMoves, TestLegacySeed_KeyGone_Refuses |
 | `two_factor/totp-step-single-use` | A TOTP code MUST be accepted at most once: only for a time step later than `last_step`, claimed by one conditional UPDATE. When two requests present the same code at once, exactly one MUST succeed. | Security | TestTotp_ACodeIsAcceptedOnce; TestTotp_ConcurrentReuseIsAcceptedOnce is **unit (mock) only**. A live test must fire N parallel VerifyMfa calls with one code against the database and show exactly one `ClaimTotpStep` row returned. |
@@ -744,7 +766,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 - REST: `POST /auth/tokens`, `GET /auth/tokens`, `DELETE /auth/tokens/{token_id}`. All three need a bearer token. None is `public` or `failed_only`.
 - The resolver is replaced: `resolvePrincipal` becomes realm-aware (installed by `init()` in `apitoken.go`).
 - Events: `ApiTokenCreated` (emitted by `IssueApiToken`: token, owner, `created_at`, name, `device_id` = the creating request's key thumbprint, `key_thumbprint` = the program's key, `created_by`; never a secret). Revoking an API token emits nothing (see gaps).
-- Env: `api_token_default_ttl_hours` (default 2160 = 90 days; 0 = never expires; above 100 years the plugin refuses to boot).
+- Env: `api_token_default_ttl_hours` (default 2160 = 90 days; 0 = never expires; above 100 years the plugin refuses to boot). `api_token_max_ttl_hours` (default 0 = no cap): the longest a person's token may live — a later requested expiry is refused (`TOKEN_EXPIRY_TOO_LATE`), and a token minted without one takes the default, never more than the cap and never "never". Machine accounts' tokens are not affected. `api_token_step_up_seconds` (default 0): see `step_up/api-token-asks-for-it`.
 
 **Requires / conflicts / combined files.** Requires `rbac` (`GetUserRolePermissionsByRealm` reads its tables) and declares no `conflicts_with` (an earlier conflict with `org_membership` was lifted once both narrowing axes began intersecting on role IDs). Go file: `handlers/apitoken.go`. `service_account` requires this feature and reuses its minting path.
 
@@ -757,6 +779,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | api_token/derived-token-not-wider | A token minted by a caller who authenticated with an API token MUST NOT carry permissions that the calling token does not carry. | Security | `TestCreateApiToken_AnAPITokenCallerIsRefused`, `TestCliAuthorize_AnAPITokenCallerIsRefused` (an API token mints nothing). |
 | api_token/not-a-session | An API token MUST NOT appear as `AuthResp.session_token_id`, so `Logout` cannot revoke it and refuses an API-token bearer. | Security | `TestResolvePrincipalRealmAware_ApiTokenHasNoSessionID`, `TestResolvePrincipalRealmAware_ReturnsTokenID`, `TestLogout_NoSessionToken_Refused` |
 | api_token/secret-once-hash-only | The plaintext token MUST be returned exactly once, at mint. Only its sha256 MUST be stored, and no list MUST ever return it. | Security | `TestCreateApiToken_StampsAPIRealm_AndSubset`, `TestListApiTokens_ReturnsCallersTokens` (the list projection lacking the secret is a schema property: `ListApiTokensByUser` selects no secret column) |
+| api_token/expiry-cap | With `api_token_max_ttl_hours` > 0, every token a person creates MUST expire no later than the cap: a later requested expiry MUST be refused, and a token minted without one MUST take the default capped (a default of "never" included). 0 MUST keep the behaviour before the setting. A negative cap MUST fail the boot. | Security | `TestPersonTokenExpiry_Cap`, `TestCheckAPITokenConfig` |
 | api_token/owner-only-management | `ListApiTokens` and `RevokeApiToken` MUST act only on the caller's own API-type tokens. A revoke MUST NOT touch another user's token or any session token; it revokes (reason API_TOKEN_REVOKED, the owner as `revoked_by`) and deletes nothing, the subset rows included. The list shows revoked tokens as revoked. | Security | `TestRevokeApiToken_RevokesTheCallersApiToken`, `TestRevokeApiToken_NothingMatchedIsDone`, `TestRevokeApiToken_RevokesAndKeepsTheRow`. Unit (mock) only: ownership sits in the `MarkApiTokenRevoked` WHERE clause. A live test must revoke user B's token ID as user A and show B's token still authenticates. |
 | api_token/expired-token-refused | A token whose `expires_at` has passed MUST fail authentication — with Unauthenticated `SESSION_EXPIRED` for the holder of its key (`base/expired-token-says-so`); the API-token sentence names creating a new token. | Security | `TestAuthenticate_ExpiredApiTokenSaysSo`. The `expires_at IS NULL OR expires_at > NOW()` predicate in `GetTokenWithType` is never run by a test. |
 | api_token/last-used-throttled | A token that authenticates MUST have `last_used_at` written at most once per minute: skipped in Go when the lookup's value is inside the window, and guarded in `TouchTokenLastUsed`'s WHERE (`last_used_at IS NULL OR last_used_at < :cutoff`) so concurrent requests write once. The stamp (`:used_at`) and the cutoff both come from the application clock, never mixed with database `NOW()`, so clock skew between app and database cannot shrink the window to nothing; skew between app instances shifts it by at most that skew. A refused request MUST write nothing, and a failed write MUST NOT fail the authentication. | Consistency & concurrency | `TestAuthenticate_TouchesLastUsedAtThrottled`, `TestAuthenticate_FailedTouchDoesNotFailAuth`, `TestAuthenticate_RefusedTokenIsNotTouched`, `TestSessionExpiryStatements`. **Unit (mock) only:** the concurrent guard is SQL. |
@@ -970,6 +993,18 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | id | invariant | category | proof |
 |---|---|---|---|
 | admin_pages/opt-in | An activation that enables neither feature MUST get no `SignIns` or `Devices` page, and no page any activation gets MUST link to a page its own gate does not guarantee (a column ref cannot be gated, and a ref to an absent page fails the admin build). | Failure & configuration | `TestAdminPages_NewPagesAreOptIn` |
+
+### admin_mfa
+
+**Purpose.** The way back for a person who lost both the phone and the recovery codes. With every sign-in challenged, the authenticator is the only proof such an account accepts. The `Authenticators` admin page lists every enrolment (never the seed), and its `Reset` action ends the selected live authenticators and the accounts' unused recovery codes, as `DisableTotp` does — `TotpDisabled` carries the operator's device. The next sign-in falls back to the mailed code, and the person sets up a new authenticator.
+
+**Adds.** Queries `ListAuthenticators` and `GetAuthenticator` (`AuthenticatorAdminRow`). Service method `ResetAuthenticators`. The page. No table, column, REST route or env. Go file: `handlers/admin_mfa.go`.
+
+**Requires / conflicts / combined files.** Requires `user_admin` and `two_factor`. No conflicts.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| admin_mfa/reset-ends-the-factor | `ResetAuthenticators` MUST end the live authenticator AND the unused recovery codes of each selected enrolment's account, in one transaction per account. An ended enrolment, or an id naming nothing, MUST be left alone; an empty selection MUST be refused. Nothing MUST be deleted. | Security | `TestResetAuthenticators` |
 
 ### my_sign_ins, client_secret_rotation
 

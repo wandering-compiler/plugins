@@ -755,6 +755,41 @@ message LockPasswordStepUpResp {
   string id = 1;
 }
 
+// SetStepUpCodeReq — the session a mailed step-up code is for, the code's
+// hash, and the moment before which the previous code must have been sent for
+// a new one to go out (at most one a minute per session).
+message SetStepUpCodeReq {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  string token_id  = 1 [(w17.field) = { type: UUID }];
+  string user_id   = 2 [(w17.field) = { type: UUID }];
+  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  google.protobuf.Timestamp resend_before = 4;
+  // event-only (no w17.field → not persisted, not validated):
+  string                    email      = 5;
+  string                    code       = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  string                    thumbprint = 8;
+}
+message SetStepUpCodeResp {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  string token_id = 1;
+  string user_id  = 2;
+  google.protobuf.Timestamp sent_at = 3;
+}
+// ConsumeStepUpCodeReq — the session and the hash of the code its holder
+// proved; the stamp lands only while that code is still the live one.
+message ConsumeStepUpCodeReq {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  string token_id  = 1 [(w17.field) = { type: UUID }];
+  string user_id   = 2 [(w17.field) = { type: UUID }];
+  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message ConsumeStepUpCodeResp {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  string id = 1;
+  google.protobuf.Timestamp stepped_up_at = 2;
+}
+
 message RevokeOtherSessionTokensReq {
   option (w17.contrib.plugin_feature) = "password_change";
   string    user_id       = 1 [(w17.field) = { type: UUID }];
@@ -3931,6 +3966,55 @@ service AuthMutation {
           "UPDATE @module.UserToken SET step_up_attempts = 0, step_up_locked_until = :until "
           "WHERE id = :token_id "
           "RETURNING id"
+      }
+    };
+  }
+
+  // SetStepUpCode — stamp a mailed step-up code's hash on the caller's
+  // session and emit the plaintext for delivery. Refuses (no row back) a
+  // session that got one less than a minute ago (resend_before), so a stolen
+  // session cannot turn the person's mailbox into a flood.
+  rpc SetStepUpCode(SetStepUpCodeReq) returns (SetStepUpCodeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up_code";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET step_up_code_hash = :code_hash, step_up_code_sent_at = NOW() "
+          "WHERE id = :token_id AND user_id = :user_id AND revoked_at IS NULL "
+          "AND (step_up_code_sent_at IS NULL OR step_up_code_sent_at < :resend_before) "
+          "RETURNING id AS token_id, user_id, step_up_code_sent_at AS sent_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "StepUpCodeRequested"
+      payload: {
+        fields: [
+          { key: "user_id",    value: "$response.user_id" },
+          { key: "token_id",   value: "$response.token_id" },
+          { key: "email",      value: "$request.email" },
+          { key: "code",       value: "$request.code" },
+          { key: "expires_at", value: "$request.expires_at" },
+          { key: "device_id",  value: "$request.thumbprint" }
+        ]
+      }
+    };
+  }
+
+  // ConsumeStepUpCode — the mailed code was right: stamp the session and
+  // spend the code, in one statement and only while it is still the live
+  // one, so a code is used once and a newer code is not spent by an older.
+  rpc ConsumeStepUpCode(ConsumeStepUpCodeReq) returns (ConsumeStepUpCodeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up_code";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.UserToken SET stepped_up_at = NOW(), step_up_attempts = 0, "
+          "step_up_code_hash = NULL, step_up_code_sent_at = NULL "
+          "WHERE id = :token_id AND user_id = :user_id AND revoked_at IS NULL "
+          "AND step_up_code_hash = :code_hash "
+          "RETURNING id, stepped_up_at"
       }
     };
   }

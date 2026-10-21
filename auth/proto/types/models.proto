@@ -605,6 +605,22 @@ message UserToken {
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "oauth_server"
   ];
+
+  // --- step_up_code: a step-up proven with the second factor ---
+  // step_up_code_hash — the hash of the code RequestStepUpCode mailed for
+  // THIS session (a person without an authenticator), so only the session
+  // that asked can spend it; ConfirmStepUp clears it. NULL when none is out.
+  // step_up_code_sent_at — when it was sent: the code expires
+  // mfa_code_ttl_seconds later, and a new one is sent at most once a minute.
+  // Gated step_up_code.
+  string step_up_code_hash = 24 [
+    (w17.field) = { type: CHAR, max_len: 255, null: true },
+    (w17.contrib.plugin_feature_field) = "step_up_code"
+  ];
+  google.protobuf.Timestamp step_up_code_sent_at = 25 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "step_up_code"
+  ];
 }
 
 // Device — one (user, device key) pair. Base tier: every session is bound

@@ -101,6 +101,11 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 
 		// api_token: the lifetime of a token minted without an expiry.
 		APITokenDefaultTTLHours: cfg.APITokenDefaultTtlHours,
+		APITokenMaxTTLHours:     cfg.APITokenMaxTtlHours,
+		APITokenStepUpSeconds:   cfg.APITokenStepUpSeconds,
+
+		// step_up_code: whether the password still steps a session up.
+		NoPasswordStepUp: !cfg.StepUpPassword,
 
 		// oauth_server (ignored unless the feature is staged).
 		OAuthAccessTTLSeconds:    cfg.OauthAccessTtlSeconds,
