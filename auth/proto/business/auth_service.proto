@@ -1457,7 +1457,11 @@ message OrgPackagesResp {
 message OrgPackageInfo {
   option (w17.contrib.plugin_feature) = "org_packages";
   string package = 1;
+  // enabled_at — when it was given; unset for a default package, which every
+  // organization holds without being given.
   google.protobuf.Timestamp enabled_at = 2;
+  // default — every organization holds it; it is not given or taken.
+  bool default = 3;
 }
 
 message ListOrgTeamsReq {

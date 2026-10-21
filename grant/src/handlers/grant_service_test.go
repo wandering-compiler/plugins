@@ -87,7 +87,8 @@ func as(userID, orgID string) context.Context {
 func TestEnvelopeLifecycle(t *testing.T) {
 	s := &store{hosts: map[string]string{}}
 	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{
-		"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "GRANT_GRANT_SERVICE_BIND_HOST": 2}}}
+		// Activated as cobrand: keyed under the activation's name.
+		"COBRAND_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "COBRAND_GRANT_SERVICE_BIND_HOST": 2}}}
 	v1, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme"}})
 	if err != nil {
 		t.Fatal(err)
@@ -160,5 +161,21 @@ func TestProposeNeedsAnOrganization(t *testing.T) {
 	}
 	if _, err := h.ProposeEnvelope(context.Background(), &pb.ProposeEnvelopeReq{}); status.Code(err) != codes.Unauthenticated {
 		t.Errorf("no caller: err = %v, want Unauthenticated", err)
+	}
+}
+
+// raceMutation answers ApproveEnvelopeRow as the unique index does when
+// another version of the organization was approved at the same moment.
+type raceMutation struct{ pb.GrantMutationClient }
+
+func (raceMutation) ApproveEnvelopeRow(context.Context, *pb.ApproveEnvelopeRowReq, ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
+	return nil, status.Error(codes.AlreadyExists, "unique violation")
+}
+
+// The approval that loses the race is told so, not handed a storage error.
+func TestApproveEnvelopeRace(t *testing.T) {
+	h := &GrantServiceHandler{Mutation: raceMutation{}, Lock: &acllock.Lock{Permissions: map[string]int{"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1}}}
+	if _, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: "x"}); status.Code(err) != codes.Aborted {
+		t.Errorf("err = %v, want Aborted", err)
 	}
 }

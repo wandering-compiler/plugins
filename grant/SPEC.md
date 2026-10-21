@@ -27,7 +27,7 @@ ACL.
 |---|---|---|---|
 | grant/approved-only | Only an APPROVED envelope MUST be readable publicly; a proposal or a rejected one never is. | Security | `TestEnvelopeLifecycle` |
 | grant/realm-decides | Approving, rejecting and binding hosts MUST be refused to a request acting inside an organization. | Security | `TestEnvelopeLifecycle` |
-| grant/one-approved | Approving a version MUST supersede the organization's previous approved one in the same transaction, and a partial unique index MUST keep two racing approvals from both committing; nothing is deleted. | Data | `TestEnvelopeLifecycle`, `ApproveEnvelopeRow`, the `Envelope` index |
+| grant/one-approved | Approving a version MUST supersede the organization's previous approved one in the same transaction, and a unique index on `(org_id, approved_slot)` MUST keep two racing approvals from both committing (the loser is `Aborted`), on every dialect; nothing is deleted. | Data | `TestEnvelopeLifecycle`, `TestApproveEnvelopeRace`, the `Envelope` index |
 | grant/acl-required | The backoffice's methods MUST be refused unless they are in the deployed ACL lock. | Security | `TestRealmOnlyNeedsTheACL` |
 | grant/host-binds-once | A host bound to one organization MUST NOT be re-bound to another without unbinding. | Security | `TestEnvelopeLifecycle` |
 | grant/safe-fields | Links MUST be absolute https (http only for localhost) without credentials; a colour #rrggbb; a host a lower-case DNS name. | Security | `TestCheckFields` |

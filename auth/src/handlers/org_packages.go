@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
-	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -167,10 +167,10 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 	if t == nil || orgID == "" {
 		return nil
 	}
-	if h.Lock == nil {
-		// Nothing to look the methods up in: refuse rather than leave the
-		// organization unbounded.
-		return errors.New("org_packages: no ACL lock to bound the organization's permissions with")
+	if !lockHasPermissions(h.Lock) {
+		// Nothing to look the methods up in (a project without the ACL gets
+		// an empty lock): refuse rather than leave the organization unbounded.
+		return status.Error(codes.FailedPrecondition, "org_packages: no ACL lock to bound the organization's permissions with — packages need the endpoint ACL")
 	}
 	pkgs, err := orgPackagesOf(ctx, h, t, orgID)
 	if err != nil {
@@ -217,19 +217,41 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 //
 // And who may call it at all is the project's endpoint ACL: the method must
 // be in the deployed lock, or nobody may — without an ACL any signed-in
-// account outside an organization would pass.
-func (h *AuthServiceHandler) refuseInsideOrg(ctx context.Context, lockKey string) error {
+// account outside an organization would pass. method is the lock key without
+// the activation's prefix (AUTH_SERVICE_ADD_ORG_PACKAGE): the lock keys it
+// under whatever name the plugin is activated as.
+func (h *AuthServiceHandler) refuseInsideOrg(ctx context.Context, method string) error {
 	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
 		return refusal(ctx, codes.PermissionDenied, "org_packages: packages are given realm-wide, not from inside an organization",
 			CodePackagesRealmOnly, "", MsgPackagesRealmOnly, nil)
 	}
-	if h.Lock == nil {
-		return status.Error(codes.PermissionDenied, "org_packages: the backoffice's package methods need the endpoint ACL (no lock)")
-	}
-	if _, ok := acllock.IDByString(h.Lock, lockKey); !ok {
-		return status.Error(codes.PermissionDenied, "org_packages: the backoffice's package methods need the endpoint ACL — "+lockKey+" is not in the lock")
+	if !lockHasMethod(h.Lock, method) {
+		return status.Error(codes.PermissionDenied, "org_packages: the backoffice's package methods need the endpoint ACL — "+method+" is not in the lock")
 	}
 	return nil
+}
+
+// lockHasPermissions is a lock the ACL allocated permissions in; a project
+// without the ACL embeds an empty one.
+func lockHasPermissions(l *acllock.Lock) bool {
+	return l != nil && len(l.Permissions) > 0
+}
+
+// lockHasMethod reports whether the lock allocates a permission for a method
+// of this plugin, whatever the activation is named: method is the key's tail
+// after the activation's prefix (AUTH_SERVICE_ADD_ORG_PACKAGE is keyed
+// AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE, or ADMIN_AUTH_AUTH_SERVICE_… under an
+// activation named admin_auth).
+func lockHasMethod(l *acllock.Lock, method string) bool {
+	if l == nil {
+		return false
+	}
+	for k := range l.Permissions {
+		if strings.HasSuffix(k, "_"+method) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *AuthServiceHandler) checkPackageName(ctx context.Context, name string) error {
@@ -239,6 +261,10 @@ func (h *AuthServiceHandler) checkPackageName(ctx context.Context, name string) 
 	}
 	if t == nil || t.byName[name].Name == "" {
 		return refusal(ctx, codes.InvalidArgument, "org_packages: no such package", CodePackageUnknown, "package", MsgPackageUnknown, nil)
+	}
+	if t.byName[name].Default {
+		return refusal(ctx, codes.FailedPrecondition, "org_packages: a default package is every organization's; it is not given or taken",
+			CodePackageDefault, "package", MsgPackageDefault, nil)
 	}
 	return nil
 }
@@ -250,7 +276,7 @@ func (h *AuthServiceHandler) AddOrgPackage(ctx context.Context, req *pb.AddOrgPa
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := h.refuseInsideOrg(ctx, "AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE"); err != nil {
+	if err := h.refuseInsideOrg(ctx, "AUTH_SERVICE_ADD_ORG_PACKAGE"); err != nil {
 		return nil, err
 	}
 	if err := h.checkPackageName(ctx, req.GetPackage()); err != nil {
@@ -283,8 +309,16 @@ func (h *AuthServiceHandler) RemoveOrgPackage(ctx context.Context, req *pb.Remov
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := h.refuseInsideOrg(ctx, "AUTH_AUTH_SERVICE_REMOVE_ORG_PACKAGE"); err != nil {
+	if err := h.refuseInsideOrg(ctx, "AUTH_SERVICE_REMOVE_ORG_PACKAGE"); err != nil {
 		return nil, err
+	}
+	// A package dropped from the protos may still be taken (its row ends);
+	// a default one is never given, so never taken.
+	if t, err := h.packageTable(); err != nil {
+		return nil, err
+	} else if t != nil && t.byName[req.GetPackage()].Default {
+		return nil, refusal(ctx, codes.FailedPrecondition, "org_packages: a default package is every organization's; it is not given or taken",
+			CodePackageDefault, "package", MsgPackageDefault, nil)
 	}
 	if _, err := h.Mutation.EndOrgPackage(ctx, &pb.EndOrgPackageReq{
 		OrgId: req.GetOrgId(), Package: req.GetPackage(), EndedBy: caller,
@@ -299,7 +333,7 @@ func (h *AuthServiceHandler) ListPackagesOfOrg(ctx context.Context, req *pb.List
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := h.refuseInsideOrg(ctx, "AUTH_AUTH_SERVICE_LIST_PACKAGES_OF_ORG"); err != nil {
+	if err := h.refuseInsideOrg(ctx, "AUTH_SERVICE_LIST_PACKAGES_OF_ORG"); err != nil {
 		return nil, err
 	}
 	return h.orgPackagesResp(ctx, req.GetOrgId())
@@ -325,28 +359,25 @@ func (h *AuthServiceHandler) orgPackagesResp(ctx context.Context, orgID string) 
 	if err != nil && status.Code(err) != codes.NotFound {
 		return nil, err
 	}
+	// What the organization holds, as Authenticate counts it: the default
+	// packages, then the given ones.
 	out := &pb.OrgPackagesResp{}
+	t, err := h.packageTable()
+	if err != nil {
+		return nil, err
+	}
+	if t != nil {
+		for _, p := range t.Packages {
+			if p.Default {
+				out.Packages = append(out.Packages, &pb.OrgPackageInfo{Package: p.Name, Default: true})
+			}
+		}
+	}
 	for _, r := range live.GetPackages() {
+		if t != nil && t.byName[r.GetPackage()].Default {
+			continue
+		}
 		out.Packages = append(out.Packages, &pb.OrgPackageInfo{Package: r.GetPackage(), EnabledAt: r.GetEnabledAt()})
 	}
 	return out, nil
-}
-
-// isUniqueConflict is a write refused by a unique index: storage reports it as
-// InvalidArgument with an ErrorDetail{code: UNIQUE_VIOLATION} (or, from a fake
-// store, AlreadyExists).
-func isUniqueConflict(err error) bool {
-	st, ok := status.FromError(err)
-	if !ok {
-		return false
-	}
-	if st.Code() == codes.AlreadyExists {
-		return true
-	}
-	for _, d := range st.Details() {
-		if ed, ok := d.(*w17pb.ErrorDetail); ok && ed.GetCode() == "UNIQUE_VIOLATION" {
-			return true
-		}
-	}
-	return false
 }

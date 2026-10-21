@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -52,7 +53,9 @@ func pkgHandler(t *testing.T, live map[string][]string) (*AuthServiceHandler, *p
 	m := &pkgMock{live: live}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PackagesTable: testPackages,
 		Lock: &acllock.Lock{Permissions: map[string]int{"ex.Notes.List": 1, "ex.Notes.Ask": 2, "ex.Notes.New": 3, "auth.AuthService.ChangePassword": 9,
-			"AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE": 10, "AUTH_AUTH_SERVICE_REMOVE_ORG_PACKAGE": 11, "AUTH_AUTH_SERVICE_LIST_PACKAGES_OF_ORG": 12}}}
+			// Activated as admin_auth: the lock keys the plugin's methods
+			// under the activation's name.
+			"ADMIN_AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE": 10, "ADMIN_AUTH_AUTH_SERVICE_REMOVE_ORG_PACKAGE": 11, "ADMIN_AUTH_AUTH_SERVICE_LIST_PACKAGES_OF_ORG": 12}}}
 	if err := parsePackageTable(h); err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +99,13 @@ func TestNarrowGrantsToPackages(t *testing.T) {
 	if got := p.effectivePermissions(h.Lock); !slices.Equal(got, []int32{3}) {
 		t.Errorf("an organization given no package holds %v, want the default floor [3]", got)
 	}
-	// No lock: refused, not unbounded.
-	h.Lock = nil
-	if err := narrowGrantsToPackages(context.Background(), h, &authPrincipal{}, map[string]string{"org_id": "org-a"}); err == nil {
-		t.Error("with no lock an organization went unbounded")
+	// No lock, or the empty one a project without the ACL embeds: refused,
+	// not unbounded.
+	for _, l := range []*acllock.Lock{nil, {Version: 1}} {
+		h.Lock = l
+		if err := narrowGrantsToPackages(context.Background(), h, &authPrincipal{}, map[string]string{"org_id": "org-a"}); err == nil {
+			t.Errorf("with lock %+v an organization went unbounded", l)
+		}
 	}
 }
 
@@ -145,6 +151,30 @@ func TestAddOrgPackage(t *testing.T) {
 	}
 	if _, err := h.RemoveOrgPackage(realm, &pb.RemoveOrgPackageReq{OrgId: "org-a", Package: "base"}); err != nil || !slices.Equal(m.ended, []string{"org-a/base"}) {
 		t.Errorf("taking base: err = %v, ended %v", err, m.ended)
+	}
+}
+
+// A default package is neither given nor taken; listing an organization's
+// packages shows it.
+func TestDefaultPackageIsNotGivenOrTaken(t *testing.T) {
+	h, _ := pkgHandler(t, map[string][]string{"org-a": {"base"}})
+	ctx := whoAmICtx("ops", "")
+	if _, err := h.AddOrgPackage(ctx, &pb.AddOrgPackageReq{OrgId: "org-a", Package: "floor"}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("giving the default: err = %v, want FailedPrecondition", err)
+	}
+	if _, err := h.RemoveOrgPackage(ctx, &pb.RemoveOrgPackageReq{OrgId: "org-a", Package: "floor"}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("taking the default: err = %v, want FailedPrecondition", err)
+	}
+	resp, err := h.ListPackagesOfOrg(ctx, &pb.ListPackagesOfOrgReq{OrgId: "org-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, p := range resp.GetPackages() {
+		got = append(got, fmt.Sprintf("%s/%v", p.GetPackage(), p.GetDefault()))
+	}
+	if !slices.Equal(got, []string{"floor/true", "base/false"}) {
+		t.Errorf("listed %v, want the default floor and the given base", got)
 	}
 }
 

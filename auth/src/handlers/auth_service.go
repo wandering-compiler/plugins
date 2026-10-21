@@ -180,9 +180,10 @@ type AuthServiceHandler struct {
 
 	// Lock is the bundle's compile-time ACL permission-lock snapshot
 	// (query.AclLock(), wired by RegisterPlugin). Non-nil in a wired
-	// bundle; nil only in a hand-built test handler that never
-	// exercises the wildcard path. Read solely to expand an
-	// `all_permissions` wildcard role via acllock.GrantAll.
+	// bundle (empty in a project without the ACL). Read to expand an
+	// `all_permissions` wildcard role via acllock.GrantAll and, under
+	// org_packages, to bound an organization's permissions and gate the
+	// backoffice's package methods — which refuse without it.
 	Lock *acllock.Lock
 
 	PasswordHash passwordhash.Settings

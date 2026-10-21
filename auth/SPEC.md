@@ -857,9 +857,9 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_packages/default-deny | A governed method no live package grants MUST be held by nobody in the organization. | Security | `TestNarrowGrantsToPackages` |
 | org_packages/plugin-and-realm-untouched | A plugin's permission (not governed) and a realm-wide request MUST NOT be narrowed. | Security | `TestNarrowGrantsToPackages` |
 | org_packages/audience-opened | An audience some package names MUST admit an organization's member only when one of its packages names it (403 `PACKAGE_AUDIENCE_OFF`); an audience no package names is open. | Security | `TestRefuseAudienceOutsidePackages` |
-| org_packages/default-floor | A `default` package MUST be held by every organization without a row, so adopting packages leaves no organization with nothing. | Correctness | `TestNarrowGrantsToPackages` |
-| org_packages/no-lock-refuses | Without an ACL lock an organization MUST be refused, never left unbounded. | Security | `TestNarrowGrantsToPackages` |
-| org_packages/realm-only | Packages MUST be given and taken realm-wide only (a call acting inside an organization is refused — the backoffice acts from accounts in no organization), and only where the endpoint ACL is on. | Security | `TestAddOrgPackage`, `TestAddOrgPackageNeedsTheACL` |
+| org_packages/default-floor | A `default` package MUST be held by every organization without a row, so adopting packages leaves no organization with nothing; it MUST NOT be given or taken (`PACKAGE_DEFAULT`), and listing an organization's packages MUST show it. | Correctness | `TestNarrowGrantsToPackages`, `TestDefaultPackageIsNotGivenOrTaken` |
+| org_packages/no-lock-refuses | Without an ACL lock, or with the empty one a project without the ACL embeds, an organization MUST be refused, never left unbounded. | Security | `TestNarrowGrantsToPackages` |
+| org_packages/realm-only | Packages MUST be given and taken realm-wide only (a call acting inside an organization is refused — the backoffice acts from accounts in no organization), and only where the endpoint ACL is on. | Security | `TestAddOrgPackage`, `TestAddOrgPackageNeedsTheACL` (the lock keys the methods under any activation name) |
 | org_packages/ceiling-follows | Nobody MUST hand out or compose a role above the organization's packages — the role ceiling is what the caller holds after this narrowing. | Security | `role_ceiling` tests over the narrowed envelope |
 
 **Gaps / suspected defects**

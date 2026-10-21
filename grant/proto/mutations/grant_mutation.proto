@@ -109,12 +109,12 @@ service GrantMutation {
       }
       ops: {
         name: "previous"
-        dql:  "UPDATE @module.Envelope SET status = 'superseded' WHERE org_id = :pending.org_id AND status = 'approved'"
+        dql:  "UPDATE @module.Envelope SET status = 'superseded', approved_slot = NULL WHERE org_id = :pending.org_id AND status = 'approved'"
       }
       ops: {
         name: "main"
         dql:
-          "UPDATE @module.Envelope SET status = 'approved', decided_by = :decided_by, decided_at = NOW() "
+          "UPDATE @module.Envelope SET status = 'approved', approved_slot = 'approved', decided_by = :decided_by, decided_at = NOW() "
           "WHERE id = :id "
           "RETURNING id AS id, org_id AS org_id"
       }

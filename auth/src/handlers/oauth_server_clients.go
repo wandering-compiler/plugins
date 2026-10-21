@@ -264,7 +264,7 @@ func (h *AuthServiceHandler) resolveOAuthClient(ctx context.Context, clientID, c
 		RedirectUris:      uris,
 		CreatedIp:         truncate(clientAddr, 64),
 		MetadataFetchedAt: timestamppb.Now(),
-	}); err != nil && status.Code(err) != codes.AlreadyExists {
+	}); err != nil && !isUniqueConflict(err) {
 		return nil, err
 	}
 	// Read back: a concurrent first request may have written the row.

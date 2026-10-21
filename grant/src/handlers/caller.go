@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 )
 
 // Who calls, and where they act.
@@ -102,8 +104,10 @@ func inOrg(ctx context.Context) (caller, orgID string, err error) {
 //
 // Who may call it at all is the project's endpoint ACL: the method must be in
 // the deployed lock, or nobody may — without an ACL any signed-in account
-// outside an organization would pass.
-func (h *GrantServiceHandler) realmOnly(ctx context.Context, lockKey string) (string, error) {
+// outside an organization would pass. method is the lock key without the
+// activation's prefix (GRANT_SERVICE_APPROVE_ENVELOPE): the lock keys it under
+// whatever name the plugin is activated as.
+func (h *GrantServiceHandler) realmOnly(ctx context.Context, method string) (string, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
 		return "", err
@@ -111,8 +115,42 @@ func (h *GrantServiceHandler) realmOnly(ctx context.Context, lockKey string) (st
 	if activeOrg(ctx) != "" {
 		return "", status.Error(codes.PermissionDenied, "grant: the platform decides this, realm-wide, not from inside an organization")
 	}
-	if _, ok := acllock.IDByString(h.Lock, lockKey); h.Lock == nil || !ok {
-		return "", status.Error(codes.PermissionDenied, "grant: the backoffice's methods need the endpoint ACL — "+lockKey+" is not in the lock")
+	if !lockHasMethod(h.Lock, method) {
+		return "", status.Error(codes.PermissionDenied, "grant: the backoffice's methods need the endpoint ACL — "+method+" is not in the lock")
 	}
 	return caller, nil
+}
+
+// lockHasMethod reports whether the lock allocates a permission for a method
+// of this plugin, whatever the activation is named: method is the key's tail
+// after the activation's prefix.
+func lockHasMethod(l *acllock.Lock, method string) bool {
+	if l == nil {
+		return false
+	}
+	for k := range l.Permissions {
+		if strings.HasSuffix(k, "_"+method) {
+			return true
+		}
+	}
+	return false
+}
+
+// isUniqueConflict is a write refused by a unique index: storage reports it as
+// InvalidArgument with an ErrorDetail{code: UNIQUE_VIOLATION} (or
+// AlreadyExists).
+func isUniqueConflict(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok || err == nil {
+		return false
+	}
+	if st.Code() == codes.AlreadyExists {
+		return true
+	}
+	for _, d := range st.Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok && ed.GetCode() == "UNIQUE_VIOLATION" {
+			return true
+		}
+	}
+	return false
 }

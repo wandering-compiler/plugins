@@ -272,7 +272,7 @@ func (h *AuthServiceHandler) AddOrgTeamMember(ctx context.Context, req *pb.AddOr
 		return nil, err
 	}
 	resp, err := h.Mutation.AddTeamMember(ctx, &pb.AddTeamMemberReq{TeamId: req.GetTeamId(), UserId: req.GetUserId(), OrgId: orgID, AddedBy: callerID})
-	if status.Code(err) == codes.AlreadyExists {
+	if isUniqueConflict(err) {
 		return nil, refusal(ctx, codes.AlreadyExists,
 			"user "+req.GetUserId()+" is already a member of team "+req.GetTeamId(),
 			CodeTeamMemberAlready, "user_id", MsgTeamMemberAlready, nil)
@@ -453,10 +453,10 @@ func teamName(ctx context.Context, name string) (string, error) {
 	return name, nil
 }
 
-// teamNameRefusal reads a write's AlreadyExists as the name being taken — the
-// one unique index a team's create and rename can hit.
+// teamNameRefusal reads a write's unique conflict as the name being taken —
+// the one unique index a team's create and rename can hit.
 func teamNameRefusal(ctx context.Context, err error, name string) error {
-	if status.Code(err) == codes.AlreadyExists {
+	if isUniqueConflict(err) {
 		return refusal(ctx, codes.AlreadyExists, "a live team of the organization is named "+name,
 			CodeTeamNameTaken, "name", MsgTeamNameTaken, map[string]string{"name": name})
 	}

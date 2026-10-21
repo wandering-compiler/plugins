@@ -1250,6 +1250,7 @@ msgids:
   - "Confirm it is you before creating a token."
   - "Confirm it is you with your authenticator app or the code we email you."
   - "Confirm your email address before accepting this invitation."
+  - "Every organization has this package; it is not given or taken."
   - "Give the public key of the program that will use this token."
   - "Give the role a name."
   - "Give the team a name."

@@ -34,8 +34,10 @@ message Envelope {
     indexes: [
       { fields: [{ name: "org_id" }, { name: "status" }] },
       // One approved version per organization: two approvals racing for one
-      // organization cannot both commit.
-      { unique: true, fields: [{ name: "org_id" }], where: "status = 'approved'" }
+      // organization cannot both commit. approved_slot is set only on the
+      // approved row and NULL elsewhere — NULLs are distinct on every
+      // dialect, so this needs no partial index.
+      { unique: true, fields: [{ name: "org_id" }, { name: "approved_slot" }] }
     ]
   };
 
@@ -58,6 +60,9 @@ message Envelope {
   string decided_by       = 17 [(w17.field) = { type: UUID, null: true }];
   google.protobuf.Timestamp decided_at  = 18 [(w17.field) = { type: DATETIME, null: true }];
   string decision_note    = 19 [(w17.field) = { type: TEXT, max_len: 2000, blank: true, default_string: "" }];
+  // approved_slot — 'approved' on the organization's one approved version,
+  // NULL on every other (the unique index above).
+  string approved_slot    = 20 [(w17.field) = { type: CHAR, max_len: 8, null: true }];
 }
 
 // HostBinding — a co-brand host and the organization it presents. One live
