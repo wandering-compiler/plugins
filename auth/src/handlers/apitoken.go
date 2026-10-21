@@ -142,6 +142,8 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		deviceThumbprint: tok.GetDeviceThumbprint(),
 		deviceRevokedAt:  tok.GetDeviceRevokedAt(),
 		mcpOnly:          tok.GetMcpOnly(),
+		oauthResource:    tok.GetOauthResource(),
+		oauthOrgID:       tok.GetOauthOrgId(),
 		bearer:           tok.GetBearer(),
 		botAccount:       isBotAccount(tok.GetUser()),
 		user:             tok.GetUser(),

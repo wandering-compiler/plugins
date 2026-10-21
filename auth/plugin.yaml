@@ -58,6 +58,30 @@ env:
     type: int
     default: "2160"
     description: "Lifetime (hours) of an API token — a person's (CreateApiToken) or a machine account's (IssueBotToken) — minted WITHOUT an explicit expires_at. Default 2160 = 90 days. A caller may still choose its own expiry (any time in the future). 0 = never expires, the behaviour before this setting existed; tokens minted earlier keep their NULL expiry. A machine account's bearer token (minted without a key) never takes \"never\": 0 gives it 90 days, and no bearer token lives more than 366 days. Rotation is issue-new-then-revoke-old; the default is what makes forgetting the revoke safe."
+  - name: oauth_access_ttl_seconds
+    type: int
+    default: "3600"
+    description: "Lifetime (seconds) of an access token the OAuth authorization server issues an MCP client (oauth_server). Default 3600 = 1 hour; the client refreshes it. <= 0 falls back to 3600."
+  - name: oauth_refresh_ttl_days
+    type: int
+    default: "30"
+    description: "Lifetime (days) of an OAuth refresh token (oauth_server); each refresh issues a new one, so an app used at least this often stays connected until oauth_grant_max_days. <= 0 falls back to 30."
+  - name: oauth_grant_max_days
+    type: int
+    default: "365"
+    description: "How long (days) an approved MCP client stays connected at most (oauth_server); after it the user approves again. <= 0 falls back to 365."
+  - name: oauth_dynamic_registration
+    type: bool
+    default: "true"
+    description: "Serve the OAuth registration endpoint (RFC 7591) for clients without a metadata document (oauth_server). Only public clients register; the gateway caps registrations per address. false = only clients with a Client ID Metadata Document (an https client_id) can connect."
+  - name: oauth_redirect_hosts
+    type: string
+    default: ""
+    description: "The https hosts a client's redirect may be on (oauth_server): a comma- or space-separated list (claude.ai, cursor.com). Empty = any https host. Loopback redirects (a program on the user's computer) are always allowed. An entry that is not a host name fails the boot."
+  - name: oauth_resources
+    type: string
+    default: ""
+    description: "The resources (MCP surface URLs) this server issues tokens for (oauth_server): a comma- or space-separated list of absolute URLs. Empty = any https URL — the consent page shows the user which one. Set it to your MCP surfaces so no client can have a token minted for another server's name. An entry that is not an absolute URL fails the boot."
   - name: totp_issuer
     type: string
     default: ""
@@ -219,6 +243,20 @@ features:
     default: false
     go_files:
       - handlers/cli_login.go
+  - name: oauth_server
+    description: "An OAuth 2.1 authorization server (the MCP authorization specification, 2025-11-25) for MCP clients — Claude, Cursor, ChatGPT — and for w17ctl's browser login. The client registers itself (RFC 7591, setting oauth_dynamic_registration) or names its metadata document (a Client ID Metadata Document: an https client_id this server fetches, guarded against private addresses), sends the user's browser to the authorization endpoint (PKCE S256, state, an RFC 8707 resource), the user approves on the project's consent page (GET /auth/oauth/authorizations/{request_id}, POST .../approve | .../deny — with org_membership the user chooses the organization the grant belongs to), and the client exchanges the code. An MCP grant (a resource named) yields an mcp_only access token of type MCP for that one resource (its permissions are the user's roles of realm mcp; Authenticate refuses it on another resource and on every other surface) and a rotating refresh token (a spent one presented again ends the grant); a session grant (no resource, a loopback redirect, a DPoP proof at the token endpoint) yields a session bound to the program's key, no longer than the approving session — w17ctl's login. The user lists and revokes their connected apps (GET /auth/oauth/connected-apps, DELETE /auth/oauth/connected-apps/{grant_id}); revoking a device, every token or the account ends the grants it reaches. The OAuth wire itself (metadata, /oauth/authorize, /oauth/token, /oauth/register, /oauth/revoke) is served by the REST gateway (SDK lib/oauthas), not by REST routes. Adds OAuthClient, OAuthAuthorization, OAuthGrant, OAuthRefreshToken and three UserToken columns; nothing is deleted. Off by default."
+    default: false
+    requires:
+      # An MCP token is an api_token-realm row: token_type (MCP), the
+      # realm-aware resolver, last_used_at.
+      - api_token
+      # The consent page and connected apps read the caller off the AuthResp
+      # envelope.
+      - authenticate_turnkey
+    go_files:
+      - handlers/oauth_server.go
+      - handlers/oauth_server_token.go
+      - handlers/oauth_server_clients.go
   - name: org_members_rest
     description: "Publishes a member's management on the REST preset beside the member list: PUT /auth/orgs/{org}/members/{id}/role (UpdateOrgMembershipRole) and DELETE /auth/orgs/{org}/members/{id} (RemoveOrgMembership), both under the role ceiling — the caller must cover every role the member holds and the one they are given — and in the organization the path names. The member list carries each membership's id for them. Off by default: an upgrade adds no route an activation did not ask for."
     default: false
@@ -299,6 +337,9 @@ features:
     description: "A machine account holds any combination of the API-realm roles: SetBotRoles (PUT /auth/bots/{user_id}/roles) replaces the set in one transaction — at least one role, each an API-realm role the caller could grant, under the operator rules of IssueBotToken — and the bot directory (ListBots) carries the roles each bot holds (BotSummary.role_ids). CreateBot still grants one role in the same call. Off by default; no migration."
     default: false
     requires:
+      # The role writes it makes (pb.AssignRoleToUserReq, CreateRoleReq …)
+      # are rbac's: declared here, not held through another feature.
+      - rbac
       - service_account
       - org_membership
     go_files:
@@ -307,6 +348,9 @@ features:
     description: "An organization composes roles of its own from the deployed lock's permissions (Role.org_id): ListOrgRoles / CreateOrgRole / UpdateOrgRole / DeleteOrgRole (GET / POST /auth/orgs/{org}/org-roles, PUT / DELETE /auth/orgs/{org}/org-roles/{role_id}). A custom role is an ordinary org-scoped role with RolePermission rows, offered, granted and edited only in its own organization: with the feature on, the catalogue every org-role grant reads (invitation, acceptance, role change, ListAssignableRoles) is the organization's — the shared org roles plus its own. The role ceiling applies to composing as to granting: a role carries only permissions its author holds, and an existing one is changed or deleted only by someone who covers it. A role still held is not deleted. Seeded roles are never edited here. Off by default; a migration adds the column."
     default: false
     requires:
+      # The role writes it makes (pb.AssignRoleToUserReq, CreateRoleReq …)
+      # are rbac's: declared here, not held through another feature.
+      - rbac
       - org_membership
     go_files:
       - handlers/org_roles.go
@@ -390,6 +434,11 @@ go_files_combined:
   # The calls it makes exist only with org_membership.
   - features: [service_account, org_membership]
     files: [handlers/service_account_org.go]
+  # The organization an OAuth grant belongs to: chosen on the consent page
+  # and stamped on its tokens. The membership reads exist only with
+  # org_membership.
+  - features: [oauth_server, org_membership]
+    files: [handlers/oauth_server_org.go]
   # The pending registration carries the tenant SignUp resolved; the fields
   # that hold it exist only when both features do.
   - features: [sign_up_confirmation, tenant_scope]
@@ -569,6 +618,18 @@ presets:
         endpoints:
           - { ref: AuthService.CliAuthorize, method: POST, path: /authorize,                     feature: cli_login }
           - { ref: AuthService.CliToken,     method: POST, path: /token,     exclude_auth: true, public_limit: failed_only, feature: cli_login }
+      # The OAuth authorization server's pages (oauth_server): the consent
+      # page's three calls and the user's connected apps, all with the
+      # user's session. The OAuth protocol endpoints are not routes here:
+      # the gateway serves them (SDK lib/oauthas).
+      - prefix: /auth/oauth
+        description: "OAuth consent and connected apps — decide an application's sign-in request, list and revoke the applications you approved."
+        endpoints:
+          - { ref: AuthService.GetOAuthAuthorization,     method: GET,    path: "/authorizations/{request_id}",         feature: oauth_server }
+          - { ref: AuthService.ApproveOAuthAuthorization, method: POST,   path: "/authorizations/{request_id}/approve", feature: oauth_server }
+          - { ref: AuthService.DenyOAuthAuthorization,    method: POST,   path: "/authorizations/{request_id}/deny",    feature: oauth_server }
+          - { ref: AuthService.ListMyOAuthGrants,         method: GET,    path: "/connected-apps",                      feature: oauth_server }
+          - { ref: AuthService.RevokeMyOAuthGrant,        method: DELETE, path: "/connected-apps/{grant_id}",           feature: oauth_server }
       # The registry of redirect targets the same flow may send a code to.
       #
       # ⚠ THE PLUGIN AUTHENTICATES THESE, IT DOES NOT AUTHORIZE THEM. The
@@ -1040,6 +1101,7 @@ msgids:
   - "Authentication is temporarily unavailable. Please try again shortly."
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Choose at least one permission for the role."
+  - "Choose one of your organizations for this application."
   - "Confirm your email address before accepting this invitation."
   - "Give the public key of the program that will use this token."
   - "Give the role a name."
@@ -1066,6 +1128,7 @@ msgids:
   - "This app did not prove which device it runs on. Reload or update it, then sign in again."
   - "This authenticator app is already set up. To get new recovery codes, generate them."
   - "This callback was registered under this client ID and revoked. Register it under a new client ID."
+  - "This connected app is not one of yours, or was already disconnected."
   - "This device was signed out for good. Sign in again to use it as a new device."
   - "This email address cannot be used. Use another address."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
@@ -1076,6 +1139,7 @@ msgids:
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
   - "This request names two different organizations. Name one."
+  - "This sign-in request has expired or was already answered. Start again from the application."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait 15 minutes and try again."
   - "Wrong email or password."

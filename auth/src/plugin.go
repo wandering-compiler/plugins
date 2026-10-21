@@ -101,6 +101,14 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 
 		// api_token: the lifetime of a token minted without an expiry.
 		APITokenDefaultTTLHours: cfg.APITokenDefaultTtlHours,
+
+		// oauth_server (ignored unless the feature is staged).
+		OAuthAccessTTLSeconds:    cfg.OauthAccessTtlSeconds,
+		OAuthRefreshTTLDays:      cfg.OauthRefreshTtlDays,
+		OAuthGrantMaxDays:        cfg.OauthGrantMaxDays,
+		OAuthDynamicRegistration: cfg.OauthDynamicRegistration,
+		OAuthRedirectHosts:       cfg.OauthRedirectHosts,
+		OAuthResources:           cfg.OauthResources,
 	}
 	if err := handlers.ValidateConfig(h); err != nil {
 		return err

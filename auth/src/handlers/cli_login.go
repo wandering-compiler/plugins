@@ -439,26 +439,6 @@ func (h *AuthServiceHandler) checkRedirectAllowed(ctx context.Context, clientID,
 	return nil
 }
 
-// isLoopbackRedirect reports whether a CLI redirect_uri is a safe loopback
-// callback (RFC 8252 §7.3): http scheme, host 127.0.0.1 / ::1 / localhost,
-// any port + path. A non-loopback target would let a stolen authorize link
-// redirect the code to an attacker-controlled origin.
-func isLoopbackRedirect(raw string) bool {
-	if raw == "" {
-		return false
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "http" {
-		return false
-	}
-	switch u.Hostname() {
-	case "127.0.0.1", "::1", "localhost":
-		return true
-	default:
-		return false
-	}
-}
-
 // --- the client registry ---------------------------------------------------
 //
 // An operator writes down the callbacks they vouch for; CliAuthorize will send

@@ -115,7 +115,7 @@ func TestEveryTokenLookupRefusesARevokedToken(t *testing.T) {
 		}
 	}
 	sort.Strings(lookups)
-	want := "GetLiveSessionExpiry,GetTokenWithType,GetUserByToken,GetUserByTokenWithPermissions"
+	want := "GetLiveSessionExpiry,GetOAuthApprovingSession,GetTokenWithType,GetUserByToken,GetUserByTokenWithPermissions"
 	if strings.Join(lookups, ",") != want {
 		t.Errorf("token lookups = %v, want %s", lookups, want)
 	}
@@ -164,6 +164,8 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 		"RevokeUserToken":          {pb.RevokeReason_REVOKE_REASON_ADMIN_REVOKED, ":revoked_by"},
 		"DisableUsers":             {pb.RevokeReason_REVOKE_REASON_USER_DISABLED, ""},
 		"BeginUserErasure":         {pb.RevokeReason_REVOKE_REASON_USER_ERASED, ":revoked_by"},
+		"RevokeOAuthGrant":         {pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, ":revoked_by"},
+		"RevokeOAuthCodeSession":   {pb.RevokeReason_REVOKE_REASON_CODE_REPLAYED, ""},
 	}
 	setRe := regexp.MustCompile(`UPDATE @module\.UserToken SET revoked_at = NOW\(\), (?:revoked_by = (:\w+), )?revoke_reason = (\d+) WHERE ([^"]*)"`)
 	seen := map[string]bool{}

@@ -434,6 +434,11 @@ func (s *revocationStore) EraseOAuthData(_ context.Context, in *pb.EraseOAuthDat
 	return &pb.EraseOAuthDataResp{}, nil
 }
 
+func (s *revocationStore) RevokeUserOAuthGrants(_ context.Context, in *pb.RevokeUserOAuthGrantsReq, _ ...grpc.CallOption) (*pb.RevokeUserOAuthGrantsResp, error) {
+	s.erased = append(s.erased, "oauth_server:"+in.GetUserId())
+	return &pb.RevokeUserOAuthGrantsResp{}, nil
+}
+
 func (s *revocationStore) EraseTwoFactorData(_ context.Context, in *pb.EraseTwoFactorDataReq, _ ...grpc.CallOption) (*pb.EraseTwoFactorDataResp, error) {
 	s.erased = append(s.erased, "two_factor:"+in.GetUserId())
 	return &pb.EraseTwoFactorDataResp{}, nil
@@ -873,7 +878,7 @@ func TestEraseUsers_PseudonymisesAndKeepsEveryRow(t *testing.T) {
 		}
 	}
 	want := []string{
-		"email_verification:u1", "oauth:u1", "org_invite:alice@example.com",
+		"email_verification:u1", "oauth:u1", "oauth_server:u1", "org_invite:alice@example.com",
 		"password_reset:u1", "sign_in_history:u1:alice@example.com>erased-u1@erased.invalid",
 		"sign_up_confirmation:alice@example.com>erased-u1@erased.invalid", "two_factor:u1",
 	}

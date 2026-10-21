@@ -1168,6 +1168,186 @@ message MarketingConsentResp {
   google.protobuf.Timestamp decided_at = 2;
 }
 
+// ── oauth_server business messages ─────────────────────────────
+//
+// The adapter-facing calls (registration, authorization, token, revocation)
+// answer an OAuth refusal in the response — oauth_error + its description —
+// and keep gRPC errors for failures, so the wire adapter (SDK lib/oauthas)
+// tells "the client asked for something it may not have" from "the server
+// could not answer".
+
+message GetOAuthServerSettingsReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+}
+message GetOAuthServerSettingsResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  bool dynamic_registration = 1;
+}
+
+message RegisterOAuthClientReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  repeated string redirect_uris = 1;
+  string client_name = 2;
+  string client_uri = 3;
+  string logo_uri = 4;
+  string software_id = 5;
+  repeated string grant_types = 6;
+  repeated string response_types = 7;
+  string scope = 8;
+  string client_addr = 9;
+}
+message RegisterOAuthClientResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string client_id = 1;
+  google.protobuf.Timestamp issued_at = 2;
+  string oauth_error = 3;
+  string oauth_error_description = 4;
+}
+
+message BeginOAuthAuthorizationReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string response_type = 1;
+  string client_id = 2;
+  string redirect_uri = 3;
+  string state = 4;
+  string scope = 5;
+  string code_challenge = 6;
+  string code_challenge_method = 7;
+  repeated string resources = 8;
+  string issuer = 9;
+  string client_addr = 10;
+}
+message BeginOAuthAuthorizationResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  // The pending request's opaque id, for the consent page.
+  string request_id = 1;
+  string oauth_error = 2;
+  string oauth_error_description = 3;
+  // The refusal concerns the client or the redirect itself: shown to the
+  // user, never sent to the redirect (RFC 6749 §4.1.2.1).
+  bool no_redirect = 4;
+}
+
+// GetOAuthAuthorization — what the consent page shows. The signed-in caller
+// only: the request id alone proves nothing about who may decide it.
+message GetOAuthAuthorizationReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string request_id = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+}
+message OAuthConsentOrg {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+}
+message GetOAuthAuthorizationResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  // The client as it named itself — unverified; redirect_host is what it
+  // cannot choose: where the code will go.
+  string client_name = 1;
+  string client_uri = 2;
+  string logo_uri = 3;
+  string client_id = 4;
+  string redirect_host = 5;
+  // MCP (an app acting through the MCP surface named by resource) or SESSION
+  // (a program on this computer signing in as the user — w17ctl).
+  OAuthGrantKind kind = 6;
+  string resource = 7;
+  string scope = 8;
+  google.protobuf.Timestamp expires_at = 9;
+  // The organizations the user may choose for the grant (org_membership);
+  // empty without organizations.
+  repeated OAuthConsentOrg orgs = 10;
+}
+
+message ApproveOAuthAuthorizationReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string request_id = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // The organization the grant belongs to; required with organizations,
+  // ignored without.
+  string org_id = 2 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+}
+message ApproveOAuthAuthorizationResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  // Where the page sends the browser: the client's redirect with the code,
+  // state and iss.
+  string redirect_url = 1;
+}
+
+message DenyOAuthAuthorizationReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string request_id = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+}
+message DenyOAuthAuthorizationResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string redirect_url = 1;
+}
+
+message ExchangeOAuthTokenReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string grant_type = 1;
+  string code = 2;
+  string redirect_uri = 3;
+  string code_verifier = 4;
+  string client_id = 5;
+  string refresh_token = 6;
+  repeated string resources = 7;
+  string scope = 8;
+  string client_addr = 9;
+}
+message ExchangeOAuthTokenResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string access_token = 1;
+  // "Bearer" (an MCP grant) or "DPoP" (a session grant, bound to the key of
+  // the request's proof).
+  string token_type = 2;
+  int64 expires_in = 3;
+  string refresh_token = 4;
+  string scope = 5;
+  string oauth_error = 6;
+  string oauth_error_description = 7;
+}
+
+message RevokeOAuthTokenReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string token = 1;
+  string token_type_hint = 2;
+  string client_id = 3;
+  string client_addr = 4;
+}
+message RevokeOAuthTokenResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+}
+
+message ListMyOAuthGrantsReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+}
+message MyOAuthGrant {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string id = 1;
+  string client_name = 2;
+  string client_uri = 3;
+  string logo_uri = 4;
+  string client_id = 5;
+  string resource = 6;
+  string org_id = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+}
+message ListMyOAuthGrantsResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  repeated MyOAuthGrant grants = 1;
+}
+
+message RevokeMyOAuthGrantReq {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+  string grant_id = 1 [(w17.field) = { type: UUID }];
+}
+message RevokeMyOAuthGrantResp {
+  option (w17.contrib.plugin_feature) = "oauth_server";
+}
+
 service AuthService {
   // Service-level tag would cascade to SignIn / SignUp too, but
   // each turnkey has its own opt-in feature tag — the service is
@@ -1463,6 +1643,44 @@ service AuthService {
   // client-sent user_id). Gated `org_membership`.
   rpc ListMyOrgs(ListMyOrgsReq) returns (ListMyOrgsResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
+  }
+
+  // ── oauth_server — the OAuth 2.1 authorization server ───────
+  // The wire (SDK lib/oauthas, mounted by the REST gateway) calls
+  // GetOAuthServerSettings, RegisterOAuthClient, BeginOAuthAuthorization,
+  // ExchangeOAuthToken and RevokeOAuthToken unauthenticated — the client
+  // has no token yet. The project's consent page calls Get/Approve/Deny with
+  // the user's session; ListMyOAuthGrants / RevokeMyOAuthGrant are the
+  // user's "connected apps". Gated `oauth_server`.
+  rpc GetOAuthServerSettings(GetOAuthServerSettingsReq) returns (GetOAuthServerSettingsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc RegisterOAuthClient(RegisterOAuthClientReq) returns (RegisterOAuthClientResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc BeginOAuthAuthorization(BeginOAuthAuthorizationReq) returns (BeginOAuthAuthorizationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc GetOAuthAuthorization(GetOAuthAuthorizationReq) returns (GetOAuthAuthorizationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc ApproveOAuthAuthorization(ApproveOAuthAuthorizationReq) returns (ApproveOAuthAuthorizationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc DenyOAuthAuthorization(DenyOAuthAuthorizationReq) returns (DenyOAuthAuthorizationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc ExchangeOAuthToken(ExchangeOAuthTokenReq) returns (ExchangeOAuthTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc RevokeOAuthToken(RevokeOAuthTokenReq) returns (RevokeOAuthTokenResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc ListMyOAuthGrants(ListMyOAuthGrantsReq) returns (ListMyOAuthGrantsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
+  }
+  rpc RevokeMyOAuthGrant(RevokeMyOAuthGrantReq) returns (RevokeMyOAuthGrantResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth_server";
   }
 
   // ────────────────────────────────────────────────────────────

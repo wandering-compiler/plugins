@@ -169,6 +169,23 @@ message ApiTokenCreated {
   string                    created_by = 7;
 }
 
+// OAuthGrantApproved — emitted when a user approves an MCP client on the
+// consent page and the client redeems its code (oauth_server): a connected
+// app came into being. No token value travels.
+message OAuthGrantApproved {
+  option (w17.event) = { channel: "events", topic: "auth.oauth_grant.approved" };
+  option (w17.contrib.plugin_feature) = "oauth_server";
+
+  string                    grant_id   = 1;
+  string                    user_id    = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // client_id — what the client is known by: the URL of its metadata
+  // document, or the id this server minted it.
+  string                    client_id  = 4;
+  // resource — the MCP surface the grant is for.
+  string                    resource   = 5;
+}
+
 // TokenIssued — emitted on AuthMutation.IssueToken after the
 // UserToken row commits. Subscribers might rate-limit token
 // issuance, populate a per-user session count, fan out to a
