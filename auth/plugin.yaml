@@ -46,6 +46,18 @@ env:
     type: int
     default: "900"
     description: "The window mfa_max_challenges_per_window counts over (two_factor feature). Default 900 = 15 minutes. <= 0 falls back to 900."
+  - name: sign_in_failure_budget
+    type: int
+    default: "20"
+    description: "How many password attempts SignIn takes for one account per sign_in_failure_window_seconds, from every address together (sign-in/failure-budget). Counted before the password is checked; a correct password resets it. Once it is spent the account is not locked: only a device that has signed in to the account before (its key) may still try, sign_in_device_failure_budget times per window — so a person keeps signing in from their own browser while someone guesses, and a new device waits for the window. <= 0 falls back to 20."
+  - name: sign_in_device_failure_budget
+    type: int
+    default: "10"
+    description: "How many password attempts one known device (a key that has signed in to the account before) may make per window while the account's sign_in_failure_budget is spent. Bounds guessing with a stolen device key. <= 0 falls back to 10."
+  - name: sign_in_failure_window_seconds
+    type: int
+    default: "900"
+    description: "The window sign_in_failure_budget and sign_in_device_failure_budget count over; it starts at the first attempt after the previous one ended. Default 900 = 15 minutes. <= 0 falls back to 900."
   - name: session_token_ttl_seconds
     type: int
     default: "2592000"

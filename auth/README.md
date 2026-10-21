@@ -109,6 +109,14 @@ Behaviour that is deliberate, and easy to build against wrongly.
 **Errors**
 - **The sentence for a person is in `details[0].message`.** The envelope's top-level `message` is the generic sentence for the code: for `EMAIL_TAKEN` it reads "Another change reached this first. Please try again." A client must render the detail.
 
+### Behind a proxy
+
+The gateway's per-address limit on the sign-in endpoints (`failed_only`, SPEC "Per-address rate limit") is only as good as the address it sees. When the gateway sits behind an HTTP terminator — a reverse proxy, a load balancer, a server-side app that relays the request — set `<PREFIX>_PUBLIC_RATELIMIT_TRUSTED_PROXIES` to the terminator's addresses (CIDRs, or `private` when every private-range hop in front of the gateway appends the client address to `X-Forwarded-For`). Unset, the gateway trusts no proxy and keys every request by the terminator's address: everyone shares one bucket, and a few wrong passwords a minute from anyone refuse every sign-in.
+
+A stack rendered by `w17ctl infra` (target swarm) sets it already: its edge publishes its ports in host mode, so it sees the client's address, and every service is told to trust the stack's private networks. Put another balancer in front of that edge, on a private address, and the edge's own trust covers it too — make sure it appends the client address.
+
+SignIn's per-account guess budget (`sign_in_failure_budget`, SPEC `sign_in_turnkey/failure-budget`) holds either way: it counts per account, wherever the attempts come from.
+
 ## Generating `src/gen`
 
 `src/gen` is generated and never committed: the pb, the contract

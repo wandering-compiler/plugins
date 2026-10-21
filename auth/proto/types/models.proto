@@ -230,6 +230,15 @@ message User {
     (w17.field) = { type: CHAR, max_len: 2048, blank: true },
     (w17.contrib.plugin_feature_field) = "bot_token_guard"
   ];
+
+  // sign_in_failures / sign_in_window_at — SignIn's per-account guess
+  // budget (sign-in/failure-budget): the password attempts counted since
+  // sign_in_window_at, the start of the current window. Every attempt is
+  // counted before its password is checked, in one statement
+  // (CountSignInAttempt); a correct password resets both
+  // (ResetSignInAttempts). Base tier.
+  int64 sign_in_failures = 15 [(w17.field) = { type: COUNTER, default_int: 0 }];
+  google.protobuf.Timestamp sign_in_window_at = 16 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // BotTokenUse — where and for what a machine account's bearer token is used:
@@ -670,6 +679,13 @@ message Device {
   // token ends by RevokeApiToken, by revoking its device on the admin
   // Devices page, or by revoking the one device that created it. Base tier.
   bool api_key = 12 [(w17.field) = { default_auto: FALSE }];
+  // sign_in_failures / sign_in_window_at — the device's own guess budget
+  // for its account, spent only while the account's is (sign-in/
+  // failure-budget): then only a key that already signed in to the account
+  // may try, and this bounds how often. Reset with the account's by a
+  // correct password. Base tier.
+  int64 sign_in_failures = 13 [(w17.field) = { type: COUNTER, default_int: 0 }];
+  google.protobuf.Timestamp sign_in_window_at = 14 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // SignInMethod — which mint path a SignInEvent records. Values are explicit
@@ -764,6 +780,9 @@ enum SignInOutcome {
   // machine account — another key than the one it has (DEVICE_KEY_REQUIRED,
   // DEVICE_KEY_INVALID, BOT_KEY_MISMATCH).
   SIGN_IN_OUTCOME_KEY_REFUSED = 19;
+  // SignIn's guess budget was spent: the account's, from a key that never
+  // signed in to it, or the device's own (sign-in/failure-budget).
+  SIGN_IN_OUTCOME_THROTTLED = 20;
 }
 
 // SignInEvent — the sign-in history: one row per sign-in attempt on every

@@ -263,6 +263,7 @@ type outcomeRule struct {
 var signInOutcomeRules = []outcomeRule{
 	{errAuthnPasswordMismatch, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_PASSWORD},
 	{errAuthnUserDisabled, pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED},
+	{errSignInThrottled, pb.SignInOutcome_SIGN_IN_OUTCOME_THROTTLED},
 }
 
 // outcomeByCode maps the ErrorDetail code a refusal carries on the wire to
