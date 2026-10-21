@@ -261,6 +261,17 @@ type AuthServiceHandler struct {
 	// an explicit expires_at (api_token_default_ttl_hours). 0 = never expires;
 	// negative falls back to the 90-day default. See apiTokenExpiry.
 	APITokenDefaultTTLHours int
+	// APITokenMaxTTLHours caps a person's API token (api_token_max_ttl_hours;
+	// 0 = no cap). See personTokenExpiry.
+	APITokenMaxTTLHours int
+	// APITokenStepUpSeconds asks CreateApiToken for a step-up that recent
+	// (api_token_step_up_seconds; 0 = not asked). Needs step_up.
+	APITokenStepUpSeconds int
+	// NoPasswordStepUp turns ConfirmPassword off as a step-up
+	// (step_up_password=false). Read only with step_up_code staged: the
+	// second factor is then the only proof. Inverted so a handler built
+	// without the setting keeps the password, as before it existed.
+	NoPasswordStepUp bool
 
 	// SignUpAllowlist is who may register at all (sign_up_allowlist): addresses
 	// and @domains, comma- or space-separated; empty = everyone. Read through
@@ -282,6 +293,24 @@ type AuthServiceHandler struct {
 	OAuthRedirectHosts       string // oauth_redirect_hosts
 	OAuthResources           string // oauth_resources
 }
+
+// apiTokenStepUpChecks run before CreateApiToken (api_token) mints: step_up.go
+// appends the one that asks for a recent step-up (api_token_step_up_seconds).
+// Empty without step_up staged, and then the setting is refused at boot.
+// Declared here, in the always-compiled file, because the two features are
+// staged independently.
+var apiTokenStepUpChecks []func(ctx context.Context, h *AuthServiceHandler, userID, sessionTokenID string) error
+
+// MsgNeedsStepUp is what a person reads when CreateApiToken asks for a
+// step-up first.
+//
+//w17:msgid
+const MsgNeedsStepUp = "Confirm it is you before creating a token."
+
+// CodeCreateNeedsStepUp — CreateApiToken: the session has not stepped up
+// recently enough (api_token_step_up_seconds); the client asks for the
+// step-up and tries again.
+const CodeCreateNeedsStepUp = "API_TOKEN_NEEDS_STEP_UP"
 
 // configChecks are the boot checks of feature-owned settings: a feature file
 // appends its own from init(), so ValidateConfig checks exactly what the

@@ -8,6 +8,7 @@ import (
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"math/big"
+	"os"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -60,6 +61,34 @@ const (
 // in every activation.
 const scopeNewDevices = "new_devices"
 
+// scopeOff is the two_factor_scope value that challenges NO sign-in — for a
+// development stack whose scripts sign in with a password, under the same
+// rule the SDK applies to its other development allowances: honoured only
+// with W17_ENV=dev. Anywhere else the boot refuses it (checkTwoFactorScope),
+// and a handler built without that check challenges anyway (twoFactorOff).
+const scopeOff = "off"
+
+// The deployment environment, as the SDK reads it (fieldcrypt, ratelimit).
+const (
+	envEnvironment = "W17_ENV"
+	devEnvironment = "dev"
+)
+
+// twoFactorOff reports whether this sign-in is spared the challenge: scope
+// off, in a development environment only.
+func (h *AuthServiceHandler) twoFactorOff() bool {
+	return h.TwoFactorScope == scopeOff && os.Getenv(envEnvironment) == devEnvironment
+}
+
+// checkTwoFactorScope refuses two_factor_scope=off outside W17_ENV=dev: a
+// production console that read it would sign everyone in on one factor.
+func checkTwoFactorScope(h *AuthServiceHandler) error {
+	if h.TwoFactorScope == scopeOff && os.Getenv(envEnvironment) != devEnvironment {
+		return fmt.Errorf("two_factor_scope = off is honoured only with %s=%s (a development stack); this environment is %q — set all_logins or new_devices", envEnvironment, devEnvironment, os.Getenv(envEnvironment))
+	}
+	return nil
+}
+
 var errMfaChallengeInvalid = errors.New("mfa challenge invalid/expired/consumed")
 
 // errMfaAttemptsSpent: the challenge's attempt budget is spent. The same
@@ -86,6 +115,7 @@ var errMfaChallengeBudget = &wireError{
 // share of an erasure.
 func init() {
 	signInMfaGate = mfaSignInGate
+	configChecks = append(configChecks, checkTwoFactorScope)
 	erasers = append(erasers, eraseTwoFactorData)
 	signInOutcomeRules = append(signInOutcomeRules,
 		outcomeRule{errMfaChallengeInvalid, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
@@ -315,8 +345,11 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 // its public-computer choice, which VerifyMfa honours.
 func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted, public bool) (*pb.SignInResp, bool, error) {
 	// new_devices: only challenge an untrusted device. all_logins (default):
-	// every sign-in challenges.
+	// every sign-in challenges. off: none, on a development stack only.
 	if h.TwoFactorScope == scopeNewDevices && deviceTrusted {
+		return nil, false, nil
+	}
+	if h.twoFactorOff() {
 		return nil, false, nil
 	}
 

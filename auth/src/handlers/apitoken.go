@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -220,7 +222,16 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 		return nil, err
 	}
 	attempt.thumbprint = key.Thumbprint
-	expiresAt, err := h.apiTokenExpiry(ctx, req.GetExpiresAt())
+	// A token outlives the session that mints it, so minting one is the
+	// moment a stolen session would choose: with api_token_step_up_seconds
+	// set, the session must have stepped up recently (step_up.go fills the
+	// seam; ValidateConfig refuses the setting without it).
+	for _, check := range apiTokenStepUpChecks {
+		if err := check(ctx, h, userID, callerSessionTokenID(ctx)); err != nil {
+			return nil, err
+		}
+	}
+	expiresAt, err := h.personTokenExpiry(ctx, req.GetExpiresAt())
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +498,53 @@ func (h *AuthServiceHandler) RevokeApiToken(ctx context.Context, req *pb.RevokeA
 const (
 	MsgExpiryInPast  = "A token cannot expire in the past. Choose a later date."
 	MsgExpiryInvalid = "That expiry date is not a valid date."
+	MsgExpiryTooLate = "A token can last at most {days} days. Choose an earlier date."
 )
+
+// CodeExpiryTooLate — a requested expiry past api_token_max_ttl_hours.
+const CodeExpiryTooLate = "TOKEN_EXPIRY_TOO_LATE"
+
+func init() {
+	configChecks = append(configChecks, checkAPITokenConfig)
+}
+
+// checkAPITokenConfig refuses settings the activation cannot honour: a
+// negative cap, and a step-up nobody can perform.
+func checkAPITokenConfig(h *AuthServiceHandler) error {
+	if h.APITokenMaxTTLHours < 0 {
+		return fmt.Errorf("api_token_max_ttl_hours = %d: must be 0 (no cap) or a number of hours", h.APITokenMaxTTLHours)
+	}
+	if h.APITokenStepUpSeconds > 0 && len(apiTokenStepUpChecks) == 0 {
+		return fmt.Errorf("api_token_step_up_seconds = %d needs the step_up feature: without it no session can step up, so no person could create a token", h.APITokenStepUpSeconds)
+	}
+	return nil
+}
+
+// personTokenExpiry is apiTokenExpiry for a token a PERSON creates, under the
+// deployment's cap (api_token_max_ttl_hours): a later expiry is refused, and
+// a token minted without one — or with a default of "never" — takes the
+// default, never more than the cap. So with a cap every person's token
+// expires. Machine accounts' tokens are the operator's and keep their rules.
+func (h *AuthServiceHandler) personTokenExpiry(ctx context.Context, requested *timestamppb.Timestamp) (*timestamppb.Timestamp, error) {
+	exp, err := h.apiTokenExpiry(ctx, requested)
+	if err != nil || h.APITokenMaxTTLHours <= 0 {
+		return exp, err
+	}
+	limit := time.Now().Add(time.Duration(h.APITokenMaxTTLHours) * time.Hour)
+	if requested != nil {
+		if exp.AsTime().After(limit) {
+			days := strconv.Itoa(h.APITokenMaxTTLHours / 24)
+			return nil, refusal(ctx, codes.InvalidArgument,
+				"expires_at "+exp.AsTime().UTC().Format(time.RFC3339)+" is past the cap of "+strconv.Itoa(h.APITokenMaxTTLHours)+" hours",
+				CodeExpiryTooLate, "expires_at", MsgExpiryTooLate, map[string]string{"days": days})
+		}
+		return exp, nil
+	}
+	if exp == nil || exp.AsTime().After(limit) {
+		return timestamppb.New(limit), nil
+	}
+	return exp, nil
+}
 
 // apiTokenExpiry decides when a token being minted expires: the caller's
 // expires_at when they gave one (it must be in the future), else the

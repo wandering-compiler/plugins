@@ -368,6 +368,27 @@ message MfaChallengeRequested {
   string                    device_id     = 7;
 }
 
+// StepUpCodeRequested — emitted by SetStepUpCode when a signed-in person
+// without an authenticator asks to step their session up (RequestStepUpCode).
+// `code` is the plaintext six-digit code for a hand-written delivery channel
+// (e-mail), exactly like MfaChallengeRequested's; only its hash is stored, on
+// the session row. `token_id` is the session it can complete.
+message StepUpCodeRequested {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.step_up.code_requested"
+  };
+  option (w17.contrib.plugin_feature) = "step_up_code";
+
+  string                    user_id    = 1;
+  string                    token_id   = 2;
+  string                    email      = 3; // delivery hint
+  string                    code       = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  // device_id — the key thumbprint of the session's device.
+  string                    device_id  = 6;
+}
+
 // MfaVerified — emitted by ConsumeMfaChallenge on a successful second
 // factor. Audit hook (logins-with-2FA, anomaly detection).
 message MfaVerified {

@@ -33,7 +33,7 @@ env:
   - name: two_factor_scope
     type: string
     default: all_logins
-    description: "When 2FA fires: all_logins (every password sign-in) | new_devices (only an untrusted device). A device is the key its client signs requests with, and trust belongs to the (account, device) pair: a device becomes trusted by passing the second factor, and a password change or a disable ends the trust of every device of the account. Works in every activation — device identity is base tier."
+    description: "When 2FA fires: all_logins (every password sign-in) | new_devices (only an untrusted device) | off (no sign-in is challenged — honoured ONLY with W17_ENV=dev, for a development stack whose scripts sign in with a password; anywhere else the plugin refuses to boot). A device is the key its client signs requests with, and trust belongs to the (account, device) pair: a device becomes trusted by passing the second factor, and a password change or a disable ends the trust of every device of the account. Works in every activation — device identity is base tier."
   - name: mfa_code_ttl_seconds
     type: int
     default: "300"
@@ -70,6 +70,18 @@ env:
     type: int
     default: "2160"
     description: "Lifetime (hours) of an API token — a person's (CreateApiToken) or a machine account's (IssueBotToken) — minted WITHOUT an explicit expires_at. Default 2160 = 90 days. A caller may still choose its own expiry (any time in the future). 0 = never expires, the behaviour before this setting existed; tokens minted earlier keep their NULL expiry. A machine account's bearer token (minted without a key) never takes \"never\": 0 gives it 90 days, and no bearer token lives more than 366 days. Rotation is issue-new-then-revoke-old; the default is what makes forgetting the revoke safe."
+  - name: api_token_max_ttl_hours
+    type: int
+    default: "0"
+    description: "The longest lifetime (hours) a person may give an API token (CreateApiToken). 0 (the default) = no cap, the behaviour before this setting existed. With a cap, a requested expiry later than it is refused (TOKEN_EXPIRY_TOO_LATE) and a token minted without one takes api_token_default_ttl_hours, never more than the cap and never \"never\" — so every person's token expires. Machine accounts' tokens (IssueBotToken) are not affected. Negative fails the boot."
+  - name: api_token_step_up_seconds
+    type: int
+    default: "0"
+    description: "With step_up staged: CreateApiToken asks for a step-up in the caller's session no older than this many seconds (UserToken.stepped_up_at — ConfirmPassword, or ConfirmStepUp with step_up_code), and refuses without one (API_TOKEN_NEEDS_STEP_UP). A token outlives the session that minted it, so minting one is the moment a stolen session would choose. 0 (the default) = not asked. Without step_up staged, a value > 0 fails the boot."
+  - name: step_up_password
+    type: bool
+    default: "true"
+    description: "With step_up_code staged: whether ConfirmPassword still steps a session up. false = only the second factor does (ConfirmStepUp); ConfirmPassword refuses with STEP_UP_PASSWORD_OFF. A deployment that makes the second factor the proof turns the password path off, or a stolen session plus a phished password would still be enough."
   - name: oauth_access_ttl_seconds
     type: int
     default: "3600"
@@ -338,6 +350,14 @@ features:
     default: false
     go_files:
       - handlers/step_up.go
+  - name: step_up_code
+    requires:
+      - step_up
+      - two_factor
+    description: "Step-up with the second factor instead of the password: RequestStepUpCode (POST /auth/step-up/code) answers which proof the session must give — the person's authenticator when one is confirmed, otherwise a six-digit code it mails: the code's hash and when it was sent are stamped on the caller's session row (UserToken.step_up_code_hash / step_up_code_sent_at, so it can complete only the session that asked for it) and the plaintext travels once, in StepUpCodeRequested, for a hand-written delivery channel, exactly like the sign-in's MfaChallengeRequested. ConfirmStepUp (POST /auth/step-up/confirm) checks the code — an authenticator code, a recovery code, or the mailed one within mfa_code_ttl_seconds — and stamps UserToken.stepped_up_at like ConfirmPassword, under the same per-session guess budget (five wrong in a row lock it for fifteen minutes). A new mailed code at most once a minute per session. Sessions only. step_up_password=false makes it the only step-up. Off by default; a migration adds the two columns."
+    default: false
+    go_files:
+      - handlers/step_up_code.go
   - name: bot_token_guard
     description: "Guards for machine accounts' bearer tokens. An address allowlist per bot (User.allowed_cidrs, set with SetBotAllowlist, PUT /auth/bots/{user_id}/allowlist): a bearer token is accepted only from a client address inside it — the address the gateway resolved through its trusted proxies (x-w17-client-addr), never a header the client wrote; with a list set, a request with no resolved address is refused. Empty = anywhere; bound tokens and people are never limited by address. And a use summary (BotTokenUse): one row per token, client address, surface and method, with the first and the latest use (written at most once a minute per row), read with GetBotGuard (GET /auth/bots/{user_id}/guard) beside the allowlist. Nothing is deleted. The operator rules of IssueBotToken apply to both. Off by default; a migration adds the column and the table."
     default: false
@@ -444,6 +464,14 @@ features:
       - user_admin
     description: "The Devices admin page: every device of every account — label, key thumbprint, first and last seen, whether its trust stands, revoked or not (AuthQuery.ListAllDevices + GetDevice, which user_admin stages). Its Revoke action (AuthService.RevokeDevices) revokes a device for good, every token bound to it and every CLI session it approved, recording the operator. Opt in with user_admin, and add the page to the admin nav if it declares groups. Off by default."
     default: false
+  - name: admin_mfa
+    requires:
+      - user_admin
+      - two_factor
+    description: "The Authenticators admin page: every authenticator enrolment of every account — whose, when set up and confirmed, whether it is still the live one (AuthQuery.ListAuthenticators + GetAuthenticator). Its Reset action (AuthService.ResetAuthenticators) is the way back for a person who lost both the phone and the recovery codes: it ends the selected live authenticators and their unused recovery codes, recording the operator (TotpDisabled), so the next sign-in falls back to the mailed code and the person can set up a new authenticator. Nothing is deleted. Opt in with user_admin and two_factor, and add the page to the admin nav if it declares groups. Off by default."
+    default: false
+    go_files:
+      - handlers/admin_mfa.go
 
 # Files that need a feature PAIR. A machine account under tenant_scope must be
 # written with a tenant (User.tenant_id is NOT NULL), and the code that fills it
@@ -623,6 +651,16 @@ presets:
           # session. A guessable secret behind a credential — charged like
           # ChangePassword, by the gateway's per-client limit.
           - { ref: AuthService.ConfirmPassword,      method: POST, path: /confirm,                           feature: step_up }
+      # Step-up with the second factor (step_up_code): which proof the
+      # session must give (mailing a code when that is the one), and the
+      # confirmation. Authenticated — the session being stepped up is the
+      # caller's — and a guessable code behind a credential, charged by the
+      # gateway's per-client limit like ConfirmPassword.
+      - prefix: /auth/step-up
+        description: "Step-up with the second factor — ask for a code (mailed when there is no authenticator) and confirm it in the current session."
+        endpoints:
+          - { ref: AuthService.RequestStepUpCode, method: POST, path: /code,    feature: step_up_code }
+          - { ref: AuthService.ConfirmStepUp,     method: POST, path: /confirm, feature: step_up_code }
       # E-mail verification — request is bearer-authenticated (verify
       # your own address); the verify link click is unauthenticated. Gated
       # email_verification.
@@ -1082,6 +1120,35 @@ presets:
             label: "Revoke"
             confirm: "Revoke the selected devices? Every session on them, and every CLI session they approved, ends at once, and their keys can never sign in to these accounts again."
             target: both
+      # Turnkey authenticator review. Gated admin_mfa (opt-in, requires
+      # user_admin and two_factor). Every authenticator enrolment of every
+      # account, ended ones included: nothing in the auth tables is deleted.
+      # The `reset` action is the way back for a person who lost both the
+      # phone and the recovery codes: AuthService.ResetAuthenticators ends
+      # the selected live authenticators and the unused recovery codes, the
+      # operator recorded, and the next sign-in falls back to the mailed code.
+      # No `delete`. A hand-written page named "Authenticators" overrides this.
+      - name: Authenticators
+        model: UserTotpSecret
+        feature: admin_mfa
+        list:
+          source: AuthQuery.ListAuthenticators
+          columns:
+            - owner
+            - { name: user, ref: { page: Users } }
+            - confirmed_at
+            - created_at
+            - revoked_at
+          detail_link_column: owner
+        detail:
+          read: AuthQuery.GetAuthenticator
+          readonly_fields: [id, owner, user, confirmed_at, created_at, revoked_at]
+        actions:
+          - name: reset
+            source: AuthService.ResetAuthenticators
+            label: "Reset"
+            confirm: "Reset the selected authenticators? Their recovery codes stop working too, and until the person sets up a new authenticator their sign-in code is mailed to them."
+            target: both
 
 # Dev-only sandbox services this plugin brings for testing / manual
 # trial. Each is wired into the consuming project's tool-owned
@@ -1126,6 +1193,7 @@ sandboxes:
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
   - "A machine account is not a team member. Give it its roles directly."
+  - "A token can last at most {days} days. Choose an earlier date."
   - "A token cannot expire in the past. Choose a later date."
   - "A token without a key must expire within a year. Choose an earlier date."
   - "An account with this address already exists. Sign in instead."
@@ -1135,6 +1203,8 @@ msgids:
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Choose at least one permission for the role."
   - "Choose one of your organizations for this application."
+  - "Confirm it is you before creating a token."
+  - "Confirm it is you with your authenticator app or the code we email you."
   - "Confirm your email address before accepting this invitation."
   - "Give the public key of the program that will use this token."
   - "Give the role a name."
@@ -1148,6 +1218,7 @@ msgids:
   - "Sign in to do this. An API token cannot create credentials."
   - "Signing in with the provider did not complete. Please start again."
   - "Someone still holds this role, directly or through a team. Give them another role first."
+  - "That code is not right, or it has expired. Ask for a new one."
   - "That expiry date is not a valid date."
   - "That is not your password. Type the password you sign in with."
   - "That key belongs to a device that was revoked. Generate a new key for the program."

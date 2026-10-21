@@ -1355,6 +1355,67 @@ message GetDeviceReq {
   string id = 1;
 }
 
+// GetSessionStepUpReq — the caller's own session (step_up_code).
+message GetSessionStepUpReq {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  string token_id = 1;
+  string user_id  = 2;
+}
+// GetSessionStepUpResp — the mailed step-up code's hash and when it was sent
+// (NULL: none is out).
+message GetSessionStepUpResp {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  string code_hash = 1 [(w17.field) = { type: CHAR, max_len: 255, null: true }];
+  google.protobuf.Timestamp sent_at = 2 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// GetSessionSteppedUpAtReq — the caller's own session (step_up): when it was
+// last stepped up, for an action of the plugin's own that asks for one
+// (CreateApiToken under api_token_step_up_seconds).
+message GetSessionSteppedUpAtReq {
+  option (w17.contrib.plugin_feature) = "step_up";
+  string token_id = 1;
+  string user_id  = 2;
+}
+message GetSessionSteppedUpAtResp {
+  option (w17.contrib.plugin_feature) = "step_up";
+  google.protobuf.Timestamp stepped_up_at = 1 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+message ListAuthenticatorsReq {
+  option (w17.contrib.plugin_feature) = "admin_mfa";
+}
+// AuthenticatorAdminRow — one authenticator enrolment as the operator reads
+// it (the list and the detail share it). Not a table.
+//   - owner        — the account's address; the row's link to its detail.
+//                    Plain columns only: the table carries the encrypted
+//                    seed, and a statement over it projects no computed
+//                    value (so no COALESCE, no recovery-code count).
+//   - user         — the raw user_id, linked to the Users page.
+//   - confirmed_at — when the person confirmed it (NULL: set up, never
+//                    confirmed, so it never guarded a sign-in).
+//   - revoked_at   — when it was disabled, replaced or reset (NULL: live).
+// Never the seed. Gated admin_mfa.
+message AuthenticatorAdminRow {
+  option (w17.contrib.plugin_feature) = "admin_mfa";
+  string id    = 1 [(w17.field) = { type: UUID }];
+  string owner = 2;
+  string user  = 3 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp confirmed_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at   = 5;
+  google.protobuf.Timestamp revoked_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
+}
+message ListAuthenticatorsResp {
+  option (w17.contrib.plugin_feature) = "admin_mfa";
+  repeated AuthenticatorAdminRow authenticators = 1;
+  // Cursor-paged (admin-only), like ListAllDevices: no enrolment is deleted.
+  w17.Paging paging = 2;
+}
+message GetAuthenticatorReq {
+  option (w17.contrib.plugin_feature) = "admin_mfa";
+  string id = 1;
+}
+
 message ListUserSignInEventsReq {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -3370,6 +3431,65 @@ service AuthQuery {
           "FROM @module.Device d "
           "LEFT JOIN @module.User u ON u.id = d.user_id "
           "ORDER BY d.created_at DESC, d.id DESC"
+      }
+    };
+  }
+
+  // GetSessionStepUp — the mailed step-up code out for the caller's session
+  // (ConfirmStepUp reads it). Gated step_up_code.
+  rpc GetSessionStepUp(GetSessionStepUpReq) returns (GetSessionStepUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up_code";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.step_up_code_hash AS code_hash, t.step_up_code_sent_at AS sent_at "
+          "FROM @module.UserToken t WHERE t.id = :token_id AND t.user_id = :user_id AND t.revoked_at IS NULL"
+      }
+    };
+  }
+
+  // GetSessionSteppedUpAt — when the caller's session was last stepped up.
+  // Gated step_up.
+  rpc GetSessionSteppedUpAt(GetSessionSteppedUpAtReq) returns (GetSessionSteppedUpAtResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.stepped_up_at AS stepped_up_at FROM @module.UserToken t "
+          "WHERE t.id = :token_id AND t.user_id = :user_id AND t.revoked_at IS NULL"
+      }
+    };
+  }
+
+  // ListAuthenticators / GetAuthenticator — the admin Authenticators page
+  // (admin_mfa): every enrolment, ended ones included, never the seed.
+  rpc ListAuthenticators(ListAuthenticatorsReq) returns (ListAuthenticatorsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_mfa";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT s.id AS id, u.email AS owner, s.user_id AS user, "
+          "       s.confirmed_at AS confirmed_at, s.created_at AS created_at, s.revoked_at AS revoked_at "
+          "FROM @module.UserTotpSecret s "
+          "JOIN @module.User u ON u.id = s.user_id "
+          "ORDER BY s.created_at DESC, s.id DESC"
+      }
+    };
+  }
+  rpc GetAuthenticator(GetAuthenticatorReq) returns (AuthenticatorAdminRow) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_mfa";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT s.id AS id, u.email AS owner, s.user_id AS user, "
+          "       s.confirmed_at AS confirmed_at, s.created_at AS created_at, s.revoked_at AS revoked_at "
+          "FROM @module.UserTotpSecret s "
+          "JOIN @module.User u ON u.id = s.user_id "
+          "WHERE s.id = :id"
       }
     };
   }

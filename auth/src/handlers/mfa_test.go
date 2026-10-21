@@ -998,3 +998,30 @@ func TestVerifyMfa_TrustIsGuardedFromTheChallengeOn(t *testing.T) {
 		t.Errorf("bound to %q, trusted %q, want both %q", m.issuedDevice, m.trustedDevice.GetDeviceId(), want)
 	}
 }
+
+// two_factor_scope=off spares the challenge on a development stack only:
+// outside W17_ENV=dev the boot refuses it, and a handler built without that
+// check challenges anyway.
+func TestTwoFactorScopeOff_DevelopmentOnly(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c"}
+	h := newMfaHandler(m)
+	h.TwoFactorScope = scopeOff
+
+	t.Setenv(envEnvironment, devEnvironment)
+	if err := checkTwoFactorScope(h); err != nil {
+		t.Fatalf("dev: %v", err)
+	}
+	if _, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); err != nil || challenged {
+		t.Fatalf("dev must not challenge: challenged=%v err=%v", challenged, err)
+	}
+
+	for _, env := range []string{"production", ""} {
+		t.Setenv(envEnvironment, env)
+		if err := checkTwoFactorScope(h); err == nil {
+			t.Fatalf("%q: off passed the boot", env)
+		}
+		if _, challenged, err := signInMfaGate(context.Background(), h, &pb.User{Id: "u1", Email: "a@b.c"}, testJKT, false, false); err != nil || !challenged {
+			t.Fatalf("%q: off must still challenge: challenged=%v err=%v", env, challenged, err)
+		}
+	}
+}

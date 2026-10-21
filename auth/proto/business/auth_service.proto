@@ -1117,6 +1117,44 @@ message ConfirmPasswordResp {
   google.protobuf.Timestamp stepped_up_at = 1;
 }
 
+// RequestStepUpCode — which proof ConfirmStepUp will take for the caller's
+// session, mailing a code when that is the one. Gated step_up_code.
+message RequestStepUpCodeReq {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+}
+message RequestStepUpCodeResp {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  // "authenticator" — a code from the person's authenticator app (or a
+  // recovery code); nothing was sent. "email" — a code was mailed to the
+  // account's address, or one sent less than a minute ago is still out.
+  string method = 1;
+  // When the mailed code stops working; unset for "authenticator".
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// ConfirmStepUp — the caller proves, in their current session, that they
+// hold the second factor: the step-up a sensitive action asks for, like
+// ConfirmPassword. Gated step_up_code.
+message ConfirmStepUpReq {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  // An authenticator code, a recovery code, or the mailed code.
+  string code = 1 [(w17.field) = { type: CHAR, max_len: 32 }];
+}
+message ConfirmStepUpResp {
+  option (w17.contrib.plugin_feature) = "step_up_code";
+  // When the session was stepped up (UserToken.stepped_up_at).
+  google.protobuf.Timestamp stepped_up_at = 1;
+}
+
+// ResetAuthenticators — the admin Authenticators page's Reset action: end
+// the selected authenticator enrolments (UserTotpSecret ids) and their
+// accounts' unused recovery codes. Gated admin_mfa.
+message ResetAuthenticatorsReq {
+  option (w17.contrib.plugin_feature) = "admin_mfa";
+  repeated string ids = 1;
+}
+message ResetAuthenticatorsResp { option (w17.contrib.plugin_feature) = "admin_mfa"; }
+
 // SetBotAllowlist — where a machine account's bearer tokens are accepted
 // from (User.allowed_cidrs). Each entry is a CIDR or a bare address; the
 // list is answered back canonical. Empty = anywhere. Gated bot_token_guard.
@@ -1888,6 +1926,24 @@ service AuthService {
   // and record when (UserToken.stepped_up_at). Changes nothing else.
   rpc ConfirmPassword(ConfirmPasswordReq) returns (ConfirmPasswordResp) {
     option (w17.contrib.plugin_feature_rpc) = "step_up";
+  }
+
+  // RequestStepUpCode / ConfirmStepUp — step the caller's session up with
+  // the second factor instead of the password: the authenticator when one
+  // is confirmed, otherwise a mailed code. Records when, like
+  // ConfirmPassword (UserToken.stepped_up_at). Changes nothing else.
+  rpc RequestStepUpCode(RequestStepUpCodeReq) returns (RequestStepUpCodeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up_code";
+  }
+  rpc ConfirmStepUp(ConfirmStepUpReq) returns (ConfirmStepUpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "step_up_code";
+  }
+
+  // ResetAuthenticators — the admin's way back for a person who lost the
+  // phone and the recovery codes: end the selected authenticators and the
+  // accounts' unused recovery codes, the operator recorded.
+  rpc ResetAuthenticators(ResetAuthenticatorsReq) returns (ResetAuthenticatorsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "admin_mfa";
   }
 
   // SetBotAllowlist / GetBotGuard — a machine account's address allowlist
