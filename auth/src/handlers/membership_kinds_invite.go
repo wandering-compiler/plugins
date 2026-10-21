@@ -21,41 +21,56 @@ func init() {
 	}
 }
 
-// checkInviteKind writes the invitation's kind, after holding it to the kinds
-// the inviter's membership may invite: the union of `invites` over the
-// audiences that admit the inviter's kind (w17_audiences; an audience naming
-// none invites its own kinds). An inviter with no membership of the
-// organization — a backoffice admin — or its owner may invite any kind, and
-// so may anyone when the domain publishes no audiences.
-func checkInviteKind(ctx context.Context, h *AuthServiceHandler, inviterID string, req *pb.InviteToOrgReq, create *pb.CreateOrgInviteReq) error {
-	create.Kind = req.GetKind()
-	if len(h.audiences) == 0 {
-		return nil
+// checkInviteKind is the invitation's kind, held to what the inviter may hand
+// out. With the domain's audience table (w17_audiences):
+//
+//   - the kind must be one some audience admits, or ” (a membership of no
+//     kind, which no kind-filtering gateway admits);
+//   - a member may invite the union of `invites` over the audiences that
+//     admit their own kind (an audience naming none invites its own kinds);
+//   - the owner, and an inviter from outside the organization (a backoffice
+//     admin), may invite any kind the table knows.
+//
+// With no table — a domain without audiences — any kind goes.
+func checkInviteKind(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (string, error) {
+	kind := req.GetKind()
+	table, err := h.audienceTable()
+	if err != nil {
+		return "", err
+	}
+	if len(table) == 0 || kind == "" {
+		return kind, nil
+	}
+	refuse := func() (string, error) {
+		return "", refusal(ctx, codes.PermissionDenied, "membership_kinds: the inviter's kind of membership may not invite this kind",
+			CodeInviteKindNotAllowed, "kind", MsgInviteKindNotAllowed, nil)
+	}
+	known := false
+	for _, a := range table {
+		known = known || slices.Contains(a.kinds, kind)
+	}
+	if !known {
+		return refuse()
 	}
 	_, all, err := admittedOrgs(ctx, h, inviterID, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
-	m := orgByID(all, create.GetOrgId())
+	m := orgByID(all, orgID)
 	if m == nil {
-		return nil
+		return kind, nil
 	}
-	var may []string
-	for _, a := range h.audiences {
-		if slices.Contains(a.kinds, m.GetMembershipKind()) {
-			may = append(may, a.invites...)
+	for _, a := range table {
+		if slices.Contains(a.kinds, m.GetMembershipKind()) && slices.Contains(a.invitable(), kind) {
+			return kind, nil
 		}
 	}
-	if slices.Contains(may, req.GetKind()) {
-		return nil
-	}
-	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: inviterID, OrgId: create.GetOrgId()})
+	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: inviterID, OrgId: orgID})
 	if err != nil {
-		return err
+		return "", err
 	}
 	if owns.GetOwner() {
-		return nil
+		return kind, nil
 	}
-	return refusal(ctx, codes.PermissionDenied, "membership_kinds: the inviter's kind of membership may not invite this kind",
-		CodeInviteKindNotAllowed, "kind", MsgInviteKindNotAllowed, nil)
+	return refuse()
 }

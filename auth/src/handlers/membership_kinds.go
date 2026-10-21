@@ -148,34 +148,68 @@ var audienceURLsNeeded bool
 // did not set, refuses to boot: either would quietly turn the consent page's
 // filter off.
 func parseAudienceTable(h *AuthServiceHandler) error {
-	h.audiences = nil
-	if strings.TrimSpace(h.Audiences) == "" {
-		return nil
+	table, err := readAudienceTable(h.Audiences)
+	if err != nil {
+		return err
 	}
-	urls := map[string]string{}
-	for _, raw := range strings.Split(h.Audiences, ";") {
-		parts := strings.Split(raw, ":")
-		if len(parts) != 4 || parts[0] == "" {
-			return fmt.Errorf("auth plugin: w17_audiences entry %q is not <audience>:<kinds>:<URL variable>:<invites> — the table is generated; regenerate instead of editing it", raw)
+	h.audiences, h.audiencesRead = table, true
+	return nil
+}
+
+// audienceTable is the parsed table: the one ValidateConfig read at boot, or
+// — for a handler that did not go through it — read now, so the consent
+// filter and the invite check never fall open for want of a boot step.
+func (h *AuthServiceHandler) audienceTable() ([]audienceEntry, error) {
+	if h.audiencesRead {
+		return h.audiences, nil
+	}
+	return readAudienceTable(h.Audiences)
+}
+
+func readAudienceTable(raw string) ([]audienceEntry, error) {
+	var out []audienceEntry
+	urls, names := map[string]string{}, map[string]bool{}
+	for _, entry := range strings.Split(raw, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
 		}
+		parts := strings.Split(entry, ":")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		if len(parts) != 4 || parts[0] == "" {
+			return nil, fmt.Errorf("auth plugin: w17_audiences entry %q is not <audience>:<kinds>:<URL variable>:<invites> — the table is generated; regenerate instead of editing it", entry)
+		}
+		if names[parts[0]] {
+			return nil, fmt.Errorf("auth plugin: w17_audiences names audience %s twice", parts[0])
+		}
+		names[parts[0]] = true
 		e := audienceEntry{name: parts[0], kinds: splitKinds(parts[1]), invites: splitKinds(parts[3])}
 		if v := parts[2]; v != "" {
-			e.url = strings.TrimRight(os.Getenv(v), "/")
-			if e.url == "" && !audienceURLsNeeded {
-				h.audiences = append(h.audiences, e)
-				continue
+			e.url = strings.TrimRight(strings.TrimSpace(os.Getenv(v)), "/")
+			if e.url == "" && audienceURLsNeeded {
+				return nil, fmt.Errorf("auth plugin: %s is unset — the public URL of the %s audience's MCP surface, the same value its gateway reads; without it the consent page cannot tell which organizations that audience admits", v, e.name)
 			}
-			if e.url == "" {
-				return fmt.Errorf("auth plugin: %s is unset — the public URL of the %s audience's MCP surface, the same value its gateway reads; without it the consent page cannot tell which organizations that audience admits", v, e.name)
+			if prev, dup := urls[e.url]; dup && e.url != "" {
+				return nil, fmt.Errorf("auth plugin: audiences %s and %s publish MCP at one URL (%s) — each audience's MCP surface needs its own", prev, e.name, e.url)
 			}
-			if prev, dup := urls[e.url]; dup {
-				return fmt.Errorf("auth plugin: audiences %s and %s publish MCP at one URL (%s) — each audience's MCP surface needs its own", prev, e.name, e.url)
+			if e.url != "" {
+				urls[e.url] = e.name
 			}
-			urls[e.url] = e.name
 		}
-		h.audiences = append(h.audiences, e)
+		out = append(out, e)
 	}
-	return nil
+	return out, nil
+}
+
+// invitable is the kinds a caller this audience admits may invite: its
+// `invites`, or its own kinds when it names none.
+func (a audienceEntry) invitable() []string {
+	if len(a.invites) > 0 {
+		return a.invites
+	}
+	return a.kinds
 }
 
 func splitKinds(s string) []string {

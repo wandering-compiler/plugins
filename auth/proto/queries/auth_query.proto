@@ -933,8 +933,7 @@ message UserOrg {
   // indistinguishable from anyone they promoted.
   bool   owner  = 6;
   // membership_kind — the kind of this membership (membership_kinds):
-  // `staff`, `client`, … A person who is both in one organization is listed
-  // once per kind.
+  // `staff`, `client`, … One membership per organization, so one kind.
   string membership_kind = 7 [(w17.contrib.plugin_feature_field) = "membership_kinds"];
 }
 

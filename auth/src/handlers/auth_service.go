@@ -293,8 +293,10 @@ type AuthServiceHandler struct {
 	OAuthRedirectHosts       string // oauth_redirect_hosts
 	OAuthResources           string // oauth_resources
 	Audiences                string // w17_audiences (generated)
-	// audiences is Audiences parsed at boot (membership_kinds; nil without it).
-	audiences []audienceEntry
+	// audiences is Audiences parsed at boot (membership_kinds; nil without
+	// it); audiencesRead says ValidateConfig did it.
+	audiences     []audienceEntry
+	audiencesRead bool
 }
 
 // audienceEntry is one audience of the domain's generated table

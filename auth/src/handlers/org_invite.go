@@ -316,7 +316,7 @@ func metadataOrEmptyObject(m string) string {
 // kindOfInvite / kindOfClaim carry an invitation's membership kind into the
 // rows it writes; set by membership_kinds.go, nil without it.
 var (
-	kindOfInvite func(ctx context.Context, h *AuthServiceHandler, inviterID string, req *pb.InviteToOrgReq, create *pb.CreateOrgInviteReq) error
+	kindOfInvite func(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (string, error)
 	kindOfClaim  func(claimed *pb.ConsumeOrgInviteByTokenResp, add *pb.AddOrgMembershipReq)
 )
 
@@ -351,6 +351,15 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	snapshot, err := h.checkMayGrantRole(ctx, roleID)
 	if err != nil {
 		return nil, err
+	}
+	// The invitation's kind (membership_kinds), held to what the inviter may
+	// invite — before anything is written, so a refused request changes
+	// nothing.
+	kind := ""
+	if kindOfInvite != nil {
+		if kind, err = kindOfInvite(ctx, h, inviter, orgID, req); err != nil {
+			return nil, err
+		}
 	}
 	// The link's secret. Minted here, stored hashed, returned once — the same
 	// three steps a password reset takes, and for the same reason: a stored
@@ -419,11 +428,7 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		// What the ceiling checked — accept holds the grant to it.
 		RoleSnapshot: snapshot,
 	}
-	if kindOfInvite != nil {
-		if err := kindOfInvite(ctx, h, inviter, req, createReq); err != nil {
-			return nil, err
-		}
-	}
+	createReq.Kind = kind
 	created, err := h.Mutation.CreateOrgInvite(ctx, createReq)
 	if err != nil {
 		return nil, err

@@ -32,14 +32,18 @@ func init() {
 // surface of another domain), where the gateway's own admission is the check.
 // The table was parsed at boot, which refuses an unset URL and two audiences
 // sharing one.
-func (h *AuthServiceHandler) resourceKinds(resource string) []string {
+func (h *AuthServiceHandler) resourceKinds(resource string) ([]string, error) {
+	table, err := h.audienceTable()
+	if err != nil {
+		return nil, err
+	}
 	want := strings.TrimRight(resource, "/")
-	for _, a := range h.audiences {
+	for _, a := range table {
 		if a.url != "" && a.url == want {
-			return a.kinds
+			return a.kinds, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // admittedOrgIDs are the organizations where userID holds a membership of one
@@ -59,10 +63,12 @@ func admittedOrgIDs(ctx context.Context, h *AuthServiceHandler, userID string, k
 // orgsForResource narrows the consent page's organizations to the ones the
 // resource's audience admits.
 func orgsForResource(ctx context.Context, h *AuthServiceHandler, userID, resource string, orgs []*pb.OAuthConsentOrg) ([]*pb.OAuthConsentOrg, error) {
-	kinds := h.resourceKinds(resource)
+	kinds, err := h.resourceKinds(resource)
+	if err != nil {
+		return nil, err
+	}
 	var ok map[string]bool
 	if len(kinds) > 0 {
-		var err error
 		if ok, err = admittedOrgIDs(ctx, h, userID, kinds); err != nil {
 			return nil, err
 		}
@@ -82,7 +88,10 @@ func orgsForResource(ctx context.Context, h *AuthServiceHandler, userID, resourc
 // checkOrgForResource refuses an approval naming an organization the
 // resource's audience does not admit the user in.
 func checkOrgForResource(ctx context.Context, h *AuthServiceHandler, userID, orgID, resource string) error {
-	kinds := h.resourceKinds(resource)
+	kinds, err := h.resourceKinds(resource)
+	if err != nil {
+		return err
+	}
 	if len(kinds) == 0 {
 		return nil
 	}

@@ -155,7 +155,7 @@ func TestNotAdmittedSurvivesTheDecoratorFold(t *testing.T) {
 
 func TestParseAudienceTable(t *testing.T) {
 	t.Setenv("APP_GATEWAY_CLIENT_MCP_PUBLIC_URL", "https://client.mcp.example.com/mcp/")
-	h := &AuthServiceHandler{Audiences: "client:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:client;staff:staff::client|staff"}
+	h := &AuthServiceHandler{Audiences: " client:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:client ;staff:staff::client|staff;\n"}
 	if err := parseAudienceTable(h); err != nil {
 		t.Fatal(err)
 	}
@@ -166,10 +166,11 @@ func TestParseAudienceTable(t *testing.T) {
 	defer func() { audienceURLsNeeded = prev }()
 	audienceURLsNeeded = true // as with oauth_server, which reads the URLs
 	for name, table := range map[string]string{
-		"malformed":        "client:client",
-		"unset MCP URL":    "client:client:APP_GATEWAY_NOWHERE_MCP_PUBLIC_URL:client",
-		"one URL, two":     "client:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:;other:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:",
-		"no audience name": ":client::client",
+		"malformed":          "client:client",
+		"unset MCP URL":      "client:client:APP_GATEWAY_NOWHERE_MCP_PUBLIC_URL:client",
+		"one URL, two":       "client:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:;other:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:",
+		"no audience name":   ":client::client",
+		"one audience twice": "client:client::;client:client::",
 	} {
 		if err := parseAudienceTable(&AuthServiceHandler{Audiences: table}); err == nil {
 			t.Errorf("%s: %q booted", name, table)
@@ -183,32 +184,48 @@ func TestParseAudienceTable(t *testing.T) {
 }
 
 // A member invites only the kinds their audiences may invite; the owner and
-// an inviter from outside the organization (backoffice) may invite any.
+// an inviter from outside the organization (backoffice) may invite any kind
+// the table knows; a kind no audience admits is refused to everyone.
 func TestCheckInviteKind(t *testing.T) {
 	table := []audienceEntry{
 		{name: "staff", kinds: []string{"staff"}, invites: []string{"staff", "client"}},
-		{name: "client", kinds: []string{"client"}, invites: []string{"client"}},
+		{name: "client", kinds: []string{"client"}}, // names none: invites its own
 	}
 	invite := func(q *ownsMock, kind string) error {
-		h := &AuthServiceHandler{Query: q, audiences: table}
-		return checkInviteKind(context.Background(), h, "u1", &pb.InviteToOrgReq{Kind: kind}, &pb.CreateOrgInviteReq{OrgId: "org-acme"})
+		h := &AuthServiceHandler{Query: q, audiences: table, audiencesRead: true}
+		_, err := checkInviteKind(context.Background(), h, "u1", "org-acme", &pb.InviteToOrgReq{Kind: kind})
+		return err
 	}
 	staff := []*pb.UserOrg{{OrgId: "org-acme", MembershipKind: "staff"}}
 	client := []*pb.UserOrg{{OrgId: "org-acme", MembershipKind: "client"}}
-	if err := invite(&ownsMock{orgs: staff}, "client"); err != nil {
-		t.Errorf("staff inviting a client: %v", err)
+	for name, tc := range map[string]struct {
+		q    *ownsMock
+		kind string
+		ok   bool
+	}{
+		"staff invite a client":           {&ownsMock{orgs: staff}, "client", true},
+		"a client invites a client":       {&ownsMock{orgs: client}, "client", true},
+		"a client invites staff":          {&ownsMock{orgs: client}, "staff", false},
+		"the owner invites staff":         {&ownsMock{orgs: client, owner: true}, "staff", true},
+		"an outsider invites staff":       {&ownsMock{}, "staff", true},
+		"a kind no audience admits":       {&ownsMock{owner: true}, "staf", false},
+		"no kind (no audience admits it)": {&ownsMock{orgs: client}, "", true},
+	} {
+		err := invite(tc.q, tc.kind)
+		if tc.ok && err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if !tc.ok && status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s: err = %v, want PermissionDenied", name, err)
+		}
 	}
-	if err := invite(&ownsMock{orgs: client}, "staff"); status.Code(err) != codes.PermissionDenied {
-		t.Errorf("a client inviting staff: err = %v, want PermissionDenied", err)
-	}
-	if err := invite(&ownsMock{orgs: client, owner: true}, "staff"); err != nil {
-		t.Errorf("the owner inviting staff: %v", err)
-	}
-	if err := invite(&ownsMock{}, "staff"); err != nil {
-		t.Errorf("an inviter from outside the organization: %v", err)
-	}
-	if err := checkInviteKind(context.Background(), &AuthServiceHandler{Query: &ownsMock{orgs: client}}, "u1",
-		&pb.InviteToOrgReq{Kind: "staff"}, &pb.CreateOrgInviteReq{OrgId: "org-acme"}); err != nil {
+	if _, err := checkInviteKind(context.Background(), &AuthServiceHandler{Query: &ownsMock{orgs: client}}, "u1", "org-acme",
+		&pb.InviteToOrgReq{Kind: "staff"}); err != nil {
 		t.Errorf("no audiences, no rule: %v", err)
+	}
+	// A handler that skipped ValidateConfig reads the table itself.
+	h := &AuthServiceHandler{Query: &ownsMock{orgs: client}, Audiences: "staff:staff::staff|client;client:client::"}
+	if _, err := checkInviteKind(context.Background(), h, "u1", "org-acme", &pb.InviteToOrgReq{Kind: "staff"}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("without ValidateConfig the check fell open: %v", err)
 	}
 }
