@@ -3,19 +3,26 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"slices"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// This file implements the `membership_kinds` feature: one identity, several
-// memberships of several KINDS (`staff`, `client`, …) — the auth half of
-// audience surfaces (`w17/audience.proto` in the SDK). A domain publishing several audiences serves each from its own
-// gateway, and that gateway names the kinds it admits in every Authenticate
-// (x-w17-membership-kinds, which only a gateway writes). Staged only with the
-// feature; it requires org_membership.
+// This file implements the `membership_kinds` feature: memberships of several
+// KINDS (`staff`, `client`, …) — the auth half of audience surfaces
+// (`w17/audience.proto` in the SDK). A domain publishing several audiences
+// serves each from its own gateway, and that gateway names the kinds it admits
+// in every Authenticate (x-w17-membership-kinds, which only a gateway writes).
+// Staged only with the feature; it requires org_membership.
+//
+// A membership has ONE kind: a person is an organization's staff or its
+// client, and may be staff of one organization and client of another. Every
+// read that takes one membership per (user, organization) stays true.
 //
 // What it changes, all of it subtractive:
 //
@@ -23,11 +30,9 @@ import (
 //     of an admitted kind only, and a caller holding none is refused 403
 //     before any handler — a client calling the staff surface reaches no
 //     endpoint of it;
-//   - the roles that count are the ones that came with an admitted
-//     membership (UserRole.membership_kind), so a person who is staff and
-//     client of one organization holds the client roles on the client's
-//     surface;
-//   - ownership does not widen there (see narrowGrantsToActiveOrg).
+//   - ownership does not widen there (see narrowGrantsToActiveOrg);
+//   - an invitation's kind is held to what the inviter's audiences may
+//     invite (membership_kinds_invite.go).
 //
 // A gateway that names no kinds — every gateway of a domain without
 // audiences — admits every membership, and nothing about it changes.
@@ -36,7 +41,7 @@ var errMembershipNotAdmitted = errors.New("membership_kinds: none of the caller'
 
 func init() {
 	orgScopeByKind = resolveOrgScopeByKind
-	grantNarrowers = append(grantNarrowers, narrowGrantsToAdmittedKinds)
+	configChecks = append(configChecks, parseAudienceTable)
 }
 
 // membershipNotAdmitted is the 403 for a caller the audience does not admit.
@@ -46,74 +51,63 @@ func membershipNotAdmitted(ctx context.Context) error {
 }
 
 // admittedOrgs is the caller's memberships of an admitted kind (every one when
-// kinds is empty), one entry per organization.
+// kinds is empty), and all of them.
 func admittedOrgs(ctx context.Context, h *AuthServiceHandler, userID string, kinds []string) (admitted, all []*pb.UserOrg, err error) {
 	resp, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
 	if err != nil {
 		return nil, nil, err
 	}
 	all = resp.GetOrgs()
-	seen := map[string]bool{}
 	for _, o := range all {
-		if len(kinds) > 0 && !slices.Contains(kinds, o.GetMembershipKind()) {
-			continue
+		if len(kinds) == 0 || slices.Contains(kinds, o.GetMembershipKind()) {
+			admitted = append(admitted, o)
 		}
-		if seen[o.GetOrgId()] {
-			continue
-		}
-		seen[o.GetOrgId()] = true
-		admitted = append(admitted, o)
 	}
 	return admitted, all, nil
 }
 
-// resolveOrgScopeByKind is resolveOrgScope for an activation with membership
-// kinds. The same order — an OAuth token's organization, then the `W17-Org`
-// selector, then the caller's sole organization — over the memberships the
-// audience admits.
-func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
-	kinds := kindsFromHeaders(headers)
-	admitted, all, err := admittedOrgs(ctx, h, userID, kinds)
-	if err != nil {
-		if len(kinds) == 0 {
-			// As inferSoleOrgScope: an unrelated lookup failure leaves the
-			// request unscoped, which a scoped model refuses.
-			return nil
+func orgByID(list []*pb.UserOrg, id string) *pb.UserOrg {
+	for _, o := range list {
+		if o.GetOrgId() == id {
+			return o
 		}
+	}
+	return nil
+}
+
+func orgBySlug(list []*pb.UserOrg, slug string) *pb.UserOrg {
+	for _, o := range list {
+		if o.GetSlug() == slug {
+			return o
+		}
+	}
+	return nil
+}
+
+// resolveOrgScopeByKind is resolveOrgScope through a gateway that admits only
+// some kinds (resolveOrgScope calls it only then). The same order — an OAuth
+// token's organization, then the `W17-Org` selector, then the caller's sole
+// organization — over the memberships the audience admits. A membership of
+// another kind in the named organization is 403, not "not a member".
+func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
+	admitted, all, err := admittedOrgs(ctx, h, userID, kindsFromHeaders(headers))
+	if err != nil {
 		return err
 	}
-	byID := func(list []*pb.UserOrg, id string) *pb.UserOrg {
-		for _, o := range list {
-			if o.GetOrgId() == id {
-				return o
-			}
-		}
-		return nil
-	}
-	bySlug := func(list []*pb.UserOrg, slug string) *pb.UserOrg {
-		for _, o := range list {
-			if o.GetSlug() == slug {
-				return o
-			}
-		}
-		return nil
-	}
-
 	// An OAuth access token acts in the organization chosen on the consent
-	// page — while the user still holds an admitted membership of it.
+	// page: held to an admitted kind here, then resolved as on any gateway
+	// (oauthOrgScope), so its checks are the one copy.
 	if orgID := oauthTokenOrg(ctx); orgID != "" {
-		o := byID(admitted, orgID)
-		if o == nil {
-			if byID(all, orgID) != nil {
+		if oauthOrgScope == nil {
+			return UnauthenticatedOrgNotMember(errOrgNotMember)
+		}
+		if orgByID(admitted, orgID) == nil {
+			if orgByID(all, orgID) != nil {
 				return membershipNotAdmitted(ctx)
 			}
 			return UnauthenticatedOrgNotMember(errOrgNotMember)
 		}
-		if named := orgSlugFromHeaders(headers); named != "" && named != o.GetSlug() {
-			return UnauthenticatedOrgNotMember(errOrgNotMember)
-		}
-		stampOrg(scopes, labels, o.GetOrgId(), o.GetSlug())
-		return nil
+		return oauthOrgScope(ctx, h, userID, orgID, headers, scopes, labels)
 	}
 
 	slug := orgSlugFromHeaders(headers)
@@ -121,33 +115,20 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 		slug = orgSlugFromContext(ctx)
 	}
 	if slug != "" {
-		if o := bySlug(admitted, slug); o != nil {
+		if o := orgBySlug(admitted, slug); o != nil {
 			stampOrg(scopes, labels, o.GetOrgId(), o.GetSlug())
 			return nil
 		}
-		if len(kinds) > 0 {
-			if bySlug(all, slug) != nil {
-				return membershipNotAdmitted(ctx)
-			}
-			return UnauthenticatedOrgNotMember(errOrgNotMember)
+		if orgBySlug(all, slug) != nil {
+			return membershipNotAdmitted(ctx)
 		}
-		// No audience filter: the owner fallback resolveOrgScope has, for the
-		// same reason (an owner whose membership row is gone).
-		owned, oerr := h.Query.GetOwnedOrgBySlug(ctx, &pb.GetOwnedOrgBySlugReq{UserId: userID, Slug: slug})
-		if notFoundOK(oerr) != nil {
-			return oerr
-		}
-		if owned.GetOrgId() == "" {
-			return UnauthenticatedOrgNotMember(errOrgNotMember)
-		}
-		stampOrg(scopes, labels, owned.GetOrgId(), slug)
-		return nil
+		return UnauthenticatedOrgNotMember(errOrgNotMember)
 	}
 
-	switch {
-	case len(admitted) == 1:
+	switch len(admitted) {
+	case 1:
 		stampOrg(scopes, labels, admitted[0].GetOrgId(), admitted[0].GetSlug())
-	case len(admitted) == 0 && len(kinds) > 0:
+	case 0:
 		// The audience is for members of an admitted kind, and this caller
 		// is a member of nothing it admits.
 		return membershipNotAdmitted(ctx)
@@ -157,37 +138,52 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 	return nil
 }
 
-// narrowGrantsToAdmittedKinds drops the roles the caller holds in the active
-// organization through a membership of a kind the audience does not admit.
-// A grant of no kind (an admin's binding, from before the feature) counts on
-// every audience, and so do realm-wide grants: they belong to no membership.
-func narrowGrantsToAdmittedKinds(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
-	kinds := admittedKinds(ctx)
-	orgID := scopes["org_id"]
-	if len(kinds) == 0 || orgID == "" {
+// audienceURLsNeeded is set by the oauth_server combination
+// (oauth_server_kinds.go): only the consent page reads the audiences' MCP
+// URLs, so only then is an unset one a boot error.
+var audienceURLsNeeded bool
+
+// parseAudienceTable reads w17_audiences once, at boot. A table that does not
+// parse, or — with the consent page — names an MCP URL variable the deploy
+// did not set, refuses to boot: either would quietly turn the consent page's
+// filter off.
+func parseAudienceTable(h *AuthServiceHandler) error {
+	h.audiences = nil
+	if strings.TrimSpace(h.Audiences) == "" {
 		return nil
 	}
-	resp, err := h.Query.ListUserRoleKinds(ctx, &pb.ListUserRoleKindsReq{UserId: p.userID, OrgId: orgID})
-	if err != nil {
-		return err
-	}
-	// A role may be granted more than once (once per kind); it counts when
-	// ANY of its grants is admitted.
-	admittedRole := map[string]bool{}
-	inOrg := map[string]bool{}
-	for _, r := range resp.GetRoles() {
-		inOrg[r.GetRoleId()] = true
-		if r.GetMembershipKind() == "" || slices.Contains(kinds, r.GetMembershipKind()) {
-			admittedRole[r.GetRoleId()] = true
+	urls := map[string]string{}
+	for _, raw := range strings.Split(h.Audiences, ";") {
+		parts := strings.Split(raw, ":")
+		if len(parts) != 4 || parts[0] == "" {
+			return fmt.Errorf("auth plugin: w17_audiences entry %q is not <audience>:<kinds>:<URL variable>:<invites> — the table is generated; regenerate instead of editing it", raw)
 		}
-	}
-	survivors := make([]*pb.RoleGrant, 0, len(p.grants))
-	for _, g := range p.grants {
-		if id := g.GetRoleId(); inOrg[id] && !admittedRole[id] {
-			continue
+		e := audienceEntry{name: parts[0], kinds: splitKinds(parts[1]), invites: splitKinds(parts[3])}
+		if v := parts[2]; v != "" {
+			e.url = strings.TrimRight(os.Getenv(v), "/")
+			if e.url == "" && !audienceURLsNeeded {
+				h.audiences = append(h.audiences, e)
+				continue
+			}
+			if e.url == "" {
+				return fmt.Errorf("auth plugin: %s is unset — the public URL of the %s audience's MCP surface, the same value its gateway reads; without it the consent page cannot tell which organizations that audience admits", v, e.name)
+			}
+			if prev, dup := urls[e.url]; dup {
+				return fmt.Errorf("auth plugin: audiences %s and %s publish MCP at one URL (%s) — each audience's MCP surface needs its own", prev, e.name, e.url)
+			}
+			urls[e.url] = e.name
 		}
-		survivors = append(survivors, g)
+		h.audiences = append(h.audiences, e)
 	}
-	p.grants = survivors
 	return nil
+}
+
+func splitKinds(s string) []string {
+	var out []string
+	for _, k := range strings.Split(s, "|") {
+		if k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
 }

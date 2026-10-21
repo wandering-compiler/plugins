@@ -204,6 +204,15 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 	return nil
 }
 
+// oauthOrgScope resolves the organization of an OAuth access token; set by
+// the oauth_server + org_membership file (oauth_server_org.go), nil without
+// it — and then no token carries an organization.
+var oauthOrgScope func(ctx context.Context, h *AuthServiceHandler, userID, orgID string, headers, scopes, labels map[string]string) error
+
+// orgScopeByKind replaces resolveOrgScope's resolution when membership
+// kinds are staged (membership_kinds.go); nil without them.
+var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
+
 // resolveOrgScope stamps scopes[org_id] for the request's ACTIVE org. The
 // active org is a client-selected slug (w17-org metadata), but it is
 // validated against the principal's membership here, so a caller can only
@@ -231,15 +240,6 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 // org_id is the data-scope key: a project scoping its rows by
 // name: "org_id" then gets per-org isolation (auto-WHERE / owner-stamp)
 // with no hand-written facade, exactly like tenant_scope's tenant_id.
-// oauthOrgScope resolves the organization of an OAuth access token; set by
-// the oauth_server + org_membership file (oauth_server_org.go), nil without
-// it — and then no token carries an organization.
-var oauthOrgScope func(ctx context.Context, h *AuthServiceHandler, userID, orgID string, headers, scopes, labels map[string]string) error
-
-// orgScopeByKind replaces resolveOrgScope's resolution when membership
-// kinds are staged (membership_kinds.go); nil without them.
-var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
-
 func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
 	// The admin plane is realm-wide: no organization is selected, so only
 	// realm-wide roles survive the narrowing (see AuthenticateAdmin).

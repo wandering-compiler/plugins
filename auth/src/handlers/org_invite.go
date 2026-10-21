@@ -316,8 +316,8 @@ func metadataOrEmptyObject(m string) string {
 // kindOfInvite / kindOfClaim carry an invitation's membership kind into the
 // rows it writes; set by membership_kinds.go, nil without it.
 var (
-	kindOfInvite func(req *pb.InviteToOrgReq, create *pb.CreateOrgInviteReq)
-	kindOfClaim  func(claimed *pb.ConsumeOrgInviteByTokenResp, add *pb.AddOrgMembershipReq, grant *pb.AssignRoleToUserReq)
+	kindOfInvite func(ctx context.Context, h *AuthServiceHandler, inviterID string, req *pb.InviteToOrgReq, create *pb.CreateOrgInviteReq) error
+	kindOfClaim  func(claimed *pb.ConsumeOrgInviteByTokenResp, add *pb.AddOrgMembershipReq)
 )
 
 func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
@@ -420,7 +420,9 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		RoleSnapshot: snapshot,
 	}
 	if kindOfInvite != nil {
-		kindOfInvite(req, createReq)
+		if err := kindOfInvite(ctx, h, inviter, req, createReq); err != nil {
+			return nil, err
+		}
 	}
 	created, err := h.Mutation.CreateOrgInvite(ctx, createReq)
 	if err != nil {
@@ -663,11 +665,11 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 		RoleId: roleID,
 		OrgId:  orgID,
 	}
-	// The invitation's kind becomes the membership's and the grant's
-	// (membership_kinds): an invited client's role counts on the client's
-	// surface.
+	// The invitation's kind becomes the membership's (membership_kinds). A
+	// person who is already a member — of any kind — is refused by the
+	// membership's unique index: a membership has one kind.
 	if kindOfClaim != nil {
-		kindOfClaim(claimed, addReq, grantReq)
+		kindOfClaim(claimed, addReq)
 	}
 	if _, err := h.Mutation.AddOrgMembership(txCtx, addReq); err != nil {
 		return nil, err

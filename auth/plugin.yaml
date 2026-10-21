@@ -109,7 +109,7 @@ env:
   - name: w17_audiences
     type: string
     default: ""
-    description: "GENERATED — do not set it: codegen fills it from the domain's audience surfaces (membership_kinds). Who each audience admits and the variable carrying its MCP surface's public URL, as <audience>:<kind>|<kind>:<URL variable> entries joined by ';'. With oauth_server, the consent page offers an MCP client only the organizations where the user holds a membership of a kind the client's audience admits."
+    description: "GENERATED — do not set it: codegen fills it from the domain's audience surfaces (membership_kinds). Who each audience admits and the variable carrying its MCP surface's public URL, as <audience>:<kind>|<kind>:<URL variable>:<kind>|<kind> entries joined by ';' — the last field the kinds a caller it admits may invite. With oauth_server, the consent page offers an MCP client only the organizations where the user holds a membership of a kind the client's audience admits; with org_invite, an invitation's kind is held to what the inviter may invite. Checked at boot."
   - name: totp_issuer
     type: string
     default: ""
@@ -1277,6 +1277,7 @@ msgids:
   - "Too many wrong passwords. Wait 15 minutes and try again."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
+  - "You cannot invite someone as this kind of member."
   - "Your session expired on {date}. Sign in again."
   - "{entry} is not an address or a network (for example 203.0.113.7 or 203.0.113.0/24)."
   - "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."

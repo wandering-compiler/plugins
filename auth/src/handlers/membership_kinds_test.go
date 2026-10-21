@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -11,35 +12,17 @@ import (
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
-// kindsMock is orgMock plus the per-grant kinds ListUserRoleKinds answers.
-type kindsMock struct {
-	orgMock
-	roleKinds map[string][]*pb.UserRoleKind // key "user|org"
-}
-
-func (m *kindsMock) ListUserRoleKinds(_ context.Context, in *pb.ListUserRoleKindsReq, _ ...grpc.CallOption) (*pb.ListUserRoleKindsResp, error) {
-	return &pb.ListUserRoleKindsResp{Roles: m.roleKinds[in.GetUserId()+"|"+in.GetOrgId()]}, nil
-}
-
-// u1 is staff of acme and a client of acme and of beta; u2 is a client of
-// nothing.
+// One membership per organization, of one kind: u1 is staff of acme and a
+// client of beta and of gamma; u2 is staff of acme only.
 func kindsHandler() *AuthServiceHandler {
-	m := &kindsMock{orgMock: orgMock{orgsByUser: map[string][]*pb.UserOrg{
+	return &AuthServiceHandler{Query: &orgMock{orgsByUser: map[string][]*pb.UserOrg{
 		"u1": {
 			{OrgId: "org-acme", Slug: "acme", MembershipKind: "staff"},
-			{OrgId: "org-acme", Slug: "acme", MembershipKind: "client"},
 			{OrgId: "org-beta", Slug: "beta", MembershipKind: "client"},
+			{OrgId: "org-gamma", Slug: "gamma", MembershipKind: "client"},
 		},
 		"u2": {{OrgId: "org-acme", Slug: "acme", MembershipKind: "staff"}},
 	}}}
-	m.roleKinds = map[string][]*pb.UserRoleKind{
-		"u1|org-acme": {
-			{RoleId: "r-staff", MembershipKind: "staff"},
-			{RoleId: "r-client", MembershipKind: "client"},
-			{RoleId: "r-any", MembershipKind: ""},
-		},
-	}
-	return &AuthServiceHandler{Query: m}
 }
 
 func admits(kinds string) map[string]string {
@@ -69,9 +52,18 @@ func TestResolveOrgScopeByKind(t *testing.T) {
 	})
 
 	t.Run("a membership of another kind in the named org is 403, not 'not a member'", func(t *testing.T) {
-		hd := admits("partner")
+		hd := admits("client")
 		hd[orgScopeMetadataKey] = "acme"
 		wantNotAdmitted(t, resolveOrgScope(context.Background(), h, "u1", hd, map[string]string{}, map[string]string{}))
+	})
+
+	t.Run("no membership of the named org at all is 'not a member'", func(t *testing.T) {
+		hd := admits("client")
+		hd[orgScopeMetadataKey] = "delta"
+		err := resolveOrgScope(context.Background(), h, "u1", hd, map[string]string{}, map[string]string{})
+		if err == nil || status.Code(err) == codes.PermissionDenied {
+			t.Fatalf("err = %v, want the not-a-member refusal", err)
+		}
 	})
 
 	t.Run("no selector: the one admitted organization", func(t *testing.T) {
@@ -111,41 +103,6 @@ func TestResolveOrgScopeByKind(t *testing.T) {
 	})
 }
 
-func TestNarrowGrantsToAdmittedKinds(t *testing.T) {
-	h := kindsHandler()
-	grants := func() []*pb.RoleGrant {
-		return []*pb.RoleGrant{{RoleId: "r-staff"}, {RoleId: "r-client"}, {RoleId: "r-any"}, {RoleId: "r-realm"}}
-	}
-	ids := func(gs []*pb.RoleGrant) map[string]bool {
-		out := map[string]bool{}
-		for _, g := range gs {
-			out[g.GetRoleId()] = true
-		}
-		return out
-	}
-
-	p := &authPrincipal{userID: "u1", grants: grants()}
-	ctx := context.WithValue(context.Background(), authHeadersKey{}, admits("client"))
-	if err := narrowGrantsToAdmittedKinds(ctx, h, p, map[string]string{"org_id": "org-acme"}); err != nil {
-		t.Fatal(err)
-	}
-	got := ids(p.grants)
-	// The client's role counts; the staff role does not — u1 is staff of the
-	// same organization, but came through the client's gateway. A grant of no
-	// kind and a realm-wide one belong to no membership and stay.
-	if got["r-staff"] || !got["r-client"] || !got["r-any"] || !got["r-realm"] {
-		t.Errorf("survivors = %v, want r-client r-any r-realm", got)
-	}
-
-	p = &authPrincipal{userID: "u1", grants: grants()}
-	if err := narrowGrantsToAdmittedKinds(context.Background(), h, p, map[string]string{"org_id": "org-acme"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(p.grants) != 4 {
-		t.Errorf("a gateway naming no kinds narrowed the grants to %v", ids(p.grants))
-	}
-}
-
 // Ownership is root authority its staff exercise: through an audience that
 // admits only some kinds, it does not widen.
 func TestOwnershipDoesNotWidenThroughAKindFilter(t *testing.T) {
@@ -162,10 +119,12 @@ func TestOwnershipDoesNotWidenThroughAKindFilter(t *testing.T) {
 	}
 }
 
-// ownsMock answers the queries narrowGrantsToActiveOrg makes.
+// ownsMock answers the queries narrowGrantsToActiveOrg and the invite check
+// make.
 type ownsMock struct {
 	pb.AuthQueryClient
 	owner bool
+	orgs  []*pb.UserOrg
 }
 
 func (m *ownsMock) GetUserOrgPermissions(context.Context, *pb.GetUserOrgPermissionsReq, ...grpc.CallOption) (*pb.GetUserOrgPermissionsResp, error) {
@@ -174,6 +133,10 @@ func (m *ownsMock) GetUserOrgPermissions(context.Context, *pb.GetUserOrgPermissi
 
 func (m *ownsMock) GetUserOwnsOrg(context.Context, *pb.GetUserOwnsOrgReq, ...grpc.CallOption) (*pb.GetUserOwnsOrgResp, error) {
 	return &pb.GetUserOwnsOrgResp{Owner: m.owner}, nil
+}
+
+func (m *ownsMock) ListUserOrgs(context.Context, *pb.ListUserOrgsReq, ...grpc.CallOption) (*pb.ListUserOrgsResp, error) {
+	return &pb.ListUserOrgsResp{Orgs: m.orgs}, nil
 }
 
 // The refusal survives Authenticate's folding of decorator errors into the
@@ -187,5 +150,65 @@ func TestNotAdmittedSurvivesTheDecoratorFold(t *testing.T) {
 	err := runScopeDecorators(context.Background(), nil, "u1", nil, map[string]string{}, map[string]string{})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("err = %v (%s), want PermissionDenied", err, status.Code(err))
+	}
+}
+
+func TestParseAudienceTable(t *testing.T) {
+	t.Setenv("APP_GATEWAY_CLIENT_MCP_PUBLIC_URL", "https://client.mcp.example.com/mcp/")
+	h := &AuthServiceHandler{Audiences: "client:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:client;staff:staff::client|staff"}
+	if err := parseAudienceTable(h); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.audiences) != 2 || h.audiences[0].url != "https://client.mcp.example.com/mcp" || strings.Join(h.audiences[1].invites, ",") != "client,staff" {
+		t.Errorf("audiences = %+v", h.audiences)
+	}
+	prev := audienceURLsNeeded
+	defer func() { audienceURLsNeeded = prev }()
+	audienceURLsNeeded = true // as with oauth_server, which reads the URLs
+	for name, table := range map[string]string{
+		"malformed":        "client:client",
+		"unset MCP URL":    "client:client:APP_GATEWAY_NOWHERE_MCP_PUBLIC_URL:client",
+		"one URL, two":     "client:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:;other:client:APP_GATEWAY_CLIENT_MCP_PUBLIC_URL:",
+		"no audience name": ":client::client",
+	} {
+		if err := parseAudienceTable(&AuthServiceHandler{Audiences: table}); err == nil {
+			t.Errorf("%s: %q booted", name, table)
+		}
+	}
+	// Without the consent page nothing reads the URLs: an unset one boots.
+	audienceURLsNeeded = false
+	if err := parseAudienceTable(&AuthServiceHandler{Audiences: "client:client:APP_GATEWAY_NOWHERE_MCP_PUBLIC_URL:client"}); err != nil {
+		t.Errorf("without oauth_server an unset MCP URL refused to boot: %v", err)
+	}
+}
+
+// A member invites only the kinds their audiences may invite; the owner and
+// an inviter from outside the organization (backoffice) may invite any.
+func TestCheckInviteKind(t *testing.T) {
+	table := []audienceEntry{
+		{name: "staff", kinds: []string{"staff"}, invites: []string{"staff", "client"}},
+		{name: "client", kinds: []string{"client"}, invites: []string{"client"}},
+	}
+	invite := func(q *ownsMock, kind string) error {
+		h := &AuthServiceHandler{Query: q, audiences: table}
+		return checkInviteKind(context.Background(), h, "u1", &pb.InviteToOrgReq{Kind: kind}, &pb.CreateOrgInviteReq{OrgId: "org-acme"})
+	}
+	staff := []*pb.UserOrg{{OrgId: "org-acme", MembershipKind: "staff"}}
+	client := []*pb.UserOrg{{OrgId: "org-acme", MembershipKind: "client"}}
+	if err := invite(&ownsMock{orgs: staff}, "client"); err != nil {
+		t.Errorf("staff inviting a client: %v", err)
+	}
+	if err := invite(&ownsMock{orgs: client}, "staff"); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("a client inviting staff: err = %v, want PermissionDenied", err)
+	}
+	if err := invite(&ownsMock{orgs: client, owner: true}, "staff"); err != nil {
+		t.Errorf("the owner inviting staff: %v", err)
+	}
+	if err := invite(&ownsMock{}, "staff"); err != nil {
+		t.Errorf("an inviter from outside the organization: %v", err)
+	}
+	if err := checkInviteKind(context.Background(), &AuthServiceHandler{Query: &ownsMock{orgs: client}}, "u1",
+		&pb.InviteToOrgReq{Kind: "staff"}, &pb.CreateOrgInviteReq{OrgId: "org-acme"}); err != nil {
+		t.Errorf("no audiences, no rule: %v", err)
 	}
 }

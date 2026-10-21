@@ -199,6 +199,9 @@ const (
 	// caller's memberships (membership_kinds): a client calling the staff
 	// surface, or anyone without a membership of an admitted kind.
 	CodeMembershipNotAdmitted = "MEMBERSHIP_NOT_ADMITTED"
+	// The inviter's kind of membership may not hand out the invitation's
+	// kind (membership_kinds): a client inviting staff.
+	CodeInviteKindNotAllowed = "INVITE_KIND_NOT_ALLOWED"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -397,6 +400,7 @@ const (
 	MsgOAuthAppUnknown       = "This connected app is not one of yours, or was already disconnected."
 	MsgOAuthOrgRequired      = "Choose one of your organizations for this application."
 	MsgMembershipNotAdmitted = "This part of the service is not open to you: none of your memberships is of a kind it admits."
+	MsgInviteKindNotAllowed  = "You cannot invite someone as this kind of member."
 )
 
 // isEmailTaken reports whether creating an account failed on the address's

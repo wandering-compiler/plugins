@@ -293,6 +293,16 @@ type AuthServiceHandler struct {
 	OAuthRedirectHosts       string // oauth_redirect_hosts
 	OAuthResources           string // oauth_resources
 	Audiences                string // w17_audiences (generated)
+	// audiences is Audiences parsed at boot (membership_kinds; nil without it).
+	audiences []audienceEntry
+}
+
+// audienceEntry is one audience of the domain's generated table
+// (w17_audiences): the kinds it admits, its MCP surface's public URL (from
+// the variable the table names), and the kinds a caller it admits may invite.
+type audienceEntry struct {
+	name, url      string
+	kinds, invites []string
 }
 
 // apiTokenStepUpChecks run before CreateApiToken (api_token) mints: step_up.go
