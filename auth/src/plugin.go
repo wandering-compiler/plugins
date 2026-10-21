@@ -109,6 +109,11 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		OAuthDynamicRegistration: cfg.OauthDynamicRegistration,
 		OAuthRedirectHosts:       cfg.OauthRedirectHosts,
 		OAuthResources:           cfg.OauthResources,
+
+		// SignIn's guess budget (<=0 → the defaults in signin_budget.go).
+		SignInFailureBudget:        cfg.SignInFailureBudget,
+		SignInDeviceFailureBudget:  cfg.SignInDeviceFailureBudget,
+		SignInFailureWindowSeconds: cfg.SignInFailureWindowSeconds,
 	}
 	if err := handlers.ValidateConfig(h); err != nil {
 		return err

@@ -205,6 +205,13 @@ type AuthServiceHandler struct {
 	MaxMfaChallengesPerWindow int // mfa_max_challenges_per_window
 	MfaChallengeWindowSeconds int // mfa_challenge_window_seconds
 
+	// SignIn's guess budget (signin_budget.go): password attempts per
+	// account per window, then per known device while the account's is
+	// spent. <= 0 → the defaults there.
+	SignInFailureBudget        int // sign_in_failure_budget
+	SignInDeviceFailureBudget  int // sign_in_device_failure_budget
+	SignInFailureWindowSeconds int // sign_in_failure_window_seconds
+
 	// SessionTokenTTLSeconds is the absolute lifetime stamped into a
 	// freshly minted session bearer token's expires_at (from
 	// session_token_ttl_seconds). <= 0 → defaultSessionTokenTTLSeconds.
@@ -1116,10 +1123,18 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 	user := userResp.GetUser()
 	attempt.userID, attempt.account = user.GetId(), user
 
+	// The guess budget, before the password: an attempt it refuses is never
+	// checked, the right password included. Refused like a wrong password,
+	// and as slowly, so the refusal tells nobody the account exists.
+	if err := spendSignInBudget(ctx, h, user.GetId(), thumbprint); err != nil {
+		signInDummyVerify(h, req.GetPassword())
+		return nil, UnauthenticatedSignIn(err)
+	}
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), nil)
 	if !ok {
 		return nil, UnauthenticatedSignIn(errAuthnPasswordMismatch)
 	}
+	resetSignInBudget(ctx, h, user.GetId(), thumbprint)
 
 	// Disabled-account gate (user_admin feature; no-op otherwise).
 	// Checked AFTER the password verify so a disabled account is

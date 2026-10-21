@@ -850,6 +850,35 @@ message RegisterDeviceResp {
   Device device = 1;
 }
 
+// ── sign-in guess budget (base tier) ───────────────────────────
+//
+// SignIn's per-account and per-device budgets (sign-in/failure-budget).
+// :now and :cutoff (now minus the window) both come from the caller's
+// clock, as TouchTokenLastUsed's do: the DQL has no interval arithmetic.
+
+message CountSignInAttemptReq {
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp now    = 2;
+  google.protobuf.Timestamp cutoff = 3;
+}
+message CountSignInAttemptResp {
+  int64 attempts = 1;
+}
+message CountDeviceSignInAttemptReq {
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
+  google.protobuf.Timestamp now    = 3;
+  google.protobuf.Timestamp cutoff = 4;
+}
+message CountDeviceSignInAttemptResp {
+  int64 attempts = 1;
+}
+message ResetSignInAttemptsReq {
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
+}
+message ResetSignInAttemptsResp {}
+
 // ── sign-in history (base tier) ────────────────────────────────
 
 // RecordSignInEventReq — one SignInEvent row. Every field is what the mint
@@ -2802,6 +2831,65 @@ service AuthMutation {
   // the conflict target. api_key is written on the INSERT only: whether a key
   // is a program's (Device.api_key) is decided by the request that first
   // named it, and the caller refuses a row of the other kind.
+  // CountSignInAttempt — count one SignIn password attempt against the
+  // account, BEFORE its password is checked: one statement, so concurrent
+  // guesses get distinct counts and none shares a budget. A window older
+  // than :cutoff starts over at 1. SET is in this order on purpose: a
+  // dialect that reads columns as already updated (MySQL) must see the old
+  // window when it decides the count.
+  rpc CountSignInAttempt(CountSignInAttemptReq) returns (CountSignInAttemptResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "sign_in_failures = CASE WHEN sign_in_window_at IS NULL OR sign_in_window_at < :cutoff "
+          "THEN 1 ELSE sign_in_failures + 1 END, "
+          "sign_in_window_at = CASE WHEN sign_in_window_at IS NULL OR sign_in_window_at < :cutoff "
+          "THEN :now ELSE sign_in_window_at END "
+          "WHERE id = :user_id "
+          "RETURNING sign_in_failures AS attempts"
+      }
+    };
+  }
+  // CountDeviceSignInAttempt — the same, against the account's live
+  // signed-in device of this key. No row = the key never signed in to the
+  // account (or its device is revoked, or a program's), and the caller
+  // refuses.
+  rpc CountDeviceSignInAttempt(CountDeviceSignInAttemptReq) returns (CountDeviceSignInAttemptResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Device SET "
+          "sign_in_failures = CASE WHEN sign_in_window_at IS NULL OR sign_in_window_at < :cutoff "
+          "THEN 1 ELSE sign_in_failures + 1 END, "
+          "sign_in_window_at = CASE WHEN sign_in_window_at IS NULL OR sign_in_window_at < :cutoff "
+          "THEN :now ELSE sign_in_window_at END "
+          "WHERE user_id = :user_id AND thumbprint = :thumbprint "
+          "AND revoked_at IS NULL AND api_key = FALSE "
+          "RETURNING sign_in_failures AS attempts"
+      }
+    };
+  }
+  // ResetSignInAttempts — a correct password: the account's budget and
+  // the signing device's start over. No RETURNING: a device that signs in
+  // for the first time has no row yet, and that is no failure.
+  rpc ResetSignInAttempts(ResetSignInAttemptsReq) returns (ResetSignInAttemptsResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "account"
+        dql: "UPDATE @module.User SET sign_in_failures = 0, sign_in_window_at = NULL WHERE id = :user_id"
+      }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Device SET sign_in_failures = 0, sign_in_window_at = NULL "
+          "WHERE user_id = :user_id AND thumbprint = :thumbprint"
+      }
+    };
+  }
+
   rpc RegisterDevice(RegisterDeviceReq) returns (RegisterDeviceResp) {
     option (w17.db.method) = {
       ops: {
