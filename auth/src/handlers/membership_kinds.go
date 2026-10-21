@@ -42,8 +42,8 @@ func init() {
 
 // membershipNotAdmitted is the 403 for a caller the audience does not admit.
 func membershipNotAdmitted(ctx context.Context) error {
-	return refusal(ctx, codes.PermissionDenied, errMembershipNotAdmitted.Error(),
-		CodeMembershipNotAdmitted, "", MsgMembershipNotAdmitted, nil)
+	return &notAdmittedError{err: refusal(ctx, codes.PermissionDenied, errMembershipNotAdmitted.Error(),
+		CodeMembershipNotAdmitted, "", MsgMembershipNotAdmitted, nil)}
 }
 
 // admittedOrgs is the caller's memberships of an admitted kind (every one when

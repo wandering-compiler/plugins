@@ -346,6 +346,24 @@ type scopeDecorator func(ctx context.Context, h *AuthServiceHandler, userID stri
 
 var scopeDecorators []scopeDecorator
 
+// notAdmittedError is a decorator's refusal of an AUTHENTICATED caller the
+// surface does not admit (membership_kinds: no membership of a kind the
+// audience accepts). It reaches the gateway as the PermissionDenied (403) it
+// carries instead of being folded into the opaque Unauthenticated: the
+// credential is fine, and "sign in again" would be the wrong advice. It
+// tells the caller nothing about anyone else — only that this door is not
+// theirs.
+type notAdmittedError struct{ err error }
+
+func (e *notAdmittedError) Error() string { return e.err.Error() }
+func (e *notAdmittedError) Unwrap() error { return e.err }
+
+// GRPCStatus is the status the wrapped refusal carries.
+func (e *notAdmittedError) GRPCStatus() *status.Status {
+	st, _ := status.FromError(e.err)
+	return st
+}
+
 // membershipKindsHeader is where an audience gateway names the membership
 // kinds it admits — principal.MembershipKindsKey of the SDK that ships audience
 // surfaces, spelled here so the plugin builds against the SDK it pins. It is
@@ -1602,6 +1620,10 @@ func runScopeDecorators(ctx context.Context, h *AuthServiceHandler, userID strin
 			var classified *authnError
 			if errors.As(err, &classified) {
 				return classified
+			}
+			var refused *notAdmittedError
+			if errors.As(err, &refused) {
+				return refused
 			}
 			return Unauthenticated(err)
 		}

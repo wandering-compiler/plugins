@@ -175,3 +175,17 @@ func (m *ownsMock) GetUserOrgPermissions(context.Context, *pb.GetUserOrgPermissi
 func (m *ownsMock) GetUserOwnsOrg(context.Context, *pb.GetUserOwnsOrgReq, ...grpc.CallOption) (*pb.GetUserOwnsOrgResp, error) {
 	return &pb.GetUserOwnsOrgResp{Owner: m.owner}, nil
 }
+
+// The refusal survives Authenticate's folding of decorator errors into the
+// opaque Unauthenticated: an admitted credential at the wrong door is 403.
+func TestNotAdmittedSurvivesTheDecoratorFold(t *testing.T) {
+	prev := scopeDecorators
+	defer func() { scopeDecorators = prev }()
+	scopeDecorators = []scopeDecorator{func(ctx context.Context, _ *AuthServiceHandler, _ string, _, _, _ map[string]string) error {
+		return membershipNotAdmitted(ctx)
+	}}
+	err := runScopeDecorators(context.Background(), nil, "u1", nil, map[string]string{}, map[string]string{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("err = %v (%s), want PermissionDenied", err, status.Code(err))
+	}
+}
