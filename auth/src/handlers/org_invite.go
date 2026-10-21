@@ -316,7 +316,9 @@ func metadataOrEmptyObject(m string) string {
 // kindOfInvite / kindOfClaim carry an invitation's membership kind into the
 // rows it writes; set by membership_kinds.go, nil without it.
 var (
-	kindOfInvite func(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (string, error)
+	// kindOfInvite checks the invitation's kind and returns what writes it onto
+	// the create request (the field exists only with membership_kinds).
+	kindOfInvite func(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (func(*pb.CreateOrgInviteReq), error)
 	kindOfClaim  func(claimed *pb.ConsumeOrgInviteByTokenResp, add *pb.AddOrgMembershipReq)
 )
 
@@ -355,9 +357,9 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	// The invitation's kind (membership_kinds), held to what the inviter may
 	// invite — before anything is written, so a refused request changes
 	// nothing.
-	kind := ""
+	var writeKind func(*pb.CreateOrgInviteReq)
 	if kindOfInvite != nil {
-		if kind, err = kindOfInvite(ctx, h, inviter, orgID, req); err != nil {
+		if writeKind, err = kindOfInvite(ctx, h, inviter, orgID, req); err != nil {
 			return nil, err
 		}
 	}
@@ -428,7 +430,9 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		// What the ceiling checked — accept holds the grant to it.
 		RoleSnapshot: snapshot,
 	}
-	createReq.Kind = kind
+	if writeKind != nil {
+		writeKind(createReq)
+	}
 	created, err := h.Mutation.CreateOrgInvite(ctx, createReq)
 	if err != nil {
 		return nil, err

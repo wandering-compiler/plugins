@@ -15,7 +15,13 @@ import (
 // hand out — a client of an organization cannot invite its staff.
 
 func init() {
-	kindOfInvite = checkInviteKind
+	kindOfInvite = func(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (func(*pb.CreateOrgInviteReq), error) {
+		kind, err := checkInviteKind(ctx, h, inviterID, orgID, req)
+		if err != nil {
+			return nil, err
+		}
+		return func(create *pb.CreateOrgInviteReq) { create.Kind = kind }, nil
+	}
 	kindOfClaim = func(claimed *pb.ConsumeOrgInviteByTokenResp, add *pb.AddOrgMembershipReq) {
 		add.Kind = claimed.GetKind()
 	}
