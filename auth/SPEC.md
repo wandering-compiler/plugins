@@ -856,12 +856,15 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_packages/governed-within-packages | In an organization, a governed permission MUST survive Authenticate only when one of the organization's live packages grants it; a wildcard is bounded the same way. | Security | `TestNarrowGrantsToPackages` |
 | org_packages/default-deny | A governed method no live package grants MUST be held by nobody in the organization. | Security | `TestNarrowGrantsToPackages` |
 | org_packages/plugin-and-realm-untouched | A plugin's permission (not governed) and a realm-wide request MUST NOT be narrowed. | Security | `TestNarrowGrantsToPackages` |
-| org_packages/audience-opened | When any package names audiences, an audience gateway MUST admit an organization's member only when one of its packages opens that audience (403 `PACKAGE_AUDIENCE_OFF`). | Security | `TestRefuseAudienceOutsidePackages` |
-| org_packages/realm-only | Packages MUST be given and taken realm-wide only: a call acting inside an organization is refused. | Security | `TestAddOrgPackage` |
+| org_packages/audience-opened | An audience some package names MUST admit an organization's member only when one of its packages names it (403 `PACKAGE_AUDIENCE_OFF`); an audience no package names is open. | Security | `TestRefuseAudienceOutsidePackages` |
+| org_packages/default-floor | A `default` package MUST be held by every organization without a row, so adopting packages leaves no organization with nothing. | Correctness | `TestNarrowGrantsToPackages` |
+| org_packages/no-lock-refuses | Without an ACL lock an organization MUST be refused, never left unbounded. | Security | `TestNarrowGrantsToPackages` |
+| org_packages/realm-only | Packages MUST be given and taken realm-wide only (a call acting inside an organization is refused — the backoffice acts from accounts in no organization), and only where the endpoint ACL is on. | Security | `TestAddOrgPackage`, `TestAddOrgPackageNeedsTheACL` |
 | org_packages/ceiling-follows | Nobody MUST hand out or compose a role above the organization's packages — the role ceiling is what the caller holds after this narrowing. | Security | `role_ceiling` tests over the narrowed envelope |
 
 **Gaps / suspected defects**
-1. Packages are read on every Authenticate in an organization (one indexed query); there is no cache.
+1. Packages are read once per Authenticate in an organization (one indexed query); there is no cache across requests.
+2. A backoffice operator who is a member of exactly one organization is inferred into it and refused the package methods: operators act from accounts that belong to no organization.
 
 ---
 
