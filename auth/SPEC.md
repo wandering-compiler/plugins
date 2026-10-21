@@ -61,6 +61,7 @@ It covers plugin version 0.1.0-rc.24.
 | `bot_token_guard` | off | `service_account` | — |
 | `bot_roles` | off | `rbac`, `service_account`, `org_membership` | — |
 | `org_roles` | off | `rbac`, `org_membership` | — |
+| `teams` | off | `rbac`, `org_membership` | — |
 | `user_admin` | off | — | — |
 | `admin_sign_ins` | off | `user_admin` | — |
 | `admin_devices` | off | `user_admin` | — |
@@ -811,6 +812,24 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | `org_roles/ceiling` | A role MUST carry only permissions its author holds and the deployed lock allocates, at least one; an existing role MUST be changed or deleted only by a caller who covers what it carries now. | Security | `TestCreateOrgRole`, `TestUpdateOrgRole` |
 | `org_roles/in-use` | A role still granted to anyone MUST NOT be deleted. | Integrity | `TestDeleteOrgRole` |
 | `org_roles/no-deletes` | Nothing is deleted: a permission is removed by `removed_at`, a role by `deleted_at`. | Audit | `no_deletes_test.go` |
+
+### teams
+
+- **Purpose.** An organization groups its members into teams, and a team holds roles every member holds while they are in it — so roles are given to a group once instead of to each person, and a resource of the project (the console's project access) can be given to a whole team.
+- **Adds.** Tables `Team`, `TeamMember`, `TeamRole`. Queries `ListTeamsByOrg`, `GetTeam`, `ListTeamMembersByOrg`, `ListTeamRolesByOrg`, `ListTeamRoleIds`, `GetUserTeamRoleGrants`, `GetOrgMemberAccount`, `CountTeamRoleGrants`; mutations `CreateTeam`, `UpdateTeam`, `DeleteTeam`, `AddTeamMember`, `RemoveTeamMember`, `GrantTeamRole`, `RevokeTeamRole`, `EndUserTeamMemberships`, `EndTeamsOfOrg`. Service methods `ListOrgTeams`, `CreateOrgTeam`, `UpdateOrgTeam`, `DeleteOrgTeam`, `AddOrgTeamMember`, `RemoveOrgTeamMember`, `SetOrgTeamRoles`. REST endpoints `GET` / `POST /auth/orgs/{org}/teams`, `PUT` / `DELETE /auth/orgs/{org}/teams/{team_id}`, `POST /auth/orgs/{org}/teams/{team_id}/members`, `DELETE /auth/orgs/{org}/teams/{team_id}/members/{user_id}`, `PUT /auth/orgs/{org}/teams/{team_id}/roles` (bearer, the org in the path).
+- **Changes.** Authenticate adds a member's team roles for a session acting in the team's organization (`orgGrantSources`, after the organization narrower's intersection). Removing someone from an organization asks the caller to cover their team roles (`memberHeldRoleSources`) and ends their team memberships in the same transaction (`membershipRemovalCascades`); deleting an organization ends its teams (`orgRemovalCascades`); `DeleteOrgRole` counts a role a team holds as in use (`roleHolderCounters`).
+- **Requires / conflicts / combined files.** Requires `rbac`, `org_membership`. Default off.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `teams/where` | A team's roles MUST count only for a session acting in the team's organization — never realm-wide, in another organization, without an organization or for an API token — and only while the person is a live member of the team and of the organization, through a membership no older than the team membership. | Isolation | `TestTeamGrants_CountForASessionInTheTeamsOrganization`, `TestTeamGrants_CountNowhereElse`, `GetUserTeamRoleGrants` DQL (`m.created_at <= tm.created_at`) |
+| `teams/fail-closed` | A team grant query that fails MUST fail the request. | Security | `TestTeamGrants_QueryErrorFailsClosed` |
+| `teams/own-org` | Every call MUST act on a live team of the caller's active organization; another organization's team MUST get the same answer as none. | Isolation | `TestTeams_AnotherOrganizationsTeamIsNotFound` |
+| `teams/ceiling` | Wherever someone gains or loses a role through a team — giving or taking a team's role, adding or removing a member, deleting the team, removing the person from the organization — the caller MUST cover every role involved; a kept role is not asked about. | Security | `TestSetOrgTeamRoles`, `TestAddOrgTeamMember`, `TestRemovingFromATeamNeedsTheCeiling`, `TestRemoveOrgMembership_TeamRoles` |
+| `teams/roles` | A team MUST hold only org-scoped session-realm roles of its organization's catalogue. | Security | `TestSetOrgTeamRoles` |
+| `teams/members` | Only a live member of the organization who is a person (not a machine account) MUST join a team. | Integrity | `TestAddOrgTeamMember` |
+| `teams/cascade` | Removing a member from the organization MUST end their team memberships there; deleting the organization MUST end its teams; a role a team holds MUST count as in use. | Integrity | `TestRemoveOrgMembership_TeamRoles`, `TestDeleteOrgRole_ARoleATeamHoldsIsInUse` |
+| `teams/no-deletes` | Nothing is deleted: a team ends by `deleted_at`, a membership by `removed_at`, a team's role by `revoked_at`, each moving `ended_key`. | Audit | `no_deletes_test.go` |
 
 ### bot_roles
 

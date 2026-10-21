@@ -2077,3 +2077,93 @@ message OrgInvite {
   google.protobuf.Timestamp closed_at = 12 [(w17.field) = { type: DATETIME, null: true }];
   string closed_by = 13 [(w17.field) = { type: UUID, null: true }];
 }
+
+// ── teams — groups of an organization's members that hold roles ──
+//
+// A team is a group of PEOPLE, not a kind of role: it belongs to one
+// organization, has members, and holds org-scoped roles that every member
+// holds while they are in it. Roles stay flat — the product defines what a
+// role means (the seed, org_roles), the organization decides who holds it,
+// directly or through a team. A project may also point at a team as the
+// holder of something of its own (the console's project access).
+//
+// Nothing here is deleted: a team, a membership in one and a role held by one
+// end with a timestamp and move ended_key from '' to the row's own id (see
+// Role.ended_key), so the same thing can be written again as a new row while
+// the ended one stays as the record.
+
+// Team — one organization's group. The name is unique among the
+// organization's live teams.
+message Team {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "org_id" }, { name: "name" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "teams";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id      = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string name        = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description = 4 [(w17.field) = { type: TEXT, max_len: 500, blank: true, default_string: "" }];
+  // created_by — the account that created it (NULL when nobody is known).
+  string created_by  = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  // deleted_at / deleted_by — the team was deleted (DeleteTeam, or its
+  // organization's deletion), and by whom.
+  google.protobuf.Timestamp deleted_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  string deleted_by  = 8 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once deleted (Role.ended_key).
+  string ended_key   = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
+// TeamMember — a person in a team. Only a live member of the team's
+// organization is added, and only a person (a machine account holds its roles
+// directly). org_id is the team's, carried so that removing someone from the
+// organization ends every team membership they have there in one statement.
+//
+// A row written BEFORE the person's current organization membership grants
+// nothing (the grant query joins the membership on created_at): someone
+// removed from the organization and invited back does not walk back into the
+// teams they were in.
+message TeamMember {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "team_id" }, { name: "user_id" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "teams";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string team_id    = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string user_id    = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string org_id     = 4 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string added_by   = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp removed_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  string removed_by = 8 [(w17.field) = { type: UUID, null: true }];
+  string ended_key  = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
+// TeamRole — a role a team holds: every live member holds it inside the
+// team's organization, for a session (a person's), never for an API token.
+// Only an org-scoped session-realm role of the organization's catalogue is
+// written here, under the role ceiling (handlers/teams.go).
+message TeamRole {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "team_id" }, { name: "role_id" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "teams";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string team_id    = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string role_id    = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string org_id     = 4 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string granted_by = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp revoked_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  string revoked_by = 8 [(w17.field) = { type: UUID, null: true }];
+  string ended_key  = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}

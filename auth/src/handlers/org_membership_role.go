@@ -113,12 +113,43 @@ func (h *AuthServiceHandler) RemoveOrgMembership(ctx context.Context, req *pb.Re
 		return nil, err
 	}
 	callerID, _ := callerUserID(ctx)
-	resp, err := h.Mutation.MarkOrgMembershipRemoved(ctx, &pb.MarkOrgMembershipRemovedReq{Id: req.GetId(), RemovedBy: callerID})
+	var membershipID string
+	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
+		resp, err := h.Mutation.MarkOrgMembershipRemoved(txCtx, &pb.MarkOrgMembershipRemovedReq{Id: req.GetId(), RemovedBy: callerID})
+		if err != nil {
+			return err
+		}
+		membershipID = resp.GetMembershipId()
+		for _, cascade := range membershipRemovalCascades {
+			if err := cascade(txCtx, h, m.GetUserId(), m.GetOrgId(), callerID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.RemoveOrgMembershipResp{MembershipId: resp.GetMembershipId()}, nil
+	return &pb.RemoveOrgMembershipResp{MembershipId: membershipID}, nil
 }
+
+// membershipRemovalCascades are what other features end with one person's
+// membership, run by RemoveOrgMembership in its transaction after the
+// membership and its grants ended: teams ends their team memberships in the
+// organization. userID / orgID are the membership's, by the account removing
+// it (empty: nobody named).
+var membershipRemovalCascades []func(ctx context.Context, h *AuthServiceHandler, userID, orgID, by string) error
+
+// memberHeldRoleSources are the roles a member holds in an organization through
+// another feature, which removing them takes away as surely as their own
+// grants: teams answers their teams' roles. checkMayManageMembership asks the
+// caller to cover them too.
+var memberHeldRoleSources []func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) ([]string, error)
+
+// roleHolderCounters count who else holds a role through another feature — a
+// team (teams) — for a role that may not be deleted while anyone holds it
+// (DeleteOrgRole).
+var roleHolderCounters []func(ctx context.Context, h *AuthServiceHandler, roleID string) (int64, error)
 
 // orgRemovalCascades are what other features end with an organization, run by
 // RemoveOrganization BEFORE the organization itself is deleted and in its
@@ -186,8 +217,11 @@ func (h *AuthServiceHandler) inOrgTx(ctx context.Context, fn func(txCtx context.
 //     checked there says nothing about another. A caller with no active
 //     organization acts on realm-wide grants, which reach every organization.
 //   - the caller covers every role the member holds in that organization —
-//     exactly the grants the change or removal revokes. Realm-wide grants stay
-//     with the member and are not asked about.
+//     exactly the grants the change or removal revokes — and every role they
+//     hold there through a team (memberHeldRoleSources): a removal ends those
+//     too, and whoever cannot hand out a team's role must not be able to strip
+//     a member of it either. Realm-wide grants stay with the member and are
+//     not asked about.
 //
 // It returns the membership, read once, for the caller to act on.
 func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membershipID string) (*pb.OrgMembership, error) {
@@ -216,14 +250,22 @@ func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membe
 	if err != nil {
 		return nil, err
 	}
-	if len(held.GetRoleIds()) == 0 {
+	roleIDs := held.GetRoleIds()
+	for _, source := range memberHeldRoleSources {
+		more, err := source(ctx, h, m.GetUserId(), m.GetOrgId())
+		if err != nil {
+			return nil, err
+		}
+		roleIDs = append(roleIDs, more...)
+	}
+	if len(roleIDs) == 0 {
 		return m, nil
 	}
 	grantable, err := h.grantableRoleIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, roleID := range held.GetRoleIds() {
+	for _, roleID := range roleIDs {
 		if !grantable[roleID] {
 			return nil, refusal(ctx, codes.PermissionDenied,
 				"the member of "+membershipID+" holds role "+roleID+", which the caller does not cover",

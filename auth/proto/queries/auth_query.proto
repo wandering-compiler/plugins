@@ -1644,6 +1644,117 @@ message ListUserOAuthGrantsResp {
   repeated OAuthGrantRow grants = 1;
 }
 
+// ── teams ──
+
+// TeamRow — one live team of an organization.
+message TeamRow {
+  option (w17.contrib.plugin_feature) = "teams";
+  string id          = 1;
+  string name        = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+message ListTeamsByOrgReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListTeamsByOrgResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated TeamRow teams = 1;
+}
+
+// GetTeamReq — one live team, whichever organization it is in: the caller
+// compares org_id with the organization it acts in.
+message GetTeamReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message GetTeamResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string id     = 1;
+  string org_id = 2;
+  string name   = 3;
+}
+
+// TeamMemberRow — one live member of one of an organization's teams.
+message TeamMemberRow {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+  string user_id = 2;
+  string email   = 3;
+  google.protobuf.Timestamp added_at = 4;
+}
+message ListTeamMembersByOrgReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListTeamMembersByOrgResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated TeamMemberRow members = 1;
+}
+
+// TeamRoleRow — one live role of one of an organization's teams.
+message TeamRoleRow {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+  string role_id = 2;
+}
+message ListTeamRolesByOrgReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListTeamRolesByOrgResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated TeamRoleRow roles = 1;
+}
+
+// ListTeamRoleIds — the live roles one team holds (of live roles).
+message ListTeamRoleIdsReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListTeamRoleIdsResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated string role_ids = 1;
+}
+
+// GetUserTeamRoleGrants — the roles a user holds through their teams IN ONE
+// ORGANIZATION, role-attributed like GetUserOrgPermissions. Authenticate adds
+// them for a session acting in that organization (handlers/teams.go).
+message GetUserTeamRoleGrantsReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string user_id = 1;
+  string org_id  = 2;
+}
+message GetUserTeamRoleGrantsResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated RoleGrant grants = 1;
+}
+
+// GetOrgMemberAccount — the account of a LIVE member of an organization, for
+// a team to take them in: NotFound for anyone else. The account's kind rides
+// along (service_account), because a machine account is not a team member.
+message GetOrgMemberAccountReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string org_id  = 2 [(w17.field) = { type: UUID }];
+}
+message GetOrgMemberAccountResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  User user = 1;
+}
+
+// CountTeamRoleGrants — how many live teams hold a role: a role a team holds
+// is in use (DeleteOrgRole).
+message CountTeamRoleGrantsReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string role_id = 1 [(w17.field) = { type: UUID }];
+}
+message CountTeamRoleGrantsResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  int64 count = 1;
+}
+
 service AuthQuery {
   rpc GetUserByEmail(GetUserByEmailReq) returns (GetUserByEmailResp) {
     option (w17.db.method) = {
@@ -3594,4 +3705,143 @@ service AuthQuery {
       }
     };
   }
+
+  // ── teams (handlers/teams.go) ──
+
+  rpc ListTeamsByOrg(ListTeamsByOrgReq) returns (ListTeamsByOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS id, t.name AS name, t.description AS description, t.created_at AS created_at "
+          "FROM @module.Team t "
+          "WHERE t.org_id = :org_id AND t.deleted_at IS NULL "
+          "ORDER BY t.name ASC, t.id ASC"
+      }
+    };
+  }
+
+  rpc GetTeam(GetTeamReq) returns (GetTeamResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.id AS id, t.org_id AS org_id, t.name AS name "
+          "FROM @module.Team t "
+          "WHERE t.id = :id AND t.deleted_at IS NULL"
+      }
+    };
+  }
+
+  // ListTeamMembersByOrg — every live member of every live team of one
+  // organization. A member whose organization membership ended (or began
+  // again after they were added) is not one: the same join the grants read.
+  rpc ListTeamMembersByOrg(ListTeamMembersByOrgReq) returns (ListTeamMembersByOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT tm.team_id AS team_id, tm.user_id AS user_id, u.email AS email, tm.created_at AS added_at "
+          "FROM @module.TeamMember tm "
+          "JOIN @module.Team t ON t.id = tm.team_id AND t.deleted_at IS NULL "
+          "JOIN @module.OrgMembership m ON m.user_id = tm.user_id AND m.org_id = t.org_id "
+          "  AND m.removed_at IS NULL AND m.created_at <= tm.created_at "
+          "JOIN @module.User u ON u.id = tm.user_id "
+          "WHERE t.org_id = :org_id AND tm.removed_at IS NULL "
+          "ORDER BY u.email ASC"
+      }
+    };
+  }
+
+  rpc ListTeamRolesByOrg(ListTeamRolesByOrgReq) returns (ListTeamRolesByOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT tr.team_id AS team_id, tr.role_id AS role_id "
+          "FROM @module.TeamRole tr "
+          "JOIN @module.Team t ON t.id = tr.team_id AND t.deleted_at IS NULL "
+          "JOIN @module.Role r ON r.id = tr.role_id AND r.deleted_at IS NULL "
+          "WHERE t.org_id = :org_id AND tr.revoked_at IS NULL "
+          "ORDER BY tr.team_id ASC, tr.role_id ASC"
+      }
+    };
+  }
+
+  rpc ListTeamRoleIds(ListTeamRoleIdsReq) returns (ListTeamRoleIdsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT ROWS_TO_ARRAY(tr.role_id) AS role_ids "
+          "FROM @module.TeamRole tr "
+          "JOIN @module.Role r ON r.id = tr.role_id "
+          "WHERE tr.team_id = :team_id AND tr.revoked_at IS NULL AND r.deleted_at IS NULL"
+      }
+    };
+  }
+
+  // GetUserTeamRoleGrants — see its request message. Every link is read live:
+  // the team, the membership in it, the organization membership it was made
+  // under (created no later than the team membership, so a person removed and
+  // invited back holds nothing from before), the team's role and the role
+  // itself; only an org-scoped role counts.
+  rpc GetUserTeamRoleGrants(GetUserTeamRoleGrantsReq) returns (GetUserTeamRoleGrantsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS role_id, "
+          "       ROWS_TO_ARRAY(rp.permission_id) AS permission_ids, "
+          "       r.all_permissions AS all_permissions "
+          "FROM @module.TeamMember tm "
+          "JOIN @module.Team t ON t.id = tm.team_id AND t.deleted_at IS NULL "
+          "JOIN @module.OrgMembership m ON m.user_id = tm.user_id AND m.org_id = t.org_id "
+          "  AND m.removed_at IS NULL AND m.created_at <= tm.created_at "
+          "JOIN @module.TeamRole tr ON tr.team_id = t.id AND tr.revoked_at IS NULL "
+          "JOIN @module.Role r ON r.id = tr.role_id AND r.deleted_at IS NULL AND r.org_scoped = TRUE "
+          "LEFT JOIN @module.RolePermission rp ON rp.role_id = r.id AND rp.removed_at IS NULL "
+          "WHERE tm.user_id = :user_id AND t.org_id = :org_id AND tm.removed_at IS NULL "
+          "GROUP BY r.id, r.all_permissions "
+          "ORDER BY r.id ASC"
+      }
+    };
+  }
+
+  rpc GetOrgMemberAccount(GetOrgMemberAccountReq) returns (GetOrgMemberAccountResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT u.id AS user.id, "
+          "       u.email AS user.email, "
+          "       ?feature(service_account) u.kind AS user.kind, "
+          "       u.created_at AS user.created_at "
+          "FROM @module.OrgMembership m "
+          "JOIN @module.User u ON u.id = m.user_id "
+          "WHERE m.user_id = :user_id AND m.org_id = :org_id AND m.removed_at IS NULL"
+      }
+    };
+  }
+
+  rpc CountTeamRoleGrants(CountTeamRoleGrantsReq) returns (CountTeamRoleGrantsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT COUNT(*) AS count FROM @module.TeamRole tr "
+          "JOIN @module.Team t ON t.id = tr.team_id AND t.deleted_at IS NULL "
+          "WHERE tr.role_id = :role_id AND tr.revoked_at IS NULL"
+      }
+    };
+  }
+
 }
