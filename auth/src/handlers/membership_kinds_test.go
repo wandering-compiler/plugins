@@ -229,3 +229,7 @@ func TestCheckInviteKind(t *testing.T) {
 		t.Errorf("without ValidateConfig the check fell open: %v", err)
 	}
 }
+
+func (m *ownsMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserTeamRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
+	return &pb.GetUserTeamRoleGrantsResp{}, nil
+}
