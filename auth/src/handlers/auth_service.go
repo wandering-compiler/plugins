@@ -332,7 +332,8 @@ const CodeCreateNeedsStepUp = "API_TOKEN_NEEDS_STEP_UP"
 // orgPackageTable is the generated w17_packages table.
 type orgPackageTable struct {
 	Packages []orgPackage `json:"packages"`
-	// Governed are the method codes a package bounds: the project's.
+	// Governed are the methods a package bounds (the project's), named as
+	// the ACL lock keys them.
 	Governed []string `json:"governed"`
 
 	byName       map[string]orgPackage
