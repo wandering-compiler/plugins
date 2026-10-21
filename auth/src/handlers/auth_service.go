@@ -297,6 +297,10 @@ type AuthServiceHandler struct {
 	// it); audiencesRead says ValidateConfig did it.
 	audiences     []audienceEntry
 	audiencesRead bool
+	PackagesTable string // w17_packages (generated; org_packages)
+	// packages is PackagesTable parsed at boot (org_packages; nil without it).
+	packages     *orgPackageTable
+	packagesRead bool
 }
 
 // audienceEntry is one audience of the domain's generated table
@@ -324,6 +328,22 @@ const MsgNeedsStepUp = "Confirm it is you before creating a token."
 // recently enough (api_token_step_up_seconds); the client asks for the
 // step-up and tries again.
 const CodeCreateNeedsStepUp = "API_TOKEN_NEEDS_STEP_UP"
+
+// orgPackageTable is the generated w17_packages table.
+type orgPackageTable struct {
+	Packages []orgPackage `json:"packages"`
+	// Governed are the method codes a package bounds: the project's.
+	Governed []string `json:"governed"`
+
+	byName       map[string]orgPackage
+	audienceAxis bool
+}
+
+type orgPackage struct {
+	Name      string   `json:"name"`
+	Methods   []string `json:"methods"`
+	Audiences []string `json:"audiences"`
+}
 
 // configChecks are the boot checks of feature-owned settings: a feature file
 // appends its own from init(), so ValidateConfig checks exactly what the
@@ -382,6 +402,10 @@ func (e *notAdmittedError) GRPCStatus() *status.Status {
 // surfaces, spelled here so the plugin builds against the SDK it pins. It is
 // gateway-owned (`x-w17-*`): a client's copy never reaches Authenticate.
 const membershipKindsHeader = "x-w17-membership-kinds"
+
+// audienceHeader is where an audience gateway names its audience
+// (principal.AudienceKey of the SDK that ships audience surfaces).
+const audienceHeader = "x-w17-audience"
 
 // authHeadersKey carries the AuthReq headers on the context, for a narrower.
 type authHeadersKey struct{}
