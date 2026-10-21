@@ -292,6 +292,7 @@ type AuthServiceHandler struct {
 	OAuthDynamicRegistration bool   // oauth_dynamic_registration
 	OAuthRedirectHosts       string // oauth_redirect_hosts
 	OAuthResources           string // oauth_resources
+	Audiences                string // w17_audiences (generated)
 }
 
 // apiTokenStepUpChecks run before CreateApiToken (api_token) mints: step_up.go

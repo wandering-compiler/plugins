@@ -106,6 +106,10 @@ env:
     type: string
     default: ""
     description: "The resources (MCP surface URLs) this server issues tokens for (oauth_server): a comma- or space-separated list of absolute URLs. Empty = any https URL — the consent page shows the user which one. Set it to your MCP surfaces so no client can have a token minted for another server's name. An entry that is not an absolute URL fails the boot."
+  - name: w17_audiences
+    type: string
+    default: ""
+    description: "GENERATED — do not set it: codegen fills it from the domain's audience surfaces (membership_kinds). Who each audience admits and the variable carrying its MCP surface's public URL, as <audience>:<kind>|<kind>:<URL variable> entries joined by ';'. With oauth_server, the consent page offers an MCP client only the organizations where the user holds a membership of a kind the client's audience admits."
   - name: totp_issuer
     type: string
     default: ""
@@ -507,6 +511,10 @@ go_files_combined:
   # invitation calls exist only with org_invite.
   - features: [membership_kinds, org_invite]
     files: [handlers/membership_kinds_invite.go]
+  # The consent page offers an MCP client only the organizations its
+  # audience admits; the grant calls exist only with oauth_server.
+  - features: [oauth_server, membership_kinds]
+    files: [handlers/oauth_server_kinds.go]
 
 # Preset surfaces this plugin injects into a consuming project's
 # gateway at activation time. On by default when the gating feature

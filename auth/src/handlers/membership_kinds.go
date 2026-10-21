@@ -12,8 +12,7 @@ import (
 
 // This file implements the `membership_kinds` feature: one identity, several
 // memberships of several KINDS (`staff`, `client`, …) — the auth half of
-// audience surfaces (docs/specs/gateway/audience-surfaces.md in the platform
-// repository). A domain publishing several audiences serves each from its own
+// audience surfaces (`w17/audience.proto` in the SDK). A domain publishing several audiences serves each from its own
 // gateway, and that gateway names the kinds it admits in every Authenticate
 // (x-w17-membership-kinds, which only a gateway writes). Staged only with the
 // feature; it requires org_membership.

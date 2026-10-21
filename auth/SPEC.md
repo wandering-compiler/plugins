@@ -1091,7 +1091,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 ### membership_kinds
 
-**Purpose.** One identity, several memberships of several kinds — the auth half of audience surfaces (a domain publishing one REST / MCP / gRPC surface per audience, each on its own gateway; platform `docs/specs/gateway/audience-surfaces.md`). A person may be an organization's staff and its client at once. An audience gateway names the kinds it admits in every `Authenticate`, and the plugin admits the caller only through a membership of one of them.
+**Purpose.** One identity, several memberships of several kinds — the auth half of audience surfaces (a domain publishing one REST / MCP / gRPC surface per audience, each on its own gateway — `w17/audience.proto` in the SDK). A person may be an organization's staff and its client at once. An audience gateway names the kinds it admits in every `Authenticate`, and the plugin admits the caller only through a membership of one of them.
 
 **Adds**
 - Columns: `OrgMembership.kind`, `OrgInvite.kind`, `UserRole.membership_kind` (CHAR 32, '' = no kind). The unique indexes move onto the kind: `OrgMembership` `(user_id, org_id, kind, ended_key)`, the pending `OrgInvite` `(org_id, email, kind)`.
