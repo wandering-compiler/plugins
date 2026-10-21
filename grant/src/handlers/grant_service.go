@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wandering-compiler/sdk/go/lib/acllock"
+
 	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
 )
 
@@ -18,6 +20,9 @@ import (
 type GrantServiceHandler struct {
 	Query    pb.GrantQueryClient
 	Mutation pb.GrantMutationClient
+	// Lock is the deployed ACL lock: the backoffice's methods must be in it
+	// (realmOnly), or nobody may call them.
+	Lock *acllock.Lock
 }
 
 var (
@@ -112,7 +117,7 @@ func (h *GrantServiceHandler) GetMyEnvelopes(ctx context.Context, _ *pb.GetMyEnv
 
 // ListEnvelopeProposals is what waits for the backoffice.
 func (h *GrantServiceHandler) ListEnvelopeProposals(ctx context.Context, _ *pb.ListEnvelopeProposalsReq) (*pb.EnvelopeVersionsResp, error) {
-	if _, err := realmOnly(ctx); err != nil {
+	if _, err := h.realmOnly(ctx, "GRANT_GRANT_SERVICE_LIST_ENVELOPE_PROPOSALS"); err != nil {
 		return nil, err
 	}
 	rows, err := h.Query.ListPendingEnvelopes(ctx, &pb.ListPendingEnvelopesReq{})
@@ -125,7 +130,7 @@ func (h *GrantServiceHandler) ListEnvelopeProposals(ctx context.Context, _ *pb.L
 // ApproveEnvelope makes a proposal the organization's shown envelope,
 // superseding the previous one.
 func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.ApproveEnvelopeReq) (*pb.EnvelopeVersion, error) {
-	caller, err := realmOnly(ctx)
+	caller, err := h.realmOnly(ctx, "GRANT_GRANT_SERVICE_APPROVE_ENVELOPE")
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +143,7 @@ func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.Appro
 
 // RejectEnvelope refuses a proposal, with a note for the organization.
 func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.RejectEnvelopeReq) (*pb.EnvelopeVersion, error) {
-	caller, err := realmOnly(ctx)
+	caller, err := h.realmOnly(ctx, "GRANT_GRANT_SERVICE_REJECT_ENVELOPE")
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +157,7 @@ func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.Reject
 // BindHost binds a co-brand host to the organization it presents. A host
 // bound to another organization is refused: unbind it first.
 func (h *GrantServiceHandler) BindHost(ctx context.Context, req *pb.BindHostReq) (*pb.BindHostResp, error) {
-	caller, err := realmOnly(ctx)
+	caller, err := h.realmOnly(ctx, "GRANT_GRANT_SERVICE_BIND_HOST")
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +183,7 @@ func (h *GrantServiceHandler) BindHost(ctx context.Context, req *pb.BindHostReq)
 // UnbindHost ends a host's binding. Unbinding a host that is not bound
 // changes nothing.
 func (h *GrantServiceHandler) UnbindHost(ctx context.Context, req *pb.UnbindHostReq) (*pb.UnbindHostResp, error) {
-	caller, err := realmOnly(ctx)
+	caller, err := h.realmOnly(ctx, "GRANT_GRANT_SERVICE_UNBIND_HOST")
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +195,7 @@ func (h *GrantServiceHandler) UnbindHost(ctx context.Context, req *pb.UnbindHost
 
 // ListHosts is every live co-brand host.
 func (h *GrantServiceHandler) ListHosts(ctx context.Context, _ *pb.ListHostsReq) (*pb.ListHostsResp, error) {
-	if _, err := realmOnly(ctx); err != nil {
+	if _, err := h.realmOnly(ctx, "GRANT_GRANT_SERVICE_LIST_HOSTS"); err != nil {
 		return nil, err
 	}
 	rows, err := h.Query.ListHostBindings(ctx, &pb.ListHostBindingsReq{})

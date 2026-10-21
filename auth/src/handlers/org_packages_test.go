@@ -43,14 +43,16 @@ func (m *pkgMock) EndOrgPackage(_ context.Context, in *pb.EndOrgPackageReq, _ ..
 
 const testPackages = `{"packages":[
  {"name":"base","methods":["ex.Notes.List"],"audiences":["staff"]},
- {"name":"pro","methods":["ex.Notes.List","ex.Notes.Ask"],"audiences":["staff","client"]}],
+ {"name":"pro","methods":["ex.Notes.List","ex.Notes.Ask"],"audiences":["staff","client"]},
+ {"name":"floor","methods":["ex.Notes.New"],"default":true}],
  "governed":["ex.Notes.List","ex.Notes.Ask","ex.Notes.New"]}`
 
 func pkgHandler(t *testing.T, live map[string][]string) (*AuthServiceHandler, *pkgMock) {
 	t.Helper()
 	m := &pkgMock{live: live}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PackagesTable: testPackages,
-		Lock: &acllock.Lock{Permissions: map[string]int{"ex.Notes.List": 1, "ex.Notes.Ask": 2, "ex.Notes.New": 3, "auth.AuthService.ChangePassword": 9}}}
+		Lock: &acllock.Lock{Permissions: map[string]int{"ex.Notes.List": 1, "ex.Notes.Ask": 2, "ex.Notes.New": 3, "auth.AuthService.ChangePassword": 9,
+			"AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE": 10, "AUTH_AUTH_SERVICE_REMOVE_ORG_PACKAGE": 11, "AUTH_AUTH_SERVICE_LIST_PACKAGES_OF_ORG": 12}}}
 	if err := parsePackageTable(h); err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +73,12 @@ func TestNarrowGrantsToPackages(t *testing.T) {
 	}
 	got := p.effectivePermissions(h.Lock)
 	slices.Sort(got)
-	if !slices.Equal(got, []int32{1, 9}) {
-		t.Errorf("held = %v, want [1 9] (base grants List; Ask and New are outside it)", got)
+	// base grants List (1) and the default floor New (3); Ask (2) is outside
+	// both. The plugin's permissions (9, and the package methods 10-12 the
+	// wildcard expands to) are not governed — refuseInsideOrg is what keeps an
+	// org-admin off the package methods.
+	if !slices.Equal(got, []int32{1, 3, 9, 10, 11, 12}) {
+		t.Errorf("held = %v, want [1 3 9 10 11 12]", got)
 	}
 	// Realm-wide (no organization): untouched.
 	p = &authPrincipal{grants: []*pb.RoleGrant{{RoleId: "r", PermissionIds: []int32{1, 2, 3}}}}
@@ -82,13 +88,18 @@ func TestNarrowGrantsToPackages(t *testing.T) {
 	if len(p.effectivePermissions(h.Lock)) != 3 {
 		t.Errorf("a realm-wide request was narrowed")
 	}
-	// No packages at all: nothing governed is held.
+	// No package given: the default floor only.
 	p = &authPrincipal{grants: []*pb.RoleGrant{{RoleId: "r", PermissionIds: []int32{1, 2, 3}}}}
 	if err := narrowGrantsToPackages(context.Background(), h, p, map[string]string{"org_id": "org-none"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := p.effectivePermissions(h.Lock); len(got) != 0 {
-		t.Errorf("an organization with no package holds %v", got)
+	if got := p.effectivePermissions(h.Lock); !slices.Equal(got, []int32{3}) {
+		t.Errorf("an organization given no package holds %v, want the default floor [3]", got)
+	}
+	// No lock: refused, not unbounded.
+	h.Lock = nil
+	if err := narrowGrantsToPackages(context.Background(), h, &authPrincipal{}, map[string]string{"org_id": "org-a"}); err == nil {
+		t.Error("with no lock an organization went unbounded")
 	}
 }
 
@@ -108,6 +119,9 @@ func TestRefuseAudienceOutsidePackages(t *testing.T) {
 	}
 	if err := call("org-b", "client"); err != nil {
 		t.Errorf("pro opens client: %v", err)
+	}
+	if err := call("org-a", "partner"); err != nil {
+		t.Errorf("an audience no package names is open: %v", err)
 	}
 }
 
@@ -131,6 +145,16 @@ func TestAddOrgPackage(t *testing.T) {
 	}
 	if _, err := h.RemoveOrgPackage(realm, &pb.RemoveOrgPackageReq{OrgId: "org-a", Package: "base"}); err != nil || !slices.Equal(m.ended, []string{"org-a/base"}) {
 		t.Errorf("taking base: err = %v, ended %v", err, m.ended)
+	}
+}
+
+// Without the endpoint ACL nobody gives packages: the method is not in the
+// lock.
+func TestAddOrgPackageNeedsTheACL(t *testing.T) {
+	h, _ := pkgHandler(t, nil)
+	h.Lock = &acllock.Lock{Permissions: map[string]int{"ex.Notes.List": 1}}
+	if _, err := h.AddOrgPackage(whoAmICtx("anyone", ""), &pb.AddOrgPackageReq{OrgId: "org-a", Package: "pro"}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("err = %v, want PermissionDenied", err)
 	}
 }
 

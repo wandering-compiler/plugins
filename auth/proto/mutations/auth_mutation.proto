@@ -1977,8 +1977,6 @@ message DeleteTeamResp {
   string team_id = 1;
 }
 
-// AddTeamMember — a person joins a live team of the organization. A live
-// membership of the same person is refused by the unique index (AlreadyExists).
 // EnableOrgPackageReq / EndOrgPackageReq — switch a package on / off for an
 // organization (org_packages).
 message EnableOrgPackageReq {
@@ -2002,6 +2000,8 @@ message EndOrgPackageResp {
   string id = 1;
 }
 
+// AddTeamMember — a person joins a live team of the organization. A live
+// membership of the same person is refused by the unique index (AlreadyExists).
 message AddTeamMemberReq {
   option (w17.contrib.plugin_feature) = "teams";
   string team_id  = 1 [(w17.field) = { type: UUID }];
@@ -5259,8 +5259,6 @@ service AuthMutation {
     };
   }
 
-  // AddTeamMember — see its request message. The first op locks the live team
-  // of the organization (DeleteTeam takes the same lock).
   // EnableOrgPackage — a new live row; a live duplicate is refused by the
   // unique index (the caller checks first).
   rpc EnableOrgPackage(EnableOrgPackageReq) returns (EnableOrgPackageResp) {
@@ -5292,6 +5290,8 @@ service AuthMutation {
     };
   }
 
+  // AddTeamMember — see its request message. The first op locks the live team
+  // of the organization (DeleteTeam takes the same lock).
   rpc AddTeamMember(AddTeamMemberReq) returns (AddTeamMemberResp) {
     option (w17.contrib.plugin_feature_rpc) = "teams";
     option (w17.db.method) = {

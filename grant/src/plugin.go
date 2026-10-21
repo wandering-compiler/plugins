@@ -14,6 +14,7 @@ func RegisterPlugin(_ *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.
 	registry.RegisterGrantServiceServer(&handlers.GrantServiceHandler{
 		Query:    clients.GrantQuery(),
 		Mutation: clients.GrantMutation(),
+		Lock:     clients.AclLock(),
 	})
 	return nil
 }

@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
 
+	"github.com/wandering-compiler/sdk/go/lib/acllock"
+
 	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
 )
 
@@ -74,7 +76,7 @@ func as(userID, orgID string) context.Context {
 	env = protowire.AppendString(env, userID)
 	pairs := []string{callerMetadataKey, base64.StdEncoding.EncodeToString(env)}
 	if orgID != "" {
-		pairs = append(pairs, orgScopeKey, orgID)
+		pairs = append(pairs, "x-w17-scope-org_id", orgID)
 	}
 	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(pairs...))
 }
@@ -84,7 +86,8 @@ func as(userID, orgID string) context.Context {
 // organization's approved envelope and an unbound host shows none.
 func TestEnvelopeLifecycle(t *testing.T) {
 	s := &store{hosts: map[string]string{}}
-	h := &GrantServiceHandler{Query: s, Mutation: s}
+	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{
+		"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "GRANT_GRANT_SERVICE_BIND_HOST": 2}}}
 	v1, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme"}})
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +123,14 @@ func TestEnvelopeLifecycle(t *testing.T) {
 	}
 	if _, err := h.BindHost(as("ops", ""), &pb.BindHostReq{Host: "acme.example.com", OrgId: "org-beta"}); status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("re-binding a bound host to another organization: err = %v", err)
+	}
+}
+
+// Without the endpoint ACL nobody approves: the method is not in the lock.
+func TestRealmOnlyNeedsTheACL(t *testing.T) {
+	h := &GrantServiceHandler{Lock: &acllock.Lock{Permissions: map[string]int{}}}
+	if _, err := h.ApproveEnvelope(as("anyone", ""), &pb.ApproveEnvelopeReq{Id: "x"}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("err = %v, want PermissionDenied", err)
 	}
 }
 

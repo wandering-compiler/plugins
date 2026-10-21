@@ -31,7 +31,12 @@ option go_package = "@project;@pkg";
 // previous one in the same transaction).
 message Envelope {
   option (w17.db.table) = {
-    indexes: [ { fields: [{ name: "org_id" }, { name: "status" }] } ]
+    indexes: [
+      { fields: [{ name: "org_id" }, { name: "status" }] },
+      // One approved version per organization: two approvals racing for one
+      // organization cannot both commit.
+      { unique: true, fields: [{ name: "org_id" }], where: "status = 'approved'" }
+    ]
   };
 
   string id               = 1  [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];

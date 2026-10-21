@@ -751,8 +751,6 @@ presets:
           # Opt-in (client_secret_rotation), for the same upgrade reason as
           # /auth/sign-ins.
           - { ref: AuthService.RotateClientSecret, method: POST, path: "/{id}/rotate-secret", feature: client_secret_rotation }
-      # Multi-org membership — the caller lists their OWN orgs, bearer-
-      # authenticated. Gated org_membership.
       # The backoffice's packages of an organization (org_packages): realm-wide,
       # so the organization is an id in the path and NOT the active one — a
       # call acting inside an organization is refused (PACKAGES_REALM_ONLY).
@@ -762,6 +760,8 @@ presets:
           - { ref: AuthService.ListPackagesOfOrg, method: GET,    path: "/{org_id}/packages",           feature: org_packages }
           - { ref: AuthService.AddOrgPackage,     method: POST,   path: "/{org_id}/packages/{package}", feature: org_packages }
           - { ref: AuthService.RemoveOrgPackage,  method: DELETE, path: "/{org_id}/packages/{package}", feature: org_packages }
+      # Multi-org membership — the caller lists their OWN orgs, bearer-
+      # authenticated. Gated org_membership.
       - prefix: /auth/orgs
         description: "Multi-org membership — list the organizations the caller belongs to."
         endpoints:

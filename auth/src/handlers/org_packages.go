@@ -12,6 +12,7 @@ import (
 
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -31,9 +32,11 @@ import (
 //     method no package grants is held by nobody there (default deny);
 //     a plugin's methods (sign-in, the account's own settings) are not
 //     governed unless a package lists them;
-//   - an audience gateway admits the caller only when one of the
-//     organization's packages opens its audience — when any package names
-//     audiences at all.
+//   - an audience gateway whose audience some package names admits the
+//     caller only when one of the organization's packages names it; an
+//     audience no package names is open;
+//   - a `default` package is every organization's without being given (and
+//     cannot be taken).
 //
 // Handing roles out needs nothing more: the role ceiling is what the caller
 // holds in this request, which is already bounded by the packages, so nobody
@@ -77,27 +80,51 @@ func readPackageTable(raw string) (*orgPackageTable, error) {
 	if err := json.Unmarshal([]byte(raw), &t); err != nil {
 		return nil, fmt.Errorf("auth plugin: w17_packages does not parse (%w) — the table is generated; regenerate instead of editing it", err)
 	}
-	t.byName = map[string]orgPackage{}
+	t.byName, t.gatedAudiences = map[string]orgPackage{}, map[string]bool{}
 	for _, p := range t.Packages {
 		if p.Name == "" {
 			return nil, fmt.Errorf("auth plugin: w17_packages names a package with no name — regenerate")
 		}
 		t.byName[p.Name] = p
-		t.audienceAxis = t.audienceAxis || len(p.Audiences) > 0
+		for _, a := range p.Audiences {
+			t.gatedAudiences[a] = true
+		}
 	}
 	return &t, nil
 }
 
-// orgPackagesOf is the live package names of orgID that the table still
-// declares (a package dropped from the protos grants nothing).
+// orgPackagesOf is the packages orgID holds: the default ones, and the live
+// rows the table still declares (a package dropped from the protos grants
+// nothing). Read once per Authenticate: the audience check and the narrowing
+// both ask, through the request's memo.
 func orgPackagesOf(ctx context.Context, h *AuthServiceHandler, t *orgPackageTable, orgID string) ([]orgPackage, error) {
+	if m := requestMemoOf(ctx); m != nil {
+		if v, ok := m["org_packages:"+orgID].([]orgPackage); ok {
+			return v, nil
+		}
+	}
+	out, err := readOrgPackages(ctx, h, t, orgID)
+	if err == nil {
+		if m := requestMemoOf(ctx); m != nil {
+			m["org_packages:"+orgID] = out
+		}
+	}
+	return out, err
+}
+
+func readOrgPackages(ctx context.Context, h *AuthServiceHandler, t *orgPackageTable, orgID string) ([]orgPackage, error) {
 	resp, err := h.Query.ListOrgPackages(ctx, &pb.ListOrgPackagesReq{OrgId: orgID})
 	if err != nil && status.Code(err) != codes.NotFound {
 		return nil, err
 	}
 	var out []orgPackage
+	for _, p := range t.Packages {
+		if p.Default {
+			out = append(out, p)
+		}
+	}
 	for _, r := range resp.GetPackages() {
-		if p, ok := t.byName[r.GetPackage()]; ok {
+		if p, ok := t.byName[r.GetPackage()]; ok && !p.Default {
 			out = append(out, p)
 		}
 	}
@@ -113,7 +140,7 @@ func refuseAudienceOutsidePackages(ctx context.Context, h *AuthServiceHandler, _
 		return err
 	}
 	aud, orgID := headers[audienceHeader], scopes["org_id"]
-	if t == nil || !t.audienceAxis || aud == "" || orgID == "" {
+	if t == nil || !t.gatedAudiences[aud] || orgID == "" {
 		return nil
 	}
 	pkgs, err := orgPackagesOf(ctx, h, t, orgID)
@@ -137,8 +164,13 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 		return err
 	}
 	orgID := scopes["org_id"]
-	if t == nil || orgID == "" || h.Lock == nil {
+	if t == nil || orgID == "" {
 		return nil
+	}
+	if h.Lock == nil {
+		// Nothing to look the methods up in: refuse rather than leave the
+		// organization unbounded.
+		return errors.New("org_packages: no ACL lock to bound the organization's permissions with")
 	}
 	pkgs, err := orgPackagesOf(ctx, h, t, orgID)
 	if err != nil {
@@ -152,7 +184,7 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 	}
 	denied := map[int32]bool{}
 	for _, code := range t.Governed {
-		if id, ok := h.Lock.Permissions[code]; ok && !allowed[code] {
+		if id, ok := acllock.IDByString(h.Lock, code); ok && !allowed[code] {
 			denied[int32(id)] = true
 		}
 	}
@@ -178,11 +210,24 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 }
 
 // refuseInsideOrg holds the backoffice's calls to the realm: an organization
-// does not give itself packages, whatever roles its admins hold.
-func refuseInsideOrg(ctx context.Context) error {
+// does not give itself packages, whatever roles its admins hold. A request
+// acts in an organization when it names one or when its caller belongs to
+// exactly one (resolveOrgScope infers it) — so the backoffice acts from
+// accounts that belong to no organization.
+//
+// And who may call it at all is the project's endpoint ACL: the method must
+// be in the deployed lock, or nobody may — without an ACL any signed-in
+// account outside an organization would pass.
+func (h *AuthServiceHandler) refuseInsideOrg(ctx context.Context, lockKey string) error {
 	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
 		return refusal(ctx, codes.PermissionDenied, "org_packages: packages are given realm-wide, not from inside an organization",
 			CodePackagesRealmOnly, "", MsgPackagesRealmOnly, nil)
+	}
+	if h.Lock == nil {
+		return status.Error(codes.PermissionDenied, "org_packages: the backoffice's package methods need the endpoint ACL (no lock)")
+	}
+	if _, ok := acllock.IDByString(h.Lock, lockKey); !ok {
+		return status.Error(codes.PermissionDenied, "org_packages: the backoffice's package methods need the endpoint ACL — "+lockKey+" is not in the lock")
 	}
 	return nil
 }
@@ -205,7 +250,7 @@ func (h *AuthServiceHandler) AddOrgPackage(ctx context.Context, req *pb.AddOrgPa
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := refuseInsideOrg(ctx); err != nil {
+	if err := h.refuseInsideOrg(ctx, "AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE"); err != nil {
 		return nil, err
 	}
 	if err := h.checkPackageName(ctx, req.GetPackage()); err != nil {
@@ -220,9 +265,11 @@ func (h *AuthServiceHandler) AddOrgPackage(ctx context.Context, req *pb.AddOrgPa
 			return &pb.AddOrgPackageResp{}, nil
 		}
 	}
+	// A concurrent add of the same package lands on the unique index: it is
+	// given either way, which is what was asked.
 	if _, err := h.Mutation.EnableOrgPackage(ctx, &pb.EnableOrgPackageReq{
 		OrgId: req.GetOrgId(), Package: req.GetPackage(), EnabledBy: caller,
-	}); err != nil {
+	}); err != nil && !isUniqueConflict(err) {
 		return nil, err
 	}
 	return &pb.AddOrgPackageResp{}, nil
@@ -236,7 +283,7 @@ func (h *AuthServiceHandler) RemoveOrgPackage(ctx context.Context, req *pb.Remov
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := refuseInsideOrg(ctx); err != nil {
+	if err := h.refuseInsideOrg(ctx, "AUTH_AUTH_SERVICE_REMOVE_ORG_PACKAGE"); err != nil {
 		return nil, err
 	}
 	if _, err := h.Mutation.EndOrgPackage(ctx, &pb.EndOrgPackageReq{
@@ -252,7 +299,7 @@ func (h *AuthServiceHandler) ListPackagesOfOrg(ctx context.Context, req *pb.List
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := refuseInsideOrg(ctx); err != nil {
+	if err := h.refuseInsideOrg(ctx, "AUTH_AUTH_SERVICE_LIST_PACKAGES_OF_ORG"); err != nil {
 		return nil, err
 	}
 	return h.orgPackagesResp(ctx, req.GetOrgId())
@@ -283,4 +330,23 @@ func (h *AuthServiceHandler) orgPackagesResp(ctx context.Context, orgID string) 
 		out.Packages = append(out.Packages, &pb.OrgPackageInfo{Package: r.GetPackage(), EnabledAt: r.GetEnabledAt()})
 	}
 	return out, nil
+}
+
+// isUniqueConflict is a write refused by a unique index: storage reports it as
+// InvalidArgument with an ErrorDetail{code: UNIQUE_VIOLATION} (or, from a fake
+// store, AlreadyExists).
+func isUniqueConflict(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	if st.Code() == codes.AlreadyExists {
+		return true
+	}
+	for _, d := range st.Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok && ed.GetCode() == "UNIQUE_VIOLATION" {
+			return true
+		}
+	}
+	return false
 }

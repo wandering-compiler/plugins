@@ -336,14 +336,18 @@ type orgPackageTable struct {
 	// the ACL lock keys them.
 	Governed []string `json:"governed"`
 
-	byName       map[string]orgPackage
-	audienceAxis bool
+	byName map[string]orgPackage
+	// gatedAudiences are the audiences some package names: closed to an
+	// organization none of whose packages names them. Any other is open.
+	gatedAudiences map[string]bool
 }
 
 type orgPackage struct {
 	Name      string   `json:"name"`
 	Methods   []string `json:"methods"`
 	Audiences []string `json:"audiences"`
+	// Default: every organization holds it without being given it.
+	Default bool `json:"default"`
 }
 
 // configChecks are the boot checks of feature-owned settings: a feature file
@@ -403,6 +407,15 @@ func (e *notAdmittedError) GRPCStatus() *status.Status {
 // surfaces, spelled here so the plugin builds against the SDK it pins. It is
 // gateway-owned (`x-w17-*`): a client's copy never reaches Authenticate.
 const membershipKindsHeader = "x-w17-membership-kinds"
+
+// requestMemoKey carries one Authenticate's memo (requestMemoOf).
+type requestMemoKey struct{}
+
+// requestMemoOf is the request's memo, nil outside Authenticate.
+func requestMemoOf(ctx context.Context) map[string]any {
+	m, _ := ctx.Value(requestMemoKey{}).(map[string]any)
+	return m
+}
 
 // audienceHeader is where an audience gateway names its audience
 // (principal.AudienceKey of the SDK that ships audience surfaces).
@@ -1125,6 +1138,9 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// an audience gateway's admitted membership kinds decide which roles
 	// count (membership_kinds), and a narrower is handed no headers.
 	ctx = context.WithValue(ctx, authHeadersKey{}, req.GetHeaders())
+	// A memo the decorators and narrowers of this one request share, so what
+	// two of them read (an organization's packages) is read once.
+	ctx = context.WithValue(ctx, requestMemoKey{}, map[string]any{})
 	if err := runScopeDecorators(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
 		return nil, err
 	}

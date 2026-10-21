@@ -9,6 +9,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
+
+	"github.com/wandering-compiler/sdk/go/lib/acllock"
+	"github.com/wandering-compiler/sdk/go/lib/principal"
 )
 
 // Who calls, and where they act.
@@ -19,15 +22,14 @@ import (
 // client's own `x-w17-*` metadata never reaches a handler: the gateway
 // strips it before stamping its own.
 
-const (
-	callerMetadataKey = "x-w17-user"
-	orgScopeKey       = "x-w17-scope-org_id"
-)
+const callerMetadataKey = "x-w17-user"
 
 var errNoCaller = errors.New("grant: request carries no authenticated caller")
 
 // callerID is the signed-in caller's id. A missing or broken envelope is
-// Unauthenticated.
+// Unauthenticated. Read off the envelope's field 2 here rather than with
+// principal.UserID, which needs the project's AuthResp type — a plugin
+// compiles alone and cannot name it (the payment plugin reads it the same way).
 func callerID(ctx context.Context) (string, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	vals := md.Get(callerMetadataKey)
@@ -76,11 +78,8 @@ func userIDField(b []byte) string {
 // activeOrg is the organization the request acts in, "" when it acts in
 // none (realm-wide).
 func activeOrg(ctx context.Context) string {
-	md, _ := metadata.FromIncomingContext(ctx)
-	if v := md.Get(orgScopeKey); len(v) == 1 {
-		return v[0]
-	}
-	return ""
+	org, _ := principal.Scope(ctx, "org_id")
+	return org
 }
 
 // inOrg is the caller and the organization they act in; refused when the
@@ -97,14 +96,23 @@ func inOrg(ctx context.Context) (caller, orgID string, err error) {
 
 // realmOnly is the backoffice caller; refused when the request acts inside an
 // organization, whatever roles its admins hold — an organization does not
-// approve its own envelope or bind its own hosts.
-func realmOnly(ctx context.Context) (string, error) {
+// approve its own envelope or bind its own hosts. A request acts in an
+// organization when it names one or when its caller belongs to exactly one,
+// so the backoffice acts from accounts that belong to no organization.
+//
+// Who may call it at all is the project's endpoint ACL: the method must be in
+// the deployed lock, or nobody may — without an ACL any signed-in account
+// outside an organization would pass.
+func (h *GrantServiceHandler) realmOnly(ctx context.Context, lockKey string) (string, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
 		return "", err
 	}
 	if activeOrg(ctx) != "" {
 		return "", status.Error(codes.PermissionDenied, "grant: the platform decides this, realm-wide, not from inside an organization")
+	}
+	if _, ok := acllock.IDByString(h.Lock, lockKey); h.Lock == nil || !ok {
+		return "", status.Error(codes.PermissionDenied, "grant: the backoffice's methods need the endpoint ACL — "+lockKey+" is not in the lock")
 	}
 	return caller, nil
 }
