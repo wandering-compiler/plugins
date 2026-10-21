@@ -130,11 +130,6 @@ service GrantMutation {
           "UPDATE @module.Envelope SET status = 'rejected', decided_by = :decided_by, decided_at = NOW(), decision_note = :decision_note "
           "WHERE id = :id AND status = 'proposed' "
           "RETURNING id AS id"
-        on_empty: {
-          code:       ON_EMPTY_NOT_FOUND
-          error_code: "ENVELOPE_NOT_PENDING"
-          message:    "That envelope is not waiting for a decision."
-        }
       }
     };
   }
