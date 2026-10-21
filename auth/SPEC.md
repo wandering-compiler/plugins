@@ -71,11 +71,13 @@ It covers plugin version 0.1.0-rc.24.
 | `org_members_rest` | off | `org_membership`, `org_invite` | — |
 | `client_secret_rotation` | off | `cli_login` | — |
 | `oauth_server` | off | `api_token`, `authenticate_turnkey` | — |
+| `membership_kinds` | off | `org_membership` | — |
 
 `go_files_combined`: `service_account_tenant.go` (`service_account` +
 `tenant_scope`), `service_account_org.go` (`service_account` +
 `org_membership`), `signup_confirm_tenant.go` (`sign_up_confirmation` +
-`tenant_scope`), `oauth_server_org.go` (`oauth_server` + `org_membership`).
+`tenant_scope`), `oauth_server_org.go` (`oauth_server` + `org_membership`),
+`membership_kinds_invite.go` (`membership_kinds` + `org_invite`).
 
 ## Verified findings
 
@@ -1084,6 +1086,34 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 5. **Sole-organization inference swallows errors.** `src/handlers/org_membership.go:286-289` returns success with no org scope when `ListUserOrgs` fails. This is safe for permissions (narrowing falls back to realm-wide), but a transient failure becomes a hard-to-diagnose "missing required scope" on scoped models.
 6. **Unpaged admin lists.** `ListOrganizations`, `ListOrgMemberships` and `ListOrgMembersByOrg` (`proto/queries/auth_query.proto:2142`, `:2235`) return whole tables.
 7. **`UpdateOrganization` can change `slug`**, which is the selector clients send in `W17-Org` and in paths, and nothing announces the old-to-new mapping beyond `OrganizationUpdated { org_id }`.
+
+---
+
+### membership_kinds
+
+**Purpose.** One identity, several memberships of several kinds — the auth half of audience surfaces (a domain publishing one REST / MCP / gRPC surface per audience, each on its own gateway; platform `docs/specs/gateway/audience-surfaces.md`). A person may be an organization's staff and its client at once. An audience gateway names the kinds it admits in every `Authenticate`, and the plugin admits the caller only through a membership of one of them.
+
+**Adds**
+- Columns: `OrgMembership.kind`, `OrgInvite.kind`, `UserRole.membership_kind` (CHAR 32, '' = no kind). The unique indexes move onto the kind: `OrgMembership` `(user_id, org_id, kind, ended_key)`, the pending `OrgInvite` `(org_id, email, kind)`.
+- Query `ListUserRoleKinds`; `ListUserOrgs` reports each membership's `membership_kind` (one row per kind).
+- `InviteToOrg.kind` (with `org_invite`): the kind of membership accepting creates; accepting writes it onto the membership and the role grant.
+- Error code `MEMBERSHIP_NOT_ADMITTED` (PermissionDenied).
+- Auth header `x-w17-membership-kinds` (gateway-owned, comma-separated).
+
+**Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/membership_kinds.go`. Combined with `org_invite`: `handlers/membership_kinds_invite.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| membership_kinds/org-among-admitted | Through a gateway that names kinds, the active organization MUST be resolved among the caller's memberships of an admitted kind only: a selector, an OAuth token's organization and sole-organization inference all read the admitted set. | Security | `TestResolveOrgScopeByKind` |
+| membership_kinds/not-admitted-is-403 | A caller with no admitted membership — none at all, or one of another kind in the organization named — MUST be refused PermissionDenied (`MEMBERSHIP_NOT_ADMITTED`) before any handler, distinct from "not a member". | Security | `TestResolveOrgScopeByKind` |
+| membership_kinds/roles-of-admitted-memberships | Only the org grants that came with an admitted membership MUST count; a grant of no kind and a realm-wide grant count on every audience. | Security | `TestNarrowGrantsToAdmittedKinds` |
+| membership_kinds/ownership-does-not-widen | Through a gateway that names kinds, ownership MUST NOT add the owner's wildcard. | Security | `TestOwnershipDoesNotWidenThroughAKindFilter` |
+| membership_kinds/no-kinds-no-change | A gateway that names no kinds MUST resolve and narrow exactly as `org_membership` does. | Security | `TestResolveOrgScopeByKind`, `TestNarrowGrantsToAdmittedKinds` |
+| membership_kinds/header-gateway-owned | The admitted kinds MUST come only from the gateway: `x-w17-*` keys a client sends never reach `Authenticate`. | Security | none here; the platform gateway's reserved-key strip |
+
+**Gaps / suspected defects**
+1. **The consent page does not filter by kind.** An MCP client's grant is for one resource; the authorization server does not know which kinds that resource's audience admits, so the consent page offers every organization. A token for an organization whose admitted membership the user lacks is refused on use (`membership_kinds/org-among-admitted`).
+2. **No tenant from the host.** The audience's `TENANT_SOURCE_HOST` needs a host → tenant registry, which arrives with the grant plugin.
 
 ---
 
