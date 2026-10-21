@@ -81,8 +81,15 @@ func init() {
 	grantNarrowers = append(grantNarrowers, narrowGrantsToActiveOrg)
 }
 
+// orgGrantSources are what other features grant a session INSIDE one
+// organization, read by narrowGrantsToActiveOrg for the active one: teams
+// appends its members' team roles. APPENDED from a feature file's init(), like
+// grantNarrowers. A source answers role-attributed grants of org-scoped roles
+// for that organization only — what it returns is added, never intersected.
+var orgGrantSources []func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) ([]*pb.RoleGrant, error)
+
 // narrowGrantsToActiveOrg restricts the principal to what applies IN THE
-// ACTIVE ORGANIZATION, and lets OWNERSHIP widen it.
+// ACTIVE ORGANIZATION, and lets OWNERSHIP (and a team's roles) widen it.
 //
 // Without the narrowing the two halves of this plugin disagree: scopes[org_id]
 // isolates the caller's ROWS to one company while the grants stay the union of
@@ -106,8 +113,12 @@ func init() {
 //     — realm-wide roles alone. Falling back to the unfiltered set here would
 //     reopen the leak on precisely the request that failed to name a company.
 //
-// ⚠️ And then OWNERSHIP, which WIDENS — the one place in this plugin where a
-// narrower adds. It is deliberate and bounded:
+// Then the active organization's own session grants (orgGrantSources: a
+// team's roles), bounded like ownership below — a session only, this
+// organization only.
+//
+// ⚠️ And then OWNERSHIP, which WIDENS — with the grants above, the one place in
+// this plugin where a narrower adds. It is deliberate and bounded:
 //
 //   - ownership is not a permission anybody granted; it is root authority over
 //     the organization, read off the organization row;
@@ -154,6 +165,22 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 		}
 	}
 	p.grants = survivors
+
+	// Grants that exist only INSIDE the active organization and only for a
+	// session — a team's roles (teams). They are added after the intersection
+	// rather than run through it: they are org-scoped by construction (a team
+	// belongs to one organization, and the source answers for this one), so
+	// the eligible set has nothing to say about them, and an API token's
+	// ceiling stays its holder's api-realm roles, as with ownership below.
+	if orgID != "" && p.realm == pb.TokenType_TOKEN_TYPE_SESSION {
+		for _, source := range orgGrantSources {
+			grants, err := source(ctx, h, p.userID, orgID)
+			if err != nil {
+				return err
+			}
+			p.grants = append(p.grants, grants...)
+		}
+	}
 
 	// Ownership last, and only for a session. Appended as a synthetic
 	// wildcard grant rather than by rewriting the survivors, so it stays

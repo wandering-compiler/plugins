@@ -334,7 +334,9 @@ var scopeDecorators []scopeDecorator
 // Contract: a narrower may only REMOVE permissions or expand a wildcard
 // it has itself re-checked in the narrower context. Returning a larger
 // ordinary set would let a feature escalate the principal past the realm
-// resolution that ran before it.
+// resolution that ran before it. The two bounded exceptions live in the
+// organization narrower and are documented there: ownership, and the
+// session-only grants of the active organization (orgGrantSources).
 type grantNarrower func(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error
 
 var grantNarrowers []grantNarrower

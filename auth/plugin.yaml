@@ -366,6 +366,17 @@ features:
       - org_membership
     go_files:
       - handlers/org_roles.go
+  - name: teams
+    description: "An organization groups its members into teams, and a team holds org-scoped roles that every member holds while they are in it: ListOrgTeams / CreateOrgTeam / UpdateOrgTeam / DeleteOrgTeam / AddOrgTeamMember / RemoveOrgTeamMember / SetOrgTeamRoles (GET / POST /auth/orgs/{org}/teams, PUT / DELETE /auth/orgs/{org}/teams/{team_id}, POST /auth/orgs/{org}/teams/{team_id}/members, DELETE /auth/orgs/{org}/teams/{team_id}/members/{user_id}, PUT /auth/orgs/{org}/teams/{team_id}/roles). A team's roles count for a session acting in the team's organization, never realm-wide, in another organization or for an API token. Only a person who is a member of the organization joins a team (a machine account holds its roles directly), and only an org-scoped session-realm role of the organization's catalogue is a team's. The role ceiling holds wherever someone gains or loses a role through a team: giving or taking a team's role, adding or removing a member, deleting the team — and removing someone from the organization asks the caller to cover their team roles and ends their team memberships. A role a team holds is in use (DeleteOrgRole). Nothing is deleted. Off by default; a migration adds the three tables."
+    default: false
+    requires:
+      # The role reads and the ceiling it applies (RoleGrant, grantableRoleIDs)
+      # are rbac's; the organization, its catalogue and the narrower are
+      # org_membership's.
+      - rbac
+      - org_membership
+    go_files:
+      - handlers/teams.go
   - name: marketing_consent
     description: "The user's own consent to marketing messages: User.marketing_consent and when it was decided (marketing_consent_at, NULL = never asked), read and set by the user on the REST preset (GET / PUT /auth/marketing-consent), announced as MarketingConsentChanged, and answered by Authenticate (AuthResp.marketing_consent), so the gateway's request stream carries it to the tool that sends the messages. It changes nothing about what is recorded. Off by default; a migration adds the two columns."
     default: false
@@ -708,6 +719,15 @@ presets:
           - { ref: AuthService.CreateOrgRole, method: POST,   path: /org-roles,             feature: org_roles }
           - { ref: AuthService.UpdateOrgRole, method: PUT,    path: "/org-roles/{role_id}", feature: org_roles }
           - { ref: AuthService.DeleteOrgRole, method: DELETE, path: "/org-roles/{role_id}", feature: org_roles }
+          # The organization's teams: groups of members holding roles, under
+          # the role ceiling (handlers/teams.go).
+          - { ref: AuthService.ListOrgTeams,        method: GET,    path: /teams,                               feature: teams }
+          - { ref: AuthService.CreateOrgTeam,       method: POST,   path: /teams,                               feature: teams }
+          - { ref: AuthService.UpdateOrgTeam,       method: PUT,    path: "/teams/{team_id}",                   feature: teams }
+          - { ref: AuthService.DeleteOrgTeam,       method: DELETE, path: "/teams/{team_id}",                   feature: teams }
+          - { ref: AuthService.AddOrgTeamMember,    method: POST,   path: "/teams/{team_id}/members",           feature: teams }
+          - { ref: AuthService.RemoveOrgTeamMember, method: DELETE, path: "/teams/{team_id}/members/{user_id}", feature: teams }
+          - { ref: AuthService.SetOrgTeamRoles,     method: PUT,    path: "/teams/{team_id}/roles",             feature: teams }
           - { ref: AuthService.ListOrgInvites,   method: GET,    path: /invites,               feature: org_invite }
           - { ref: AuthService.InviteToOrg,      method: POST,   path: /invites,               feature: org_invite }
           - { ref: AuthService.RevokeOrgInvite,  method: DELETE, path: "/invites/{invite_id}", feature: org_invite }
@@ -1105,6 +1125,7 @@ sandboxes:
 # so codegen can put them in a project's .po. The SOURCE is the Go constant
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
+  - "A machine account is not a team member. Give it its roles directly."
   - "A token cannot expire in the past. Choose a later date."
   - "A token without a key must expire within a year. Choose an earlier date."
   - "An account with this address already exists. Sign in instead."
@@ -1117,13 +1138,16 @@ msgids:
   - "Confirm your email address before accepting this invitation."
   - "Give the public key of the program that will use this token."
   - "Give the role a name."
+  - "Give the team a name."
+  - "Only a member of this organization can join one of its teams."
   - "Permission {permission} is not part of this deployment."
   - "Registration is by invitation only. Ask the organization you are joining to invite you."
   - "Registration is not open for this email address."
+  - "Role {role} is not one this organization's teams can hold."
   - "Set up an authenticator app first. Recovery codes belong to it."
   - "Sign in to do this. An API token cannot create credentials."
   - "Signing in with the provider did not complete. Please start again."
-  - "Someone still holds this role. Give them another role first."
+  - "Someone still holds this role, directly or through a team. Give them another role first."
   - "That expiry date is not a valid date."
   - "That is not your password. Type the password you sign in with."
   - "That key belongs to a device that was revoked. Generate a new key for the program."
@@ -1134,6 +1158,7 @@ msgids:
   - "That role is not one of this organization's own roles, so it cannot be changed here."
   - "The list is too long: at most {max} entries."
   - "There is no organization role named {role}."
+  - "There is no such team in this organization."
   - "This API token expired on {date}. Create a new token."
   - "This account has been disabled."
   - "This address does not belong to any organization here. Check the address you registered on."
@@ -1150,8 +1175,11 @@ msgids:
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
+  - "This organization already has a team named {name}."
+  - "This person is already in the team."
   - "This request names two different organizations. Name one."
   - "This sign-in request has expired or was already answered. Start again from the application."
+  - "This team holds a role with permissions you do not have, so you cannot change its members or delete it."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait 15 minutes and try again."
   - "Wrong email or password."

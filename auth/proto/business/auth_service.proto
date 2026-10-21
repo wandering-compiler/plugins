@@ -1348,6 +1348,116 @@ message RevokeMyOAuthGrantResp {
   option (w17.contrib.plugin_feature) = "oauth_server";
 }
 
+// ── teams: groups of an organization's members that hold roles ──
+//
+// Every call acts in the caller's ACTIVE organization (`org` only has to
+// agree with it, as on the member endpoints). A team's roles are org-scoped
+// session-realm roles of the organization's catalogue, and the role ceiling
+// holds wherever someone gains or loses them: giving a team a role, taking
+// one away, adding a member, removing one and deleting the team each require
+// the caller to cover every role involved.
+
+// OrgTeam — one team, with its members and the roles it holds.
+message OrgTeam {
+  option (w17.contrib.plugin_feature) = "teams";
+  string id          = 1;
+  string name        = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+  repeated OrgTeamMember members = 5;
+  repeated string role_ids = 6;
+  // manageable — the caller covers every role the team holds, so they may
+  // change its members and roles and delete it.
+  bool manageable = 7;
+}
+message OrgTeamMember {
+  option (w17.contrib.plugin_feature) = "teams";
+  string user_id = 1;
+  string email   = 2;
+  google.protobuf.Timestamp added_at = 3;
+}
+
+message ListOrgTeamsReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
+message ListOrgTeamsResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated OrgTeam teams = 1;
+}
+
+message CreateOrgTeamReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org         = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string name        = 2 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description = 3 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+}
+message CreateOrgTeamResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+}
+
+message UpdateOrgTeamReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org         = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string team_id     = 2 [(w17.field) = { type: UUID }];
+  string name        = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description = 4 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+}
+message UpdateOrgTeamResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+}
+
+// DeleteOrgTeam — the team ends with its memberships and roles; its members
+// lose what it gave them.
+message DeleteOrgTeamReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org     = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string team_id = 2 [(w17.field) = { type: UUID }];
+}
+message DeleteOrgTeamResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+}
+
+// AddOrgTeamMember — a person who is a member of the organization joins the
+// team, and holds its roles from then on.
+message AddOrgTeamMemberReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org     = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string team_id = 2 [(w17.field) = { type: UUID }];
+  string user_id = 3 [(w17.field) = { type: UUID }];
+}
+message AddOrgTeamMemberResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string member_id = 1;
+}
+
+message RemoveOrgTeamMemberReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org     = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string team_id = 2 [(w17.field) = { type: UUID }];
+  string user_id = 3 [(w17.field) = { type: UUID }];
+}
+message RemoveOrgTeamMemberResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string member_id = 1;
+}
+
+// SetOrgTeamRoles — replace the roles the team holds (the whole set; empty
+// is a team that holds none, which can still be given a project).
+message SetOrgTeamRolesReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org     = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string team_id = 2 [(w17.field) = { type: UUID }];
+  repeated string role_ids = 3;
+}
+message SetOrgTeamRolesResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated string role_ids = 1;
+}
+
 service AuthService {
   // Service-level tag would cascade to SignIn / SignUp too, but
   // each turnkey has its own opt-in feature tag — the service is
@@ -1814,6 +1924,29 @@ service AuthService {
   }
   rpc SetMarketingConsent(SetMarketingConsentReq) returns (MarketingConsentResp) {
     option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+  }
+
+  // An organization's teams (handlers/teams.go).
+  rpc ListOrgTeams(ListOrgTeamsReq) returns (ListOrgTeamsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+  }
+  rpc CreateOrgTeam(CreateOrgTeamReq) returns (CreateOrgTeamResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+  }
+  rpc UpdateOrgTeam(UpdateOrgTeamReq) returns (UpdateOrgTeamResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+  }
+  rpc DeleteOrgTeam(DeleteOrgTeamReq) returns (DeleteOrgTeamResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+  }
+  rpc AddOrgTeamMember(AddOrgTeamMemberReq) returns (AddOrgTeamMemberResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+  }
+  rpc RemoveOrgTeamMember(RemoveOrgTeamMemberReq) returns (RemoveOrgTeamMemberResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+  }
+  rpc SetOrgTeamRoles(SetOrgTeamRolesReq) returns (SetOrgTeamRolesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
   }
 }
 

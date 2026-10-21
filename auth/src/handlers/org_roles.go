@@ -43,7 +43,7 @@ const (
 	MsgOrgRoleNotOwn            = "That role is not one of this organization's own roles, so it cannot be changed here."
 	MsgOrgRoleNoPermissions     = "Choose at least one permission for the role."
 	MsgOrgRoleUnknownPermission = "Permission {permission} is not part of this deployment."
-	MsgOrgRoleInUse             = "Someone still holds this role. Give them another role first."
+	MsgOrgRoleInUse             = "Someone still holds this role, directly or through a team. Give them another role first."
 	MsgOrgRoleNoName            = "Give the role a name."
 )
 
@@ -270,9 +270,17 @@ func (h *AuthServiceHandler) DeleteOrgRole(ctx context.Context, req *pb.DeleteOr
 	if err != nil {
 		return nil, err
 	}
-	if held.GetCount() > 0 {
+	count := held.GetCount()
+	for _, counter := range roleHolderCounters {
+		more, err := counter(ctx, h, req.GetRoleId())
+		if err != nil {
+			return nil, err
+		}
+		count += more
+	}
+	if count > 0 {
 		return nil, refusal(ctx, codes.FailedPrecondition,
-			"role "+req.GetRoleId()+" still has "+strconv.FormatInt(held.GetCount(), 10)+" live grant(s)",
+			"role "+req.GetRoleId()+" still has "+strconv.FormatInt(count, 10)+" live grant(s)",
 			CodeOrgRoleInUse, "role_id", MsgOrgRoleInUse, nil)
 	}
 	if _, err := h.Mutation.DeleteRole(ctx, &pb.DeleteRoleReq{RoleId: req.GetRoleId()}); err != nil {

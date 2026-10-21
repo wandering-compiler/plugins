@@ -1888,6 +1888,123 @@ message IssueOAuthAccessTokenResp {
   string id = 1;
 }
 
+// ── teams ──
+
+// CreateTeam — a new team of an organization. A live team of the same name
+// in the organization is refused by the unique index (AlreadyExists).
+message CreateTeamReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org_id      = 1 [(w17.field) = { type: UUID }];
+  string name        = 2 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description = 3 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+  string created_by  = 4 [(w17.field) = { type: UUID, null: true }];
+}
+message CreateTeamResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+}
+
+// UpdateTeam — rename a live team or change its description, only in the
+// organization it belongs to (NotFound otherwise).
+message UpdateTeamReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string id          = 1 [(w17.field) = { type: UUID }];
+  string org_id      = 2 [(w17.field) = { type: UUID }];
+  string name        = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
+  string description = 4 [(w17.field) = { type: TEXT, max_len: 500, blank: true }];
+}
+message UpdateTeamResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+}
+
+// DeleteTeam — end a live team with its memberships and roles (the rows stay).
+message DeleteTeamReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string id         = 1 [(w17.field) = { type: UUID }];
+  string org_id     = 2 [(w17.field) = { type: UUID }];
+  string deleted_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message DeleteTeamResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id = 1;
+}
+
+// AddTeamMember — a person joins a live team of the organization. A live
+// membership of the same person is refused by the unique index (AlreadyExists).
+message AddTeamMemberReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id  = 1 [(w17.field) = { type: UUID }];
+  string user_id  = 2 [(w17.field) = { type: UUID }];
+  string org_id   = 3 [(w17.field) = { type: UUID }];
+  string added_by = 4 [(w17.field) = { type: UUID, null: true }];
+}
+message AddTeamMemberResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string member_id = 1;
+}
+
+// RemoveTeamMember — a person's live membership in a team ends.
+message RemoveTeamMemberReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id    = 1 [(w17.field) = { type: UUID }];
+  string user_id    = 2 [(w17.field) = { type: UUID }];
+  string removed_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message RemoveTeamMemberResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string member_id = 1;
+}
+
+// GrantTeamRole — a live team of the organization holds a live role. A role
+// the team already holds is refused by the unique index (AlreadyExists).
+message GrantTeamRoleReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id    = 1 [(w17.field) = { type: UUID }];
+  string role_id    = 2 [(w17.field) = { type: UUID }];
+  string org_id     = 3 [(w17.field) = { type: UUID }];
+  string granted_by = 4 [(w17.field) = { type: UUID, null: true }];
+}
+message GrantTeamRoleResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_role_id = 1;
+}
+
+// RevokeTeamRole — a team stops holding a role.
+message RevokeTeamRoleReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_id    = 1 [(w17.field) = { type: UUID }];
+  string role_id    = 2 [(w17.field) = { type: UUID }];
+  string revoked_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message RevokeTeamRoleResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  string team_role_id = 1;
+}
+
+// EndUserTeamMemberships — every live team membership of one person in one
+// organization ends: they left it (RemoveOrgMembership).
+message EndUserTeamMembershipsReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  string org_id     = 2 [(w17.field) = { type: UUID }];
+  string removed_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message EndUserTeamMembershipsResp {
+  option (w17.contrib.plugin_feature) = "teams";
+}
+
+// EndTeamsOfOrg — every live team of an organization ends, with its
+// memberships and roles: the organization is deleted (RemoveOrganization).
+message EndTeamsOfOrgReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org_id     = 1 [(w17.field) = { type: UUID }];
+  string deleted_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message EndTeamsOfOrgResp {
+  option (w17.contrib.plugin_feature) = "teams";
+}
+
 service AuthMutation {
   // CreateUser — INSERT User. The `password_hash` request
   // field carries the already-encoded hash — the plugin's
@@ -4950,4 +5067,199 @@ service AuthMutation {
       }
     };
   }
+
+  // ── teams (handlers/teams.go) ──
+
+  rpc CreateTeam(CreateTeamReq) returns (CreateTeamResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Team SET "
+          "org_id = :org_id, "
+          "name = :name, "
+          "description = :description, "
+          "created_by = :created_by "
+          "RETURNING id AS team_id"
+      }
+    };
+  }
+
+  rpc UpdateTeam(UpdateTeamReq) returns (UpdateTeamResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Team SET name = :name, description = :description "
+          "WHERE id = :id AND org_id = :org_id AND deleted_at IS NULL "
+          "RETURNING id AS team_id"
+      }
+    };
+  }
+
+  // DeleteTeam — see its request message. The first op locks the team, so a
+  // member or a role added at the same time waits for it and then finds no
+  // live team.
+  rpc DeleteTeam(DeleteTeamReq) returns (DeleteTeamResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "team"
+        dql:  "UPDATE @module.Team SET id = id WHERE id = :id AND org_id = :org_id AND deleted_at IS NULL RETURNING id AS id"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "TEAM_NOT_FOUND"
+          message:    "That team does not exist, or it was deleted."
+        }
+      }
+      ops: {
+        name: "members"
+        dql:
+          "UPDATE @module.TeamMember SET removed_at = NOW(), removed_by = :deleted_by, ended_key = id "
+          "WHERE team_id = :team.id AND removed_at IS NULL"
+      }
+      ops: {
+        name: "roles"
+        dql:
+          "UPDATE @module.TeamRole SET revoked_at = NOW(), revoked_by = :deleted_by, ended_key = id "
+          "WHERE team_id = :team.id AND revoked_at IS NULL"
+      }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Team SET deleted_at = NOW(), deleted_by = :deleted_by, ended_key = id "
+          "WHERE id = :team.id AND deleted_at IS NULL "
+          "RETURNING id AS team_id"
+      }
+    };
+  }
+
+  // AddTeamMember — see its request message. The first op locks the live team
+  // of the organization (DeleteTeam takes the same lock).
+  rpc AddTeamMember(AddTeamMemberReq) returns (AddTeamMemberResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "team"
+        dql:  "UPDATE @module.Team SET id = id WHERE id = :team_id AND org_id = :org_id AND deleted_at IS NULL RETURNING id AS id"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "TEAM_NOT_FOUND"
+          message:    "That team does not exist, or it was deleted."
+        }
+      }
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.TeamMember SET "
+          "team_id = :team.id, "
+          "user_id = :user_id, "
+          "org_id = :org_id, "
+          "added_by = :added_by "
+          "RETURNING id AS member_id"
+      }
+    };
+  }
+
+  rpc RemoveTeamMember(RemoveTeamMemberReq) returns (RemoveTeamMemberResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.TeamMember SET removed_at = NOW(), removed_by = :removed_by, ended_key = id "
+          "WHERE team_id = :team_id AND user_id = :user_id AND removed_at IS NULL "
+          "RETURNING id AS member_id"
+      }
+    };
+  }
+
+  // GrantTeamRole — see its request message. Locks the role (as
+  // AssignRoleToUser does, so a DeleteRole runs before or after it) and the
+  // live team of the organization.
+  rpc GrantTeamRole(GrantTeamRoleReq) returns (GrantTeamRoleResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "role"
+        dql:  "UPDATE @module.Role SET id = id WHERE id = :role_id AND deleted_at IS NULL RETURNING id AS id"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "ROLE_NOT_FOUND"
+          message:    "That role does not exist, or it was deleted."
+        }
+      }
+      ops: {
+        name: "team"
+        dql:  "UPDATE @module.Team SET id = id WHERE id = :team_id AND org_id = :org_id AND deleted_at IS NULL RETURNING id AS id"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "TEAM_NOT_FOUND"
+          message:    "That team does not exist, or it was deleted."
+        }
+      }
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.TeamRole SET "
+          "team_id = :team.id, "
+          "role_id = :role.id, "
+          "org_id = :org_id, "
+          "granted_by = :granted_by "
+          "RETURNING id AS team_role_id"
+      }
+    };
+  }
+
+  rpc RevokeTeamRole(RevokeTeamRoleReq) returns (RevokeTeamRoleResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.TeamRole SET revoked_at = NOW(), revoked_by = :revoked_by, ended_key = id "
+          "WHERE team_id = :team_id AND role_id = :role_id AND revoked_at IS NULL "
+          "RETURNING id AS team_role_id"
+      }
+    };
+  }
+
+  rpc EndUserTeamMemberships(EndUserTeamMembershipsReq) returns (EndUserTeamMembershipsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.TeamMember SET removed_at = NOW(), removed_by = :removed_by, ended_key = id "
+          "WHERE user_id = :user_id AND org_id = :org_id AND removed_at IS NULL"
+      }
+    };
+  }
+
+  rpc EndTeamsOfOrg(EndTeamsOfOrgReq) returns (EndTeamsOfOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "members"
+        dql:
+          "UPDATE @module.TeamMember SET removed_at = NOW(), removed_by = :deleted_by, ended_key = id "
+          "WHERE org_id = :org_id AND removed_at IS NULL"
+      }
+      ops: {
+        name: "roles"
+        dql:
+          "UPDATE @module.TeamRole SET revoked_at = NOW(), revoked_by = :deleted_by, ended_key = id "
+          "WHERE org_id = :org_id AND revoked_at IS NULL"
+      }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Team SET deleted_at = NOW(), deleted_by = :deleted_by, ended_key = id "
+          "WHERE org_id = :org_id AND deleted_at IS NULL"
+      }
+    };
+  }
+
 }
