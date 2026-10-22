@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -14,6 +15,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+
+	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
 )
 
 // Who calls, and where they act.
@@ -104,9 +107,8 @@ func inOrg(ctx context.Context) (caller, orgID string, err error) {
 //
 // Who may call it at all is the project's endpoint ACL: the method must be in
 // the deployed lock, or nobody may — without an ACL any signed-in account
-// outside an organization would pass. method is the lock key without the
-// activation's prefix (GRANT_SERVICE_APPROVE_ENVELOPE): the lock keys it under
-// whatever name the plugin is activated as.
+// outside an organization would pass. method is the RPC's name (lockGatesCall
+// finds its key).
 func (h *GrantServiceHandler) realmOnly(ctx context.Context, method string) (string, error) {
 	caller, err := callerID(ctx)
 	if err != nil {
@@ -115,25 +117,33 @@ func (h *GrantServiceHandler) realmOnly(ctx context.Context, method string) (str
 	if activeOrg(ctx) != "" {
 		return "", status.Error(codes.PermissionDenied, "grant: the platform decides this, realm-wide, not from inside an organization")
 	}
-	if !lockHasMethod(h.Lock, method) {
+	if !lockGatesCall(ctx, h.Lock, pb.GrantService_ServiceDesc.ServiceName, method) {
 		return "", status.Error(codes.PermissionDenied, "grant: the backoffice's methods need the endpoint ACL — "+method+" is not in the lock")
 	}
 	return caller, nil
 }
 
-// lockHasMethod reports whether the lock allocates a permission for a method
-// of this plugin, whatever the activation is named: method is the key's tail
-// after the activation's prefix.
-func lockHasMethod(l *acllock.Lock, method string) bool {
-	if l == nil {
-		return false
-	}
-	for k := range l.Permissions {
-		if strings.HasSuffix(k, "_"+method) {
-			return true
+// lockGatesCall reports whether the deployed lock allocates a permission for
+// the call being served — exactly, never by a name's tail: the lock keys a
+// method `<module>.<Service>.<Method>` after the project's service, which
+// grpc.Method names. Called outside a gRPC server (a direct call), the
+// plugin's own service name stands in; either way a method the lock does not
+// name refuses.
+func lockGatesCall(ctx context.Context, l *acllock.Lock, ownService, method string) bool {
+	svc, m := ownService, method
+	if full, ok := grpc.Method(ctx); ok {
+		if i := strings.LastIndex(full, "/"); i > 0 {
+			svc, m = strings.TrimPrefix(full[:i], "/"), full[i+1:]
 		}
 	}
-	return false
+	dot := strings.LastIndex(svc, ".")
+	if dot < 0 {
+		return false
+	}
+	pkg, name := svc[:dot], svc[dot+1:]
+	module := pkg[strings.LastIndex(pkg, ".")+1:]
+	_, ok := acllock.IDByString(l, module+"."+name+"."+m)
+	return ok
 }
 
 // isUniqueConflict is a write refused by a unique index: storage reports it as

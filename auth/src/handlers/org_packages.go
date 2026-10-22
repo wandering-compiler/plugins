@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -217,15 +218,14 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 //
 // And who may call it at all is the project's endpoint ACL: the method must
 // be in the deployed lock, or nobody may — without an ACL any signed-in
-// account outside an organization would pass. method is the lock key without
-// the activation's prefix (AUTH_SERVICE_ADD_ORG_PACKAGE): the lock keys it
-// under whatever name the plugin is activated as.
+// account outside an organization would pass. method is the RPC's name
+// (lockGatesCall finds its key).
 func (h *AuthServiceHandler) refuseInsideOrg(ctx context.Context, method string) error {
 	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
 		return refusal(ctx, codes.PermissionDenied, "org_packages: packages are given realm-wide, not from inside an organization",
 			CodePackagesRealmOnly, "", MsgPackagesRealmOnly, nil)
 	}
-	if !lockHasMethod(h.Lock, method) {
+	if !lockGatesCall(ctx, h.Lock, pb.AuthService_ServiceDesc.ServiceName, method) {
 		return status.Error(codes.PermissionDenied, "org_packages: the backoffice's package methods need the endpoint ACL — "+method+" is not in the lock")
 	}
 	return nil
@@ -237,21 +237,27 @@ func lockHasPermissions(l *acllock.Lock) bool {
 	return l != nil && len(l.Permissions) > 0
 }
 
-// lockHasMethod reports whether the lock allocates a permission for a method
-// of this plugin, whatever the activation is named: method is the key's tail
-// after the activation's prefix (AUTH_SERVICE_ADD_ORG_PACKAGE is keyed
-// AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE, or ADMIN_AUTH_AUTH_SERVICE_… under an
-// activation named admin_auth).
-func lockHasMethod(l *acllock.Lock, method string) bool {
-	if l == nil {
-		return false
-	}
-	for k := range l.Permissions {
-		if strings.HasSuffix(k, "_"+method) {
-			return true
+// lockGatesCall reports whether the deployed lock allocates a permission for
+// the call being served — exactly, never by a name's tail: the lock keys a
+// method `<module>.<Service>.<Method>` after the project's service, which
+// grpc.Method names. Called outside a gRPC server (a direct call), the
+// plugin's own service name stands in; either way a method the lock does not
+// name refuses.
+func lockGatesCall(ctx context.Context, l *acllock.Lock, ownService, method string) bool {
+	svc, m := ownService, method
+	if full, ok := grpc.Method(ctx); ok {
+		if i := strings.LastIndex(full, "/"); i > 0 {
+			svc, m = strings.TrimPrefix(full[:i], "/"), full[i+1:]
 		}
 	}
-	return false
+	dot := strings.LastIndex(svc, ".")
+	if dot < 0 {
+		return false
+	}
+	pkg, name := svc[:dot], svc[dot+1:]
+	module := pkg[strings.LastIndex(pkg, ".")+1:]
+	_, ok := acllock.IDByString(l, module+"."+name+"."+m)
+	return ok
 }
 
 func (h *AuthServiceHandler) checkPackageName(ctx context.Context, name string) error {
@@ -276,7 +282,7 @@ func (h *AuthServiceHandler) AddOrgPackage(ctx context.Context, req *pb.AddOrgPa
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := h.refuseInsideOrg(ctx, "AUTH_SERVICE_ADD_ORG_PACKAGE"); err != nil {
+	if err := h.refuseInsideOrg(ctx, "AddOrgPackage"); err != nil {
 		return nil, err
 	}
 	if err := h.checkPackageName(ctx, req.GetPackage()); err != nil {
@@ -309,7 +315,7 @@ func (h *AuthServiceHandler) RemoveOrgPackage(ctx context.Context, req *pb.Remov
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := h.refuseInsideOrg(ctx, "AUTH_SERVICE_REMOVE_ORG_PACKAGE"); err != nil {
+	if err := h.refuseInsideOrg(ctx, "RemoveOrgPackage"); err != nil {
 		return nil, err
 	}
 	// A package dropped from the protos may still be taken (its row ends);
@@ -333,7 +339,7 @@ func (h *AuthServiceHandler) ListPackagesOfOrg(ctx context.Context, req *pb.List
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := h.refuseInsideOrg(ctx, "AUTH_SERVICE_LIST_PACKAGES_OF_ORG"); err != nil {
+	if err := h.refuseInsideOrg(ctx, "ListPackagesOfOrg"); err != nil {
 		return nil, err
 	}
 	return h.orgPackagesResp(ctx, req.GetOrgId())

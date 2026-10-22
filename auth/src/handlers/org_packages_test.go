@@ -53,9 +53,7 @@ func pkgHandler(t *testing.T, live map[string][]string) (*AuthServiceHandler, *p
 	m := &pkgMock{live: live}
 	h := &AuthServiceHandler{Query: m, Mutation: m, PackagesTable: testPackages,
 		Lock: &acllock.Lock{Permissions: map[string]int{"ex.Notes.List": 1, "ex.Notes.Ask": 2, "ex.Notes.New": 3, "auth.AuthService.ChangePassword": 9,
-			// Activated as admin_auth: the lock keys the plugin's methods
-			// under the activation's name.
-			"ADMIN_AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE": 10, "ADMIN_AUTH_AUTH_SERVICE_REMOVE_ORG_PACKAGE": 11, "ADMIN_AUTH_AUTH_SERVICE_LIST_PACKAGES_OF_ORG": 12}}}
+			"AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE": 10, "AUTH_AUTH_SERVICE_REMOVE_ORG_PACKAGE": 11, "AUTH_AUTH_SERVICE_LIST_PACKAGES_OF_ORG": 12}}}
 	if err := parsePackageTable(h); err != nil {
 		t.Fatal(err)
 	}
@@ -199,3 +197,26 @@ func TestReadPackageTable(t *testing.T) {
 		t.Error("a nameless package booted")
 	}
 }
+
+// Served as a project's service (an activation named admin_auth), the call is
+// found under that service's key — and a key with only the same tail is not
+// it.
+func TestLockGatesCall(t *testing.T) {
+	l := &acllock.Lock{Permissions: map[string]int{"ADMIN_AUTH_AUTH_SERVICE_ADD_ORG_PACKAGE": 1, "BILLING_AUTH_SERVICE_REMOVE_ORG_PACKAGE": 2}}
+	served := func(method string) context.Context {
+		return grpc.NewContextWithServerTransportStream(context.Background(), &methodStream{method: method})
+	}
+	if !lockGatesCall(served("/e2e.app.admin_auth.AuthService/AddOrgPackage"), l, pb.AuthService_ServiceDesc.ServiceName, "AddOrgPackage") {
+		t.Error("the project's own key was not found")
+	}
+	if lockGatesCall(served("/e2e.app.admin_auth.AuthService/RemoveOrgPackage"), l, pb.AuthService_ServiceDesc.ServiceName, "RemoveOrgPackage") {
+		t.Error("another service's key with the same tail passed")
+	}
+}
+
+type methodStream struct {
+	grpc.ServerTransportStream
+	method string
+}
+
+func (s *methodStream) Method() string { return s.method }

@@ -87,8 +87,7 @@ func as(userID, orgID string) context.Context {
 func TestEnvelopeLifecycle(t *testing.T) {
 	s := &store{hosts: map[string]string{}}
 	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{
-		// Activated as cobrand: keyed under the activation's name.
-		"COBRAND_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "COBRAND_GRANT_SERVICE_BIND_HOST": 2}}}
+		"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "GRANT_GRANT_SERVICE_BIND_HOST": 2}}}
 	v1, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme"}})
 	if err != nil {
 		t.Fatal(err)

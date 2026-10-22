@@ -117,7 +117,7 @@ func (h *GrantServiceHandler) GetMyEnvelopes(ctx context.Context, _ *pb.GetMyEnv
 
 // ListEnvelopeProposals is what waits for the backoffice.
 func (h *GrantServiceHandler) ListEnvelopeProposals(ctx context.Context, _ *pb.ListEnvelopeProposalsReq) (*pb.EnvelopeVersionsResp, error) {
-	if _, err := h.realmOnly(ctx, "GRANT_SERVICE_LIST_ENVELOPE_PROPOSALS"); err != nil {
+	if _, err := h.realmOnly(ctx, "ListEnvelopeProposals"); err != nil {
 		return nil, err
 	}
 	rows, err := h.Query.ListPendingEnvelopes(ctx, &pb.ListPendingEnvelopesReq{})
@@ -130,7 +130,7 @@ func (h *GrantServiceHandler) ListEnvelopeProposals(ctx context.Context, _ *pb.L
 // ApproveEnvelope makes a proposal the organization's shown envelope,
 // superseding the previous one.
 func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.ApproveEnvelopeReq) (*pb.EnvelopeVersion, error) {
-	caller, err := h.realmOnly(ctx, "GRANT_SERVICE_APPROVE_ENVELOPE")
+	caller, err := h.realmOnly(ctx, "ApproveEnvelope")
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.Appro
 
 // RejectEnvelope refuses a proposal, with a note for the organization.
 func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.RejectEnvelopeReq) (*pb.EnvelopeVersion, error) {
-	caller, err := h.realmOnly(ctx, "GRANT_SERVICE_REJECT_ENVELOPE")
+	caller, err := h.realmOnly(ctx, "RejectEnvelope")
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.Reject
 // BindHost binds a co-brand host to the organization it presents. A host
 // bound to another organization is refused: unbind it first.
 func (h *GrantServiceHandler) BindHost(ctx context.Context, req *pb.BindHostReq) (*pb.BindHostResp, error) {
-	caller, err := h.realmOnly(ctx, "GRANT_SERVICE_BIND_HOST")
+	caller, err := h.realmOnly(ctx, "BindHost")
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func (h *GrantServiceHandler) BindHost(ctx context.Context, req *pb.BindHostReq)
 // UnbindHost ends a host's binding. Unbinding a host that is not bound
 // changes nothing.
 func (h *GrantServiceHandler) UnbindHost(ctx context.Context, req *pb.UnbindHostReq) (*pb.UnbindHostResp, error) {
-	caller, err := h.realmOnly(ctx, "GRANT_SERVICE_UNBIND_HOST")
+	caller, err := h.realmOnly(ctx, "UnbindHost")
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (h *GrantServiceHandler) UnbindHost(ctx context.Context, req *pb.UnbindHost
 
 // ListHosts is every live co-brand host.
 func (h *GrantServiceHandler) ListHosts(ctx context.Context, _ *pb.ListHostsReq) (*pb.ListHostsResp, error) {
-	if _, err := h.realmOnly(ctx, "GRANT_SERVICE_LIST_HOSTS"); err != nil {
+	if _, err := h.realmOnly(ctx, "ListHosts"); err != nil {
 		return nil, err
 	}
 	rows, err := h.Query.ListHostBindings(ctx, &pb.ListHostBindingsReq{})

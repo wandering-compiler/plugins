@@ -113,7 +113,7 @@ env:
   - name: w17_packages
     type: string
     default: ""
-    description: "GENERATED — do not set it: codegen fills it from the domain's (w17.packages) and bakes it into the binary (org_packages). Each package's methods and audiences, and the project methods a package governs, named as the ACL lock keys them, as JSON. Parsed at boot."
+    description: "GENERATED — do not set it: codegen fills it from the domain's (w17.packages) and bakes it into the binary (org_packages). Each package's methods and audiences, and the governed methods — the project's ACL-gated ones and any (a plugin's too) a package lists, which an organization then holds only through a package — named as the ACL lock keys them, as JSON. Parsed at boot."
   - name: totp_issuer
     type: string
     default: ""
