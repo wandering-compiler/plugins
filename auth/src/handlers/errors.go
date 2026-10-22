@@ -202,6 +202,13 @@ const (
 	// The inviter's kind of membership may not hand out the invitation's
 	// kind (membership_kinds): a client inviting staff.
 	CodeInviteKindNotAllowed = "INVITE_KIND_NOT_ALLOWED"
+	// org_packages: the organization's packages do not open the audience the
+	// request came through; a package call from inside an organization; a
+	// package the domain does not declare; a default package given or taken.
+	CodePackageAudienceOff = "PACKAGE_AUDIENCE_OFF"
+	CodePackagesRealmOnly  = "PACKAGES_REALM_ONLY"
+	CodePackageUnknown     = "PACKAGE_UNKNOWN"
+	CodePackageDefault     = "PACKAGE_DEFAULT"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -401,7 +408,30 @@ const (
 	MsgOAuthOrgRequired      = "Choose one of your organizations for this application."
 	MsgMembershipNotAdmitted = "This part of the service is not open to you: none of your memberships is of a kind it admits."
 	MsgInviteKindNotAllowed  = "You cannot invite someone as this kind of member."
+	MsgPackageAudienceOff    = "Your organization's plan does not include this part of the service."
+	MsgPackagesRealmOnly     = "An organization's plan is changed by the platform, not from inside the organization."
+	MsgPackageUnknown        = "There is no such package."
+	MsgPackageDefault        = "Every organization has this package; it is not given or taken."
 )
+
+// isUniqueConflict is a write refused by a unique index: storage reports it as
+// InvalidArgument with an ErrorDetail{code: UNIQUE_VIOLATION} (or, from a fake
+// store, AlreadyExists).
+func isUniqueConflict(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	if st.Code() == codes.AlreadyExists {
+		return true
+	}
+	for _, d := range st.Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok && ed.GetCode() == "UNIQUE_VIOLATION" {
+			return true
+		}
+	}
+	return false
+}
 
 // isEmailTaken reports whether creating an account failed on the address's
 // unique index.

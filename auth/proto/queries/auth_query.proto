@@ -1718,6 +1718,21 @@ message TeamRow {
   string description = 3;
   google.protobuf.Timestamp created_at = 4;
 }
+// ListOrgPackagesReq — the packages an organization has live (org_packages).
+message ListOrgPackagesReq {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgPackagesResp {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  repeated OrgPackageRow packages = 1;
+}
+message OrgPackageRow {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string package = 1;
+  google.protobuf.Timestamp enabled_at = 2;
+}
+
 message ListTeamsByOrgReq {
   option (w17.contrib.plugin_feature) = "teams";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -3831,6 +3846,22 @@ service AuthQuery {
   }
 
   // ── teams (handlers/teams.go) ──
+
+  // ListOrgPackages — read on every Authenticate in an organization: the
+  // packages bound what its members hold.
+  rpc ListOrgPackages(ListOrgPackagesReq) returns (ListOrgPackagesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_packages";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.package AS package, p.enabled_at AS enabled_at "
+          "FROM @module.OrgPackage p "
+          "WHERE p.org_id = :org_id AND p.ended_at IS NULL "
+          "ORDER BY p.package ASC"
+      }
+    };
+  }
 
   rpc ListTeamsByOrg(ListTeamsByOrgReq) returns (ListTeamsByOrgResp) {
     option (w17.contrib.plugin_feature_rpc) = "teams";

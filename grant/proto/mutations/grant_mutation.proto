@@ -1,0 +1,160 @@
+syntax = "proto3";
+
+// Grant plugin — storage writes. Nothing is deleted: a decision changes an
+// envelope's status, unbinding a host ends its row.
+
+package w17.contrib.grant;
+
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+message InsertEnvelopeReq {
+  string org_id      = 1 [(w17.field) = { type: UUID }];
+  string proposed_by = 2 [(w17.field) = { type: UUID, null: true }];
+  string display_name     = 3 [(w17.field) = { type: CHAR, max_len: 200 }];
+  string logo_light_url   = 4 [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string logo_dark_url    = 5 [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string verified_host    = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  string website_url      = 7 [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string support_url      = 8 [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string privacy_url      = 9 [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string terms_url        = 10 [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string accent_color     = 11 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string default_language = 12 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string operated_by      = 13 [(w17.field) = { type: CHAR, max_len: 200, blank: true }];
+}
+message InsertEnvelopeResp {
+  string id = 1;
+}
+
+message ApproveEnvelopeRowReq {
+  string id         = 1 [(w17.field) = { type: UUID }];
+  string decided_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message ApproveEnvelopeRowResp {
+  string id     = 1;
+  string org_id = 2;
+}
+
+message RejectEnvelopeRowReq {
+  string id            = 1 [(w17.field) = { type: UUID }];
+  string decided_by    = 2 [(w17.field) = { type: UUID, null: true }];
+  string decision_note = 3 [(w17.field) = { type: TEXT, max_len: 2000, blank: true }];
+}
+message RejectEnvelopeRowResp {
+  string id = 1;
+}
+
+message InsertHostBindingReq {
+  string host       = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string org_id     = 2 [(w17.field) = { type: UUID }];
+  string created_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message InsertHostBindingResp {
+  string id = 1;
+}
+
+message EndHostBindingReq {
+  string host     = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message EndHostBindingResp {
+  string id = 1;
+}
+
+service GrantMutation {
+  // InsertEnvelope — a new proposed version.
+  rpc InsertEnvelope(InsertEnvelopeReq) returns (InsertEnvelopeResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Envelope SET "
+          "org_id = :org_id, "
+          "status = 'proposed', "
+          "proposed_by = :proposed_by, "
+          "display_name = :display_name, "
+          "logo_light_url = :logo_light_url, "
+          "logo_dark_url = :logo_dark_url, "
+          "verified_host = :verified_host, "
+          "website_url = :website_url, "
+          "support_url = :support_url, "
+          "privacy_url = :privacy_url, "
+          "terms_url = :terms_url, "
+          "accent_color = :accent_color, "
+          "default_language = :default_language, "
+          "operated_by = :operated_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // ApproveEnvelopeRow — the proposed version becomes the organization's
+  // one approved envelope; the previous approved one is superseded in the
+  // same transaction.
+  rpc ApproveEnvelopeRow(ApproveEnvelopeRowReq) returns (ApproveEnvelopeRowResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "pending"
+        dql:  "UPDATE @module.Envelope SET id = id WHERE id = :id AND status = 'proposed' RETURNING org_id AS org_id"
+        on_empty: {
+          code:       ON_EMPTY_NOT_FOUND
+          error_code: "ENVELOPE_NOT_PENDING"
+          message:    "That envelope is not waiting for a decision."
+        }
+      }
+      ops: {
+        name: "previous"
+        dql:  "UPDATE @module.Envelope SET status = 'superseded', approved_slot = NULL WHERE org_id = :pending.org_id AND status = 'approved'"
+      }
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Envelope SET status = 'approved', approved_slot = 'approved', decided_by = :decided_by, decided_at = NOW() "
+          "WHERE id = :id "
+          "RETURNING id AS id, org_id AS org_id"
+      }
+    };
+  }
+
+  // RejectEnvelopeRow — the proposed version is refused, with a note.
+  rpc RejectEnvelopeRow(RejectEnvelopeRowReq) returns (RejectEnvelopeRowResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Envelope SET status = 'rejected', decided_by = :decided_by, decided_at = NOW(), decision_note = :decision_note "
+          "WHERE id = :id AND status = 'proposed' "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // InsertHostBinding — a live binding; a host already bound is refused by
+  // the unique index (the caller checks first).
+  rpc InsertHostBinding(InsertHostBindingReq) returns (InsertHostBindingResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:  "INSERT INTO @module.HostBinding SET host = :host, org_id = :org_id, created_by = :created_by RETURNING id AS id"
+      }
+    };
+  }
+
+  // EndHostBinding — unbinds the host; nothing is deleted.
+  rpc EndHostBinding(EndHostBindingReq) returns (EndHostBindingResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.HostBinding SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE host = :host AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+}

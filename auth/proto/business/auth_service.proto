@@ -1423,6 +1423,47 @@ message OrgTeamMember {
   google.protobuf.Timestamp added_at = 3;
 }
 
+// The packages an organization has (org_packages): what its members can
+// hold. The backoffice gives and takes them — realm-wide, never from inside an
+// organization — and an organization's members read their own.
+message AddOrgPackageReq {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string org_id  = 1 [(w17.field) = { type: UUID }];
+  string package = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message AddOrgPackageResp {
+  option (w17.contrib.plugin_feature) = "org_packages";
+}
+message RemoveOrgPackageReq {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string org_id  = 1 [(w17.field) = { type: UUID }];
+  string package = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message RemoveOrgPackageResp {
+  option (w17.contrib.plugin_feature) = "org_packages";
+}
+message ListPackagesOfOrgReq {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListMyOrgPackagesReq {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
+message OrgPackagesResp {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  repeated OrgPackageInfo packages = 1;
+}
+message OrgPackageInfo {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string package = 1;
+  // enabled_at — when it was given; unset for a default package, which every
+  // organization holds without being given.
+  google.protobuf.Timestamp enabled_at = 2;
+  // default — every organization holds it; it is not given or taken.
+  bool default = 3;
+}
+
 message ListOrgTeamsReq {
   option (w17.contrib.plugin_feature) = "teams";
   string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
@@ -1988,6 +2029,20 @@ service AuthService {
   }
   rpc SetMarketingConsent(SetMarketingConsentReq) returns (MarketingConsentResp) {
     option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+  }
+
+  // An organization's packages (handlers/org_packages.go).
+  rpc AddOrgPackage(AddOrgPackageReq) returns (AddOrgPackageResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_packages";
+  }
+  rpc RemoveOrgPackage(RemoveOrgPackageReq) returns (RemoveOrgPackageResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_packages";
+  }
+  rpc ListPackagesOfOrg(ListPackagesOfOrgReq) returns (OrgPackagesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_packages";
+  }
+  rpc ListMyOrgPackages(ListMyOrgPackagesReq) returns (OrgPackagesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_packages";
   }
 
   // An organization's teams (handlers/teams.go).

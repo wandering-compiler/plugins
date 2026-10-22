@@ -2200,3 +2200,29 @@ message TeamRole {
   string revoked_by = 8 [(w17.field) = { type: UUID, null: true }];
   string ended_key  = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
+
+// OrgPackage — a package (w17/packages.proto) an organization has been
+// given: what its members can hold (org_packages). The backoffice switches it
+// on and off; switching off ends the row (ended_at, ended_key = id), and the
+// next switch-on writes a new one, so the record of who gave what and when
+// stays. The package is named, not numbered: its methods come from the
+// domain's protos at every boot.
+message OrgPackage {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "org_id" }, { name: "package" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "org_packages";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string package    = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string enabled_by = 4 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp enabled_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by   = 7 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once switched off (Role.ended_key).
+  string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+

@@ -180,9 +180,10 @@ type AuthServiceHandler struct {
 
 	// Lock is the bundle's compile-time ACL permission-lock snapshot
 	// (query.AclLock(), wired by RegisterPlugin). Non-nil in a wired
-	// bundle; nil only in a hand-built test handler that never
-	// exercises the wildcard path. Read solely to expand an
-	// `all_permissions` wildcard role via acllock.GrantAll.
+	// bundle (empty in a project without the ACL). Read to expand an
+	// `all_permissions` wildcard role via acllock.GrantAll and, under
+	// org_packages, to bound an organization's permissions and gate the
+	// backoffice's package methods — which refuse without it.
 	Lock *acllock.Lock
 
 	PasswordHash passwordhash.Settings
@@ -297,6 +298,10 @@ type AuthServiceHandler struct {
 	// it); audiencesRead says ValidateConfig did it.
 	audiences     []audienceEntry
 	audiencesRead bool
+	PackagesTable string // w17_packages (generated; org_packages)
+	// packages is PackagesTable parsed at boot (org_packages; nil without it).
+	packages     *orgPackageTable
+	packagesRead bool
 }
 
 // audienceEntry is one audience of the domain's generated table
@@ -324,6 +329,27 @@ const MsgNeedsStepUp = "Confirm it is you before creating a token."
 // recently enough (api_token_step_up_seconds); the client asks for the
 // step-up and tries again.
 const CodeCreateNeedsStepUp = "API_TOKEN_NEEDS_STEP_UP"
+
+// orgPackageTable is the generated w17_packages table.
+type orgPackageTable struct {
+	Packages []orgPackage `json:"packages"`
+	// Governed are the methods a package bounds (the project's), named as
+	// the ACL lock keys them.
+	Governed []string `json:"governed"`
+
+	byName map[string]orgPackage
+	// gatedAudiences are the audiences some package names: closed to an
+	// organization none of whose packages names them. Any other is open.
+	gatedAudiences map[string]bool
+}
+
+type orgPackage struct {
+	Name      string   `json:"name"`
+	Methods   []string `json:"methods"`
+	Audiences []string `json:"audiences"`
+	// Default: every organization holds it without being given it.
+	Default bool `json:"default"`
+}
 
 // configChecks are the boot checks of feature-owned settings: a feature file
 // appends its own from init(), so ValidateConfig checks exactly what the
@@ -382,6 +408,19 @@ func (e *notAdmittedError) GRPCStatus() *status.Status {
 // surfaces, spelled here so the plugin builds against the SDK it pins. It is
 // gateway-owned (`x-w17-*`): a client's copy never reaches Authenticate.
 const membershipKindsHeader = "x-w17-membership-kinds"
+
+// requestMemoKey carries one Authenticate's memo (requestMemoOf).
+type requestMemoKey struct{}
+
+// requestMemoOf is the request's memo, nil outside Authenticate.
+func requestMemoOf(ctx context.Context) map[string]any {
+	m, _ := ctx.Value(requestMemoKey{}).(map[string]any)
+	return m
+}
+
+// audienceHeader is where an audience gateway names its audience
+// (principal.AudienceKey of the SDK that ships audience surfaces).
+const audienceHeader = "x-w17-audience"
 
 // authHeadersKey carries the AuthReq headers on the context, for a narrower.
 type authHeadersKey struct{}
@@ -1100,6 +1139,9 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// an audience gateway's admitted membership kinds decide which roles
 	// count (membership_kinds), and a narrower is handed no headers.
 	ctx = context.WithValue(ctx, authHeadersKey{}, req.GetHeaders())
+	// A memo the decorators and narrowers of this one request share, so what
+	// two of them read (an organization's packages) is read once.
+	ctx = context.WithValue(ctx, requestMemoKey{}, map[string]any{})
 	if err := runScopeDecorators(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
 		return nil, err
 	}

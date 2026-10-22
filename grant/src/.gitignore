@@ -1,0 +1,7 @@
+# Standard Go + IDE artifacts. gen/ is generated and ignored by the
+# repository's .gitignore (`make gen`).
+*.test
+*.out
+coverage.txt
+.idea/
+.vscode/

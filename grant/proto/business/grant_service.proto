@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+// Grant plugin — GrantService (gateway-facing). Hand-written handlers in
+// src/handlers/.
+//
+// Who calls what:
+//
+//   - an organization's members (acting in it — the active organization the
+//     auth plugin resolved) propose its envelope and read their own;
+//   - the backoffice, realm-wide (not acting in any organization), decides
+//     proposals and binds co-brand hosts; a call from inside an
+//     organization is refused, whatever roles its admins hold;
+//   - anyone, signed in or not, reads an organization's APPROVED envelope —
+//     by organization or by co-brand host — because the pages that show it
+//     (consent, an invitation, sign-in) come before trust.
+//
+// Which members and which backoffice operators may call a method is the
+// project's endpoint ACL, as for any method.
+
+package w17.contrib.grant;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+// EnvelopeFields — what an organization proposes. URLs are absolute
+// (https://, or http:// for localhost); accent_color is #rrggbb.
+message EnvelopeFields {
+  string display_name     = 1  [(w17.field) = { type: CHAR, min_len: 1, max_len: 200 }];
+  string logo_light_url   = 2  [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string logo_dark_url    = 3  [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string verified_host    = 4  [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  string website_url      = 5  [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string support_url      = 6  [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string privacy_url      = 7  [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string terms_url        = 8  [(w17.field) = { type: CHAR, max_len: 2000, blank: true }];
+  string accent_color     = 9  [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string default_language = 10 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string operated_by      = 11 [(w17.field) = { type: CHAR, max_len: 200, blank: true }];
+}
+
+// EnvelopeVersion — one version as its organization and the backoffice see
+// it.
+message EnvelopeVersion {
+  string id      = 1;
+  string org_id  = 2;
+  string status  = 3;
+  EnvelopeFields fields = 4;
+  google.protobuf.Timestamp proposed_at = 5;
+  google.protobuf.Timestamp decided_at  = 6;
+  string decision_note = 7;
+}
+
+// PublicEnvelope — the approved envelope, the one thing anyone may read.
+// Empty fields (found = false) when the organization has none approved: the
+// page then renders neutrally.
+message PublicEnvelope {
+  bool   found  = 1;
+  string org_id = 2;
+  EnvelopeFields fields = 3;
+}
+
+message ProposeEnvelopeReq {
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  EnvelopeFields fields = 2;
+}
+message GetMyEnvelopesReq {
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
+message EnvelopeVersionsResp {
+  repeated EnvelopeVersion envelopes = 1;
+}
+
+message ListEnvelopeProposalsReq {}
+message ApproveEnvelopeReq {
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message RejectEnvelopeReq {
+  string id   = 1 [(w17.field) = { type: UUID }];
+  string note = 2 [(w17.field) = { type: TEXT, max_len: 2000, blank: true }];
+}
+
+message GetOrgEnvelopeReq {
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message GetHostEnvelopeReq {
+  string host = 1 [(w17.field) = { type: CHAR, min_len: 1, max_len: 255 }];
+}
+
+message BindHostReq {
+  string host   = 1 [(w17.field) = { type: CHAR, min_len: 1, max_len: 255 }];
+  string org_id = 2 [(w17.field) = { type: UUID }];
+}
+message BindHostResp {}
+message UnbindHostReq {
+  string host = 1 [(w17.field) = { type: CHAR, min_len: 1, max_len: 255 }];
+}
+message UnbindHostResp {}
+message ListHostsReq {}
+message HostBindingView {
+  string host   = 1;
+  string org_id = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+message ListHostsResp {
+  repeated HostBindingView hosts = 1;
+}
+
+service GrantService {
+  // The organization's own: propose a version, read every version.
+  rpc ProposeEnvelope(ProposeEnvelopeReq) returns (EnvelopeVersion);
+  rpc GetMyEnvelopes(GetMyEnvelopesReq) returns (EnvelopeVersionsResp);
+
+  // The backoffice's, realm-wide.
+  rpc ListEnvelopeProposals(ListEnvelopeProposalsReq) returns (EnvelopeVersionsResp);
+  rpc ApproveEnvelope(ApproveEnvelopeReq) returns (EnvelopeVersion);
+  rpc RejectEnvelope(RejectEnvelopeReq) returns (EnvelopeVersion);
+  rpc BindHost(BindHostReq) returns (BindHostResp);
+  rpc UnbindHost(UnbindHostReq) returns (UnbindHostResp);
+  rpc ListHosts(ListHostsReq) returns (ListHostsResp);
+
+  // Anyone's: the approved envelope, by organization or co-brand host.
+  rpc GetOrgEnvelope(GetOrgEnvelopeReq) returns (PublicEnvelope);
+  rpc GetHostEnvelope(GetHostEnvelopeReq) returns (PublicEnvelope);
+}

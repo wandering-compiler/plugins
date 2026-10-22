@@ -1977,6 +1977,29 @@ message DeleteTeamResp {
   string team_id = 1;
 }
 
+// EnableOrgPackageReq / EndOrgPackageReq — switch a package on / off for an
+// organization (org_packages).
+message EnableOrgPackageReq {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string org_id     = 1 [(w17.field) = { type: UUID }];
+  string package    = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string enabled_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message EnableOrgPackageResp {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string id = 1;
+}
+message EndOrgPackageReq {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string org_id   = 1 [(w17.field) = { type: UUID }];
+  string package  = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string ended_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message EndOrgPackageResp {
+  option (w17.contrib.plugin_feature) = "org_packages";
+  string id = 1;
+}
+
 // AddTeamMember — a person joins a live team of the organization. A live
 // membership of the same person is refused by the unique index (AlreadyExists).
 message AddTeamMemberReq {
@@ -5232,6 +5255,37 @@ service AuthMutation {
           "UPDATE @module.Team SET deleted_at = NOW(), deleted_by = :deleted_by, ended_key = id "
           "WHERE id = :team.id AND deleted_at IS NULL "
           "RETURNING id AS team_id"
+      }
+    };
+  }
+
+  // EnableOrgPackage — a new live row; a live duplicate is refused by the
+  // unique index (the caller checks first).
+  rpc EnableOrgPackage(EnableOrgPackageReq) returns (EnableOrgPackageResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_packages";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgPackage SET "
+          "org_id = :org_id, "
+          "package = :package, "
+          "enabled_by = :enabled_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EndOrgPackage — switches the live row off; nothing is deleted.
+  rpc EndOrgPackage(EndOrgPackageReq) returns (EndOrgPackageResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_packages";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgPackage SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE org_id = :org_id AND package = :package AND ended_at IS NULL "
+          "RETURNING id AS id"
       }
     };
   }

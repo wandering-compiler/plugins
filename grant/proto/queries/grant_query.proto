@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+// Grant plugin — storage reads.
+
+package w17.contrib.grant;
+
+import "google/protobuf/timestamp.proto";
+import "@self/types/models.proto";
+import "w17/contrib.proto";
+import "w17/db.proto";
+import "w17/field.proto";
+
+option go_package = "@project;@pkg";
+
+// EnvelopeRow — one envelope version as read.
+message EnvelopeRow {
+  string id               = 1;
+  string org_id           = 2;
+  string status           = 3;
+  string display_name     = 4;
+  string logo_light_url   = 5;
+  string logo_dark_url    = 6;
+  string verified_host    = 7;
+  string website_url      = 8;
+  string support_url      = 9;
+  string privacy_url      = 10;
+  string terms_url        = 11;
+  string accent_color     = 12;
+  string default_language = 13;
+  string operated_by      = 14;
+  google.protobuf.Timestamp proposed_at = 15;
+  google.protobuf.Timestamp decided_at = 16;
+  string decision_note    = 17;
+}
+
+message GetApprovedEnvelopeReq {
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+
+message ListOrgEnvelopesReq {
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListPendingEnvelopesReq {}
+message EnvelopeRowsResp {
+  repeated EnvelopeRow envelopes = 1;
+}
+
+message GetHostBindingReq {
+  string host = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message HostBindingRow {
+  string host   = 1;
+  string org_id = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+message ListHostBindingsReq {}
+message HostBindingRowsResp {
+  repeated HostBindingRow bindings = 1;
+}
+
+service GrantQuery {
+  // GetApprovedEnvelope — the organization's approved envelope; NotFound
+  // when it has none.
+  rpc GetApprovedEnvelope(GetApprovedEnvelopeReq) returns (EnvelopeRow) {
+    option (w17.db.method) = {
+      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.org_id = :org_id AND e.status = 'approved'" }
+    };
+  }
+
+  // ListOrgEnvelopes — every version of one organization, newest first.
+  rpc ListOrgEnvelopes(ListOrgEnvelopesReq) returns (EnvelopeRowsResp) {
+    option (w17.db.method) = {
+      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.org_id = :org_id ORDER BY e.proposed_at DESC, e.id DESC" }
+    };
+  }
+
+  // ListPendingEnvelopes — the proposals waiting for the backoffice, oldest
+  // first.
+  rpc ListPendingEnvelopes(ListPendingEnvelopesReq) returns (EnvelopeRowsResp) {
+    option (w17.db.method) = {
+      ops: { name: "main", dql: "SELECT e.id AS id, e.org_id AS org_id, e.status AS status, e.display_name AS display_name, e.logo_light_url AS logo_light_url, e.logo_dark_url AS logo_dark_url, e.verified_host AS verified_host, e.website_url AS website_url, e.support_url AS support_url, e.privacy_url AS privacy_url, e.terms_url AS terms_url, e.accent_color AS accent_color, e.default_language AS default_language, e.operated_by AS operated_by, e.proposed_at AS proposed_at, e.decided_at AS decided_at, e.decision_note AS decision_note FROM @module.Envelope e WHERE e.status = 'proposed' ORDER BY e.proposed_at ASC, e.id ASC" }
+    };
+  }
+
+  // GetHostBinding — the organization a co-brand host presents; NotFound
+  // when it is not bound.
+  rpc GetHostBinding(GetHostBindingReq) returns (HostBindingRow) {
+    option (w17.db.method) = {
+      ops: { name: "main", dql: "SELECT b.host AS host, b.org_id AS org_id, b.created_at AS created_at FROM @module.HostBinding b WHERE b.host = :host AND b.ended_at IS NULL" }
+    };
+  }
+
+  rpc ListHostBindings(ListHostBindingsReq) returns (HostBindingRowsResp) {
+    option (w17.db.method) = {
+      ops: { name: "main", dql: "SELECT b.host AS host, b.org_id AS org_id, b.created_at AS created_at FROM @module.HostBinding b WHERE b.ended_at IS NULL ORDER BY b.host ASC" }
+    };
+  }
+}
