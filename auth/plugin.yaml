@@ -1,5 +1,5 @@
 name: auth
-version: 0.1.0-rc.31
+version: 0.1.0-rc.32
 requires_w17: ">=1.12"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
