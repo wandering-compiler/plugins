@@ -147,6 +147,16 @@ message AuthResp {
   // tool that sends the messages; nothing here acts on it. Field-gated
   // `marketing_consent`.
   bool                marketing_consent = 7 [(w17.contrib.plugin_feature_field) = "marketing_consent"];
+
+  // membership_kind — the kind of the caller's membership (`staff`,
+  // `client`, …: what a project calls the account type) in the organization
+  // this request acts in, scopes[org_id]. Like the organization it is the
+  // request's context, not the person's: the same user may be staff of one
+  // organization and a client of another. Empty when the request acts in no
+  // organization, or in one the caller only owns. The gateway copies it into
+  // every request record (RequestEventMeta.membership_kind). Field-gated
+  // `membership_kinds`.
+  string              membership_kind = 8 [(w17.contrib.plugin_feature_field) = "membership_kinds"];
 }
 
 // SignInReq / SignInResp — canonical email+password sign-in

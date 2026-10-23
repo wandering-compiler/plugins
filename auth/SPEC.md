@@ -1132,6 +1132,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 - With `oauth_server`: the consent page offers an MCP client only the organizations where the user holds a kind its resource's audience admits — none refuses at once, one is the only choice.
 - Error code `MEMBERSHIP_NOT_ADMITTED` (PermissionDenied).
 - Auth header `x-w17-membership-kinds` (gateway-owned, comma-separated).
+- `AuthResp.membership_kind` (8): the kind of the caller's membership in the organization the request acts in (`scopes[org_id]`), the project's account type. The gateway copies it into every request record (`RequestEventMeta.membership_kind`).
 
 **Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/membership_kinds.go`. Combined with `org_invite`: `handlers/membership_kinds_invite.go`; with `oauth_server`: `handlers/oauth_server_kinds.go`.
 
@@ -1144,6 +1145,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | membership_kinds/consent-by-kind | The consent page MUST offer, and an approval MUST name, only organizations where the user holds a kind the resource's audience admits. | Security | `TestOAuthConsent_OffersOnlyTheOrganizationsTheResourcesAudienceAdmits` |
 | membership_kinds/table-fails-at-boot | A table that would turn the consent filter off silently — malformed, an unset MCP URL, one URL for two audiences — MUST refuse to boot. | Security | `TestParseAudienceTable` |
 | membership_kinds/no-kinds-no-change | A gateway that names no kinds MUST resolve and narrow exactly as `org_membership` does. | Security | `TestResolveOrgScopeByKind` |
+| membership_kinds/kind-of-the-request | `AuthResp.membership_kind` MUST be the kind of the caller's membership in the organization this request resolved, whichever way it was resolved; empty when the request acts in no organization or in one the caller only owns. It MUST NOT be a property of the user (no last or default kind). | Consistency & concurrency | `TestAnswerMembershipKind` |
 | membership_kinds/header-gateway-owned | The admitted kinds MUST come only from the gateway: `x-w17-*` keys a client sends never reach `Authenticate`. | Security | none here; the platform gateway's reserved-key strip |
 
 **Gaps / suspected defects**

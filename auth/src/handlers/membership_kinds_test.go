@@ -233,3 +233,42 @@ func TestCheckInviteKind(t *testing.T) {
 func (m *ownsMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserTeamRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
 	return &pb.GetUserTeamRoleGrantsResp{}, nil
 }
+
+// The kind answered is the caller's membership in the organization THIS
+// request acts in: u1 is staff of acme and a client of beta, so two requests
+// at once, one per tab, answer one kind each. No organization, or one the
+// caller only owns, answers none.
+func TestAnswerMembershipKind(t *testing.T) {
+	h := kindsHandler()
+	answer := func(ctx context.Context, org string) string {
+		t.Helper()
+		resp := &pb.AuthResp{Scopes: map[string]string{"user_id": "u1"}}
+		if org != "" {
+			resp.Scopes["org_id"] = org
+		}
+		if err := answerMembershipKind(ctx, h, &authPrincipal{userID: "u1"}, resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.GetMembershipKind()
+	}
+	for org, want := range map[string]string{"org-acme": "staff", "org-beta": "client", "": "", "org-owned-only": ""} {
+		if got := answer(context.Background(), org); got != want {
+			t.Errorf("org %q: kind %q, want %q", org, got, want)
+		}
+	}
+
+	// Through an audience gateway the resolution has read the memberships
+	// already: one Authenticate reads them once.
+	m := h.Query.(*orgMock)
+	m.listCalls = 0
+	ctx := context.WithValue(context.Background(), requestMemoKey{}, map[string]any{})
+	sc := map[string]string{}
+	hd := admits("client")
+	hd[orgScopeMetadataKey] = "beta"
+	if err := resolveOrgScope(ctx, h, "u1", hd, sc, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := answer(ctx, sc["org_id"]); got != "client" || m.listCalls != 1 {
+		t.Errorf("kind %q after %d membership reads, want client after 1", got, m.listCalls)
+	}
+}

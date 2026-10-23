@@ -519,7 +519,7 @@ type authPrincipal struct {
 	botAccount bool
 
 	// user is the account the token belongs to, as the token lookup read it:
-	// the columns a feature answers in AuthResp ride it (authRespEnrich).
+	// the columns a feature answers in AuthResp ride it (authRespEnrichers).
 	user *pb.User
 
 	// legacyToken is the presented token when it resolved to a LEGACY row
@@ -1183,14 +1183,19 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 		SessionTokenId: prin.tokenID,
 		DeviceId:       prin.deviceThumbprint,
 	}
-	authRespEnrich(prin, resp)
+	for _, enrich := range authRespEnrichers {
+		if err := enrich(ctx, h, prin, resp); err != nil {
+			return nil, err
+		}
+	}
 	return resp, nil
 }
 
-// authRespEnrich fills the AuthResp fields a feature adds (marketing_consent)
-// from what the token lookup already read. Base tier: a no-op, because those
-// fields exist only in a build with the feature.
-var authRespEnrich = func(*authPrincipal, *pb.AuthResp) {}
+// authRespEnrichers fill the AuthResp fields a feature adds
+// (marketing_consent, membership_kind), each feature appending its own from
+// its file's init. Base tier: none, because those fields exist only in a
+// build with the feature. They run last, on the resolved scopes.
+var authRespEnrichers []func(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, resp *pb.AuthResp) error
 
 // presentedToken strips the scheme off the auth header. A token may come
 // under DPoP (RFC 9449, a bound token with a proof — viaDPoP) or under the
