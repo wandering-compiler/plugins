@@ -45,6 +45,11 @@ const (
 	oauthRequestTTL = 10 * time.Minute
 	// oauthCodeTTL is a code's life: the browser → client hop is immediate.
 	oauthCodeTTL = 60 * time.Second
+	// oauthCodePageTTL is the life of a code the code page shows: a person
+	// copies it into a w17ctl in another window, possibly on another machine.
+	// Still single-use, and worth nothing without the program's PKCE verifier
+	// and DPoP key.
+	oauthCodePageTTL = 5 * time.Minute
 	// oauthScope is the one scope: what an MCP client may do is the user's
 	// mcp-realm roles, not a scope string the client picked.
 	oauthScope = "mcp"
@@ -127,7 +132,31 @@ func checkOAuthServerConfig(h *AuthServiceHandler) error {
 	if _, err := parseOAuthResources(h.OAuthResources); err != nil {
 		return err
 	}
+	if err := checkOAuthCodeRedirect(h.OAuthCodeRedirect); err != nil {
+		return err
+	}
 	return nil
+}
+
+// checkOAuthCodeRedirect reads oauth_code_redirect: empty, or an https URL
+// (http only on a loopback host: a dev stack) without query, fragment or
+// credentials, compared as a whole string.
+func checkOAuthCodeRedirect(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" || u.RawQuery != "" || u.Fragment != "" ||
+		strings.Contains(raw, "#") || u.User != nil ||
+		u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname())) {
+		return fmt.Errorf("oauth_code_redirect %q: not an https URL without query, fragment or credentials", raw)
+	}
+	return nil
+}
+
+// isCodeRedirect reports whether a redirect is this deployment's code page.
+func (h *AuthServiceHandler) isCodeRedirect(redirectURI string) bool {
+	return h.OAuthCodeRedirect != "" && redirectURI == h.OAuthCodeRedirect
 }
 
 // parseOAuthRedirectHosts reads oauth_redirect_hosts: host names, comma- or
@@ -285,16 +314,24 @@ func oauthRequestedScope(raw string) (string, error) {
 // oauthGrantKind decides what the authorization yields. A resource named:
 // an MCP grant for it. None: a session grant — the whole account, bound to a
 // program's key — which only w17ctl asks for: a client that registered as it
-// (software_id), on the user's own computer (a loopback redirect). Every
-// other client without a resource is refused, so an MCP client that forgot
-// the parameter is not offered a whole session on the consent page. The
+// (software_id), either on the user's own computer (a loopback redirect) or
+// through the deployment's code page (oauth_code_redirect), which shows the
+// code for the person to type into a w17ctl on another machine. Every other
+// client without a resource is refused, so an MCP client that forgot the
+// parameter is not offered a whole session on the consent page. The
 // software_id is the client's own claim; what bounds a false one is the
-// loopback redirect (a program already on the user's computer) and the
-// consent page, which says plainly that the program signs in as the user.
+// redirect — a program already on the user's computer, or a code only the
+// person sees — and the consent page, which says plainly that the program
+// signs in as the user.
 func (h *AuthServiceHandler) oauthGrantKind(client *pb.OAuthClientRow, resources []string, redirectURI string) (pb.OAuthGrantKind, string, error) {
 	switch len(resources) {
 	case 0:
-		if !isLoopbackRedirect(redirectURI) || client.GetSoftwareId() != sessionGrantSoftwareID {
+		if client.GetSoftwareId() == sessionGrantSoftwareID && !isLoopbackRedirect(redirectURI) && !h.isCodeRedirect(redirectURI) {
+			// w17ctl's sign-in with a code, on a console that does not
+			// offer it: say so, rather than the MCP answer below.
+			return 0, "", oauthRefuse(oauthInvalidTarget, "this console does not offer sign-in with a code; sign in with `w17ctl login --method password`, or in a browser on the machine w17ctl runs on")
+		}
+		if !isLoopbackRedirect(redirectURI) && !h.isCodeRedirect(redirectURI) || client.GetSoftwareId() != sessionGrantSoftwareID {
 			return 0, "", oauthRefuse(oauthInvalidTarget, "a resource is required")
 		}
 		return pb.OAuthGrantKind_OAUTH_GRANT_KIND_SESSION, "", nil
@@ -341,7 +378,7 @@ func (h *AuthServiceHandler) GetOAuthAuthorization(ctx context.Context, req *pb.
 		ClientUri:    pending.GetClient().GetClientUri(),
 		LogoUri:      pending.GetClient().GetLogoUri(),
 		ClientId:     pending.GetClient().GetClientId(),
-		RedirectHost: redirectHost(pending.GetRedirectUri()),
+		RedirectHost: h.redirectHost(pending.GetRedirectUri()),
 		Kind:         pending.GetKind(),
 		Resource:     pending.GetResource(),
 		Scope:        pending.GetScope(),
@@ -430,7 +467,7 @@ func (h *AuthServiceHandler) ApproveOAuthAuthorization(ctx context.Context, req 
 		ApprovedByDeviceId: approving.GetDeviceId(),
 		SessionExpiresAt:   approving.GetExpiresAt(),
 		CodeHash:           sha256Hex(code),
-		CodeExpiresAt:      timestamppb.New(time.Now().Add(oauthCodeTTL)),
+		CodeExpiresAt:      timestamppb.New(time.Now().Add(h.oauthCodeLife(pending.GetRedirectUri()))),
 	})
 	if err != nil {
 		if notFoundOK(err) == nil {
@@ -513,9 +550,20 @@ func clientRedirect(redirectURI string, params map[string]string) (string, error
 	return u.String(), nil
 }
 
+// oauthCodeLife is how long an approved request's code may be redeemed.
+func (h *AuthServiceHandler) oauthCodeLife(redirectURI string) time.Duration {
+	if h.isCodeRedirect(redirectURI) {
+		return oauthCodePageTTL
+	}
+	return oauthCodeTTL
+}
+
 // redirectHost is what the consent page shows as where the code goes: the
 // one part of the request the client cannot dress up.
-func redirectHost(redirectURI string) string {
+func (h *AuthServiceHandler) redirectHost(redirectURI string) string {
+	if h.isCodeRedirect(redirectURI) {
+		return "a code shown to you on the next page, to type into w17ctl"
+	}
 	u, err := url.Parse(redirectURI)
 	if err != nil {
 		return ""

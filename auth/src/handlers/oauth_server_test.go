@@ -794,7 +794,7 @@ func TestRegisterOAuthClient_Rules(t *testing.T) {
 	if resp, _ := h.RegisterOAuthClient(context.Background(), &pb.RegisterOAuthClientReq{RedirectUris: []string{"cursor://anysphere.cursor-mcp/oauth/callback"}}); resp.GetClientId() == "" {
 		t.Errorf("a private-use scheme refused: %v", resp)
 	}
-	if got := redirectHost("cursor://anysphere.cursor-mcp/oauth/callback"); got != "the cursor app on this device" {
+	if got := (&AuthServiceHandler{}).redirectHost("cursor://anysphere.cursor-mcp/oauth/callback"); got != "the cursor app on this device" {
 		t.Errorf("redirectHost = %q", got)
 	}
 	h.OAuthDynamicRegistration = false
