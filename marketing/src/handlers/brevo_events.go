@@ -146,6 +146,18 @@ func eventFor(meta *w17pb.RequestEventMeta, consentAttr string) (brevo.Event, bo
 	if r := meta.GetRoute(); r != "" {
 		props["w17_route"] = r
 	}
+	// The organization the request acted in and the caller's kind of
+	// membership there (the account type) are the request's, not the
+	// person's: one user may work in two organizations at once, as staff of
+	// one and a client of the other. On the event, never on the contact,
+	// where the last request would overwrite the one before. Absent when the
+	// project has no organizations or no kinds.
+	if org := meta.GetOrgId(); org != "" {
+		props["w17_org_id"] = org
+	}
+	if kind := meta.GetMembershipKind(); kind != "" {
+		props["w17_account_type"] = kind
+	}
 	if meta.GetTruncated() {
 		props["w17_truncated"] = true
 	}
@@ -158,9 +170,6 @@ func eventFor(meta *w17pb.RequestEventMeta, consentAttr string) (brevo.Event, bo
 		}
 	}
 	contact := map[string]any{}
-	if org := meta.GetOrgId(); org != "" {
-		contact[orgAttribute] = org
-	}
 	if meta.MarketingConsent != nil {
 		contact[consentAttr] = meta.GetMarketingConsent()
 	}

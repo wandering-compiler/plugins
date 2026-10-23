@@ -40,9 +40,6 @@ type brevoAPI interface {
 	DeleteContact(ctx context.Context, extID string) error
 }
 
-// orgAttribute is the contact attribute an event's organization goes to.
-const orgAttribute = "W17_ORG_ID"
-
 func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.ClientSet) error {
 	if !gen.FeatureBrevo {
 		return nil
@@ -85,22 +82,19 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 	return nil
 }
 
-// ensureAttributes creates the contact attributes the plugin writes, in the
-// background and again every interval until Brevo has them: without them
-// Brevo drops the consent and the organization silently, and the bundle's
-// boot must not wait on Brevo being reachable.
+// ensureAttributes creates the contact attribute the plugin writes, in the
+// background and again every interval until Brevo has it: without it Brevo
+// drops the consent silently, and the bundle's boot must not wait on Brevo
+// being reachable.
 func (t *brevoTool) ensureAttributes(every time.Duration) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
 			err := t.client.EnsureAttribute(ctx, t.consentAttr, "boolean")
-			if err == nil {
-				err = t.client.EnsureAttribute(ctx, orgAttribute, "text")
-			}
 			if err == nil || ctx.Err() != nil {
 				return
 			}
-			log.Printf("marketing plugin: creating the Brevo contact attributes %s, %s: %v", t.consentAttr, orgAttribute, err)
+			log.Printf("marketing plugin: creating the Brevo contact attribute %s: %v", t.consentAttr, err)
 			select {
 			case <-ctx.Done():
 				return
