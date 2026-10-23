@@ -71,8 +71,8 @@ github.com/prometheus/procfs v0.20.1 h1:XwbrGOIplXW/AU3YhIhLODXMJYyC1isLFfYCsTEy
 github.com/prometheus/procfs v0.20.1/go.mod h1:o9EMBZGRyvDrSPH1RqdxhojkuXstoe4UlK79eF5TGGo=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/wandering-compiler/sdk/go v0.1.0-rc.25 h1:jZzpBb1yuX8fF0/XkVvpfKbKJgOz5cspddDf99RZpBc=
-github.com/wandering-compiler/sdk/go v0.1.0-rc.25/go.mod h1:vXK/wLhjJqdWZoQxvXl6o5aKp/ytyhlaSK2lqrj3/qw=
+github.com/wandering-compiler/sdk/go v0.1.0-rc.37.0.20261023170902-e980e21158c5 h1:a3EFE4s8PUi6n8N89pO6vVnL8IZdHlEDta68P96O5yI=
+github.com/wandering-compiler/sdk/go v0.1.0-rc.37.0.20261023170902-e980e21158c5/go.mod h1:vXK/wLhjJqdWZoQxvXl6o5aKp/ytyhlaSK2lqrj3/qw=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0 h1:2yEATaop1/a1I4psnSLgWVPLWwCzkqWakgJy7xTDVy0=

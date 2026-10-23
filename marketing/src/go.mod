@@ -3,7 +3,7 @@ module github.com/wandering-compiler/plugins/marketing
 go 1.26.1
 
 require (
-	github.com/wandering-compiler/sdk/go v0.1.0-rc.25
+	github.com/wandering-compiler/sdk/go v0.1.0-rc.37.0.20261023170902-e980e21158c5
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
