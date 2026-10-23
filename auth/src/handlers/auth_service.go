@@ -293,6 +293,7 @@ type AuthServiceHandler struct {
 	OAuthDynamicRegistration bool   // oauth_dynamic_registration
 	OAuthRedirectHosts       string // oauth_redirect_hosts
 	OAuthResources           string // oauth_resources
+	OAuthCodeRedirect        string // oauth_code_redirect
 	Audiences                string // w17_audiences (generated)
 	// audiences is Audiences parsed at boot (membership_kinds; nil without
 	// it); audiencesRead says ValidateConfig did it.

@@ -114,6 +114,7 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		OAuthDynamicRegistration: cfg.OauthDynamicRegistration,
 		OAuthRedirectHosts:       cfg.OauthRedirectHosts,
 		OAuthResources:           cfg.OauthResources,
+		OAuthCodeRedirect:        cfg.OauthCodeRedirect,
 
 		// SignIn's guess budget (<=0 → the defaults in signin_budget.go).
 		SignInFailureBudget:        cfg.SignInFailureBudget,

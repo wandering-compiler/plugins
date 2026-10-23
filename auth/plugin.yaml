@@ -106,6 +106,10 @@ env:
     type: string
     default: ""
     description: "The resources (MCP surface URLs) this server issues tokens for (oauth_server): a comma- or space-separated list of absolute URLs. Empty = any https URL — the consent page shows the user which one. Set it to your MCP surfaces so no client can have a token minted for another server's name. An entry that is not an absolute URL fails the boot."
+  - name: oauth_code_redirect
+    type: string
+    default: ""
+    description: "The authorization server's code page (oauth_server): the https URL of the page that shows an approved sign-in's code to type into w17ctl, for a w17ctl on another machine than the browser (an ssh session, a remote workspace). The REST gateway serves it at <issuer>/oauth/code, so this is that URL (https://api.example.com/oauth/code). Set, w17ctl may ask for a session with it as its redirect, as it may with a loopback one; the code it shows lasts 5 minutes instead of 1. Empty = sign-in with a code is not offered. Allowed whatever oauth_redirect_hosts lists. A value that is not an https URL (http only on a loopback host) without query or fragment fails the boot."
   - name: w17_audiences
     type: string
     default: ""

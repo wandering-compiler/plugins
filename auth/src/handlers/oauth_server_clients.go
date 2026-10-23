@@ -120,6 +120,10 @@ func (h *AuthServiceHandler) checkClientMetadata(md *clientMetadata) error {
 	}
 	hosts, _ := parseOAuthRedirectHosts(h.OAuthRedirectHosts)
 	for _, r := range md.RedirectURIs {
+		if h.isCodeRedirect(r) {
+			// This server's own code page, on whatever host the list names.
+			continue
+		}
 		if err := checkClientRedirect(r, hosts); err != nil {
 			return oauthRefuse(oauthInvalidRedirectURI, r+": "+err.Error())
 		}
