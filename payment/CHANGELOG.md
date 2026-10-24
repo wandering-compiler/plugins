@@ -2,6 +2,45 @@
 
 ## 0.1.0-rc.5
 
+### The provider's client secret stays out of every sink
+
+`client_secret` (the token a browser confirms a charge with) is marked `sensitive` on both responses that return it. The response still carries it; telemetry and the request event stream no longer write it.
+
+### `src/gen` is generated, not shipped
+
+- **Needs w17ctl v0.1.0-rc.75 or newer.** The release no longer carries `src/gen` (the pb, the `EnvConfig` / `ClientSet` / `HandlerRegistry` contract and the feature constants). A consumer's staging generates all of it for each activation from `plugin.yaml` and the protos, and w17ctl does that from rc.75 on. An older w17ctl expects the release to carry the contract; upgrade it before you take this release.
+- Nothing in your project changes: the same activation, the same env variables, the same configuration, no migration.
+
+### `ReconcileProvider` records what the webhooks never brought in
+
+A provider object whose local row never landed (a failed insert nobody retried), or a row whose webhook was lost for good (an endpoint down longer than the provider redelivers), stayed wrong forever: a paid charge read pending, a top-up's credit was never granted, a dashboard refund never recorded.
+
+- **New method `PaymentService.ReconcileProvider(since, limit, cursor)`** (feature `stripe_webhooks`). It walks the provider's customers, payment intents, refunds and subscriptions created at or after `since`, and records every object this installation made that has no local row, and every status a row lags, through the same paths the create calls and the webhook use (events fire once; a top-up's credit is granted or taken back once). Objects of other installations or apps are left alone. It answers per-kind counts and a cursor when `limit` stopped it.
+- **A provider list that fails keeps the walk.** Transient failures are retried briefly (within the call's deadline); a list that still fails ends the call with the counts so far, `stopped` and `next_cursor` at the failed page. A cursor whose object was deleted at the provider continues from that object's creation time. Stop your loop on `stopped` and resume later.
+- **Rotating `webhook_signing_secret` changes the installation mark**, and every object made before the rotation then reads as foreign. The new env `previous_install_marks` (comma-separated, 16 hex characters each; read one off an older object's `w17_install` metadata) keeps those objects this installation's, for the webhook and the reconciliation.
+- **The plugin schedules nothing and no preset exposes it.** Call it from your own code (a scheduled job, an operator action); the README suggests hourly with `since` four days back. Without a call nothing changes.
+- **Provider customers are now marked** (`w17_payment=customer`, `w17_install`) like every other object the plugin creates. Customers made before this version are not recognised by the reconciliation.
+- **A payment row the reconciliation records** carries a stand-in idempotency key; a caller's retry the provider replays onto that intent is answered with it.
+- **Nothing is ever deleted.** `ProcessedWebhookEvent` and the ledgers are audit logs and are never pruned; archiving them at scale is a deployment concern.
+- **Generated code.** New queries `GetCustomerByProviderId` (base) and `GetPlanByProviderPriceId` (`subscriptions`); `CreateSubscription` now also writes `provider_event_at` (an existing column). No new table, column or index, so no migration. Regenerate your project so the new method and queries are emitted. A custom `backend.Backend` driver must implement the four new `List*Page` methods.
+
+### A refund's outcome is recorded, and a top-up's credit follows its refunds and disputes
+
+A refund was recorded as done whatever the provider answered, and a refund that failed later still counted toward `REFUNDED`. A refund made in the provider's dashboard, or a lost dispute, left a top-up's credit spendable.
+
+- **`Refund.status`** (`PENDING`, `SUCCEEDED`, `FAILED`, `CANCELED`) holds the provider's answer, and the refund webhooks keep it current. Only pending and succeeded refunds count toward `REFUNDED` (`SumRefundsForPayment`). `FAILED` and `CANCELED` never move back.
+- **A payment whose completing refund fails goes back to `SUCCEEDED`** and emits the new event `PaymentRefundReversed` (`payment.payment.refund_reversed`). A subscriber that acted on `PaymentRefunded` undoes that there.
+- **The webhook handles `refund.created`, `refund.updated`, `refund.failed` and `charge.refund.updated`** besides `charge.refunded`. Each one makes the plugin read the payment's refunds from the provider (one `GET /v1/refunds` per event) and record them; the payment's status is then derived from the local refund rows. **Subscribe your webhook endpoint to the `refund.*` and `charge.dispute.*` events.**
+- **Disputes are recorded** in the new `Dispute` table (feature `stripe_webhooks`) from `charge.dispute.*` events.
+- **A top-up's credit follows one rule.** It is worth its amount, less its pending and succeeded refunds (through `RefundPayment` or made at the provider) and its lost disputes, never below zero, and nothing until its payment has succeeded. After every change the plugin moves the credit it holds for the top-up to that value. A decrease takes only what the balance holds; the rest is recorded as `CreditTopup.credit_owed` (credit the owner spent and owes; the plugin does not collect it). An increase — a refund that failed — cancels what is owed first, then adds spendable credit. A refund or dispute that arrives before the grant is left out of the grant. A `CreditApplied` with delta `0` can appear when only what is owed changed.
+- **The ledger reasons `topup`, `topup-refund`, `topup-refund-refused` and `topup-reconcile` are reserved**: `GrantCredit` and `SpendCredit` refuse them. A row your own code wrote earlier with one of these reasons and a payment id as its reference would now be counted as that top-up's credit; check your ledger if you ever used them.
+- **Migration.** New columns `Refund.status` (enum, default `SUCCEEDED`, so existing rows keep meaning what they did), `CreditTopup.credit_owed` (nullable `DECIMAL(20,4)`) and `CreditTopup.reconciled_step` (integer, default 0); new table `Dispute` under `stripe_webhooks`. New mutations `RecordProviderRefund`, `MarkRefundStatus`, `MarkPaymentRefundReversed`, `CreateDispute`, `MarkDisputeStatus`, `SetTopupCreditOwed` and queries `GetDisputeByProviderId`, `SumLostDisputesForPayment`, `SumTopupCredit`. Generate a migration.
+
+### Built on SDK go/v0.1.0-rc.24
+
+- **The plugin's module requires `github.com/wandering-compiler/sdk/go` v0.1.0-rc.24.** A w17ctl that knows the request data annotations (`gdpr`, `sensitive`) generates a redaction plan next to every pb file of the plugin's `src/gen`, and that plan imports the SDK's `lib/redact`, which rc.24 is the first to have. The plugin's own code does not change.
+- Nothing in your project changes: the same activation, the same env variables, no migration. Your project's own `go.mod` moves to rc.24 with the same w17ctl.
+
 Needs w17 platform 1.11 (`requires_w17: ">=1.11"`): `public_limit` on the webhook endpoint.
 
 ### Every REST endpoint acts on the signed-in caller's own billing (breaking)
