@@ -1,0 +1,7 @@
+### Tokens, codes and secrets stay out of every sink
+
+Telemetry and the request event stream write each request message without its `sensitive` fields (the redaction plan beside each `.pb.go`). Only the fields the type marks were left out until now: `PASSWORD`, `SECRET`, `CRYPTED_SECRET`. Most credentials the plugin hands out or takes in were plain strings, so they were written. That included `AuthReq.headers`, which carries the caller's `Authorization` header and goes to the error report whenever `Authenticate` fails on the backend.
+
+- 70 fields are now marked `sensitive`. They cover what the plugin issues (session, API, bot and OAuth access/refresh tokens; `client_secret`; the TOTP secret, its `otpauth://` URI and recovery codes) and what it takes in (`AuthReq.headers`; sign-up, MFA, step-up and OAuth codes; `code_verifier`; reset, verification and invite tokens; a legacy plaintext token). They include the decrypted TOTP seed and the hashes of the short codes (MFA, step-up, sign-up, recovery), which a brute force over the code space reverses. The plaintext codes and tokens on the `*Requested` events are marked too.
+- Nothing changes on the wire. The responses still carry the token, and the events still carry the code the mail is built from. Only what a sink writes changes.
+- The hashes of the long random tokens and the token ids stay visible. They identify a token, and nobody can authenticate with them.

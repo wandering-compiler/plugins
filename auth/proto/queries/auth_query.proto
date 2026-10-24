@@ -77,7 +77,7 @@ message GetUserPermissionsResp {
 message GetUserByTokenWithPermissionsReq {
   option (w17.contrib.plugin_feature) = "rbac";
   // See GetUserByTokenReq.
-  string legacy_token = 1;
+  string legacy_token = 1 [(w17.field) = { sensitive: true }];
   string token_hash   = 2;
 }
 // UserWithPermissions packs identity + the deduped permission
@@ -427,7 +427,7 @@ message GetRoleReq {
 message GetTokenWithTypeReq {
   option (w17.contrib.plugin_feature) = "api_token";
   // See GetUserByTokenReq.
-  string legacy_token = 1;
+  string legacy_token = 1 [(w17.field) = { sensitive: true }];
   string token_hash   = 2;
 }
 message GetTokenWithTypeResp {
@@ -473,7 +473,7 @@ message GetTokenWithTypeResp {
 message GetExpiredTokenWithTypeReq {
   option (w17.contrib.plugin_feature) = "api_token";
   // See GetUserByTokenReq.
-  string legacy_token = 1;
+  string legacy_token = 1 [(w17.field) = { sensitive: true }];
   string token_hash   = 2;
 }
 message GetExpiredTokenWithTypeResp {
@@ -667,7 +667,7 @@ message GetAuthClientSecretReq {
 }
 message GetAuthClientSecretResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  string client_secret = 1; // argon2id PHC hash — verified against, never returned to a caller
+  string client_secret = 1 [(w17.field) = { sensitive: true }]; // argon2id PHC hash — verified against, never returned to a caller
   bool   enabled       = 2;
 }
 
@@ -738,7 +738,7 @@ message GetProviderByNameResp {
   OAuthProvider provider = 1;
   // The decrypted client secret (OAuthProvider.secret) — top-level because an
   // encrypted column decrypts only into a single-segment target.
-  string secret = 2;
+  string secret = 2 [(w17.field) = { sensitive: true }];
 }
 
 message GetOAuthIdentityReq {
@@ -790,7 +790,7 @@ message GetTotpSecretResp {
   UserTotpSecret secret = 1;
   // The decrypted seed — top-level because an encrypted column decrypts only
   // into a single-segment target (`secret.seed` would carry ciphertext).
-  string seed = 2;
+  string seed = 2 [(w17.field) = { sensitive: true }];
 }
 
 message CountRecoveryCodesReq {
@@ -1368,7 +1368,7 @@ message GetSessionStepUpReq {
 // (NULL: none is out).
 message GetSessionStepUpResp {
   option (w17.contrib.plugin_feature) = "step_up_code";
-  string code_hash = 1 [(w17.field) = { type: CHAR, max_len: 255, null: true }];
+  string code_hash = 1 [(w17.field) = { type: CHAR, max_len: 255, null: true, sensitive: true }];
   google.protobuf.Timestamp sent_at = 2 [(w17.field) = { type: DATETIME, null: true }];
 }
 

@@ -28,6 +28,7 @@ package w17.contrib.auth;
 
 import "google/protobuf/timestamp.proto";
 import "w17/contrib.proto";
+import "w17/field.proto";
 import "w17/event.proto";
 
 option go_package = "@project;@pkg";
@@ -360,7 +361,7 @@ message MfaChallengeRequested {
   string                    challenge_id  = 2;
   bool                      totp_enrolled = 3; // ← the keystone signal
   string                    email         = 4; // delivery hint
-  string                    code          = 5; // plugin-generates mode only; blank otherwise
+  string                    code          = 5 [(w17.field) = { sensitive: true }]; // plugin-generates mode only; blank otherwise
   google.protobuf.Timestamp expires_at    = 6;
   // device_id — the key thumbprint of the device that caused it (the value
   // AuthResp.device_id and principal.DeviceID carry): the device that passed
@@ -383,7 +384,7 @@ message StepUpCodeRequested {
   string                    user_id    = 1;
   string                    token_id   = 2;
   string                    email      = 3; // delivery hint
-  string                    code       = 4;
+  string                    code       = 4 [(w17.field) = { sensitive: true }];
   google.protobuf.Timestamp expires_at = 5;
   // device_id — the key thumbprint of the session's device.
   string                    device_id  = 6;
@@ -461,7 +462,7 @@ message PasswordResetRequested {
 
   string                    user_id    = 1;
   string                    email      = 2; // delivery hint
-  string                    token      = 3; // plaintext reset token; NEVER persisted
+  string                    token      = 3 [(w17.field) = { sensitive: true }]; // plaintext reset token; NEVER persisted
   google.protobuf.Timestamp expires_at = 4;
 }
 
@@ -480,7 +481,7 @@ message SignUpConfirmationRequested {
 
   string                    pending_id = 1;
   string                    email      = 2; // where the code must go
-  string                    code       = 3; // plaintext; NEVER persisted
+  string                    code       = 3 [(w17.field) = { sensitive: true }]; // plaintext; NEVER persisted
   google.protobuf.Timestamp expires_at = 4;
 }
 
@@ -496,7 +497,7 @@ message EmailVerificationRequested {
 
   string                    user_id    = 1;
   string                    email      = 2; // delivery hint + the address being verified
-  string                    token      = 3; // plaintext verification token; NEVER persisted
+  string                    token      = 3 [(w17.field) = { sensitive: true }]; // plaintext verification token; NEVER persisted
   google.protobuf.Timestamp expires_at = 4;
 }
 

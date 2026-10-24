@@ -72,7 +72,7 @@ option go_package = "@project;@pkg";
 // scheme prefix, and resolves the bearer token.
 message AuthReq {
   option (w17.contrib.plugin_feature) = "authenticate_turnkey";
-  map<string, string> headers = 1;
+  map<string, string> headers = 1 [(w17.field) = { sensitive: true }];
 }
 
 // AuthResp matches the gateway's auth contract. The router
@@ -182,7 +182,7 @@ message SignInReq {
 message SignInResp {
   option (w17.contrib.plugin_feature) = "sign_in_turnkey";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2;
+  string token   = 2 [(w17.field) = { sensitive: true }];
 
   // two_factor — when a challenge is raised SignIn returns
   // mfa_required=true + a challenge_id INSTEAD of a token; the client
@@ -227,7 +227,7 @@ message SignUpReq {
   // is what spends it, so a signup that fails afterwards must not have burnt the
   // link. Empty is normal — a bound invitation still matches by address, and a
   // deployment with `invite_only` off asks nothing at all.
-  string invite_token = 4 [(w17.field) = { type: CHAR, max_len: 128, null: true }];
+  string invite_token = 4 [(w17.field) = { type: CHAR, max_len: 128, null: true, sensitive: true }];
   // tenant_slug — the URL-based tenant identifier, bound at the
   // gateway from a `{tenant_slug}` path placeholder (PATH_VAR). Field-
   // gated by `tenant_scope`: present only when BOTH sign_up_turnkey
@@ -250,7 +250,7 @@ message SignUpReq {
 message SignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_turnkey";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2;
+  string token   = 2 [(w17.field) = { sensitive: true }];
   // With `sign_up_confirmation` SignUp creates no account yet: user_id and
   // token stay empty, confirmation_required is true, and pending_id is what
   // ConfirmSignUp takes together with the code mailed to the address.
@@ -265,7 +265,7 @@ message SignUpResp {
 message ConfirmSignUpReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string pending_id = 1 [(w17.field) = { type: UUID }];
-  string code       = 2 [(w17.field) = { type: CHAR, max_len: 32 }];
+  string code       = 2 [(w17.field) = { type: CHAR, max_len: 32, sensitive: true }];
   // public_computer — "this is a public computer" (an internet café, a
   // shared PC). The session gets the public lifetime
   // (public_session_ttl_seconds, shorter than the normal one) and the device
@@ -277,7 +277,7 @@ message ConfirmSignUpReq {
 message ConfirmSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2;
+  string token   = 2 [(w17.field) = { sensitive: true }];
   bool   public_computer = 3;
 }
 
@@ -483,7 +483,7 @@ message IssueBotTokenReq {
 message IssueBotTokenResp {
   option (w17.contrib.plugin_feature) = "service_account";
   // The opaque token — returned ONCE, exactly as CreateApiToken does.
-  string token    = 1;
+  string token    = 1 [(w17.field) = { sensitive: true }];
   string token_id = 2 [(w17.field) = { type: UUID }];
   // When it expires; absent = never (the deployment's default is 0).
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
@@ -522,7 +522,7 @@ message CreateApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
   // The opaque token string — returned ONCE at creation; never
   // retrievable again (ListApiTokens omits it).
-  string token    = 1;
+  string token    = 1 [(w17.field) = { sensitive: true }];
   string token_id = 2 [(w17.field) = { type: UUID }];
   // When it expires; absent = never (the deployment's default is 0).
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
@@ -568,7 +568,7 @@ message OAuthAuthorizeURLResp {
 message OAuthCallbackReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string provider = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
-  string code     = 2;
+  string code     = 2 [(w17.field) = { sensitive: true }];
   string state    = 3;
 }
 message OAuthCallbackResp {
@@ -576,7 +576,7 @@ message OAuthCallbackResp {
   // code is single-use, short-lived, and redeemable only at OAuthExchange
   // with the verifier of the authorize step's code_challenge. The callback
   // never carries a session: it is a URL, and a URL can be handed to anyone.
-  string code           = 5;
+  string code           = 5 [(w17.field) = { sensitive: true }];
   string redirect_after = 3;
 
   // user_id, token and device_trust_token moved to OAuthExchangeResp.
@@ -586,15 +586,15 @@ message OAuthCallbackResp {
 
 message OAuthExchangeReq {
   option (w17.contrib.plugin_feature) = "oauth";
-  string code          = 1;
-  string code_verifier = 2;
+  string code          = 1 [(w17.field) = { sensitive: true }];
+  string code_verifier = 2 [(w17.field) = { sensitive: true }];
   // invite_token is the invitation a NEW account registers with — the same
   // token SignUp takes, checked by the same rules (invite_only, a bound
   // invitation's address, an open link spent by its first registration).
   // Ignored when the identity already belongs to an account. It travels
   // only here, in the page's own request, never through a URL or the
   // provider.
-  string invite_token  = 3;
+  string invite_token  = 3 [(w17.field) = { sensitive: true }];
   // public_computer — "this is a public computer" (an internet café, a
   // shared PC). The session gets the public lifetime
   // (public_session_ttl_seconds, shorter than the normal one) and the device
@@ -609,7 +609,7 @@ message OAuthExchangeReq {
 message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2;
+  string token   = 2 [(w17.field) = { sensitive: true }];
   // 3 = device_trust_token (see SignInResp).
   reserved 3;
   reserved "device_trust_token";
@@ -630,15 +630,15 @@ message EnrollTotpReq {
   // switch the victim's 2FA off — the thing DisableTotp's code requirement
   // exists to prevent. A lost phone is: sign in with a recovery code, then
   // enrol with another one.
-  string code = 1;
+  string code = 1 [(w17.field) = { sensitive: true }];
 }
 message EnrollTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   // The base32 secret (shown once, for typing in by hand) + the otpauth://
   // URI an authenticator app scans. The secret is also stored encrypted
   // server-side.
-  string secret      = 1;
-  string otpauth_uri = 2;
+  string secret      = 1 [(w17.field) = { sensitive: true }];
+  string otpauth_uri = 2 [(w17.field) = { sensitive: true }];
   // qr_svg — otpauth_uri as a QR code, a self-contained SVG document
   // (black modules on white, quiet zone included, scales without loss).
   // Render it as-is (an <img> data URI or inline). Generating it here keeps
@@ -648,13 +648,13 @@ message EnrollTotpResp {
 
 message ConfirmTotpReq {
   option (w17.contrib.plugin_feature) = "two_factor";
-  string code = 1;
+  string code = 1 [(w17.field) = { sensitive: true }];
 }
 message ConfirmTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   // Ten one-time recovery codes for when the authenticator is lost, shown
   // ONCE (only their hashes are stored). Confirming replaces any earlier set.
-  repeated string recovery_codes = 1;
+  repeated string recovery_codes = 1 [(w17.field) = { sensitive: true }];
 }
 
 message DisableTotpReq {
@@ -665,7 +665,7 @@ message DisableTotpReq {
   // weaken the account). Ignored when no confirmed authenticator
   // exists (nothing to protect). A recovery code is accepted too (lost
   // phone). Disabling deletes the recovery codes with the authenticator.
-  string code = 1;
+  string code = 1 [(w17.field) = { sensitive: true }];
 }
 message DisableTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -687,11 +687,11 @@ message GetMfaStatusResp {
 // a recovery code), like DisableTotp.
 message GenerateRecoveryCodesReq {
   option (w17.contrib.plugin_feature) = "two_factor";
-  string code = 1;
+  string code = 1 [(w17.field) = { sensitive: true }];
 }
 message GenerateRecoveryCodesResp {
   option (w17.contrib.plugin_feature) = "two_factor";
-  repeated string recovery_codes = 1;
+  repeated string recovery_codes = 1 [(w17.field) = { sensitive: true }];
 }
 
 message VerifyMfaReq {
@@ -699,12 +699,12 @@ message VerifyMfaReq {
   string challenge_id = 1 [(w17.field) = { type: UUID }];
   // The authenticator's current code — each accepted at most once — or,
   // for an account with an authenticator, one of its recovery codes.
-  string code         = 2;
+  string code         = 2 [(w17.field) = { sensitive: true }];
 }
 message VerifyMfaResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2;
+  string token   = 2 [(w17.field) = { sensitive: true }];
   // 3 = device_trust_token (see SignInResp). Passing VerifyMfa still trusts
   // the device the request's key names; nothing is handed back for it.
   reserved 3;
@@ -1024,7 +1024,7 @@ message InviteToOrgResp {
   // ⚠️ Not in `OrgInviteSummary`, deliberately. That summary is what a LIST of an
   // org's outstanding invitations shows, and a secret that appears in a list is a
   // secret readable long after the moment it was handed over.
-  string token = 2;
+  string token = 2 [(w17.field) = { sensitive: true }];
 }
 
 // OrgInviteSummary — what a list of an org's outstanding invitations
@@ -1098,7 +1098,7 @@ message AcceptOrgInviteReq {
   // reads as "your invitation is invalid" rather than "your client is old".
   reserved 1;
   reserved "invite_id";
-  string token = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string token = 2 [(w17.field) = { type: CHAR, max_len: 128, sensitive: true }];
 }
 message AcceptOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -1156,7 +1156,7 @@ message RequestStepUpCodeResp {
 message ConfirmStepUpReq {
   option (w17.contrib.plugin_feature) = "step_up_code";
   // An authenticator code, a recovery code, or the mailed code.
-  string code = 1 [(w17.field) = { type: CHAR, max_len: 32 }];
+  string code = 1 [(w17.field) = { type: CHAR, max_len: 32, sensitive: true }];
 }
 message ConfirmStepUpResp {
   option (w17.contrib.plugin_feature) = "step_up_code";
@@ -1342,23 +1342,23 @@ message DenyOAuthAuthorizationResp {
 message ExchangeOAuthTokenReq {
   option (w17.contrib.plugin_feature) = "oauth_server";
   string grant_type = 1;
-  string code = 2;
+  string code = 2 [(w17.field) = { sensitive: true }];
   string redirect_uri = 3;
-  string code_verifier = 4;
+  string code_verifier = 4 [(w17.field) = { sensitive: true }];
   string client_id = 5;
-  string refresh_token = 6;
+  string refresh_token = 6 [(w17.field) = { sensitive: true }];
   repeated string resources = 7;
   string scope = 8;
   string client_addr = 9;
 }
 message ExchangeOAuthTokenResp {
   option (w17.contrib.plugin_feature) = "oauth_server";
-  string access_token = 1;
+  string access_token = 1 [(w17.field) = { sensitive: true }];
   // "Bearer" (an MCP grant) or "DPoP" (a session grant, bound to the key of
   // the request's proof).
   string token_type = 2;
   int64 expires_in = 3;
-  string refresh_token = 4;
+  string refresh_token = 4 [(w17.field) = { sensitive: true }];
   string scope = 5;
   string oauth_error = 6;
   string oauth_error_description = 7;
@@ -1366,7 +1366,7 @@ message ExchangeOAuthTokenResp {
 
 message RevokeOAuthTokenReq {
   option (w17.contrib.plugin_feature) = "oauth_server";
-  string token = 1;
+  string token = 1 [(w17.field) = { sensitive: true }];
   string token_type_hint = 2;
   string client_id = 3;
   string client_addr = 4;
@@ -2093,7 +2093,7 @@ message RequestPasswordResetResp {
 
 message ResetPasswordReq {
   option (w17.contrib.plugin_feature) = "password_reset";
-  string token        = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string token        = 1 [(w17.field) = { type: CHAR, max_len: 128, sensitive: true }];
   string new_password = 2 [(w17.field) = { type: PASSWORD }];
 }
 message ResetPasswordResp {
@@ -2129,7 +2129,7 @@ message RequestEmailVerificationResp {
 
 message VerifyEmailReq {
   option (w17.contrib.plugin_feature) = "email_verification";
-  string token = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string token = 1 [(w17.field) = { type: CHAR, max_len: 128, sensitive: true }];
 }
 message VerifyEmailResp {
   option (w17.contrib.plugin_feature) = "email_verification";
@@ -2174,7 +2174,7 @@ message CliAuthorizeResp {
   // The single-use authorization code; the console web redirects the
   // browser to redirect_uri?code=<code>, where the CLI's loopback server
   // receives it and redeems it at CliToken.
-  string code = 1;
+  string code = 1 [(w17.field) = { sensitive: true }];
   // Echoed back so the web front-end builds the redirect without re-reading
   // the request.
   string redirect_uri = 2;
@@ -2203,7 +2203,7 @@ message RegisterClientResp {
   // NEW one from RotateClientSecret (same client_id, same callback) rather
   // than being reminded. Same single-delivery contract as a password-reset
   // token.
-  string client_secret = 2;
+  string client_secret = 2 [(w17.field) = { sensitive: true }];
 }
 message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
 message ListClientsResp {
@@ -2227,7 +2227,7 @@ message RotateClientSecretResp {
   option (w17.contrib.plugin_feature) = "cli_login";
   // The new PLAINTEXT, handed out once, like RegisterClientResp.client_secret.
   // The old secret stops working when this commits.
-  string client_secret = 1;
+  string client_secret = 1 [(w17.field) = { sensitive: true }];
 }
 message DeleteClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -2289,9 +2289,9 @@ message RevokeDevicesResp { option (w17.contrib.plugin_feature) = "user_admin"; 
 
 message CliTokenReq {
   option (w17.contrib.plugin_feature) = "cli_login";
-  string code = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string code = 1 [(w17.field) = { type: CHAR, max_len: 128, sensitive: true }];
   // PKCE code_verifier (RFC 7636: 43–128 chars of the unreserved set).
-  string code_verifier = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  string code_verifier = 2 [(w17.field) = { type: CHAR, max_len: 128, sensitive: true }];
   // The same redirect the code was issued for (RFC 6749 §4.1.3). Optional
   // only so a code minted before this binding existed can still be redeemed;
   // when the stored value is present, this must equal it.
@@ -2300,11 +2300,11 @@ message CliTokenReq {
   // client, refused without it. Blank for loopback, which has no registration
   // and authenticates by PKCE alone (RFC 8252) — that is the whole of the
   // public-client shape this flow still offers.
-  string client_secret = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string client_secret = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true, sensitive: true }];
 }
 message CliTokenResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  string token   = 1; // opaque bearer the CLI stores in ~/.w17/auth.yaml
+  string token   = 1 [(w17.field) = { sensitive: true }]; // opaque bearer the CLI stores in ~/.w17/auth.yaml
   string user_id = 2;
 }
 
