@@ -20,6 +20,13 @@ license: "Apache-2.0"
 # anywhere in this plugin: the pool IS the activation. A type enum would have
 # had to enumerate every consumer's workload in the plugin's own proto, which
 # no consumer could extend without forking it.
+#
+# WHERE IT RUNS: the plugin is staged into the domain's STORAGE bundle
+# (`<domain>-storage`). ClusterService — IssueRegistrationCode, CheckWorkers,
+# BanWorkers, … — is served there, and the env below is read there: set
+# client_cert_path / client_key_path on the storage service. The business
+# bundle does not serve it; a call there answers `Unimplemented: unknown
+# service …ClusterService`.
 
 env:
   - name: client_cert_path
@@ -49,7 +56,9 @@ env:
 # project's network, because it is what the workers reach.
 #
 # Build the image from the plugin directory (it shares the plugin's Go module,
-# so the relay and the handlers carry one copy of the contract):
+# so the relay and the handlers carry one copy of the contract). The generated
+# pb is not in a clone (src/gen is never committed), so generate it first:
+#   w17ctl plugin gen-pb cluster
 #   docker build -f cluster/sandboxes/relay/Dockerfile \
 #     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev cluster   (from a clone of github.com/wandering-compiler/plugins)
 #
