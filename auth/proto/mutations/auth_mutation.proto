@@ -121,7 +121,7 @@ message RevokeTokenReq  { string legacy_token = 1; string token_hash = 2; }
 // to the hash, and clears the clear copy. Run by the lookup that found it;
 // a no-op on a row already moved.
 message UpgradeTokenHashReq {
-  string legacy_token = 1;
+  string legacy_token = 1 [(w17.field) = { sensitive: true }];
   string token_hash   = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
 }
 message UpgradeTokenHashResp {}
@@ -445,7 +445,7 @@ message ResetStepUpResp {
 message CreateRecoveryCodeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id   = 1 [(w17.field) = { type: UUID }];
-  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64, sensitive: true }];
 }
 message CreateRecoveryCodeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -465,7 +465,7 @@ message RevokeRecoveryCodesResp {
 message ConsumeRecoveryCodeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id   = 1 [(w17.field) = { type: UUID }];
-  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 64, sensitive: true }];
   // event-only (no w17.field: not persisted, not validated): the key
   // thumbprint of the device that caused it, the event's device_id.
   string thumbprint = 3;
@@ -501,11 +501,11 @@ message RevokeTotpSecretResp {
 message CreateMfaChallengeReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id   = 1 [(w17.field) = { type: UUID }];
-  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
+  string code_hash = 2 [(w17.field) = { type: CHAR, max_len: 255, blank: true, sensitive: true }];
   // event-only (no w17.field → not persisted, not validated):
   bool                      totp_enrolled = 3;
   string                    email         = 4;
-  string                    code          = 5;
+  string                    code          = 5 [(w17.field) = { sensitive: true }];
   google.protobuf.Timestamp expires_at    = 6;
   // The key that signed the sign-in raising the challenge; VerifyMfa must
   // be signed by the same one.
@@ -565,10 +565,10 @@ message CreatePendingSignUpReq {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string email         = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
   string password_hash = 2 [(w17.field) = { type: PASSWORD }];
-  string code_hash     = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string code_hash     = 3 [(w17.field) = { type: CHAR, max_len: 255, sensitive: true }];
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
   // event-only (no w17.field → not persisted, not validated):
-  string code = 5;
+  string code = 5 [(w17.field) = { sensitive: true }];
   string tenant_id = 6 [
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
@@ -589,7 +589,7 @@ message RecordPendingSignUpAttemptReq {
 message RecordPendingSignUpAttemptResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   int64  attempts  = 1;
-  string code_hash = 2;
+  string code_hash = 2 [(w17.field) = { sensitive: true }];
   string email     = 3;
 }
 
@@ -603,7 +603,7 @@ message ClaimPendingSignUpReq {
 message ClaimPendingSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string email         = 1;
-  string password_hash = 2;
+  string password_hash = 2 [(w17.field) = { sensitive: true }];
   string tenant_id     = 3 [(w17.contrib.plugin_feature_field) = "tenant_scope"];
 }
 
@@ -648,7 +648,7 @@ message CreatePasswordResetTokenReq {
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
   // event-only (no w17.field → not persisted, not validated):
   string email = 4;
-  string token = 5;
+  string token = 5 [(w17.field) = { sensitive: true }];
 }
 message CreatePasswordResetTokenResp {
   option (w17.contrib.plugin_feature) = "password_reset";
@@ -762,11 +762,11 @@ message SetStepUpCodeReq {
   option (w17.contrib.plugin_feature) = "step_up_code";
   string token_id  = 1 [(w17.field) = { type: UUID }];
   string user_id   = 2 [(w17.field) = { type: UUID }];
-  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 255, sensitive: true }];
   google.protobuf.Timestamp resend_before = 4;
   // event-only (no w17.field → not persisted, not validated):
   string                    email      = 5;
-  string                    code       = 6;
+  string                    code       = 6 [(w17.field) = { sensitive: true }];
   google.protobuf.Timestamp expires_at = 7;
   string                    thumbprint = 8;
 }
@@ -782,7 +782,7 @@ message ConsumeStepUpCodeReq {
   option (w17.contrib.plugin_feature) = "step_up_code";
   string token_id  = 1 [(w17.field) = { type: UUID }];
   string user_id   = 2 [(w17.field) = { type: UUID }];
-  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string code_hash = 3 [(w17.field) = { type: CHAR, max_len: 255, sensitive: true }];
 }
 message ConsumeStepUpCodeResp {
   option (w17.contrib.plugin_feature) = "step_up_code";
@@ -828,7 +828,7 @@ message CreateEmailVerificationTokenReq {
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
   // event-only:
   string email = 4;
-  string token = 5;
+  string token = 5 [(w17.field) = { sensitive: true }];
 }
 message CreateEmailVerificationTokenResp {
   option (w17.contrib.plugin_feature) = "email_verification";

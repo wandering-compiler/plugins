@@ -68,7 +68,7 @@ message ChargeResp {
   // client_secret — provider-issued token the frontend uses to confirm
   // the payment (e.g. Stripe PaymentIntent client_secret). Not
   // persisted; returned for the create call only.
-  string  client_secret = 2;
+  string  client_secret = 2 [(w17.field) = { sensitive: true }];
 }
 
 // RefundPaymentReq reverses a Payment. amount is a decimal string; empty
@@ -201,7 +201,7 @@ message TopUpCreditReq {
 message TopUpCreditResp {
   option (w17.contrib.plugin_feature) = "prepaid";
   Payment payment       = 1;
-  string  client_secret = 2; // provider token to confirm the charge
+  string  client_secret = 2 [(w17.field) = { sensitive: true }]; // provider token to confirm the charge
 }
 
 // ── usage feature: report / read metered usage ──────────────────────
