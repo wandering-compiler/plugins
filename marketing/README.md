@@ -46,8 +46,13 @@ letters, to be replayed once the account allows them.
   (`TasksBusiness_CreateTask`), on the contact keyed by the user's id
   (`ext_id`), at the request's time, with the record's own properties:
   `w17_status` (or `w17_grpc_code`), `w17_duration_ms`, `w17_api`,
-  `w17_route`, `utm_<key>`, `referrer`, `w17_truncated`. The contact gets
-  `W17_ORG_ID` and the consent attribute (when the record knows it).
+  `w17_route`, `utm_<key>`, `referrer`, `w17_truncated`, and the request's
+  context: `w17_org_id` (the organization it acted in) and `w17_account_type`
+  (the caller's kind of membership there, auth's `membership_kinds`), each
+  only when the project has it. The contact gets the consent attribute (when
+  the record knows it). The organization is never written to the contact: a
+  person may work in two organizations at once, and only the request knows
+  which one it was.
 - **Not**: the request's own fields (yet), the IP address, the user agent,
   anything marked `sensitive`.
 - **Contacts** (`POST /v3/contacts`, upsert by `ext_id`): created on
@@ -56,9 +61,10 @@ letters, to be replayed once the account allows them.
 - **Erasure** (`DELETE /v3/contacts/{id}?identifierType=ext_id`) on
   `UserDeleted`: the contact and its history.
 
-The plugin creates the two contact attributes it writes
-(`W17_MARKETING_CONSENT`, or `BREVO_CONSENT_ATTRIBUTE`; and `W17_ORG_ID`) when it
-starts: Brevo drops an attribute the account does not have, silently.
+The plugin creates the contact attribute it writes (`W17_MARKETING_CONSENT`,
+or `BREVO_CONSENT_ATTRIBUTE`) when it starts: Brevo drops an attribute the
+account does not have, silently. Segment by organization or account type on
+the events' properties.
 
 Consent does not change what is recorded or sent: it is the tool's to read
 before it writes to anyone.

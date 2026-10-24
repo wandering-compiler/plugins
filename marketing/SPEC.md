@@ -33,7 +33,8 @@ stub of the Brevo API.
 | `brevo/erasure` | `UserDeleted` MUST delete the contact and its history; a transient failure MUST be retried, a missing contact counts as deleted. | Security | `TestContacts_FollowTheAccounts`, `TestContacts_RetryOnlyWhatMaySucceed`, `TestDeleteContact_AMissingContactIsDeleted` |
 | `brevo/rate` | Requests MUST leave at most `brevo_rps` per second; a 429 MUST be waited out as `x-sib-ratelimit-reset` says. | Performance | `TestPace_SpacesTheRequests`, `TestDo_WaitsOutARateLimit` |
 | `brevo/contact-write` | A contact MUST be written by its `ext_id` (PUT), and created only when Brevo has none; an address change MUST reach Brevo. | Consistency & concurrency | `TestContacts_FollowTheAccounts`, `TestContacts_ConsentBeforeTheContactCreatesIt`, `TestUpdateContact_ByTheUsersID` |
-| `brevo/attributes` | The consent and organization attributes MUST exist in the account before they are written, created without holding up the bundle's boot. | Failure & configuration | `TestEnsureAttributes`, `TestEnsureAttribute_AnExistingOneIsFine` |
+| `brevo/attributes` | The consent attribute MUST exist in the account before it is written, created without holding up the bundle's boot. | Failure & configuration | `TestEnsureAttributes`, `TestEnsureAttribute_AnExistingOneIsFine` |
+| `brevo/request-context-on-the-event` | The organization a request acted in and the caller's account type there MUST go on that request's event (`w17_org_id`, `w17_account_type`), each only when the record carries it, and MUST NOT be written to the contact, which is the person and not the request. | Consistency & concurrency | `TestEventFor` |
 | `brevo/batch-limits` | A batch MUST hold at most 200 events and 512 KB. | Failure & configuration | `TestConsumeMarketing_SplitsAtTheBatchLimit`, `TestSendEvents_RefusesWhatBrevoWould` |
 
 **Gaps / suspected defects**
@@ -55,9 +56,9 @@ deleted afterwards. What it showed, and what the plugin does about it:
   `PUT /contacts/{ext_id}?identifierType=ext_id` (`EMAIL` among the attributes)
   and creates it by `POST` only when that answers 404 (`brevo/contact-write`).
 - **An attribute the account has not created is dropped silently** — on an
-  upsert and in an event's `contact_properties`. The plugin creates its two
-  (`brevo_consent_attribute`, boolean; `W17_ORG_ID`, text) in the background,
-  retrying until Brevo has them (`brevo/attributes`).
+  upsert and in an event's `contact_properties`. The plugin creates its one
+  (`brevo_consent_attribute`, boolean) in the background, retrying until Brevo
+  has it (`brevo/attributes`). Event properties need no declaration.
 - **Authorised IPs**: an account that lists addresses answers `401
   "unrecognised IP address"` to any other, IPv4 and IPv6 separately. The call
   fails and is kept for a replay (`brevo/transient-is-redelivered`).

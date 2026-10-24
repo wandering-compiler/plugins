@@ -28,9 +28,12 @@ type orgMock struct {
 	listErr   error
 	bySlugErr error
 	ownedErr  error
+
+	listCalls int // ListUserOrgs calls
 }
 
 func (m *orgMock) ListUserOrgs(ctx context.Context, in *pb.ListUserOrgsReq, _ ...grpc.CallOption) (*pb.ListUserOrgsResp, error) {
+	m.listCalls++
 	if m.listErr != nil {
 		return nil, m.listErr
 	}

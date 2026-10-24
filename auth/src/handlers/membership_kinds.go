@@ -42,6 +42,50 @@ var errMembershipNotAdmitted = errors.New("membership_kinds: none of the caller'
 func init() {
 	orgScopeByKind = resolveOrgScopeByKind
 	configChecks = append(configChecks, parseAudienceTable)
+	authRespEnrichers = append(authRespEnrichers, answerMembershipKind)
+}
+
+// answerMembershipKind answers the kind of the caller's membership in the
+// organization the request acts in (AuthResp.membership_kind) — what a
+// project calls the account type, and like the organization it is the
+// request's: the same person may be staff of one organization and a client
+// of another, in two tabs at once. Read once the organization is resolved,
+// whichever way it was (the selector, the sole membership, an OAuth token's
+// organization, an audience's kinds). Empty when the request acts in no
+// organization, or in one the caller only owns (ownership is no membership,
+// so it has no kind).
+func answerMembershipKind(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, resp *pb.AuthResp) error {
+	orgID := resp.GetScopes()["org_id"]
+	if orgID == "" {
+		return nil
+	}
+	all, err := userOrgs(ctx, h, prin.userID)
+	if err != nil {
+		return err
+	}
+	if o := orgByID(all, orgID); o != nil {
+		resp.MembershipKind = o.GetMembershipKind()
+	}
+	return nil
+}
+
+// userOrgs is the caller's memberships, read once per Authenticate (the
+// request's memo): an audience gateway's resolution and the kind answered
+// read the same list.
+func userOrgs(ctx context.Context, h *AuthServiceHandler, userID string) ([]*pb.UserOrg, error) {
+	key := "membership_kinds.user_orgs." + userID
+	memo := requestMemoOf(ctx)
+	if v, ok := memo[key].([]*pb.UserOrg); ok {
+		return v, nil
+	}
+	resp, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
+	if err != nil {
+		return nil, err
+	}
+	if memo != nil {
+		memo[key] = resp.GetOrgs()
+	}
+	return resp.GetOrgs(), nil
 }
 
 // membershipNotAdmitted is the 403 for a caller the audience does not admit.
@@ -53,11 +97,10 @@ func membershipNotAdmitted(ctx context.Context) error {
 // admittedOrgs is the caller's memberships of an admitted kind (every one when
 // kinds is empty), and all of them.
 func admittedOrgs(ctx context.Context, h *AuthServiceHandler, userID string, kinds []string) (admitted, all []*pb.UserOrg, err error) {
-	resp, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
+	all, err = userOrgs(ctx, h, userID)
 	if err != nil {
 		return nil, nil, err
 	}
-	all = resp.GetOrgs()
 	for _, o := range all {
 		if len(kinds) == 0 || slices.Contains(kinds, o.GetMembershipKind()) {
 			admitted = append(admitted, o)

@@ -16,9 +16,10 @@ import (
 // given by somebody else is not the user's.
 
 func init() {
-	authRespEnrich = func(prin *authPrincipal, resp *pb.AuthResp) {
+	authRespEnrichers = append(authRespEnrichers, func(_ context.Context, _ *AuthServiceHandler, prin *authPrincipal, resp *pb.AuthResp) error {
 		resp.MarketingConsent = prin.user.GetMarketingConsent()
-	}
+		return nil
+	})
 }
 
 // GetMarketingConsent answers the caller's consent and when they decided it;

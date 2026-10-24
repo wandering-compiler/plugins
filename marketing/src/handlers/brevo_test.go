@@ -252,13 +252,14 @@ func TestNewSelection_RefusesWhatTheStreamDoesNotRecord(t *testing.T) {
 }
 
 // The event: the method as its name, the user as the contact, the record's
-// own properties, the org and the consent on the contact. Nothing else.
+// own properties with the org and the account type it acted in, the consent
+// on the contact. Nothing else.
 func TestEventFor(t *testing.T) {
 	consent := true
 	meta := &w17pb.RequestEventMeta{
 		Id: []byte{1}, Method: createTask, Route: "/api/v1/tasks", HttpStatus: 201,
 		DurationMicros: 12500, Api: w17pb.RequestApi_REQUEST_API_REST,
-		UserId: "u1", OrgId: "o1", MarketingConsent: proto.Bool(consent), Truncated: true,
+		UserId: "u1", OrgId: "o1", MembershipKind: "client", MarketingConsent: proto.Bool(consent), Truncated: true,
 		Start:  timestamppb.New(time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC)),
 		Client: &w17pb.RequestClient{Ip: "10.0.0.1", UserAgent: "ua", Referrer: "https://x.example", Utm: map[string]string{"source": "news", "camp aign": "q4"}},
 	}
@@ -272,6 +273,7 @@ func TestEventFor(t *testing.T) {
 	want := map[string]any{
 		"w17_api": "rest", "w17_duration_ms": int64(12), "w17_status": int32(201), "w17_route": "/api/v1/tasks",
 		"w17_truncated": true, "utm_source": "news", "utm_camp_aign": "q4", "referrer": "https://x.example",
+		"w17_org_id": "o1", "w17_account_type": "client",
 	}
 	if fmt.Sprint(ev.EventProperties) != fmt.Sprint(want) {
 		t.Errorf("properties = %v\nwant         %v", ev.EventProperties, want)
@@ -281,8 +283,15 @@ func TestEventFor(t *testing.T) {
 			t.Errorf("the IP or user agent reached Brevo: %v", ev)
 		}
 	}
-	if ev.ContactProperties["W17_ORG_ID"] != "o1" || ev.ContactProperties["W17_MARKETING_CONSENT"] != true {
-		t.Errorf("contact = %v", ev.ContactProperties)
+	if fmt.Sprint(ev.ContactProperties) != fmt.Sprint(map[string]any{"W17_MARKETING_CONSENT": true}) {
+		t.Errorf("contact = %v, want the consent alone: the org is the request's, not the person's", ev.ContactProperties)
+	}
+	// A project without organizations or kinds: neither property, not empty
+	// ones.
+	bare := proto.Clone(meta).(*w17pb.RequestEventMeta)
+	bare.OrgId, bare.MembershipKind = "", ""
+	if ev, _ := eventFor(bare, "W17_MARKETING_CONSENT"); ev.EventProperties["w17_org_id"] != nil || ev.EventProperties["w17_account_type"] != nil {
+		t.Errorf("no org, no kind: properties = %v", ev.EventProperties)
 	}
 	meta.MarketingConsent = nil
 	ev, _ = eventFor(meta, "W17_MARKETING_CONSENT")
@@ -339,17 +348,17 @@ func TestContacts_ConsentBeforeTheContactCreatesIt(t *testing.T) {
 	}
 }
 
-// The attributes the plugin writes are created, retried until they are: Brevo
+// The attribute the plugin writes is created, retried until it is: Brevo
 // drops an attribute the account has not created, silently.
 func TestEnsureAttributes(t *testing.T) {
 	f := &fakeBrevo{}
 	stop := tool(t, f, &ledger{}, "all", "", "").ensureAttributes(time.Millisecond)
 	defer stop()
 	deadline := time.Now().Add(2 * time.Second)
-	for len(f.ensuredSoFar()) < 2 && time.Now().Before(deadline) {
+	for len(f.ensuredSoFar()) < 1 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := strings.Join(f.ensuredSoFar(), ","); got != "W17_MARKETING_CONSENT:boolean,W17_ORG_ID:text" {
+	if got := strings.Join(f.ensuredSoFar(), ","); got != "W17_MARKETING_CONSENT:boolean" {
 		t.Errorf("ensured = %v", got)
 	}
 }
