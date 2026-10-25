@@ -916,7 +916,21 @@ message OAuthProvider {
     (w17.db.column) = { index: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
-  string secret = 15 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // the client secret
+  string secret = 15 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // the client secret, or the key it is signed with (team_id)
+
+  // response_mode — how the provider comes back to the callback: empty, by
+  // the query string of a GET; or "form_post", by an HTML form the browser
+  // POSTs (POST /auth/oauth/{name}/callback). Sign in with Apple requires
+  // form_post whenever the scopes ask for the address, which this plugin
+  // needs.
+  string response_mode = 16 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  // team_id + key_id — a provider whose client secret is a JWT signed with a
+  // key it issued (Sign in with Apple). `secret` then holds that key (a
+  // PKCS#8 PEM, ES256), and each token exchange sends a JWT minted from it:
+  // iss team_id, sub client_id, aud the token endpoint's origin, kid key_id,
+  // valid five minutes. Both empty = `secret` is the client secret itself.
+  string team_id = 17 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string key_id  = 18 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
 }
 
 // OAuthIdentity — links a local User to an external IdP subject, behind

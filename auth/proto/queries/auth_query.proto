@@ -2880,7 +2880,10 @@ service AuthQuery {
           "       p.subject_path AS provider.subject_path, "
           "       p.email_path AS provider.email_path, "
           "       p.enabled AS provider.enabled, "
-          "       p.created_at AS provider.created_at "
+          "       p.created_at AS provider.created_at, "
+          "       p.response_mode AS provider.response_mode, "
+          "       p.team_id AS provider.team_id, "
+          "       p.key_id AS provider.key_id "
           "FROM @module.OAuthProvider p WHERE p.name = :name"
       }
     };

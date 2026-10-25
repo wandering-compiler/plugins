@@ -1800,6 +1800,13 @@ service AuthService {
   rpc OAuthCallback(OAuthCallbackReq) returns (OAuthCallbackResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
   }
+  // OAuthCallbackForm is OAuthCallback for a provider that comes back by an
+  // HTML form POST (response_mode form_post — Sign in with Apple): the same
+  // code and state, in the body. Refused for a provider that returns by the
+  // query string. Unauthenticated. Gated oauth.
+  rpc OAuthCallbackForm(OAuthCallbackReq) returns (OAuthCallbackResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+  }
   // OAuthExchange redeems the callback's code with the PKCE verifier and
   // issues the session. Unauthenticated. Gated oauth.
   rpc OAuthExchange(OAuthExchangeReq) returns (OAuthExchangeResp) {

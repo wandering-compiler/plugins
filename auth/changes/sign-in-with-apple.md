@@ -1,0 +1,8 @@
+### Sign in with Apple
+
+Apple is an OIDC provider like the others, with two differences the plugin could not configure until now. With the address in the scopes, Apple comes back by an HTML form POST rather than a GET. Its client secret is a JWT signed with a key Apple issued, valid at most six months, rather than a string.
+
+- `OAuthProvider` (and `UpsertOAuthProviderReq`) gains `response_mode`, `team_id` and `key_id`. `response_mode` is empty (the query string, as before) or `form_post`, which the authorize URL then asks for. With `team_id` and `key_id`, `secret` holds the `.p8` key Apple issued. Each token exchange then sends a client secret minted from it: an ES256 JWT, `iss` team_id, `sub` client_id, `aud` the token endpoint's origin, `kid` key_id, valid five minutes. There is nothing to rotate before Apple's six months run out, and the key itself is never sent. The state, PKCE and nonce stay keyed by the key, so a sign-in started before a mint finishes after it.
+- The new feature `oauth_form_post` publishes `POST /auth/oauth/{provider}/callback` (`OAuthCallbackForm`). It is the same callback with the code and state in the form body, and it answers with the same 302 and login code. It accepts only a `form_post` provider. Without the feature, a `form_post` provider is refused at the authorize step, since nothing would receive its POST.
+- Apple's `email_verified` arrives as the string `"true"`, which was already read as verified. A private-relay address (`…@privaterelay.appleid.com`) is an address like any other.
+- A migration adds the three columns. A provider configured without them behaves as before.

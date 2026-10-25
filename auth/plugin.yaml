@@ -234,10 +234,11 @@ features:
     go_files:
       - handlers/devices.go
   - name: oauth
-    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client secret encrypted) + OAuthIdentity (User↔external-subject link) + OAuthLoginCode tables and the authorize/callback/exchange handlers. The browser that starts a sign-in sends a PKCE challenge; the callback hands it a single-use code, never a session, and only that browser's verifier redeems it (OAuthExchange). Towards the provider the plugin uses PKCE and an OIDC nonce, and checks an id_token's audience, expiry and nonce. Providers are configured at runtime via the generated admin CRUD, or from the project's own code with AuthMutation.UpsertOAuthProvider; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default."
+    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client secret encrypted) + OAuthIdentity (User↔external-subject link) + OAuthLoginCode tables and the authorize/callback/exchange handlers. The browser that starts a sign-in sends a PKCE challenge; the callback hands it a single-use code, never a session, and only that browser's verifier redeems it (OAuthExchange). Towards the provider the plugin uses PKCE and an OIDC nonce, and checks an id_token's audience, expiry and nonce. Providers are configured at runtime via the generated admin CRUD, or from the project's own code with AuthMutation.UpsertOAuthProvider; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. Sign in with Apple is configuration too: response_mode form_post (the provider comes back by a form POST, received with oauth_form_post) and team_id + key_id, with `secret` holding the .p8 key — each token exchange then sends a client secret minted from it (an ES256 JWT, five minutes), so nothing expires after Apple's six months. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default."
     default: false
     go_files:
       - handlers/oauth.go
+      - handlers/oauth_apple.go
     # ⚠️ REQUIRED, and the reason is a takeover rather than a compile error.
     #
     # OAuth auto-links an incoming identity to an existing account with the
@@ -297,6 +298,11 @@ features:
       - handlers/oauth_server.go
       - handlers/oauth_server_token.go
       - handlers/oauth_server_clients.go
+  - name: oauth_form_post
+    description: "Publishes the OAuth callback for a provider that comes back by an HTML form POST (OAuthProvider.response_mode form_post — Sign in with Apple, which requires it whenever the scopes ask for the address): POST /auth/oauth/{provider}/callback (OAuthCallbackForm), the same callback as the GET with the code and state in an application/x-www-form-urlencoded body, answered with the same 302. Without it a form_post provider is refused at the authorize step, since nothing would receive its POST. Off by default: an upgrade adds no route an activation did not ask for."
+    default: false
+    requires:
+      - oauth
   - name: org_members_rest
     description: "Publishes a member's management on the REST preset beside the member list: PUT /auth/orgs/{org}/members/{id}/role (UpdateOrgMembershipRole) and DELETE /auth/orgs/{org}/members/{id} (RemoveOrgMembership), both under the role ceiling — the caller must cover every role the member holds and the one they are given — and in the organization the path names. The member list carries each membership's id for them. Off by default: an upgrade adds no route an activation did not ask for."
     default: false
@@ -655,6 +661,14 @@ presets:
           # now NOTHING read it back. The browser landed on
           # {"token":"ey…"} and the flow ended there.
           - { ref: AuthService.OAuthCallback,     method: GET, path: "/{provider}/callback",  exclude_auth: true, public_limit: failed_only, feature: oauth,
+              browser_redirect: { target_field: "redirect_after", token_field: "code", token_param: "code", fallback: "/" } }
+          # The same callback for a provider that comes back by an HTML
+          # form POST (response_mode form_post — Sign in with Apple, which
+          # requires it whenever the scopes ask for the address). The body
+          # is application/x-www-form-urlencoded (code, state, and on a
+          # first sign-in Apple's `user`, which is not read); the answer is
+          # the same 302 with the login code in the fragment.
+          - { ref: AuthService.OAuthCallbackForm, method: POST, path: "/{provider}/callback", exclude_auth: true, public_limit: failed_only, feature: oauth_form_post,
               browser_redirect: { target_field: "redirect_after", token_field: "code", token_param: "code", fallback: "/" } }
           # Redeems the callback's code with the verifier whose challenge
           # the same browser sent to /authorize, and issues the session.

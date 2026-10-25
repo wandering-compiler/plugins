@@ -69,6 +69,7 @@ It covers plugin version 0.1.0-rc.24.
 | `admin_mfa` | off | `user_admin`, `two_factor` | — |
 | `my_sign_ins` | off | `authenticate_turnkey` | — |
 | `org_members_rest` | off | `org_membership`, `org_invite` | — |
+| `oauth_form_post` | off | `oauth` | — |
 | `client_secret_rotation` | off | `cli_login` | — |
 | `oauth_server` | off | `api_token`, `authenticate_turnkey` | — |
 | `membership_kinds` | off | `org_membership` | — |
@@ -620,9 +621,9 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 **Purpose.** Generic OAuth2/OIDC sign-in as a *consumer* of external identity providers. Providers are administrator-managed rows rather than code. The callback finds or creates the local user, links the external subject, and issues a session.
 
 **Adds.**
-- Tables: `OAuthProvider` (unique `name`; `secret` CRYPTED_SECRET client secret; legacy plaintext `client_secret` migrated on first use; URLs; `scopes`; `subject_path`/`email_path`; `enabled`; `tenant_id` gated on tenant_scope) and `OAuthIdentity` (unique `(provider_id, external_id)`, indexed `user_id`).
+- Tables: `OAuthProvider` (unique `name`; `secret` CRYPTED_SECRET client secret — or, with `team_id` + `key_id`, the PKCS#8 P-256 key a client secret is minted from; legacy plaintext `client_secret` migrated on first use; URLs; `scopes`; `subject_path`/`email_path`; `response_mode` (empty or `form_post`); `team_id`, `key_id`; `enabled`; `tenant_id` gated on tenant_scope) and `OAuthIdentity` (unique `(provider_id, external_id)`, indexed `user_id`).
 - Table `OAuthLoginCode` (`code_hash` unique SHA-256, `code_challenge` = SHA-256 hex of the browser's challenge, `expires_at` = now + 2 min, `consumed_at`).
-- Business RPCs: `OAuthAuthorizeURL` (requires `code_challenge`), `OAuthCallback`, `OAuthExchange`.
+- Business RPCs: `OAuthAuthorizeURL` (requires `code_challenge`), `OAuthCallback`, `OAuthCallbackForm` (the callback of a `form_post` provider; its route is `oauth_form_post`'s), `OAuthExchange`.
 - REST (`/auth/oauth`): `GET /{provider}/authorize` (**public**, browser 302 to the provider), `GET /{provider}/callback` (**public, failed_only**, browser 302 to the site-relative `redirect_after` with a single-use login code in the fragment) and `POST /exchange` (**public, failed_only**: code + verifier → session).
 - Storage RPCs: `GetProviderByName`, `GetOAuthIdentity`; `CreateOAuthIdentity`, `UpsertOAuthProvider`, `MoveOAuthProviderSecret`, `ClearOAuthProviderLegacySecret`, `CreateOAuthLoginCode`, `ConsumeOAuthLoginCode`.
 - Sandbox: a deterministic fake OIDC provider (`sandboxes/fakeidp`).
@@ -658,6 +659,9 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `oauth/outbound-bounded` | Token and userinfo calls MUST time out (15 s) and MUST read at most 1 MiB. | Performance | `TestOAuthHTTPClient_TimesOutAfterFifteenSeconds`, `TestOAuthOutbound_ReadsAtMostOneMiB` (token and userinfo endpoints; exactly 1 MiB parses, 1 MiB + 1 is cut and refused) |
 | `oauth/indexed-lookups` | `OAuthProvider.name` (unique), `OAuthIdentity(provider_id, external_id)` (unique) and `OAuthIdentity.user_id` MUST be indexed. | Performance | none (schema) |
 | `oauth/redirect-base-configured` | The callback URL sent to the provider MUST come from configuration, not from a request header. | Failure & configuration | TestOAuthAuthorizeURL_BuildsRedirect (configured path only); not enforced when `oauth_redirect_base` is empty |
+| `oauth/minted-client-secret` | A provider with `team_id` and `key_id` (Sign in with Apple) MUST send the token endpoint a client secret minted per exchange: an ES256 JWT (`r‖s` signature) with header `kid` = key_id, claims `iss` = team_id, `sub` = client_id, `aud` = the token endpoint's origin, `iat` now and `exp` five minutes later. The stored key MUST NOT be sent. Only one of the two ids, a `secret` that is not a PKCS#8 P-256 PEM, or a token URL without an origin MUST be refused before anything is sent. A provider with neither id MUST send `secret` as it is. | Security | `TestOAuthCallbackForm_SignInWithApple` (verifies the secret with the key's public half), `TestOAuthProvider_AppleMisconfigurations`, `TestOAuthProvider_PlainSecretUnchanged` |
+| `oauth/state-key-survives-minting` | The state, the PKCE verifier towards the provider and the OIDC nonce MUST stay keyed by `secret` (for a minting provider the key, which does not change between mints), never by a minted client secret. | Security | `TestOAuthCallbackForm_SignInWithApple` (a state signed with the key completes) |
+| `oauth/response-mode` | `response_mode` MUST be empty (the query string) or `form_post`, which the authorize URL then asks for. A `form_post` provider MUST be refused at authorize where `oauth_form_post` is off, and only a `form_post` provider MUST be accepted on `OAuthCallbackForm`, before its code is exchanged. | Failure & configuration | `TestOAuthAuthorizeURL_FormPostNeedsItsRoute`, `TestOAuthCallbackForm_RefusesAQueryProvider`, `TestOAuthProvider_AppleMisconfigurations`, `TestOAuthProvider_PlainSecretUnchanged` |
 | `oauth/provider-secret-encrypted` | A provider configured through `UpsertOAuthProvider` MUST store its secret only in the encrypted `secret` column, on creation and on every rewrite, and MUST leave no plaintext `client_secret`. The same request twice MUST leave one row. | Security | `TestUpsertOAuthProvider_WritesTheSecretEncryptedOnBothBranches` (the declaration). **Unit (mock) only:** a live test would upsert twice and read the row back: one row, ciphertext in `secret`, `client_secret` NULL, the secret decrypting to the second value. |
 
 **Gaps / suspected defects**
@@ -1074,6 +1078,18 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | id | invariant | category | proof |
 |---|---|---|---|
 | surface/upgrade-adds-nothing | Against the last release (rc.23), no preset page, page slot, page action or REST/MCP endpoint MAY disappear, and every one added MUST be gated by a feature that release did not have and that is off by default — except an addition the README's upgrade guide names as required (`POST /auth/oauth/exchange`). A slot MAY be rebound to another method of the same request key and response shape. | Failure & configuration | `TestPresetSurface_AnUpgradeRemovesNothingAndAddsOnlyOptIn` |
+
+### oauth_form_post
+
+**Purpose.** The OAuth callback for a provider that comes back by an HTML form POST (`OAuthProvider.response_mode` `form_post` — Sign in with Apple, which requires it whenever the scopes ask for the address): `POST /auth/oauth/{provider}/callback` (`OAuthCallbackForm`), the same callback as the GET with `code` and `state` in an `application/x-www-form-urlencoded` body, answered with the same 302 (a login code in the fragment, never a session).
+
+**Adds.** The endpoint only (the preset's `feature:`). The method stays with `oauth`, whose invariants cover it (`oauth/response-mode`, `oauth/callback-carries-no-session`, `oauth/state-*`). Apple's `user` form field (the name, sent on a first sign-in only) is not read.
+
+**Requires / conflicts / combined files.** Requires `oauth`. No conflicts, no Go files. The gateway must decode a form body into the request (platform: REST body negotiation).
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| oauth_form_post/opt-in | The route MUST be published only where `oauth_form_post` is on (`surface/upgrade-adds-nothing`). | Compatibility | `TestPresetSurface_AnUpgradeRemovesNothingAndAddsOnlyOptIn` |
 
 ### org_members_rest
 

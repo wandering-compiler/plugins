@@ -353,6 +353,12 @@ message UpsertOAuthProviderReq {
     (w17.field) = { type: UUID },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  // How the provider returns and how its client secret is made — see
+  // OAuthProvider.response_mode / team_id / key_id (Sign in with Apple:
+  // form_post, and `secret` is the .p8 key the secret is signed with).
+  string response_mode = 13 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string team_id       = 14 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string key_id        = 15 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
 }
 message UpsertOAuthProviderResp {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -2585,6 +2591,9 @@ service AuthMutation {
           "subject_path = :subject_path, "
           "email_path = :email_path, "
           "enabled = :enabled, "
+          "response_mode = :response_mode, "
+          "team_id = :team_id, "
+          "key_id = :key_id, "
           "?feature(tenant_scope) tenant_id = :tenant_id "
           "ON CONFLICT (name) DO UPDATE SET "
           "display_name = :display_name, "
@@ -2597,7 +2606,10 @@ service AuthMutation {
           "scopes = :scopes, "
           "subject_path = :subject_path, "
           "email_path = :email_path, "
-          "enabled = :enabled "
+          "enabled = :enabled, "
+          "response_mode = :response_mode, "
+          "team_id = :team_id, "
+          "key_id = :key_id "
           "RETURNING id"
       }
     };
