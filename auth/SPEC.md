@@ -865,9 +865,33 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 **Gaps / suspected defects**
 1. Packages are read once per Authenticate in an organization (one indexed query); there is no cache across requests.
-2. A backoffice operator who is a member of exactly one organization is inferred into it and refused the package methods: operators act from accounts that belong to no organization.
+2. A backoffice operator who is a member of exactly one organization is inferred into it and refused the package methods: operators act from accounts that belong to no organization, or the deployment sets `org_from_sole_membership` false.
 
 ---
+
+### org_hosts
+
+**Purpose.** A white-label or co-brand host serves one organization: a request arriving on it, through an audience that takes the tenant from the host (w17/audience.proto `TENANT_SOURCE_HOST`), acts in that organization. The binding lives here because `Authenticate` enforces it.
+
+**Adds**
+- Table `OrgHost` (host, org_id, bound_by/at, ended_by/at, ended_key): one live binding per host; unbinding ends the row; nothing is deleted.
+- Queries `GetOrgOfHost`, `ListOrgHostRows` (live organizations only); mutations `BindOrgHostRow`, `EndOrgHostRow`.
+- Business: `BindOrgHost`, `UnbindOrgHost`, `ListOrgHosts` (realm-wide only; `PUT` / `DELETE /auth/admin/hosts/{host}`, `GET /auth/admin/hosts`), `GetHostOrg` (anyone; `GET /auth/hosts/{host}`, limited per address).
+- Errors `HOSTS_REALM_ONLY` (403), `HOST_TAKEN` (400), `HOST_INVALID` (400); through an audience, `ORG_HOST_CONFLICT` (403) and `ORG_SELECTOR_NOT_ACCEPTED` (403) — see `org_membership/tenant-from`.
+
+**Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/org_hosts.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| org_hosts/realm-only | Hosts MUST be bound, unbound and listed realm-wide only (a call acting inside an organization is refused), and only where the endpoint ACL is on. | Security | `TestBindOrgHost`, `TestBindOrgHostNeedsTheACL` |
+| org_hosts/one-organization | A host bound to one organization MUST NOT be bound to another without unbinding; binding it again to its own changes nothing; a racing second binding lands on the unique index and is told the host is taken. | Security | `TestBindOrgHost`, the `OrgHost` index |
+| org_hosts/host-shape | A host MUST be a lower-case DNS name of two labels or more, without a port, scheme or path, stored as the gateway reports it (lower-case, no trailing dot). | Validation | `TestBindOrgHost` |
+| org_hosts/public-answer | `GetHostOrg` MUST answer `found = false`, never an error, for an unbound host or no host at all. | Privacy | `TestGetHostOrg` |
+| org_hosts/chooses-never-grants | A host MUST only choose among the caller's organizations: the caller still needs a membership there. | Security | `TestResolveOrgScope_TenantFromHost` |
+
+**Gaps / suspected defects**
+1. On MCP the organization is the OAuth grant's, chosen on the consent page; a bound host does not yet preselect it there.
+2. A host is read on every `Authenticate` through an audience that takes the tenant from it (one indexed query); there is no cache across requests beyond the gateway's auth cache, which keys on the host.
 
 ### teams
 
@@ -1086,6 +1110,8 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_membership/selector-validated | A client-sent organization selector (header or path) MUST resolve to an organization only if the caller is a member or its owner. Otherwise authentication MUST fail with a distinct "not a member" refusal. | Security | `TestResolveOrgScope`, `TestResolveOrgScope_NonMemberNonOwnerStillRefused`, `TestOrgNotMember_SaysWhatIsWrong`, `TestResolveOrgScope_HeaderLookupIsCaseInsensitive`, `TestResolveOrgScope_SlugFromHeadersWithoutMetadata` |
 | org_membership/path-header-agree | A request whose `org` field names a different organization from the one authentication resolved MUST be refused. An empty field MUST defer to authentication. | Security | `TestRefuseOtherOrg`, `TestManageMembership_RefusesAnotherOrgInTheRequest`, `TestRefuseOtherOrgDefersWhenNoOrgWasResolved` |
 | org_membership/sole-org-inference-only | With no selector, the active organization MUST be inferred only when the caller belongs to exactly one. With zero or several it MUST stay unset. | Security | `TestResolveOrgScope_SoleOrgInference`, `TestResolveOrgScope_MultipleOrgsStayAmbiguous`, `TestResolveOrgScope_HeaderWinsOverInference`, `TestResolveOrgScope_NoSelectorFallsBackToInference`, `TestResolveOrgScope_SoleOrgInferenceAlsoStampsTheSlug` |
+| org_membership/sole-org-inference-switch | With `org_from_sole_membership` false, a request naming no organization MUST act in none (and the memberships MUST NOT be read for it); through an audience, only `TENANT_SOURCE_DEFAULT` MAY infer. | Security | `TestResolveOrgScope_TenantFromHost` (the switched-off cases), `TestResolveOrgScope_SoleInferenceOffReadsNothing` |
+| org_membership/tenant-from | Through an audience naming `tenant_from`, the sources MUST be tried in order and the first that names an organization decides; a bound host MUST decide over the selector, and a selector naming another organization MUST be refused (`ORG_HOST_CONFLICT`); a selector on an audience whose sources omit `DEFAULT` MUST be refused (`ORG_SELECTOR_NOT_ACCEPTED`); the caller MUST still hold a membership (of an admitted kind) in the organization named. Naming the host without `org_hosts` MUST fail the request. | Security | `TestResolveOrgScope_TenantFromHost` (with and without kinds), `TestResolveOrgScope_HostWithoutOrgHosts` |
 | org_membership/grants-narrowed-to-active-org | With an active organization, grants MUST be limited to realm-wide non-org-scoped roles plus roles assigned in that organization. With none, they MUST be realm-wide roles only. | Security | `TestNarrowGrants_ActiveOrg`, `TestNarrowGrants_NoActiveOrg`. Unit (mock) only for the role selection itself: the `GetUserOrgPermissions` predicate is SQL. A live test must give a user an org-scoped admin role in A and show that acting in B grants nothing from it. |
 | org_membership/intersect-on-roles | A permission MUST survive only if one single role grants it and that role passes both the realm axis and the organization axis. | Security | `TestNarrowGrants_APermissionTwoDifferentRolesGrantDoesNotSurvive`, `TestNarrowGrants_WildcardRoleMustPassTheOrgAxis` |
 | org_membership/admin-plane-realm-only | `AuthenticateAdmin` (the admin `user_lookup`) MUST select no organization, from a header, the context or sole-org inference. Only realm-wide roles survive, and ownership grants nothing. `Authenticate` MUST keep selecting one. | Security | `TestResolveOrgScope_TheAdminPlaneSelectsNoOrganization`, `TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot`, `TestNarrowGrants_NoActiveOrg` |

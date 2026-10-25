@@ -1733,6 +1733,25 @@ message OrgPackageRow {
   google.protobuf.Timestamp enabled_at = 2;
 }
 
+message GetOrgOfHostReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+}
+message OrgHostRow {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host    = 1;
+  string org_id  = 2;
+  string slug    = 3;
+  google.protobuf.Timestamp bound_at = 4;
+}
+message ListOrgHostRowsReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+}
+message ListOrgHostRowsResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  repeated OrgHostRow hosts = 1;
+}
+
 message ListTeamsByOrgReq {
   option (w17.contrib.plugin_feature) = "teams";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -3859,6 +3878,40 @@ service AuthQuery {
           "FROM @module.OrgPackage p "
           "WHERE p.org_id = :org_id AND p.ended_at IS NULL "
           "ORDER BY p.package ASC"
+      }
+    };
+  }
+
+  // GetOrgOfHost — the live organization a host is bound to (org_hosts);
+  // NotFound when the host is unbound or its organization deleted. Read on
+  // every Authenticate through an audience that takes the tenant from the
+  // host.
+  rpc GetOrgOfHost(GetOrgOfHostReq) returns (OrgHostRow) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT h.host AS host, h.org_id AS org_id, o.slug AS slug, h.bound_at AS bound_at "
+          "FROM @module.OrgHost h "
+          "JOIN @module.Organization o ON o.id = h.org_id "
+          "WHERE h.host = :host AND h.ended_at IS NULL AND o.deleted_at IS NULL"
+      }
+    };
+  }
+
+  // ListOrgHostRows — every live binding, by host.
+  rpc ListOrgHostRows(ListOrgHostRowsReq) returns (ListOrgHostRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT h.host AS host, h.org_id AS org_id, o.slug AS slug, h.bound_at AS bound_at "
+          "FROM @module.OrgHost h "
+          "JOIN @module.Organization o ON o.id = h.org_id "
+          "WHERE h.ended_at IS NULL AND o.deleted_at IS NULL "
+          "ORDER BY h.host ASC"
       }
     };
   }

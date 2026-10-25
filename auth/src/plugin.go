@@ -92,9 +92,12 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		PasswordResetTTLSeconds:     cfg.PasswordResetTtlSeconds,
 		EmailVerificationTTLSeconds: cfg.EmailVerificationTtlSeconds,
 
-		InviteOnly:         cfg.InviteOnly,
-		EmailProofRequired: cfg.EmailProofRequired,
-		OrgInviteTTLHours:  cfg.OrgInviteTtlHours,
+		InviteOnly: cfg.InviteOnly,
+		// org_from_sole_membership (org_membership): off = an organization only
+		// ever comes from the request.
+		NoOrgFromSoleMembership: !cfg.OrgFromSoleMembership,
+		EmailProofRequired:      cfg.EmailProofRequired,
+		OrgInviteTTLHours:       cfg.OrgInviteTtlHours,
 
 		SignUpAllowlist:              cfg.SignUpAllowlist,
 		SignUpConfirmationTTLSeconds: cfg.SignUpConfirmationTtlSeconds,

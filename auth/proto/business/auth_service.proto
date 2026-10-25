@@ -1464,6 +1464,52 @@ message OrgPackagesResp {
   option (w17.contrib.plugin_feature) = "org_packages";
   repeated OrgPackageInfo packages = 1;
 }
+// The hosts bound to organizations (org_hosts): the backoffice binds a
+// white-label or co-brand host to the organization it serves — realm-wide,
+// never from inside an organization — and anyone may ask which organization a
+// host serves (a sign-in page on that host renders it before anyone signs in).
+message BindOrgHostReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host   = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+  string org_id = 2 [(w17.field) = { type: UUID }];
+}
+message BindOrgHostResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+}
+message UnbindOrgHostReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+}
+message UnbindOrgHostResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+}
+message ListOrgHostsReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+}
+message ListOrgHostsResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  repeated OrgHostInfo hosts = 1;
+}
+message OrgHostInfo {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host   = 1;
+  string org_id = 2;
+  string slug   = 3;
+  google.protobuf.Timestamp bound_at = 4;
+}
+message GetHostOrgReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+}
+// HostOrgResp — the organization a host serves; found = false (and the rest
+// empty) for a host bound to none.
+message HostOrgResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  bool   found  = 1;
+  string org_id = 2;
+  string slug   = 3;
+}
+
 message OrgPackageInfo {
   option (w17.contrib.plugin_feature) = "org_packages";
   string package = 1;
@@ -2053,6 +2099,20 @@ service AuthService {
   }
   rpc ListMyOrgPackages(ListMyOrgPackagesReq) returns (OrgPackagesResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_packages";
+  }
+
+  // The hosts bound to organizations (handlers/org_hosts.go).
+  rpc BindOrgHost(BindOrgHostReq) returns (BindOrgHostResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+  rpc UnbindOrgHost(UnbindOrgHostReq) returns (UnbindOrgHostResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+  rpc ListOrgHosts(ListOrgHostsReq) returns (ListOrgHostsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+  rpc GetHostOrg(GetHostOrgReq) returns (HostOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
   }
 
   // An organization's teams (handlers/teams.go).

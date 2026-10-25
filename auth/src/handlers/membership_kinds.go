@@ -129,8 +129,9 @@ func orgBySlug(list []*pb.UserOrg, slug string) *pb.UserOrg {
 
 // resolveOrgScopeByKind is resolveOrgScope through a gateway that admits only
 // some kinds (resolveOrgScope calls it only then). The same order — an OAuth
-// token's organization, then the `W17-Org` selector, then the caller's sole
-// organization — over the memberships the audience admits. A membership of
+// token's organization, then what the request names by the audience's tenant
+// sources (chooseOrg), then the caller's sole organization — over the
+// memberships the audience admits. A membership of
 // another kind in the named organization is 403, not "not a member".
 func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
 	admitted, all, err := admittedOrgs(ctx, h, userID, kindsFromHeaders(headers))
@@ -153,11 +154,22 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 		return oauthOrgScope(ctx, h, userID, orgID, headers, scopes, labels)
 	}
 
-	slug := orgSlugFromHeaders(headers)
-	if slug == "" {
-		slug = orgSlugFromContext(ctx)
+	// The organization the request names — by the audience's tenant
+	// sources, or the selector — or the sole admitted one (chooseOrg).
+	pick, err := chooseOrg(ctx, h, headers, func() *pb.UserOrg {
+		if len(admitted) == 1 {
+			return admitted[0]
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	if slug != "" {
+	if o := pick.sole; o != nil {
+		stampOrg(scopes, labels, o.GetOrgId(), o.GetSlug())
+		return nil
+	}
+	if slug := pick.slug; slug != "" {
 		if o := orgBySlug(admitted, slug); o != nil {
 			stampOrg(scopes, labels, o.GetOrgId(), o.GetSlug())
 			return nil
@@ -167,16 +179,12 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 		}
 		return UnauthenticatedOrgNotMember(errOrgNotMember)
 	}
-
-	switch len(admitted) {
-	case 1:
-		stampOrg(scopes, labels, admitted[0].GetOrgId(), admitted[0].GetSlug())
-	case 0:
+	if len(admitted) == 0 {
 		// The audience is for members of an admitted kind, and this caller
 		// is a member of nothing it admits.
 		return membershipNotAdmitted(ctx)
 	}
-	// Several admitted organizations and no selector: ambiguous, as in
+	// Several admitted organizations and none named: ambiguous, as in
 	// resolveOrgScope — no scope, which a scoped model refuses.
 	return nil
 }

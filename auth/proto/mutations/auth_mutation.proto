@@ -2000,6 +2000,26 @@ message EndOrgPackageResp {
   string id = 1;
 }
 
+message BindOrgHostRowReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host     = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+  string org_id   = 2 [(w17.field) = { type: UUID }];
+  string bound_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message BindOrgHostRowResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string id = 1;
+}
+message EndOrgHostRowReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host     = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message EndOrgHostRowResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string id = 1;
+}
+
 // AddTeamMember — a person joins a live team of the organization. A live
 // membership of the same person is refused by the unique index (AlreadyExists).
 message AddTeamMemberReq {
@@ -5285,6 +5305,37 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgPackage SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
           "WHERE org_id = :org_id AND package = :package AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // BindOrgHostRow — a new live binding; a host already bound is refused by
+  // the unique index (the caller checks first).
+  rpc BindOrgHostRow(BindOrgHostRowReq) returns (BindOrgHostRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgHost SET "
+          "host = :host, "
+          "org_id = :org_id, "
+          "bound_by = :bound_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EndOrgHostRow — unbinds the host; nothing is deleted.
+  rpc EndOrgHostRow(EndOrgHostRowReq) returns (EndOrgHostRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgHost SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE host = :host AND ended_at IS NULL "
           "RETURNING id AS id"
       }
     };

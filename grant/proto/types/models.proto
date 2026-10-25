@@ -9,9 +9,9 @@ syntax = "proto3";
 // organization's name and logo. Every version stays: a newer approval
 // supersedes the previous one, nothing is deleted.
 //
-// HostBinding: a co-brand host bound to the organization it presents
-// (`acme.finance.example.com` → acme). The backoffice binds and unbinds;
-// unbinding ends the row.
+// The co-brand hosts an organization is presented on are the auth plugin's
+// (org_hosts): the host decides the organization a request acts in, which
+// Authenticate enforces.
 //
 // Wire identity (`w17.contrib.grant`) derives from the manifest `name`;
 // tables emit as `<registered_as>_<message_lower>`.
@@ -63,22 +63,4 @@ message Envelope {
   // approved_slot — 'approved' on the organization's one approved version,
   // NULL on every other (the unique index above).
   string approved_slot    = 20 [(w17.field) = { type: CHAR, max_len: 8, null: true }];
-}
-
-// HostBinding — a co-brand host and the organization it presents. One live
-// binding per host.
-message HostBinding {
-  option (w17.db.table) = {
-    indexes: [ { unique: true, fields: [{ name: "host" }, { name: "ended_key" }] } ]
-  };
-
-  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  string host       = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string org_id     = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  string created_by = 4 [(w17.field) = { type: UUID, null: true }];
-  google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
-  google.protobuf.Timestamp ended_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
-  string ended_by   = 7 [(w17.field) = { type: UUID, null: true }];
-  // ended_key — '' while live, the row's own id once unbound.
-  string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }

@@ -209,6 +209,16 @@ const (
 	CodePackagesRealmOnly  = "PACKAGES_REALM_ONLY"
 	CodePackageUnknown     = "PACKAGE_UNKNOWN"
 	CodePackageDefault     = "PACKAGE_DEFAULT"
+	// org_hosts: a host call from inside an organization; a host already
+	// bound to another organization; a host that is no DNS name.
+	CodeHostsRealmOnly = "HOSTS_REALM_ONLY"
+	CodeHostTaken      = "HOST_TAKEN"
+	CodeHostInvalid    = "HOST_INVALID"
+	// An audience taking the tenant from the host: a W17-Org selector naming
+	// another organization than the host's, or a selector on an audience
+	// that does not take the tenant from it (its tenant_from omits DEFAULT).
+	CodeOrgHostConflict        = "ORG_HOST_CONFLICT"
+	CodeOrgSelectorNotAccepted = "ORG_SELECTOR_NOT_ACCEPTED"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -403,15 +413,20 @@ const (
 	MsgClientKeySignsIn = "That key belongs to a device you sign in with. Generate a separate key for the program."
 	MsgBotKeyMismatch   = "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
 
-	MsgOAuthRequestGone      = "This sign-in request has expired or was already answered. Start again from the application."
-	MsgOAuthAppUnknown       = "This connected app is not one of yours, or was already disconnected."
-	MsgOAuthOrgRequired      = "Choose one of your organizations for this application."
-	MsgMembershipNotAdmitted = "This part of the service is not open to you: none of your memberships is of a kind it admits."
-	MsgInviteKindNotAllowed  = "You cannot invite someone as this kind of member."
-	MsgPackageAudienceOff    = "Your organization's plan does not include this part of the service."
-	MsgPackagesRealmOnly     = "An organization's plan is changed by the platform, not from inside the organization."
-	MsgPackageUnknown        = "There is no such package."
-	MsgPackageDefault        = "Every organization has this package; it is not given or taken."
+	MsgOAuthRequestGone       = "This sign-in request has expired or was already answered. Start again from the application."
+	MsgOAuthAppUnknown        = "This connected app is not one of yours, or was already disconnected."
+	MsgOAuthOrgRequired       = "Choose one of your organizations for this application."
+	MsgMembershipNotAdmitted  = "This part of the service is not open to you: none of your memberships is of a kind it admits."
+	MsgInviteKindNotAllowed   = "You cannot invite someone as this kind of member."
+	MsgPackageAudienceOff     = "Your organization's plan does not include this part of the service."
+	MsgPackagesRealmOnly      = "An organization's plan is changed by the platform, not from inside the organization."
+	MsgPackageUnknown         = "There is no such package."
+	MsgPackageDefault         = "Every organization has this package; it is not given or taken."
+	MsgHostsRealmOnly         = "Which organization a host serves is set by the platform, not from inside an organization."
+	MsgHostTaken              = "This host already serves another organization."
+	MsgHostInvalid            = "This is not a host name."
+	MsgOrgHostConflict        = "This address belongs to another organization than the one you chose."
+	MsgOrgSelectorNotAccepted = "The organization is taken from the address here, not chosen."
 )
 
 // isUniqueConflict is a write refused by a unique index: storage reports it as

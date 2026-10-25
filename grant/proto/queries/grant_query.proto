@@ -45,19 +45,6 @@ message EnvelopeRowsResp {
   repeated EnvelopeRow envelopes = 1;
 }
 
-message GetHostBindingReq {
-  string host = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
-}
-message HostBindingRow {
-  string host   = 1;
-  string org_id = 2;
-  google.protobuf.Timestamp created_at = 3;
-}
-message ListHostBindingsReq {}
-message HostBindingRowsResp {
-  repeated HostBindingRow bindings = 1;
-}
-
 service GrantQuery {
   // GetApprovedEnvelope — the organization's approved envelope; NotFound
   // when it has none.
@@ -82,17 +69,4 @@ service GrantQuery {
     };
   }
 
-  // GetHostBinding — the organization a co-brand host presents; NotFound
-  // when it is not bound.
-  rpc GetHostBinding(GetHostBindingReq) returns (HostBindingRow) {
-    option (w17.db.method) = {
-      ops: { name: "main", dql: "SELECT b.host AS host, b.org_id AS org_id, b.created_at AS created_at FROM @module.HostBinding b WHERE b.host = :host AND b.ended_at IS NULL" }
-    };
-  }
-
-  rpc ListHostBindings(ListHostBindingsReq) returns (HostBindingRowsResp) {
-    option (w17.db.method) = {
-      ops: { name: "main", dql: "SELECT b.host AS host, b.org_id AS org_id, b.created_at AS created_at FROM @module.HostBinding b WHERE b.ended_at IS NULL ORDER BY b.host ASC" }
-    };
-  }
 }

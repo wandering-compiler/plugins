@@ -238,6 +238,12 @@ type AuthServiceHandler struct {
 	EmailVerificationTTLSeconds int // email_verification_ttl_seconds
 
 	InviteOnly bool // require a pending org invitation to sign up (invite_only)
+	// NoOrgFromSoleMembership turns off acting in the caller's only
+	// organization when a request names none (org_from_sole_membership
+	// false): an organization then comes only from the request — the
+	// selector, the path, the host. Inverted so the zero value is the
+	// setting's default.
+	NoOrgFromSoleMembership bool
 	// EmailProofRequired is the FLOOR an address must reach before
 	// AcceptOrgInvite will admit it: "none", "derived" or "full"
 	// (email_proof_required).
