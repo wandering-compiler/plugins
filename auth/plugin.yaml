@@ -433,6 +433,16 @@ features:
       - org_membership
     go_files:
       - handlers/org_hosts.go
+  - name: org_signup
+    description: "Registration on an organization's own host. Per organization and kind of membership, the backoffice sets whether people may register without an invitation and with which org-scoped role (SetOrgSignUpPolicy / ClearOrgSignUpPolicy / ListOrgSignUpPolicies — PUT / GET /auth/admin/orgs/{org_id}/signup-policies, POST /auth/admin/orgs/{org_id}/signup-policies/clear; realm-wide only, SIGNUP_POLICIES_REALM_ONLY from inside an organization). A registration without an invitation — SignUp, ConfirmSignUp, an OAuth sign-in that creates the account — arriving on a host bound to the organization (org_hosts), through an audience that takes the tenant from the host, of a kind the audience admits: an open policy makes the new account a member of that kind with that role in the same transaction, whatever invite_only says; a closed one refuses it (SIGNUP_NOT_INVITED); with no policy for the kind, invite_only decides as before and the account joins nothing. Two open kinds on one audience are a configuration error (SIGNUP_KIND_AMBIGUOUS), never a guess. An invitation still decides its own organization. GetHostOrg answers the open kinds, so a sign-up page knows whether to show its form. Nothing is deleted. Off by default; a migration adds the table."
+    default: false
+    requires:
+      # The organization comes from the host; the membership and its grant are
+      # org_membership's and rbac's.
+      - org_hosts
+      - rbac
+    go_files:
+      - handlers/org_signup.go
   - name: teams
     description: "An organization groups its members into teams, and a team holds org-scoped roles that every member holds while they are in it: ListOrgTeams / CreateOrgTeam / UpdateOrgTeam / DeleteOrgTeam / AddOrgTeamMember / RemoveOrgTeamMember / SetOrgTeamRoles (GET / POST /auth/orgs/{org}/teams, PUT / DELETE /auth/orgs/{org}/teams/{team_id}, POST /auth/orgs/{org}/teams/{team_id}/members, DELETE /auth/orgs/{org}/teams/{team_id}/members/{user_id}, PUT /auth/orgs/{org}/teams/{team_id}/roles). A team's roles count for a session acting in the team's organization, never realm-wide, in another organization or for an API token. Only a person who is a member of the organization joins a team (a machine account holds its roles directly), and only an org-scoped session-realm role of the organization's catalogue is a team's. The role ceiling holds wherever someone gains or loses a role through a team: giving or taking a team's role, adding or removing a member, deleting the team — and removing someone from the organization asks the caller to cover their team roles and ends their team memberships. A role a team holds is in use (DeleteOrgRole). Nothing is deleted. Off by default; a migration adds the three tables."
     default: false
@@ -549,6 +559,10 @@ go_files_combined:
   # audience admits; the grant calls exist only with oauth_server.
   - features: [oauth_server, membership_kinds]
     files: [handlers/oauth_server_kinds.go]
+  # A registration parked for its code carries the organization an open
+  # registration on the host joins; the fields exist only with both.
+  - features: [sign_up_confirmation, org_signup]
+    files: [handlers/signup_confirm_org.go]
 
 # Preset surfaces this plugin injects into a consuming project's
 # gateway at activation time. On by default when the gating feature
@@ -785,8 +799,11 @@ presets:
       # so the organization is an id in the path and NOT the active one — a
       # call acting inside an organization is refused (PACKAGES_REALM_ONLY).
       - prefix: /auth/admin/orgs
-        description: "What an organization has been given — the backoffice's packages of it."
+        description: "What an organization has been given — the backoffice's packages of it, and who may register into it."
         endpoints:
+          - { ref: AuthService.ListOrgSignUpPolicies, method: GET,  path: "/{org_id}/signup-policies",       feature: org_signup }
+          - { ref: AuthService.SetOrgSignUpPolicy,    method: PUT,  path: "/{org_id}/signup-policies",       feature: org_signup }
+          - { ref: AuthService.ClearOrgSignUpPolicy,  method: POST, path: "/{org_id}/signup-policies/clear", feature: org_signup }
           - { ref: AuthService.ListPackagesOfOrg, method: GET,    path: "/{org_id}/packages",           feature: org_packages }
           - { ref: AuthService.AddOrgPackage,     method: POST,   path: "/{org_id}/packages/{package}", feature: org_packages }
           - { ref: AuthService.RemoveOrgPackage,  method: DELETE, path: "/{org_id}/packages/{package}", feature: org_packages }
@@ -1292,6 +1309,7 @@ msgids:
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Choose at least one permission for the role."
   - "Choose one of your organizations for this application."
+  - "Choose the role people get when they register."
   - "Confirm it is you before creating a token."
   - "Confirm it is you with your authenticator app or the code we email you."
   - "Confirm your email address before accepting this invitation."
@@ -1299,8 +1317,10 @@ msgids:
   - "Give the public key of the program that will use this token."
   - "Give the role a name."
   - "Give the team a name."
+  - "Name the kind of membership this applies to."
   - "Only a member of this organization can join one of its teams."
   - "Permission {permission} is not part of this deployment."
+  - "Registration here is not set up correctly. Contact the organization."
   - "Registration is by invitation only. Ask the organization you are joining to invite you."
   - "Registration is not open for this email address."
   - "Role {role} is not one this organization's teams can hold."
@@ -1330,6 +1350,7 @@ msgids:
   - "This authenticator app is already set up. To get new recovery codes, generate them."
   - "This callback was registered under this client ID and revoked. Register it under a new client ID."
   - "This connected app is not one of yours, or was already disconnected."
+  - "This deployment has no kinds of membership; leave the kind empty."
   - "This device was signed out for good. Sign in again to use it as a new device."
   - "This email address cannot be used. Use another address."
   - "This host already serves another organization."
@@ -1350,6 +1371,7 @@ msgids:
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait 15 minutes and try again."
   - "Which organization a host serves is set by the platform, not from inside an organization."
+  - "Who may register into an organization is set by the platform, not from inside the organization."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
   - "You cannot invite someone as this kind of member."

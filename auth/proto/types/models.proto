@@ -1124,6 +1124,22 @@ message PendingSignUp {
   // account first (SupersedePendingSignUpsForEmail, in the confirming
   // transaction).
   google.protobuf.Timestamp superseded_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  // join_org_id / join_kind / join_role — the organization an open
+  // registration on its host joins (org_signup), decided when the
+  // registration is REQUESTED — when it is known whether it came with an
+  // invitation — and written when it is confirmed. NULL / '' = joins none.
+  string join_org_id = 11 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
+  string join_kind = 12 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
+  string join_role = 13 [
+    (w17.field) = { type: CHAR, max_len: 128, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
 }
 
 // PasswordResetToken — a single-use, time-bounded credential the
@@ -2261,5 +2277,34 @@ message OrgHost {
   string ended_by   = 7 [(w17.field) = { type: UUID, null: true }];
   // ended_key — '' while live, the row's own id once unbound (Role.ended_key).
   string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
+// OrgSignUpPolicy — whether an organization takes people who register
+// without an invitation, per kind of membership, and the role they get
+// (org_signup). A registration arriving on a host bound to the organization
+// (org_hosts), through an audience of that kind, becomes a member at once
+// when the policy is open; a closed one (or none, under invite_only) needs
+// an invitation. One live row per (organization, kind); replacing or
+// clearing it ends the row, and nothing is deleted.
+message OrgSignUpPolicy {
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "org_id" }, { name: "kind" }, { name: "ended_key" }] } ]
+  };
+  option (w17.contrib.plugin_feature) = "org_signup";
+
+  string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id  = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  // kind — the membership kind it is for ('' without membership_kinds).
+  string kind    = 3 [(w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" }];
+  // open — a registration of this kind joins without an invitation.
+  bool   open    = 4;
+  // role — the org-scoped role an open registration is given.
+  string role    = 5 [(w17.field) = { type: CHAR, max_len: 128, blank: true, default_string: "" }];
+  string set_by  = 6 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp set_at   = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by  = 9 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once replaced or cleared.
+  string ended_key = 10 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 

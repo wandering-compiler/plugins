@@ -128,6 +128,15 @@ var pendingSignUpTenant = func(_ context.Context, _ *AuthServiceHandler, _ *pb.S
 	return nil
 }
 
+// pendingSignUpJoin carries the organization an open registration on its
+// host joins (org_signup) on the pending row; claimedSignUpJoin reads it
+// back at confirmation. No-ops without org_signup; handlers/
+// signup_confirm_org.go replaces them, because the fields exist only with
+// both features.
+var pendingSignUpJoin = func(_ *pb.CreatePendingSignUpReq, _ *orgJoin) {}
+
+var claimedSignUpJoin = func(_ *pb.ClaimPendingSignUpResp) *orgJoin { return nil }
+
 // confirmCreateUser creates the account from a claimed registration. The
 // tenant-less create here; handlers/signup_confirm_tenant.go replaces it with
 // one that writes the tenant the registration carried.
@@ -160,7 +169,7 @@ func (h *AuthServiceHandler) signUpConfirmationTTL() time.Duration {
 // "the answer for an existing address must not differ from a new one"); the
 // code reaches only the address's owner, so only they learn it, and they are
 // the one person it is not news to.
-func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb.SignUpReq) (*pb.SignUpResp, error) {
+func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb.SignUpReq, join *orgJoin) (*pb.SignUpResp, error) {
 	email := normalizeEmail(req.GetEmail())
 
 	hashed, err := h.PasswordHash.Hash(req.GetPassword())
@@ -212,6 +221,7 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 		ExpiresAt:    timestamppb.New(time.Now().Add(h.signUpConfirmationTTL())),
 		Code:         code,
 	}
+	pendingSignUpJoin(create, join)
 	if err := pendingSignUpTenant(txCtx, h, req, create); err != nil {
 		return fail(err)
 	}
@@ -336,6 +346,11 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 		return nil, err
 	}
 	if err := signupAssignRoleIDs(txCtx, h, userID, roles); err != nil {
+		return nil, err
+	}
+	// The organization the registration joins, decided when it was
+	// requested (it is known there whether it came with an invitation).
+	if err := joinSignedUpOrg(txCtx, h, userID, claimedSignUpJoin(claimed)); err != nil {
 		return nil, err
 	}
 	if err := markEmailConfirmed(txCtx, h, userID); err != nil {

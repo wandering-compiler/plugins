@@ -55,7 +55,7 @@ var signupCreateUser = func(ctx context.Context, h *AuthServiceHandler, _ *pb.Si
 // pending registration that ConfirmSignUp completes. handlers/signup_confirm.go
 // installs it; it lives here because its signature names pb.SignUpReq, which
 // exists only with `sign_up_turnkey` — the feature this file is staged with.
-var signUpConfirmation func(ctx context.Context, h *AuthServiceHandler, req *pb.SignUpReq) (*pb.SignUpResp, error)
+var signUpConfirmation func(ctx context.Context, h *AuthServiceHandler, req *pb.SignUpReq, join *orgJoin) (*pb.SignUpResp, error)
 
 // SignUp is the canonical register-and-issue-token flow, made ATOMIC via the
 // distributed transaction:
@@ -98,14 +98,16 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 	if err := signUpAllowlistGate(h, normalizeEmail(req.GetEmail())); err != nil {
 		return nil, err
 	}
-	if err := signupInviteGate(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken()); err != nil {
+	// The invitation, or the organization of the host it arrived on (org_signup).
+	join, err := signupGates(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken())
+	if err != nil {
 		return nil, err
 	}
 
 	// `sign_up_confirmation`: park the registration and mail a code instead
 	// of creating the account. After the gates, so they decide for both.
 	if signUpConfirmation != nil {
-		return signUpConfirmation(ctx, h, req)
+		return signUpConfirmation(ctx, h, req, join)
 	}
 
 	// The session this registration issues is bound to the caller's device
@@ -139,7 +141,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 		}
 	}
 
-	resp, err := h.signUpTx(txCtx, req, hashed, roles, thumbprint, attempt)
+	resp, err := h.signUpTx(txCtx, req, hashed, roles, thumbprint, attempt, join)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -159,7 +161,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 // register the device, mint the session token bound to it, and write the
 // attempt's success row. Every storage call uses txCtx so all of them join
 // the one transaction.
-func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles, thumbprint string, attempt *signInAttempt) (*pb.SignUpResp, error) {
+func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles, thumbprint string, attempt *signInAttempt, join *orgJoin) (*pb.SignUpResp, error) {
 	if signupCreateUser == nil {
 		// Neither create path staged — see the seam's declaration. This
 		// is a bundle-composition fault, not something a caller did, so
@@ -183,6 +185,9 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 		return nil, err
 	}
 	if err := signupClaimInvite(txCtx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken()); err != nil {
+		return nil, err
+	}
+	if err := joinSignedUpOrg(txCtx, h, userID, join); err != nil {
 		return nil, err
 	}
 	// A new account's device is new and untrusted: the registration passed

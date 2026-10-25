@@ -652,7 +652,9 @@ func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID,
 	if err := signUpAllowlistGate(h, email); err != nil {
 		return "", err
 	}
-	if err := signupInviteGate(ctx, h, email, inviteToken); err != nil {
+	// The invitation, or the organization of the host it arrived on (org_signup).
+	join, err := signupGates(ctx, h, email, inviteToken)
+	if err != nil {
 		return "", err
 	}
 	randomPw, err := randomToken(32)
@@ -677,6 +679,9 @@ func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID,
 	userID, err := h.createOAuthUserTx(txCtx, email, hash, roles, emailVerified)
 	if err == nil {
 		err = signupClaimInvite(txCtx, h, email, inviteToken)
+	}
+	if err == nil {
+		err = joinSignedUpOrg(txCtx, h, userID, join)
 	}
 	if err == nil {
 		_, err = h.Mutation.CreateOAuthIdentity(txCtx, &pb.CreateOAuthIdentityReq{

@@ -579,6 +579,18 @@ message CreatePendingSignUpReq {
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  string join_org_id = 7 [
+    (w17.field) = { type: UUID, null: true },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
+  string join_kind = 8 [
+    (w17.field) = { type: CHAR, max_len: 32, blank: true },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
+  string join_role = 9 [
+    (w17.field) = { type: CHAR, max_len: 128, blank: true },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
 }
 message CreatePendingSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
@@ -611,6 +623,9 @@ message ClaimPendingSignUpResp {
   string email         = 1;
   string password_hash = 2 [(w17.field) = { blank: true, sensitive: true }];
   string tenant_id     = 3 [(w17.contrib.plugin_feature_field) = "tenant_scope"];
+  string join_org_id   = 4 [(w17.contrib.plugin_feature_field) = "org_signup"];
+  string join_kind     = 5 [(w17.contrib.plugin_feature_field) = "org_signup"];
+  string join_role     = 6 [(w17.contrib.plugin_feature_field) = "org_signup"];
 }
 
 // SupersedePendingSignUpsForEmail ends the other open registrations of an
@@ -2006,6 +2021,29 @@ message EndOrgPackageResp {
   string id = 1;
 }
 
+message SetOrgSignUpPolicyRowReq {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+  string kind   = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  bool   open   = 3;
+  string role   = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string set_by = 5 [(w17.field) = { type: UUID, null: true }];
+}
+message SetOrgSignUpPolicyRowResp {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string id = 1;
+}
+message EndOrgSignUpPolicyRowReq {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string org_id   = 1 [(w17.field) = { type: UUID }];
+  string kind     = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  string ended_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message EndOrgSignUpPolicyRowResp {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string id = 1;
+}
+
 message BindOrgHostRowReq {
   option (w17.contrib.plugin_feature) = "org_hosts";
   string host     = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
@@ -2866,7 +2904,10 @@ service AuthMutation {
           "password_hash = :password_hash, "
           "code_hash = :code_hash, "
           "expires_at = :expires_at, "
-          "?feature(tenant_scope) tenant_id = :tenant_id "
+          "?feature(tenant_scope) tenant_id = :tenant_id, "
+          "?feature(org_signup) join_org_id = :join_org_id, "
+          "?feature(org_signup) join_kind = :join_kind, "
+          "?feature(org_signup) join_role = :join_role "
           "RETURNING id AS pending.id, "
           "          email AS pending.email, "
           "          expires_at AS pending.expires_at, "
@@ -2916,7 +2957,10 @@ service AuthMutation {
           "UPDATE @module.PendingSignUp SET claimed_at = NOW() "
           "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW() "
           "RETURNING email AS email, password_hash AS password_hash, "
-          "?feature(tenant_scope) tenant_id AS tenant_id"
+          "?feature(tenant_scope) tenant_id AS tenant_id, "
+          "?feature(org_signup) join_org_id AS join_org_id, "
+          "?feature(org_signup) join_kind AS join_kind, "
+          "?feature(org_signup) join_role AS join_role"
       }
     };
   }
@@ -5348,6 +5392,41 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgHost SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
           "WHERE host = :host AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // SetOrgSignUpPolicyRow — a new live policy for (organization, kind); the
+  // caller ends the live one first (EndOrgSignUpPolicyRow) in the same
+  // transaction, and the unique index refuses a racing second.
+  rpc SetOrgSignUpPolicyRow(SetOrgSignUpPolicyRowReq) returns (SetOrgSignUpPolicyRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_signup";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgSignUpPolicy SET "
+          "org_id = :org_id, "
+          "kind = :kind, "
+          "open = :open, "
+          "role = :role, "
+          "set_by = :set_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EndOrgSignUpPolicyRow — ends the live policy of (organization, kind);
+  // nothing is deleted.
+  rpc EndOrgSignUpPolicyRow(EndOrgSignUpPolicyRowReq) returns (EndOrgSignUpPolicyRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_signup";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgSignUpPolicy SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE org_id = :org_id AND kind = :kind AND ended_at IS NULL "
           "RETURNING id AS id"
       }
     };
