@@ -922,6 +922,51 @@ var signupInviteGate = func(ctx context.Context, h *AuthServiceHandler, email, i
 	return nil
 }
 
+// orgJoin is an organization a registration joins without an invitation
+// (org_signup): its id, the membership kind and the role.
+type orgJoin struct {
+	orgID, kind, role string
+}
+
+// signupOrgDecide decides, for a registration WITHOUT an invitation, whether
+// the organization of the host it arrived on takes it (org_signup.go): a
+// join when an open policy covers it, a refusal when a closed one does, and
+// nil, nil when no policy speaks — invite_only decides then, as without the
+// feature. nil without org_signup.
+var signupOrgDecide func(ctx context.Context, h *AuthServiceHandler) (*orgJoin, error)
+
+// signupOrgJoin writes the membership and its grant, in the registration's
+// own transaction. Set with signupOrgDecide.
+var signupOrgJoin func(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error
+
+// signupGates is the invitation side of every registration path (SignUp,
+// ConfirmSignUp, an OAuth sign-in that creates the account). An invitation
+// decides its own organization and goes through invite_only as before;
+// without one, the host's organization may take the registration openly,
+// refuse it, or say nothing — and only when it says nothing does
+// invite_only decide. The join it returns is written by the caller inside
+// the account's transaction (joinSignedUpOrg).
+func signupGates(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) (*orgJoin, error) {
+	if inviteToken == "" && signupOrgDecide != nil {
+		join, err := signupOrgDecide(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		if join != nil {
+			return join, nil
+		}
+	}
+	return nil, signupInviteGate(ctx, h, email, inviteToken)
+}
+
+// joinSignedUpOrg writes signupGates' join, if any, for the new account.
+func joinSignedUpOrg(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error {
+	if j == nil || signupOrgJoin == nil {
+		return nil
+	}
+	return signupOrgJoin(txCtx, h, userID, j)
+}
+
 // signupClaimInvite spends an OPEN invitation's link on the registration
 // that came through it (see handlers/org_invite.go). Default (no
 // `org_invite`): nothing to claim. Called inside the registration's unit of

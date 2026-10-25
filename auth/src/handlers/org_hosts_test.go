@@ -21,6 +21,14 @@ type hostMock struct {
 	hosts map[string]*pb.OrgHostRow // live bindings by host
 	bound []string
 	ended []string
+
+	// org_signup (org_signup_test.go)
+	policies    map[string][]*pb.OrgSignUpPolicyRow // org → live policies
+	roles       []*pb.OrgRoleRow                    // the org-role catalogue
+	joined      []string                            // AddOrgMembership: user/org/kind/role
+	granted     []string                            // AssignRoleToUser: user/org/role id
+	policySet   []string                            // SetOrgSignUpPolicyRow: org/kind/open/role
+	policyEnded []string                            // EndOrgSignUpPolicyRow: org/kind
 }
 
 func (m *hostMock) GetOrgOfHost(_ context.Context, in *pb.GetOrgOfHostReq, _ ...grpc.CallOption) (*pb.OrgHostRow, error) {

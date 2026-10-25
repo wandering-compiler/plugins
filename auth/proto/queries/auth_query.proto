@@ -1752,6 +1752,22 @@ message ListOrgHostRowsResp {
   repeated OrgHostRow hosts = 1;
 }
 
+message ListOrgSignUpPolicyRowsReq {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgSignUpPolicyRowsResp {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  repeated OrgSignUpPolicyRow policies = 1;
+}
+message OrgSignUpPolicyRow {
+  option (w17.contrib.plugin_feature) = "org_signup";
+  string kind = 1;
+  bool   open = 2;
+  string role = 3;
+  google.protobuf.Timestamp set_at = 4;
+}
+
 message ListTeamsByOrgReq {
   option (w17.contrib.plugin_feature) = "teams";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -3915,6 +3931,23 @@ service AuthQuery {
           "JOIN @module.Organization o ON o.id = h.org_id "
           "WHERE h.ended_at IS NULL AND o.deleted_at IS NULL "
           "ORDER BY h.host ASC"
+      }
+    };
+  }
+
+  // ListOrgSignUpPolicyRows — an organization's live registration
+  // policies, by kind. Read on a registration without an invitation that
+  // arrives on the organization's host.
+  rpc ListOrgSignUpPolicyRows(ListOrgSignUpPolicyRowsReq) returns (ListOrgSignUpPolicyRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_signup";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.kind AS kind, p.open AS open, p.role AS role, p.set_at AS set_at "
+          "FROM @module.OrgSignUpPolicy p "
+          "WHERE p.org_id = :org_id AND p.ended_at IS NULL "
+          "ORDER BY p.kind ASC"
       }
     };
   }

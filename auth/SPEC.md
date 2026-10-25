@@ -897,6 +897,32 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 1. On MCP the organization is the OAuth grant's, chosen on the consent page; a bound host does not yet preselect it there.
 2. A host is read on every `Authenticate` through an audience that takes the tenant from it (one indexed query); there is no cache across requests beyond the gateway's auth cache, which keys on the host.
 
+### org_signup
+
+**Purpose.** Registration on an organization's own host. An organization takes people who register without an invitation per kind of membership — clients openly, staff by invitation, say — with a role the backoffice chose, so a white-label host is a sign-up page of its own.
+
+**Adds**
+- Table `OrgSignUpPolicy` (org_id, kind, open, role, set_by/at, ended_by/at, ended_key): one live policy per (organization, kind); replacing or clearing ends the row; nothing is deleted.
+- `PendingSignUp.join_org_id / join_kind / join_role` (with `sign_up_confirmation`, `handlers/signup_confirm_org.go`): the join is decided when a registration is requested and written when it is confirmed.
+- Business: `SetOrgSignUpPolicy`, `ClearOrgSignUpPolicy`, `ListOrgSignUpPolicies` (realm-wide only; `PUT` / `GET /auth/admin/orgs/{org_id}/signup-policies`, `POST …/signup-policies/clear`). `GetHostOrg` answers `open_kinds`.
+- Errors `SIGNUP_POLICIES_REALM_ONLY` (403), `SIGNUP_POLICY_INVALID` (400), `SIGNUP_KIND_AMBIGUOUS` (412); a closed policy refuses with `SIGNUP_NOT_INVITED`.
+
+**How a registration decides** (SignUp, ConfirmSignUp, an OAuth sign-in that creates the account). With an invitation, the invitation decides its organization and `invite_only` applies as before. Without one, through an audience gateway that takes the tenant from the host (its context arrives as metadata, SDK `restgw.AudienceContextMiddleware`), on a host bound to an organization: the policies of the kinds the audience admits are read — one open: the account joins with that kind and role in its own transaction, whatever `invite_only` says; none open but some closed: refused; none: `invite_only` decides and the account joins nothing; two open: refused as a configuration error.
+
+**Requires / conflicts / combined files.** Requires `org_hosts` and `rbac`. Go file: `handlers/org_signup.go`; with `sign_up_confirmation`, `handlers/signup_confirm_org.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| org_signup/policy-decides | Without an invitation, on a bound host, an open policy for the audience's kind MUST join the account to the host's organization with that kind and role; a closed one MUST refuse it; no policy MUST leave invite_only to decide; two open kinds MUST be refused, never guessed. | Security | `TestDecideSignUpJoin`, `TestSignUpGates_OpenPolicyAndInvitation` |
+| org_signup/invitation-first | A registration carrying an invitation MUST NOT consult the host. | Correctness | `TestSignUpGates_OpenPolicyAndInvitation` |
+| org_signup/same-transaction | The membership and its org-scoped grant MUST be written in the account's own transaction, the role resolved against the organization's catalogue then. | Consistency & concurrency | `TestWriteSignUpJoin`; live: `examples/grant-proof` |
+| org_signup/decided-at-request | With sign_up_confirmation, the join MUST be decided when the registration is requested and carried on the pending row. | Correctness | `TestPendingSignUpCarriesTheJoin` |
+| org_signup/realm-only | Policies MUST be set, cleared and listed realm-wide only, where the endpoint ACL is on; a policy MUST name a kind exactly when memberships have kinds, and an open one a role the organization can hand out. | Security | `TestSetOrgSignUpPolicy` |
+
+**Gaps / suspected defects**
+1. A policy is per (organization, kind) and set by the backoffice; an organization does not set its own.
+2. Only the host names the organization a registration joins; an organization in the path does not.
+
 ### teams
 
 - **Purpose.** An organization groups its members into teams, and a team holds roles every member holds while they are in it — so roles are given to a group once instead of to each person, and a resource of the project (the console's project access) can be given to a whole team.

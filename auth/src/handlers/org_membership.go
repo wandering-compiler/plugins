@@ -224,6 +224,11 @@ const (
 	tenantFromDefault = "default"
 )
 
+// kindOfJoin stamps a membership's kind on a membership a registration
+// creates without an invitation (org_signup); set by membership_kinds, nil
+// without it — then a membership has no kind.
+var kindOfJoin func(kind string, add *pb.AddOrgMembershipReq)
+
 // orgSlugOfHost is the slug of the organization a host is bound to, "" for
 // none; set by org_hosts (org_hosts.go), nil without it.
 var orgSlugOfHost func(ctx context.Context, h *AuthServiceHandler, host string) (string, error)

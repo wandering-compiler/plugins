@@ -165,5 +165,15 @@ func (h *AuthServiceHandler) GetHostOrg(ctx context.Context, req *pb.GetHostOrgR
 	if err != nil {
 		return nil, err
 	}
-	return &pb.HostOrgResp{Found: true, OrgId: row.GetOrgId(), Slug: row.GetSlug()}, nil
+	resp := &pb.HostOrgResp{Found: true, OrgId: row.GetOrgId(), Slug: row.GetSlug()}
+	if hostOrgAnswer != nil {
+		if err := hostOrgAnswer(ctx, h, resp); err != nil {
+			return nil, err
+		}
+	}
+	return resp, nil
 }
+
+// hostOrgAnswer adds to GetHostOrg's answer what another feature knows
+// about the host's organization — org_signup's open kinds. nil without one.
+var hostOrgAnswer func(ctx context.Context, h *AuthServiceHandler, resp *pb.HostOrgResp) error
