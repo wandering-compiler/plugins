@@ -8,12 +8,13 @@ Apple is an OIDC provider like the others, with two differences the plugin could
 - A migration adds the three columns. A provider configured without them behaves as before.
 - The dev-only `fakeidp` sandbox can play Apple for one client (`APPLE_CLIENT_ID`, with `APPLE_TEAM_ID`, `APPLE_KEY_ID` and `APPLE_PUBLIC_KEY_PEM`). It answers `response_mode=form_post` with the form page, accepts only a client secret that verifies with the key and names the team, the client and itself, and sends `email_verified` as Apple does. Every other client is served as before.
 
-### Optional fields that rc.34 made required are optional again
+### Fields rc.34 made required are as optional as they were in rc.33 (read first)
 
-rc.34 marked credentials `sensitive`, which gave a few plain fields a `(w17.field)`. A field with one and no `blank` is a field the generated code requires, so four optional fields became required:
+rc.34 marked credentials `sensitive`, which gave plain fields a `(w17.field)`. A field with one and no `blank` is a field the generated code requires, so rc.34 changed what a request must carry, not only what a log may show. Seen broken:
 
 - `OAuthExchangeReq.invite_token`: every `POST /auth/oauth/exchange` without an invitation, which is almost all of them, was refused 400 `REQUIRED_VIOLATION invite_token`.
-- `CreateMfaChallengeReq.code` and `MfaChallengeRequested.code`: both are empty for a user with a confirmed authenticator under the built-in TOTP verifier, since no code is generated then. Storage refused the challenge, so such a user could not sign in.
-- `EnrollTotpReq.code`: it is required only to re-enrol, so a first enrolment (`POST /auth/mfa/enroll` with no code) was refused 400.
+- `CreateMfaChallengeReq.code` and `MfaChallengeRequested.code`: empty for a user with a confirmed authenticator under the built-in TOTP verifier, so storage refused the challenge and such a user could not sign in.
+- `EnrollTotpReq.code`: required only to re-enrol, so a first enrolment was refused 400.
+- `GenerateRecoveryCodesReq.code` and `DisableTotpReq.code`: empty after a recent step-up (and for `DisableTotp` without an authenticator), so they were refused 400 before the handler could answer.
 
-All four are `blank` again. The other rc.34 fields are always set by their callers (the `legacy_token` lookups, `UpgradeTokenHashReq`, `CreateEmailVerificationTokenReq.token`) or are validated nowhere on their path: `ExchangeOAuthTokenReq` reaches the business method from the gateway's OAuth endpoint (SDK `lib/oauthas`), not through a REST route, and only REST routes and storage methods carry the generated validation.
+Every field rc.34 turned from a plain field into `(w17.field) = { sensitive: true }` now carries `blank: true` as well: what a request must carry is again exactly what it was in rc.33, and redaction is all `sensitive` changes. Fields that had a `(w17.field)` before rc.34 are unchanged. Upgrade from rc.34 if you use `oauth`, `two_factor` or `step_up`.
