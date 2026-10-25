@@ -183,9 +183,10 @@ jobs:
       plugins_ref: ${{ github.event.pull_request.head.sha || github.sha }}
       # MCP out, on purpose: this branch's auth binds devices, and reference's
       # MCP is no OAuth protected resource, so its MCP scenarios cannot run
-      # here — and w17ctl fails a run that selects them and skips them.
-      # The examples repository's own CI runs them against reference's auth.
-      test_transport: rest,admin
+      # here — and w17ctl fails a run that selects them and skips them. Each
+      # example runs the transports it has minus mcp; the examples
+      # repository's own CI runs reference's MCP against its own auth.
+      skip_transports: mcp
     secrets:
       W17_TOKEN: ${{ secrets.W17_TOKEN }}
       # The key W17_TOKEN is bound to, once the console binds devices.
