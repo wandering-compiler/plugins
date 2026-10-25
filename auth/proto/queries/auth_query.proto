@@ -1768,6 +1768,55 @@ message OrgSignUpPolicyRow {
   google.protobuf.Timestamp set_at = 4;
 }
 
+// The product roles users hold (product_roles) and an organization's plan
+// (product_plans).
+message ListProductRolesOfUserReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string product = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message ProductRoleGrantRowsResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  repeated ProductRoleGrantRow grants = 1;
+}
+message ProductRoleGrantRow {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id         = 1;
+  string user_id    = 2;
+  // org_id — '' for a realm-wide grant.
+  string org_id     = 3;
+  string product    = 4;
+  string role_key   = 5;
+  string granted_by = 6;
+  google.protobuf.Timestamp granted_at = 7;
+}
+message ListOrgProductRoleGrantRowsReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListUserProductRoleGrantRowsReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListRealmProductRoleGrantRowsReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+}
+message ListOrgProductAllowanceRowsReq {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgProductAllowanceRowsResp {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  repeated OrgProductAllowanceRow lines = 1;
+}
+message OrgProductAllowanceRow {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string id       = 1;
+  string product  = 2;
+  string role_key = 3;
+  google.protobuf.Timestamp allowed_at = 4;
+}
+
 message ListTeamsByOrgReq {
   option (w17.contrib.plugin_feature) = "teams";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -3948,6 +3997,77 @@ service AuthQuery {
           "FROM @module.OrgSignUpPolicy p "
           "WHERE p.org_id = :org_id AND p.ended_at IS NULL "
           "ORDER BY p.kind ASC"
+      }
+    };
+  }
+
+  // ListProductRolesOfUser — read on every Authenticate a product's gateway
+  // asks: the user's live grants in the product, in every organization and
+  // realm-wide; the handler keeps the active organization's and the realm's.
+  rpc ListProductRolesOfUser(ListProductRolesOfUserReq) returns (ProductRoleGrantRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT g.id AS id, g.user_id AS user_id, g.org_id AS org_id, g.product AS product, g.role_key AS role_key, g.granted_by AS granted_by, g.granted_at AS granted_at "
+          "FROM @module.ProductRoleGrant g "
+          "WHERE g.user_id = :user_id AND g.product = :product AND g.ended_at IS NULL "
+          "ORDER BY g.role_key ASC"
+      }
+    };
+  }
+  rpc ListOrgProductRoleGrantRows(ListOrgProductRoleGrantRowsReq) returns (ProductRoleGrantRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT g.id AS id, g.user_id AS user_id, g.org_id AS org_id, g.product AS product, g.role_key AS role_key, g.granted_by AS granted_by, g.granted_at AS granted_at "
+          "FROM @module.ProductRoleGrant g "
+          "WHERE g.org_id = :org_id AND g.ended_at IS NULL "
+          "ORDER BY g.user_id ASC, g.product ASC, g.role_key ASC"
+      }
+    };
+  }
+  rpc ListUserProductRoleGrantRows(ListUserProductRoleGrantRowsReq) returns (ProductRoleGrantRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT g.id AS id, g.user_id AS user_id, g.org_id AS org_id, g.product AS product, g.role_key AS role_key, g.granted_by AS granted_by, g.granted_at AS granted_at "
+          "FROM @module.ProductRoleGrant g "
+          "WHERE g.user_id = :user_id AND g.ended_at IS NULL "
+          "ORDER BY g.product ASC, g.role_key ASC"
+      }
+    };
+  }
+  rpc ListRealmProductRoleGrantRows(ListRealmProductRoleGrantRowsReq) returns (ProductRoleGrantRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT g.id AS id, g.user_id AS user_id, g.org_id AS org_id, g.product AS product, g.role_key AS role_key, g.granted_by AS granted_by, g.granted_at AS granted_at "
+          "FROM @module.ProductRoleGrant g "
+          "WHERE g.org_id IS NULL AND g.ended_at IS NULL "
+          "ORDER BY g.user_id ASC, g.product ASC, g.role_key ASC"
+      }
+    };
+  }
+  // ListOrgProductAllowanceRows — an organization's plan: read on every
+  // Authenticate a product's gateway asks in the organization.
+  rpc ListOrgProductAllowanceRows(ListOrgProductAllowanceRowsReq) returns (ListOrgProductAllowanceRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT a.id AS id, a.product AS product, a.role_key AS role_key, a.allowed_at AS allowed_at "
+          "FROM @module.OrgProductAllowance a "
+          "WHERE a.org_id = :org_id AND a.ended_at IS NULL "
+          "ORDER BY a.product ASC, a.role_key ASC"
       }
     };
   }

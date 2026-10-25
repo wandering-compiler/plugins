@@ -226,6 +226,20 @@ const (
 	CodeSignUpPoliciesRealmOnly = "SIGNUP_POLICIES_REALM_ONLY"
 	CodeSignUpPolicyInvalid     = "SIGNUP_POLICY_INVALID"
 	CodeSignUpKindAmbiguous     = "SIGNUP_KIND_AMBIGUOUS"
+	// product_roles: a product or a role the catalogue does not name; an
+	// org-held grant of a role the product holds realm-wide only; a grant
+	// above what the caller holds; one for someone outside the organization;
+	// the backoffice's calls from inside an organization.
+	CodeProductUnknown        = "PRODUCT_UNKNOWN"
+	CodeProductRoleUnknown    = "PRODUCT_ROLE_UNKNOWN"
+	CodeProductRoleRealmHeld  = "PRODUCT_ROLE_REALM_HELD"
+	CodeProductRoleAbove      = "PRODUCT_ROLE_ABOVE_CALLER"
+	CodeProductRoleNotMember  = "PRODUCT_ROLE_NOT_MEMBER"
+	CodeProductRolesRealmOnly = "PRODUCT_ROLES_REALM_ONLY"
+	// product_plans: a grant the organization's plan does not carry; a plan
+	// call from inside an organization.
+	CodeProductRoleNotInPlan  = "PRODUCT_ROLE_NOT_IN_PLAN"
+	CodeProductPlansRealmOnly = "PRODUCT_PLANS_REALM_ONLY"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -439,6 +453,14 @@ const (
 	MsgSignUpPolicyNoKind      = "This deployment has no kinds of membership; leave the kind empty."
 	MsgSignUpPolicyRole        = "Choose the role people get when they register."
 	MsgSignUpKindAmbiguous     = "Registration here is not set up correctly. Contact the organization."
+	MsgProductUnknown          = "There is no such product."
+	MsgProductRoleUnknown      = "The product has no such role."
+	MsgProductRoleRealmHeld    = "This role is held across the whole platform, not in one organization."
+	MsgProductRoleAbove        = "You can only give a role that your own role includes."
+	MsgProductRoleNotMember    = "This person is not a member of the organization."
+	MsgProductRolesRealmOnly   = "This is managed by the platform, not from inside an organization."
+	MsgProductRoleNotInPlan    = "Your organization's plan does not include this role."
+	MsgProductPlansRealmOnly   = "An organization's plan is changed by the platform, not from inside the organization."
 )
 
 // isUniqueConflict is a write refused by a unique index: storage reports it as
