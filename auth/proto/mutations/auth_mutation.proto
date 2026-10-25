@@ -511,7 +511,7 @@ message CreateMfaChallengeReq {
   // event-only (no w17.field → not persisted, not validated):
   bool                      totp_enrolled = 3;
   string                    email         = 4;
-  string                    code          = 5 [(w17.field) = { sensitive: true }];
+  string                    code          = 5 [(w17.field) = { blank: true, sensitive: true }]; // blank for a confirmed authenticator under the built-in verifier
   google.protobuf.Timestamp expires_at    = 6;
   // The key that signed the sign-in raising the challenge; VerifyMfa must
   // be signed by the same one.

@@ -361,7 +361,7 @@ message MfaChallengeRequested {
   string                    challenge_id  = 2;
   bool                      totp_enrolled = 3; // ← the keystone signal
   string                    email         = 4; // delivery hint
-  string                    code          = 5 [(w17.field) = { sensitive: true }]; // plugin-generates mode only; blank otherwise
+  string                    code          = 5 [(w17.field) = { blank: true, sensitive: true }]; // plugin-generates mode only; blank otherwise
   google.protobuf.Timestamp expires_at    = 6;
   // device_id — the key thumbprint of the device that caused it (the value
   // AuthResp.device_id and principal.DeviceID carry): the device that passed

@@ -593,8 +593,11 @@ message OAuthExchangeReq {
   // invitation's address, an open link spent by its first registration).
   // Ignored when the identity already belongs to an account. It travels
   // only here, in the page's own request, never through a URL or the
-  // provider.
-  string invite_token  = 3 [(w17.field) = { sensitive: true }];
+  // provider. Optional — most sign-ins carry none — and said so (`blank`):
+  // marking it sensitive gave it a (w17.field), and a field with one and no
+  // `blank` is one the gateway requires, so from rc.34 every exchange
+  // without an invitation was refused 400.
+  string invite_token  = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true, sensitive: true }];
   // public_computer — "this is a public computer" (an internet café, a
   // shared PC). The session gets the public lifetime
   // (public_session_ttl_seconds, shorter than the normal one) and the device
@@ -629,8 +632,8 @@ message EnrollTotpReq {
   // replaces that authenticator, so without this a hijacked session could
   // switch the victim's 2FA off — the thing DisableTotp's code requirement
   // exists to prevent. A lost phone is: sign in with a recovery code, then
-  // enrol with another one.
-  string code = 1 [(w17.field) = { sensitive: true }];
+  // enrol with another one. A first enrolment carries none (`blank`).
+  string code = 1 [(w17.field) = { blank: true, sensitive: true }];
 }
 message EnrollTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
