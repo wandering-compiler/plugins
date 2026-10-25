@@ -213,6 +213,150 @@ var oauthOrgScope func(ctx context.Context, h *AuthServiceHandler, userID, orgID
 // kinds are staged (membership_kinds.go); nil without them.
 var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
 
+// The keys an audience gateway writes for the tenant's sources and the host
+// (principal.TenantFromKey / principal.HostKey and the TenantFrom* values of
+// the SDK that ships tenant_from), spelled here so the plugin builds against
+// an SDK from before them.
+const (
+	tenantFromHeader  = "x-w17-tenant-from"
+	hostHeader        = "x-w17-host"
+	tenantFromHost    = "host"
+	tenantFromDefault = "default"
+)
+
+// orgSlugOfHost is the slug of the organization a host is bound to, "" for
+// none; set by org_hosts (org_hosts.go), nil without it.
+var orgSlugOfHost func(ctx context.Context, h *AuthServiceHandler, host string) (string, error)
+
+// pickOrg is the organization a request acts in, before the membership check:
+// a slug the request named (selector, path, host), or the caller's sole
+// membership, or neither.
+type pickOrg struct {
+	slug string
+	sole *pb.UserOrg
+}
+
+// chooseOrg decides which organization a request names, by the places its
+// audience takes the tenant from (x-w17-tenant-from, in order; the
+// gateway writes it, never a client). sole is the caller's only membership
+// the request could act in, nil when there is not exactly one; it is asked
+// only where inferring is allowed.
+//
+// Without sources (a gateway with no audience, or one that names none): the
+// W17-Org selector, else the sole membership. With them, the first that
+// names an organization decides:
+//
+//   - host: the organization the request's host is bound to (org_hosts);
+//     an unbound host names nothing. A selector naming another organization
+//     is refused — the host decided, and a request does not get to override
+//     it — never followed.
+//   - default: the selector, else the sole membership.
+//   - invitation: names nothing on a request (it is read where an invitation
+//     is accepted).
+//
+// A selector the audience does not take (its sources omit default, and no
+// host decided) is refused rather than ignored: a client sending one expects
+// it to count. Nothing named leaves the request in no organization.
+//
+// The refusals are notAdmittedError: Authenticate passes them to the caller
+// as the 403 (or, for a deployment error, the FailedPrecondition) they carry
+// instead of folding them into "You are not signed in." — the credential is
+// fine, and signing in again would change nothing.
+func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]string, sole func() *pb.UserOrg) (pickOrg, error) {
+	selector := orgSlugFromHeaders(headers)
+	if selector == "" {
+		selector = orgSlugFromContext(ctx)
+	}
+	inferred := func() (pickOrg, bool) {
+		if h.NoOrgFromSoleMembership {
+			return pickOrg{}, false
+		}
+		if o := sole(); o != nil {
+			return pickOrg{sole: o}, true
+		}
+		return pickOrg{}, false
+	}
+	sources := tenantFromHeaders(headers)
+	if len(sources) == 0 {
+		if selector != "" {
+			return pickOrg{slug: selector}, nil
+		}
+		p, _ := inferred()
+		return p, nil
+	}
+	takesSelector := false
+	for _, src := range sources {
+		switch src {
+		case tenantFromHost:
+			if orgSlugOfHost == nil {
+				return pickOrg{}, &notAdmittedError{err: status.Error(codes.FailedPrecondition,
+					"org_membership: the audience takes the tenant from the host, and org_hosts is not activated")}
+			}
+			host := headerValue(headers, hostHeader)
+			if host == "" {
+				continue
+			}
+			slug, err := orgSlugOfHost(ctx, h, host)
+			if err != nil {
+				return pickOrg{}, err
+			}
+			if slug == "" {
+				continue
+			}
+			if selector != "" && selector != slug {
+				return pickOrg{}, &notAdmittedError{err: refusal(ctx, codes.PermissionDenied,
+					"org_membership: the selector names another organization than the host is bound to",
+					CodeOrgHostConflict, "", MsgOrgHostConflict, nil)}
+			}
+			return pickOrg{slug: slug}, nil
+		case tenantFromDefault:
+			takesSelector = true
+			if selector != "" {
+				return pickOrg{slug: selector}, nil
+			}
+			if p, ok := inferred(); ok {
+				return p, nil
+			}
+		}
+	}
+	if selector != "" && !takesSelector {
+		return pickOrg{}, &notAdmittedError{err: refusal(ctx, codes.PermissionDenied,
+			"org_membership: the audience does not take the organization from a selector",
+			CodeOrgSelectorNotAccepted, "", MsgOrgSelectorNotAccepted, nil)}
+	}
+	return pickOrg{}, nil
+}
+
+// tenantFromHeaders is the audience's tenant sources, in order; nil when its
+// gateway names none.
+func tenantFromHeaders(headers map[string]string) []string {
+	v := headerValue(headers, tenantFromHeader)
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// headerValue reads a gateway-written key out of the AuthReq header map,
+// whatever case a hand-built caller used.
+func headerValue(headers map[string]string, key string) string {
+	if v := headers[key]; v != "" {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
+}
+
 // resolveOrgScope stamps scopes[org_id] for the request's ACTIVE org. The
 // active org is a client-selected slug (w17-org metadata), but it is
 // validated against the principal's membership here, so a caller can only
@@ -221,9 +365,12 @@ var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID strin
 //   - a slug the caller IS a member of → scopes[org_id] = that org's id.
 //   - a slug the caller is NOT a member of → fail closed (Authenticate
 //     returns the same opaque Unauthenticated as every other failure).
-//   - no header, and the caller belongs to exactly ONE org → that org.
+//   - no header, and the caller belongs to exactly ONE org → that org,
+//     unless org_from_sole_membership is off (NoOrgFromSoleMembership).
 //     Unambiguous: there is no second org the request could have meant, and
 //     the value is still read from OrgMembership, never from the request.
+//   - through an audience that names where it takes the tenant from
+//     (tenant_from), that order decides instead — see chooseOrg.
 //   - no header, and the caller belongs to none or to several → no org
 //     scope. Zero orgs has nothing to stamp; several is genuinely ambiguous
 //     and guessing would pick which org a write lands in. Both leave the
@@ -261,12 +408,17 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 		}
 		return oauthOrgScope(ctx, h, userID, orgID, headers, scopes, labels)
 	}
-	slug := orgSlugFromHeaders(headers)
-	if slug == "" {
-		slug = orgSlugFromContext(ctx)
+	pick, err := chooseOrg(ctx, h, headers, func() *pb.UserOrg { return soleOrg(ctx, h, userID) })
+	if err != nil {
+		return err
 	}
+	if pick.sole != nil {
+		stampOrg(scopes, labels, pick.sole.GetOrgId(), pick.sole.GetSlug())
+		return nil
+	}
+	slug := pick.slug
 	if slug == "" {
-		return inferSoleOrgScope(ctx, h, userID, scopes, labels)
+		return nil
 	}
 	// NotFound is "not a member", not a failure: a generated single-row read
 	// reports no row as NotFound. Returned as an error it skipped both the
@@ -339,22 +491,18 @@ func stampOrg(scopes, labels map[string]string, orgID, slug string) {
 	}
 }
 
-// inferSoleOrgScope stamps the caller's org when they have exactly one, and
-// stamps nothing otherwise. A lookup failure is NOT fatal: the caller simply
-// gets no org scope, which a scoped model then refuses — the same outcome as
-// having several orgs, and it keeps an unrelated query error from turning
-// every unscoped request (login, `org list`) into an auth failure.
-func inferSoleOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, scopes, labels map[string]string) error {
+// soleOrg is the caller's organization when they have exactly one, nil
+// otherwise. A lookup failure is NOT fatal: the caller simply gets no org
+// scope, which a scoped model then refuses — the same outcome as having
+// several orgs, and it keeps an unrelated query error from turning every
+// unscoped request (login, `org list`) into an auth failure.
+func soleOrg(ctx context.Context, h *AuthServiceHandler, userID string) *pb.UserOrg {
 	resp, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
 	if err != nil {
 		return nil
 	}
-	orgs := resp.GetOrgs()
-	if len(orgs) != 1 {
-		return nil
-	}
-	if id := orgs[0].GetOrgId(); id != "" {
-		stampOrg(scopes, labels, id, orgs[0].GetSlug())
+	if orgs := resp.GetOrgs(); len(orgs) == 1 && orgs[0].GetOrgId() != "" {
+		return orgs[0]
 	}
 	return nil
 }
@@ -372,7 +520,7 @@ func inferSoleOrgScope(ctx context.Context, h *AuthServiceHandler, userID string
 // stamps outgoing metadata before the handler runs.
 //
 // Nobody noticed because the one deployment with organizations has users
-// who belong to exactly ONE of them, so inferSoleOrgScope quietly supplied
+// who belong to exactly ONE of them, so the sole-org inference quietly supplied
 // the right answer and the selector never had to work.
 //
 // Both gateways lowercase what they collect (REST from HTTP headers, rpc

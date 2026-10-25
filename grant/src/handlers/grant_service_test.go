@@ -21,7 +21,6 @@ type store struct {
 	pb.GrantQueryClient
 	pb.GrantMutationClient
 	envelopes []*pb.EnvelopeRow
-	hosts     map[string]string
 }
 
 func (s *store) InsertEnvelope(_ context.Context, in *pb.InsertEnvelopeReq, _ ...grpc.CallOption) (*pb.InsertEnvelopeResp, error) {
@@ -58,18 +57,6 @@ func (s *store) GetApprovedEnvelope(_ context.Context, in *pb.GetApprovedEnvelop
 	return nil, status.Error(codes.NotFound, "none")
 }
 
-func (s *store) GetHostBinding(_ context.Context, in *pb.GetHostBindingReq, _ ...grpc.CallOption) (*pb.HostBindingRow, error) {
-	if org, ok := s.hosts[in.GetHost()]; ok {
-		return &pb.HostBindingRow{Host: in.GetHost(), OrgId: org}, nil
-	}
-	return nil, status.Error(codes.NotFound, "unbound")
-}
-
-func (s *store) InsertHostBinding(_ context.Context, in *pb.InsertHostBindingReq, _ ...grpc.CallOption) (*pb.InsertHostBindingResp, error) {
-	s.hosts[in.GetHost()] = in.GetOrgId()
-	return &pb.InsertHostBindingResp{}, nil
-}
-
 // as is a request from userID, acting in orgID ("" = realm-wide).
 func as(userID, orgID string) context.Context {
 	env := protowire.AppendTag(nil, 2, protowire.BytesType)
@@ -85,7 +72,7 @@ func as(userID, orgID string) context.Context {
 // a newer approval supersedes the older one; a co-brand host shows its
 // organization's approved envelope and an unbound host shows none.
 func TestEnvelopeLifecycle(t *testing.T) {
-	s := &store{hosts: map[string]string{}}
+	s := &store{}
 	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{
 		"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "GRANT_GRANT_SERVICE_BIND_HOST": 2}}}
 	v1, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme"}})
@@ -112,17 +99,8 @@ func TestEnvelopeLifecycle(t *testing.T) {
 	if s.envelopes[0].GetStatus() != "superseded" {
 		t.Errorf("v1 is %s after v2's approval, want superseded", s.envelopes[0].GetStatus())
 	}
-	if _, err := h.BindHost(as("ops", ""), &pb.BindHostReq{Host: "acme.example.com", OrgId: "org-acme"}); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := h.GetHostEnvelope(context.Background(), &pb.GetHostEnvelopeReq{Host: "Acme.Example.com"}); got.GetFields().GetDisplayName() != "Acme Inc." {
-		t.Errorf("the co-brand host shows %+v", got)
-	}
-	if got, _ := h.GetHostEnvelope(context.Background(), &pb.GetHostEnvelopeReq{Host: "evil.example.com"}); got.GetFound() {
-		t.Error("an unbound host shows an envelope")
-	}
-	if _, err := h.BindHost(as("ops", ""), &pb.BindHostReq{Host: "acme.example.com", OrgId: "org-beta"}); status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("re-binding a bound host to another organization: err = %v", err)
+	if got, _ := h.GetOrgEnvelope(context.Background(), &pb.GetOrgEnvelopeReq{OrgId: "org-acme"}); got.GetFields().GetDisplayName() != "Acme Inc." {
+		t.Errorf("after v2's approval the organization shows %+v", got)
 	}
 }
 

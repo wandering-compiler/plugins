@@ -121,7 +121,7 @@ message RevokeTokenReq  { string legacy_token = 1; string token_hash = 2; }
 // to the hash, and clears the clear copy. Run by the lookup that found it;
 // a no-op on a row already moved.
 message UpgradeTokenHashReq {
-  string legacy_token = 1 [(w17.field) = { sensitive: true }];
+  string legacy_token = 1 [(w17.field) = { blank: true, sensitive: true }];
   string token_hash   = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
 }
 message UpgradeTokenHashResp {}
@@ -353,6 +353,12 @@ message UpsertOAuthProviderReq {
     (w17.field) = { type: UUID },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  // How the provider returns and how its client secret is made — see
+  // OAuthProvider.response_mode / team_id / key_id (Sign in with Apple:
+  // form_post, and `secret` is the .p8 key the secret is signed with).
+  string response_mode = 13 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string team_id       = 14 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string key_id        = 15 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
 }
 message UpsertOAuthProviderResp {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -505,7 +511,7 @@ message CreateMfaChallengeReq {
   // event-only (no w17.field → not persisted, not validated):
   bool                      totp_enrolled = 3;
   string                    email         = 4;
-  string                    code          = 5 [(w17.field) = { sensitive: true }];
+  string                    code          = 5 [(w17.field) = { blank: true, sensitive: true }]; // blank for a confirmed authenticator under the built-in verifier
   google.protobuf.Timestamp expires_at    = 6;
   // The key that signed the sign-in raising the challenge; VerifyMfa must
   // be signed by the same one.
@@ -568,7 +574,7 @@ message CreatePendingSignUpReq {
   string code_hash     = 3 [(w17.field) = { type: CHAR, max_len: 255, sensitive: true }];
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
   // event-only (no w17.field → not persisted, not validated):
-  string code = 5 [(w17.field) = { sensitive: true }];
+  string code = 5 [(w17.field) = { blank: true, sensitive: true }];
   string tenant_id = 6 [
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
@@ -589,7 +595,7 @@ message RecordPendingSignUpAttemptReq {
 message RecordPendingSignUpAttemptResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   int64  attempts  = 1;
-  string code_hash = 2 [(w17.field) = { sensitive: true }];
+  string code_hash = 2 [(w17.field) = { blank: true, sensitive: true }];
   string email     = 3;
 }
 
@@ -603,7 +609,7 @@ message ClaimPendingSignUpReq {
 message ClaimPendingSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string email         = 1;
-  string password_hash = 2 [(w17.field) = { sensitive: true }];
+  string password_hash = 2 [(w17.field) = { blank: true, sensitive: true }];
   string tenant_id     = 3 [(w17.contrib.plugin_feature_field) = "tenant_scope"];
 }
 
@@ -648,7 +654,7 @@ message CreatePasswordResetTokenReq {
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
   // event-only (no w17.field → not persisted, not validated):
   string email = 4;
-  string token = 5 [(w17.field) = { sensitive: true }];
+  string token = 5 [(w17.field) = { blank: true, sensitive: true }];
 }
 message CreatePasswordResetTokenResp {
   option (w17.contrib.plugin_feature) = "password_reset";
@@ -766,7 +772,7 @@ message SetStepUpCodeReq {
   google.protobuf.Timestamp resend_before = 4;
   // event-only (no w17.field → not persisted, not validated):
   string                    email      = 5;
-  string                    code       = 6 [(w17.field) = { sensitive: true }];
+  string                    code       = 6 [(w17.field) = { blank: true, sensitive: true }];
   google.protobuf.Timestamp expires_at = 7;
   string                    thumbprint = 8;
 }
@@ -828,7 +834,7 @@ message CreateEmailVerificationTokenReq {
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
   // event-only:
   string email = 4;
-  string token = 5 [(w17.field) = { sensitive: true }];
+  string token = 5 [(w17.field) = { blank: true, sensitive: true }];
 }
 message CreateEmailVerificationTokenResp {
   option (w17.contrib.plugin_feature) = "email_verification";
@@ -2000,6 +2006,26 @@ message EndOrgPackageResp {
   string id = 1;
 }
 
+message BindOrgHostRowReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host     = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+  string org_id   = 2 [(w17.field) = { type: UUID }];
+  string bound_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message BindOrgHostRowResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string id = 1;
+}
+message EndOrgHostRowReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host     = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true }];
+}
+message EndOrgHostRowResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string id = 1;
+}
+
 // AddTeamMember — a person joins a live team of the organization. A live
 // membership of the same person is refused by the unique index (AlreadyExists).
 message AddTeamMemberReq {
@@ -2565,6 +2591,9 @@ service AuthMutation {
           "subject_path = :subject_path, "
           "email_path = :email_path, "
           "enabled = :enabled, "
+          "response_mode = :response_mode, "
+          "team_id = :team_id, "
+          "key_id = :key_id, "
           "?feature(tenant_scope) tenant_id = :tenant_id "
           "ON CONFLICT (name) DO UPDATE SET "
           "display_name = :display_name, "
@@ -2577,7 +2606,10 @@ service AuthMutation {
           "scopes = :scopes, "
           "subject_path = :subject_path, "
           "email_path = :email_path, "
-          "enabled = :enabled "
+          "enabled = :enabled, "
+          "response_mode = :response_mode, "
+          "team_id = :team_id, "
+          "key_id = :key_id "
           "RETURNING id"
       }
     };
@@ -5285,6 +5317,37 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgPackage SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
           "WHERE org_id = :org_id AND package = :package AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // BindOrgHostRow — a new live binding; a host already bound is refused by
+  // the unique index (the caller checks first).
+  rpc BindOrgHostRow(BindOrgHostRowReq) returns (BindOrgHostRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgHost SET "
+          "host = :host, "
+          "org_id = :org_id, "
+          "bound_by = :bound_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EndOrgHostRow — unbinds the host; nothing is deleted.
+  rpc EndOrgHostRow(EndOrgHostRowReq) returns (EndOrgHostRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgHost SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE host = :host AND ended_at IS NULL "
           "RETURNING id AS id"
       }
     };

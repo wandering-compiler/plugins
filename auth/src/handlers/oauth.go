@@ -126,6 +126,9 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 	if !isPKCEChallenge(req.GetCodeChallenge()) {
 		return nil, oauthRefusal(errOAuthChallengeMissing)
 	}
+	if err := checkResponseMode(p); err != nil {
+		return nil, oauthRefusal(err)
+	}
 	state, nonce, err := signOAuthState(p.GetSecret(), p.GetName(), req.GetRedirectAfter(), challengeDigest(req.GetCodeChallenge()), time.Now())
 	if err != nil {
 		return nil, oauthRefusal(err)
@@ -138,6 +141,9 @@ func (h *AuthServiceHandler) OAuthAuthorizeURL(ctx context.Context, req *pb.OAut
 		q.Set("scope", s)
 	}
 	q.Set("state", state)
+	if m := p.GetResponseMode(); m != "" {
+		q.Set("response_mode", m)
+	}
 	// Towards the provider: PKCE, so an intercepted provider code is useless
 	// without our verifier, and an OIDC nonce, so an id_token minted for
 	// another sign-in is refused. Both derive from the state's nonce under the
@@ -169,6 +175,12 @@ func (h *AuthServiceHandler) OAuthCallback(ctx context.Context, req *pb.OAuthCal
 	if err != nil {
 		return nil, oauthRefusal(err)
 	}
+	return h.oauthCallback(ctx, p, req)
+}
+
+// oauthCallback is the callback for a loaded provider, by either route: the
+// GET (OAuthCallback) or a form POST (OAuthCallbackForm, oauth_apple.go).
+func (h *AuthServiceHandler) oauthCallback(ctx context.Context, p *pb.OAuthProvider, req *pb.OAuthCallbackReq) (*pb.OAuthCallbackResp, error) {
 	st, err := verifyOAuthState(p.GetSecret(), p.GetName(), req.GetState(), time.Now())
 	if err != nil {
 		return nil, oauthRefusal(err)
@@ -386,13 +398,17 @@ func hostFromMeta(ctx context.Context) string {
 // exchangeCode POSTs the authorization code to the provider's token
 // endpoint and returns the decoded token response.
 func (h *AuthServiceHandler) exchangeCode(ctx context.Context, p *pb.OAuthProvider, code, verifier string) (*oauthTokenResp, error) {
+	secret, err := clientSecret(p, time.Now())
+	if err != nil {
+		return nil, err
+	}
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
 	form.Set("code_verifier", verifier)
 	form.Set("redirect_uri", h.oauthRedirectURI(ctx, p.GetName()))
 	form.Set("client_id", p.GetClientId())
-	form.Set("client_secret", p.GetSecret())
+	form.Set("client_secret", secret)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.GetTokenUrl(), strings.NewReader(form.Encode()))
 	if err != nil {

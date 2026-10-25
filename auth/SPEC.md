@@ -69,6 +69,7 @@ It covers plugin version 0.1.0-rc.24.
 | `admin_mfa` | off | `user_admin`, `two_factor` | — |
 | `my_sign_ins` | off | `authenticate_turnkey` | — |
 | `org_members_rest` | off | `org_membership`, `org_invite` | — |
+| `oauth_form_post` | off | `oauth` | — |
 | `client_secret_rotation` | off | `cli_login` | — |
 | `oauth_server` | off | `api_token`, `authenticate_turnkey` | — |
 | `membership_kinds` | off | `org_membership` | — |
@@ -620,9 +621,9 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 **Purpose.** Generic OAuth2/OIDC sign-in as a *consumer* of external identity providers. Providers are administrator-managed rows rather than code. The callback finds or creates the local user, links the external subject, and issues a session.
 
 **Adds.**
-- Tables: `OAuthProvider` (unique `name`; `secret` CRYPTED_SECRET client secret; legacy plaintext `client_secret` migrated on first use; URLs; `scopes`; `subject_path`/`email_path`; `enabled`; `tenant_id` gated on tenant_scope) and `OAuthIdentity` (unique `(provider_id, external_id)`, indexed `user_id`).
+- Tables: `OAuthProvider` (unique `name`; `secret` CRYPTED_SECRET client secret — or, with `team_id` + `key_id`, the PKCS#8 P-256 key a client secret is minted from; legacy plaintext `client_secret` migrated on first use; URLs; `scopes`; `subject_path`/`email_path`; `response_mode` (empty or `form_post`); `team_id`, `key_id`; `enabled`; `tenant_id` gated on tenant_scope) and `OAuthIdentity` (unique `(provider_id, external_id)`, indexed `user_id`).
 - Table `OAuthLoginCode` (`code_hash` unique SHA-256, `code_challenge` = SHA-256 hex of the browser's challenge, `expires_at` = now + 2 min, `consumed_at`).
-- Business RPCs: `OAuthAuthorizeURL` (requires `code_challenge`), `OAuthCallback`, `OAuthExchange`.
+- Business RPCs: `OAuthAuthorizeURL` (requires `code_challenge`), `OAuthCallback`, `OAuthCallbackForm` (the callback of a `form_post` provider; its route is `oauth_form_post`'s), `OAuthExchange`.
 - REST (`/auth/oauth`): `GET /{provider}/authorize` (**public**, browser 302 to the provider), `GET /{provider}/callback` (**public, failed_only**, browser 302 to the site-relative `redirect_after` with a single-use login code in the fragment) and `POST /exchange` (**public, failed_only**: code + verifier → session).
 - Storage RPCs: `GetProviderByName`, `GetOAuthIdentity`; `CreateOAuthIdentity`, `UpsertOAuthProvider`, `MoveOAuthProviderSecret`, `ClearOAuthProviderLegacySecret`, `CreateOAuthLoginCode`, `ConsumeOAuthLoginCode`.
 - Sandbox: a deterministic fake OIDC provider (`sandboxes/fakeidp`).
@@ -658,6 +659,9 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `oauth/outbound-bounded` | Token and userinfo calls MUST time out (15 s) and MUST read at most 1 MiB. | Performance | `TestOAuthHTTPClient_TimesOutAfterFifteenSeconds`, `TestOAuthOutbound_ReadsAtMostOneMiB` (token and userinfo endpoints; exactly 1 MiB parses, 1 MiB + 1 is cut and refused) |
 | `oauth/indexed-lookups` | `OAuthProvider.name` (unique), `OAuthIdentity(provider_id, external_id)` (unique) and `OAuthIdentity.user_id` MUST be indexed. | Performance | none (schema) |
 | `oauth/redirect-base-configured` | The callback URL sent to the provider MUST come from configuration, not from a request header. | Failure & configuration | TestOAuthAuthorizeURL_BuildsRedirect (configured path only); not enforced when `oauth_redirect_base` is empty |
+| `oauth/minted-client-secret` | A provider with `team_id` and `key_id` (Sign in with Apple) MUST send the token endpoint a client secret minted per exchange: an ES256 JWT (`r‖s` signature) with header `kid` = key_id, claims `iss` = team_id, `sub` = client_id, `aud` = the token endpoint's origin, `iat` now and `exp` five minutes later. The stored key MUST NOT be sent. Only one of the two ids, a `secret` that is not a PKCS#8 P-256 PEM, or a token URL without an origin MUST be refused before anything is sent. A provider with neither id MUST send `secret` as it is. | Security | `TestOAuthCallbackForm_SignInWithApple` (verifies the secret with the key's public half), `TestOAuthProvider_AppleMisconfigurations`, `TestOAuthProvider_PlainSecretUnchanged` |
+| `oauth/state-key-survives-minting` | The state, the PKCE verifier towards the provider and the OIDC nonce MUST stay keyed by `secret` (for a minting provider the key, which does not change between mints), never by a minted client secret. | Security | `TestOAuthCallbackForm_SignInWithApple` (a state signed with the key completes) |
+| `oauth/response-mode` | `response_mode` MUST be empty (the query string) or `form_post`, which the authorize URL then asks for. A `form_post` provider MUST be refused at authorize where `oauth_form_post` is off, and only a `form_post` provider MUST be accepted on `OAuthCallbackForm`, before its code is exchanged. | Failure & configuration | `TestOAuthAuthorizeURL_FormPostNeedsItsRoute`, `TestOAuthCallbackForm_RefusesAQueryProvider`, `TestOAuthProvider_AppleMisconfigurations`, `TestOAuthProvider_PlainSecretUnchanged` |
 | `oauth/provider-secret-encrypted` | A provider configured through `UpsertOAuthProvider` MUST store its secret only in the encrypted `secret` column, on creation and on every rewrite, and MUST leave no plaintext `client_secret`. The same request twice MUST leave one row. | Security | `TestUpsertOAuthProvider_WritesTheSecretEncryptedOnBothBranches` (the declaration). **Unit (mock) only:** a live test would upsert twice and read the row back: one row, ciphertext in `secret`, `client_secret` NULL, the secret decrypting to the second value. |
 
 **Gaps / suspected defects**
@@ -865,9 +869,33 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 **Gaps / suspected defects**
 1. Packages are read once per Authenticate in an organization (one indexed query); there is no cache across requests.
-2. A backoffice operator who is a member of exactly one organization is inferred into it and refused the package methods: operators act from accounts that belong to no organization.
+2. A backoffice operator who is a member of exactly one organization is inferred into it and refused the package methods: operators act from accounts that belong to no organization, or the deployment sets `org_from_sole_membership` false.
 
 ---
+
+### org_hosts
+
+**Purpose.** A white-label or co-brand host serves one organization: a request arriving on it, through an audience that takes the tenant from the host (w17/audience.proto `TENANT_SOURCE_HOST`), acts in that organization. The binding lives here because `Authenticate` enforces it.
+
+**Adds**
+- Table `OrgHost` (host, org_id, bound_by/at, ended_by/at, ended_key): one live binding per host; unbinding ends the row; nothing is deleted.
+- Queries `GetOrgOfHost`, `ListOrgHostRows` (live organizations only); mutations `BindOrgHostRow`, `EndOrgHostRow`.
+- Business: `BindOrgHost`, `UnbindOrgHost`, `ListOrgHosts` (realm-wide only; `PUT` / `DELETE /auth/admin/hosts/{host}`, `GET /auth/admin/hosts`), `GetHostOrg` (anyone; `GET /auth/hosts/{host}`, limited per address).
+- Errors `HOSTS_REALM_ONLY` (403), `HOST_TAKEN` (400), `HOST_INVALID` (400); through an audience, `ORG_HOST_CONFLICT` (403) and `ORG_SELECTOR_NOT_ACCEPTED` (403) — see `org_membership/tenant-from`.
+
+**Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/org_hosts.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| org_hosts/realm-only | Hosts MUST be bound, unbound and listed realm-wide only (a call acting inside an organization is refused), and only where the endpoint ACL is on. | Security | `TestBindOrgHost`, `TestBindOrgHostNeedsTheACL` |
+| org_hosts/one-organization | A host bound to one organization MUST NOT be bound to another without unbinding; binding it again to its own changes nothing; a racing second binding lands on the unique index and is told the host is taken. | Security | `TestBindOrgHost`, the `OrgHost` index |
+| org_hosts/host-shape | A host MUST be a lower-case DNS name of two labels or more, without a port, scheme or path, stored as the gateway reports it (lower-case, no trailing dot). | Validation | `TestBindOrgHost` |
+| org_hosts/public-answer | `GetHostOrg` MUST answer `found = false`, never an error, for an unbound host or no host at all. | Privacy | `TestGetHostOrg` |
+| org_hosts/chooses-never-grants | A host MUST only choose among the caller's organizations: the caller still needs a membership there. | Security | `TestResolveOrgScope_TenantFromHost` |
+
+**Gaps / suspected defects**
+1. On MCP the organization is the OAuth grant's, chosen on the consent page; a bound host does not yet preselect it there.
+2. A host is read on every `Authenticate` through an audience that takes the tenant from it (one indexed query); there is no cache across requests beyond the gateway's auth cache, which keys on the host.
 
 ### teams
 
@@ -1051,6 +1079,18 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 |---|---|---|---|
 | surface/upgrade-adds-nothing | Against the last release (rc.23), no preset page, page slot, page action or REST/MCP endpoint MAY disappear, and every one added MUST be gated by a feature that release did not have and that is off by default — except an addition the README's upgrade guide names as required (`POST /auth/oauth/exchange`). A slot MAY be rebound to another method of the same request key and response shape. | Failure & configuration | `TestPresetSurface_AnUpgradeRemovesNothingAndAddsOnlyOptIn` |
 
+### oauth_form_post
+
+**Purpose.** The OAuth callback for a provider that comes back by an HTML form POST (`OAuthProvider.response_mode` `form_post` — Sign in with Apple, which requires it whenever the scopes ask for the address): `POST /auth/oauth/{provider}/callback` (`OAuthCallbackForm`), the same callback as the GET with `code` and `state` in an `application/x-www-form-urlencoded` body, answered with the same 302 (a login code in the fragment, never a session).
+
+**Adds.** The endpoint only (the preset's `feature:`). The method stays with `oauth`, whose invariants cover it (`oauth/response-mode`, `oauth/callback-carries-no-session`, `oauth/state-*`). Apple's `user` form field (the name, sent on a first sign-in only) is not read.
+
+**Requires / conflicts / combined files.** Requires `oauth`. No conflicts, no Go files. The gateway must decode a form body into the request (platform: REST body negotiation).
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| oauth_form_post/opt-in | The route MUST be published only where `oauth_form_post` is on (`surface/upgrade-adds-nothing`). | Compatibility | `TestPresetSurface_AnUpgradeRemovesNothingAndAddsOnlyOptIn` |
+
 ### org_members_rest
 
 **Purpose.** A member's management over the REST preset, beside the member list, for a UI: `PUT /auth/orgs/{org}/members/{id}/role` (`UpdateOrgMembershipRole`) and `DELETE /auth/orgs/{org}/members/{id}` (`RemoveOrgMembership`).
@@ -1086,6 +1126,8 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_membership/selector-validated | A client-sent organization selector (header or path) MUST resolve to an organization only if the caller is a member or its owner. Otherwise authentication MUST fail with a distinct "not a member" refusal. | Security | `TestResolveOrgScope`, `TestResolveOrgScope_NonMemberNonOwnerStillRefused`, `TestOrgNotMember_SaysWhatIsWrong`, `TestResolveOrgScope_HeaderLookupIsCaseInsensitive`, `TestResolveOrgScope_SlugFromHeadersWithoutMetadata` |
 | org_membership/path-header-agree | A request whose `org` field names a different organization from the one authentication resolved MUST be refused. An empty field MUST defer to authentication. | Security | `TestRefuseOtherOrg`, `TestManageMembership_RefusesAnotherOrgInTheRequest`, `TestRefuseOtherOrgDefersWhenNoOrgWasResolved` |
 | org_membership/sole-org-inference-only | With no selector, the active organization MUST be inferred only when the caller belongs to exactly one. With zero or several it MUST stay unset. | Security | `TestResolveOrgScope_SoleOrgInference`, `TestResolveOrgScope_MultipleOrgsStayAmbiguous`, `TestResolveOrgScope_HeaderWinsOverInference`, `TestResolveOrgScope_NoSelectorFallsBackToInference`, `TestResolveOrgScope_SoleOrgInferenceAlsoStampsTheSlug` |
+| org_membership/sole-org-inference-switch | With `org_from_sole_membership` false, a request naming no organization MUST act in none (and the memberships MUST NOT be read for it); through an audience, only `TENANT_SOURCE_DEFAULT` MAY infer. | Security | `TestResolveOrgScope_TenantFromHost` (the switched-off cases), `TestResolveOrgScope_SoleInferenceOffReadsNothing` |
+| org_membership/tenant-from | Through an audience naming `tenant_from`, the sources MUST be tried in order and the first that names an organization decides; a bound host MUST decide over the selector, and a selector naming another organization MUST be refused (`ORG_HOST_CONFLICT`); a selector on an audience whose sources omit `DEFAULT` MUST be refused (`ORG_SELECTOR_NOT_ACCEPTED`); the caller MUST still hold a membership (of an admitted kind) in the organization named. Naming the host without `org_hosts` MUST fail the request. | Security | `TestResolveOrgScope_TenantFromHost` (with and without kinds), `TestResolveOrgScope_HostWithoutOrgHosts` |
 | org_membership/grants-narrowed-to-active-org | With an active organization, grants MUST be limited to realm-wide non-org-scoped roles plus roles assigned in that organization. With none, they MUST be realm-wide roles only. | Security | `TestNarrowGrants_ActiveOrg`, `TestNarrowGrants_NoActiveOrg`. Unit (mock) only for the role selection itself: the `GetUserOrgPermissions` predicate is SQL. A live test must give a user an org-scoped admin role in A and show that acting in B grants nothing from it. |
 | org_membership/intersect-on-roles | A permission MUST survive only if one single role grants it and that role passes both the realm axis and the organization axis. | Security | `TestNarrowGrants_APermissionTwoDifferentRolesGrantDoesNotSurvive`, `TestNarrowGrants_WildcardRoleMustPassTheOrgAxis` |
 | org_membership/admin-plane-realm-only | `AuthenticateAdmin` (the admin `user_lookup`) MUST select no organization, from a header, the context or sole-org inference. Only realm-wide roles survive, and ownership grants nothing. `Authenticate` MUST keep selecting one. | Security | `TestResolveOrgScope_TheAdminPlaneSelectsNoOrganization`, `TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot`, `TestNarrowGrants_NoActiveOrg` |

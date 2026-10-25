@@ -134,6 +134,10 @@ env:
     type: bool
     default: "true"
     description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. Enabling `email_verification` does not close the window: that feature adds a column and two RPCs and blocks nothing — accounts still sign up unverified with it on. Set `invite_requires_verified_email` to close it."
+  - name: org_from_sole_membership
+    type: bool
+    default: "true"
+    description: "Whether a request that names no organization acts in the caller's only one (org_membership). Default TRUE, today's behaviour: on an install where everyone belongs to one organization, every request but the first would otherwise need the W17-Org selector. false = an organization is only ever taken from the request — the selector, the organization in the path, or the host (org_hosts) — and a request naming none acts in no organization, which a scoped read refuses. Through an audience gateway it applies to TENANT_SOURCE_DEFAULT (w17/audience.proto); an audience whose tenant_from omits DEFAULT never infers."
   - name: email_proof_required
     type: string
     default: "none"
@@ -230,10 +234,11 @@ features:
     go_files:
       - handlers/devices.go
   - name: oauth
-    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client secret encrypted) + OAuthIdentity (User↔external-subject link) + OAuthLoginCode tables and the authorize/callback/exchange handlers. The browser that starts a sign-in sends a PKCE challenge; the callback hands it a single-use code, never a session, and only that browser's verifier redeems it (OAuthExchange). Towards the provider the plugin uses PKCE and an OIDC nonce, and checks an id_token's audience, expiry and nonce. Providers are configured at runtime via the generated admin CRUD, or from the project's own code with AuthMutation.UpsertOAuthProvider; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default."
+    description: "Generic OAuth2 / OIDC sign-in. Adds OAuthProvider (admin-managed server configs, client secret encrypted) + OAuthIdentity (User↔external-subject link) + OAuthLoginCode tables and the authorize/callback/exchange handlers. The browser that starts a sign-in sends a PKCE challenge; the callback hands it a single-use code, never a session, and only that browser's verifier redeems it (OAuthExchange). Towards the provider the plugin uses PKCE and an OIDC nonce, and checks an id_token's audience, expiry and nonce. Providers are configured at runtime via the generated admin CRUD, or from the project's own code with AuthMutation.UpsertOAuthProvider; non-OIDC providers (GitHub) are handled by per-provider userinfo_url + subject_path/email_path mapping columns, not code. Sign in with Apple is configuration too: response_mode form_post (the provider comes back by a form POST, received with oauth_form_post) and team_id + key_id, with `secret` holding the .p8 key — each token exchange then sends a client secret minted from it (an ES256 JWT, five minutes), so nothing expires after Apple's six months. OAuth login bypasses plugin 2FA by default (the IdP is the second factor). Off by default."
     default: false
     go_files:
       - handlers/oauth.go
+      - handlers/oauth_apple.go
     # ⚠️ REQUIRED, and the reason is a takeover rather than a compile error.
     #
     # OAuth auto-links an incoming identity to an existing account with the
@@ -293,6 +298,11 @@ features:
       - handlers/oauth_server.go
       - handlers/oauth_server_token.go
       - handlers/oauth_server_clients.go
+  - name: oauth_form_post
+    description: "Publishes the OAuth callback for a provider that comes back by an HTML form POST (OAuthProvider.response_mode form_post — Sign in with Apple, which requires it whenever the scopes ask for the address): POST /auth/oauth/{provider}/callback (OAuthCallbackForm), the same callback as the GET with the code and state in an application/x-www-form-urlencoded body, answered with the same 302. Without it a form_post provider is refused at the authorize step, since nothing would receive its POST. Off by default: an upgrade adds no route an activation did not ask for."
+    default: false
+    requires:
+      - oauth
   - name: org_members_rest
     description: "Publishes a member's management on the REST preset beside the member list: PUT /auth/orgs/{org}/members/{id}/role (UpdateOrgMembershipRole) and DELETE /auth/orgs/{org}/members/{id} (RemoveOrgMembership), both under the role ceiling — the caller must cover every role the member holds and the one they are given — and in the organization the path names. The member list carries each membership's id for them. Off by default: an upgrade adds no route an activation did not ask for."
     default: false
@@ -415,6 +425,14 @@ features:
       - org_membership
     go_files:
       - handlers/org_packages.go
+  - name: org_hosts
+    description: "A host (white-label or co-brand) bound to the organization it serves. The backoffice binds and unbinds hosts realm-wide (BindOrgHost / UnbindOrgHost / ListOrgHosts — PUT / DELETE /auth/admin/hosts/{host}, GET /auth/admin/hosts; one live organization per host, a call acting inside an organization refused with HOSTS_REALM_ONLY), and anyone may ask which organization a host serves (GetHostOrg, GET /auth/hosts/{host}, unauthenticated and limited per address) — a sign-in page on the host renders it before anyone signs in. An audience that takes the tenant from the host (w17/audience.proto TENANT_SOURCE_HOST) then acts, on a request arriving on a bound host, in that organization: the caller must hold a membership there (of a kind the audience admits), and a W17-Org selector naming another organization is refused (ORG_HOST_CONFLICT), never followed. An unbound host names nothing and the audience's next source is tried. Nothing is deleted. Off by default; a migration adds the table."
+    default: false
+    requires:
+      # The organizations, the active scope and its resolution are org_membership's.
+      - org_membership
+    go_files:
+      - handlers/org_hosts.go
   - name: teams
     description: "An organization groups its members into teams, and a team holds org-scoped roles that every member holds while they are in it: ListOrgTeams / CreateOrgTeam / UpdateOrgTeam / DeleteOrgTeam / AddOrgTeamMember / RemoveOrgTeamMember / SetOrgTeamRoles (GET / POST /auth/orgs/{org}/teams, PUT / DELETE /auth/orgs/{org}/teams/{team_id}, POST /auth/orgs/{org}/teams/{team_id}/members, DELETE /auth/orgs/{org}/teams/{team_id}/members/{user_id}, PUT /auth/orgs/{org}/teams/{team_id}/roles). A team's roles count for a session acting in the team's organization, never realm-wide, in another organization or for an API token. Only a person who is a member of the organization joins a team (a machine account holds its roles directly), and only an org-scoped session-realm role of the organization's catalogue is a team's. The role ceiling holds wherever someone gains or loses a role through a team: giving or taking a team's role, adding or removing a member, deleting the team — and removing someone from the organization asks the caller to cover their team roles and ends their team memberships. A role a team holds is in use (DeleteOrgRole). Nothing is deleted. Off by default; a migration adds the three tables."
     default: false
@@ -644,6 +662,14 @@ presets:
           # {"token":"ey…"} and the flow ended there.
           - { ref: AuthService.OAuthCallback,     method: GET, path: "/{provider}/callback",  exclude_auth: true, public_limit: failed_only, feature: oauth,
               browser_redirect: { target_field: "redirect_after", token_field: "code", token_param: "code", fallback: "/" } }
+          # The same callback for a provider that comes back by an HTML
+          # form POST (response_mode form_post — Sign in with Apple, which
+          # requires it whenever the scopes ask for the address). The body
+          # is application/x-www-form-urlencoded (code, state, and on a
+          # first sign-in Apple's `user`, which is not read); the answer is
+          # the same 302 with the login code in the fragment.
+          - { ref: AuthService.OAuthCallbackForm, method: POST, path: "/{provider}/callback", exclude_auth: true, public_limit: failed_only, feature: oauth_form_post,
+              browser_redirect: { target_field: "redirect_after", token_field: "code", token_param: "code", fallback: "/" } }
           # Redeems the callback's code with the verifier whose challenge
           # the same browser sent to /authorize, and issues the session.
           # failed_only: a wrong or replayed code is what the limit is for.
@@ -764,6 +790,21 @@ presets:
           - { ref: AuthService.ListPackagesOfOrg, method: GET,    path: "/{org_id}/packages",           feature: org_packages }
           - { ref: AuthService.AddOrgPackage,     method: POST,   path: "/{org_id}/packages/{package}", feature: org_packages }
           - { ref: AuthService.RemoveOrgPackage,  method: DELETE, path: "/{org_id}/packages/{package}", feature: org_packages }
+      # The backoffice's hosts (org_hosts): realm-wide — a call acting inside
+      # an organization is refused (HOSTS_REALM_ONLY).
+      - prefix: /auth/admin/hosts
+        description: "The hosts bound to organizations — the backoffice's."
+        endpoints:
+          - { ref: AuthService.ListOrgHosts,  method: GET,    path: "",        feature: org_hosts }
+          - { ref: AuthService.BindOrgHost,   method: PUT,    path: "/{host}", feature: org_hosts }
+          - { ref: AuthService.UnbindOrgHost, method: DELETE, path: "/{host}", feature: org_hosts }
+      # Which organization a host serves — read before anyone signs in (a
+      # sign-in page on a white-label host), so unauthenticated and limited
+      # per address.
+      - prefix: /auth/hosts
+        description: "The organization a host serves — public."
+        endpoints:
+          - { ref: AuthService.GetHostOrg, method: GET, path: "/{host}", exclude_auth: true, public_limit: every_request, feature: org_hosts }
       # Multi-org membership — the caller lists their OWN orgs, bearer-
       # authenticated. Gated org_membership.
       - prefix: /auth/orgs
@@ -1277,11 +1318,13 @@ msgids:
   - "That role carries permissions you do not hold. A role can be granted only by someone who holds everything it grants."
   - "That role is not one of this organization's own roles, so it cannot be changed here."
   - "The list is too long: at most {max} entries."
+  - "The organization is taken from the address here, not chosen."
   - "There is no organization role named {role}."
   - "There is no such package."
   - "There is no such team in this organization."
   - "This API token expired on {date}. Create a new token."
   - "This account has been disabled."
+  - "This address belongs to another organization than the one you chose."
   - "This address does not belong to any organization here. Check the address you registered on."
   - "This app did not prove which device it runs on. Reload or update it, then sign in again."
   - "This authenticator app is already set up. To get new recovery codes, generate them."
@@ -1289,7 +1332,9 @@ msgids:
   - "This connected app is not one of yours, or was already disconnected."
   - "This device was signed out for good. Sign in again to use it as a new device."
   - "This email address cannot be used. Use another address."
+  - "This host already serves another organization."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
+  - "This is not a host name."
   - "This is the organization's last superadmin. Make someone else a superadmin first."
   - "This is the organization's owner. Their membership cannot be changed or removed; transfer ownership first."
   - "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
@@ -1304,6 +1349,7 @@ msgids:
   - "This team holds a role with permissions you do not have, so you cannot change its members or delete it."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait 15 minutes and try again."
+  - "Which organization a host serves is set by the platform, not from inside an organization."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
   - "You cannot invite someone as this kind of member."

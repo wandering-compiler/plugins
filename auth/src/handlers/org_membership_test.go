@@ -443,7 +443,7 @@ func TestNarrowGrants_QueryErrorFailsClosed(t *testing.T) {
 // AuthReq.Headers, then calls Authenticate with the raw incoming context —
 // which has no OUTGOING metadata and no forwarding interceptor. Reading
 // only the context made org selection a REST-only feature, and the single
-// deployment with organizations has one-org users, so inferSoleOrgScope
+// deployment with organizations has one-org users, so the sole-org inference
 // supplied the right answer and the gap never showed.
 func TestResolveOrgScope_SlugFromHeadersWithoutMetadata(t *testing.T) {
 	m := &orgMock{bySlug: map[string]*pb.GetUserOrgBySlugResp{

@@ -85,28 +85,7 @@ message RejectEnvelopeReq {
 message GetOrgEnvelopeReq {
   string org_id = 1 [(w17.field) = { type: UUID }];
 }
-message GetHostEnvelopeReq {
-  string host = 1 [(w17.field) = { type: CHAR, min_len: 1, max_len: 255 }];
-}
 
-message BindHostReq {
-  string host   = 1 [(w17.field) = { type: CHAR, min_len: 1, max_len: 255 }];
-  string org_id = 2 [(w17.field) = { type: UUID }];
-}
-message BindHostResp {}
-message UnbindHostReq {
-  string host = 1 [(w17.field) = { type: CHAR, min_len: 1, max_len: 255 }];
-}
-message UnbindHostResp {}
-message ListHostsReq {}
-message HostBindingView {
-  string host   = 1;
-  string org_id = 2;
-  google.protobuf.Timestamp created_at = 3;
-}
-message ListHostsResp {
-  repeated HostBindingView hosts = 1;
-}
 
 service GrantService {
   // The organization's own: propose a version, read every version.
@@ -117,11 +96,8 @@ service GrantService {
   rpc ListEnvelopeProposals(ListEnvelopeProposalsReq) returns (EnvelopeVersionsResp);
   rpc ApproveEnvelope(ApproveEnvelopeReq) returns (EnvelopeVersion);
   rpc RejectEnvelope(RejectEnvelopeReq) returns (EnvelopeVersion);
-  rpc BindHost(BindHostReq) returns (BindHostResp);
-  rpc UnbindHost(UnbindHostReq) returns (UnbindHostResp);
-  rpc ListHosts(ListHostsReq) returns (ListHostsResp);
 
-  // Anyone's: the approved envelope, by organization or co-brand host.
+  // Anyone's: the approved envelope of an organization. A co-brand host's
+  // organization is the auth plugin's (org_hosts, GET /auth/hosts/{host}).
   rpc GetOrgEnvelope(GetOrgEnvelopeReq) returns (PublicEnvelope);
-  rpc GetHostEnvelope(GetHostEnvelopeReq) returns (PublicEnvelope);
 }

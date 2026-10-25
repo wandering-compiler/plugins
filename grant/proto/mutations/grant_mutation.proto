@@ -49,23 +49,6 @@ message RejectEnvelopeRowResp {
   string id = 1;
 }
 
-message InsertHostBindingReq {
-  string host       = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string org_id     = 2 [(w17.field) = { type: UUID }];
-  string created_by = 3 [(w17.field) = { type: UUID, null: true }];
-}
-message InsertHostBindingResp {
-  string id = 1;
-}
-
-message EndHostBindingReq {
-  string host     = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string ended_by = 2 [(w17.field) = { type: UUID, null: true }];
-}
-message EndHostBindingResp {
-  string id = 1;
-}
-
 service GrantMutation {
   // InsertEnvelope — a new proposed version.
   rpc InsertEnvelope(InsertEnvelopeReq) returns (InsertEnvelopeResp) {
@@ -129,30 +112,6 @@ service GrantMutation {
         dql:
           "UPDATE @module.Envelope SET status = 'rejected', decided_by = :decided_by, decided_at = NOW(), decision_note = :decision_note "
           "WHERE id = :id AND status = 'proposed' "
-          "RETURNING id AS id"
-      }
-    };
-  }
-
-  // InsertHostBinding — a live binding; a host already bound is refused by
-  // the unique index (the caller checks first).
-  rpc InsertHostBinding(InsertHostBindingReq) returns (InsertHostBindingResp) {
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:  "INSERT INTO @module.HostBinding SET host = :host, org_id = :org_id, created_by = :created_by RETURNING id AS id"
-      }
-    };
-  }
-
-  // EndHostBinding — unbinds the host; nothing is deleted.
-  rpc EndHostBinding(EndHostBindingReq) returns (EndHostBindingResp) {
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "UPDATE @module.HostBinding SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
-          "WHERE host = :host AND ended_at IS NULL "
           "RETURNING id AS id"
       }
     };

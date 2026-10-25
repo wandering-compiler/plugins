@@ -182,7 +182,7 @@ message SignInReq {
 message SignInResp {
   option (w17.contrib.plugin_feature) = "sign_in_turnkey";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2 [(w17.field) = { sensitive: true }];
+  string token   = 2 [(w17.field) = { blank: true, sensitive: true }];
 
   // two_factor — when a challenge is raised SignIn returns
   // mfa_required=true + a challenge_id INSTEAD of a token; the client
@@ -250,7 +250,7 @@ message SignUpReq {
 message SignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_turnkey";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2 [(w17.field) = { sensitive: true }];
+  string token   = 2 [(w17.field) = { blank: true, sensitive: true }];
   // With `sign_up_confirmation` SignUp creates no account yet: user_id and
   // token stay empty, confirmation_required is true, and pending_id is what
   // ConfirmSignUp takes together with the code mailed to the address.
@@ -277,7 +277,7 @@ message ConfirmSignUpReq {
 message ConfirmSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2 [(w17.field) = { sensitive: true }];
+  string token   = 2 [(w17.field) = { blank: true, sensitive: true }];
   bool   public_computer = 3;
 }
 
@@ -483,7 +483,7 @@ message IssueBotTokenReq {
 message IssueBotTokenResp {
   option (w17.contrib.plugin_feature) = "service_account";
   // The opaque token — returned ONCE, exactly as CreateApiToken does.
-  string token    = 1 [(w17.field) = { sensitive: true }];
+  string token    = 1 [(w17.field) = { blank: true, sensitive: true }];
   string token_id = 2 [(w17.field) = { type: UUID }];
   // When it expires; absent = never (the deployment's default is 0).
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
@@ -522,7 +522,7 @@ message CreateApiTokenResp {
   option (w17.contrib.plugin_feature) = "api_token";
   // The opaque token string — returned ONCE at creation; never
   // retrievable again (ListApiTokens omits it).
-  string token    = 1 [(w17.field) = { sensitive: true }];
+  string token    = 1 [(w17.field) = { blank: true, sensitive: true }];
   string token_id = 2 [(w17.field) = { type: UUID }];
   // When it expires; absent = never (the deployment's default is 0).
   google.protobuf.Timestamp expires_at = 3 [(w17.field) = { type: DATETIME }];
@@ -568,7 +568,7 @@ message OAuthAuthorizeURLResp {
 message OAuthCallbackReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string provider = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
-  string code     = 2 [(w17.field) = { sensitive: true }];
+  string code     = 2 [(w17.field) = { blank: true, sensitive: true }];
   string state    = 3;
 }
 message OAuthCallbackResp {
@@ -576,7 +576,7 @@ message OAuthCallbackResp {
   // code is single-use, short-lived, and redeemable only at OAuthExchange
   // with the verifier of the authorize step's code_challenge. The callback
   // never carries a session: it is a URL, and a URL can be handed to anyone.
-  string code           = 5 [(w17.field) = { sensitive: true }];
+  string code           = 5 [(w17.field) = { blank: true, sensitive: true }];
   string redirect_after = 3;
 
   // user_id, token and device_trust_token moved to OAuthExchangeResp.
@@ -586,15 +586,18 @@ message OAuthCallbackResp {
 
 message OAuthExchangeReq {
   option (w17.contrib.plugin_feature) = "oauth";
-  string code          = 1 [(w17.field) = { sensitive: true }];
-  string code_verifier = 2 [(w17.field) = { sensitive: true }];
+  string code          = 1 [(w17.field) = { blank: true, sensitive: true }];
+  string code_verifier = 2 [(w17.field) = { blank: true, sensitive: true }];
   // invite_token is the invitation a NEW account registers with — the same
   // token SignUp takes, checked by the same rules (invite_only, a bound
   // invitation's address, an open link spent by its first registration).
   // Ignored when the identity already belongs to an account. It travels
   // only here, in the page's own request, never through a URL or the
-  // provider.
-  string invite_token  = 3 [(w17.field) = { sensitive: true }];
+  // provider. Optional — most sign-ins carry none — and said so (`blank`):
+  // marking it sensitive gave it a (w17.field), and a field with one and no
+  // `blank` is one the gateway requires, so from rc.34 every exchange
+  // without an invitation was refused 400.
+  string invite_token  = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true, sensitive: true }];
   // public_computer — "this is a public computer" (an internet café, a
   // shared PC). The session gets the public lifetime
   // (public_session_ttl_seconds, shorter than the normal one) and the device
@@ -609,7 +612,7 @@ message OAuthExchangeReq {
 message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2 [(w17.field) = { sensitive: true }];
+  string token   = 2 [(w17.field) = { blank: true, sensitive: true }];
   // 3 = device_trust_token (see SignInResp).
   reserved 3;
   reserved "device_trust_token";
@@ -629,16 +632,16 @@ message EnrollTotpReq {
   // replaces that authenticator, so without this a hijacked session could
   // switch the victim's 2FA off — the thing DisableTotp's code requirement
   // exists to prevent. A lost phone is: sign in with a recovery code, then
-  // enrol with another one.
-  string code = 1 [(w17.field) = { sensitive: true }];
+  // enrol with another one. A first enrolment carries none (`blank`).
+  string code = 1 [(w17.field) = { blank: true, sensitive: true }];
 }
 message EnrollTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   // The base32 secret (shown once, for typing in by hand) + the otpauth://
   // URI an authenticator app scans. The secret is also stored encrypted
   // server-side.
-  string secret      = 1 [(w17.field) = { sensitive: true }];
-  string otpauth_uri = 2 [(w17.field) = { sensitive: true }];
+  string secret      = 1 [(w17.field) = { blank: true, sensitive: true }];
+  string otpauth_uri = 2 [(w17.field) = { blank: true, sensitive: true }];
   // qr_svg — otpauth_uri as a QR code, a self-contained SVG document
   // (black modules on white, quiet zone included, scales without loss).
   // Render it as-is (an <img> data URI or inline). Generating it here keeps
@@ -648,7 +651,7 @@ message EnrollTotpResp {
 
 message ConfirmTotpReq {
   option (w17.contrib.plugin_feature) = "two_factor";
-  string code = 1 [(w17.field) = { sensitive: true }];
+  string code = 1 [(w17.field) = { blank: true, sensitive: true }];
 }
 message ConfirmTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -665,7 +668,7 @@ message DisableTotpReq {
   // weaken the account). Ignored when no confirmed authenticator
   // exists (nothing to protect). A recovery code is accepted too (lost
   // phone). Disabling deletes the recovery codes with the authenticator.
-  string code = 1 [(w17.field) = { sensitive: true }];
+  string code = 1 [(w17.field) = { blank: true, sensitive: true }];
 }
 message DisableTotpResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -687,7 +690,7 @@ message GetMfaStatusResp {
 // a recovery code), like DisableTotp.
 message GenerateRecoveryCodesReq {
   option (w17.contrib.plugin_feature) = "two_factor";
-  string code = 1 [(w17.field) = { sensitive: true }];
+  string code = 1 [(w17.field) = { blank: true, sensitive: true }];
 }
 message GenerateRecoveryCodesResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -699,12 +702,12 @@ message VerifyMfaReq {
   string challenge_id = 1 [(w17.field) = { type: UUID }];
   // The authenticator's current code — each accepted at most once — or,
   // for an account with an authenticator, one of its recovery codes.
-  string code         = 2 [(w17.field) = { sensitive: true }];
+  string code         = 2 [(w17.field) = { blank: true, sensitive: true }];
 }
 message VerifyMfaResp {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1 [(w17.field) = { type: UUID }];
-  string token   = 2 [(w17.field) = { sensitive: true }];
+  string token   = 2 [(w17.field) = { blank: true, sensitive: true }];
   // 3 = device_trust_token (see SignInResp). Passing VerifyMfa still trusts
   // the device the request's key names; nothing is handed back for it.
   reserved 3;
@@ -1024,7 +1027,7 @@ message InviteToOrgResp {
   // ⚠️ Not in `OrgInviteSummary`, deliberately. That summary is what a LIST of an
   // org's outstanding invitations shows, and a secret that appears in a list is a
   // secret readable long after the moment it was handed over.
-  string token = 2 [(w17.field) = { sensitive: true }];
+  string token = 2 [(w17.field) = { blank: true, sensitive: true }];
 }
 
 // OrgInviteSummary — what a list of an org's outstanding invitations
@@ -1342,23 +1345,23 @@ message DenyOAuthAuthorizationResp {
 message ExchangeOAuthTokenReq {
   option (w17.contrib.plugin_feature) = "oauth_server";
   string grant_type = 1;
-  string code = 2 [(w17.field) = { sensitive: true }];
+  string code = 2 [(w17.field) = { blank: true, sensitive: true }];
   string redirect_uri = 3;
-  string code_verifier = 4 [(w17.field) = { sensitive: true }];
+  string code_verifier = 4 [(w17.field) = { blank: true, sensitive: true }];
   string client_id = 5;
-  string refresh_token = 6 [(w17.field) = { sensitive: true }];
+  string refresh_token = 6 [(w17.field) = { blank: true, sensitive: true }];
   repeated string resources = 7;
   string scope = 8;
   string client_addr = 9;
 }
 message ExchangeOAuthTokenResp {
   option (w17.contrib.plugin_feature) = "oauth_server";
-  string access_token = 1 [(w17.field) = { sensitive: true }];
+  string access_token = 1 [(w17.field) = { blank: true, sensitive: true }];
   // "Bearer" (an MCP grant) or "DPoP" (a session grant, bound to the key of
   // the request's proof).
   string token_type = 2;
   int64 expires_in = 3;
-  string refresh_token = 4 [(w17.field) = { sensitive: true }];
+  string refresh_token = 4 [(w17.field) = { blank: true, sensitive: true }];
   string scope = 5;
   string oauth_error = 6;
   string oauth_error_description = 7;
@@ -1366,7 +1369,7 @@ message ExchangeOAuthTokenResp {
 
 message RevokeOAuthTokenReq {
   option (w17.contrib.plugin_feature) = "oauth_server";
-  string token = 1 [(w17.field) = { sensitive: true }];
+  string token = 1 [(w17.field) = { blank: true, sensitive: true }];
   string token_type_hint = 2;
   string client_id = 3;
   string client_addr = 4;
@@ -1464,6 +1467,52 @@ message OrgPackagesResp {
   option (w17.contrib.plugin_feature) = "org_packages";
   repeated OrgPackageInfo packages = 1;
 }
+// The hosts bound to organizations (org_hosts): the backoffice binds a
+// white-label or co-brand host to the organization it serves — realm-wide,
+// never from inside an organization — and anyone may ask which organization a
+// host serves (a sign-in page on that host renders it before anyone signs in).
+message BindOrgHostReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host   = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+  string org_id = 2 [(w17.field) = { type: UUID }];
+}
+message BindOrgHostResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+}
+message UnbindOrgHostReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+}
+message UnbindOrgHostResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+}
+message ListOrgHostsReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+}
+message ListOrgHostsResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  repeated OrgHostInfo hosts = 1;
+}
+message OrgHostInfo {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host   = 1;
+  string org_id = 2;
+  string slug   = 3;
+  google.protobuf.Timestamp bound_at = 4;
+}
+message GetHostOrgReq {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  string host = 1 [(w17.field) = { type: CHAR, max_len: 253 }];
+}
+// HostOrgResp — the organization a host serves; found = false (and the rest
+// empty) for a host bound to none.
+message HostOrgResp {
+  option (w17.contrib.plugin_feature) = "org_hosts";
+  bool   found  = 1;
+  string org_id = 2;
+  string slug   = 3;
+}
+
 message OrgPackageInfo {
   option (w17.contrib.plugin_feature) = "org_packages";
   string package = 1;
@@ -1752,6 +1801,13 @@ service AuthService {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
   }
   rpc OAuthCallback(OAuthCallbackReq) returns (OAuthCallbackResp) {
+    option (w17.contrib.plugin_feature_rpc) = "oauth";
+  }
+  // OAuthCallbackForm is OAuthCallback for a provider that comes back by an
+  // HTML form POST (response_mode form_post — Sign in with Apple): the same
+  // code and state, in the body. Refused for a provider that returns by the
+  // query string. Unauthenticated. Gated oauth.
+  rpc OAuthCallbackForm(OAuthCallbackReq) returns (OAuthCallbackResp) {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
   }
   // OAuthExchange redeems the callback's code with the PKCE verifier and
@@ -2055,6 +2111,20 @@ service AuthService {
     option (w17.contrib.plugin_feature_rpc) = "org_packages";
   }
 
+  // The hosts bound to organizations (handlers/org_hosts.go).
+  rpc BindOrgHost(BindOrgHostReq) returns (BindOrgHostResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+  rpc UnbindOrgHost(UnbindOrgHostReq) returns (UnbindOrgHostResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+  rpc ListOrgHosts(ListOrgHostsReq) returns (ListOrgHostsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+  rpc GetHostOrg(GetHostOrgReq) returns (HostOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+
   // An organization's teams (handlers/teams.go).
   rpc ListOrgTeams(ListOrgTeamsReq) returns (ListOrgTeamsResp) {
     option (w17.contrib.plugin_feature_rpc) = "teams";
@@ -2174,7 +2244,7 @@ message CliAuthorizeResp {
   // The single-use authorization code; the console web redirects the
   // browser to redirect_uri?code=<code>, where the CLI's loopback server
   // receives it and redeems it at CliToken.
-  string code = 1 [(w17.field) = { sensitive: true }];
+  string code = 1 [(w17.field) = { blank: true, sensitive: true }];
   // Echoed back so the web front-end builds the redirect without re-reading
   // the request.
   string redirect_uri = 2;
@@ -2203,7 +2273,7 @@ message RegisterClientResp {
   // NEW one from RotateClientSecret (same client_id, same callback) rather
   // than being reminded. Same single-delivery contract as a password-reset
   // token.
-  string client_secret = 2 [(w17.field) = { sensitive: true }];
+  string client_secret = 2 [(w17.field) = { blank: true, sensitive: true }];
 }
 message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
 message ListClientsResp {
@@ -2227,7 +2297,7 @@ message RotateClientSecretResp {
   option (w17.contrib.plugin_feature) = "cli_login";
   // The new PLAINTEXT, handed out once, like RegisterClientResp.client_secret.
   // The old secret stops working when this commits.
-  string client_secret = 1 [(w17.field) = { sensitive: true }];
+  string client_secret = 1 [(w17.field) = { blank: true, sensitive: true }];
 }
 message DeleteClientReq {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -2304,7 +2374,7 @@ message CliTokenReq {
 }
 message CliTokenResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  string token   = 1 [(w17.field) = { sensitive: true }]; // opaque bearer the CLI stores in ~/.w17/auth.yaml
+  string token   = 1 [(w17.field) = { blank: true, sensitive: true }]; // opaque bearer the CLI stores in ~/.w17/auth.yaml
   string user_id = 2;
 }
 

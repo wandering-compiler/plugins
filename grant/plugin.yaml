@@ -7,7 +7,7 @@ requires_w17: ">=1.14"
 # Also the package base `w17ctl plugin gen` generates src/gen under.
 go_module: github.com/wandering-compiler/plugins/grant
 
-description: "What an organization shows before it is trusted, approved by the platform: its envelope (name, logos, verified host, links) on the consent, invitation and sign-in pages, and the co-brand hosts that present it. An organization proposes, the backoffice approves; only an approved envelope is ever read."
+description: "What an organization shows before it is trusted, approved by the platform: its envelope (name, logos, verified host, links) on the consent, invitation and sign-in pages. An organization proposes, the backoffice approves; only an approved envelope is ever read. The hosts an organization is presented on are the auth plugin's (org_hosts)."
 license: "Apache-2.0"
 
 # The caller and the active organization are the auth plugin's
@@ -29,18 +29,14 @@ presets:
           - { ref: GrantService.GetMyEnvelopes,  method: GET,  path: /envelopes }
       # The backoffice's: realm-wide, refused from inside an organization.
       - prefix: /grant/admin
-        description: "Envelope decisions and co-brand hosts — the backoffice's."
+        description: "Envelope decisions — the backoffice's."
         endpoints:
           - { ref: GrantService.ListEnvelopeProposals, method: GET,    path: /envelopes }
           - { ref: GrantService.ApproveEnvelope,       method: POST,   path: "/envelopes/{id}/approve" }
           - { ref: GrantService.RejectEnvelope,        method: POST,   path: "/envelopes/{id}/reject" }
-          - { ref: GrantService.ListHosts,             method: GET,    path: /hosts }
-          - { ref: GrantService.BindHost,              method: PUT,    path: "/hosts/{host}" }
-          - { ref: GrantService.UnbindHost,            method: DELETE, path: "/hosts/{host}" }
       # Anyone's: the approved envelope. Read before sign-in (an invitation,
       # a co-brand sign-in page), so unauthenticated and limited per address.
       - prefix: /grant/envelopes
-        description: "The approved envelope of an organization or a co-brand host — public."
+        description: "The approved envelope of an organization — public."
         endpoints:
           - { ref: GrantService.GetOrgEnvelope,  method: GET, path: "/orgs/{org_id}", exclude_auth: true, public_limit: every_request }
-          - { ref: GrantService.GetHostEnvelope, method: GET, path: "/hosts/{host}",  exclude_auth: true, public_limit: every_request }

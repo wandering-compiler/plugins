@@ -916,7 +916,21 @@ message OAuthProvider {
     (w17.db.column) = { index: true },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
-  string secret = 15 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // the client secret
+  string secret = 15 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // the client secret, or the key it is signed with (team_id)
+
+  // response_mode — how the provider comes back to the callback: empty, by
+  // the query string of a GET; or "form_post", by an HTML form the browser
+  // POSTs (POST /auth/oauth/{name}/callback). Sign in with Apple requires
+  // form_post whenever the scopes ask for the address, which this plugin
+  // needs.
+  string response_mode = 16 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  // team_id + key_id — a provider whose client secret is a JWT signed with a
+  // key it issued (Sign in with Apple). `secret` then holds that key (a
+  // PKCS#8 PEM, ES256), and each token exchange sends a JWT minted from it:
+  // iss team_id, sub client_id, aud the token endpoint's origin, kid key_id,
+  // valid five minutes. Both empty = `secret` is the client secret itself.
+  string team_id = 17 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string key_id  = 18 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
 }
 
 // OAuthIdentity — links a local User to an external IdP subject, behind
@@ -2223,6 +2237,29 @@ message OrgPackage {
   google.protobuf.Timestamp ended_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
   string ended_by   = 7 [(w17.field) = { type: UUID, null: true }];
   // ended_key — '' while live, the row's own id once switched off (Role.ended_key).
+  string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
+// OrgHost — a host (white-label or co-brand) bound to the organization it
+// serves (org_hosts). An audience that takes the tenant from the host
+// (w17/audience.proto TENANT_SOURCE_HOST) acts in this organization on a
+// request arriving on it. One live binding per host; unbinding ends the row
+// (ended_at, ended_key = id), and nothing is deleted.
+message OrgHost {
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "host" }, { name: "ended_key" }] } ]
+  };
+  option (w17.contrib.plugin_feature) = "org_hosts";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  // host — lower-case, no port and no trailing dot: as the gateway reports it.
+  string host       = 2 [(w17.field) = { type: CHAR, max_len: 253 }];
+  string org_id     = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string bound_by   = 4 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp bound_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by   = 7 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once unbound (Role.ended_key).
   string ended_key  = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 

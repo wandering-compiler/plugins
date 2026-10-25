@@ -158,78 +158,10 @@ func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.Reject
 	return &pb.EnvelopeVersion{Id: resp.GetId(), Status: "rejected", DecisionNote: req.GetNote()}, nil
 }
 
-// BindHost binds a co-brand host to the organization it presents. A host
-// bound to another organization is refused: unbind it first.
-func (h *GrantServiceHandler) BindHost(ctx context.Context, req *pb.BindHostReq) (*pb.BindHostResp, error) {
-	caller, err := h.realmOnly(ctx, "BindHost")
-	if err != nil {
-		return nil, err
-	}
-	host := strings.ToLower(req.GetHost())
-	if !hostRE.MatchString(host) {
-		return nil, invalid("host", "a host is a lower-case DNS name")
-	}
-	cur, err := h.Query.GetHostBinding(ctx, &pb.GetHostBindingReq{Host: host})
-	switch {
-	case err == nil && cur.GetOrgId() == req.GetOrgId():
-		return &pb.BindHostResp{}, nil
-	case err == nil:
-		return nil, status.Error(codes.FailedPrecondition, "grant: the host presents another organization — unbind it first")
-	case status.Code(err) != codes.NotFound:
-		return nil, err
-	}
-	if _, err := h.Mutation.InsertHostBinding(ctx, &pb.InsertHostBindingReq{Host: host, OrgId: req.GetOrgId(), CreatedBy: caller}); err != nil {
-		return nil, err
-	}
-	return &pb.BindHostResp{}, nil
-}
-
-// UnbindHost ends a host's binding. Unbinding a host that is not bound
-// changes nothing.
-func (h *GrantServiceHandler) UnbindHost(ctx context.Context, req *pb.UnbindHostReq) (*pb.UnbindHostResp, error) {
-	caller, err := h.realmOnly(ctx, "UnbindHost")
-	if err != nil {
-		return nil, err
-	}
-	if _, err := h.Mutation.EndHostBinding(ctx, &pb.EndHostBindingReq{Host: strings.ToLower(req.GetHost()), EndedBy: caller}); err != nil && status.Code(err) != codes.NotFound {
-		return nil, err
-	}
-	return &pb.UnbindHostResp{}, nil
-}
-
-// ListHosts is every live co-brand host.
-func (h *GrantServiceHandler) ListHosts(ctx context.Context, _ *pb.ListHostsReq) (*pb.ListHostsResp, error) {
-	if _, err := h.realmOnly(ctx, "ListHosts"); err != nil {
-		return nil, err
-	}
-	rows, err := h.Query.ListHostBindings(ctx, &pb.ListHostBindingsReq{})
-	if err != nil && status.Code(err) != codes.NotFound {
-		return nil, err
-	}
-	out := &pb.ListHostsResp{}
-	for _, b := range rows.GetBindings() {
-		out.Hosts = append(out.Hosts, &pb.HostBindingView{Host: b.GetHost(), OrgId: b.GetOrgId(), CreatedAt: b.GetCreatedAt()})
-	}
-	return out, nil
-}
-
 // GetOrgEnvelope is an organization's APPROVED envelope; found = false when
 // it has none, and a page then renders neutrally.
 func (h *GrantServiceHandler) GetOrgEnvelope(ctx context.Context, req *pb.GetOrgEnvelopeReq) (*pb.PublicEnvelope, error) {
 	return h.approved(ctx, req.GetOrgId())
-}
-
-// GetHostEnvelope is the approved envelope of the organization a co-brand
-// host presents; found = false for a host nobody bound.
-func (h *GrantServiceHandler) GetHostEnvelope(ctx context.Context, req *pb.GetHostEnvelopeReq) (*pb.PublicEnvelope, error) {
-	b, err := h.Query.GetHostBinding(ctx, &pb.GetHostBindingReq{Host: strings.ToLower(req.GetHost())})
-	if status.Code(err) == codes.NotFound {
-		return &pb.PublicEnvelope{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return h.approved(ctx, b.GetOrgId())
 }
 
 func (h *GrantServiceHandler) approved(ctx context.Context, orgID string) (*pb.PublicEnvelope, error) {
