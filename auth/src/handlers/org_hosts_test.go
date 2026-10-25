@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -121,6 +122,12 @@ func TestResolveOrgScope_TenantFromHost(t *testing.T) {
 					if _, code := detailCode(t, err); code != c.code {
 						t.Errorf("err = %v, want %s", err, c.code)
 					}
+					// Authenticate folds every other error into the opaque
+					// "You are not signed in."; only this type passes.
+					var passes *notAdmittedError
+					if !errors.As(err, &passes) {
+						t.Errorf("%s is not a notAdmittedError: Authenticate would hide it", c.code)
+					}
 				case err != nil:
 					t.Errorf("err = %v", err)
 				case got != c.want:
@@ -148,8 +155,10 @@ func TestResolveOrgScope_HostWithoutOrgHosts(t *testing.T) {
 	orgSlugOfHost = nil
 	defer func() { orgSlugOfHost = saved }()
 	h := &AuthServiceHandler{Query: hostFixture()}
-	if _, err := resolveVia(h, "bob", "host,default", "acme.example.com", "", ""); status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("err = %v, want FailedPrecondition", err)
+	_, err := resolveVia(h, "bob", "host,default", "acme.example.com", "", "")
+	var passes *notAdmittedError
+	if status.Code(err) != codes.FailedPrecondition || !errors.As(err, &passes) {
+		t.Errorf("err = %v, want a FailedPrecondition Authenticate passes on", err)
 	}
 }
 

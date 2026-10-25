@@ -257,6 +257,11 @@ type pickOrg struct {
 // A selector the audience does not take (its sources omit default, and no
 // host decided) is refused rather than ignored: a client sending one expects
 // it to count. Nothing named leaves the request in no organization.
+//
+// The refusals are notAdmittedError: Authenticate passes them to the caller
+// as the 403 (or, for a deployment error, the FailedPrecondition) they carry
+// instead of folding them into "You are not signed in." — the credential is
+// fine, and signing in again would change nothing.
 func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]string, sole func() *pb.UserOrg) (pickOrg, error) {
 	selector := orgSlugFromHeaders(headers)
 	if selector == "" {
@@ -284,8 +289,8 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 		switch src {
 		case tenantFromHost:
 			if orgSlugOfHost == nil {
-				return pickOrg{}, status.Error(codes.FailedPrecondition,
-					"org_membership: the audience takes the tenant from the host, and org_hosts is not activated")
+				return pickOrg{}, &notAdmittedError{err: status.Error(codes.FailedPrecondition,
+					"org_membership: the audience takes the tenant from the host, and org_hosts is not activated")}
 			}
 			host := headerValue(headers, hostHeader)
 			if host == "" {
@@ -299,9 +304,9 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 				continue
 			}
 			if selector != "" && selector != slug {
-				return pickOrg{}, refusal(ctx, codes.PermissionDenied,
+				return pickOrg{}, &notAdmittedError{err: refusal(ctx, codes.PermissionDenied,
 					"org_membership: the selector names another organization than the host is bound to",
-					CodeOrgHostConflict, "", MsgOrgHostConflict, nil)
+					CodeOrgHostConflict, "", MsgOrgHostConflict, nil)}
 			}
 			return pickOrg{slug: slug}, nil
 		case tenantFromDefault:
@@ -315,9 +320,9 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 		}
 	}
 	if selector != "" && !takesSelector {
-		return pickOrg{}, refusal(ctx, codes.PermissionDenied,
+		return pickOrg{}, &notAdmittedError{err: refusal(ctx, codes.PermissionDenied,
 			"org_membership: the audience does not take the organization from a selector",
-			CodeOrgSelectorNotAccepted, "", MsgOrgSelectorNotAccepted, nil)
+			CodeOrgSelectorNotAccepted, "", MsgOrgSelectorNotAccepted, nil)}
 	}
 	return pickOrg{}, nil
 }
