@@ -213,6 +213,17 @@ var oauthOrgScope func(ctx context.Context, h *AuthServiceHandler, userID, orgID
 // kinds are staged (membership_kinds.go); nil without them.
 var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
 
+// The keys an audience gateway writes for the tenant's sources and the host
+// (principal.TenantFromKey / principal.HostKey and the TenantFrom* values of
+// the SDK that ships tenant_from), spelled here so the plugin builds against
+// an SDK from before them.
+const (
+	tenantFromHeader  = "x-w17-tenant-from"
+	hostHeader        = "x-w17-host"
+	tenantFromHost    = "host"
+	tenantFromDefault = "default"
+)
+
 // orgSlugOfHost is the slug of the organization a host is bound to, "" for
 // none; set by org_hosts (org_hosts.go), nil without it.
 var orgSlugOfHost func(ctx context.Context, h *AuthServiceHandler, host string) (string, error)
@@ -226,7 +237,7 @@ type pickOrg struct {
 }
 
 // chooseOrg decides which organization a request names, by the places its
-// audience takes the tenant from (principal.TenantFromKey, in order; the
+// audience takes the tenant from (x-w17-tenant-from, in order; the
 // gateway writes it, never a client). sole is the caller's only membership
 // the request could act in, nil when there is not exactly one; it is asked
 // only where inferring is allowed.
@@ -271,12 +282,12 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 	takesSelector := false
 	for _, src := range sources {
 		switch src {
-		case principal.TenantFromHost:
+		case tenantFromHost:
 			if orgSlugOfHost == nil {
 				return pickOrg{}, status.Error(codes.FailedPrecondition,
 					"org_membership: the audience takes the tenant from the host, and org_hosts is not activated")
 			}
-			host := headerValue(headers, principal.HostKey)
+			host := headerValue(headers, hostHeader)
 			if host == "" {
 				continue
 			}
@@ -293,7 +304,7 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 					CodeOrgHostConflict, "", MsgOrgHostConflict, nil)
 			}
 			return pickOrg{slug: slug}, nil
-		case principal.TenantFromDefault:
+		case tenantFromDefault:
 			takesSelector = true
 			if selector != "" {
 				return pickOrg{slug: selector}, nil
@@ -314,7 +325,7 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 // tenantFromHeaders is the audience's tenant sources, in order; nil when its
 // gateway names none.
 func tenantFromHeaders(headers map[string]string) []string {
-	v := headerValue(headers, principal.TenantFromKey)
+	v := headerValue(headers, tenantFromHeader)
 	if v == "" {
 		return nil
 	}

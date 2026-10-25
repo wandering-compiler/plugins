@@ -19,7 +19,7 @@ import (
 //
 // What reads it: an audience that takes the tenant from the host
 // (w17/audience.proto TENANT_SOURCE_HOST). Its gateway hands Authenticate the
-// host the request arrived on (principal.HostKey), and resolveOrgScope acts
+// host the request arrived on (x-w17-host), and resolveOrgScope acts
 // in the organization the host is bound to — through orgSlugOfHost, which
 // this file installs. The caller still needs a membership there: the host
 // chooses among the caller's organizations, as the W17-Org selector does,

@@ -10,7 +10,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
-	"github.com/wandering-compiler/sdk/go/lib/principal"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -69,16 +68,16 @@ func hostFixture() *hostMock {
 func resolveVia(h *AuthServiceHandler, user, from, host, selector, kinds string) (string, error) {
 	headers := map[string]string{}
 	if from != "" {
-		headers[principal.TenantFromKey] = from
+		headers[tenantFromHeader] = from
 	}
 	if host != "" {
-		headers[principal.HostKey] = host
+		headers[hostHeader] = host
 	}
 	if selector != "" {
 		headers["w17-org"] = selector
 	}
 	if kinds != "" {
-		headers[principal.MembershipKindsKey] = kinds
+		headers[membershipKindsHeader] = kinds
 	}
 	scopes := map[string]string{}
 	err := resolveOrgScope(context.Background(), h, user, headers, scopes, map[string]string{})
