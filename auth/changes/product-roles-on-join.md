@@ -1,0 +1,3 @@
+### Product roles on joining (`product_roles` with `org_invite` / `org_signup`)
+
+- Invitations and open registration carry product roles: `InviteToOrgReq.product_roles` (with `org_invite`) names the products' roles accepting gives — each covered by one the inviter holds there and carried by the plan, checked again at acceptance (`PRODUCT_ROLE_NOT_IN_PLAN`, `PRODUCT_ROLE_UNKNOWN` leave the invitation unspent); the invitation lists, `ListMyInvites` and `AcceptOrgInviteResp` show them. `SetOrgSignUpPolicyReq.product_roles` (with `org_signup`) names those an open registration is given; one that left the catalogue or the plan since is passed over. Migrations add `OrgInvite.product_roles` and `OrgSignUpPolicy.product_roles`.
