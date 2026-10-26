@@ -1647,6 +1647,11 @@ message CreateOrgInviteReq {
     (w17.field) = { type: CHAR, max_len: 32, blank: true },
     (w17.contrib.plugin_feature_field) = "membership_kinds"
   ];
+  // The products' roles accepting gives — see OrgInvite.product_roles.
+  string product_roles = 10 [
+    (w17.field) = { type: TEXT, blank: true },
+    (w17.contrib.plugin_feature_field) = "product_roles"
+  ];
 }
 message CreateOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -1709,6 +1714,11 @@ message ConsumeOrgInviteByTokenResp {
   string role_snapshot = 5;
   // The kind of membership the invitation creates (membership_kinds).
   string kind = 7 [(w17.contrib.plugin_feature_field) = "membership_kinds"];
+  // The products' roles accepting gives (product_roles) — see
+  // OrgInvite.product_roles.
+  string product_roles = 8 [(w17.contrib.plugin_feature_field) = "product_roles"];
+  // Who sent it: the grants accepting writes name them as the giver.
+  string invited_by = 9;
 }
 
 // CloseOrgInvitesOfOrg — the invitations of an organization being deleted
@@ -2090,6 +2100,12 @@ message SetOrgSignUpPolicyRowReq {
   bool   open   = 3;
   string role   = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   string set_by = 5 [(w17.field) = { type: UUID, null: true }];
+  // The products' roles an open registration is given (product_roles) — see
+  // OrgSignUpPolicy.product_roles.
+  string product_roles = 6 [
+    (w17.field) = { type: TEXT, blank: true },
+    (w17.contrib.plugin_feature_field) = "product_roles"
+  ];
 }
 message SetOrgSignUpPolicyRowResp {
   option (w17.contrib.plugin_feature) = "org_signup";
@@ -4949,7 +4965,8 @@ service AuthMutation {
           "token_hash = :token_hash, "
           "metadata = :metadata, "
           "role_snapshot = :role_snapshot, "
-          "?feature(membership_kinds) kind = :kind "
+          "?feature(membership_kinds) kind = :kind, "
+          "?feature(product_roles) product_roles = :product_roles "
           "RETURNING id AS invite.id, "
           "          org_id AS invite.org_id, "
           "          email AS invite.email, "
@@ -4957,7 +4974,8 @@ service AuthMutation {
           "          invited_by AS invite.invited_by, "
           "          expires_at AS invite.expires_at, "
           "          accepted_at AS invite.accepted_at, "
-          "          created_at AS invite.created_at"
+          "          created_at AS invite.created_at, "
+          "          ?feature(product_roles) product_roles AS invite.product_roles"
       }
     };
     option (w17.event_emit) = {
@@ -5015,8 +5033,9 @@ service AuthMutation {
           "accepted_at = NOW() "
           "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
           "AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL) "
-          "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot, "
-          "          ?feature(membership_kinds) kind"
+          "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot, invited_by, "
+          "          ?feature(membership_kinds) kind, "
+          "          ?feature(product_roles) product_roles"
       }
     };
     // The acceptance's announcement. OrgInviteAccepted was declared and nothing
@@ -5556,7 +5575,8 @@ service AuthMutation {
           "kind = :kind, "
           "open = :open, "
           "role = :role, "
-          "set_by = :set_by "
+          "set_by = :set_by, "
+          "?feature(product_roles) product_roles = :product_roles "
           "RETURNING id AS id"
       }
     };

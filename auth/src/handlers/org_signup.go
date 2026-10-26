@@ -127,8 +127,26 @@ func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string
 	}
 	// org_id on the grant scopes it to the organization; empty would be
 	// realm-wide, which a registration must never produce.
-	_, err = h.Mutation.AssignRoleToUser(txCtx, &pb.AssignRoleToUserReq{UserId: userID, RoleId: roleID, OrgId: j.orgID})
-	return err
+	if _, err = h.Mutation.AssignRoleToUser(txCtx, &pb.AssignRoleToUserReq{UserId: userID, RoleId: roleID, OrgId: j.orgID}); err != nil {
+		return err
+	}
+	if signupPolicyProductRoles != nil {
+		return signupPolicyProductRoles.grant(txCtx, h, userID, j)
+	}
+	return nil
+}
+
+// signupPolicyProductRoles carries the products' roles an open registration
+// is given (product_roles_signup.go); nil without product_roles.
+var signupPolicyProductRoles *signupPolicyProductRoleHooks
+
+type signupPolicyProductRoleHooks struct {
+	// check holds a policy's roles to the catalogue and the organization's
+	// plan, and returns what writes them onto the row.
+	check func(ctx context.Context, h *AuthServiceHandler, req *pb.SetOrgSignUpPolicyReq) (func(*pb.SetOrgSignUpPolicyRowReq), error)
+	info  func(row *pb.OrgSignUpPolicyRow, out *pb.OrgSignUpPolicyInfo)
+	// grant gives the joining account the live policy's roles.
+	grant func(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error
 }
 
 // answerOpenKinds adds the kinds open for registration to GetHostOrg, so a
@@ -200,15 +218,25 @@ func (h *AuthServiceHandler) SetOrgSignUpPolicy(ctx context.Context, req *pb.Set
 	} else {
 		role = ""
 	}
+	var writeProductRoles func(*pb.SetOrgSignUpPolicyRowReq)
+	if signupPolicyProductRoles != nil && req.GetOpen() {
+		if writeProductRoles, err = signupPolicyProductRoles.check(ctx, h, req); err != nil {
+			return nil, err
+		}
+	}
 	if err := h.inTx(ctx, func(txCtx context.Context) error {
 		if _, err := h.Mutation.EndOrgSignUpPolicyRow(txCtx, &pb.EndOrgSignUpPolicyRowReq{
 			OrgId: req.GetOrgId(), Kind: req.GetKind(), EndedBy: caller,
 		}); notFoundOK(err) != nil {
 			return err
 		}
-		_, err := h.Mutation.SetOrgSignUpPolicyRow(txCtx, &pb.SetOrgSignUpPolicyRowReq{
+		row := &pb.SetOrgSignUpPolicyRowReq{
 			OrgId: req.GetOrgId(), Kind: req.GetKind(), Open: req.GetOpen(), Role: role, SetBy: caller,
-		})
+		}
+		if writeProductRoles != nil {
+			writeProductRoles(row)
+		}
+		_, err := h.Mutation.SetOrgSignUpPolicyRow(txCtx, row)
 		return err
 	}); err != nil {
 		return nil, err
@@ -248,7 +276,11 @@ func (h *AuthServiceHandler) ListOrgSignUpPolicies(ctx context.Context, req *pb.
 	}
 	out := &pb.ListOrgSignUpPoliciesResp{}
 	for _, p := range rows.GetPolicies() {
-		out.Policies = append(out.Policies, &pb.OrgSignUpPolicyInfo{Kind: p.GetKind(), Open: p.GetOpen(), Role: p.GetRole(), SetAt: p.GetSetAt()})
+		info := &pb.OrgSignUpPolicyInfo{Kind: p.GetKind(), Open: p.GetOpen(), Role: p.GetRole(), SetAt: p.GetSetAt()}
+		if signupPolicyProductRoles != nil {
+			signupPolicyProductRoles.info(p, info)
+		}
+		out.Policies = append(out.Policies, info)
 	}
 	return out, nil
 }

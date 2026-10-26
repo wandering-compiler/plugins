@@ -936,7 +936,9 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 **How Authenticate answers a product.** Everything up to the scopes runs as for the identity's own surfaces — the token, the device binding, the active organization (`tenant_from`, `W17-Org`, the host). Then, with `x-w17-product` set: the caller's live grants in that product are read; the realm-wide ones count, and those of the active organization when the catalogue still holds the role in an organization and every bound (`product_plans`) allows it; a role the product no longer declares counts for nothing. The keys go to `product_roles` and `permission_ids` is emptied — this domain's ids mean nothing in the product. A product the catalogue does not name is refused (`FailedPrecondition`): the identity was generated without it.
 
-**Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/product_roles.go`. Seams: `authRespEnrichers`, `membershipRemovalCascades`, `orgRemovalCascades`, `configChecks`; it offers `productRoleBounds`.
+**Invitations and open registration.** With `org_invite`, `InviteToOrgReq.product_roles` names the products' roles accepting gives in the organization (column `OrgInvite.product_roles`, `<product>:<role key>` pairs): each must be one the catalogue holds in an organization, carried by the plan, and covered by a role the inviter holds there. Acceptance holds them to the catalogue and the plan again before it writes the membership, then grants them in its transaction with the inviter as the giver; a role that left either refuses the acceptance. The invitation lists (`ListOrgInvites`, `ListMyInvites`), `InviteToOrgResp` and `AcceptOrgInviteResp` show them. With `org_signup`, `SetOrgSignUpPolicyReq.product_roles` names those an open registration is given (column `OrgSignUpPolicy.product_roles`), held to the catalogue and the plan when the backoffice sets the policy; a registration gives those of the policy live when it joins that the catalogue and the plan still carry, and passes over the rest — the person registering cannot replace the policy.
+
+**Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/product_roles.go`; with `org_invite` also `handlers/product_roles_invite.go` (`inviteProductRoles`), with `org_signup` also `handlers/product_roles_signup.go` (`signupPolicyProductRoles`). Seams: `authRespEnrichers`, `membershipRemovalCascades`, `orgRemovalCascades`, `configChecks`; it offers `productRoleBounds`.
 
 | id | invariant | category | proof |
 |---|---|---|---|
@@ -944,11 +946,12 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | product_roles/ceiling | Inside an organization a caller MUST hand out and take only product roles covered by one they hold there (or realm-wide) — one carrying every permission of it, as codegen computed from the product's roles (`covers`) — only to members, and only roles the catalogue holds in an organization. | Security | `TestAssignOrgProductRole` |
 | product_roles/backoffice | The backoffice's grants MUST be made realm-wide, where the endpoint ACL gates the method; a grant in an organization MUST respect its plan. | Security | `TestBackofficeProductRoles` |
 | product_roles/leaving | A member leaving an organization MUST lose the product roles held there, and only those; a deleted organization's MUST end with it. | Lifecycle | `TestProductRolesEndWithTheMembership` |
+| product_roles/invitation | An invitation MUST carry only product roles the inviter could hand out in the organization at that moment, and accepting it MUST give them only while the catalogue and the plan still carry them — refusing otherwise, before the membership is written. | Security | `TestInviteProductRoles`; live: `examples/product-roles-proof` |
+| product_roles/registration | An open registration policy MUST name only roles the catalogue holds in an organization and the plan carries; a registration MUST give only those still carried when it joins. | Security | `TestSignUpPolicyProductRoles`; live: `examples/product-roles-proof` |
 | product_roles/catalogue | The catalogue MUST be the products' own declarations, generated — never edited — and a table that does not parse MUST refuse to boot. | Correctness | `parseProductRoleCatalogue`; codegen `TestWithProductRoleTables` |
 
 **Gaps / suspected defects**
-1. Invitations and `org_signup` do not carry product roles yet: a new member is given them after joining.
-2. An API token or a machine account reaches a product with the product roles of its user; there is no per-token subset of product roles.
+1. An API token or a machine account reaches a product with the product roles of its user; there is no per-token subset of product roles.
 
 ### product_plans
 

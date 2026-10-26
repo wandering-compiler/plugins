@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -290,28 +291,111 @@ func (h *AuthServiceHandler) orgProductRoleCall(ctx context.Context, req *pb.Org
 	if err != nil {
 		return "", "", err
 	}
-	entry, err := c.role(ctx, req.GetProduct(), req.GetRoleKey())
-	if err != nil {
+	if err := h.checkOrgProductRole(ctx, c, orgID, req.GetProduct(), req.GetRoleKey()); err != nil {
 		return "", "", err
+	}
+	if err := h.checkProductRoleCeiling(ctx, c, caller, orgID, req.GetProduct(), req.GetRoleKey()); err != nil {
+		return "", "", err
+	}
+	return caller, orgID, nil
+}
+
+// checkOrgProductRole refuses a role the catalogue does not name or holds
+// realm-wide.
+func (h *AuthServiceHandler) checkOrgProductRole(ctx context.Context, c *productRoleCatalogue, orgID, product, role string) error {
+	entry, err := c.role(ctx, product, role)
+	if err != nil {
+		return err
 	}
 	if !entry.OrgScoped {
-		return "", "", refusal(ctx, codes.InvalidArgument, "product_roles: the role is held realm-wide, not in an organization",
+		return refusal(ctx, codes.InvalidArgument, "product_roles: the role is held realm-wide, not in an organization",
 			CodeProductRoleRealmHeld, "role_key", MsgProductRoleRealmHeld, nil)
 	}
-	held, err := heldProductRoles(ctx, h, c, caller, req.GetProduct(), orgID)
+	return nil
+}
+
+// checkProductRoleCeiling refuses a role no role the caller holds in orgID
+// (or realm-wide) covers — carries every permission of (Covers, computed at
+// codegen from the product's roles; a role always covers itself).
+func (h *AuthServiceHandler) checkProductRoleCeiling(ctx context.Context, c *productRoleCatalogue, caller, orgID, product, role string) error {
+	held, err := heldProductRoles(ctx, h, c, caller, product, orgID)
 	if err != nil {
-		return "", "", err
+		return err
 	}
-	// The ceiling: a role the caller holds here covers the one handed out —
-	// it carries every permission of it (Covers, computed at codegen from the
-	// product's roles; the role itself always).
 	for _, g := range held {
-		if g.GetRoleKey() == req.GetRoleKey() || slices.Contains(c.byProduct[req.GetProduct()][g.GetRoleKey()].Covers, req.GetRoleKey()) {
-			return caller, orgID, nil
+		if g.GetRoleKey() == role || slices.Contains(c.byProduct[product][g.GetRoleKey()].Covers, role) {
+			return nil
 		}
 	}
-	return "", "", refusal(ctx, codes.PermissionDenied, "product_roles: no role the caller holds here covers this one",
+	return refusal(ctx, codes.PermissionDenied, "product_roles: no role the caller holds here covers this one",
 		CodeProductRoleAbove, "role_key", MsgProductRoleAbove, nil)
+}
+
+// checkProductRoleInPlan refuses a role the organization's plan does not
+// carry (product_plans; nothing bounds it without).
+func (h *AuthServiceHandler) checkProductRoleInPlan(ctx context.Context, orgID, product, role string) error {
+	for _, b := range productRoleBounds {
+		allow, err := b(ctx, h, orgID, product)
+		if err != nil {
+			return err
+		}
+		if allow != nil && !allow(role) {
+			return refusal(ctx, codes.FailedPrecondition, "product_roles: the organization's plan does not carry the role",
+				CodeProductRoleNotInPlan, "role_key", MsgProductRoleNotInPlan, nil)
+		}
+	}
+	return nil
+}
+
+// orgProductRoleRefs checks the products' roles an invitation or an open
+// registration gives in orgID — each named by the catalogue, held in an
+// organization and carried by the plan; and, with a caller, covered by one
+// they hold there — and returns them as the column stores them.
+func (h *AuthServiceHandler) orgProductRoleRefs(ctx context.Context, orgID, caller string, refs []*pb.ProductRoleRef) (string, error) {
+	if len(refs) == 0 {
+		return "", nil
+	}
+	c, err := h.productRoleCatalogue()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range refs {
+		if err := h.checkOrgProductRole(ctx, c, orgID, r.GetProduct(), r.GetRoleKey()); err != nil {
+			return "", err
+		}
+		if err := h.checkProductRoleInPlan(ctx, orgID, r.GetProduct(), r.GetRoleKey()); err != nil {
+			return "", err
+		}
+		if caller != "" {
+			if err := h.checkProductRoleCeiling(ctx, c, caller, orgID, r.GetProduct(), r.GetRoleKey()); err != nil {
+				return "", err
+			}
+		}
+	}
+	return encodeProductRoleRefs(refs), nil
+}
+
+// encodeProductRoleRefs is the column form of a set of product roles:
+// `<product>:<role key>` pairs, sorted and deduplicated, comma-separated.
+// Neither a domain name nor a role key carries ':' or ','.
+func encodeProductRoleRefs(refs []*pb.ProductRoleRef) string {
+	pairs := make([]string, 0, len(refs))
+	for _, r := range refs {
+		pairs = append(pairs, r.GetProduct()+":"+r.GetRoleKey())
+	}
+	sort.Strings(pairs)
+	return strings.Join(slices.Compact(pairs), ",")
+}
+
+// decodeProductRoleRefs reads encodeProductRoleRefs' form back.
+func decodeProductRoleRefs(s string) []*pb.ProductRoleRef {
+	var out []*pb.ProductRoleRef
+	for _, pair := range strings.Split(s, ",") {
+		if product, role, ok := strings.Cut(strings.TrimSpace(pair), ":"); ok && product != "" && role != "" {
+			out = append(out, &pb.ProductRoleRef{Product: product, RoleKey: role})
+		}
+	}
+	return out
 }
 
 // ListProductRoleGrants is the backoffice's view: an organization's grants,
@@ -422,17 +506,18 @@ func (h *AuthServiceHandler) grantProductRole(ctx context.Context, caller, userI
 			return refusal(ctx, codes.FailedPrecondition, "product_roles: the user is not a member of the organization",
 				CodeProductRoleNotMember, "user_id", MsgProductRoleNotMember, nil)
 		}
-		for _, b := range productRoleBounds {
-			allow, err := b(ctx, h, orgID, product)
-			if err != nil {
-				return err
-			}
-			if allow != nil && !allow(role) {
-				return refusal(ctx, codes.FailedPrecondition, "product_roles: the organization's plan does not carry the role",
-					CodeProductRoleNotInPlan, "role_key", MsgProductRoleNotInPlan, nil)
-			}
+		if err := h.checkProductRoleInPlan(ctx, orgID, product, role); err != nil {
+			return err
 		}
 	}
+	return h.writeProductRoleGrant(ctx, caller, userID, orgID, product, role)
+}
+
+// writeProductRoleGrant writes the grant with no check of the membership or
+// the plan: for the joins (an accepted invitation, an open registration)
+// that wrote the membership in the same transaction — a read of it outside
+// that transaction would not see it — and checked the plan before.
+func (h *AuthServiceHandler) writeProductRoleGrant(ctx context.Context, caller, userID, orgID, product, role string) error {
 	if g, err := h.liveProductRoleGrant(ctx, userID, orgID, product, role); err != nil {
 		return err
 	} else if g != nil {
