@@ -259,11 +259,12 @@ message SignUpReq {
   // organizations' sign-ups and is bound to none of them). Without a gateway
   // host (an audience taking the tenant from the host), org_signup decides on
   // it exactly as for a registration arriving on that host: the organization
-  // bound to it (org_hosts) and its policies. A gateway host is the request's
-  // own and wins; a body host naming another one is refused
-  // (SIGNUP_HOST_CONFLICT). Nothing is verified beyond the binding: an open
-  // policy admits anyone who reaches that host, so naming it gains nothing
-  // more. Field-gated by `org_signup`.
+  // bound to it (org_hosts) and its policies. A gateway host bound to an
+  // organization is the request's own and wins; a body host naming another
+  // one is refused (SIGNUP_HOST_CONFLICT). A gateway host bound to none (the
+  // identity's own) leaves the body host to decide. Nothing is verified
+  // beyond the binding: an open policy admits anyone who reaches that host,
+  // so naming it gains nothing more. Field-gated by `org_signup`.
   string signup_host = 6 [
     (w17.field) = { type: CHAR, max_len: 253, null: true },
     (w17.contrib.plugin_feature_field) = "org_signup"
@@ -635,11 +636,12 @@ message OAuthExchangeReq {
   // organizations' sign-ups and is bound to none of them). Without a gateway
   // host (an audience taking the tenant from the host), org_signup decides on
   // it exactly as for a registration arriving on that host: the organization
-  // bound to it (org_hosts) and its policies. A gateway host is the request's
-  // own and wins; a body host naming another one is refused
-  // (SIGNUP_HOST_CONFLICT). Nothing is verified beyond the binding: an open
-  // policy admits anyone who reaches that host, so naming it gains nothing
-  // more. Field-gated by `org_signup`.
+  // bound to it (org_hosts) and its policies. A gateway host bound to an
+  // organization is the request's own and wins; a body host naming another
+  // one is refused (SIGNUP_HOST_CONFLICT). A gateway host bound to none (the
+  // identity's own) leaves the body host to decide. Nothing is verified
+  // beyond the binding: an open policy admits anyone who reaches that host,
+  // so naming it gains nothing more. Field-gated by `org_signup`.
   string signup_host = 5 [
     (w17.field) = { type: CHAR, max_len: 253, null: true },
     (w17.contrib.plugin_feature_field) = "org_signup"

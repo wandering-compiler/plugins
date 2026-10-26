@@ -970,7 +970,8 @@ type orgJoin struct {
 // join when an open policy covers it, a refusal when a closed one does, and
 // nil, nil when no policy speaks — invite_only decides then, as without the
 // feature. bodyHost is the host the request names (signupHostOf), "" when
-// none; the gateway's host, when there is one, wins. nil without org_signup.
+// none; a gateway host bound to an organization wins, one bound to none
+// leaves bodyHost to decide. nil without org_signup.
 var signupOrgDecide func(ctx context.Context, h *AuthServiceHandler, bodyHost string) (*orgJoin, error)
 
 // signupHostOf reads the host a registration request names (`signup_host`,

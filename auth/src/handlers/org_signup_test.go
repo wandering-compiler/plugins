@@ -230,8 +230,9 @@ func TestPendingSignUpCarriesTheJoin(t *testing.T) {
 // comes from: with no gateway host, that host decides exactly as a
 // registration arriving on it would — the bound organization and its
 // policies, with the audience's kinds when it names some and none otherwise.
-// A gateway host is the request's own and wins over a body host naming
-// another; an invitation is still never second-guessed.
+// A gateway host bound to an organization is the request's own and wins over
+// a body host naming another; one bound to none leaves the body host to
+// decide; an invitation is still never second-guessed.
 func TestDecideSignUpJoin_ABodyHost(t *testing.T) {
 	for _, c := range []struct {
 		name, from, kinds, host, body string
@@ -249,6 +250,8 @@ func TestDecideSignUpJoin_ABodyHost(t *testing.T) {
 			extra: []*pb.OrgSignUpPolicyRow{{Kind: "guest", Open: true, Role: "member"}}, code: CodeSignUpKindAmbiguous},
 		{name: "only closed policies refuse", body: "closed.example.com", code: CodeSignUpNotInvited},
 		{name: "a gateway host and the same body host", from: "host", kinds: "client", host: "acme.example.com", body: "acme.example.com",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "a body host equal to the gateway's once normalised is no conflict", from: "host", kinds: "client", host: "acme.example.com", body: " ACME.example.com. ",
 			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
 		{name: "a body host naming another than the gateway's bound host is refused", from: "host", kinds: "client", host: "acme.example.com", body: "other.example.com",
 			code: CodeSignUpHostConflict},
