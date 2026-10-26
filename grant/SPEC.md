@@ -41,20 +41,23 @@ ACL.
 The backoffice decides an envelope by approving a proposal. A project that
 decides it at deploy time instead, with a fixture (an organization the
 deployment itself creates), writes the row exactly as `ApproveEnvelope`
-leaves it:
+leaves it. A fixture file (`fixtures/<domain>/<name>.json`, in the domain the
+plugin is activated in) is a JSON array of rows:
 
 ```json
-{
-  "model": "grant.Envelope",
-  "pk": ["<uuid>"],
-  "fields": {
-    "org_id": "<the organization>",
-    "status": "approved",
-    "approved_slot": "approved",
-    "display_name": "Acme",
-    "decided_at": "2026-10-26T00:00:00Z"
+[
+  {
+    "model": "grant.Envelope",
+    "pk": ["<uuid>"],
+    "fields": {
+      "org_id": "<the organization>",
+      "status": "approved",
+      "approved_slot": "approved",
+      "display_name": "Acme",
+      "decided_at": "2026-10-26T00:00:00Z"
+    }
   }
-}
+]
 ```
 
 (`grant` is the activation's name; use yours.)
@@ -67,10 +70,12 @@ leaves it:
   is not a UUID and the row is refused. `decided_at` is set.
 - One per organization. To replace a seeded envelope, write the previous one
   with `status: "superseded"` and `"approved_slot": null` — what an approval
-  does to its predecessor — and the new one as above. Rows of one model are
-  written in file order and the index is checked per statement, so the
-  superseded row comes FIRST: the other way round, the new row meets the old
-  one still holding the slot and the apply is refused.
+  does to its predecessor — and the new one as above, both in the SAME
+  fixture file. Rows of one model are written in file order and the index is
+  checked per statement, so the superseded row comes FIRST: the other way
+  round, the new row meets the old one still holding the slot and the apply
+  is refused. Across files the order is the files' names, not the rows'
+  meaning.
 - A fixture is re-applied on every deploy (an upsert by `pk`), so it keeps
   writing what it says. Once the backoffice approves a newer proposal for a
   seeded organization (which supersedes the seeded row), the next apply would
@@ -79,9 +84,10 @@ leaves it:
   either the fixture alone, or, after the first approval by the backoffice,
   change the seeded row in the fixture to `superseded` with
   `"approved_slot": null`.
-- The other fields are checked like a proposal's (`grant/safe-fields`):
-  links absolute https, a colour `#rrggbb`, a host a lower-case DNS name. A
-  fixture is not run through that check, so keep to it.
+- The other fields are NOT checked: a proposal is held to
+  `grant/safe-fields` (links absolute https, a colour `#rrggbb`, a host a
+  lower-case DNS name), but a fixture bypasses that check and the public read
+  serves the row as written (gap 3), so keep to it.
 
 The VALUES are the public contract — what a fixture writes. The handlers
 name them (`StatusApproved`, `ApprovedSlot`, `StatusSuperseded` in
@@ -93,3 +99,4 @@ statements to them.
 
 1. The verified host is the organization's claim until the backoffice approves the version; nothing checks DNS.
 2. The envelope of a host is two reads — the auth plugin's host binding, then the organization's envelope here.
+3. `grant/safe-fields` is enforced on a proposal only. An envelope seeded by fixture is never run through `checkFields`, and `GetOrgEnvelope` serves it as stored: a seeded `javascript:` link or a malformed colour reaches the pages. The fixture's author is the deployment, not an organization, but nothing refuses it.

@@ -3,6 +3,8 @@ package handlers
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -49,7 +51,12 @@ func TestEnvelopeStatementsUseTheContractValues(t *testing.T) {
 	if !strings.Contains(models, `{ unique: true, fields: [{ name: "org_id" }, { name: "approved_slot" }] }`) {
 		t.Error("models.proto has no unique (org_id, approved_slot) index — a seeded approved envelope is no longer held to one per organization")
 	}
-	if !strings.Contains(models, `string approved_slot    = 20 [(w17.field) = { type: CHAR, max_len: 8, null: true }];`) || len(ApprovedSlot) > 8 {
-		t.Errorf("approved_slot is not a nullable CHAR(8) holding %q", ApprovedSlot)
+	// Field alignment is cosmetic: match the declaration, not its padding.
+	slot := regexp.MustCompile(`string\s+approved_slot\s*=\s*\d+\s*\[\(w17\.field\)\s*=\s*\{\s*type:\s*CHAR,\s*max_len:\s*(\d+),\s*null:\s*true\s*\}\]`).FindStringSubmatch(models)
+	if slot == nil {
+		t.Fatal("models.proto has no nullable CHAR approved_slot")
+	}
+	if n, _ := strconv.Atoi(slot[1]); len(ApprovedSlot) > n {
+		t.Errorf("approved_slot is CHAR(%d), too short for %q", n, ApprovedSlot)
 	}
 }

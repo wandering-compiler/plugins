@@ -17,11 +17,12 @@ import (
 )
 
 // The values Envelope.status takes, and Envelope.approved_slot on an
-// organization's one approved version. The VALUES are a public contract, not only
-// this file's (a project cannot import these names; it writes the values): a project seeding an approved envelope by fixture writes them
-// (SPEC.md, "Seeding an approved envelope"), and the statements in
-// grant_mutation.proto and grant_query.proto use them as literals —
-// TestEnvelopeStatementsUseTheContractValues holds the two together.
+// organization's one approved version. The VALUES are a public contract, not
+// only this file's: a project seeding an approved envelope by fixture writes
+// them (SPEC.md, "Seeding an approved envelope") — it cannot import these
+// names — and the statements in grant_mutation.proto and grant_query.proto use
+// them as literals. TestEnvelopeStatementsUseTheContractValues holds the two
+// together.
 const (
 	StatusProposed   = "proposed"
 	StatusApproved   = "approved"
