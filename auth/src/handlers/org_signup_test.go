@@ -107,7 +107,7 @@ func TestDecideSignUpJoin(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			m := signupFixture()
 			m.policies["org-acme"] = append(m.policies["org-acme"], c.extra...)
-			got, err := decideSignUpJoin(registrationVia(c.from, c.kinds, c.host), &AuthServiceHandler{Query: m})
+			got, err := decideSignUpJoin(registrationVia(c.from, c.kinds, c.host), &AuthServiceHandler{Query: m}, "")
 			if c.code != "" {
 				if _, code := detailCode(t, err); code != c.code {
 					t.Fatalf("err = %v, want %s", err, c.code)
@@ -130,7 +130,7 @@ func TestSignUpGates_OpenPolicyAndInvitation(t *testing.T) {
 	m := signupFixture()
 	h := &AuthServiceHandler{Query: m, InviteOnly: true}
 	ctx := registrationVia("host,default", "client", "acme.example.com")
-	join, err := signupGates(ctx, h, "new@example.com", "")
+	join, err := signupGates(ctx, h, "new@example.com", "", "")
 	if err != nil || join == nil || join.orgID != "org-acme" {
 		t.Fatalf("open policy under invite_only: join %+v, err %v", join, err)
 	}
@@ -138,11 +138,11 @@ func TestSignUpGates_OpenPolicyAndInvitation(t *testing.T) {
 	saved := signupInviteGate
 	signupInviteGate = func(context.Context, *AuthServiceHandler, string, string) error { called = true; return nil }
 	defer func() { signupInviteGate = saved }()
-	if join, err := signupGates(ctx, h, "new@example.com", "invite-token"); err != nil || join != nil || !called {
+	if join, err := signupGates(ctx, h, "new@example.com", "invite-token", ""); err != nil || join != nil || !called {
 		t.Errorf("with an invitation: join %+v, err %v, invite gate called %v", join, err, called)
 	}
 	called = false
-	if join, err := signupGates(registrationVia("host,default", "partner", "acme.example.com"), h, "new@example.com", ""); err != nil || join != nil || !called {
+	if join, err := signupGates(registrationVia("host,default", "partner", "acme.example.com"), h, "new@example.com", "", ""); err != nil || join != nil || !called {
 		t.Errorf("no policy: join %+v, err %v, invite gate called %v — invite_only must decide", join, err, called)
 	}
 }
@@ -223,5 +223,85 @@ func TestPendingSignUpCarriesTheJoin(t *testing.T) {
 	}
 	if readClaimedSignUpJoin(&pb.ClaimPendingSignUpResp{}) != nil {
 		t.Error("a registration that joins nothing came back joining something")
+	}
+}
+
+// A registration page on the identity's own host names the host the person
+// comes from: with no gateway host, that host decides exactly as a
+// registration arriving on it would — the bound organization and its
+// policies, with the audience's kinds when it names some and none otherwise.
+// A gateway host bound to an organization is the request's own and wins over
+// a body host naming another; one bound to none leaves the body host to
+// decide; an invitation is still never second-guessed.
+func TestDecideSignUpJoin_ABodyHost(t *testing.T) {
+	for _, c := range []struct {
+		name, from, kinds, host, body string
+		extra                         []*pb.OrgSignUpPolicyRow
+		want                          *orgJoin
+		code                          string
+	}{
+		{name: "the identity's own page names acme's host: acme's one open kind joins", body: "acme.example.com",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "normalised like a gateway host", body: " ACME.example.com. ",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "an unbound host joins nothing", body: "other.example.com"},
+		{name: "the audience's kinds still filter: staff is by invitation only", kinds: "staff", body: "acme.example.com", code: CodeSignUpNotInvited},
+		{name: "no audience kinds and two open kinds is ambiguous", body: "acme.example.com",
+			extra: []*pb.OrgSignUpPolicyRow{{Kind: "guest", Open: true, Role: "member"}}, code: CodeSignUpKindAmbiguous},
+		{name: "only closed policies refuse", body: "closed.example.com", code: CodeSignUpNotInvited},
+		{name: "a gateway host and the same body host", from: "host", kinds: "client", host: "acme.example.com", body: "acme.example.com",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "a body host equal to the gateway's once normalised is no conflict", from: "host", kinds: "client", host: "acme.example.com", body: " ACME.example.com. ",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "a body host naming another than the gateway's bound host is refused", from: "host", kinds: "client", host: "acme.example.com", body: "other.example.com",
+			code: CodeSignUpHostConflict},
+		{name: "an audience that does not read the host leaves the body host to decide", from: "default", host: "x.example.com", body: "acme.example.com",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "the identity's own unbound host behind a host-reading audience leaves the body host to decide", from: "host,default", host: "id.example.com", body: "acme.example.com",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "not a host name", body: "https://acme.example.com/x", code: CodeHostInvalid},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := signupFixture()
+			m.policies["org-acme"] = append(m.policies["org-acme"], c.extra...)
+			m.policies["org-closed"] = []*pb.OrgSignUpPolicyRow{{Kind: "client", Open: false}}
+			m.hosts["closed.example.com"] = &pb.OrgHostRow{Host: "closed.example.com", OrgId: "org-closed", Slug: "closed"}
+			got, err := decideSignUpJoin(registrationVia(c.from, c.kinds, c.host), &AuthServiceHandler{Query: m}, c.body)
+			if c.code != "" {
+				if _, code := detailCode(t, err); code != c.code {
+					t.Fatalf("err = %v, want %s", err, c.code)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+				t.Errorf("join = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// The body host reaches the decision from both registration requests that
+// create an account, and an invitation still decides its own organization.
+func TestSignUpGates_ABodyHostFromEachRequest(t *testing.T) {
+	if got := signupHost(&pb.SignUpReq{SignupHost: "acme.example.com"}); got != "acme.example.com" {
+		t.Errorf("SignUpReq: %q", got)
+	}
+	if got := signupHost(&pb.OAuthExchangeReq{SignupHost: "acme.example.com"}); got != "acme.example.com" {
+		t.Errorf("OAuthExchangeReq: %q", got)
+	}
+	m := signupFixture()
+	h := &AuthServiceHandler{Query: m, InviteOnly: true}
+	join, err := signupGates(context.Background(), h, "new@example.com", "", "acme.example.com")
+	if err != nil || join == nil || join.orgID != "org-acme" {
+		t.Fatalf("body host under invite_only: join %+v, err %v", join, err)
+	}
+	saved := signupInviteGate
+	signupInviteGate = func(context.Context, *AuthServiceHandler, string, string) error { return nil }
+	defer func() { signupInviteGate = saved }()
+	if join, err := signupGates(context.Background(), h, "new@example.com", "invite-token", "acme.example.com"); err != nil || join != nil {
+		t.Errorf("an invitation with a body host: join %+v, err %v — the invitation decides", join, err)
 	}
 }

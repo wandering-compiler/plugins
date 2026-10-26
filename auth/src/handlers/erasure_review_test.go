@@ -177,7 +177,7 @@ func TestConfirmSignUp_RefusesTheErasedDomain(t *testing.T) {
 // erased domain before any gate or write.
 func TestOAuthAccountCreation_RefusesTheErasedDomain(t *testing.T) {
 	h := &AuthServiceHandler{} // no store: a call into one would panic
-	_, err := h.createOAuthAccount(context.Background(), "p1", "sub-1", "Erased-U1@Erased.Invalid", true, "")
+	_, err := h.createOAuthAccount(context.Background(), "p1", "sub-1", "Erased-U1@Erased.Invalid", true, "", "")
 	assertReservedRefused(t, "OAuth account creation", err)
 }
 

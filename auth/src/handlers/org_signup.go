@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 
@@ -34,11 +35,38 @@ import (
 // Two open kinds for one audience are a configuration error
 // (SIGNUP_KIND_AMBIGUOUS), never a guess. An invitation still decides its own
 // organization: a registration carrying one never reaches this.
+//
+// A registration page on the identity's own host — one host serving several
+// organizations' sign-ups, bound to none of them — names the host the person
+// comes from in the request (`signup_host`). With no gateway host it decides
+// as the host would: the organization bound to it and that organization's
+// policies, with the kinds filter of the audience when one names kinds and
+// none otherwise. Nothing is verified beyond the binding, and nothing needs to
+// be: an open policy admits anyone who reaches that host, so naming it gains
+// nothing more, and a closed or absent one admits nothing either way. The
+// page shows the organization the same way (GetHostOrg for the host, then
+// the organization's approved envelope). A gateway host bound to an
+// organization is the request's own and wins; a body host naming another one is
+// refused (SIGNUP_HOST_CONFLICT). A gateway host bound to none (the identity's
+// own, behind an audience reading the host) leaves the body host to decide.
 
 func init() {
 	signupOrgDecide = decideSignUpJoin
 	signupOrgJoin = writeSignUpJoin
+	signupHostOf = requestSignupHost
 	hostOrgAnswer = answerOpenKinds
+}
+
+// requestSignupHost is signupHostOf: the host a SignUp or an OAuth exchange
+// names.
+func requestSignupHost(req proto.Message) string {
+	switch r := req.(type) {
+	case *pb.SignUpReq:
+		return r.GetSignupHost()
+	case *pb.OAuthExchangeReq:
+		return r.GetSignupHost()
+	}
+	return ""
 }
 
 // gatewayValue is a gateway-owned key of the incoming metadata. Only a
@@ -61,12 +89,38 @@ func splitGatewayList(v string) []string {
 }
 
 // decideSignUpJoin — see the file comment.
-func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler) (*orgJoin, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok || !slices.Contains(splitGatewayList(gatewayValue(md, tenantFromHeader)), tenantFromHost) {
-		return nil, nil
+func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler, bodyHost string) (*orgJoin, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	host := ""
+	if slices.Contains(splitGatewayList(gatewayValue(md, tenantFromHeader)), tenantFromHost) {
+		host = gatewayValue(md, hostHeader)
 	}
-	host := gatewayValue(md, hostHeader)
+	if bodyHost != "" {
+		// Normalised as the gateway reports a host, and refused on the field
+		// the caller sent.
+		named, err := normalHostOf(ctx, bodyHost, "signup_host")
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case host == "":
+			host = named
+		case named != host:
+			// A gateway host decides only when it is bound to an organization:
+			// the identity's own host behind an audience that reads the host
+			// is bound to none, and its page is the one that names the host.
+			bound, err := hostIsBound(ctx, h, host)
+			if err != nil {
+				return nil, err
+			}
+			if bound {
+				return nil, refusal(ctx, codes.InvalidArgument,
+					"org_signup: signup_host names "+named+", but the registration arrived on "+host+", which is bound to an organization",
+					CodeSignUpHostConflict, "signup_host", MsgSignUpHostConflict, nil)
+			}
+			host = named
+		}
+	}
 	if host == "" {
 		return nil, nil
 	}
@@ -106,6 +160,15 @@ func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler) (*orgJoin, err
 			CodeSignUpNotInvited, "", MsgSignUpNotInvited, nil)
 	}
 	return nil, nil
+}
+
+// hostIsBound reports whether host is bound to a live organization.
+func hostIsBound(ctx context.Context, h *AuthServiceHandler, host string) (bool, error) {
+	_, err := h.Query.GetOrgOfHost(ctx, &pb.GetOrgOfHostReq{Host: host})
+	if status.Code(err) == codes.NotFound {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // writeSignUpJoin makes the new account a member of the organization, of the

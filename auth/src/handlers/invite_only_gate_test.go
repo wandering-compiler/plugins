@@ -116,7 +116,7 @@ func TestOAuthCreate_ConsultsTheInviteGate(t *testing.T) {
 		Query:      &inviteGateMock{},
 		InviteOnly: true,
 	}
-	_, err := h.createOAuthAccount(context.Background(), "p1", "sub-1", "stranger@example.com", true, "")
+	_, err := h.createOAuthAccount(context.Background(), "p1", "sub-1", "stranger@example.com", true, "", "")
 	if err == nil {
 		t.Fatal("OAuth created an account for an uninvited address under invite_only")
 	}
