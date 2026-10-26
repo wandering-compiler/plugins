@@ -1,5 +1,50 @@
 # auth — changelog
 
+## 0.1.0-rc.37
+
+### Correction: the `owner_id` drop is not asked for (`org_membership`) (read first)
+
+- The rc.36 notes said the migration that drops `Organization.owner_id` "is lossy and the migrator asks you to confirm it". It does not. A field the proto no longer declares is a decision already made, so `migrate generate` writes the drop and asks nothing. `migrate check` reports nothing to decide, and the generated migration only carries a `-- RISK:` comment for the step (`drop_column`, MEDIUM). Only a local `stack build` stops on it, as on any lossy sync, until `--lossy` says what to do.
+- If a deployment set `owner_id` by hand and wants the values, export them before anything applies the migration: the deployed binary when it migrates, or a local `stack build --lossy=apply`. Grant those people a role and a membership first, as the rc.36 notes say.
+
+### A registration on the identity's own host names the host it comes from (`org_signup`)
+
+- `SignUpReq.signup_host` and `OAuthExchangeReq.signup_host` (new, present with `org_signup`). When a person comes from an organization's host to register on the identity's own host, the registration page there sends that host. The identity's host serves several organizations' sign-ups and is bound to none of them.
+- With no gateway host, the named host decides exactly as a registration arriving on it would: the organization bound to it (`org_hosts`) and that organization's policies (kind, role, open or closed), and `invite_only` when no policy speaks. An unbound host joins nothing. An invitation still decides its own organization.
+- A gateway that takes the tenant from the host still decides by the host the request arrived on when that host is bound to an organization; one bound to none (the identity's own) leaves the named host to decide. A body host naming another host than a bound gateway host is refused with `SIGNUP_HOST_CONFLICT`; one that is not a host name is refused with `HOST_INVALID` on `signup_host`.
+- The page shows the organization the same way as on its own host: `GET /auth/hosts/{host}` (with `open_kinds`), then the grant plugin's approved envelope (`GET /grant/envelopes/orgs/{org_id}`).
+- Nothing extra is verified. An open policy already admits anyone who reaches that host, so naming the host gains nothing more.
+
+### Role changes in an organization run one at a time (`org_membership`, `teams`, `org_roles`, `org_invite`, `org_signup`, `product_roles`, `product_plans`, `service_account`, `bot_roles`)
+
+- Every change to who holds what in an organization now runs, from its first read, in ONE transaction that first locks the organization's row (new query `AuthQuery.LockOrganization`, SELECT … FOR UPDATE). Its role-ceiling and last-superadmin checks therefore judge the state its write changes. Before, they read the member's grants, the team's roles and the role catalogue outside the write's transaction, and several races got through:
+  - two superadmins demoting or removing each other at the same moment both passed the last-superadmin rule and left the organization with none, and with ownership gone nothing inside the organization could restore one;
+  - a caller removed a member whom someone else was promoting above the caller at that moment;
+  - a role was granted while an edit was widening it;
+  - two role changes of one team diffed against the same stale set and failed.
+- Two such changes in one organization now run one after the other. The covered calls:
+  - `UpdateOrgMembershipRole`, `RemoveOrgMembership`, `RemoveOrganization`;
+  - the team methods (`AddOrgTeamMember`, `RemoveOrgTeamMember`, `SetOrgTeamRoles`, `DeleteOrgTeam`);
+  - `CreateOrgRole`, `UpdateOrgRole`, `DeleteOrgRole`;
+  - `InviteToOrg`, `AcceptOrgInvite`, and an open registration's join;
+  - `AssignOrgProductRole`, `RevokeOrgProductRole`, `AssignProductRole`, `RevokeProductRole` (with an organization), and the organization's plan (`AllowOrgProduct`, `DisallowOrgProduct`), which bounds what they may give;
+  - `SetBotRoles`, `CreateBot`, `IssueBotToken`. With organizations, the ceiling is re-checked inside the mint's transaction.
+- `RemoveOrganization` takes the lock first as well. Its cascades lock team and membership rows before the organization's row, so a member removal running at the same time cannot take them in the other order and deadlock with it.
+- Calls that wrote outside a transaction now write inside that one when the bundle has a coordinator. Without one (no `DistTx`), every statement commits on its own, as before, and the lock is held for none of them.
+- The caller's own permissions are re-read under the lock too. A ceiling compares against what Authenticate resolved for the request, less every permission whose grants the caller has all lost since (the active organization's and realm-wide roles, or realm-wide alone with no active organization, and for a session a team's roles): a caller demoted while their request waited for the lock no longer hands out what the demotion took — a machine account's creation and token minting included. The re-read only ever removes, so what Authenticate narrowed away (another organization's roles, the packages, a token's subset) stays away. It counts the caller's realm on role ids, as Authenticate does: a session's roles for a session, the API and MCP realms' for a token (nothing on the request tells an API token from an MCP one, so for either a role of the other token realm still keeps a permission).
+- A change to an organization the lock finds no live row for (an unknown or deleted organization) runs as before and answers with its own refusal.
+
+### An API token names the products' roles it may use (`product_roles` with `api_token`)
+
+- `CreateApiTokenReq.product_roles` and `IssueBotTokenReq.product_roles` name the products' roles a token may use, each one of the catalogue (`PRODUCT_UNKNOWN`, `PRODUCT_ROLE_UNKNOWN` otherwise). A product is answered the roles the token names that a role its holder holds there covers (a holder of alpha's editor may mint a token for alpha's viewer).
+- **A token minted narrow stays narrow toward the products.** One with a `permission_subset` and no product role now reaches the products with **no** role; until now it carried every product role of its holder. A token narrowed on neither axis carries them all, as before, and so does a session.
+- A migration adds the table `TokenProductRole` (with `product_roles`).
+
+### A backoffice method held realm-wide acts realm-wide from inside an organization
+
+- The backoffice's methods that refuse inside an organization — packages, hosts, sign-up policies, the products' roles and plans — now act realm-wide for a caller who holds them through a realm-wide role, whatever organization the request acts in (named, or the caller's only one inferred). Until now they refused (`PACKAGES_REALM_ONLY`, `HOSTS_REALM_ONLY`, …) and an operator who was also a member of one organization needed a second account or `org_from_sole_membership: false`.
+- A member who holds such a method only inside an organization is refused as before. The grant plugin's envelope decisions still need a request acting in no organization.
+
 ## 0.1.0-rc.36
 
 ### An invitation for someone who is already a member is refused

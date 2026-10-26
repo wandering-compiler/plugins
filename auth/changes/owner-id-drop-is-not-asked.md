@@ -1,4 +1,0 @@
-### Correction: the `owner_id` drop is not asked for (`org_membership`) (read first)
-
-- The rc.36 notes said the migration that drops `Organization.owner_id` "is lossy and the migrator asks you to confirm it". It does not. A field the proto no longer declares is a decision already made, so `migrate generate` writes the drop and asks nothing. `migrate check` reports nothing to decide, and the generated migration only carries a `-- RISK:` comment for the step (`drop_column`, MEDIUM). Only a local `stack build` stops on it, as on any lossy sync, until `--lossy` says what to do.
-- If a deployment set `owner_id` by hand and wants the values, export them before anything applies the migration: the deployed binary when it migrates, or a local `stack build --lossy=apply`. Grant those people a role and a membership first, as the rc.36 notes say.
