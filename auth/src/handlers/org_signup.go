@@ -45,8 +45,10 @@ import (
 // be: an open policy admits anyone who reaches that host, so naming it gains
 // nothing more, and a closed or absent one admits nothing either way. The
 // page shows the organization the same way (GetHostOrg for the host, then
-// the organization's approved envelope). A gateway host is the request's own
-// and wins; a body host naming another one is refused (SIGNUP_HOST_CONFLICT).
+// the organization's approved envelope). A gateway host bound to an
+// organization is the request's own and wins; a body host naming another one is
+// refused (SIGNUP_HOST_CONFLICT). A gateway host bound to none (the identity's
+// own, behind an audience reading the host) leaves the body host to decide.
 
 func init() {
 	signupOrgDecide = decideSignUpJoin
@@ -104,9 +106,19 @@ func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler, bodyHost strin
 		case host == "":
 			host = named
 		case named != host:
-			return nil, refusal(ctx, codes.InvalidArgument,
-				"org_signup: signup_host names "+named+", but the registration arrived on "+host,
-				CodeSignUpHostConflict, "signup_host", MsgSignUpHostConflict, nil)
+			// A gateway host decides only when it is bound to an organization:
+			// the identity's own host behind an audience that reads the host
+			// is bound to none, and its page is the one that names the host.
+			bound, err := hostIsBound(ctx, h, host)
+			if err != nil {
+				return nil, err
+			}
+			if bound {
+				return nil, refusal(ctx, codes.InvalidArgument,
+					"org_signup: signup_host names "+named+", but the registration arrived on "+host+", which is bound to an organization",
+					CodeSignUpHostConflict, "signup_host", MsgSignUpHostConflict, nil)
+			}
+			host = named
 		}
 	}
 	if host == "" {
@@ -148,6 +160,15 @@ func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler, bodyHost strin
 			CodeSignUpNotInvited, "", MsgSignUpNotInvited, nil)
 	}
 	return nil, nil
+}
+
+// hostIsBound reports whether host is bound to a live organization.
+func hostIsBound(ctx context.Context, h *AuthServiceHandler, host string) (bool, error) {
+	_, err := h.Query.GetOrgOfHost(ctx, &pb.GetOrgOfHostReq{Host: host})
+	if status.Code(err) == codes.NotFound {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // writeSignUpJoin makes the new account a member of the organization, of the

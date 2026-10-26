@@ -250,9 +250,11 @@ func TestDecideSignUpJoin_ABodyHost(t *testing.T) {
 		{name: "only closed policies refuse", body: "closed.example.com", code: CodeSignUpNotInvited},
 		{name: "a gateway host and the same body host", from: "host", kinds: "client", host: "acme.example.com", body: "acme.example.com",
 			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
-		{name: "a body host naming another than the gateway's is refused", from: "host", kinds: "client", host: "acme.example.com", body: "other.example.com",
+		{name: "a body host naming another than the gateway's bound host is refused", from: "host", kinds: "client", host: "acme.example.com", body: "other.example.com",
 			code: CodeSignUpHostConflict},
 		{name: "an audience that does not read the host leaves the body host to decide", from: "default", host: "x.example.com", body: "acme.example.com",
+			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
+		{name: "the identity's own unbound host behind a host-reading audience leaves the body host to decide", from: "host,default", host: "id.example.com", body: "acme.example.com",
 			want: &orgJoin{orgID: "org-acme", kind: "client", role: "member"}},
 		{name: "not a host name", body: "https://acme.example.com/x", code: CodeHostInvalid},
 	} {
