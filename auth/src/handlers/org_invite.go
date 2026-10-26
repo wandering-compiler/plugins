@@ -335,8 +335,9 @@ func metadataOrEmptyObject(m string) string {
 // still act on it.
 //
 // The account is found the way sign-in finds it (GetUserByEmail on the
-// normalised address); its memberships are ListUserOrgs, which reads live rows
-// only: a REMOVED member is not listed and may be invited back
+// normalised address); its membership here is GetOrgMember, the (user, org)
+// point lookup over live rows only: a REMOVED member is not found and may be
+// invited back
 // (org_membership/removal-is-a-state). No account (NotFound) is the ordinary
 // case of an invitation — the invitee registers later. An open invitation names
 // no address, so there is nobody to look up.
@@ -359,16 +360,16 @@ func (h *AuthServiceHandler) refuseInviteForMember(ctx context.Context, orgID, e
 	if userID == "" {
 		return nil
 	}
-	orgs, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
-	if err != nil {
+	member, err := h.Query.GetOrgMember(ctx, &pb.GetOrgMemberReq{UserId: userID, OrgId: orgID})
+	if err != nil && status.Code(err) != codes.NotFound {
 		return err
 	}
-	for _, o := range orgs.GetOrgs() {
-		if o.GetOrgId() == orgID {
-			return refusal(ctx, codes.AlreadyExists,
-				"the account of "+email+" is already a member of organization "+orgID,
-				CodeInviteAlreadyMember, "email", MsgInviteAlreadyMember, nil)
-		}
+	if member.GetUserId() != "" {
+		// The address stays out of the developer message: it is logged, and the
+		// inviter already holds it.
+		return refusal(ctx, codes.AlreadyExists,
+			"org_invite: the invited address belongs to a live member of organization "+orgID,
+			CodeInviteAlreadyMember, "email", MsgInviteAlreadyMember, nil)
 	}
 	return nil
 }

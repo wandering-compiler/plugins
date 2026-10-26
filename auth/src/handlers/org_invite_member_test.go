@@ -16,7 +16,7 @@ import (
 // first place that refused it, so it could never be accepted.
 //
 // Over orgTables (no_deletes_test.go), whose reads apply the statements'
-// predicates: ListUserOrgs lists live memberships only.
+// predicates: GetOrgMember finds live memberships only.
 func TestInviteToOrg_RefusesAnAddressThatIsAlreadyAMember(t *testing.T) {
 	o := newOrgTables()
 	h := &AuthServiceHandler{Query: o, Mutation: o}
