@@ -210,9 +210,22 @@ type callerGrantsStore struct {
 	*membershipRoleMock
 	org, realm []*pb.RoleGrant
 	asked      []string
+	byRealm    map[pb.TokenType][]*pb.RoleGrant
+	realms     []pb.TokenType
 }
 
 func (callerGrantsStore) keepsCallerGrants() {}
+
+// GetUserRolePermissionsByRealm: every role the store knows the caller holds,
+// in the realm asked (byRealm overrides it per realm); realms records the
+// realms asked.
+func (s *callerGrantsStore) GetUserRolePermissionsByRealm(_ context.Context, in *pb.GetUserRolePermissionsByRealmReq, _ ...grpc.CallOption) (*pb.GetUserRolePermissionsByRealmResp, error) {
+	s.realms = append(s.realms, in.GetTokenType())
+	if g, ok := s.byRealm[in.GetTokenType()]; ok {
+		return &pb.GetUserRolePermissionsByRealmResp{Grants: g}, nil
+	}
+	return &pb.GetUserRolePermissionsByRealmResp{Grants: append(append([]*pb.RoleGrant(nil), s.org...), s.realm...)}, nil
+}
 
 func (s *callerGrantsStore) GetUserOrgPermissions(_ context.Context, in *pb.GetUserOrgPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserOrgPermissionsResp, error) {
 	s.asked = append(s.asked, "org "+in.GetUserId()+" "+in.GetOrgId())
@@ -333,5 +346,62 @@ func TestCeiling_UnderTheLockCountsTeamsForASessionOnly(t *testing.T) {
 	token := context.WithValue(metadata.NewIncomingContext(context.Background(), md), orgLockKey{}, "org-1")
 	if got, err := heldUnderOrgLock(token, h, held); err != nil || !reflect.DeepEqual(got, map[int32]bool{1: true}) {
 		t.Fatalf("API token: got %v, %v; want the team's permission gone", got, err)
+	}
+}
+
+// The re-read counts the caller's realm, on role ids, as Authenticate does: a
+// token's permission survives only through a role of a token realm still
+// held, and a session role of the same person keeps nothing for it. And the
+// reverse: a session is not kept by the person's token-realm roles.
+func TestCeiling_UnderTheLockCountsTheCallersRealm(t *testing.T) {
+	envelope := func(resp *pb.AuthResp) context.Context {
+		raw, err := proto.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		md := metadata.Pairs(userMetadataKey, base64.StdEncoding.EncodeToString(raw))
+		return context.WithValue(inOrg(metadata.NewIncomingContext(context.Background(), md), "org-1"), orgLockKey{}, "org-1")
+	}
+	sessionRole := &pb.RoleGrant{RoleId: "r-session", PermissionIds: []int32{1, 2}}
+	apiRole := &pb.RoleGrant{RoleId: "r-api", PermissionIds: []int32{1}}
+	newStore := func() *callerGrantsStore {
+		return &callerGrantsStore{
+			// Both roles are eligible in org-1; which realm holds which is
+			// what the realm read answers.
+			org: []*pb.RoleGrant{sessionRole, apiRole},
+			byRealm: map[pb.TokenType][]*pb.RoleGrant{
+				pb.TokenType_TOKEN_TYPE_SESSION: {sessionRole},
+				pb.TokenType_TOKEN_TYPE_API:     {apiRole},
+				pb.TokenType_TOKEN_TYPE_MCP:     nil,
+			},
+		}
+	}
+	held := map[int32]bool{1: true, 2: true}
+
+	// A token (no session id): permission 2 came from an API role it lost;
+	// the person's session role still carrying 2 does not keep it.
+	s := newStore()
+	got, err := heldUnderOrgLock(envelope(&pb.AuthResp{UserId: "u1", PermissionIds: []int32{1, 2}}), &AuthServiceHandler{Query: s}, held)
+	if err != nil || !reflect.DeepEqual(got, map[int32]bool{1: true}) {
+		t.Fatalf("token: got %v, %v; want only what a token-realm role still carries", got, err)
+	}
+	if !reflect.DeepEqual(s.realms, []pb.TokenType{pb.TokenType_TOKEN_TYPE_API, pb.TokenType_TOKEN_TYPE_MCP}) {
+		t.Fatalf("token: realms read %v", s.realms)
+	}
+
+	// A session: its own realm's roles, and nothing else.
+	s = newStore()
+	got, err = heldUnderOrgLock(envelope(&pb.AuthResp{UserId: "u1", SessionTokenId: "s-1", PermissionIds: []int32{1, 2}}), &AuthServiceHandler{Query: s}, held)
+	if err != nil || !reflect.DeepEqual(got, held) || !reflect.DeepEqual(s.realms, []pb.TokenType{pb.TokenType_TOKEN_TYPE_SESSION}) {
+		t.Fatalf("session: got %v, %v, realms %v", got, err, s.realms)
+	}
+
+	// A role of the caller's realm no longer eligible where they act (moved
+	// out of the organization) keeps nothing either.
+	s = newStore()
+	s.org = []*pb.RoleGrant{apiRole}
+	got, _ = heldUnderOrgLock(envelope(&pb.AuthResp{UserId: "u1", SessionTokenId: "s-1"}), &AuthServiceHandler{Query: s}, held)
+	if len(got) != 0 {
+		t.Fatalf("session with no eligible role: kept %v", got)
 	}
 }

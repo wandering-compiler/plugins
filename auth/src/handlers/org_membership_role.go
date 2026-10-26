@@ -308,13 +308,15 @@ func init() { heldNow = heldUnderOrgLock }
 
 // heldUnderOrgLock is heldNow: under an organization's lock, the caller's
 // resolved permissions held keep only those a grant of theirs still carries,
-// read now — the grants the organization narrowing reads (the active
-// organization's and realm-wide roles, or realm-wide alone with no active
-// organization) and, for a session, the active organization's own
-// (orgGrantSources: a team's roles). It only ever removes: whatever Authenticate narrowed away (another
-// organization's roles, the packages, a token's subset) stays away, and a
-// permission the caller lost every grant of since the request arrived — a
-// demotion that committed while this request waited for the lock — is gone.
+// read now the way Authenticate narrowed them — the roles of the caller's
+// realm (a session's, or for a token both token realms), eligible where the
+// caller acts, plus a team's roles for a session. It only ever removes:
+// whatever Authenticate narrowed away (another organization's roles, the
+// packages, a token's subset) stays away, and a permission the caller lost
+// every grant of since the request arrived — a demotion that committed while
+// this request waited for the lock — is gone. One imprecision is left: an API
+// and an MCP token are told apart by nothing in the envelope, so for either a
+// role of the other token realm still keeps a permission.
 // Outside a lock, or with no caller id, held is returned as it is.
 func heldUnderOrgLock(ctx context.Context, h *AuthServiceHandler, held map[int32]bool) (map[int32]bool, error) {
 	if locked, _ := ctx.Value(orgLockKey{}).(string); locked == "" {
@@ -324,35 +326,51 @@ func heldUnderOrgLock(ctx context.Context, h *AuthServiceHandler, held map[int32
 	if err != nil || userID == "" {
 		return held, nil
 	}
-	var grants []*pb.RoleGrant
+	// As the narrowing does (narrowGrantsToActiveOrg), on ROLE ids: the
+	// roles of the caller's realm (callerRealmGrants), kept when they are
+	// eligible where the caller acts — the active organization's and
+	// realm-wide ones, or realm-wide alone with none active — then, for a
+	// session, the active organization's own (orgGrantSources: a team's).
+	// Authenticate stamps session_token_id for a session and nothing else.
+	var who pb.AuthResp
+	session := principal.Envelope(ctx, &who) == nil && who.GetSessionTokenId() != ""
+	realmGrants, err := callerRealmGrants(ctx, h, userID, session)
+	if err != nil {
+		return nil, err
+	}
+	var eligible []*pb.RoleGrant
 	active := scopeOrg(ctx)
 	if active != "" {
 		resp, err := h.Query.GetUserOrgPermissions(ctx, &pb.GetUserOrgPermissionsReq{UserId: userID, OrgId: active})
 		if err != nil {
 			return nil, err
 		}
-		grants = resp.GetGrants()
-		// A team's roles count for a session only, as the narrowing adds them
-		// (narrowGrantsToActiveOrg): an API or OAuth token never carried them,
-		// so they cannot keep a permission its own roles no longer grant.
-		// Authenticate stamps session_token_id for a session and for nothing
-		// else.
-		var who pb.AuthResp
-		if principal.Envelope(ctx, &who) == nil && who.GetSessionTokenId() != "" {
-			for _, source := range orgGrantSources {
-				more, err := source(ctx, h, userID, active)
-				if err != nil {
-					return nil, err
-				}
-				grants = append(grants, more...)
-			}
-		}
+		eligible = resp.GetGrants()
 	} else {
 		resp, err := h.Query.GetUserRealmWidePermissions(ctx, &pb.GetUserRealmWidePermissionsReq{UserId: userID})
 		if err != nil {
 			return nil, err
 		}
-		grants = resp.GetGrants()
+		eligible = resp.GetGrants()
+	}
+	keep := make(map[string]bool, len(eligible))
+	for _, g := range eligible {
+		keep[g.GetRoleId()] = true
+	}
+	var grants []*pb.RoleGrant
+	for _, g := range realmGrants {
+		if keep[g.GetRoleId()] {
+			grants = append(grants, g)
+		}
+	}
+	if active != "" && session {
+		for _, source := range orgGrantSources {
+			more, err := source(ctx, h, userID, active)
+			if err != nil {
+				return nil, err
+			}
+			grants = append(grants, more...)
+		}
 	}
 	carried := map[int32]bool{}
 	for _, g := range grants {
