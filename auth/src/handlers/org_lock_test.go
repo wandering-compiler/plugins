@@ -199,3 +199,91 @@ func funcBody(t *testing.T, src, decl string) string {
 	}
 	return src[i+open+2 : i+end]
 }
+
+// callerGrantsStore is a membership store that also answers the caller's own
+// grants: org — what the caller holds in the active organization (and
+// realm-wide), realm — realm-wide alone; asked records which was read.
+type callerGrantsStore struct {
+	*membershipRoleMock
+	org, realm []*pb.RoleGrant
+	asked      []string
+}
+
+func (callerGrantsStore) keepsCallerGrants() {}
+
+func (s *callerGrantsStore) GetUserOrgPermissions(_ context.Context, in *pb.GetUserOrgPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserOrgPermissionsResp, error) {
+	s.asked = append(s.asked, "org "+in.GetUserId()+" "+in.GetOrgId())
+	return &pb.GetUserOrgPermissionsResp{Grants: s.org}, nil
+}
+
+func (s *callerGrantsStore) GetUserRealmWidePermissions(_ context.Context, in *pb.GetUserRealmWidePermissionsReq, _ ...grpc.CallOption) (*pb.GetUserRealmWidePermissionsResp, error) {
+	s.asked = append(s.asked, "realm "+in.GetUserId())
+	return &pb.GetUserRealmWidePermissionsResp{Grants: s.realm}, nil
+}
+
+// Under the organization's lock the ceiling judges what the caller holds NOW:
+// the permissions Authenticate resolved, less those whose every grant the
+// caller has lost since. A caller demoted while their request waited for the
+// lock no longer hands out what the demotion took — and one whose grants
+// still carry the role does, so the re-read only ever removes.
+func TestCeiling_UnderTheLockJudgesTheCallersGrantsNow(t *testing.T) {
+	ctx := inOrg(withHeldPermissions(context.Background(), "u1", 1, 2), "org-1")
+	for _, c := range []struct {
+		name    string
+		now     []*pb.RoleGrant
+		refused bool
+	}{
+		{"still holds it", []*pb.RoleGrant{{RoleId: "r-worker", PermissionIds: []int32{1, 2}}}, false},
+		{"demoted meanwhile", []*pb.RoleGrant{{RoleId: "r-viewer", PermissionIds: []int32{1}}}, true},
+		{"removed meanwhile", nil, true},
+		// More now than the request resolved: the envelope still bounds it.
+		{"promoted meanwhile", []*pb.RoleGrant{{RoleId: "r-admin", PermissionIds: []int32{1, 2, 3}}}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, mm := newMembershipRoleHandler("r-viewer")
+			s := &callerGrantsStore{membershipRoleMock: mm, org: c.now}
+			h := &AuthServiceHandler{Query: s, Mutation: s}
+			_, err := h.UpdateOrgMembershipRole(ctx, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-worker"})
+			if c.refused {
+				// Either ceiling may be the one that refuses: the role handed
+				// out, or the member's role the change takes away.
+				if code := detailOf(t, err).GetCode(); (code != CodeRoleAboveCaller && code != CodeMemberAboveCaller) || mm.updated != nil {
+					t.Fatalf("err %v, written %v: a caller who lost the role handed it out", err, mm.updated)
+				}
+			} else if err != nil {
+				t.Fatalf("refused a caller whose grants carry the role: %v", err)
+			}
+			if len(s.asked) == 0 {
+				t.Fatal("the caller's grants were not read under the lock")
+			}
+			for _, a := range s.asked {
+				if a != "org u1 org-1" {
+					t.Fatalf("asked %q, want the caller's grants in the active organization", s.asked)
+				}
+			}
+		})
+	}
+
+	// Never more than the envelope: a permission the request did not resolve
+	// (narrowed away, a token's subset) stays out whatever the grants carry.
+	h := &AuthServiceHandler{}
+	held := map[int32]bool{1: true}
+	s := &callerGrantsStore{org: []*pb.RoleGrant{{RoleId: "r-admin", PermissionIds: []int32{1, 2, 3}}}}
+	h.Query = s
+	locked := context.WithValue(ctx, orgLockKey{}, "org-1")
+	if got, err := heldUnderOrgLock(locked, h, held); err != nil || !reflect.DeepEqual(got, map[int32]bool{1: true}) {
+		t.Fatalf("got %v, %v; want only what the request resolved", got, err)
+	}
+	// A realm-wide caller (no active organization) is judged by their
+	// realm-wide grants, as Authenticate narrowed them.
+	realm := context.WithValue(withHeldPermissions(context.Background(), "u1", 1, 2), orgLockKey{}, "org-1")
+	s = &callerGrantsStore{realm: []*pb.RoleGrant{{RoleId: "r-viewer", PermissionIds: []int32{1}}}}
+	h.Query = s
+	if got, err := heldUnderOrgLock(realm, h, map[int32]bool{1: true, 2: true}); err != nil || !reflect.DeepEqual(got, map[int32]bool{1: true}) || !reflect.DeepEqual(s.asked, []string{"realm u1"}) {
+		t.Fatalf("got %v, %v, asked %q", got, err, s.asked)
+	}
+	// Outside a lock the request's permissions stand as resolved.
+	if got, _ := heldUnderOrgLock(ctx, h, held); !reflect.DeepEqual(got, held) {
+		t.Fatalf("outside the lock: %v", got)
+	}
+}

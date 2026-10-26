@@ -304,6 +304,63 @@ func underOrgLock[Req, Resp any](ctx context.Context, h *AuthServiceHandler, org
 	return resp, true, err
 }
 
+func init() { heldNow = heldUnderOrgLock }
+
+// heldUnderOrgLock is heldNow: under an organization's lock, the caller's
+// resolved permissions held keep only those a grant of theirs still carries,
+// read now — the grants the organization narrowing reads (the active
+// organization's and realm-wide roles, or realm-wide alone with no active
+// organization) and the active organization's own (orgGrantSources: a team's
+// roles). It only ever removes: whatever Authenticate narrowed away (another
+// organization's roles, the packages, a token's subset) stays away, and a
+// permission the caller lost every grant of since the request arrived — a
+// demotion that committed while this request waited for the lock — is gone.
+// Outside a lock, or with no caller id, held is returned as it is.
+func heldUnderOrgLock(ctx context.Context, h *AuthServiceHandler, held map[int32]bool) (map[int32]bool, error) {
+	if locked, _ := ctx.Value(orgLockKey{}).(string); locked == "" {
+		return held, nil
+	}
+	userID, err := callerUserID(ctx)
+	if err != nil || userID == "" {
+		return held, nil
+	}
+	var grants []*pb.RoleGrant
+	active := scopeOrg(ctx)
+	if active != "" {
+		resp, err := h.Query.GetUserOrgPermissions(ctx, &pb.GetUserOrgPermissionsReq{UserId: userID, OrgId: active})
+		if err != nil {
+			return nil, err
+		}
+		grants = resp.GetGrants()
+		for _, source := range orgGrantSources {
+			more, err := source(ctx, h, userID, active)
+			if err != nil {
+				return nil, err
+			}
+			grants = append(grants, more...)
+		}
+	} else {
+		resp, err := h.Query.GetUserRealmWidePermissions(ctx, &pb.GetUserRealmWidePermissionsReq{UserId: userID})
+		if err != nil {
+			return nil, err
+		}
+		grants = resp.GetGrants()
+	}
+	carried := map[int32]bool{}
+	for _, g := range grants {
+		for _, id := range expandRoleGrant(g, h.Lock) {
+			carried[id] = true
+		}
+	}
+	out := make(map[int32]bool, len(held))
+	for id := range held {
+		if carried[id] {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
 // scopeOrg is the organization the caller acts in, "" when none is selected
 // (the method then refuses or acts realm-wide, as it did).
 func scopeOrg(ctx context.Context) string {

@@ -358,7 +358,7 @@ func (h *AuthServiceHandler) checkRolePermissions(ctx context.Context, ids []int
 				CodeOrgRoleUnknownPermission, "permission_ids", MsgOrgRoleUnknownPermission, map[string]string{"permission": n})
 		}
 	}
-	held, err := callerHeldPermissions(ctx)
+	held, err := h.callerHeldNow(ctx)
 	if err != nil {
 		return nil, err
 	}
