@@ -1421,7 +1421,7 @@ msgids:
   - "Who may register into an organization is set by the platform, not from inside the organization."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
-  - "You can only give a role you hold yourself."
+  - "You can only give a role that your own role includes."
   - "You cannot invite someone as this kind of member."
   - "Your organization's plan does not include this part of the service."
   - "Your organization's plan does not include this role."
