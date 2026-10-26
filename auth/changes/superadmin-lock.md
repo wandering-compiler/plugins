@@ -1,6 +1,17 @@
-### The last-superadmin rule holds under concurrent changes (`org_membership`, `teams`)
+### Role changes in an organization run one at a time (`org_membership`, `teams`, `org_roles`, `org_invite`, `org_signup`, `product_roles`, `service_account`, `bot_roles`)
 
-- A change that can take a superadmin away now checks the last-superadmin rule and writes in ONE transaction that first locks the organization's row (new query `AuthQuery.LockOrganization`, SELECT … FOR UPDATE): `UpdateOrgMembershipRole`, `RemoveOrgMembership`, and with `teams` `RemoveOrgTeamMember`, `SetOrgTeamRoles` and `DeleteOrgTeam`. Before, the check ran before the write's transaction, so two superadmins demoting or removing each other at the same moment both passed and left the organization with none — and with ownership gone nothing inside the organization could restore one. Two such changes in one organization now run one after the other.
-- `UpdateOrgMembershipRole`, `RemoveOrgTeamMember` and `DeleteOrgTeam` now write inside that transaction when the bundle has a coordinator. Without one (no `DistTx`) every statement commits on its own, as before, and the lock holds for none of them.
-- `SetOrgTeamRoles` reads the team's current roles under that lock too, so two role changes of one team diff one after the other instead of both against the same stale set (one then revoked a role already gone or granted one already held, and failed).
-- `RemoveOrganization` takes the same organization lock first: its cascades and `DeleteOrganization` lock team and membership rows before the organization's, so a member removal running at the same time cannot take them in the other order and deadlock with it.
+- Every change to who holds what in an organization now runs, from its first read, in ONE transaction that first locks the organization's row (new query `AuthQuery.LockOrganization`, SELECT … FOR UPDATE). Its role-ceiling and last-superadmin checks therefore judge the state its write changes. Before, they read the member's grants, the team's roles and the role catalogue outside the write's transaction, and several races got through:
+  - two superadmins demoting or removing each other at the same moment both passed the last-superadmin rule and left the organization with none, and with ownership gone nothing inside the organization could restore one;
+  - a caller removed a member whom someone else was promoting above the caller at that moment;
+  - a role was granted while an edit was widening it;
+  - two role changes of one team diffed against the same stale set and failed.
+- Two such changes in one organization now run one after the other. The covered calls:
+  - `UpdateOrgMembershipRole`, `RemoveOrgMembership`, `RemoveOrganization`;
+  - the team methods (`AddOrgTeamMember`, `RemoveOrgTeamMember`, `SetOrgTeamRoles`, `DeleteOrgTeam`);
+  - `CreateOrgRole`, `UpdateOrgRole`, `DeleteOrgRole`;
+  - `InviteToOrg`, `AcceptOrgInvite`, and an open registration's join;
+  - `AssignOrgProductRole`, `RevokeOrgProductRole`, `AssignProductRole`, `RevokeProductRole` (with an organization);
+  - `SetBotRoles`, `CreateBot`, `IssueBotToken`. With organizations, the ceiling is re-checked inside the mint's transaction.
+- `RemoveOrganization` takes the lock first as well. Its cascades lock team and membership rows before the organization's row, so a member removal running at the same time cannot take them in the other order and deadlock with it.
+- Calls that wrote outside a transaction now write inside that one when the bundle has a coordinator. Without one (no `DistTx`), every statement commits on its own, as before, and the lock is held for none of them.
+- A change to an organization the lock finds no live row for (an unknown or deleted organization) runs as before and answers with its own refusal.

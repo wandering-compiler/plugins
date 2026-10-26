@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -65,6 +66,9 @@ const (
 // rather than beside it. It is handed the role by ID, the role checked here:
 // a lookup by name there would let a rename between the two grant another.
 func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *pb.UpdateOrgMembershipRoleReq) (*pb.UpdateOrgMembershipRoleResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, h.membershipOrg(ctx, req.GetId()), req, h.UpdateOrgMembershipRole); done {
+		return resp, err
+	}
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
@@ -108,6 +112,9 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 // and its grants end (removed_at / revoked_at, the caller recorded as the one
 // who removed them) and the rows stay.
 func (h *AuthServiceHandler) RemoveOrgMembership(ctx context.Context, req *pb.RemoveOrgMembershipReq) (*pb.RemoveOrgMembershipResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, h.membershipOrg(ctx, req.GetId()), req, h.RemoveOrgMembership); done {
+		return resp, err
+	}
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
@@ -177,20 +184,17 @@ var orgRemovalCascades []func(ctx context.Context, h *AuthServiceHandler, orgID,
 // transaction with a coordinator. Without one the cascades run first, so a
 // failure leaves the organization live and a retry completes it; the cascades
 // are idempotent UPDATEs. The organization's row is locked first
-// (LockOrganization), as every change that can take a superadmin away locks
-// it (guardSuperadmins): the cascades and DeleteOrganization lock team and
-// membership rows before the organization's, and taking them in the other
-// order than a concurrent member removal would deadlock the two.
+// (withOrgLock), as every change to who holds what in it locks it: the
+// cascades and DeleteOrganization lock team and membership rows before the
+// organization's, and taking them in the other order than a concurrent member
+// removal would deadlock the two.
 func (h *AuthServiceHandler) RemoveOrganization(ctx context.Context, req *pb.RemoveOrganizationReq) (*pb.RemoveOrganizationResp, error) {
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
 	var orgID string
-	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
-		if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: req.GetId()}); err != nil {
-			return err
-		}
+	err = h.withOrgLock(ctx, req.GetId(), func(txCtx context.Context) error {
 		for _, cascade := range orgRemovalCascades {
 			if err := cascade(txCtx, h, req.GetId(), callerID); err != nil {
 				return err
@@ -226,23 +230,91 @@ func (h *AuthServiceHandler) inOrgTx(ctx context.Context, fn func(txCtx context.
 	return tx.Commit(ctx)
 }
 
-// guardSuperadmins runs a change that can take a superadmin away from
-// organization orgID: in one transaction, the organization's row is locked
-// (LockOrganization), check runs the last-superadmin rule and write makes the
-// change. Every such change takes the same lock first, so two of them in one
-// organization run one after the other, and the second one's check sees what
-// the first one ended. Checked outside the transaction, two superadmins
-// demoting each other at the same moment both passed — each still saw the
-// other — and the organization was left with none.
+// orgLockKey marks a context whose transaction already holds an
+// organization's row lock (withOrgLock); its value is the organization.
+type orgLockKey struct{}
+
+// withOrgLock runs fn — the whole of a change to who holds what in
+// organization orgID, its checks and its writes — in one transaction that
+// first locks the organization's row (LockOrganization, SELECT … FOR UPDATE).
 //
-// Without a coordinator (no DistTx) every statement commits on its own, the
-// lock is held for none of them, and check and write stay as far apart as
-// they are; the ordering is the same.
-func (h *AuthServiceHandler) guardSuperadmins(ctx context.Context, orgID string, check, write func(txCtx context.Context) error) error {
+// Every such change takes the same lock first, so two of them in one
+// organization run one after the other, and the second one's checks read what
+// the first one wrote. Checked before the write's transaction, two of them
+// judged the same state: two superadmins demoting each other at the same
+// moment both passed the last-superadmin rule, each still seeing the other;
+// a caller removed a member someone was promoting above them at that moment,
+// passing a ceiling read off the member's roles as they were; a role was
+// granted as it carried less than an edit was giving it.
+//
+// A context already under orgID's lock runs fn on it — a method composed into
+// another one's change takes no second lock. An organization the lock finds no
+// live row for (unknown, deleted) has nothing to serialise: fn runs in the
+// same transaction and answers with its own refusal. Without a coordinator (no
+// DistTx) every statement commits on its own, the lock is held for none of
+// them, and only the order is kept.
+func (h *AuthServiceHandler) withOrgLock(ctx context.Context, orgID string, fn func(txCtx context.Context) error) error {
+	if held, _ := ctx.Value(orgLockKey{}).(string); held != "" && held == orgID {
+		return fn(ctx)
+	}
 	return h.inOrgTx(ctx, func(txCtx context.Context) error {
-		if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: orgID}); err != nil {
+		if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: orgID}); err != nil && status.Code(err) != codes.NotFound {
 			return err
 		}
+		return fn(context.WithValue(txCtx, orgLockKey{}, orgID))
+	})
+}
+
+// underOrgLock is withOrgLock for a whole method: when ctx is not under
+// orgID's lock yet, it runs m(req) again inside it and reports done, and the
+// method returns what that run returned; under the lock (or with no
+// organization to lock) it reports not done and the method goes on.
+//
+//	if resp, done, err := underOrgLock(ctx, h, orgID, req, h.Method); done {
+//		return resp, err
+//	}
+func underOrgLock[Req, Resp any](ctx context.Context, h *AuthServiceHandler, orgID string, req Req, m func(context.Context, Req) (Resp, error)) (resp Resp, done bool, err error) {
+	if orgID == "" {
+		return resp, false, nil
+	}
+	if held, _ := ctx.Value(orgLockKey{}).(string); held == orgID {
+		return resp, false, nil
+	}
+	err = h.withOrgLock(ctx, orgID, func(txCtx context.Context) error {
+		var mErr error
+		resp, mErr = m(txCtx, req)
+		return mErr
+	})
+	return resp, true, err
+}
+
+// scopeOrg is the organization the caller acts in, "" when none is selected
+// (the method then refuses or acts realm-wide, as it did).
+func scopeOrg(ctx context.Context) string {
+	orgID, _ := principal.Scope(ctx, "org_id")
+	return orgID
+}
+
+// membershipOrg is the organization a change to membership membershipID
+// locks: the caller's active one (a membership elsewhere is refused anyway),
+// or, for a realm-wide caller, the membership's own. "" when it cannot be
+// read — the method's own read then answers.
+func (h *AuthServiceHandler) membershipOrg(ctx context.Context, membershipID string) string {
+	if orgID := scopeOrg(ctx); orgID != "" {
+		return orgID
+	}
+	m, err := h.Query.GetOrgMembership(ctx, &pb.GetOrgMembershipReq{Id: membershipID})
+	if err != nil {
+		return ""
+	}
+	return m.GetOrgId()
+}
+
+// guardSuperadmins runs a change that can take a superadmin away from
+// organization orgID under its lock (withOrgLock): check runs the
+// last-superadmin rule, then write makes the change.
+func (h *AuthServiceHandler) guardSuperadmins(ctx context.Context, orgID string, check, write func(txCtx context.Context) error) error {
+	return h.withOrgLock(ctx, orgID, func(txCtx context.Context) error {
 		if err := check(txCtx); err != nil {
 			return err
 		}

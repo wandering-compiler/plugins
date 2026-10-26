@@ -240,6 +240,9 @@ func (h *AuthServiceHandler) UpdateOrgTeam(ctx context.Context, req *pb.UpdateOr
 // DeleteOrgTeam ends a team, its memberships and its roles. Every member loses
 // the team's roles, so the caller covers them.
 func (h *AuthServiceHandler) DeleteOrgTeam(ctx context.Context, req *pb.DeleteOrgTeamReq) (*pb.DeleteOrgTeamResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.DeleteOrgTeam); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -274,6 +277,9 @@ func (h *AuthServiceHandler) DeleteOrgTeam(ctx context.Context, req *pb.DeleteOr
 // AddOrgTeamMember adds a person of the organization to a team. They gain the
 // team's roles, so the caller covers them.
 func (h *AuthServiceHandler) AddOrgTeamMember(ctx context.Context, req *pb.AddOrgTeamMemberReq) (*pb.AddOrgTeamMemberResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.AddOrgTeamMember); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -314,6 +320,9 @@ func (h *AuthServiceHandler) AddOrgTeamMember(ctx context.Context, req *pb.AddOr
 // RemoveOrgTeamMember takes a person out of a team. They lose the team's
 // roles, so the caller covers them.
 func (h *AuthServiceHandler) RemoveOrgTeamMember(ctx context.Context, req *pb.RemoveOrgTeamMemberReq) (*pb.RemoveOrgTeamMemberResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.RemoveOrgTeamMember); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -350,6 +359,9 @@ func (h *AuthServiceHandler) RemoveOrgTeamMember(ctx context.Context, req *pb.Re
 // and the caller covers every role the change gives or takes away. A role the
 // team keeps is not asked about: nobody gains or loses it.
 func (h *AuthServiceHandler) SetOrgTeamRoles(ctx context.Context, req *pb.SetOrgTeamRolesReq) (*pb.SetOrgTeamRolesResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.SetOrgTeamRoles); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

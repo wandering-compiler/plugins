@@ -250,6 +250,9 @@ func (h *AuthServiceHandler) ListOrgProductRoleGrants(ctx context.Context, req *
 // AssignOrgProductRole gives a member of the active organization a role of a
 // product, held there. The caller must hold that role there themselves.
 func (h *AuthServiceHandler) AssignOrgProductRole(ctx context.Context, req *pb.OrgProductRoleReq) (*pb.ProductRoleChangeResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.AssignOrgProductRole); done {
+		return resp, err
+	}
 	caller, orgID, err := h.orgProductRoleCall(ctx, req)
 	if err != nil {
 		return nil, err
@@ -263,6 +266,9 @@ func (h *AuthServiceHandler) AssignOrgProductRole(ctx context.Context, req *pb.O
 // RevokeOrgProductRole takes a product role held in the active organization.
 // The caller must hold that role there themselves.
 func (h *AuthServiceHandler) RevokeOrgProductRole(ctx context.Context, req *pb.OrgProductRoleReq) (*pb.ProductRoleChangeResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.RevokeOrgProductRole); done {
+		return resp, err
+	}
 	caller, orgID, err := h.orgProductRoleCall(ctx, req)
 	if err != nil {
 		return nil, err
@@ -436,6 +442,9 @@ func (h *AuthServiceHandler) ListProductRoleGrants(ctx context.Context, req *pb.
 // AssignProductRole is the backoffice's grant: in an organization (org_id) or
 // realm-wide. No ceiling — the endpoint ACL decides who is the backoffice.
 func (h *AuthServiceHandler) AssignProductRole(ctx context.Context, req *pb.ProductRoleReq) (*pb.ProductRoleChangeResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, req.GetOrgId(), req, h.AssignProductRole); done {
+		return resp, err
+	}
 	caller, err := h.backofficeProductRoleCall(ctx, "AssignProductRole", req)
 	if err != nil {
 		return nil, err
@@ -448,6 +457,9 @@ func (h *AuthServiceHandler) AssignProductRole(ctx context.Context, req *pb.Prod
 
 // RevokeProductRole is the backoffice's revocation.
 func (h *AuthServiceHandler) RevokeProductRole(ctx context.Context, req *pb.ProductRoleReq) (*pb.ProductRoleChangeResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, req.GetOrgId(), req, h.RevokeProductRole); done {
+		return resp, err
+	}
 	caller, err := h.backofficeProductRoleCall(ctx, "RevokeProductRole", req)
 	if err != nil {
 		return nil, err

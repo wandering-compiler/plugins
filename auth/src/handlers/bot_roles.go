@@ -47,6 +47,9 @@ func fillBotRoles(ctx context.Context, h *AuthServiceHandler, bot *pb.BotSummary
 // CreateBot. The change is one transaction: a bot is never left holding half
 // of the old set and half of the new.
 func (h *AuthServiceHandler) SetBotRoles(ctx context.Context, req *pb.SetBotRolesReq) (*pb.SetBotRolesResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.SetBotRoles); done {
+		return resp, err
+	}
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}

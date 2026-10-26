@@ -169,12 +169,10 @@ func TestSuperadminChanges_CheckAndWriteUnderTheOrganizationsLock(t *testing.T) 
 				locked := lockedTeamStore{teamStore: s, txOrder: order}
 				h.Query, h.Mutation, h.DistTx, h.Connection = locked, locked, order.tx, "main"
 				err := do(h)
-				// SetOrgTeamRoles diffs the team's roles under the lock, so
-				// two of them on one team cannot both diff the same stale set.
-				want := want
-				if name == "SetOrgTeamRoles" {
-					want = []string{want[0], "team roles in tx", want[1], want[2]}
-				}
+				// Every team method reads the team's roles under the lock: the
+				// ceiling (coverTeamRoles) judges what the write changes, and
+				// two SetOrgTeamRoles on one team cannot diff the same stale set.
+				want := []string{want[0], "team roles in tx", want[1], want[2]}
 				steps, settled := want, "committed"
 				if refused {
 					if detailOf(t, err).GetCode() != CodeLastSuperadmin {
