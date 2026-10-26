@@ -1521,7 +1521,8 @@ message AddOrgMembershipReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string org_id  = 2 [(w17.field) = { type: UUID }];
-  // role: owner | admin | member. Free-form CHAR — project policy owns
+  // role: a label (admin | member, a Role.name). Free-form CHAR — it
+  // grants nothing (an organization has no owner); project policy owns
   // the vocabulary; the plugin passes it through (mirrors OrgMembership.role).
   string role    = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
   // kind — the kind of membership (membership_kinds); '' = none.
@@ -4504,9 +4505,12 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
   // org_membership mutations — the two org write primitives (the
   // symmetric counterpart to CreateUser). A consuming handler /
-  // subscriber composes them: CreateOrganization then
-  // AddOrgMembership(creator, org, "owner"), atomically via distx
-  // like SignUp. Both gated `org_membership`.
+  // subscriber composes them: CreateOrganization, AddOrgMembership
+  // for the creator, and an org-scoped admin role granted on that
+  // membership (AssignRoleToUser with the org) — the role, not the
+  // membership's `role` label, is what lets the creator administer it:
+  // an organization has no owner. Atomically via distx like SignUp.
+  // Both gated `org_membership`.
   // ────────────────────────────────────────────────────────────
 
   // CreateOrganization — INSERT Organization. Refuses a duplicate slug
