@@ -1924,9 +1924,10 @@ message Organization {
   // root authority — a synthetic wildcard grant over the whole deployed
   // permission lock, selection of the organization without a membership, a
   // membership nobody could change — and nothing in the plugin ever wrote it.
-  // Dropped: a project's next generated migration drops the column (a lossy
-  // step the migrator asks to confirm); nothing it held granted anything a
-  // role should not.
+  // Dropped: a project's next generated migration drops the column. The step
+  // is lossy and nothing asks to confirm it (the migration carries only a
+  // drop_column RISK comment); nothing it held granted anything a role should
+  // not.
   reserved 6;
   reserved "owner_id";
 
