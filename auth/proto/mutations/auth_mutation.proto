@@ -4554,7 +4554,7 @@ service AuthMutation {
   // with a role. A live duplicate (same user and org, ended_key '') is
   // refused by the unique index with AlreadyExists; a REMOVED membership does
   // not block it, so a removed member can be added again (a new row). Emits OrgMembershipAdded (fires for
-  // the creator's owner grant + every later invite accept). Mirrors
+  // the creator's membership + every later invite accept). Mirrors
   // AssignRoleToUser.
   rpc AddOrgMembership(AddOrgMembershipReq) returns (AddOrgMembershipResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
@@ -4757,8 +4757,7 @@ service AuthMutation {
   // grant and could never accept. They are revoked (revoked_at, the same
   // actor as revoked_by), not deleted. The request names only the membership,
   // so the first op reads whose it is; a removed membership matches nothing
-  // (NotFound), as a deleted one did. An owner without a membership is
-  // unaffected: ownership is read off the organization.
+  // (NotFound), as a deleted one did.
   rpc MarkOrgMembershipRemoved(MarkOrgMembershipRemovedReq) returns (MarkOrgMembershipRemovedResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {

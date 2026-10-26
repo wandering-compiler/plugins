@@ -251,17 +251,24 @@ func (h *AuthServiceHandler) DeleteOrgTeam(ctx context.Context, req *pb.DeleteOr
 	if _, err := h.coverTeamRoles(ctx, req.GetTeamId()); err != nil {
 		return nil, err
 	}
-	// Deleting the team ends every wildcard its members hold through it.
-	if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
-		return g.GetTeamId() == req.GetTeamId()
-	}); err != nil {
-		return nil, err
-	}
-	resp, err := h.Mutation.DeleteTeam(ctx, &pb.DeleteTeamReq{Id: req.GetTeamId(), OrgId: orgID, DeletedBy: callerID})
+	var teamID string
+	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
+		// Deleting the team ends every wildcard its members hold through it.
+		return h.refuseLeavingNoSuperadmin(txCtx, orgID, func(g *pb.OrgSuperadminRow) bool {
+			return g.GetTeamId() == req.GetTeamId()
+		})
+	}, func(txCtx context.Context) error {
+		resp, err := h.Mutation.DeleteTeam(txCtx, &pb.DeleteTeamReq{Id: req.GetTeamId(), OrgId: orgID, DeletedBy: callerID})
+		if err != nil {
+			return err
+		}
+		teamID = resp.GetTeamId()
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.DeleteOrgTeamResp{TeamId: resp.GetTeamId()}, nil
+	return &pb.DeleteOrgTeamResp{TeamId: teamID}, nil
 }
 
 // AddOrgTeamMember adds a person of the organization to a team. They gain the
@@ -318,17 +325,24 @@ func (h *AuthServiceHandler) RemoveOrgTeamMember(ctx context.Context, req *pb.Re
 	if _, err := h.coverTeamRoles(ctx, req.GetTeamId()); err != nil {
 		return nil, err
 	}
-	// The member loses every wildcard they hold through this team.
-	if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
-		return g.GetTeamId() == req.GetTeamId() && g.GetUserId() == req.GetUserId()
-	}); err != nil {
-		return nil, err
-	}
-	resp, err := h.Mutation.RemoveTeamMember(ctx, &pb.RemoveTeamMemberReq{TeamId: req.GetTeamId(), UserId: req.GetUserId(), RemovedBy: callerID})
+	var memberID string
+	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
+		// The member loses every wildcard they hold through this team.
+		return h.refuseLeavingNoSuperadmin(txCtx, orgID, func(g *pb.OrgSuperadminRow) bool {
+			return g.GetTeamId() == req.GetTeamId() && g.GetUserId() == req.GetUserId()
+		})
+	}, func(txCtx context.Context) error {
+		resp, err := h.Mutation.RemoveTeamMember(txCtx, &pb.RemoveTeamMemberReq{TeamId: req.GetTeamId(), UserId: req.GetUserId(), RemovedBy: callerID})
+		if err != nil {
+			return err
+		}
+		memberID = resp.GetMemberId()
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.RemoveOrgTeamMemberResp{MemberId: resp.GetMemberId()}, nil
+	return &pb.RemoveOrgTeamMemberResp{MemberId: memberID}, nil
 }
 
 // SetOrgTeamRoles replaces the roles a team holds, in one transaction. Each
@@ -397,24 +411,25 @@ func (h *AuthServiceHandler) SetOrgTeamRoles(ctx context.Context, req *pb.SetOrg
 	}
 	// A team left with no wildcard role ends every wildcard its members hold
 	// through it; one that keeps or gains a wildcard keeps them superadmins.
+	endsWildcards := false
 	if len(removed) > 0 {
 		wildcard, err := h.wildcardRoleIDs(ctx)
 		if err != nil {
 			return nil, err
 		}
-		keepsWildcard := false
+		endsWildcards = true
 		for _, id := range wanted {
-			keepsWildcard = keepsWildcard || wildcard[id]
-		}
-		if !keepsWildcard {
-			if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
-				return g.GetTeamId() == req.GetTeamId()
-			}); err != nil {
-				return nil, err
-			}
+			endsWildcards = endsWildcards && !wildcard[id]
 		}
 	}
-	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
+	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
+		if !endsWildcards {
+			return nil
+		}
+		return h.refuseLeavingNoSuperadmin(txCtx, orgID, func(g *pb.OrgSuperadminRow) bool {
+			return g.GetTeamId() == req.GetTeamId()
+		})
+	}, func(txCtx context.Context) error {
 		for _, id := range removed {
 			if _, err := h.Mutation.RevokeTeamRole(txCtx, &pb.RevokeTeamRoleReq{TeamId: req.GetTeamId(), RoleId: id, RevokedBy: callerID}); err != nil {
 				return err

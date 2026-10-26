@@ -76,22 +76,30 @@ func (h *AuthServiceHandler) UpdateOrgMembershipRole(ctx context.Context, req *p
 	if err != nil {
 		return nil, err
 	}
-	if err := h.refuseLastSuperadmin(ctx, m, roleID); err != nil {
-		return nil, err
-	}
-	// The snapshot is for a grant written LATER (an invitation's acceptance);
-	// this one is written now, by the call below.
-	if _, err := h.checkMayGrantRole(ctx, roleID); err != nil {
-		return nil, err
-	}
 	// The caller is recorded as revoked_by on the grants the change replaces
 	// (they stay, revoked). No caller id (a direct call) leaves it NULL.
 	callerID, _ := callerUserID(ctx)
-	resp, err := h.Mutation.UpdateOrgMembership(ctx, &pb.UpdateOrgMembershipReq{Id: req.GetId(), RoleId: roleID, ChangedBy: callerID})
+	var membershipID string
+	err = h.guardSuperadmins(ctx, m.GetOrgId(), func(txCtx context.Context) error {
+		if err := h.refuseLastSuperadmin(txCtx, m, roleID); err != nil {
+			return err
+		}
+		// The snapshot is for a grant written LATER (an invitation's
+		// acceptance); this one is written now, by the call below.
+		_, err := h.checkMayGrantRole(txCtx, roleID)
+		return err
+	}, func(txCtx context.Context) error {
+		resp, err := h.Mutation.UpdateOrgMembership(txCtx, &pb.UpdateOrgMembershipReq{Id: req.GetId(), RoleId: roleID, ChangedBy: callerID})
+		if err != nil {
+			return err
+		}
+		membershipID = resp.GetMembershipId()
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.UpdateOrgMembershipRoleResp{MembershipId: resp.GetMembershipId()}, nil
+	return &pb.UpdateOrgMembershipRoleResp{MembershipId: membershipID}, nil
 }
 
 // RemoveOrgMembership removes a member, under the role ceiling: the removal
@@ -107,12 +115,11 @@ func (h *AuthServiceHandler) RemoveOrgMembership(ctx context.Context, req *pb.Re
 	if err != nil {
 		return nil, err
 	}
-	if err := h.refuseLastSuperadmin(ctx, m, ""); err != nil {
-		return nil, err
-	}
 	callerID, _ := callerUserID(ctx)
 	var membershipID string
-	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
+	err = h.guardSuperadmins(ctx, m.GetOrgId(), func(txCtx context.Context) error {
+		return h.refuseLastSuperadmin(txCtx, m, "")
+	}, func(txCtx context.Context) error {
 		resp, err := h.Mutation.MarkOrgMembershipRemoved(txCtx, &pb.MarkOrgMembershipRemovedReq{Id: req.GetId(), RemovedBy: callerID})
 		if err != nil {
 			return err
@@ -210,6 +217,30 @@ func (h *AuthServiceHandler) inOrgTx(ctx context.Context, fn func(txCtx context.
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// guardSuperadmins runs a change that can take a superadmin away from
+// organization orgID: in one transaction, the organization's row is locked
+// (LockOrganization), check runs the last-superadmin rule and write makes the
+// change. Every such change takes the same lock first, so two of them in one
+// organization run one after the other, and the second one's check sees what
+// the first one ended. Checked outside the transaction, two superadmins
+// demoting each other at the same moment both passed — each still saw the
+// other — and the organization was left with none.
+//
+// Without a coordinator (no DistTx) every statement commits on its own, the
+// lock is held for none of them, and check and write stay as far apart as
+// they are; the ordering is the same.
+func (h *AuthServiceHandler) guardSuperadmins(ctx context.Context, orgID string, check, write func(txCtx context.Context) error) error {
+	return h.inOrgTx(ctx, func(txCtx context.Context) error {
+		if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: orgID}); err != nil {
+			return err
+		}
+		if err := check(txCtx); err != nil {
+			return err
+		}
+		return write(txCtx)
+	})
 }
 
 // checkMayManageMembership is what a change or a removal of one membership
