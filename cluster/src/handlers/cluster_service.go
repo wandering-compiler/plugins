@@ -122,6 +122,17 @@ type ClusterServiceHandler struct {
 	bansFull bool
 	bansGen  uint64
 
+	// BanReadTimeout bounds the registry reads of one ban-set delivery (the
+	// set and the relay list). Zero means banReadTimeout.
+	BanReadTimeout time.Duration
+
+	// delivered is the outcome of the last ban-set delivery, per relay id and
+	// for the registry reads ("" = it went through), so the periodic delivery
+	// logs a change of state — a relay or the registry failing, and
+	// recovering — and not the same failure every few minutes.
+	deliveredMu sync.Mutex
+	delivered   map[string]string
+
 	// written remembers what this replica last wrote onto each relay's row,
 	// and when, so an unchanged state is written at most once per
 	// reachedEvery instead of on every placement (see record).

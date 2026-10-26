@@ -134,7 +134,8 @@ func (e *Enrollment) Renew(ctx context.Context, req *workerpb.RenewReq) (*worker
 	// (disabled, or cut off), may be missing a ban.
 	if !e.Workers.HoldsBanSet() {
 		return nil, refusal.New(codes.Unavailable, refusal.BanSetUnknown,
-			"relay: cannot renew yet — this relay has not received the ban set since it started; retry shortly")
+			"relay: cannot renew yet — this relay has not received the ban set since it started; "+
+				BanSetSource+"; retry shortly")
 	}
 	if !e.Workers.Admitted(id) {
 		return nil, refusal.New(codes.PermissionDenied, refusal.WorkerBanned,
@@ -143,7 +144,7 @@ func (e *Enrollment) Renew(ctx context.Context, req *workerpb.RenewReq) (*worker
 	if at, ok := e.Workers.LastDelivered(); !ok || e.now().Sub(at) > e.maxBanSetAge() {
 		return nil, refusal.New(codes.Unavailable, refusal.BanSetStale,
 			"relay: cannot renew now — no control plane has delivered the ban set within "+
-				e.maxBanSetAge().String()+"; retry later")
+				e.maxBanSetAge().String()+"; "+BanSetSource+"; retry later")
 	}
 	csr, err := identity.ParseCSR(req.GetCsr())
 	if err != nil {
