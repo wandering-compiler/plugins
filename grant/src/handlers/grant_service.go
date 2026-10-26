@@ -16,6 +16,24 @@ import (
 	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
 )
 
+// The values Envelope.status takes, and Envelope.approved_slot on an
+// organization's one approved version. The VALUES are a public contract, not
+// only this file's: a project seeding an approved envelope by fixture writes
+// them (SPEC.md, "Seeding an approved envelope") — it cannot import these
+// names — and the statements in grant_mutation.proto and grant_query.proto use
+// them as literals. TestEnvelopeStatementsUseTheContractValues holds the two
+// together.
+const (
+	StatusProposed   = "proposed"
+	StatusApproved   = "approved"
+	StatusRejected   = "rejected"
+	StatusSuperseded = "superseded"
+	// ApprovedSlot is approved_slot on the approved version; NULL on every
+	// other, so the unique (org_id, approved_slot) index admits one approved
+	// version per organization.
+	ApprovedSlot = "approved"
+)
+
 // GrantServiceHandler implements pb.GrantServiceServer.
 type GrantServiceHandler struct {
 	Query    pb.GrantQueryClient
@@ -98,7 +116,7 @@ func (h *GrantServiceHandler) ProposeEnvelope(ctx context.Context, req *pb.Propo
 	if err != nil {
 		return nil, err
 	}
-	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: orgID, Status: "proposed", Fields: f}, nil
+	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: orgID, Status: StatusProposed, Fields: f}, nil
 }
 
 // GetMyEnvelopes is every version of the caller's organization, newest
@@ -142,7 +160,7 @@ func (h *GrantServiceHandler) ApproveEnvelope(ctx context.Context, req *pb.Appro
 	if err != nil {
 		return nil, err
 	}
-	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: resp.GetOrgId(), Status: "approved"}, nil
+	return &pb.EnvelopeVersion{Id: resp.GetId(), OrgId: resp.GetOrgId(), Status: StatusApproved}, nil
 }
 
 // RejectEnvelope refuses a proposal, with a note for the organization.
@@ -155,7 +173,7 @@ func (h *GrantServiceHandler) RejectEnvelope(ctx context.Context, req *pb.Reject
 	if err != nil {
 		return nil, err
 	}
-	return &pb.EnvelopeVersion{Id: resp.GetId(), Status: "rejected", DecisionNote: req.GetNote()}, nil
+	return &pb.EnvelopeVersion{Id: resp.GetId(), Status: StatusRejected, DecisionNote: req.GetNote()}, nil
 }
 
 // GetOrgEnvelope is an organization's APPROVED envelope; found = false when
@@ -172,7 +190,33 @@ func (h *GrantServiceHandler) approved(ctx context.Context, orgID string) (*pb.P
 	if err != nil {
 		return nil, err
 	}
-	return &pb.PublicEnvelope{Found: true, OrgId: orgID, Fields: fieldsOf(e)}, nil
+	return &pb.PublicEnvelope{Found: true, OrgId: orgID, Fields: publicFields(fieldsOf(e))}, nil
+}
+
+// publicFields is what the public read serves of an approved envelope: every
+// field that passes the proposal's check (checkFields), and nothing in place
+// of one that does not. A proposal is checked when it is written, but a row a
+// project seeds by fixture is not, and the read is what reaches the consent,
+// invitation and sign-in pages — a `javascript:` link or a colour that is not
+// one must not. Dropping the one field rather than the envelope keeps a
+// version the backoffice approved under older, looser rules on the page.
+func publicFields(f *pb.EnvelopeFields) *pb.EnvelopeFields {
+	link := func(v string) string {
+		if v != "" && !safeURL(v) {
+			return ""
+		}
+		return v
+	}
+	f.LogoLightUrl, f.LogoDarkUrl = link(f.GetLogoLightUrl()), link(f.GetLogoDarkUrl())
+	f.WebsiteUrl, f.SupportUrl = link(f.GetWebsiteUrl()), link(f.GetSupportUrl())
+	f.PrivacyUrl, f.TermsUrl = link(f.GetPrivacyUrl()), link(f.GetTermsUrl())
+	if c := f.GetAccentColor(); c != "" && !accentRE.MatchString(c) {
+		f.AccentColor = ""
+	}
+	if h := f.GetVerifiedHost(); h != "" && !hostRE.MatchString(h) {
+		f.VerifiedHost = ""
+	}
+	return f
 }
 
 func fieldsOf(e *pb.EnvelopeRow) *pb.EnvelopeFields {
