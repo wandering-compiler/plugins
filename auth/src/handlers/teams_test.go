@@ -48,6 +48,14 @@ func (m *membershipRoleMock) EndUserTeamMemberships(context.Context, *pb.EndUser
 	return &pb.EndUserTeamMembershipsResp{}, nil
 }
 
+func (o *orgTables) CountOtherOrgTeamSuperadmins(context.Context, *pb.CountOtherOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.CountOtherOrgTeamSuperadminsResp, error) {
+	return &pb.CountOtherOrgTeamSuperadminsResp{}, nil
+}
+
+func (m *membershipRoleMock) CountOtherOrgTeamSuperadmins(context.Context, *pb.CountOtherOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.CountOtherOrgTeamSuperadminsResp, error) {
+	return &pb.CountOtherOrgTeamSuperadminsResp{}, nil
+}
+
 func (m *botAdminMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserTeamRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
 	return noTeamRoles()
 }

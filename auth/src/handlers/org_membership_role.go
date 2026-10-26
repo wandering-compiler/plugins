@@ -144,6 +144,13 @@ var membershipRemovalCascades []func(ctx context.Context, h *AuthServiceHandler,
 // caller to cover them too.
 var memberHeldRoleSources []func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) ([]string, error)
 
+// otherSuperadminCounters count the members of an organization other than
+// userID who hold a wildcard role there through another feature — teams
+// counts its members' wildcard team roles — for refuseLastSuperadmin, beside
+// CountOtherOrgSuperadmins' direct grants. Same liveness: an account that is
+// disabled or erased does not count.
+var otherSuperadminCounters []func(ctx context.Context, h *AuthServiceHandler, orgID, userID string) (int64, error)
+
 // roleHolderCounters count who else holds a role through another feature — a
 // team (teams) — for a role that may not be deleted while anyone holds it
 // (DeleteOrgRole).
@@ -329,16 +336,30 @@ func isAPIRealmRow(m proto.Message) bool {
 }
 
 // refuseLastSuperadmin keeps an organization from losing its last
-// superadmin — a member holding a wildcard (all_permissions) role there. A
-// role change to another wildcard role (newRoleID) keeps them one; a removal
-// passes "". Holds for everyone, the member who created the organization
-// included: whoever is its last superadmin cannot demote or remove
-// themselves (organization ownership, which once counted as a superadmin
-// here, grants nothing).
+// superadmin — a member holding a wildcard (all_permissions) role there,
+// directly or through a team (memberHeldRoleSources). A role change to another
+// wildcard role (newRoleID) keeps them one, and so does a wildcard they hold
+// through a team, which a role change leaves in place; a removal passes "" and
+// ends both (RemoveOrgMembership ends the team memberships too). Holds for
+// everyone, the member who created the organization included: whoever is its
+// last superadmin cannot demote or remove themselves (organization ownership,
+// which once counted as a superadmin here, grants nothing).
+//
+// "Another superadmin" is one who can act: CountOtherOrgSuperadmins and
+// otherSuperadminCounters count only live grants of active (not disabled, not
+// erased) accounts with a live membership.
 func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.OrgMembership, newRoleID string) error {
 	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
 	if err != nil {
 		return err
+	}
+	var throughTeams []string
+	for _, source := range memberHeldRoleSources {
+		more, err := source(ctx, h, m.GetUserId(), m.GetOrgId())
+		if err != nil {
+			return err
+		}
+		throughTeams = append(throughTeams, more...)
 	}
 	catalogue, err := h.Query.ListRoleGrants(ctx, &pb.ListRoleGrantsReq{})
 	if err != nil {
@@ -350,11 +371,19 @@ func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.Org
 			wildcard[g.GetRoleId()] = true
 		}
 	}
-	isSuper := false
+	direct, viaTeam := false, false
 	for _, id := range held.GetRoleIds() {
-		isSuper = isSuper || wildcard[id]
+		direct = direct || wildcard[id]
 	}
-	if !isSuper || wildcard[newRoleID] {
+	for _, id := range throughTeams {
+		viaTeam = viaTeam || wildcard[id]
+	}
+	if !direct && !viaTeam {
+		return nil
+	}
+	// A role change keeps what the member holds through a team; a removal
+	// (newRoleID "") ends it with the membership.
+	if newRoleID != "" && (wildcard[newRoleID] || viaTeam) {
 		return nil
 	}
 	others, err := h.Query.CountOtherOrgSuperadmins(ctx, &pb.CountOtherOrgSuperadminsReq{OrgId: m.GetOrgId(), UserId: m.GetUserId()})
@@ -363,6 +392,15 @@ func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.Org
 	}
 	if others.GetCount() > 0 {
 		return nil
+	}
+	for _, count := range otherSuperadminCounters {
+		n, err := count(ctx, h, m.GetOrgId(), m.GetUserId())
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return nil
+		}
 	}
 	return refusal(ctx, codes.FailedPrecondition,
 		"member "+m.GetUserId()+" is the last superadmin of organization "+m.GetOrgId(),

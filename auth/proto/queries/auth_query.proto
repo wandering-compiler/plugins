@@ -366,9 +366,16 @@ message CountRoleGrantsResp {
 }
 
 // CountOtherOrgSuperadmins — how many live grants of a wildcard role
-// (all_permissions) members of the organization OTHER than user_id hold there.
-// Zero means user_id is the organization's last superadmin, whom a role change
-// or a removal must not take away (handlers/org_membership_role.go).
+// (all_permissions) members of the organization OTHER than user_id hold there
+// directly. Zero here and from every other source (a team's wildcard role,
+// CountOtherOrgTeamSuperadmins) means user_id is the organization's last
+// superadmin, whom a role change or a removal must not take away
+// (handlers/org_membership_role.go).
+//
+// Only a superadmin who can act counts: a live grant of a live role, on a live
+// membership, of an account that is neither disabled nor erased (user_admin).
+// A disabled superadmin holds no working credential, so counting one let the
+// last ACTIVE superadmin leave an organization nobody could administer.
 message CountOtherOrgSuperadminsReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string org_id  = 1 [(w17.field) = { type: UUID }];
@@ -1854,6 +1861,21 @@ message GetOrgMemberAccountResp {
   User user = 1;
 }
 
+// CountOtherOrgTeamSuperadmins — how many members of the organization OTHER
+// than user_id hold a wildcard role there through a team: CountOtherOrgSuperadmins'
+// team half, read with the same liveness (the team membership, the team, its
+// role grant, the role, the organization membership it was made under, and an
+// account that is neither disabled nor erased).
+message CountOtherOrgTeamSuperadminsReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org_id  = 1 [(w17.field) = { type: UUID }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+}
+message CountOtherOrgTeamSuperadminsResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  int64 count = 1;
+}
+
 // CountTeamRoleGrants — how many live teams hold a role: a role a team holds
 // is in use (DeleteOrgRole).
 message CountTeamRoleGrantsReq {
@@ -2370,7 +2392,9 @@ service AuthQuery {
 
   // CountOtherOrgSuperadmins — see its request message. Only grants of a live
   // membership count: a removed member's grants are revoked with it, but the
-  // join says so rather than relying on it.
+  // join says so rather than relying on it. The account's disabled_at and
+  // erased_at exist only with user_admin, hence the gated conjuncts; without
+  // it no account can be disabled or erased.
   rpc CountOtherOrgSuperadmins(CountOtherOrgSuperadminsReq) returns (CountOtherOrgSuperadminsResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
@@ -2380,8 +2404,11 @@ service AuthQuery {
           "SELECT COUNT(*) AS count FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
           "JOIN @module.OrgMembership m ON m.user_id = ur.user_id AND m.org_id = ur.org_id AND m.removed_at IS NULL "
+          "JOIN @module.User u ON u.id = ur.user_id "
           "WHERE ur.org_id = :org_id AND ur.user_id <> :user_id AND ur.revoked_at IS NULL "
-          "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL"
+          "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL "
+          "  AND ?feature(user_admin) u.disabled_at IS NULL "
+          "  AND ?feature(user_admin) u.erased_at IS NULL"
       }
     };
   }
@@ -4072,6 +4099,30 @@ service AuthQuery {
           "FROM @module.OrgMembership m "
           "JOIN @module.User u ON u.id = m.user_id "
           "WHERE m.user_id = :user_id AND m.org_id = :org_id AND m.removed_at IS NULL"
+      }
+    };
+  }
+
+  // CountOtherOrgTeamSuperadmins — see its request message. The joins are
+  // GetUserTeamRoleGrants', narrowed to wildcard roles and to members other
+  // than user_id.
+  rpc CountOtherOrgTeamSuperadmins(CountOtherOrgTeamSuperadminsReq) returns (CountOtherOrgTeamSuperadminsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT COUNT(*) AS count FROM @module.TeamMember tm "
+          "JOIN @module.Team t ON t.id = tm.team_id AND t.deleted_at IS NULL "
+          "JOIN @module.OrgMembership m ON m.user_id = tm.user_id AND m.org_id = t.org_id "
+          "  AND m.removed_at IS NULL AND m.created_at <= tm.created_at "
+          "JOIN @module.TeamRole tr ON tr.team_id = t.id AND tr.revoked_at IS NULL "
+          "JOIN @module.Role r ON r.id = tr.role_id AND r.deleted_at IS NULL AND r.org_scoped = TRUE "
+          "  AND r.all_permissions = TRUE "
+          "JOIN @module.User u ON u.id = tm.user_id "
+          "WHERE t.org_id = :org_id AND tm.user_id <> :user_id AND tm.removed_at IS NULL "
+          "  AND ?feature(user_admin) u.disabled_at IS NULL "
+          "  AND ?feature(user_admin) u.erased_at IS NULL"
       }
     };
   }

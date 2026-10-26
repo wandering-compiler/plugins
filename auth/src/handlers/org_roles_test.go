@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -243,7 +244,24 @@ func TestDeleteOrgRole(t *testing.T) {
 
 type superadminMock struct {
 	*membershipRoleMock
-	others int64
+	others     int64    // other members' direct wildcard grants (CountOtherOrgSuperadmins)
+	teamOthers int64    // other members' wildcard team roles (CountOtherOrgTeamSuperadmins)
+	teamRoles  []string // what u2 holds in org-1 through a team
+}
+
+func (m *superadminMock) GetUserTeamRoleGrants(_ context.Context, in *pb.GetUserTeamRoleGrantsReq, _ ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
+	if in.GetUserId() != "u2" || in.GetOrgId() != "org-1" || len(m.teamRoles) == 0 {
+		return noTeamRoles()
+	}
+	out := &pb.GetUserTeamRoleGrantsResp{}
+	for _, id := range m.teamRoles {
+		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: id, AllPermissions: id == "r-super"})
+	}
+	return out, nil
+}
+
+func (m *superadminMock) CountOtherOrgTeamSuperadmins(context.Context, *pb.CountOtherOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.CountOtherOrgTeamSuperadminsResp, error) {
+	return &pb.CountOtherOrgTeamSuperadminsResp{Count: m.teamOthers}, nil
 }
 
 func (m *superadminMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
@@ -317,6 +335,71 @@ func TestLastSuperadmin_CannotDemoteOrRemoveThemselves(t *testing.T) {
 	m.others = 1
 	if _, err := h.UpdateOrgMembershipRole(self, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-admin"}); err != nil {
 		t.Fatalf("self-demotion beside another superadmin: %v", err)
+	}
+}
+
+// A wildcard role held through a TEAM makes a superadmin on both sides of the
+// rule, as checkMayManageMembership already counts team roles for the ceiling.
+func TestRefuseLastSuperadmin_TeamHeldWildcards(t *testing.T) {
+	ctx := context.Background()
+	mem := &pb.OrgMembership{Id: "mem-1", UserId: "u2", OrgId: "org-1"}
+
+	// The member: a superadmin only through a team. Removing them ends the
+	// team membership too, so it is refused; a role change leaves the team's
+	// wildcard in place, so it is not.
+	_, mm := newMembershipRoleHandler("r-admin")
+	m := &superadminMock{membershipRoleMock: mm, teamRoles: []string{"r-super"}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Errorf("removing the last superadmin, a superadmin through a team: %v", err)
+	}
+	if err := h.refuseLastSuperadmin(ctx, mem, "r-admin"); err != nil {
+		t.Errorf("a role change keeps the team's wildcard: %v", err)
+	}
+
+	// The others: the member is the last DIRECT superadmin, and another member
+	// holds a wildcard through a team — the organization keeps a superadmin.
+	_, mm = newMembershipRoleHandler("r-super")
+	m = &superadminMock{membershipRoleMock: mm, teamOthers: 1}
+	h = &AuthServiceHandler{Query: m, Mutation: m}
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
+		t.Errorf("another member is a superadmin through a team: %v", err)
+	}
+	m.teamOthers = 0
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Errorf("control, nobody else: %v", err)
+	}
+}
+
+// Who counts as "another superadmin" is decided in SQL, so the statements
+// are what is asserted: a grant counts only when it, its role, the membership
+// (and, through a team, the team, its role grant and the team membership) are
+// live, and the account is neither disabled nor erased. A disabled superadmin
+// holds no working credential; counting one let the last ACTIVE superadmin
+// leave. **Unit (statement) only** — no database runs here.
+func TestOtherSuperadminCounts_OnlyActiveLiveAccounts(t *testing.T) {
+	q := authProtos(t)["queries/auth_query.proto"]
+	for marker, want := range map[string][]string{
+		"rpc CountOtherOrgSuperadmins(": {
+			"ur.revoked_at IS NULL", "r.deleted_at IS NULL", "r.all_permissions = TRUE",
+			"m.removed_at IS NULL", "ur.user_id <> :user_id",
+			"JOIN @module.User u ON u.id = ur.user_id",
+			"?feature(user_admin) u.disabled_at IS NULL", "?feature(user_admin) u.erased_at IS NULL",
+		},
+		"rpc CountOtherOrgTeamSuperadmins(": {
+			"tm.removed_at IS NULL", "t.deleted_at IS NULL", "tr.revoked_at IS NULL",
+			"r.deleted_at IS NULL", "r.all_permissions = TRUE", "m.removed_at IS NULL",
+			"m.created_at <= tm.created_at", "tm.user_id <> :user_id",
+			"JOIN @module.User u ON u.id = tm.user_id",
+			"?feature(user_admin) u.disabled_at IS NULL", "?feature(user_admin) u.erased_at IS NULL",
+		},
+	} {
+		body := dqlText(methodDQL(t, q, marker))
+		for _, w := range want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s does not say %q:\n%s", marker, w, body)
+			}
+		}
 	}
 }
 

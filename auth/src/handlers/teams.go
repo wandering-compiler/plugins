@@ -35,7 +35,11 @@ import (
 // asks the caller to cover their team roles too (memberHeldRoleSources) and
 // ends their team memberships in the same transaction
 // (membershipRemovalCascades); deleting the organization ends its teams
-// (orgRemovalCascades); a role a team holds is in use (roleHolderCounters).
+// (orgRemovalCascades); a role a team holds is in use (roleHolderCounters);
+// and a wildcard role held through a team makes its member a superadmin of
+// the organization for the last-superadmin rule, on both sides — the member
+// a change or removal acts on (memberHeldRoleSources) and the others who would
+// remain (otherSuperadminCounters).
 
 // The sentences a person reads for these refusals. Mirrored into plugin.yaml
 // by `make plugin-msgids-sync` (see errors.go).
@@ -70,6 +74,7 @@ func init() {
 	membershipRemovalCascades = append(membershipRemovalCascades, endTeamMemberships)
 	orgRemovalCascades = append(orgRemovalCascades, endTeamsOfOrg)
 	roleHolderCounters = append(roleHolderCounters, countTeamRoleHolders)
+	otherSuperadminCounters = append(otherSuperadminCounters, countOtherTeamSuperadmins)
 }
 
 // teamRoleGrants is teams' orgGrantSource: the roles the user holds through
@@ -109,6 +114,16 @@ func endTeamMemberships(ctx context.Context, h *AuthServiceHandler, userID, orgI
 func endTeamsOfOrg(ctx context.Context, h *AuthServiceHandler, orgID, by string) error {
 	_, err := h.Mutation.EndTeamsOfOrg(ctx, &pb.EndTeamsOfOrgReq{OrgId: orgID, DeletedBy: by})
 	return err
+}
+
+// countOtherTeamSuperadmins is teams' otherSuperadminCounter: the other
+// members holding a wildcard role in the organization through a team.
+func countOtherTeamSuperadmins(ctx context.Context, h *AuthServiceHandler, orgID, userID string) (int64, error) {
+	resp, err := h.Query.CountOtherOrgTeamSuperadmins(ctx, &pb.CountOtherOrgTeamSuperadminsReq{OrgId: orgID, UserId: userID})
+	if err != nil {
+		return 0, err
+	}
+	return resp.GetCount(), nil
 }
 
 // countTeamRoleHolders is teams' roleHolderCounter.
