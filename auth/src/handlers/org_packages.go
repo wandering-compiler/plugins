@@ -27,7 +27,7 @@ import (
 //
 //   - a GOVERNED permission — one of a project method, which the table lists
 //     — survives only when one of the organization's packages grants it,
-//     whatever the caller's roles say, the owner's wildcard included. A
+//     whatever the caller's roles say, a wildcard role included. A
 //     method no package grants is held by nobody there (default deny);
 //     a plugin's methods (sign-in, the account's own settings) are not
 //     governed unless a package lists them;

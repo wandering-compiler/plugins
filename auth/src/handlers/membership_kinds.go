@@ -30,7 +30,6 @@ import (
 //     of an admitted kind only, and a caller holding none is refused 403
 //     before any handler — a client calling the staff surface reaches no
 //     endpoint of it;
-//   - ownership does not widen there (see narrowGrantsToActiveOrg);
 //   - an invitation's kind is held to what the inviter's audiences may
 //     invite (membership_kinds_invite.go).
 //
@@ -53,8 +52,7 @@ func init() {
 // of another, in two tabs at once. Read once the organization is resolved,
 // whichever way it was (the selector, the sole membership, an OAuth token's
 // organization, an audience's kinds). Empty when the request acts in no
-// organization, or in one the caller only owns (ownership is no membership,
-// so it has no kind).
+// organization.
 func answerMembershipKind(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, resp *pb.AuthResp) error {
 	orgID := resp.GetScopes()["org_id"]
 	if orgID == "" {

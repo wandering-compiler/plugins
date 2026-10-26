@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -23,11 +24,9 @@ type orgMock struct {
 
 	orgsByUser map[string][]*pb.UserOrg            // ListUserOrgs
 	bySlug     map[string]*pb.GetUserOrgBySlugResp // key "user|slug"; absent = not a member
-	owned      map[string]string                   // key "user|slug" -> org id; absent = not the owner
 
 	listErr   error
 	bySlugErr error
-	ownedErr  error
 
 	listCalls int // ListUserOrgs calls
 }
@@ -50,20 +49,6 @@ func (m *orgMock) GetUserOrgBySlug(ctx context.Context, in *pb.GetUserOrgBySlugR
 	// Not a member: what a generated single-row read answers for no row —
 	// NotFound, not an empty response. The fake used to answer empty, which
 	// is why resolveOrgScope's `return err` on NotFound never showed here.
-	return nil, status.Error(codes.NotFound, "no rows")
-}
-
-// GetOwnedOrgBySlug is the ownership fallback resolveOrgScope reaches for when
-// the membership lookup comes back empty. Kept as a SEPARATE map from bySlug so
-// a test can express the state that matters — owner, no membership row — which
-// is unreachable if both answers come from one fixture.
-func (m *orgMock) GetOwnedOrgBySlug(ctx context.Context, in *pb.GetOwnedOrgBySlugReq, _ ...grpc.CallOption) (*pb.GetOwnedOrgBySlugResp, error) {
-	if m.ownedErr != nil {
-		return nil, m.ownedErr
-	}
-	if id := m.owned[in.GetUserId()+"|"+in.GetSlug()]; id != "" {
-		return &pb.GetOwnedOrgBySlugResp{OrgId: id}, nil
-	}
 	return nil, status.Error(codes.NotFound, "no rows")
 }
 
@@ -271,13 +256,11 @@ type permMock struct {
 
 	orgGrants   []*pb.RoleGrant
 	realmGrants []*pb.RoleGrant
-	owner       bool
 	err         error
 
-	sawOrgID     string
-	calledOrg    bool
-	calledRealm  bool
-	calledOwning bool
+	sawOrgID    string
+	calledOrg   bool
+	calledRealm bool
 }
 
 func (m *permMock) GetUserOrgPermissions(ctx context.Context, in *pb.GetUserOrgPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserOrgPermissionsResp, error) {
@@ -295,14 +278,6 @@ func (m *permMock) GetUserRealmWidePermissions(ctx context.Context, in *pb.GetUs
 		return nil, m.err
 	}
 	return &pb.GetUserRealmWidePermissionsResp{Grants: m.realmGrants}, nil
-}
-
-func (m *permMock) GetUserOwnsOrg(ctx context.Context, in *pb.GetUserOwnsOrgReq, _ ...grpc.CallOption) (*pb.GetUserOwnsOrgResp, error) {
-	m.calledOwning = true
-	if m.err != nil {
-		return nil, m.err
-	}
-	return &pb.GetUserOwnsOrgResp{Owner: m.owner}, nil
 }
 
 func grant(role string, perms ...int32) *pb.RoleGrant {
@@ -391,37 +366,33 @@ func TestNarrowGrants_WildcardRoleMustPassTheOrgAxis(t *testing.T) {
 	}
 }
 
-// Ownership WIDENS — the one exception to "a narrower only subtracts" — and
-// it is what makes an owner able to act without seeded role grants.
-func TestNarrowGrants_OwnershipWidensASession(t *testing.T) {
-	m := &permMock{owner: true} // no role grants at all
-	h := &AuthServiceHandler{Query: m, Lock: wildcardLock()}
-	p := sessionPrincipal()
+// Whoever created an organization holds in it exactly what their roles say.
+// Organization ownership once appended a synthetic wildcard here — over the
+// WHOLE deployed permission lock, not just the organization — for a principal
+// named by Organization.owner_id, a column nothing wrote. A session principal
+// with no role in the active organization, whatever their relation to it,
+// must come out of the narrowing holding nothing, for a session and for an
+// API token alike.
+func TestNarrowGrants_NoRoleMeansNothingWhoeverCreatedTheOrg(t *testing.T) {
+	for name, realm := range map[string]pb.TokenType{
+		"session":   pb.TokenType_TOKEN_TYPE_SESSION,
+		"api token": pb.TokenType_TOKEN_TYPE_API,
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &permMock{} // no role grants in the org, none realm-wide
+			h := &AuthServiceHandler{Query: m, Lock: wildcardLock()}
+			p := &authPrincipal{userID: "u-creator", realm: realm}
 
-	if err := narrowGrantsToActiveOrg(context.Background(), h, p, map[string]string{"org_id": "org-a"}); err != nil {
-		t.Fatalf("narrow: %v", err)
-	}
-	if got := p.effectivePermissions(h.Lock); len(got) == 0 {
-		t.Error("an owner holding no role received nothing — ownership is still inert")
-	}
-}
-
-// ...but NOT an API token. Its ceiling stays the holder's api-realm roles,
-// so a stolen CI token is not an owner login even when its minter owns the
-// company.
-func TestNarrowGrants_OwnershipDoesNotWidenAnApiToken(t *testing.T) {
-	m := &permMock{owner: true}
-	h := &AuthServiceHandler{Query: m, Lock: wildcardLock()}
-	p := &authPrincipal{userID: "u1", realm: pb.TokenType_TOKEN_TYPE_API}
-
-	if err := narrowGrantsToActiveOrg(context.Background(), h, p, map[string]string{"org_id": "org-a"}); err != nil {
-		t.Fatalf("narrow: %v", err)
-	}
-	if got := p.effectivePermissions(h.Lock); len(got) != 0 {
-		t.Errorf("ownership widened an API token: got %v", got)
-	}
-	if m.calledOwning {
-		t.Error("the ownership probe ran for an API token — it cannot apply, so it should not be asked")
+			if err := narrowGrantsToActiveOrg(context.Background(), h, p, map[string]string{"org_id": "org-a"}); err != nil {
+				t.Fatalf("narrow: %v", err)
+			}
+			if len(p.grants) != 0 {
+				t.Errorf("a principal with no role in the organization was granted %v", p.grants)
+			}
+			if got := p.effectivePermissions(h.Lock); len(got) != 0 {
+				t.Errorf("a principal with no role in the organization holds %v, want nothing", got)
+			}
+		})
 	}
 }
 
@@ -504,89 +475,30 @@ func TestResolveOrgScope_NoSelectorFallsBackToInference(t *testing.T) {
 	}
 }
 
-// An OWNER with no membership row can still scope into the org they own.
-//
-// MarkOrgMembershipRemoved makes this state reachable: it ends the row, and
-// nothing but a new invitation (which the owner, locked out, cannot send) adds
-// one back, so without the ownership fallback the owner of an organization is
-// locked out of it permanently — and the refusal
-// they get is the opaque Unauthenticated every other auth failure returns, so
-// nothing on the way out says "your membership is gone".
-func TestResolveOrgScope_OwnerWithoutMembership(t *testing.T) {
-	h := &AuthServiceHandler{Query: &orgMock{
-		// Deliberately empty: u1 is a member of nothing.
+// Live membership is the only way to select an organization. Ownership
+// (Organization.owner_id) used to be a second one, read when the membership
+// lookup found nothing, so the person named there could act in an
+// organization they were no member of. Without a membership row — never
+// added, or ended by MarkOrgMembershipRemoved — the organization's creator is
+// refused like anybody else and nothing is stamped; and the refusal is the
+// answer itself, one lookup, with no second claim consulted.
+func TestResolveOrgScope_WithoutAMembershipNobodySelectsTheOrg(t *testing.T) {
+	m := &orgMock{
+		// Deliberately empty: u-creator made acme but is a member of nothing.
 		bySlug: map[string]*pb.GetUserOrgBySlugResp{},
-		owned:  map[string]string{"u1|acme": "org-acme"},
-	}}
+		orgsByUser: map[string][]*pb.UserOrg{
+			"u-creator": nil,
+		},
+	}
+	h := &AuthServiceHandler{Query: m}
 
 	sc, lb := map[string]string{}, map[string]string{}
-	if err := resolveOrgScope(ctxWithOrg("acme"), h, "u1", nil, sc, lb); err != nil {
-		t.Fatalf("owner must resolve their own org: %v", err)
-	}
-	if sc["org_id"] != "org-acme" {
-		t.Fatalf("scope org_id = %q, want org-acme", sc["org_id"])
-	}
-	// stampOrg owns both keys; an owner whose rows are scoped but whose events
-	// are not would be the same one-surface-over leak the label exists to fix.
-	if lb["org_id"] != "org-acme" {
-		t.Fatalf("label org_id = %q, want org-acme", lb["org_id"])
-	}
-}
-
-// The decoy for the test above: ownership admits the OWNER, not everyone the
-// membership lookup turned away. Without this, a fallback that stamped any org
-// it could find a row for would pass the owner test and leak every org.
-func TestResolveOrgScope_NonMemberNonOwnerStillRefused(t *testing.T) {
-	h := &AuthServiceHandler{Query: &orgMock{
-		bySlug: map[string]*pb.GetUserOrgBySlugResp{},
-		owned:  map[string]string{"u1|acme": "org-acme"}, // u1 owns acme; u2 owns nothing
-	}}
-
-	sc, lb := map[string]string{}, map[string]string{}
-	err := resolveOrgScope(ctxWithOrg("acme"), h, "u2", nil, sc, lb)
+	err := resolveOrgScope(ctxWithOrg("acme"), h, "u-creator", nil, sc, lb)
 	if !errors.Is(err, errOrgNotMember) {
-		t.Fatalf("want errOrgNotMember for a non-member non-owner, got %v", err)
+		t.Fatalf("want errOrgNotMember for a principal with no membership, got %v", err)
 	}
 	if len(sc) != 0 || len(lb) != 0 {
 		t.Fatalf("a refused scope must stamp nothing, got scopes=%v labels=%v", sc, lb)
-	}
-}
-
-// A failing ownership lookup must not become "not a member". The distinction
-// matters because the two produce the same opaque refusal to the caller but
-// mean opposite things to whoever reads the logs, and because swallowing it
-// would make a database outage look like a revoked membership.
-func TestResolveOrgScope_OwnershipLookupErrorPropagates(t *testing.T) {
-	boom := errors.New("db down")
-	h := &AuthServiceHandler{Query: &orgMock{
-		bySlug:   map[string]*pb.GetUserOrgBySlugResp{},
-		ownedErr: boom,
-	}}
-
-	err := resolveOrgScope(ctxWithOrg("acme"), h, "u1", nil, map[string]string{}, map[string]string{})
-	if !errors.Is(err, boom) {
-		t.Fatalf("want the raw db error, got %v", err)
-	}
-}
-
-// Membership stays the primary path: when the membership lookup answers, the
-// ownership query is not consulted at all. Asserted because the fallback sits
-// on the hot path of every org-scoped request, and a version that always ran
-// both would pass every other test here while doubling the query count.
-func TestResolveOrgScope_MembershipShortCircuitsTheOwnershipLookup(t *testing.T) {
-	h := &AuthServiceHandler{Query: &orgMock{
-		bySlug: map[string]*pb.GetUserOrgBySlugResp{
-			"u1|acme": {OrgId: "org-acme", Role: "member"},
-		},
-		ownedErr: errors.New("ownership lookup must not run for a member"),
-	}}
-
-	sc, lb := map[string]string{}, map[string]string{}
-	if err := resolveOrgScope(ctxWithOrg("acme"), h, "u1", nil, sc, lb); err != nil {
-		t.Fatalf("member must resolve without the fallback: %v", err)
-	}
-	if sc["org_id"] != "org-acme" {
-		t.Fatalf("scope org_id = %q, want org-acme", sc["org_id"])
 	}
 }
 
@@ -707,5 +619,54 @@ func TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot(t *testing.T
 	}
 	if len(seen) != 2 || seen[0] || seen[1] {
 		t.Fatalf("Authenticate: decorator/narrower saw admin plane = %v, want [false false]", seen)
+	}
+}
+
+// An organization has no owner, and no statement reads one. owner_id was
+// root authority nobody wrote; with the field reserved a query naming it would
+// fail at generation, and this says so where a reader of the tests looks —
+// along with the two business answers that still carry an `owner` flag for
+// old clients, which no statement may fill.
+func TestOrganizationHasNoOwner(t *testing.T) {
+	if fd := (&pb.Organization{}).ProtoReflect().Descriptor().Fields().ByName("owner_id"); fd != nil {
+		t.Fatalf("Organization still declares %s", fd.FullName())
+	}
+	for rel, src := range authProtos(t) {
+		for name, body := range rpcBodies(dqlText(src)) {
+			// owner_id anywhere, or an `owner` column computed beside an
+			// Organization (the old `(o.owner_id = m.user_id) AS owner`); the
+			// device and session lists' `owner` is an account's address.
+			if strings.Contains(body, "owner_id") || (strings.Contains(body, "@module.Organization") && strings.Contains(body, " AS owner")) {
+				t.Errorf("%s: %s reads organization ownership:\n%s", rel, name, body)
+			}
+		}
+	}
+}
+
+// UserOrg.owner and OrgMember.owner stay on the wire for old clients and are
+// always false: ListMyOrgs and ListOrgMembers fill nothing into them.
+func TestOwnerFlagsAreAlwaysFalse(t *testing.T) {
+	h := &AuthServiceHandler{Query: &orgMock{orgsByUser: map[string][]*pb.UserOrg{
+		"u1": {{OrgId: "org-acme", Slug: "acme", Role: "org-admin"}},
+	}}}
+	resp, err := h.ListMyOrgs(orgAuthedCtx("u1"), &pb.ListMyOrgsReq{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range resp.GetOrgs() {
+		if o.GetOwner() {
+			t.Errorf("ListMyOrgs answered owner=true for %s", o.GetSlug())
+		}
+	}
+	members, err := (&AuthServiceHandler{Query: memberListQuery{}}).ListOrgMembers(
+		metadata.NewIncomingContext(context.Background(), metadata.Pairs(scopeUserIDKey, "u1", "x-w17-scope-org_id", "org-1")),
+		&pb.ListOrgMembersReq{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members.GetMembers() {
+		if m.GetOwner() {
+			t.Errorf("ListOrgMembers answered owner=true for %s", m.GetUserId())
+		}
 	}
 }

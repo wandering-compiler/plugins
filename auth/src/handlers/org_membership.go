@@ -89,13 +89,13 @@ func init() {
 var orgGrantSources []func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) ([]*pb.RoleGrant, error)
 
 // narrowGrantsToActiveOrg restricts the principal to what applies IN THE
-// ACTIVE ORGANIZATION, and lets OWNERSHIP (and a team's roles) widen it.
+// ACTIVE ORGANIZATION, and lets a team's roles add to it.
 //
 // Without the narrowing the two halves of this plugin disagree: scopes[org_id]
 // isolates the caller's ROWS to one company while the grants stay the union of
-// every role they hold in every company. An accountant in company A who owns
-// company B would carry the owner's permissions into A — the data would be A's,
-// the rights B's.
+// every role they hold in every company. An accountant in company A who is an
+// admin of company B would carry B's permissions into A — the data would be
+// A's, the rights B's.
 //
 // The intersection is over ROLE IDS, not permission ids, and that is what lets
 // this run alongside api_token at all. Intersecting sets of permissions is only
@@ -114,25 +114,14 @@ var orgGrantSources []func(ctx context.Context, h *AuthServiceHandler, userID, o
 //     reopen the leak on precisely the request that failed to name a company.
 //
 // Then the active organization's own session grants (orgGrantSources: a
-// team's roles), bounded like ownership below — a session only, this
-// organization only.
+// team's roles) — a session only, this organization only.
 //
-// ⚠️ And then OWNERSHIP, which WIDENS — with the grants above, the one place in
-// this plugin where a narrower adds. It is deliberate and bounded:
-//
-//   - ownership is not a permission anybody granted; it is root authority over
-//     the organization, read off the organization row;
-//   - it applies to a SESSION principal only. An API token's ceiling stays its
-//     holder's api-realm roles, so a stolen CI token is not an owner login even
-//     when the person who minted it owns the company;
-//   - and it is scoped to the ACTIVE org, so owning one company grants nothing
-//     in another.
-//
-// Before this, ownership was folded into the same `all_permissions` bool as a
-// wildcard ROLE and therefore arrived inside the narrowing — where it could
-// only subtract. An owner holding no role intersected "everything" with
-// "nothing" and got nothing, so owners needed seeded
-// grants like anyone else.
+// Organization ownership adds nothing. It used to: a principal named by
+// Organization.owner_id got a synthetic wildcard grant here, which expanded
+// over the WHOLE deployed permission lock — realm-wide power through any app
+// endpoint not row-scoped by org_id — and nothing in the plugin ever wrote the
+// column. Whoever administers an organization holds a role in it, like
+// everyone else (the column is gone; see Organization in models.proto).
 func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
 	orgID := scopes["org_id"]
 
@@ -171,7 +160,7 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 	// rather than run through it: they are org-scoped by construction (a team
 	// belongs to one organization, and the source answers for this one), so
 	// the eligible set has nothing to say about them, and an API token's
-	// ceiling stays its holder's api-realm roles, as with ownership below.
+	// ceiling stays its holder's api-realm roles.
 	if orgID != "" && p.realm == pb.TokenType_TOKEN_TYPE_SESSION {
 		for _, source := range orgGrantSources {
 			grants, err := source(ctx, h, p.userID, orgID)
@@ -182,25 +171,6 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 		}
 	}
 
-	// Ownership last, and only for a session. Appended as a synthetic
-	// wildcard grant rather than by rewriting the survivors, so it stays
-	// visible as its own thing to anything that inspects the principal.
-	if orgID == "" || p.realm != pb.TokenType_TOKEN_TYPE_SESSION {
-		return nil
-	}
-	// Not through an audience that admits only some memberships: ownership
-	// is root authority over the organization, which its staff exercise —
-	// an owner who is also a client is a client on the client's surface.
-	if len(admittedKinds(ctx)) > 0 {
-		return nil
-	}
-	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: p.userID, OrgId: orgID})
-	if err != nil {
-		return err
-	}
-	if owns.GetOwner() {
-		p.grants = append(p.grants, &pb.RoleGrant{AllPermissions: true})
-	}
 	return nil
 }
 
@@ -426,35 +396,19 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 		return nil
 	}
 	// NotFound is "not a member", not a failure: a generated single-row read
-	// reports no row as NotFound. Returned as an error it skipped both the
-	// owner fallback below — so an owner whose membership row was gone could
-	// not reach their own org — and the ORG_NOT_MEMBER answer, so a caller who
-	// named the wrong org read "You are not signed in.".
+	// reports no row as NotFound. Returned as an error it skipped the
+	// ORG_NOT_MEMBER answer, so a caller who named the wrong org read "You are
+	// not signed in.".
+	//
+	// Live membership is the only claim on an organization. Ownership
+	// (Organization.owner_id) once was a second one, read when the membership
+	// lookup found nothing; it is gone with the column, so a principal without
+	// a live membership cannot select the organization, whoever created it.
 	resp, err := h.Query.GetUserOrgBySlug(ctx, &pb.GetUserOrgBySlugReq{UserId: userID, Slug: slug})
 	if notFoundOK(err) != nil {
 		return err
 	}
 	orgID := resp.GetOrgId()
-	if orgID == "" {
-		// Not a member — but ownership is its own claim on an organization,
-		// and it is the one claim membership management cannot take away.
-		// Without this an owner whose membership row is missing cannot scope
-		// into the org they own at all: resolveOrgScope fails closed, the
-		// refusal is the opaque Unauthenticated every other auth failure
-		// returns, and there is no add-membership action anywhere to undo it.
-		// MarkOrgMembershipRemoved would therefore lock an owner out permanently.
-		//
-		// It also decides what owner_id MEANS. GetUserOwnsAnyOrg widens an
-		// owner's permissions, but permissions are checked after a scope is
-		// resolved, so ownership that cannot resolve a scope is ownership
-		// that grants nothing — the column would be decorative for exactly
-		// the case it exists to serve.
-		owned, oerr := h.Query.GetOwnedOrgBySlug(ctx, &pb.GetOwnedOrgBySlugReq{UserId: userID, Slug: slug})
-		if notFoundOK(oerr) != nil {
-			return oerr
-		}
-		orgID = owned.GetOrgId()
-	}
 	if orgID == "" {
 		return UnauthenticatedOrgNotMember(errOrgNotMember)
 	}
@@ -626,7 +580,6 @@ func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrg
 			UserId:   m.GetUserId(),
 			Email:    m.GetEmail(),
 			Role:     m.GetRole(),
-			Owner:    m.GetOwner(),
 			JoinedAt: m.GetJoinedAt(),
 
 			MembershipId: m.GetMembershipId(),

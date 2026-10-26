@@ -456,14 +456,6 @@ const audienceHeader = "x-w17-audience"
 // authHeadersKey carries the AuthReq headers on the context, for a narrower.
 type authHeadersKey struct{}
 
-// admittedKinds are the membership kinds the request's audience gateway
-// admits (x-w17-membership-kinds, which only a gateway writes); nil when it
-// came through a gateway that admits any.
-func admittedKinds(ctx context.Context) []string {
-	headers, _ := ctx.Value(authHeadersKey{}).(map[string]string)
-	return kindsFromHeaders(headers)
-}
-
 // kindsFromHeaders reads the admitted membership kinds off AuthReq headers.
 func kindsFromHeaders(headers map[string]string) []string {
 	raw := headers[membershipKindsHeader]
@@ -496,9 +488,9 @@ func kindsFromHeaders(headers map[string]string) []string {
 // Contract: a narrower may only REMOVE permissions or expand a wildcard
 // it has itself re-checked in the narrower context. Returning a larger
 // ordinary set would let a feature escalate the principal past the realm
-// resolution that ran before it. The two bounded exceptions live in the
-// organization narrower and are documented there: ownership, and the
-// session-only grants of the active organization (orgGrantSources).
+// resolution that ran before it. The one bounded exception lives in the
+// organization narrower and is documented there: the session-only grants of
+// the active organization (orgGrantSources).
 type grantNarrower func(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error
 
 var grantNarrowers []grantNarrower
@@ -512,8 +504,9 @@ var grantNarrowers []grantNarrower
 // which role contributed what, and an intersection then keeps permissions that
 // no one role grants under both axes.
 //
-// Realm rides along because one narrowing needs it: organization OWNERSHIP
-// widens, and it may only widen a SESSION principal (see narrowGrantsToActiveOrg).
+// Realm rides along because one narrowing needs it: the active organization's
+// own grants (a team's roles) add to a SESSION principal only (see
+// narrowGrantsToActiveOrg).
 type authPrincipal struct {
 	userID  string
 	tokenID string
@@ -651,7 +644,7 @@ func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token s
 	}
 	// SESSION: with api_token off there is only one credential class, and
 	// this is it. Stamping it rather than leaving the zero value keeps the
-	// ownership rule (session-only) reading the same in both builds.
+	// session-only rules (a team's grants) reading the same in both builds.
 	userID := resp.GetUser().GetId()
 	grants, err := h.Query.GetUserRoleGrants(ctx, &pb.GetUserRoleGrantsReq{UserId: userID})
 	if err != nil {
@@ -1094,7 +1087,7 @@ func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) 
 // organization, and wrong for the admin: a role scoped to one organization,
 // a wildcard one above all, would pass every admin page for every
 // organization. Here no organization is selected, so the grants that survive
-// are the realm-wide ones, and organization ownership grants nothing.
+// are the realm-wide ones.
 //
 // Two consequences a project sees:
 //

@@ -243,8 +243,7 @@ func TestDeleteOrgRole(t *testing.T) {
 
 type superadminMock struct {
 	*membershipRoleMock
-	others  int64
-	ownerID string
+	others int64
 }
 
 func (m *superadminMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
@@ -258,13 +257,10 @@ func (m *superadminMock) CountOtherOrgSuperadmins(context.Context, *pb.CountOthe
 	return &pb.CountOtherOrgSuperadminsResp{Count: m.others}, nil
 }
 
-func (m *superadminMock) GetOrganization(context.Context, *pb.GetOrganizationReq, ...grpc.CallOption) (*pb.Organization, error) {
-	return &pb.Organization{Id: "org-1", OwnerId: m.ownerID}, nil
-}
-
 // An organization keeps a superadmin: the last one is neither removed nor
-// moved to a lesser role — unless another member or the owner is one, or the
-// new role is a wildcard too.
+// moved to a lesser role — unless another member is one, or the new role is a
+// wildcard too. Nobody is exempt: organization ownership once counted as a
+// superadmin here and let the last one leave; it grants nothing now.
 func TestRefuseLastSuperadmin(t *testing.T) {
 	_, mm := newMembershipRoleHandler("r-super")
 	m := &superadminMock{membershipRoleMock: mm}
@@ -285,14 +281,42 @@ func TestRefuseLastSuperadmin(t *testing.T) {
 	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
 		t.Errorf("another superadmin: %v", err)
 	}
-	m.others, m.ownerID = 0, "u1"
-	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
-		t.Errorf("an owner: %v", err)
-	}
+	m.others = 0
 	mm.memberOrgRoles = []string{"r-admin"}
-	m.ownerID = ""
 	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
 		t.Errorf("not a superadmin: %v", err)
+	}
+}
+
+// The last superadmin cannot demote or remove THEMSELVES — the case an
+// organization's creator is in: they made it, hold its only wildcard role, and
+// with ownership gone nothing else keeps it administered. Through the
+// business methods, so the refusal is shown to come before either write.
+func TestLastSuperadmin_CannotDemoteOrRemoveThemselves(t *testing.T) {
+	_, mm := newMembershipRoleHandler("r-super")
+	m := &superadminMock{membershipRoleMock: mm}
+	mm.all = append(mm.all, &pb.Role{Id: "r-super", Name: "org-super"})
+	mm.orgScoped = append(mm.orgScoped, &pb.OrgScopedRole{Id: "r-super", Name: "org-super"})
+	h := &AuthServiceHandler{Query: m, Mutation: m, Lock: wildcardLock()}
+	// u2 is the member of mem-1 and the caller, holding everything the lock has.
+	self := inOrg(withHeldPermissions(context.Background(), "u2", 1, 2, 3), "org-1")
+
+	_, err := h.UpdateOrgMembershipRole(self, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-admin"})
+	if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Fatalf("self-demotion of the last superadmin: %v", err)
+	}
+	_, err = h.RemoveOrgMembership(self, &pb.RemoveOrgMembershipReq{Id: "mem-1"})
+	if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Fatalf("self-removal of the last superadmin: %v", err)
+	}
+	if mm.updated != nil || mm.deleted != nil {
+		t.Fatalf("a refused request wrote: updated=%v deleted=%v", mm.updated, mm.deleted)
+	}
+
+	// Control: with another superadmin in the organization, both go through.
+	m.others = 1
+	if _, err := h.UpdateOrgMembershipRole(self, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-admin"}); err != nil {
+		t.Fatalf("self-demotion beside another superadmin: %v", err)
 	}
 }
 

@@ -36,7 +36,6 @@ const (
 	MsgRoleNotOrgScoped     = "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."
 	MsgMembershipInOtherOrg = "This membership belongs to another organization."
 	MsgMemberAboveCaller    = "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
-	MsgMembershipIsOwner    = "This is the organization's owner. Their membership cannot be changed or removed; transfer ownership first."
 	MsgLastSuperadmin       = "This is the organization's last superadmin. Make someone else a superadmin first."
 	MsgRoleIsForBots        = "{role} is a role for machine accounts. A person's membership carries a person's role."
 )
@@ -47,7 +46,6 @@ const (
 	CodeRoleNotOrgScoped     = "ROLE_NOT_ORG_SCOPED"
 	CodeMembershipInOtherOrg = "MEMBERSHIP_IN_ANOTHER_ORG"
 	CodeMemberAboveCaller    = "MEMBER_ABOVE_CALLER"
-	CodeMembershipIsOwner    = "MEMBERSHIP_IS_OWNER"
 	CodeLastSuperadmin       = "LAST_SUPERADMIN"
 	CodeRoleIsForBots        = "ROLE_IS_FOR_BOTS"
 )
@@ -212,9 +210,9 @@ func (h *AuthServiceHandler) inOrgTx(ctx context.Context, fn func(txCtx context.
 // requires of the caller, before either writes anything:
 //
 //   - the membership is in the organization the caller acts in, when they act
-//     in one. Their permissions were resolved FOR that organization (an owner
-//     holds every permission in their own org, and only there), so a ceiling
-//     checked there says nothing about another. A caller with no active
+//     in one. Their permissions were resolved FOR that organization (an
+//     org-scoped role grants only there), so a ceiling checked there says
+//     nothing about another. A caller with no active
 //     organization acts on realm-wide grants, which reach every organization.
 //   - the caller covers every role the member holds in that organization —
 //     exactly the grants the change or removal revokes — and every role they
@@ -233,18 +231,6 @@ func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membe
 		return nil, refusal(ctx, codes.PermissionDenied,
 			"membership "+membershipID+" is in organization "+m.GetOrgId()+", not the caller's active "+active,
 			CodeMembershipInOtherOrg, "", MsgMembershipInOtherOrg, nil)
-	}
-	// The owner's membership is not one to manage: ownership is
-	// Organization.owner_id and outlives it, so a demoted or removed owner
-	// keeps root authority while vanishing from the member list.
-	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
-	if err != nil {
-		return nil, err
-	}
-	if owns.GetOwner() {
-		return nil, refusal(ctx, codes.FailedPrecondition,
-			"membership "+membershipID+" is the owner's of organization "+m.GetOrgId(),
-			CodeMembershipIsOwner, "", MsgMembershipIsOwner, nil)
 	}
 	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
 	if err != nil {
@@ -345,8 +331,10 @@ func isAPIRealmRow(m proto.Message) bool {
 // refuseLastSuperadmin keeps an organization from losing its last
 // superadmin — a member holding a wildcard (all_permissions) role there. A
 // role change to another wildcard role (newRoleID) keeps them one; a removal
-// passes "". The owner counts: ownership grants everything in the
-// organization, whatever its membership says.
+// passes "". Holds for everyone, the member who created the organization
+// included: whoever is its last superadmin cannot demote or remove
+// themselves (organization ownership, which once counted as a superadmin
+// here, grants nothing).
 func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.OrgMembership, newRoleID string) error {
 	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
 	if err != nil {
@@ -375,9 +363,6 @@ func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.Org
 	}
 	if others.GetCount() > 0 {
 		return nil
-	}
-	if owner, err := h.orgHasOwner(ctx, m.GetOrgId()); err != nil || owner {
-		return err
 	}
 	return refusal(ctx, codes.FailedPrecondition,
 		"member "+m.GetUserId()+" is the last superadmin of organization "+m.GetOrgId(),
@@ -444,14 +429,4 @@ func (h *AuthServiceHandler) roleIDByName(ctx context.Context, orgID, name strin
 	return "", refusal(ctx, codes.InvalidArgument,
 		"no role by that name exists in this project's role catalogue: "+name,
 		CodeUnknownOrgRole, "role", MsgUnknownOrgRole, map[string]string{"role": name})
-}
-
-// orgHasOwner reports whether the organization has an owner
-// (Organization.owner_id), who holds every permission in it.
-func (h *AuthServiceHandler) orgHasOwner(ctx context.Context, orgID string) (bool, error) {
-	o, err := h.Query.GetOrganization(ctx, &pb.GetOrganizationReq{Id: orgID})
-	if err != nil {
-		return false, err
-	}
-	return o.GetOwnerId() != "", nil
 }

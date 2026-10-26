@@ -27,12 +27,11 @@ import (
 // administrator hand out narrower roles than their own.
 //
 // "What the caller holds" is the permission set Authenticate resolved for THIS
-// request — after the realm, the active organization, an API token's subset
-// and ownership have all had their say — read off the envelope the gateway
-// threads in. Recomputing it here would be a second resolver that has to agree
-// with the first one, and the day it did not, the ceiling would sit somewhere
-// the access checks do not. An organization's owner resolves to every
-// permission, so an owner seeded without roles can still bootstrap anyone.
+// request — after the realm, the active organization and an API token's
+// subset have all had their say — read off the envelope the gateway threads
+// in. Recomputing it here would be a second resolver that has to agree with
+// the first one, and the day it did not, the ceiling would sit somewhere the
+// access checks do not.
 //
 // Checked at the moment of granting. An invitation's grant is written LATER,
 // at accept, so the invitation also stores what the role carried when it was

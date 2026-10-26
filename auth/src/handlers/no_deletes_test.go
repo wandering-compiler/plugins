@@ -363,12 +363,6 @@ type orgTables struct {
 	next        int
 }
 
-// GetUserOwnsOrg: u1 is the owner of every organization here (its address
-// says so), u2 of none.
-func (o *orgTables) GetUserOwnsOrg(_ context.Context, in *pb.GetUserOwnsOrgReq, _ ...grpc.CallOption) (*pb.GetUserOwnsOrgResp, error) {
-	return &pb.GetUserOwnsOrgResp{Owner: in.GetUserId() == "u1"}, nil
-}
-
 func newOrgTables() *orgTables {
 	o := &orgTables{roleCatalogueMock: newRoleCatalogue(), users: map[string]string{"u1": "owner@example.com", "u2": "member@example.com"}}
 	o.rolePerms = map[string][]int32{"r-admin": {1, 2, 3}, "r-worker": {1, 2}, "r-viewer": {1}}

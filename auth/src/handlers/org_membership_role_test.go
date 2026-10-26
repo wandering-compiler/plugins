@@ -24,7 +24,6 @@ type membershipRoleMock struct {
 
 	updated *pb.UpdateOrgMembershipReq
 	deleted *pb.MarkOrgMembershipRemovedReq
-	ownerID string // the organization's owner ("" = none of the test's users)
 }
 
 func (m *membershipRoleMock) GetOrgMembership(_ context.Context, in *pb.GetOrgMembershipReq, _ ...grpc.CallOption) (*pb.OrgMembership, error) {
@@ -49,10 +48,6 @@ func (m *membershipRoleMock) UpdateOrgMembership(_ context.Context, in *pb.Updat
 func (m *membershipRoleMock) MarkOrgMembershipRemoved(_ context.Context, in *pb.MarkOrgMembershipRemovedReq, _ ...grpc.CallOption) (*pb.MarkOrgMembershipRemovedResp, error) {
 	m.deleted = in
 	return &pb.MarkOrgMembershipRemovedResp{MembershipId: in.GetId()}, nil
-}
-
-func (m *membershipRoleMock) GetUserOwnsOrg(_ context.Context, in *pb.GetUserOwnsOrgReq, _ ...grpc.CallOption) (*pb.GetUserOwnsOrgResp, error) {
-	return &pb.GetUserOwnsOrgResp{Owner: m.ownerID != "" && in.GetUserId() == m.ownerID}, nil
 }
 
 func newMembershipRoleHandler(memberHolds ...string) (*AuthServiceHandler, *membershipRoleMock) {
@@ -244,22 +239,29 @@ func TestListOrgMembers_NamesTheMembership(t *testing.T) {
 	}
 }
 
-// The owner's membership is refused for a role change and a removal alike,
-// whatever the caller covers: ownership outlives the membership, so an owner
-// demoted or removed keeps root authority while vanishing from the list.
-func TestManageMembership_RefusesTheOwnersMembership(t *testing.T) {
-	h, m := newMembershipRoleHandler()
-	m.ownerID = "u2"
+// The membership of whoever created the organization is managed like any
+// other. It used to be refused outright (MEMBERSHIP_IS_OWNER) when
+// Organization.owner_id named its member, because ownership outlived the
+// membership; ownership is gone, so the role ceiling and the last-superadmin
+// rule are all that stand in front of a change or a removal. u2 here is the
+// organization's creator holding org-viewer; a caller covering it changes and
+// removes the membership, and both writes happen.
+func TestManageMembership_TheCreatorsMembershipIsManagedLikeAnyOther(t *testing.T) {
 	ctx := inOrg(withHeldPermissions(context.Background(), "u1", 1, 2, 3), "org-1")
-	_, err := h.UpdateOrgMembershipRole(ctx, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-viewer"})
-	if detailOf(t, err).GetCode() != CodeMembershipIsOwner {
-		t.Fatalf("owner's role change: %v", err)
+
+	h, m := newMembershipRoleHandler("r-viewer")
+	if _, err := h.UpdateOrgMembershipRole(ctx, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-worker"}); err != nil {
+		t.Fatalf("the creator's role change was refused: %v", err)
 	}
-	_, err = h.RemoveOrgMembership(ctx, &pb.RemoveOrgMembershipReq{Id: "mem-1"})
-	if detailOf(t, err).GetCode() != CodeMembershipIsOwner {
-		t.Fatalf("owner's removal: %v", err)
+	if m.updated.GetId() != "mem-1" || m.updated.GetRoleId() != "r-worker" {
+		t.Fatalf("the role change was not written: %v", m.updated)
 	}
-	if m.updated != nil || m.deleted != nil {
-		t.Fatal("a refused request wrote")
+
+	h, m = newMembershipRoleHandler("r-viewer")
+	if _, err := h.RemoveOrgMembership(ctx, &pb.RemoveOrgMembershipReq{Id: "mem-1"}); err != nil {
+		t.Fatalf("the creator's removal was refused: %v", err)
+	}
+	if m.deleted.GetId() != "mem-1" {
+		t.Fatalf("the removal was not written: %v", m.deleted)
 	}
 }
