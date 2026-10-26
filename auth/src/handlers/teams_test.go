@@ -49,6 +49,19 @@ func (m *membershipRoleMock) EndUserTeamMemberships(context.Context, *pb.EndUser
 	return &pb.EndUserTeamMembershipsResp{}, nil
 }
 
+// The organization's row lock (guardSuperadmins): a fake has no rows to lock.
+func (o *orgTables) LockOrganization(_ context.Context, in *pb.LockOrganizationReq, _ ...grpc.CallOption) (*pb.LockOrganizationResp, error) {
+	return &pb.LockOrganizationResp{OrgId: in.GetOrgId()}, nil
+}
+
+func (m *membershipRoleMock) LockOrganization(_ context.Context, in *pb.LockOrganizationReq, _ ...grpc.CallOption) (*pb.LockOrganizationResp, error) {
+	return &pb.LockOrganizationResp{OrgId: in.GetOrgId()}, nil
+}
+
+func (s *teamStore) LockOrganization(_ context.Context, in *pb.LockOrganizationReq, _ ...grpc.CallOption) (*pb.LockOrganizationResp, error) {
+	return &pb.LockOrganizationResp{OrgId: in.GetOrgId()}, nil
+}
+
 // None of these fakes has a superadmin: the last-superadmin rule has nothing
 // to protect in them.
 func (o *orgTables) ListOrgSuperadmins(context.Context, *pb.ListOrgSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgSuperadminsResp, error) {

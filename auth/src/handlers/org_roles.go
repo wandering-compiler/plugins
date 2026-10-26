@@ -150,6 +150,9 @@ func (h *AuthServiceHandler) ListOrgRoles(ctx context.Context, req *pb.ListOrgRo
 
 // CreateOrgRole composes a new role of the caller's organization.
 func (h *AuthServiceHandler) CreateOrgRole(ctx context.Context, req *pb.CreateOrgRoleReq) (*pb.CreateOrgRoleResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.CreateOrgRole); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -200,6 +203,9 @@ func (h *AuthServiceHandler) CreateOrgRole(ctx context.Context, req *pb.CreateOr
 // carries. The caller covers the role as it is (the ceiling on changing what
 // someone else holds) and as it will be (the ceiling on composing).
 func (h *AuthServiceHandler) UpdateOrgRole(ctx context.Context, req *pb.UpdateOrgRoleReq) (*pb.UpdateOrgRoleResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.UpdateOrgRole); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -260,6 +266,9 @@ func (h *AuthServiceHandler) UpdateOrgRole(ctx context.Context, req *pb.UpdateOr
 
 // DeleteOrgRole retires one of the organization's roles that nobody holds.
 func (h *AuthServiceHandler) DeleteOrgRole(ctx context.Context, req *pb.DeleteOrgRoleReq) (*pb.DeleteOrgRoleResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.DeleteOrgRole); done {
+		return resp, err
+	}
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
@@ -349,7 +358,7 @@ func (h *AuthServiceHandler) checkRolePermissions(ctx context.Context, ids []int
 				CodeOrgRoleUnknownPermission, "permission_ids", MsgOrgRoleUnknownPermission, map[string]string{"permission": n})
 		}
 	}
-	held, err := callerHeldPermissions(ctx)
+	held, err := h.callerHeldNow(ctx)
 	if err != nil {
 		return nil, err
 	}

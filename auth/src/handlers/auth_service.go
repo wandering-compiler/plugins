@@ -619,6 +619,25 @@ func (p *authPrincipal) effectivePermissions(lock *acllock.Lock) []int32 {
 // feature file staged; the override only ships when api_token is on.
 var resolvePrincipal = resolvePrincipalSession
 
+// callerRealmGrants are the roles userID holds in the realm their credential
+// counts — what resolvePrincipal reads, read again under an organization's
+// lock (heldUnderOrgLock). The default is accountRoleGrants; the api_token
+// feature file overrides it with the realm-aware read (realmGrantsOfCaller),
+// as it does resolvePrincipal.
+var callerRealmGrants = accountRoleGrants
+
+// accountRoleGrants is the default callerRealmGrants: with api_token off every
+// caller is a session and every role of the account counts, as
+// resolvePrincipalSession reads them. Named so a test reaches it even in a
+// build where api_token's init() replaced the variable.
+func accountRoleGrants(ctx context.Context, h *AuthServiceHandler, userID string, _ bool) ([]*pb.RoleGrant, error) {
+	resp, err := h.Query.GetUserRoleGrants(ctx, &pb.GetUserRoleGrantsReq{UserId: userID})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetGrants(), nil
+}
+
 // resolvePrincipalSession is the default resolvePrincipal, named so a test
 // reaches it even in a build where api_token's init() replaced the variable.
 func resolvePrincipalSession(ctx context.Context, h *AuthServiceHandler, token string) (*authPrincipal, error) {

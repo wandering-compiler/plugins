@@ -10,8 +10,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/sdk/go/lib/principal"
-	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
-	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -404,6 +402,9 @@ type inviteProductRoleHooks struct {
 }
 
 func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.InviteToOrg); done {
+		return resp, err
+	}
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
@@ -699,24 +700,18 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 		return nil, err
 	}
 
-	var tx *distx.TxHandle
-	txCtx := ctx
-	if h.DistTx != nil {
-		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
-			return nil, err
-		}
-	}
-	resp, err := h.acceptInviteTx(txCtx, tokenHash, userID, bound)
+	// Under the organization's lock (withOrgLock): the grant it writes is
+	// checked against the role as it carries now (checkRoleWithinSnapshot), and
+	// an edit of that role in the same moment must come before or after it,
+	// not between the check and the grant.
+	var resp *pb.AcceptOrgInviteResp
+	err = h.withOrgLock(ctx, pending.GetOrgId(), func(txCtx context.Context) error {
+		var txErr error
+		resp, txErr = h.acceptInviteTx(txCtx, tokenHash, userID, bound)
+		return txErr
+	})
 	if err != nil {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
 		return nil, err
-	}
-	if tx != nil {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, err
-		}
 	}
 	return resp, nil
 }

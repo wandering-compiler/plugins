@@ -156,6 +156,15 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 	// the key this one registered.
 	var token, tokenID string
 	err = h.inTx(ctx, func(txCtx context.Context) error {
+		// The ceiling on acting as the machine account, again under the
+		// organization's lock: operableBot read it outside this transaction.
+		txCtx, err := h.underBotOrgLock(txCtx)
+		if err != nil {
+			return err
+		}
+		if err := h.checkMayActAsBot(txCtx, target); err != nil {
+			return err
+		}
 		dev, err := h.machineKeyDevice(txCtx, attempt, target, key)
 		if err != nil {
 			return err
@@ -223,6 +232,15 @@ func (h *AuthServiceHandler) issueBotBearerToken(ctx context.Context, attempt *s
 	target := req.GetUserId()
 	var token, tokenID string
 	err = h.inTx(ctx, func(txCtx context.Context) error {
+		// As IssueBotToken's keyed transaction: the ceiling again, under the
+		// organization's lock.
+		txCtx, err := h.underBotOrgLock(txCtx)
+		if err != nil {
+			return err
+		}
+		if err := h.checkMayActAsBot(txCtx, target); err != nil {
+			return err
+		}
 		approver, err := h.approverDevice(txCtx, callerID)
 		if err != nil {
 			return err
@@ -354,6 +372,34 @@ type botOrgScope struct {
 	accounts func(ctx context.Context, h *AuthServiceHandler) ([]*pb.User, error)
 	// isMember reports whether userID is a member of the caller's organization.
 	isMember func(ctx context.Context, h *AuthServiceHandler, userID string) (bool, error)
+	// lock takes orgID's row lock inside the caller's transaction — the one
+	// every change to who holds what in the organization takes first
+	// (withOrgLock) — and answers txCtx marked as under it, as withOrgLock
+	// marks its own: the ceiling re-checked there reads the caller's grants
+	// as they are now (heldNow).
+	lock func(h *AuthServiceHandler, txCtx context.Context, orgID string) (context.Context, error)
+}
+
+// underBotOrgLock is the start of a machine-account transaction whose
+// authorization rests on roles: where the realm has organizations it takes the
+// caller's organization's lock, so a role change there (SetBotRoles, an edit
+// of the role) comes before or after this transaction, not between the
+// ceiling it is about to re-check and its write. Without organizations there
+// is nothing to lock. A caller with no active organization was refused before
+// the transaction (operableBot, CreateBot); here that refuses too, rather than
+// re-checking with no lock. It answers the context the transaction goes on
+// in: under the lock, marked so (orgLockKey) — every ceiling checked on it
+// judges the caller's grants as they are now, not as the request resolved them.
+func (h *AuthServiceHandler) underBotOrgLock(txCtx context.Context) (context.Context, error) {
+	orgs, err := botOrgScopeOrNil()
+	if err != nil || orgs == nil || orgs.lock == nil {
+		return txCtx, err
+	}
+	orgID, err := orgs.active(txCtx)
+	if err != nil {
+		return nil, err
+	}
+	return orgs.lock(h, txCtx, orgID)
 }
 
 // createBotUserTx creates the machine account and its grant — and, where the
@@ -504,7 +550,17 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 			return nil, err
 		}
 	}
-	userID, err := h.createBotUserTx(txCtx, req.GetEmail(), orgID, req.GetRoleId())
+	// The ceiling on the role, again under the organization's lock: an edit of
+	// the role at the same moment comes before or after the grant, not between
+	// the check above and it.
+	txCtx, err = h.underBotOrgLock(txCtx)
+	if err == nil {
+		_, err = h.checkMayGrantRole(txCtx, req.GetRoleId())
+	}
+	var userID string
+	if err == nil {
+		userID, err = h.createBotUserTx(txCtx, req.GetEmail(), orgID, req.GetRoleId())
+	}
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)

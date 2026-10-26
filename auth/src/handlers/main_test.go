@@ -23,6 +23,14 @@ type keepsSignInHistory interface{ keepsSignInHistory() }
 // the history, and SignIn spends no budget on them.
 type keepsSignInBudget interface{ keepsSignInBudget() }
 
+// keepsCallerGrants marks a test store that answers the caller's own grants
+// (GetUserOrgPermissions, GetUserRealmWidePermissions) — callerGrantsStore.
+// Under an organization's lock every ceiling re-reads them (heldUnderOrgLock),
+// and the package's fakes model only the caller's resolved envelope, not the
+// grants behind it: TestMain re-reads them only on a store that says it keeps
+// them; the tests about the re-read use one, through the production code.
+type keepsCallerGrants interface{ keepsCallerGrants() }
+
 func TestMain(m *testing.M) {
 	signInBudgetApplies = func(h *AuthServiceHandler) bool {
 		_, ok := h.Mutation.(keepsSignInBudget)
@@ -34,6 +42,13 @@ func TestMain(m *testing.M) {
 			return nil
 		}
 		return write(ctx, h, row)
+	}
+	reread := heldNow
+	heldNow = func(ctx context.Context, h *AuthServiceHandler, held map[int32]bool) (map[int32]bool, error) {
+		if _, ok := h.Query.(keepsCallerGrants); !ok {
+			return held, nil
+		}
+		return reread(ctx, h, held)
 	}
 	os.Exit(m.Run())
 }

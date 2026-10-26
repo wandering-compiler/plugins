@@ -388,6 +388,20 @@ message ListOrgSuperadminsResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   repeated OrgSuperadminRow grants = 1;
 }
+// LockOrganizationReq — the organization whose row a change that can take a
+// superadmin away locks first (SELECT … FOR UPDATE), in the transaction that
+// then checks the last-superadmin rule and writes the change. Every such
+// change takes the same lock, so two of them in one organization run one after
+// the other and the second one's check sees what the first one ended.
+message LockOrganizationReq {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message LockOrganizationResp {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string org_id = 1;
+}
+
 // OrgSuperadminRow — one wildcard grant a superadmin holds in an organization:
 // directly (team_id empty) or through a team.
 message OrgSuperadminRow {
@@ -2408,6 +2422,24 @@ service AuthQuery {
           "SELECT COUNT(*) AS count FROM @module.UserRole ur "
           "WHERE ur.role_id = :role_id AND ur.revoked_at IS NULL"
       }
+    };
+  }
+
+  // LockOrganization — SELECT … FOR UPDATE on the organization's row, read
+  // inside the transaction of a change that can take a superadmin away; see
+  // the request.
+  rpc LockOrganization(LockOrganizationReq) returns (LockOrganizationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_membership";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT o.id AS org_id FROM @module.Organization o WHERE o.id = :org_id AND o.deleted_at IS NULL"
+      }
+    };
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "Organization", kind: SELECT_FOR_UPDATE }
+      ]
     };
   }
 

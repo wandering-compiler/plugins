@@ -33,6 +33,26 @@ func init() {
 	resolvePrincipal = resolvePrincipalRealmAware
 	recordTokenUse = touchTokenLastUsed
 	revokeApprovedAPITokens = revokeAPITokensOfDevice
+	callerRealmGrants = realmGrantsOfCaller
+}
+
+// realmGrantsOfCaller is callerRealmGrants with realms: a session's roles for
+// a session, and for any other caller the roles of both token realms (API and
+// MCP), since the envelope says only whether the caller is a session.
+func realmGrantsOfCaller(ctx context.Context, h *AuthServiceHandler, userID string, session bool) ([]*pb.RoleGrant, error) {
+	realms := []pb.TokenType{pb.TokenType_TOKEN_TYPE_API, pb.TokenType_TOKEN_TYPE_MCP}
+	if session {
+		realms = []pb.TokenType{pb.TokenType_TOKEN_TYPE_SESSION}
+	}
+	var out []*pb.RoleGrant
+	for _, realm := range realms {
+		resp, err := h.Query.GetUserRolePermissionsByRealm(ctx, &pb.GetUserRolePermissionsByRealmReq{UserId: userID, TokenType: realm})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, resp.GetGrants()...)
+	}
+	return out, nil
 }
 
 // revokeAPITokensOfDevice revokes the owner's live API tokens the device

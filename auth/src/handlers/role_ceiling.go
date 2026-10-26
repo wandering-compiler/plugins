@@ -65,7 +65,7 @@ var errRoleMovedSinceInvite = errors.New("this invitation's role has changed sin
 // One function for both questions — "which roles may I be offered" and "may I
 // grant this one" — so a picker and the endpoint behind it cannot disagree.
 func (h *AuthServiceHandler) grantableRoleIDs(ctx context.Context) (map[string]bool, error) {
-	held, err := callerHeldPermissions(ctx)
+	held, err := h.callerHeldNow(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +82,27 @@ func (h *AuthServiceHandler) grantableRoleIDs(ctx context.Context) (map[string]b
 	return out, nil
 }
 
+// heldNow, set by org_membership, narrows the caller's resolved permissions to
+// what their grants still carry, read inside an organization's lock
+// (withOrgLock); it leaves them as they are elsewhere. nil without
+// organizations.
+var heldNow func(ctx context.Context, h *AuthServiceHandler, held map[int32]bool) (map[int32]bool, error)
+
+// callerHeldNow is what every ceiling compares against: the permissions
+// Authenticate resolved for this request (callerHeldPermissions), less any
+// whose every grant the caller has lost since — read under the organization's
+// lock, when the check runs under one (heldNow). A caller demoted while their
+// request waited for the lock is judged by what they hold after the demotion.
+func (h *AuthServiceHandler) callerHeldNow(ctx context.Context) (map[int32]bool, error) {
+	held, err := callerHeldPermissions(ctx)
+	if err != nil || heldNow == nil {
+		return held, err
+	}
+	return heldNow(ctx, h, held)
+}
+
 // callerHeldPermissions is the permission set Authenticate resolved for this
-// request, off the envelope — what every ceiling compares against.
+// request, off the envelope.
 func callerHeldPermissions(ctx context.Context) (map[int32]bool, error) {
 	var who pb.AuthResp
 	if err := principal.Envelope(ctx, &who); err != nil {

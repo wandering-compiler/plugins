@@ -240,6 +240,9 @@ func (h *AuthServiceHandler) UpdateOrgTeam(ctx context.Context, req *pb.UpdateOr
 // DeleteOrgTeam ends a team, its memberships and its roles. Every member loses
 // the team's roles, so the caller covers them.
 func (h *AuthServiceHandler) DeleteOrgTeam(ctx context.Context, req *pb.DeleteOrgTeamReq) (*pb.DeleteOrgTeamResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.DeleteOrgTeam); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -251,22 +254,32 @@ func (h *AuthServiceHandler) DeleteOrgTeam(ctx context.Context, req *pb.DeleteOr
 	if _, err := h.coverTeamRoles(ctx, req.GetTeamId()); err != nil {
 		return nil, err
 	}
-	// Deleting the team ends every wildcard its members hold through it.
-	if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
-		return g.GetTeamId() == req.GetTeamId()
-	}); err != nil {
-		return nil, err
-	}
-	resp, err := h.Mutation.DeleteTeam(ctx, &pb.DeleteTeamReq{Id: req.GetTeamId(), OrgId: orgID, DeletedBy: callerID})
+	var teamID string
+	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
+		// Deleting the team ends every wildcard its members hold through it.
+		return h.refuseLeavingNoSuperadmin(txCtx, orgID, func(g *pb.OrgSuperadminRow) bool {
+			return g.GetTeamId() == req.GetTeamId()
+		})
+	}, func(txCtx context.Context) error {
+		resp, err := h.Mutation.DeleteTeam(txCtx, &pb.DeleteTeamReq{Id: req.GetTeamId(), OrgId: orgID, DeletedBy: callerID})
+		if err != nil {
+			return err
+		}
+		teamID = resp.GetTeamId()
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.DeleteOrgTeamResp{TeamId: resp.GetTeamId()}, nil
+	return &pb.DeleteOrgTeamResp{TeamId: teamID}, nil
 }
 
 // AddOrgTeamMember adds a person of the organization to a team. They gain the
 // team's roles, so the caller covers them.
 func (h *AuthServiceHandler) AddOrgTeamMember(ctx context.Context, req *pb.AddOrgTeamMemberReq) (*pb.AddOrgTeamMemberResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.AddOrgTeamMember); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -307,6 +320,9 @@ func (h *AuthServiceHandler) AddOrgTeamMember(ctx context.Context, req *pb.AddOr
 // RemoveOrgTeamMember takes a person out of a team. They lose the team's
 // roles, so the caller covers them.
 func (h *AuthServiceHandler) RemoveOrgTeamMember(ctx context.Context, req *pb.RemoveOrgTeamMemberReq) (*pb.RemoveOrgTeamMemberResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.RemoveOrgTeamMember); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -318,17 +334,24 @@ func (h *AuthServiceHandler) RemoveOrgTeamMember(ctx context.Context, req *pb.Re
 	if _, err := h.coverTeamRoles(ctx, req.GetTeamId()); err != nil {
 		return nil, err
 	}
-	// The member loses every wildcard they hold through this team.
-	if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
-		return g.GetTeamId() == req.GetTeamId() && g.GetUserId() == req.GetUserId()
-	}); err != nil {
-		return nil, err
-	}
-	resp, err := h.Mutation.RemoveTeamMember(ctx, &pb.RemoveTeamMemberReq{TeamId: req.GetTeamId(), UserId: req.GetUserId(), RemovedBy: callerID})
+	var memberID string
+	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
+		// The member loses every wildcard they hold through this team.
+		return h.refuseLeavingNoSuperadmin(txCtx, orgID, func(g *pb.OrgSuperadminRow) bool {
+			return g.GetTeamId() == req.GetTeamId() && g.GetUserId() == req.GetUserId()
+		})
+	}, func(txCtx context.Context) error {
+		resp, err := h.Mutation.RemoveTeamMember(txCtx, &pb.RemoveTeamMemberReq{TeamId: req.GetTeamId(), UserId: req.GetUserId(), RemovedBy: callerID})
+		if err != nil {
+			return err
+		}
+		memberID = resp.GetMemberId()
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.RemoveOrgTeamMemberResp{MemberId: resp.GetMemberId()}, nil
+	return &pb.RemoveOrgTeamMemberResp{MemberId: memberID}, nil
 }
 
 // SetOrgTeamRoles replaces the roles a team holds, in one transaction. Each
@@ -336,6 +359,9 @@ func (h *AuthServiceHandler) RemoveOrgTeamMember(ctx context.Context, req *pb.Re
 // and the caller covers every role the change gives or takes away. A role the
 // team keeps is not asked about: nobody gains or loses it.
 func (h *AuthServiceHandler) SetOrgTeamRoles(ctx context.Context, req *pb.SetOrgTeamRolesReq) (*pb.SetOrgTeamRolesResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, scopeOrg(ctx), req, h.SetOrgTeamRoles); done {
+		return resp, err
+	}
 	callerID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -360,61 +386,65 @@ func (h *AuthServiceHandler) SetOrgTeamRoles(ctx context.Context, req *pb.SetOrg
 				CodeTeamRoleNotAvailable, "role_ids", MsgTeamRoleNotAvailable, map[string]string{"role": id})
 		}
 	}
-	current, err := h.teamRoleIDs(ctx, req.GetTeamId())
-	if err != nil {
-		return nil, err
-	}
-	keep := map[string]bool{}
-	for _, id := range wanted {
-		keep[id] = true
-	}
-	held := map[string]bool{}
-	for _, id := range current {
-		held[id] = true
-	}
+	// What the team holds is read under the organization's lock, as the
+	// change is checked and written: two SetOrgTeamRoles on one team then run
+	// one after the other, and the second diffs against what the first left
+	// rather than revoking a role already gone or granting one already held.
 	var added, removed []string
-	for _, id := range wanted {
-		if !held[id] {
-			added = append(added, id)
-		}
-	}
-	for _, id := range current {
-		if !keep[id] {
-			removed = append(removed, id)
-		}
-	}
-	if len(added)+len(removed) > 0 {
-		grantable, err := h.grantableRoleIDs(ctx)
+	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
+		current, err := h.teamRoleIDs(txCtx, req.GetTeamId())
 		if err != nil {
-			return nil, err
+			return err
 		}
-		for _, id := range append(append([]string(nil), added...), removed...) {
-			if !grantable[id] {
-				return nil, refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
-					CodeRoleAboveCaller, "role_ids", MsgRoleAboveCaller, nil)
-			}
-		}
-	}
-	// A team left with no wildcard role ends every wildcard its members hold
-	// through it; one that keeps or gains a wildcard keeps them superadmins.
-	if len(removed) > 0 {
-		wildcard, err := h.wildcardRoleIDs(ctx)
-		if err != nil {
-			return nil, err
-		}
-		keepsWildcard := false
+		keep := map[string]bool{}
 		for _, id := range wanted {
-			keepsWildcard = keepsWildcard || wildcard[id]
+			keep[id] = true
 		}
-		if !keepsWildcard {
-			if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
-				return g.GetTeamId() == req.GetTeamId()
-			}); err != nil {
-				return nil, err
+		held := map[string]bool{}
+		for _, id := range current {
+			held[id] = true
+		}
+		for _, id := range wanted {
+			if !held[id] {
+				added = append(added, id)
 			}
 		}
-	}
-	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
+		for _, id := range current {
+			if !keep[id] {
+				removed = append(removed, id)
+			}
+		}
+		if len(added)+len(removed) > 0 {
+			grantable, err := h.grantableRoleIDs(txCtx)
+			if err != nil {
+				return err
+			}
+			for _, id := range append(append([]string(nil), added...), removed...) {
+				if !grantable[id] {
+					return refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
+						CodeRoleAboveCaller, "role_ids", MsgRoleAboveCaller, nil)
+				}
+			}
+		}
+		// A team left with no wildcard role ends every wildcard its members
+		// hold through it; one that keeps or gains a wildcard keeps them
+		// superadmins.
+		if len(removed) == 0 {
+			return nil
+		}
+		wildcard, err := h.wildcardRoleIDs(txCtx)
+		if err != nil {
+			return err
+		}
+		for _, id := range wanted {
+			if wildcard[id] {
+				return nil
+			}
+		}
+		return h.refuseLeavingNoSuperadmin(txCtx, orgID, func(g *pb.OrgSuperadminRow) bool {
+			return g.GetTeamId() == req.GetTeamId()
+		})
+	}, func(txCtx context.Context) error {
 		for _, id := range removed {
 			if _, err := h.Mutation.RevokeTeamRole(txCtx, &pb.RevokeTeamRoleReq{TeamId: req.GetTeamId(), RoleId: id, RevokedBy: callerID}); err != nil {
 				return err

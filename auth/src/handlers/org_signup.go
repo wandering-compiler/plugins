@@ -114,6 +114,11 @@ func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler) (*orgJoin, err
 // organization's catalogue: one retired since the policy was set refuses the
 // registration rather than writing a membership without its grant.
 func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error {
+	// Under the organization's lock, as every grant there is: the role is
+	// resolved and granted with no edit or retirement of it in between.
+	if err := h.lockOrgRow(txCtx, j.orgID); err != nil {
+		return err
+	}
 	roleID, err := h.roleIDByName(txCtx, j.orgID, j.role)
 	if err != nil {
 		return err
