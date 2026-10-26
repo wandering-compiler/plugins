@@ -70,7 +70,7 @@ func acceptTunnel(c net.Conn, workers *workeradmit.Registry, backends *Backends,
 	// Fail closed while no ban set is known, as Attach does: every key would
 	// read as admitted.
 	if !workers.HoldsBanSet() {
-		return fmt.Errorf("relay: tunnel from worker %s refused — no ban set received since this relay started", fp)
+		return fmt.Errorf("relay: tunnel from worker %s refused — no ban set received since this relay started; %s", fp, BanSetSource)
 	}
 	// Checked HERE and not only at Attach, because a ban can land between the
 	// two: a worker that attached a second before it was banned must not get

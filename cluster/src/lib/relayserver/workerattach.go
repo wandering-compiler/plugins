@@ -116,7 +116,8 @@ func (s *WorkerServer) Attach(
 	// the worker retries at its usual pace instead of backing off as banned.
 	if !s.Workers.HoldsBanSet() {
 		return refusal.New(codes.Unavailable, refusal.BanSetUnknown,
-			"relay: not admitting workers yet — this relay has not received the ban set since it started; retry shortly")
+			"relay: not admitting workers yet — this relay has not received the ban set since it started; "+
+				BanSetSource+"; retry shortly")
 	}
 	if !s.Workers.Admitted(id) {
 		// The message names the identity on purpose: a banned machine's

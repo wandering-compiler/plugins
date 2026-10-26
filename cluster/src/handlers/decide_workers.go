@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,21 +51,42 @@ func (h *ClusterServiceHandler) decide(ctx context.Context, req *pb.DecideWorker
 // otherwise never hear of it and go on renewing the banned worker's
 // certificate. Best effort: the decision is recorded, and a relay that
 // cannot be reached gets the set with the next delivery (KeepBansDelivered).
-// logFailures is off for the periodic delivery, which would otherwise log a
-// relay that is deliberately down every few minutes.
+//
+// logFailures (a decision's push) logs every relay the set did not reach. The
+// periodic delivery logs CHANGES instead (deliveryOutcome): a relay, or the
+// registry read, that starts failing, with the error, and its recovery — not
+// a relay that is deliberately down every few minutes. Silent, a control
+// plane that could not deliver at all left a relay refusing every worker
+// with nothing anywhere saying why.
+//
+// The registry reads are bounded (BanReadTimeout). They ran on a context
+// with no deadline, so one statement that never returned — a database
+// stalled on a full disk — held this call, and with it every later periodic
+// delivery, for good: the loop waits for a delivery before the next.
 func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) {
 	if h.Relays == nil || h.Dial == nil {
 		return
 	}
-	ctx, err := h.withFreshBans(context.WithoutCancel(ctx))
+	base := context.WithoutCancel(ctx)
+	read, cancel := context.WithTimeout(base, h.banReadTimeout())
+	defer cancel()
+	readCtx, err := h.withFreshBans(read)
 	if err != nil {
+		h.deliveryOutcome(registryKey, err, logFailures,
+			"cluster: cannot read the ban set, so no relay is handed one — a relay holding none refuses every worker")
 		return
 	}
-	relays, err := h.Relays.ListAll(ctx)
+	relays, err := h.Relays.ListAll(readCtx)
 	if err != nil {
-		log.Printf("cluster: cannot list relays to deliver the ban set: %v", err)
+		h.deliveryOutcome(registryKey, err, logFailures,
+			"cluster: cannot list the relays to hand them the ban set")
 		return
 	}
+	h.deliveryOutcome(registryKey, nil, logFailures, "cluster: the ban set and the relay list are read again")
+	h.forgetDeliveries(relays)
+	// The relays get the set on a context of their own, each bounded by the
+	// dial timeout below: the read deadline is not theirs.
+	ctx = withBanSetFrom(base, readCtx)
 	// The complete registry is in hand: connections to relays deleted since,
 	// or re-registered under another url or pin, are closed here.
 	h.pruneConns(relays)
@@ -88,13 +111,102 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 					h.retireRelay(r.ID)
 				}
 			}
-			if err != nil && logFailures {
-				log.Printf("cluster: relay %q did not take the new ban set now (it gets it with the next delivery): %v", r.Name, err)
+			if err != nil {
+				h.deliveryOutcome(r.ID, err, logFailures,
+					fmt.Sprintf("cluster: relay %q did not take the ban set (it gets it with the next delivery)", r.Name))
+			} else {
+				h.deliveryOutcome(r.ID, nil, logFailures, fmt.Sprintf("cluster: relay %q takes the ban set again", r.Name))
 			}
 		}(r)
 	}
 	wg.Wait()
 }
+
+// registryKey is deliveryOutcome's key for the registry reads.
+const registryKey = "\x00registry"
+
+// banReadTimeout is BanReadTimeout's default.
+const banReadTimeout = 30 * time.Second
+
+func (h *ClusterServiceHandler) banReadTimeout() time.Duration {
+	if h.BanReadTimeout > 0 {
+		return h.BanReadTimeout
+	}
+	return banReadTimeout
+}
+
+// withBanSetFrom carries the ban set read under from onto to.
+func withBanSetFrom(to, from context.Context) context.Context {
+	if bs, ok := from.Value(banSetKey{}).(banSet); ok {
+		return context.WithValue(to, banSetKey{}, bs)
+	}
+	return to
+}
+
+// forgetDeliveries drops the recorded outcome of relays no longer registered,
+// so the map does not keep every relay id this replica ever delivered to.
+func (h *ClusterServiceHandler) forgetDeliveries(registered []Relay) {
+	keep := make(map[string]bool, len(registered))
+	for _, r := range registered {
+		keep[r.ID] = true
+	}
+	h.deliveredMu.Lock()
+	defer h.deliveredMu.Unlock()
+	for key := range h.delivered {
+		if key != registryKey && !keep[key] {
+			delete(h.delivered, key)
+		}
+	}
+}
+
+// errShape is an error's text with every run of digits masked: two failures
+// that differ only in an ephemeral port, an address or a duration ("read tcp
+// 10.0.0.2:51234->…: connection reset") are the same failure, and comparing
+// the raw text would log a relay that stays down on every round.
+func errShape(err error) string {
+	var b strings.Builder
+	digits := false
+	for _, c := range err.Error() {
+		if c >= '0' && c <= '9' {
+			if !digits {
+				b.WriteByte('#')
+			}
+			digits = true
+			continue
+		}
+		digits = false
+		b.WriteRune(c)
+	}
+	return b.String()
+}
+
+// deliveryOutcome records how a ban-set delivery to key went and logs line:
+// every failure when always is set, otherwise only a change — the first
+// failure (or a different error, by errShape) after a success or none, with
+// the error, and the recovery, with the error it recovered from.
+func (h *ClusterServiceHandler) deliveryOutcome(key string, err error, always bool, line string) {
+	now := delivery{}
+	if err != nil {
+		now = delivery{shape: errShape(err), text: err.Error()}
+	}
+	h.deliveredMu.Lock()
+	if h.delivered == nil {
+		h.delivered = map[string]delivery{}
+	}
+	before, seen := h.delivered[key]
+	h.delivered[key] = now
+	h.deliveredMu.Unlock()
+	switch {
+	case err != nil && (always || !seen || before.shape != now.shape):
+		log.Printf("%s: %v", line, err)
+	case err == nil && seen && before.shape != "":
+		log.Printf("%s (it failed with: %s)", line, before.text)
+	}
+}
+
+// delivery is one recorded outcome: shape is errShape of the failure ("" =
+// it went through), text the failure as it was.
+type delivery struct{ shape, text string }
 
 // BanRedeliveryInterval is how often every control-plane replica re-delivers
 // the ban set to every registered relay, enabled or not. A relay refuses

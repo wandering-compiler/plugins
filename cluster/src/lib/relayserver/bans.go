@@ -64,6 +64,12 @@ func BanInterceptors(reg *workeradmit.Registry) (grpc.UnaryServerInterceptor, gr
 	return unary, stream
 }
 
+// BanSetSource names, in a refusal, who owes a relay its ban set. The refusal
+// is read on the relay's side, where nothing is broken: the set comes from a
+// control plane, and a relay that has none — or none recently — is one no
+// control plane has reached, which that control plane's log says.
+const BanSetSource = "the control plane delivers it on every management call and every 5 minutes (KeepBansDelivered); if none arrives, the control plane's log says why"
+
 // BanServerOptions installs BanInterceptors on a server.
 func BanServerOptions(reg *workeradmit.Registry) []grpc.ServerOption {
 	u, s := BanInterceptors(reg)
