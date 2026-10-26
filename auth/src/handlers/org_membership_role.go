@@ -317,13 +317,14 @@ func init() { heldNow = heldUnderOrgLock }
 // this request waited for the lock — is gone. One imprecision is left: an API
 // and an MCP token are told apart by nothing in the envelope, so for either a
 // role of the other token realm still keeps a permission.
-// Outside a lock, or with no caller id, held is returned as it is.
+// Outside a lock, with no caller id, or with nothing held, held is returned
+// as it is.
 func heldUnderOrgLock(ctx context.Context, h *AuthServiceHandler, held map[int32]bool) (map[int32]bool, error) {
 	if locked, _ := ctx.Value(orgLockKey{}).(string); locked == "" {
 		return held, nil
 	}
 	userID, err := callerUserID(ctx)
-	if err != nil || userID == "" {
+	if err != nil || userID == "" || len(held) == 0 {
 		return held, nil
 	}
 	// As the narrowing does (narrowGrantsToActiveOrg), on ROLE ids: the

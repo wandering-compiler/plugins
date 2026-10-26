@@ -621,11 +621,16 @@ var resolvePrincipal = resolvePrincipalSession
 
 // callerRealmGrants are the roles userID holds in the realm their credential
 // counts — what resolvePrincipal reads, read again under an organization's
-// lock (heldUnderOrgLock): every role of the account for a session. The
-// api_token feature file overrides it with the realm-aware read, as it does
-// resolvePrincipal; a caller that is no session (an API or MCP token — the
-// envelope does not say which) gets the roles of both.
-var callerRealmGrants = func(ctx context.Context, h *AuthServiceHandler, userID string, _ bool) ([]*pb.RoleGrant, error) {
+// lock (heldUnderOrgLock). The default is accountRoleGrants; the api_token
+// feature file overrides it with the realm-aware read (realmGrantsOfCaller),
+// as it does resolvePrincipal.
+var callerRealmGrants = accountRoleGrants
+
+// accountRoleGrants is the default callerRealmGrants: with api_token off every
+// caller is a session and every role of the account counts, as
+// resolvePrincipalSession reads them. Named so a test reaches it even in a
+// build where api_token's init() replaced the variable.
+func accountRoleGrants(ctx context.Context, h *AuthServiceHandler, userID string, _ bool) ([]*pb.RoleGrant, error) {
 	resp, err := h.Query.GetUserRoleGrants(ctx, &pb.GetUserRoleGrantsReq{UserId: userID})
 	if err != nil {
 		return nil, err

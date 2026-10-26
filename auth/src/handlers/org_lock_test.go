@@ -227,6 +227,14 @@ func (s *callerGrantsStore) GetUserRolePermissionsByRealm(_ context.Context, in 
 	return &pb.GetUserRolePermissionsByRealmResp{Grants: append(append([]*pb.RoleGrant(nil), s.org...), s.realm...)}, nil
 }
 
+// GetUserRoleGrants: every role the store knows the caller holds, in any
+// realm (the read of a build without api_token); realms records it as
+// UNSPECIFIED.
+func (s *callerGrantsStore) GetUserRoleGrants(_ context.Context, _ *pb.GetUserRoleGrantsReq, _ ...grpc.CallOption) (*pb.GetUserRoleGrantsResp, error) {
+	s.realms = append(s.realms, pb.TokenType_TOKEN_TYPE_UNSPECIFIED)
+	return &pb.GetUserRoleGrantsResp{Grants: append(append([]*pb.RoleGrant(nil), s.org...), s.realm...)}, nil
+}
+
 func (s *callerGrantsStore) GetUserOrgPermissions(_ context.Context, in *pb.GetUserOrgPermissionsReq, _ ...grpc.CallOption) (*pb.GetUserOrgPermissionsResp, error) {
 	s.asked = append(s.asked, "org "+in.GetUserId()+" "+in.GetOrgId())
 	return &pb.GetUserOrgPermissionsResp{Grants: s.org}, nil
@@ -403,5 +411,23 @@ func TestCeiling_UnderTheLockCountsTheCallersRealm(t *testing.T) {
 	got, _ = heldUnderOrgLock(envelope(&pb.AuthResp{UserId: "u1", SessionTokenId: "s-1"}), &AuthServiceHandler{Query: s}, held)
 	if len(got) != 0 {
 		t.Fatalf("session with no eligible role: kept %v", got)
+	}
+
+	// Without api_token every caller is a session and every role of the
+	// account counts (accountRoleGrants, the default callerRealmGrants).
+	defer func(prev func(context.Context, *AuthServiceHandler, string, bool) ([]*pb.RoleGrant, error)) {
+		callerRealmGrants = prev
+	}(callerRealmGrants)
+	callerRealmGrants = accountRoleGrants
+	s = newStore()
+	got, err = heldUnderOrgLock(envelope(&pb.AuthResp{UserId: "u1", SessionTokenId: "s-1"}), &AuthServiceHandler{Query: s}, held)
+	if err != nil || !reflect.DeepEqual(got, held) || !reflect.DeepEqual(s.realms, []pb.TokenType{pb.TokenType_TOKEN_TYPE_UNSPECIFIED}) {
+		t.Fatalf("no api_token: got %v, %v, realms %v", got, err, s.realms)
+	}
+	s = newStore()
+	s.org = []*pb.RoleGrant{apiRole}
+	got, _ = heldUnderOrgLock(envelope(&pb.AuthResp{UserId: "u1", SessionTokenId: "s-1"}), &AuthServiceHandler{Query: s}, held)
+	if !reflect.DeepEqual(got, map[int32]bool{1: true}) {
+		t.Fatalf("no api_token, one role eligible: got %v", got)
 	}
 }
