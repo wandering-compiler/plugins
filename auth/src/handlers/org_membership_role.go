@@ -176,7 +176,11 @@ var orgRemovalCascades []func(ctx context.Context, h *AuthServiceHandler, orgID,
 // its memberships, revokes its org grants and stamps it deleted_at. One
 // transaction with a coordinator. Without one the cascades run first, so a
 // failure leaves the organization live and a retry completes it; the cascades
-// are idempotent UPDATEs.
+// are idempotent UPDATEs. The organization's row is locked first
+// (LockOrganization), as every change that can take a superadmin away locks
+// it (guardSuperadmins): the cascades and DeleteOrganization lock team and
+// membership rows before the organization's, and taking them in the other
+// order than a concurrent member removal would deadlock the two.
 func (h *AuthServiceHandler) RemoveOrganization(ctx context.Context, req *pb.RemoveOrganizationReq) (*pb.RemoveOrganizationResp, error) {
 	callerID, err := callerUserID(ctx)
 	if err != nil {
@@ -184,6 +188,9 @@ func (h *AuthServiceHandler) RemoveOrganization(ctx context.Context, req *pb.Rem
 	}
 	var orgID string
 	err = h.inOrgTx(ctx, func(txCtx context.Context) error {
+		if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: req.GetId()}); err != nil {
+			return err
+		}
 		for _, cascade := range orgRemovalCascades {
 			if err := cascade(txCtx, h, req.GetId(), callerID); err != nil {
 				return err

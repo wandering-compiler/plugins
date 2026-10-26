@@ -419,7 +419,10 @@ func (h *AuthServiceHandler) SetOrgTeamRoles(ctx context.Context, req *pb.SetOrg
 		}
 		endsWildcards = true
 		for _, id := range wanted {
-			endsWildcards = endsWildcards && !wildcard[id]
+			if wildcard[id] {
+				endsWildcards = false
+				break
+			}
 		}
 	}
 	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
