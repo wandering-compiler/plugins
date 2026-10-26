@@ -271,3 +271,81 @@ func splitKinds(s string) []string {
 	}
 	return out
 }
+
+// checkKindWithinCaller refuses a kind of membership the caller may not hand
+// out in orgID: one no audience admits, or one the audiences admitting the
+// caller's own kind there may not invite. A caller from outside the
+// organization (the backoffice) may hand out any known kind when outsiders
+// is set; ” (no kind) is always allowed.
+func checkKindWithinCaller(ctx context.Context, h *AuthServiceHandler, callerID, orgID, kind string, outsiders bool) error {
+	table, err := h.audienceTable()
+	if err != nil {
+		return err
+	}
+	// No audience names a kind: nothing is gated on the kind, so nothing
+	// limits which one is handed out — the same as no audience at all.
+	gated := false
+	for _, a := range table {
+		gated = gated || len(a.kinds) > 0
+	}
+	if !gated || kind == "" {
+		return nil
+	}
+	refuse := func() error {
+		return refusal(ctx, codes.PermissionDenied, "membership_kinds: the caller's kind of membership may not hand out this kind",
+			CodeInviteKindNotAllowed, "kind", MsgInviteKindNotAllowed, nil)
+	}
+	known := false
+	for _, a := range table {
+		known = known || slices.Contains(a.kinds, kind)
+	}
+	if !known {
+		return refuse()
+	}
+	_, all, err := admittedOrgs(ctx, h, callerID, nil)
+	if err != nil {
+		return err
+	}
+	m := orgByID(all, orgID)
+	if m == nil {
+		if outsiders {
+			return nil
+		}
+		return refuse()
+	}
+	for _, a := range table {
+		if slices.Contains(a.kinds, m.GetMembershipKind()) && slices.Contains(a.invitable(), kind) {
+			return nil
+		}
+	}
+	return refuse()
+}
+
+// UpdateOrgMembershipKind changes a member's kind of membership — staff to
+// client, say — without removing and re-inviting them. Under the same rules
+// as both halves: the caller must be allowed to manage the member (the role
+// ceiling), and to hand out the new kind (as an invitation of it).
+func (h *AuthServiceHandler) UpdateOrgMembershipKind(ctx context.Context, req *pb.UpdateOrgMembershipKindReq) (*pb.UpdateOrgMembershipKindResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, h.membershipOrg(ctx, req.GetId()), req, h.UpdateOrgMembershipKind); done {
+		return resp, err
+	}
+	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
+		return nil, err
+	}
+	callerID, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	m, err := h.checkMayManageMembership(ctx, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	if err := checkKindWithinCaller(ctx, h, callerID, m.GetOrgId(), req.GetKind(), true); err != nil {
+		return nil, err
+	}
+	resp, err := h.Mutation.SetOrgMembershipKind(ctx, &pb.SetOrgMembershipKindReq{Id: req.GetId(), Kind: req.GetKind()})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.UpdateOrgMembershipKindResp{MembershipId: resp.GetMembershipId()}, nil
+}

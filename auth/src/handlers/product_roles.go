@@ -49,6 +49,7 @@ func init() {
 	configChecks = append(configChecks, parseProductRoleCatalogue)
 	authRespEnrichers = append(authRespEnrichers, answerProductRoles)
 	membershipRemovalCascades = append(membershipRemovalCascades, endProductRolesOfMember)
+	memberManageChecks = append(memberManageChecks, checkMemberProductRolesWithinCaller)
 	orgRemovalCascades = append(orgRemovalCascades, endProductRolesOfOrg)
 }
 
@@ -582,4 +583,49 @@ func productRoleGrantsResp(rows []*pb.ProductRoleGrantRow, userID, product strin
 		})
 	}
 	return out
+}
+
+// checkMemberProductRolesWithinCaller refuses managing a member who holds,
+// through the products' roles granted in orgID, a permission the caller does
+// not hold there: removing them ends those grants, and the caller could not
+// have given them. Their realm-wide grants are not the organization's and
+// stay whatever happens to the membership.
+func checkMemberProductRolesWithinCaller(ctx context.Context, h *AuthServiceHandler, memberID, orgID string) error {
+	// No principal holds nothing: anything the member holds here is above it.
+	caller, _ := callerUserID(ctx)
+	c, err := h.productRoleCatalogue()
+	if err != nil {
+		return err
+	}
+	if len(c.Products) == 0 {
+		return nil // no product, no product role to hold
+	}
+	resp, err := h.Query.ListUserProductRoleGrantRows(ctx, &pb.ListUserProductRoleGrantRowsReq{UserId: memberID})
+	if err != nil && status.Code(err) != codes.NotFound {
+		return err
+	}
+	var held map[string]map[string]bool
+	for _, g := range resp.GetGrants() {
+		if g.GetOrgId() != orgID {
+			continue
+		}
+		role, err := h.lookupRole(ctx, c, orgID, g.GetProduct(), g.GetRoleKey())
+		if roleGone(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if held == nil && caller != "" {
+			if held, err = heldProductPermissions(ctx, h, c, caller, orgID); err != nil {
+				return err
+			}
+		}
+		if !covers(held, role) {
+			return refusal(ctx, codes.PermissionDenied,
+				"the member holds product role "+g.GetProduct()+":"+g.GetRoleKey()+" here, which the caller does not cover",
+				CodeMemberAboveCaller, "", MsgMemberAboveCaller, nil)
+		}
+	}
+	return nil
 }

@@ -306,7 +306,7 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 			return nil, err
 		}
 	}
-	resp, err := h.confirmSignUpTx(txCtx, req.GetPendingId(), roles, thumbprint, attempt)
+	resp, err := h.confirmSignUpTx(txCtx, req.GetPendingId(), confirmInviteToken(req), roles, thumbprint, attempt)
 	if err != nil {
 		if tx != nil {
 			_ = tx.Rollback(ctx)
@@ -321,7 +321,7 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 	return resp, nil
 }
 
-func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID string, roles signupRoles, thumbprint string, attempt *signInAttempt) (*pb.ConfirmSignUpResp, error) {
+func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID, inviteToken string, roles signupRoles, thumbprint string, attempt *signInAttempt) (*pb.ConfirmSignUpResp, error) {
 	claimed, err := h.Mutation.ClaimPendingSignUp(txCtx, &pb.ClaimPendingSignUpReq{PendingId: pendingID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -353,6 +353,11 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 	if err := joinSignedUpOrg(txCtx, h, userID, claimedSignUpJoin(claimed)); err != nil {
 		return nil, err
 	}
+	if claimedSignUpJoin(claimed) == nil {
+		if err := signupAcceptInvite(txCtx, h, userID, claimed.GetEmail(), inviteToken, true); err != nil {
+			return nil, err
+		}
+	}
 	if err := markEmailConfirmed(txCtx, h, userID); err != nil {
 		return nil, err
 	}
@@ -379,3 +384,7 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID st
 		PublicComputer: public,
 	}, nil
 }
+
+// confirmInviteToken reads the invitation link a confirmation carries; the
+// field exists only with invite_accept_at_signup, which sets this.
+var confirmInviteToken = func(*pb.ConfirmSignUpReq) string { return "" }

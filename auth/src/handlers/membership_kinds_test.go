@@ -209,6 +209,18 @@ func TestCheckInviteKind(t *testing.T) {
 	}
 }
 
+// Audiences that name no kind gate nothing on it (a surface taking the
+// tenant from the host, the identity's own): any kind is handed out, as
+// without audiences — the kinds are the project's account types, not a gate.
+func TestCheckInviteKind_NoAudienceNamesAKind(t *testing.T) {
+	h := &AuthServiceHandler{Query: &kindsQueryMock{}, audiences: []audienceEntry{{name: "members"}}, audiencesRead: true}
+	for _, kind := range []string{"client", "advisor"} {
+		if _, err := checkInviteKind(context.Background(), h, "u1", "org-acme", &pb.InviteToOrgReq{Kind: kind}); err != nil {
+			t.Errorf("%s under an audience naming no kind: %v", kind, err)
+		}
+	}
+}
+
 func (m *kindsQueryMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserTeamRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
 	return &pb.GetUserTeamRoleGrantsResp{}, nil
 }

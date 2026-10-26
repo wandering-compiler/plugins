@@ -904,6 +904,25 @@ var markEmailConfirmed = func(_ context.Context, _ *AuthServiceHandler, _ string
 // invitation at that moment and the gate must run before the row is spent: a
 // bound invitation derives the address by being accepted, an open one derives
 // nothing, and the difference is what the middle floor is for.
+// The three floors, weakest first. Strings rather than an enum because the knob
+// is an env var an operator types, and a typo has to be readable in the refusal
+// rather than silently becoming zero.
+const (
+	emailProofNone    = "none"
+	emailProofDerived = "derived"
+	emailProofFull    = "full"
+)
+
+// normalizedFloor is email_proof_required as the gates read it.
+func normalizedFloor(h *AuthServiceHandler) string {
+	return strings.TrimSpace(strings.ToLower(h.EmailProofRequired))
+}
+
+// emailProofEnforced is set when the gate above is the real one
+// (email_verification staged). Without it the floor cannot be read — the
+// column it reads does not exist — so a floor above `none` refuses to boot.
+var emailProofEnforced bool
+
 var inviteVerifiedEmailGate = func(_ context.Context, _ *AuthServiceHandler, _ string, _ bool) error {
 	return nil
 }
@@ -1042,6 +1061,16 @@ func joinSignedUpOrg(txCtx context.Context, h *AuthServiceHandler, userID string
 // work where there is one, so a registration that fails leaves the link
 // open.
 var signupClaimInvite = func(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) error {
+	return nil
+}
+
+// signupAcceptInvite accepts, in the registration's own transaction, the
+// invitation whose link the registration came through
+// (invite_accept_at_signup): the person arrives a member. proven says the
+// registration itself proved the address (a confirmation code, a provider's
+// verified email). Default: nothing — the link is accepted afterwards
+// (AcceptOrgInvite).
+var signupAcceptInvite = func(ctx context.Context, h *AuthServiceHandler, userID, email, inviteToken string, proven bool) error {
 	return nil
 }
 

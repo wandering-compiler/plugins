@@ -137,7 +137,7 @@ env:
   - name: invite_only
     type: bool
     default: "true"
-    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. Enabling `email_verification` does not close the window: that feature adds a column and two RPCs and blocks nothing — accounts still sign up unverified with it on. Set `invite_requires_verified_email` to close it."
+    description: "Require a pending org invitation for the address before SignUp will create an account (org_invite + sign_up_turnkey). Default TRUE: the unsafe state is the one you opt into, not the one you get by forgetting a variable — a console reachable from the internet with open sign-up is a hole, and the deployment that forgot this knob is exactly the one that cannot afford it. false = anyone may register and an invitation only governs which org they can join. ⚠️ This gate proves possession of an ADDRESS only in the weak sense that the address was invited; someone who guesses an invited address can register it first and inherit the membership and role. Enabling `email_verification` does not close the window by itself: accounts still sign up unverified with it on. Set `email_proof_required` (derived or full) to close it; accepting through the invitation's link needs no proved address."
   - name: org_from_sole_membership
     type: bool
     default: "true"
@@ -350,7 +350,7 @@ features:
       # lookup lives here, not in org_invite.go, because both features grant.
       - handlers/org_membership_role.go
   - name: org_invite
-    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / BindOpenOrgInvite / ConsumeOrgInviteByToken / CloseOrgInvite / CloseExpiredOrgInvite (a withdrawn or lapsed invitation is closed, never deleted), and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
+    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / BindOpenOrgInvite / ConsumeOrgInviteByToken / CloseOrgInvite / CloseExpiredOrgInvite (a withdrawn or lapsed invitation is closed, never deleted), and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. An invitation is accepted through its link (AcceptOrgInvite); with `invite_accept_from_list` also from the caller's own list. Listing and withdrawing an organization's invitations shows and allows only those whose role the caller could give. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
     default: false
     # Built ON org_membership, not merely alongside it: the invite writes an
     # OrgMembership row and an org-scoped UserRole, both of which are types
@@ -366,8 +366,22 @@ features:
       - rbac
     go_files:
       - handlers/org_invite.go
+  - name: invite_accept_at_signup
+    description: "A registration through an invitation's link joins at once: SignUp, an OAuth account's creation and (with sign_up_confirmation) ConfirmSignUp — which takes the link again, ConfirmSignUpReq.invite_token — accept the invitation in the transaction that creates the account, as AcceptOrgInvite would, so the person arrives a member with the invited role. Not when the address does not reach the floor `email_proof_required` asks without proof (an open link under `derived`, or `full` without a confirmation or a provider's verified email), nor when the host's registration policy already joined the person: the invitation then stays for AcceptOrgInvite. A refusal of the acceptance itself (the role or plan moved since the invitation) refuses the registration, which writes nothing. Off by default: without it the link is accepted afterwards."
+    default: false
+    requires:
+      - org_invite
+    go_files:
+      - handlers/org_invite_at_signup.go
+  - name: invite_accept_from_list
+    description: "Accepting an invitation from the caller's own list, without its link — register first, accept later (the GitHub way): AcceptMyOrgInvite (POST /auth/invites/{invite_id}/accept) accepts a pending invitation BOUND to the caller's address, by its id from ListMyInvites; an open invitation names nobody and is accepted only through its link. No link reached the address, so nothing is derived about it, and the deployment's floor (`email_proof_required`) asks the account for the proof it already holds: under `derived` or `full` an address nobody proved is refused (EMAIL_NOT_VERIFIED), which closes the window in which whoever registers an invited address first takes the invitation. Same transaction, checks and OrgInviteAccepted as accepting through the link: AuthQuery.GetPendingOrgInviteForEmail finds it by id AND the caller's address, and the link's own claim spends it. Off by default: without it an invitation is accepted through its link only."
+    default: false
+    requires:
+      - org_invite
+    go_files:
+      - handlers/org_invite_from_list.go
   - name: membership_kinds
-    description: "Memberships of several KINDS — the auth half of audience surfaces (a domain publishing one REST / MCP / gRPC surface per audience, each on its own gateway). OrgMembership and OrgInvite gain a kind (`staff`, `client`, … — the project names them, the plugin carries them); a membership has one kind, so a person is an organization's staff or its client, and may be staff of one and client of another. An audience gateway names the kinds it admits in every Authenticate (x-w17-membership-kinds, which only a gateway writes): the organization a request acts in is resolved among the caller's memberships of an admitted kind, a caller holding none is refused 403 (MEMBERSHIP_NOT_ADMITTED) before any handler. A gateway that names no kinds admits every membership. InviteToOrg takes the kind of membership accepting creates, held to the kinds the inviter may invite (INVITE_KIND_NOT_ALLOWED). Off by default; a migration adds the columns."
+    description: "Memberships of several KINDS — the auth half of audience surfaces (a domain publishing one REST / MCP / gRPC surface per audience, each on its own gateway). OrgMembership and OrgInvite gain a kind (`staff`, `client`, … — the project names them, the plugin carries them); a membership has one kind, so a person is an organization's staff or its client, and may be staff of one and client of another. An audience gateway names the kinds it admits in every Authenticate (x-w17-membership-kinds, which only a gateway writes): the organization a request acts in is resolved among the caller's memberships of an admitted kind, a caller holding none is refused 403 (MEMBERSHIP_NOT_ADMITTED) before any handler. A gateway that names no kinds admits every membership. InviteToOrg takes the kind of membership accepting creates, held to the kinds the inviter may invite (INVITE_KIND_NOT_ALLOWED). Off by default; a migration adds the columns. A member's kind is changed in place (UpdateOrgMembershipKind, PUT /auth/orgs/{org}/members/{id}/kind) under the role ceiling and the kinds the caller may hand out."
     default: false
     requires:
       # The memberships, organizations and org-scoped grants it narrows are
@@ -575,6 +589,9 @@ go_files_combined:
   # invitation calls exist only with org_invite.
   - features: [membership_kinds, org_invite]
     files: [handlers/membership_kinds_invite.go]
+  # The confirmation carries the link again only with both.
+  - features: [invite_accept_at_signup, sign_up_confirmation]
+    files: [handlers/org_invite_at_signup_confirm.go]
   # An invitation names the products' roles accepting gives; the invitation
   # calls exist only with org_invite.
   - features: [product_roles, org_invite]
@@ -912,6 +929,7 @@ presets:
           # ceiling (checkMayManageMembership): the caller must cover every
           # role the member holds and the one they are given.
           - { ref: AuthService.UpdateOrgMembershipRole, method: PUT, path: "/members/{id}/role", feature: org_members_rest }
+          - { ref: AuthService.UpdateOrgMembershipKind, method: PUT, path: "/members/{id}/kind", feature: membership_kinds }
           - { ref: AuthService.RemoveOrgMembership,     method: DELETE, path: "/members/{id}",   feature: org_members_rest }
           # The role vocabulary an invitation may use. Org-scoped (realm
           # roles are filtered out), and GET because a picker reads it
@@ -967,6 +985,9 @@ presets:
           # link IS the invitation", that is the one place it cannot go. It travels in
           # the POST body.
           - { ref: AuthService.AcceptOrgInvite, method: POST, path: "/accept",                 feature: org_invite }
+          # From the caller's own list, without the link: the id is not a secret,
+          # only an invitation bound to the caller's address is accepted by it.
+          - { ref: AuthService.AcceptMyOrgInvite, method: POST, path: "/{invite_id}/accept",  feature: invite_accept_from_list }
   mcp:
     # MCP tools the plugin exposes. WhoAmI lets an MCP client confirm the
     # principal behind its API token. Deliberately a NARROW surface —
@@ -1428,6 +1449,7 @@ msgids:
   - "This email address cannot be used. Use another address."
   - "This host already serves another organization."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
+  - "This invitation offers a role with permissions you do not have, so you cannot withdraw it."
   - "This is managed by the platform, not from inside an organization."
   - "This is not a host name."
   - "This is the organization's last superadmin. Make someone else a superadmin first."

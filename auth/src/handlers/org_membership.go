@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strconv"
 
@@ -512,6 +513,9 @@ func stampOrg(scopes, labels map[string]string, orgID, slug string) {
 func soleOrg(ctx context.Context, h *AuthServiceHandler, userID string) *pb.UserOrg {
 	resp, err := h.Query.ListUserOrgs(ctx, &pb.ListUserOrgsReq{UserId: userID})
 	if err != nil {
+		// Not fatal, and not silent: a scoped model then refuses with "missing
+		// required scope", and this line is what says why.
+		slog.WarnContext(ctx, "auth: sole-organization inference skipped: listing the caller's organizations failed", "user_id", userID, "error", err)
 		return nil
 	}
 	if orgs := resp.GetOrgs(); len(orgs) == 1 && orgs[0].GetOrgId() != "" {

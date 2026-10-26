@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -66,7 +67,34 @@ const CodeInviteAlreadyMember = "INVITE_ALREADY_MEMBER"
 // this file, check that this survived — and note that the behavioural test
 // in org_invite_gate_test.go fails exactly when it has not, because the
 // permissive default returns nil for everything.
+// checkEmailProofFloor refuses, at boot, a floor that would not be enforced:
+// an unknown value (a typo), or one above `none` without `email_verification`,
+// whose gate is then a no-op and admits every acceptance while the operator
+// believes addresses are proved.
+func checkEmailProofFloor(h *AuthServiceHandler) error {
+	switch floor := strings.TrimSpace(strings.ToLower(h.EmailProofRequired)); floor {
+	case "", emailProofNone:
+		return nil
+	case emailProofDerived, emailProofFull:
+		if !emailProofEnforced {
+			return fmt.Errorf("auth plugin: email_proof_required=%s needs the email_verification feature — without it no address proof exists to check, and every invitation would be accepted", floor)
+		}
+		return nil
+	default:
+		return fmt.Errorf("auth plugin: email_proof_required=%q is not one of none, derived, full", h.EmailProofRequired)
+	}
+}
+
+// The sentence and code for withdrawing an invitation above the caller.
+//
+//w17:msgid
+const MsgInviteAboveCaller = "This invitation offers a role with permissions you do not have, so you cannot withdraw it."
+
+// CodeInviteAboveCaller is the code a client branches on for it.
+const CodeInviteAboveCaller = "INVITE_ABOVE_CALLER"
+
 func init() {
+	configChecks = append(configChecks, checkEmailProofFloor)
 	signupInviteGate = requirePendingInvite
 	signupClaimInvite = claimOpenInvite
 	erasers = append(erasers, eraseInviteAddress)
@@ -572,8 +600,17 @@ func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, req *pb.ListOrg
 	if err != nil {
 		return nil, err
 	}
+	// Only the invitations whose role the caller could give: an invitation is
+	// the offer of a role, and its address and metadata are the inviter's
+	// business — a member below that role sees neither.
+	may := h.inviteRoleCeiling(orgID)
 	out := make([]*pb.OrgInviteSummary, 0, len(resp.GetInvites()))
 	for _, i := range resp.GetInvites() {
+		if ok, err := may(ctx, i.GetRole()); err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
 		summary := &pb.OrgInviteSummary{
 			InviteId:  i.GetId(),
 			Email:     i.GetEmail(),
@@ -603,6 +640,24 @@ func (h *AuthServiceHandler) RevokeOrgInvite(ctx context.Context, req *pb.Revoke
 	orgID, err := activeOrgID(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// Withdrawn only by someone who could have made it: the role it offers
+	// must be within the caller's ceiling. An id this organization does not
+	// hold falls through to the close, which matches nothing.
+	pending, err := h.Query.ListOrgInvitesByOrg(ctx, &pb.ListOrgInvitesByOrgReq{OrgId: orgID})
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range pending.GetInvites() {
+		if i.GetId() != req.GetInviteId() {
+			continue
+		}
+		if ok, err := h.inviteRoleCeiling(orgID)(ctx, i.GetRole()); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, refusal(ctx, codes.PermissionDenied, "revoke org invite: the invitation offers a role above the caller's",
+				CodeInviteAboveCaller, "invite_id", MsgInviteAboveCaller, nil)
+		}
 	}
 	// org_id goes into the statement's WHERE, not just into a check here:
 	// the close itself refuses an invitation belonging to another
@@ -707,7 +762,16 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	var resp *pb.AcceptOrgInviteResp
 	err = h.withOrgLock(ctx, pending.GetOrgId(), func(txCtx context.Context) error {
 		var txErr error
-		resp, txErr = h.acceptInviteTx(txCtx, tokenHash, userID, bound)
+		resp, txErr = h.acceptInviteTx(txCtx, userID, true, func(txCtx context.Context) (*pb.ConsumeOrgInviteByTokenResp, error) {
+			// Claim by TOKEN, and by the address: an open invitation, or one
+			// bound to this account's address. A bind that raced the read above
+			// is decided here, in the statement that spends the row.
+			return h.Mutation.ConsumeOrgInviteByToken(txCtx, &pb.ConsumeOrgInviteByTokenReq{
+				TokenHash: tokenHash,
+				UserId:    userID,
+				Email:     email,
+			})
+		})
 		return txErr
 	})
 	if err != nil {
@@ -716,15 +780,15 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	return resp, nil
 }
 
-func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, userID string, bound bool) (*pb.AcceptOrgInviteResp, error) {
-	// Claim by TOKEN. The not-yet-accepted and not-expired tests still sit in the
-	// UPDATE's own WHERE, so there is no window between deciding an invitation is
-	// good and consuming it — two clicks cannot both win, and the read above is
+// acceptInviteTx spends the invitation claim names and makes the caller a
+// member under it. viaLink says whether the caller presented the link: only
+// then does accepting a BOUND invitation derive the address.
+func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, userID string, viaLink bool, claim func(context.Context) (*pb.ConsumeOrgInviteByTokenResp, error)) (*pb.AcceptOrgInviteResp, error) {
+	// The not-yet-accepted and not-expired tests sit in the UPDATE's own
+	// WHERE, so there is no window between deciding an invitation is good and
+	// consuming it — two clicks cannot both win, and any read before is
 	// advisory rather than a decision this relies on.
-	claimed, err := h.Mutation.ConsumeOrgInviteByToken(txCtx, &pb.ConsumeOrgInviteByTokenReq{
-		TokenHash: tokenHash,
-		UserId:    userID,
-	})
+	claimed, err := claim(txCtx)
 	// A claim that matches nothing arrives as NotFound, not as an empty
 	// response: the mutation carries RETURNING, and the generated write
 	// reports zero rows as an error.
@@ -810,7 +874,10 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 	// The seam is nil unless `email_verification` is staged — the column does not
 	// exist otherwise, and an invitation must not stop working because a project
 	// declined that feature.
-	if bound {
+	//
+	// Bound is read from the CLAIMED row: the statement that spent it matched
+	// only an open invitation or one bound to this address.
+	if viaLink && claimed.GetEmail() != "" {
 		if err := markEmailDerived(txCtx, h, userID); err != nil {
 			return nil, err
 		}
@@ -828,4 +895,40 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 		}
 	}
 	return resp, nil
+}
+
+// inviteRoleCeiling answers whether the caller could give an invitation's
+// role in orgID (the same ceiling InviteToOrg applies), once per role name.
+// A role the organization no longer has is within anyone's ceiling who may
+// give some role: nobody can be given it any more, and withdrawing the
+// offer is housekeeping.
+func (h *AuthServiceHandler) inviteRoleCeiling(orgID string) func(ctx context.Context, role string) (bool, error) {
+	seen := map[string]bool{}
+	return func(ctx context.Context, role string) (bool, error) {
+		if ok, done := seen[role]; done {
+			return ok, nil
+		}
+		roleID, err := h.roleIDByName(ctx, orgID, role)
+		if status.Code(err) == codes.InvalidArgument {
+			grantable, gerr := h.grantableRoleIDs(ctx)
+			if gerr != nil {
+				return false, gerr
+			}
+			seen[role] = len(grantable) > 0
+			return seen[role], nil
+		}
+		if err != nil {
+			return false, err
+		}
+		_, err = h.checkMayGrantRole(ctx, roleID)
+		switch status.Code(err) {
+		case codes.OK:
+			seen[role] = true
+		case codes.PermissionDenied:
+			seen[role] = false
+		default:
+			return false, err
+		}
+		return seen[role], nil
+	}
 }

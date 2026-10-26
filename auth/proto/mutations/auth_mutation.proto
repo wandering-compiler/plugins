@@ -1600,6 +1600,16 @@ message UpdateOrgMembershipReq {
   // grants the change replaces. Empty = nobody named (NULL).
   string changed_by = 4 [(w17.field) = { type: UUID, null: true }];
 }
+// SetOrgMembershipKind — change a live membership's kind (membership_kinds).
+message SetOrgMembershipKindReq {
+  option (w17.contrib.plugin_feature) = "membership_kinds";
+  string id   = 1 [(w17.field) = { type: UUID }];
+  string kind = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+}
+message SetOrgMembershipKindResp {
+  option (w17.contrib.plugin_feature) = "membership_kinds";
+  string membership_id = 1;
+}
 message UpdateOrgMembershipResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   string membership_id = 1;
@@ -1694,6 +1704,11 @@ message ConsumeOrgInviteByTokenReq {
   // event-only (no w17.field → not persisted, not validated): the account
   // accepting, which OrgInviteAccepted names and the row does not hold.
   string user_id = 2;
+  // The accepting account's address. The claim matches an OPEN invitation or
+  // one bound to this address and no other — in the statement that spends it,
+  // so a bind racing the acceptance cannot hand a bound invitation to a
+  // different account.
+  string email = 3 [(w17.field) = { type: EMAIL, max_len: 320 }];
 }
 message ConsumeOrgInviteByTokenResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -4721,6 +4736,21 @@ service AuthMutation {
   // and grant the new one as a new row. Realm-wide grants are not
   // touched. Called by AuthService.UpdateOrgMembershipRole, which holds the
   // change to the role ceiling; it checks nothing about the caller itself.
+  // SetOrgMembershipKind — the kind of a LIVE membership; a removed one is
+  // NotFound. The caller (UpdateOrgMembershipKind) checks who may.
+  rpc SetOrgMembershipKind(SetOrgMembershipKindReq) returns (SetOrgMembershipKindResp) {
+    option (w17.contrib.plugin_feature_rpc) = "membership_kinds";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgMembership SET kind = :kind "
+          "WHERE id = :id AND removed_at IS NULL "
+          "RETURNING id AS membership_id"
+      }
+    };
+  }
+
   rpc UpdateOrgMembership(UpdateOrgMembershipReq) returns (UpdateOrgMembershipResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
@@ -5074,7 +5104,8 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgInvite i SET "
           "accepted_at = NOW() "
-          "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
+          "WHERE i.token_hash = :token_hash AND (i.email IS NULL OR i.email = :email) "
+          "AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() "
           "AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL) "
           "RETURNING id AS invite_id, org_id, role, email, metadata, role_snapshot, invited_by, "
           "          ?feature(membership_kinds) kind, "
@@ -5099,7 +5130,6 @@ service AuthMutation {
       }
     };
   }
-
   // CloseExpiredOrgInvite — release the slot an EXPIRED invitation holds, by
   // closing it (closed_at; closed_by NULL — nobody withdrew it, it lapsed).
   // Was ClearExpiredOrgInvite, which deleted the row; the row stays.

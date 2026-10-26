@@ -296,6 +296,13 @@ message ConfirmSignUpReq {
   // factor at every sign-in from it. The client keeps the token in session
   // storage only. Echoed on the response.
   bool public_computer = 3;
+  // invite_token — the invitation link the registration came through, sent
+  // again with the code (invite_accept_at_signup): the confirmation accepts
+  // it in the transaction that creates the account. Optional.
+  string invite_token = 4 [
+    (w17.field) = { type: CHAR, max_len: 128, blank: true, sensitive: true },
+    (w17.contrib.plugin_feature_field) = "invite_accept_at_signup"
+  ];
 }
 message ConfirmSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
@@ -854,6 +861,21 @@ message UpdateOrgMembershipRoleResp {
   string membership_id = 1;
 }
 
+message UpdateOrgMembershipKindReq {
+  option (w17.contrib.plugin_feature) = "membership_kinds";
+  string id   = 1 [(w17.field) = { type: UUID }];
+  // kind — one some audience admits, and one the caller's kind may invite
+  // there (as InviteToOrgReq.kind); '' = no kind.
+  string kind = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  // org — the organization's slug, as the REST path names it; see
+  // UpdateOrgMembershipRoleReq.org.
+  string org  = 3 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
+message UpdateOrgMembershipKindResp {
+  option (w17.contrib.plugin_feature) = "membership_kinds";
+  string membership_id = 1;
+}
+
 // RemoveOrgMembership — remove one membership, under the role ceiling: the
 // caller must cover every role the member holds in that organization, since
 // removing the membership revokes them. The admin's OrgMemberships page
@@ -1162,6 +1184,12 @@ message AcceptOrgInviteReq {
   reserved 1;
   reserved "invite_id";
   string token = 2 [(w17.field) = { type: CHAR, max_len: 128, sensitive: true }];
+}
+message AcceptMyOrgInviteReq {
+  option (w17.contrib.plugin_feature) = "invite_accept_from_list";
+  // invite_id — from ListMyInvites. Not a secret: only an invitation bound to
+  // the caller's own address is accepted by it.
+  string invite_id = 1 [(w17.field) = { type: UUID }];
 }
 message AcceptOrgInviteResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -2255,6 +2283,13 @@ service AuthService {
 
   // RemoveOrgMembership — the delete twin: the caller must cover every role
   // the member holds in that organization, which the removal revokes.
+  // UpdateOrgMembershipKind — change a member's kind of membership
+  // (membership_kinds) under the role ceiling and the kinds the caller may
+  // hand out, without removing and re-inviting them.
+  rpc UpdateOrgMembershipKind(UpdateOrgMembershipKindReq) returns (UpdateOrgMembershipKindResp) {
+    option (w17.contrib.plugin_feature_rpc) = "membership_kinds";
+  }
+
   rpc RemoveOrgMembership(RemoveOrgMembershipReq) returns (RemoveOrgMembershipResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
   }
@@ -2314,6 +2349,14 @@ service AuthService {
   // write the membership, and grant the role IN that organization.
   rpc AcceptOrgInvite(AcceptOrgInviteReq) returns (AcceptOrgInviteResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
+  }
+
+  // AcceptMyOrgInvite — join from the caller's own list (ListMyInvites),
+  // without the link: an invitation bound to the caller's address, under the
+  // deployment's address-proof floor (email_proof_required) with no proof
+  // derived from a link. Same transaction as AcceptOrgInvite.
+  rpc AcceptMyOrgInvite(AcceptMyOrgInviteReq) returns (AcceptOrgInviteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "invite_accept_from_list";
   }
 
   // ChangePassword — rotate the caller's own password. Needs no mail

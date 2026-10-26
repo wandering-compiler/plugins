@@ -121,6 +121,7 @@ func (h *AuthServiceHandler) consumeAndMarkVerified(txCtx context.Context, token
 // below safe to compile — `User.email_verified_at` does not exist otherwise.
 func init() {
 	inviteVerifiedEmailGate = inviteVerifiedEmailGateImpl
+	emailProofEnforced = true
 	markEmailDerived = markEmailDerivedImpl
 	markEmailConfirmed = markEmailConfirmedImpl
 	erasers = append(erasers, spendVerificationLinks)
@@ -215,12 +216,3 @@ func inviteVerifiedEmailGateImpl(ctx context.Context, h *AuthServiceHandler, use
 		CodeEmailNotVerified, MsgInviteNeedsVerifiedEmail,
 	).Err()
 }
-
-// The three floors, weakest first. Strings rather than an enum because the knob
-// is an env var an operator types, and a typo has to be readable in the refusal
-// rather than silently becoming zero.
-const (
-	emailProofNone    = "none"
-	emailProofDerived = "derived"
-	emailProofFull    = "full"
-)

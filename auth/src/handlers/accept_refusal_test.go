@@ -41,7 +41,7 @@ func TestAcceptInvite_NotFoundBecomesTheOpaqueRefusal(t *testing.T) {
 		claimErr: status.Error(codes.NotFound, "ConsumeOrgInviteByToken: no rows"),
 	}}
 
-	_, err := h.acceptInviteTx(context.Background(), "deadbeef", "u1", false)
+	_, err := h.acceptInviteTx(context.Background(), "u1", true, byToken(h, "deadbeef"))
 	if err == nil {
 		t.Fatal("a claim matching nothing was accepted")
 	}
@@ -63,7 +63,7 @@ func TestAcceptInvite_EmptyResponseGivesTheSameRefusal(t *testing.T) {
 		claimResp: &pb.ConsumeOrgInviteByTokenResp{}, // no org_id
 	}}
 
-	_, err := h.acceptInviteTx(context.Background(), "deadbeef", "u1", false)
+	_, err := h.acceptInviteTx(context.Background(), "u1", true, byToken(h, "deadbeef"))
 	if err == nil {
 		t.Fatal("an empty claim was treated as a successful one — the membership would be written into no organization")
 	}
@@ -79,8 +79,15 @@ func TestAcceptInvite_OtherErrorsAreNotDisguised(t *testing.T) {
 		claimErr: status.Error(codes.Unavailable, "db down"),
 	}}
 
-	_, err := h.acceptInviteTx(context.Background(), "deadbeef", "u1", false)
+	_, err := h.acceptInviteTx(context.Background(), "u1", true, byToken(h, "deadbeef"))
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("want Unavailable passed through, got %v", err)
+	}
+}
+
+// byToken is AcceptOrgInvite's claim, for driving acceptInviteTx directly.
+func byToken(h *AuthServiceHandler, tokenHash string) func(context.Context) (*pb.ConsumeOrgInviteByTokenResp, error) {
+	return func(ctx context.Context) (*pb.ConsumeOrgInviteByTokenResp, error) {
+		return h.Mutation.ConsumeOrgInviteByToken(ctx, &pb.ConsumeOrgInviteByTokenReq{TokenHash: tokenHash, UserId: "u1"})
 	}
 }
