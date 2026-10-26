@@ -118,6 +118,10 @@ env:
     type: string
     default: ""
     description: "GENERATED — do not set it: codegen fills it from the domain's (w17.packages) and bakes it into the binary (org_packages). Each package's methods and audiences, and the governed methods — the project's ACL-gated ones and any (a plugin's too) a package lists, which an organization then holds only through a package — named as the ACL lock keys them, as JSON. Parsed at boot."
+  - name: w17_product_roles
+    type: string
+    default: ""
+    description: "GENERATED — do not set it: codegen fills it from the (w17.acl_roles) of the project's products — the domains whose (w17.domain).identity names this one — and bakes it into the binary (product_roles). Each role's product, key, name and whether it is held in an organization, as JSON; what a role grants stays the product's. Parsed at boot."
   - name: totp_issuer
     type: string
     default: ""
@@ -443,6 +447,21 @@ features:
       - rbac
     go_files:
       - handlers/org_signup.go
+  - name: product_roles
+    description: "One identity for the project's products: domains whose (w17.domain).identity names this one keep no users and authenticate their callers here. A product's gateway asks Authenticate on its own behalf (x-w17-product), and the answer carries the KEYS of the roles the caller holds in that product (AuthResp.product_roles) — realm-wide and in the active organization — and no permission ids of this domain; the product turns the keys into its own ids from its (w17.acl_roles), so this plugin never stores another domain's permissions. The catalogue is the products' roles, baked in at codegen (w17_product_roles; ListProductRoles, GET /auth/product-roles). Inside an organization a member hands out and takes the product roles covered by one they hold there (it carries every permission of them — computed at codegen from the product's roles), to members only (ListOrgProductRoleGrants / AssignOrgProductRole / RevokeOrgProductRole — GET / PUT /auth/orgs/{org}/product-role-grants, POST /auth/orgs/{org}/product-role-grants/revoke; PRODUCT_ROLE_ABOVE_CALLER, PRODUCT_ROLE_NOT_MEMBER); the backoffice, acting realm-wide and gated by the endpoint ACL, hands out any, realm-wide ones too (ListProductRoleGrants / AssignProductRole / RevokeProductRole — GET / PUT /auth/admin/product-role-grants, POST /auth/admin/product-role-grants/revoke). A member who leaves an organization loses the product roles held there; a deleted organization's end with it. A user holds any number of roles in each product. Nothing is deleted. Off by default; a migration adds the table."
+    default: false
+    requires:
+      # Organizations, the active scope and membership are org_membership's.
+      - org_membership
+    go_files:
+      - handlers/product_roles.go
+  - name: product_plans
+    description: "An organization's plan across the products (product_roles): the roles of each product its members may hold, a line per role or a whole product. The backoffice gives and takes the lines realm-wide (ListOrgProductPlan / AllowOrgProduct / DisallowOrgProduct — GET / PUT /auth/admin/orgs/{org_id}/product-plan, POST /auth/admin/orgs/{org_id}/product-plan/remove; PRODUCT_PLANS_REALM_ONLY from inside an organization), and an organization reads its own (ListMyOrgProductPlan, GET /auth/orgs/{org}/product-plan). A product role held in an organization counts only when its plan carries it — on every request, so taking a line applies on the next one — and nobody hands out a role the plan does not carry (PRODUCT_ROLE_NOT_IN_PLAN). An organization without a line for a product holds nothing there. Realm-wide roles are not bounded. Nothing is deleted. Off by default; a migration adds the table."
+    default: false
+    requires:
+      - product_roles
+    go_files:
+      - handlers/product_plans.go
   - name: teams
     description: "An organization groups its members into teams, and a team holds org-scoped roles that every member holds while they are in it: ListOrgTeams / CreateOrgTeam / UpdateOrgTeam / DeleteOrgTeam / AddOrgTeamMember / RemoveOrgTeamMember / SetOrgTeamRoles (GET / POST /auth/orgs/{org}/teams, PUT / DELETE /auth/orgs/{org}/teams/{team_id}, POST /auth/orgs/{org}/teams/{team_id}/members, DELETE /auth/orgs/{org}/teams/{team_id}/members/{user_id}, PUT /auth/orgs/{org}/teams/{team_id}/roles). A team's roles count for a session acting in the team's organization, never realm-wide, in another organization or for an API token. Only a person who is a member of the organization joins a team (a machine account holds its roles directly), and only an org-scoped session-realm role of the organization's catalogue is a team's. The role ceiling holds wherever someone gains or loses a role through a team: giving or taking a team's role, adding or removing a member, deleting the team — and removing someone from the organization asks the caller to cover their team roles and ends their team memberships. A role a team holds is in use (DeleteOrgRole). Nothing is deleted. Off by default; a migration adds the three tables."
     default: false
@@ -804,9 +823,26 @@ presets:
           - { ref: AuthService.ListOrgSignUpPolicies, method: GET,  path: "/{org_id}/signup-policies",       feature: org_signup }
           - { ref: AuthService.SetOrgSignUpPolicy,    method: PUT,  path: "/{org_id}/signup-policies",       feature: org_signup }
           - { ref: AuthService.ClearOrgSignUpPolicy,  method: POST, path: "/{org_id}/signup-policies/clear", feature: org_signup }
+          - { ref: AuthService.ListOrgProductPlan, method: GET,  path: "/{org_id}/product-plan",        feature: product_plans }
+          - { ref: AuthService.AllowOrgProduct,    method: PUT,  path: "/{org_id}/product-plan",        feature: product_plans }
+          - { ref: AuthService.DisallowOrgProduct, method: POST, path: "/{org_id}/product-plan/remove", feature: product_plans }
           - { ref: AuthService.ListPackagesOfOrg, method: GET,    path: "/{org_id}/packages",           feature: org_packages }
           - { ref: AuthService.AddOrgPackage,     method: POST,   path: "/{org_id}/packages/{package}", feature: org_packages }
           - { ref: AuthService.RemoveOrgPackage,  method: DELETE, path: "/{org_id}/packages/{package}", feature: org_packages }
+      # The backoffice's grants of the products' roles (product_roles):
+      # realm-wide, any organization's and realm-wide ones; a call acting
+      # inside an organization uses /auth/orgs/{org}/product-role-grants.
+      - prefix: /auth/admin/product-role-grants
+        description: "Who holds which role in the project's products — the backoffice's."
+        endpoints:
+          - { ref: AuthService.ListProductRoleGrants, method: GET,  path: "",        feature: product_roles }
+          - { ref: AuthService.AssignProductRole,     method: PUT,  path: "",        feature: product_roles }
+          - { ref: AuthService.RevokeProductRole,     method: POST, path: "/revoke", feature: product_roles }
+      # The products' roles, as the products declare them.
+      - prefix: /auth/product-roles
+        description: "The roles of the project's products — the catalogue a grant names."
+        endpoints:
+          - { ref: AuthService.ListProductRoles, method: GET, path: "", feature: product_roles }
       # The backoffice's hosts (org_hosts): realm-wide — a call acting inside
       # an organization is refused (HOSTS_REALM_ONLY).
       - prefix: /auth/admin/hosts
@@ -864,6 +900,12 @@ presets:
           # The organization's teams: groups of members holding roles, under
           # the role ceiling (handlers/teams.go).
           - { ref: AuthService.ListMyOrgPackages,   method: GET,    path: /packages,                            feature: org_packages }
+          # The products' roles held in the organization, under the ceiling
+          # (handlers/product_roles.go), and its plan.
+          - { ref: AuthService.ListOrgProductRoleGrants, method: GET,  path: /product-role-grants,        feature: product_roles }
+          - { ref: AuthService.AssignOrgProductRole,     method: PUT,  path: /product-role-grants,        feature: product_roles }
+          - { ref: AuthService.RevokeOrgProductRole,     method: POST, path: /product-role-grants/revoke, feature: product_roles }
+          - { ref: AuthService.ListMyOrgProductPlan,     method: GET,  path: /product-plan,               feature: product_plans }
           - { ref: AuthService.ListOrgTeams,        method: GET,    path: /teams,                               feature: teams }
           - { ref: AuthService.CreateOrgTeam,       method: POST,   path: /teams,                               feature: teams }
           - { ref: AuthService.UpdateOrgTeam,       method: PUT,    path: "/teams/{team_id}",                   feature: teams }
@@ -1339,8 +1381,10 @@ msgids:
   - "That role is not one of this organization's own roles, so it cannot be changed here."
   - "The list is too long: at most {max} entries."
   - "The organization is taken from the address here, not chosen."
+  - "The product has no such role."
   - "There is no organization role named {role}."
   - "There is no such package."
+  - "There is no such product."
   - "There is no such team in this organization."
   - "This API token expired on {date}. Create a new token."
   - "This account has been disabled."
@@ -1355,6 +1399,7 @@ msgids:
   - "This email address cannot be used. Use another address."
   - "This host already serves another organization."
   - "This invitation is for a different email address, or has already been used. Ask for a new invitation."
+  - "This is managed by the platform, not from inside an organization."
   - "This is not a host name."
   - "This is the organization's last superadmin. Make someone else a superadmin first."
   - "This is the organization's owner. Their membership cannot be changed or removed; transfer ownership first."
@@ -1365,7 +1410,9 @@ msgids:
   - "This organization already has a team named {name}."
   - "This part of the service is not open to you: none of your memberships is of a kind it admits."
   - "This person is already in the team."
+  - "This person is not a member of the organization."
   - "This request names two different organizations. Name one."
+  - "This role is held across the whole platform, not in one organization."
   - "This sign-in request has expired or was already answered. Start again from the application."
   - "This team holds a role with permissions you do not have, so you cannot change its members or delete it."
   - "Too many wrong codes. Wait 15 minutes and try again."
@@ -1374,8 +1421,10 @@ msgids:
   - "Who may register into an organization is set by the platform, not from inside the organization."
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
+  - "You can only give a role that your own role includes."
   - "You cannot invite someone as this kind of member."
   - "Your organization's plan does not include this part of the service."
+  - "Your organization's plan does not include this role."
   - "Your session expired on {date}. Sign in again."
   - "{entry} is not an address or a network (for example 203.0.113.7 or 203.0.113.0/24)."
   - "{role} is a realm-wide role. An organization membership can only carry an organization-scoped role."

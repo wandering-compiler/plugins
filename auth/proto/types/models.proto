@@ -2308,3 +2308,62 @@ message OrgSignUpPolicy {
   string ended_key = 10 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
+// ProductRoleGrant — a role a user holds in a PRODUCT: another domain of the
+// project, whose (w17.domain).identity names this one (product_roles). Held in
+// one organization (org_id), or realm-wide (org_id NULL — the backoffice's
+// own staff). The role is the product's (w17.acl_roles) key: what it grants is
+// the product's to say, resolved by its gateway against its own lock, so this
+// table holds no permission ids of another domain. Revoking ends the row
+// (ended_at, ended_key = id); nothing is deleted.
+message ProductRoleGrant {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "user_id" }, { name: "product" }, { name: "role_key" }, { name: "ended_key" }],
+        where: "org_id IS NULL" },
+      { unique: true, fields: [{ name: "user_id" }, { name: "org_id" }, { name: "product" }, { name: "role_key" }, { name: "ended_key" }],
+        where: "org_id IS NOT NULL", name: "productrolegrant_org_uidx" }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "product_roles";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string user_id    = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  // org_id — the organization the role is held in; NULL = realm-wide.
+  string org_id     = 3 [(w17.field) = { type: UUID, null: true }, (w17.db.column) = { index: true }];
+  // product — the product domain, as its (w17.domain).identity names this one.
+  string product    = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // role_key — the product's (w17.acl_roles) key.
+  string role_key   = 5 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string granted_by = 6 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp granted_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at   = 8 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by   = 9 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once revoked (Role.ended_key).
+  string ended_key  = 10 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
+// OrgProductAllowance — one line of an organization's plan (product_plans):
+// a role of a product its members may hold, or (role_key '') the whole
+// product. The backoffice gives and takes them; an organization holds a
+// product's role only through a line of its plan. Taking a line ends the row;
+// nothing is deleted.
+message OrgProductAllowance {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "org_id" }, { name: "product" }, { name: "role_key" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "product_plans";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id     = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string product    = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // role_key — the product's role; '' = every role of the product.
+  string role_key   = 4 [(w17.field) = { type: CHAR, max_len: 64, blank: true, default_string: "" }];
+  string allowed_by = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp allowed_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at   = 7 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by   = 8 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once taken (Role.ended_key).
+  string ended_key  = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}

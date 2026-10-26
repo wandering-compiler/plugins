@@ -2021,6 +2021,68 @@ message EndOrgPackageResp {
   string id = 1;
 }
 
+// Product role grants (product_roles) and plan lines (product_plans): new
+// live rows, and rows ended — nothing is deleted.
+message GrantProductRoleRowReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  // org_id — empty = realm-wide (NULL).
+  string org_id     = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+  string product    = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string role_key   = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string granted_by = 5 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message GrantProductRoleRowResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id = 1;
+}
+message EndProductRoleGrantRowReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndProductRoleGrantRowResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id = 1;
+}
+message EndUserProductRoleGrantsInOrgReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string user_id  = 1 [(w17.field) = { type: UUID }];
+  string org_id   = 2 [(w17.field) = { type: UUID }];
+  string ended_by = 3 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndUserProductRoleGrantsInOrgResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+}
+message EndProductRoleGrantsOfOrgReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string org_id   = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndProductRoleGrantsOfOrgResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+}
+message AllowOrgProductRowReq {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string org_id     = 1 [(w17.field) = { type: UUID }];
+  string product    = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string role_key   = 3 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string allowed_by = 4 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message AllowOrgProductRowResp {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string id = 1;
+}
+message EndOrgProductAllowanceRowReq {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndOrgProductAllowanceRowResp {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string id = 1;
+}
+
 message SetOrgSignUpPolicyRowReq {
   option (w17.contrib.plugin_feature) = "org_signup";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -5331,6 +5393,89 @@ service AuthMutation {
           "UPDATE @module.Team SET deleted_at = NOW(), deleted_by = :deleted_by, ended_key = id "
           "WHERE id = :team.id AND deleted_at IS NULL "
           "RETURNING id AS team_id"
+      }
+    };
+  }
+
+  // GrantProductRoleRow — a new live grant; a live duplicate is refused by
+  // the unique index (the caller checks first).
+  rpc GrantProductRoleRow(GrantProductRoleRowReq) returns (GrantProductRoleRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ProductRoleGrant SET "
+          "user_id = :user_id, "
+          "org_id = :org_id, "
+          "product = :product, "
+          "role_key = :role_key, "
+          "granted_by = :granted_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  rpc EndProductRoleGrantRow(EndProductRoleGrantRowReq) returns (EndProductRoleGrantRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductRoleGrant SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // EndUserProductRoleGrantsInOrg — a member leaves the organization: the
+  // product roles they held there end with the membership.
+  rpc EndUserProductRoleGrantsInOrg(EndUserProductRoleGrantsInOrgReq) returns (EndUserProductRoleGrantsInOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductRoleGrant SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE user_id = :user_id AND org_id = :org_id AND ended_at IS NULL"
+      }
+    };
+  }
+  // EndProductRoleGrantsOfOrg — the organization is deleted.
+  rpc EndProductRoleGrantsOfOrg(EndProductRoleGrantsOfOrgReq) returns (EndProductRoleGrantsOfOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductRoleGrant SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE org_id = :org_id AND ended_at IS NULL"
+      }
+    };
+  }
+  rpc AllowOrgProductRow(AllowOrgProductRowReq) returns (AllowOrgProductRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgProductAllowance SET "
+          "org_id = :org_id, "
+          "product = :product, "
+          "role_key = :role_key, "
+          "allowed_by = :allowed_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  rpc EndOrgProductAllowanceRow(EndOrgProductAllowanceRowReq) returns (EndOrgProductAllowanceRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgProductAllowance SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
       }
     };
   }

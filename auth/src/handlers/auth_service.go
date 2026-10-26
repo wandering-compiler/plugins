@@ -309,6 +309,11 @@ type AuthServiceHandler struct {
 	// packages is PackagesTable parsed at boot (org_packages; nil without it).
 	packages     *orgPackageTable
 	packagesRead bool
+	// ProductRolesTable is w17_product_roles (generated; product_roles): the
+	// catalogue of the products' roles. productRoles is it parsed at boot.
+	ProductRolesTable string
+	productRoles      *productRoleCatalogue
+	productRolesRead  bool
 }
 
 // audienceEntry is one audience of the domain's generated table
@@ -336,6 +341,25 @@ const MsgNeedsStepUp = "Confirm it is you before creating a token."
 // recently enough (api_token_step_up_seconds); the client asks for the
 // step-up and tries again.
 const CodeCreateNeedsStepUp = "API_TOKEN_NEEDS_STEP_UP"
+
+// productRoleCatalogue is w17_product_roles, parsed (product_roles): the
+// products' roles. Declared here because the handler holds one in every build.
+type productRoleCatalogue struct {
+	Roles []productRoleEntry `json:"roles"`
+	// byProduct maps product → role key → its entry.
+	byProduct map[string]map[string]productRoleEntry
+}
+
+type productRoleEntry struct {
+	Product   string `json:"product"`
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	OrgScoped bool   `json:"org_scoped"`
+	// Covers are the product's roles whose every permission this one carries
+	// too (itself included), computed at codegen from the product's own
+	// roles: the ceiling, with no permission of the product here.
+	Covers []string `json:"covers"`
+}
 
 // orgPackageTable is the generated w17_packages table.
 type orgPackageTable struct {

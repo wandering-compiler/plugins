@@ -923,6 +923,50 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 1. A policy is per (organization, kind) and set by the backoffice; an organization does not set its own.
 2. Only the host names the organization a registration joins; an organization in the path does not.
 
+### product_roles
+
+**Purpose.** One identity for the project's products. A product is a domain whose `(w17.domain).identity` names this one: it keeps no users and authenticates every caller here. The product says what its roles grant (its own `(w17.acl_roles)`, resolved by codegen against its own lock); this plugin says who holds them — so it never stores another domain's permission ids, and a product's deploy alone changes what its roles mean.
+
+**Adds**
+- Table `ProductRoleGrant` (user_id, org_id — NULL = realm-wide, product, role_key, granted_by/at, ended_by/at, ended_key): one live grant per (user, organization or realm, product, role); revoking ends the row; nothing is deleted.
+- `AuthResp.product_roles` (field 9): set when a product's gateway asks (`x-w17-product`, which only a gateway writes).
+- Generated setting `w17_product_roles`: the catalogue of the products' roles (product, key, name, org_scoped, and `covers` — the product's roles each one carries every permission of), baked in at codegen; never in the env files.
+- Business: `ListProductRoles` (`GET /auth/product-roles`); in the organization `ListOrgProductRoleGrants`, `AssignOrgProductRole`, `RevokeOrgProductRole` (`GET` / `PUT /auth/orgs/{org}/product-role-grants`, `POST …/product-role-grants/revoke`); the backoffice's `ListProductRoleGrants`, `AssignProductRole`, `RevokeProductRole` (`GET` / `PUT /auth/admin/product-role-grants`, `POST …/revoke`).
+- Errors `PRODUCT_UNKNOWN`, `PRODUCT_ROLE_UNKNOWN`, `PRODUCT_ROLE_REALM_HELD` (400), `PRODUCT_ROLE_ABOVE_CALLER`, `PRODUCT_ROLES_REALM_ONLY` (403), `PRODUCT_ROLE_NOT_MEMBER` (412).
+
+**How Authenticate answers a product.** Everything up to the scopes runs as for the identity's own surfaces — the token, the device binding, the active organization (`tenant_from`, `W17-Org`, the host). Then, with `x-w17-product` set: the caller's live grants in that product are read; the realm-wide ones count, and those of the active organization when the catalogue still holds the role in an organization and every bound (`product_plans`) allows it; a role the product no longer declares counts for nothing. The keys go to `product_roles` and `permission_ids` is emptied — this domain's ids mean nothing in the product. A product the catalogue does not name is refused (`FailedPrecondition`): the identity was generated without it.
+
+**Requires / conflicts / combined files.** Requires `org_membership`. Go file: `handlers/product_roles.go`. Seams: `authRespEnrichers`, `membershipRemovalCascades`, `orgRemovalCascades`, `configChecks`; it offers `productRoleBounds`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| product_roles/keys-not-ids | Asked by a product, Authenticate MUST answer the keys of the roles the caller holds in that product — realm-wide and in the active organization only — and MUST NOT answer any of this domain's permission ids. | Isolation | `TestAnswerProductRoles`, `TestAnswerProductRolesIsInstalled`; live: `examples/product-roles-proof` |
+| product_roles/ceiling | Inside an organization a caller MUST hand out and take only product roles covered by one they hold there (or realm-wide) — one carrying every permission of it, as codegen computed from the product's roles (`covers`) — only to members, and only roles the catalogue holds in an organization. | Security | `TestAssignOrgProductRole` |
+| product_roles/backoffice | The backoffice's grants MUST be made realm-wide, where the endpoint ACL gates the method; a grant in an organization MUST respect its plan. | Security | `TestBackofficeProductRoles` |
+| product_roles/leaving | A member leaving an organization MUST lose the product roles held there, and only those; a deleted organization's MUST end with it. | Lifecycle | `TestProductRolesEndWithTheMembership` |
+| product_roles/catalogue | The catalogue MUST be the products' own declarations, generated — never edited — and a table that does not parse MUST refuse to boot. | Correctness | `parseProductRoleCatalogue`; codegen `TestWithProductRoleTables` |
+
+**Gaps / suspected defects**
+1. Invitations and `org_signup` do not carry product roles yet: a new member is given them after joining.
+2. An API token or a machine account reaches a product with the product roles of its user; there is no per-token subset of product roles.
+
+### product_plans
+
+**Purpose.** An organization's plan across the products: which roles of which products its members may hold — so a firm that uses one product holds nothing in the others, and the backoffice decides it in one place.
+
+**Adds**
+- Table `OrgProductAllowance` (org_id, product, role_key — `''` = the whole product, allowed_by/at, ended_by/at, ended_key).
+- Business: `ListOrgProductPlan`, `AllowOrgProduct`, `DisallowOrgProduct` (realm-wide only; `GET` / `PUT /auth/admin/orgs/{org_id}/product-plan`, `POST …/product-plan/remove`); `ListMyOrgProductPlan` (`GET /auth/orgs/{org}/product-plan`).
+- Errors `PRODUCT_ROLE_NOT_IN_PLAN` (412), `PRODUCT_PLANS_REALM_ONLY` (403).
+
+**Requires / conflicts / combined files.** Requires `product_roles`. Go file: `handlers/product_plans.go` (a `productRoleBounds` entry).
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| product_plans/bounds | A product role held in an organization MUST count only while the organization's plan carries it (the role, or the whole product), on every request; an organization with no line for a product MUST hold nothing there; realm-wide grants MUST NOT be bounded. | Security | `TestAnswerProductRoles`, `TestProductPlanLines`; live: `examples/product-roles-proof` |
+| product_plans/no-grant-outside | Nobody MUST be able to hand out a role the plan does not carry. | Security | `TestAssignOrgProductRole`, `TestBackofficeProductRoles` |
+| product_plans/realm-only | Lines MUST be given and taken realm-wide only, where the endpoint ACL gates the method. | Security | `TestProductPlanLines` |
+
 ### teams
 
 - **Purpose.** An organization groups its members into teams, and a team holds roles every member holds while they are in it — so roles are given to a group once instead of to each person, and a resource of the project (the console's project access) can be given to a whole team.

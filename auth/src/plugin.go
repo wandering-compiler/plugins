@@ -128,6 +128,8 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		Audiences: cfg.W17Audiences,
 		// org_packages: the domain's packages, generated from the protos.
 		PackagesTable: cfg.W17Packages,
+		// product_roles: the products' roles, generated from their protos.
+		ProductRolesTable: cfg.W17ProductRoles,
 	}
 	if err := handlers.ValidateConfig(h); err != nil {
 		return err
