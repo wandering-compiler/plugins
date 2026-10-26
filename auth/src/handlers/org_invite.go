@@ -337,10 +337,9 @@ func metadataOrEmptyObject(m string) string {
 // The account is found the way sign-in finds it (GetUserByEmail on the
 // normalised address); its membership here is GetOrgMember, the (user, org)
 // point lookup over live rows only: a REMOVED member is not found and may be
-// invited back
-// (org_membership/removal-is-a-state). No account (NotFound) is the ordinary
-// case of an invitation — the invitee registers later. An open invitation names
-// no address, so there is nobody to look up.
+// invited back (org_membership/removal-is-a-state). No account (NotFound) is
+// the ordinary case of an invitation — the invitee registers later. An open
+// invitation names no address, so there is nobody to look up.
 //
 // A membership that starts after this check (the person accepts another
 // invitation meanwhile) is still refused at acceptance by the index; this
