@@ -1,5 +1,39 @@
 # auth — changelog
 
+## 0.1.0-rc.36
+
+### An invitation for someone who is already a member is refused
+
+- `InviteToOrg` (`POST /auth/orgs/{org}/invites`) refuses an address whose account is already a live member of the organization: `AlreadyExists` with the detail `INVITE_ALREADY_MEMBER` on `email` ("This person is already a member of the organization."), and nothing is written. Until now the invitation was written and listed as pending, and only acceptance refused it, on the membership's unique index, so it could never be accepted.
+- A removed member can still be invited back, and an address with no account or with a membership of another organization is invited as before. Open invitations (no address) are not affected.
+
+### Organizations have no owner (`org_membership`) (read first)
+
+- **`Organization.owner_id` is dropped.** It was read as root authority — a wildcard grant over the whole deployed permission lock in the owned organization, selecting the organization without a membership, a membership nobody could change or remove (`MEMBERSHIP_IS_OWNER`), an exemption from the last-superadmin rule, and inviting any kind of membership under `membership_kinds` — yet nothing in the plugin ever wrote it. The field is reserved (6, `owner_id`); a project's next generated migration drops the column and its index. **The drop is lossy and the migrator asks you to confirm it.** Nothing the column held should be kept: it granted what a role should grant.
+- **Use roles.** Whoever administers an organization holds an org-scoped role there — grant the creator one on their membership when you create the organization. Make it a wildcard (`all_permissions`) org role, or keep one wildcard holder per organization: the last-superadmin rule counts wildcard roles only, so an organization administered only through non-wildcard roles can lose its last administrator, and nothing in the plugin restores one. If a deployment set `owner_id` by hand and gave that person no role, grant them one **before** upgrading, or they lose access to the organization (they also need a live membership to select it).
+- Organization selection is by live membership only. A principal without one is refused `ORG_NOT_MEMBER`, whoever created the organization.
+- Every membership is managed the same way, its creator's included; `MEMBERSHIP_IS_OWNER` and its message are gone. The last superadmin of an organization (the last member holding a wildcard role there) cannot be demoted or removed — by themselves or by anyone else (`LAST_SUPERADMIN`), with no exception. A wildcard role held through a team (`teams`) now counts: such a member is a superadmin, and one keeps the organization administered. The team methods are held to the rule too: `RemoveOrgTeamMember`, `SetOrgTeamRoles` and `DeleteOrgTeam` refuse `LAST_SUPERADMIN` when they would end the organization's last wildcard. Only a superadmin who can act counts: a disabled or erased account (`user_admin`), a machine account's API-realm wildcard (`api_token`), a revoked grant, a removed membership or a deleted role or team no longer lets the last active superadmin go. An operator's `DisableUsers` / `EraseUsers` is not held to the rule, by design — they are realm-level actions, and an operator may disable the last superadmin deliberately. `AuthQuery.CountOtherOrgSuperadmins` is replaced by `ListOrgSuperadmins`; new `ListOrgTeamSuperadmins` (`teams`).
+- `UserOrg.owner` (`ListMyOrgs`) and `OrgMember.owner` (`ListOrgMembers`) stay on the wire, deprecated and always `false`; stop reading them. `OrgMemberRow.owner` is reserved.
+- Removed queries: `AuthQuery.GetUserOwnsOrg`, `GetOwnedOrgBySlug`, `GetUserOwnsAnyOrg`. `GetOrganization` no longer projects `owner_id`. A project query that names `Organization.owner_id` stops generating; drop the reference.
+
+### Registration on an organization's own host (`org_signup`)
+
+- New feature `org_signup` (requires `org_hosts`, `rbac`; off by default; a migration adds `OrgSignUpPolicy` and, with `sign_up_confirmation`, three `PendingSignUp` columns). Per organization and kind of membership the backoffice sets whether people may register without an invitation and with which org-scoped role (`PUT` / `GET /auth/admin/orgs/{org_id}/signup-policies`, `POST …/signup-policies/clear`).
+- A registration without an invitation — password, OAuth (Google, Apple), or confirmed by code — on a host bound to an organization, through an audience that takes the tenant from the host: an open policy for the audience's kind makes the new account a member of that kind with that role in the same transaction, whatever `invite_only` says; a closed one refuses it (`SIGNUP_NOT_INVITED`); no policy leaves `invite_only` to decide, as before. Two open kinds on one audience are refused (`SIGNUP_KIND_AMBIGUOUS`). An invitation still decides its own organization.
+- `GET /auth/hosts/{host}` answers `open_kinds`, so a sign-up page knows whether to show its form.
+- Needs a gateway generated by a console that hands the audience's context to every call (SDK `restgw.AudienceContextMiddleware`).
+
+### One identity for several products (`product_roles`, `product_plans`)
+
+- New feature `product_roles` (requires `org_membership`; off by default; a migration adds `ProductRoleGrant`). A domain whose `(w17.domain).identity` names this one is a product: it keeps no users, and its gateway authenticates here with `x-w17-product`. `Authenticate` then answers `product_roles` — the keys of the roles the caller holds in that product, realm-wide and in the active organization — and no permission ids; the product turns the keys into its own ids. The catalogue is the products' `(w17.acl_roles)`, generated into `w17_product_roles` (`GET /auth/product-roles`).
+- Grants: inside an organization a member gives and takes the product roles covered by one they hold there (it carries all their permissions), to members (`GET` / `PUT /auth/orgs/{org}/product-role-grants`, `POST …/revoke`); the backoffice any, realm-wide too (`GET` / `PUT /auth/admin/product-role-grants`, `POST …/revoke`). Leaving an organization ends the roles held there.
+- New feature `product_plans` (requires `product_roles`; a migration adds `OrgProductAllowance`): an organization's plan — a product's roles or the whole product — bounds what its members hold on every request and what anyone can hand out (`GET` / `PUT /auth/admin/orgs/{org_id}/product-plan`, `POST …/product-plan/remove`; `GET /auth/orgs/{org}/product-plan`).
+- Needs a console that generates products (SDK `(w17.domain).identity`) and fills `w17_product_roles`.
+
+### Product roles on joining (`product_roles` with `org_invite` / `org_signup`)
+
+- Invitations and open registration carry product roles: `InviteToOrgReq.product_roles` (with `org_invite`) names the products' roles accepting gives — each covered by one the inviter holds there and carried by the plan, checked again at acceptance (`PRODUCT_ROLE_NOT_IN_PLAN`, `PRODUCT_ROLE_UNKNOWN` leave the invitation unspent); the invitation lists, `ListMyInvites` and `AcceptOrgInviteResp` show them. `SetOrgSignUpPolicyReq.product_roles` (with `org_signup`) names those an open registration is given; one that left the catalogue or the plan since is passed over. Migrations add `OrgInvite.product_roles` and `OrgSignUpPolicy.product_roles`.
+
 ## 0.1.0-rc.35
 
 ### The organization comes from the host, or only from the request
