@@ -65,6 +65,16 @@ func (s lockedTeamStore) ListOrgSuperadmins(ctx context.Context, in *pb.ListOrgS
 	return s.teamStore.ListOrgSuperadmins(ctx, in, opts...)
 }
 
+// What a team holds, noted only when read inside the transaction:
+// SetOrgTeamRoles diffs against it under the lock, while the ceiling checks
+// before the transaction (coverTeamRoles) read it too.
+func (s lockedTeamStore) ListTeamRoleIds(ctx context.Context, in *pb.ListTeamRoleIdsReq, opts ...grpc.CallOption) (*pb.ListTeamRoleIdsResp, error) {
+	if len(s.tx.begun) == 1 && len(s.tx.committed) == 0 && len(s.tx.rolledBack) == 0 {
+		s.note("team roles")
+	}
+	return s.teamStore.ListTeamRoleIds(ctx, in, opts...)
+}
+
 func (s lockedTeamStore) DeleteTeam(ctx context.Context, in *pb.DeleteTeamReq, opts ...grpc.CallOption) (*pb.DeleteTeamResp, error) {
 	s.note("write")
 	return s.teamStore.DeleteTeam(ctx, in, opts...)
@@ -159,12 +169,18 @@ func TestSuperadminChanges_CheckAndWriteUnderTheOrganizationsLock(t *testing.T) 
 				locked := lockedTeamStore{teamStore: s, txOrder: order}
 				h.Query, h.Mutation, h.DistTx, h.Connection = locked, locked, order.tx, "main"
 				err := do(h)
+				// SetOrgTeamRoles diffs the team's roles under the lock, so
+				// two of them on one team cannot both diff the same stale set.
+				want := want
+				if name == "SetOrgTeamRoles" {
+					want = []string{want[0], "team roles in tx", want[1], want[2]}
+				}
 				steps, settled := want, "committed"
 				if refused {
 					if detailOf(t, err).GetCode() != CodeLastSuperadmin {
 						t.Fatalf("the last superadmin: %v", err)
 					}
-					steps, settled = want[:2], "rolled back"
+					steps, settled = want[:len(want)-1], "rolled back"
 				} else if err != nil {
 					t.Fatalf("another superadmin remains: %v", err)
 				}

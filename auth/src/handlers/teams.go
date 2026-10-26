@@ -374,60 +374,60 @@ func (h *AuthServiceHandler) SetOrgTeamRoles(ctx context.Context, req *pb.SetOrg
 				CodeTeamRoleNotAvailable, "role_ids", MsgTeamRoleNotAvailable, map[string]string{"role": id})
 		}
 	}
-	current, err := h.teamRoleIDs(ctx, req.GetTeamId())
-	if err != nil {
-		return nil, err
-	}
-	keep := map[string]bool{}
-	for _, id := range wanted {
-		keep[id] = true
-	}
-	held := map[string]bool{}
-	for _, id := range current {
-		held[id] = true
-	}
+	// What the team holds is read under the organization's lock, as the
+	// change is checked and written: two SetOrgTeamRoles on one team then run
+	// one after the other, and the second diffs against what the first left
+	// rather than revoking a role already gone or granting one already held.
 	var added, removed []string
-	for _, id := range wanted {
-		if !held[id] {
-			added = append(added, id)
-		}
-	}
-	for _, id := range current {
-		if !keep[id] {
-			removed = append(removed, id)
-		}
-	}
-	if len(added)+len(removed) > 0 {
-		grantable, err := h.grantableRoleIDs(ctx)
+	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
+		current, err := h.teamRoleIDs(txCtx, req.GetTeamId())
 		if err != nil {
-			return nil, err
+			return err
 		}
-		for _, id := range append(append([]string(nil), added...), removed...) {
-			if !grantable[id] {
-				return nil, refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
-					CodeRoleAboveCaller, "role_ids", MsgRoleAboveCaller, nil)
+		keep := map[string]bool{}
+		for _, id := range wanted {
+			keep[id] = true
+		}
+		held := map[string]bool{}
+		for _, id := range current {
+			held[id] = true
+		}
+		for _, id := range wanted {
+			if !held[id] {
+				added = append(added, id)
 			}
 		}
-	}
-	// A team left with no wildcard role ends every wildcard its members hold
-	// through it; one that keeps or gains a wildcard keeps them superadmins.
-	endsWildcards := false
-	if len(removed) > 0 {
-		wildcard, err := h.wildcardRoleIDs(ctx)
-		if err != nil {
-			return nil, err
+		for _, id := range current {
+			if !keep[id] {
+				removed = append(removed, id)
+			}
 		}
-		endsWildcards = true
+		if len(added)+len(removed) > 0 {
+			grantable, err := h.grantableRoleIDs(txCtx)
+			if err != nil {
+				return err
+			}
+			for _, id := range append(append([]string(nil), added...), removed...) {
+				if !grantable[id] {
+					return refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
+						CodeRoleAboveCaller, "role_ids", MsgRoleAboveCaller, nil)
+				}
+			}
+		}
+		// A team left with no wildcard role ends every wildcard its members
+		// hold through it; one that keeps or gains a wildcard keeps them
+		// superadmins.
+		if len(removed) == 0 {
+			return nil
+		}
+		wildcard, err := h.wildcardRoleIDs(txCtx)
+		if err != nil {
+			return err
+		}
 		for _, id := range wanted {
 			if wildcard[id] {
-				endsWildcards = false
-				break
+				return nil
 			}
-		}
-	}
-	err = h.guardSuperadmins(ctx, orgID, func(txCtx context.Context) error {
-		if !endsWildcards {
-			return nil
 		}
 		return h.refuseLeavingNoSuperadmin(txCtx, orgID, func(g *pb.OrgSuperadminRow) bool {
 			return g.GetTeamId() == req.GetTeamId()
