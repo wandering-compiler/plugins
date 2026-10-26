@@ -448,13 +448,14 @@ features:
     go_files:
       - handlers/org_signup.go
   - name: product_roles
-    description: "One identity for the project's products: domains whose (w17.domain).identity names this one keep no users and authenticate their callers here. A product's gateway asks Authenticate on its own behalf (x-w17-product), and the answer carries the KEYS of the roles the caller holds in that product (AuthResp.product_roles) — realm-wide and in the active organization — and no permission ids of this domain; the product turns the keys into its own ids from its (w17.acl_roles), so this plugin never stores another domain's permissions. The catalogue is the products' roles, baked in at codegen (w17_product_roles; ListProductRoles, GET /auth/product-roles). Inside an organization a member hands out and takes the product roles covered by one they hold there (it carries every permission of them — computed at codegen from the product's roles), to members only (ListOrgProductRoleGrants / AssignOrgProductRole / RevokeOrgProductRole — GET / PUT /auth/orgs/{org}/product-role-grants, POST /auth/orgs/{org}/product-role-grants/revoke; PRODUCT_ROLE_ABOVE_CALLER, PRODUCT_ROLE_NOT_MEMBER); the backoffice, acting realm-wide and gated by the endpoint ACL, hands out any, realm-wide ones too (ListProductRoleGrants / AssignProductRole / RevokeProductRole — GET / PUT /auth/admin/product-role-grants, POST /auth/admin/product-role-grants/revoke). A member who leaves an organization loses the product roles held there; a deleted organization's end with it. A user holds any number of roles in each product. With org_invite an invitation names the products' roles accepting gives (InviteToOrgReq.product_roles: each covered by one the inviter holds there and carried by the organization's plan; held to the catalogue and the plan again at acceptance, which refuses and leaves the invitation unspent when one has left either); with org_signup an open registration policy names those a registration is given (SetOrgSignUpPolicyReq.product_roles; one that has left the catalogue or the plan by then is not given). With api_token a token names the products' roles it may use (CreateApiTokenReq.product_roles, IssueBotTokenReq.product_roles; TokenProductRole): a product is answered the roles the token names that a role the holder holds there covers; a token minted with a permission subset and no product role reaches the products with none, and only a token narrowed on neither axis carries every role its holder holds. Nothing is deleted. Off by default; a migration adds the tables (ProductRoleGrant, TokenProductRole) and the invitation's and the policy's product_roles columns."
+    description: "One identity for the project's products: domains whose (w17.domain).identity names this one keep no users and authenticate their callers here. The roles are the identity's: the products' presets (each product's (w17.acl_roles), baked into the catalogue w17_product_roles with the permission codes they grant) and roles the identity composes from every product's permissions — the backoffice's (DefineProductRole / RetireProductRole, PUT /auth/admin/product-roles, POST /auth/admin/product-roles/retire; realm-only, endpoint ACL) and an organization's own under the ceiling (DefineOrgProductRole / RetireOrgProductRole, PUT /auth/orgs/{org}/product-roles, POST …/retire); a grant names one as product `*`, and one may span products (ProductRoleDef). ListProductRoles (GET /auth/product-roles) lists the presets and the identity's own, ListProductPermissions (GET /auth/product-permissions) every product's permissions. A product's gateway asks Authenticate on its own behalf (x-w17-product), and the answer carries the product's permission CODES the caller holds there (AuthResp.product_roles) — through roles held realm-wide and in the active organization — and no permission ids of this domain; the product resolves the codes against its own lock. Inside an organization a member hands out, takes and defines only roles every permission of which they hold there, to members only (ListOrgProductRoleGrants / AssignOrgProductRole / RevokeOrgProductRole — GET / PUT /auth/orgs/{org}/product-role-grants, POST …/revoke; PRODUCT_ROLE_ABOVE_CALLER, PRODUCT_ROLE_NOT_MEMBER); the backoffice, acting realm-wide and gated by the endpoint ACL, hands out any, realm-wide ones too (ListProductRoleGrants / AssignProductRole / RevokeProductRole — GET / PUT /auth/admin/product-role-grants, POST …/revoke). A member who leaves an organization loses the roles held there; a deleted organization's end with it. With org_invite an invitation names the roles accepting gives (InviteToOrgReq.product_roles, held to the inviter, the catalogue and the plan, again at acceptance); with org_signup an open registration policy names those a registration is given (SetOrgSignUpPolicyReq.product_roles); with api_token a token names the roles it may use (CreateApiTokenReq.product_roles, IssueBotTokenReq.product_roles; TokenProductRole): a product is answered what the holder holds there that a named role grants, and a token minted with a permission subset and no product role reaches the products with nothing. Nothing is deleted. Off by default; a migration adds the tables (ProductRoleGrant, ProductRoleDef, TokenProductRole) and the invitation's and the policy's product_roles columns."
     default: false
     requires:
       # Organizations, the active scope and membership are org_membership's.
       - org_membership
     go_files:
       - handlers/product_roles.go
+      - handlers/product_role_defs.go
   - name: product_plans
     description: "An organization's plan across the products (product_roles): the roles of each product its members may hold, a line per role or a whole product. The backoffice gives and takes the lines realm-wide (ListOrgProductPlan / AllowOrgProduct / DisallowOrgProduct — GET / PUT /auth/admin/orgs/{org_id}/product-plan, POST /auth/admin/orgs/{org_id}/product-plan/remove; PRODUCT_PLANS_REALM_ONLY from inside an organization), and an organization reads its own (ListMyOrgProductPlan, GET /auth/orgs/{org}/product-plan). A product role held in an organization counts only when its plan carries it — on every request, so taking a line applies on the next one — and nobody hands out a role the plan does not carry (PRODUCT_ROLE_NOT_IN_PLAN). An organization without a line for a product holds nothing there. Realm-wide roles are not bounded. Nothing is deleted. Off by default; a migration adds the table."
     default: false
@@ -850,11 +851,24 @@ presets:
           - { ref: AuthService.ListProductRoleGrants, method: GET,  path: "",        feature: product_roles }
           - { ref: AuthService.AssignProductRole,     method: PUT,  path: "",        feature: product_roles }
           - { ref: AuthService.RevokeProductRole,     method: POST, path: "/revoke", feature: product_roles }
-      # The products' roles, as the products declare them.
+      # The products' roles: the presets the products declare and the
+      # identity's own (the backoffice's and the organization's).
       - prefix: /auth/product-roles
         description: "The roles of the project's products — the catalogue a grant names."
         endpoints:
           - { ref: AuthService.ListProductRoles, method: GET, path: "", feature: product_roles }
+      # The products' permissions: what the identity's own roles are made of.
+      - prefix: /auth/product-permissions
+        description: "Every product's permissions — the stuff the identity's own roles are composed from."
+        endpoints:
+          - { ref: AuthService.ListProductPermissions, method: GET, path: "", feature: product_roles }
+      # The backoffice's own roles across the products: realm-wide, under the
+      # endpoint ACL (PRODUCT_ROLES_REALM_ONLY from inside an organization).
+      - prefix: /auth/admin/product-roles
+        description: "The identity's own roles across the products — the backoffice's."
+        endpoints:
+          - { ref: AuthService.DefineProductRole, method: PUT,  path: "",        feature: product_roles }
+          - { ref: AuthService.RetireProductRole, method: POST, path: "/retire", feature: product_roles }
       # The backoffice's hosts (org_hosts): realm-wide — a call acting inside
       # an organization is refused (HOSTS_REALM_ONLY).
       - prefix: /auth/admin/hosts
@@ -917,6 +931,8 @@ presets:
           - { ref: AuthService.ListOrgProductRoleGrants, method: GET,  path: /product-role-grants,        feature: product_roles }
           - { ref: AuthService.AssignOrgProductRole,     method: PUT,  path: /product-role-grants,        feature: product_roles }
           - { ref: AuthService.RevokeOrgProductRole,     method: POST, path: /product-role-grants/revoke, feature: product_roles }
+          - { ref: AuthService.DefineOrgProductRole,     method: PUT,  path: /product-roles,              feature: product_roles }
+          - { ref: AuthService.RetireOrgProductRole,     method: POST, path: /product-roles/retire,       feature: product_roles }
           - { ref: AuthService.ListMyOrgProductPlan,     method: GET,  path: /product-plan,               feature: product_plans }
           - { ref: AuthService.ListOrgTeams,        method: GET,    path: /teams,                               feature: teams }
           - { ref: AuthService.CreateOrgTeam,       method: POST,   path: /teams,                               feature: teams }
@@ -1372,6 +1388,7 @@ msgids:
   - "Give the role a name."
   - "Give the team a name."
   - "Name the kind of membership this applies to."
+  - "No product has this permission."
   - "Only a member of this organization can join one of its teams."
   - "Permission {permission} is not part of this deployment."
   - "Registration here is not set up correctly. Contact the organization."

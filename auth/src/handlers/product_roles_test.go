@@ -121,11 +121,21 @@ func (m *prodMock) EndOrgProductAllowanceRow(_ context.Context, in *pb.EndOrgPro
 }
 
 const testProductRoles = `{"roles":[
- {"product":"alpha","key":"viewer","name":"Viewer","org_scoped":true,"covers":["viewer"]},
- {"product":"alpha","key":"editor","name":"Editor","org_scoped":true,"covers":["editor","viewer"]},
- {"product":"alpha","key":"admin","name":"Admin","org_scoped":true,"covers":["admin","editor","viewer"]},
- {"product":"alpha","key":"auditor","name":"Auditor","org_scoped":false},
- {"product":"beta","key":"viewer","name":"Viewer","org_scoped":true}]}`
+ {"product":"alpha","key":"viewer","name":"Viewer","org_scoped":true,"covers":["viewer"],"permissions":["notes.NoteQuery.GetNote","notes.NoteQuery.ListNotes"]},
+ {"product":"alpha","key":"editor","name":"Editor","org_scoped":true,"covers":["editor","viewer"],"permissions":["notes.NoteMutation.CreateNote","notes.NoteQuery.GetNote","notes.NoteQuery.ListNotes"]},
+ {"product":"alpha","key":"admin","name":"Admin","org_scoped":true,"covers":["admin","editor","viewer"],"permissions":["notes.NoteMutation.CreateNote","notes.NoteMutation.DeleteNote","notes.NoteQuery.GetNote","notes.NoteQuery.ListNotes"]},
+ {"product":"alpha","key":"auditor","name":"Auditor","org_scoped":false,"permissions":["notes.NoteQuery.ListNotes"]},
+ {"product":"beta","key":"viewer","name":"Viewer","org_scoped":true,"permissions":["notes.NoteQuery.ListNotes"]}],
+ "products":{
+  "alpha":["notes.NoteMutation.CreateNote","notes.NoteMutation.DeleteNote","notes.NoteQuery.GetNote","notes.NoteQuery.ListNotes"],
+  "beta":["notes.NoteQuery.ListNotes"]}}`
+
+// The codes the test catalogue's alpha roles grant.
+var (
+	alphaViewer = []string{"notes.NoteQuery.GetNote", "notes.NoteQuery.ListNotes"}
+	alphaEditor = []string{"notes.NoteMutation.CreateNote", "notes.NoteQuery.GetNote", "notes.NoteQuery.ListNotes"}
+	alphaAdmin  = []string{"notes.NoteMutation.CreateNote", "notes.NoteMutation.DeleteNote", "notes.NoteQuery.GetNote", "notes.NoteQuery.ListNotes"}
+)
 
 // prodHandler: alice holds alpha's admin in org-a, whose plan carries the
 // whole of alpha; bob and alice are org-a's members, carol is org-b's.
@@ -140,7 +150,8 @@ func prodHandler(t *testing.T) (*AuthServiceHandler, *prodMock) {
 	h := &AuthServiceHandler{Query: m, Mutation: m, ProductRolesTable: testProductRoles,
 		Lock: &acllock.Lock{Permissions: map[string]int{
 			"AUTH_AUTH_SERVICE_ASSIGN_PRODUCT_ROLE": 1, "AUTH_AUTH_SERVICE_REVOKE_PRODUCT_ROLE": 2, "AUTH_AUTH_SERVICE_LIST_PRODUCT_ROLE_GRANTS": 3,
-			"AUTH_AUTH_SERVICE_ALLOW_ORG_PRODUCT": 4, "AUTH_AUTH_SERVICE_DISALLOW_ORG_PRODUCT": 5, "AUTH_AUTH_SERVICE_LIST_ORG_PRODUCT_PLAN": 6}}}
+			"AUTH_AUTH_SERVICE_ALLOW_ORG_PRODUCT": 4, "AUTH_AUTH_SERVICE_DISALLOW_ORG_PRODUCT": 5, "AUTH_AUTH_SERVICE_LIST_ORG_PRODUCT_PLAN": 6,
+			"AUTH_AUTH_SERVICE_DEFINE_PRODUCT_ROLE": 7, "AUTH_AUTH_SERVICE_RETIRE_PRODUCT_ROLE": 8}}}
 	if err := parseProductRoleCatalogue(h); err != nil {
 		t.Fatal(err)
 	}
@@ -161,9 +172,9 @@ func answer(t *testing.T, h *AuthServiceHandler, userID, orgID, product string) 
 	return resp, err
 }
 
-// A product's gateway gets the keys the caller holds there — realm-wide and
-// in the active organization, within its plan — and none of the identity's
-// own permission ids.
+// A product's gateway gets the permission codes the caller holds there
+// through their roles — realm-wide and in the active organization, within
+// its plan — and none of the identity's own permission ids.
 func TestAnswerProductRoles(t *testing.T) {
 	h, m := prodHandler(t)
 	m.grants = append(m.grants,
@@ -177,11 +188,11 @@ func TestAnswerProductRoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(resp.GetProductRoles(), []string{"admin", "auditor"}) || resp.GetPermissionIds() != nil {
-		t.Errorf("alpha in org-a: roles %v ids %v, want [admin auditor] and no ids", resp.GetProductRoles(), resp.GetPermissionIds())
+	if !slices.Equal(resp.GetProductRoles(), alphaAdmin) || resp.GetPermissionIds() != nil {
+		t.Errorf("alpha in org-a: codes %v ids %v, want admin's and auditor's, no ids", resp.GetProductRoles(), resp.GetPermissionIds())
 	}
-	if resp, _ := answer(t, h, "alice", "", "alpha"); !slices.Equal(resp.GetProductRoles(), []string{"auditor"}) {
-		t.Errorf("alpha realm-wide: %v, want [auditor]", resp.GetProductRoles())
+	if resp, _ := answer(t, h, "alice", "", "alpha"); !slices.Equal(resp.GetProductRoles(), []string{"notes.NoteQuery.ListNotes"}) {
+		t.Errorf("alpha realm-wide: %v, want the auditor's ListNotes", resp.GetProductRoles())
 	}
 	if resp, _ := answer(t, h, "alice", "org-a", "beta"); len(resp.GetProductRoles()) != 0 {
 		t.Errorf("beta outside org-a's plan: %v, want none", resp.GetProductRoles())
@@ -213,8 +224,8 @@ func TestAnswerProductRolesIsInstalled(t *testing.T) {
 			_ = enrich(ctx, h, &authPrincipal{userID: "alice"}, resp)
 		}()
 	}
-	if !slices.Equal(resp.GetProductRoles(), []string{"admin"}) || resp.GetPermissionIds() != nil {
-		t.Errorf("through the installed enrichers: roles %v ids %v, want [admin] and no ids", resp.GetProductRoles(), resp.GetPermissionIds())
+	if !slices.Equal(resp.GetProductRoles(), alphaAdmin) || resp.GetPermissionIds() != nil {
+		t.Errorf("through the installed enrichers: codes %v ids %v, want admin's and no ids", resp.GetProductRoles(), resp.GetPermissionIds())
 	}
 	if len(membershipRemovalCascades) == 0 || len(orgRemovalCascades) == 0 || len(productRoleBounds) == 0 {
 		t.Fatal("product_roles / product_plans installed no cascade or bound")

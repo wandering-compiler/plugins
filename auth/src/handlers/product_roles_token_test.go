@@ -75,8 +75,8 @@ func TestTokenProductRoles_TheMintHoldsThemToTheCatalogue(t *testing.T) {
 	}
 }
 
-// A product is answered the roles the token names that a role the holder
-// holds there covers.
+// A product is answered the permissions the holder holds there that a role
+// the token names grants.
 // A token narrowed on either axis stays narrow on the products'; only one
 // narrowed on neither carries every role its holder holds, as a session does.
 func TestTokenProductRoles_AProductIsAnsweredTheTokensShare(t *testing.T) {
@@ -103,13 +103,13 @@ func TestTokenProductRoles_AProductIsAnsweredTheTokensShare(t *testing.T) {
 		prin *authPrincipal
 		want []string
 	}{
-		{"a session", &authPrincipal{userID: "alice", realm: pb.TokenType_TOKEN_TYPE_SESSION, usedTokenID: "viewer-only"}, []string{"admin", "viewer"}},
-		{"a token narrowed on neither axis", api("plain", false), []string{"admin", "viewer"}},
-		{"a token naming alpha's viewer (and an auditor alice does not hold)", api("viewer-only", false), []string{"viewer"}},
+		{"a session", &authPrincipal{userID: "alice", realm: pb.TokenType_TOKEN_TYPE_SESSION, usedTokenID: "viewer-only"}, alphaAdmin},
+		{"a token narrowed on neither axis", api("plain", false), alphaAdmin},
+		{"a token naming alpha's viewer (and an auditor alice does not hold)", api("viewer-only", false), alphaViewer},
 		{"a token naming only beta's roles", api("beta-only", false), nil},
-		{"a token naming alpha's editor, which alice's admin covers", api("editor", false), []string{"editor"}},
+		{"a token naming alpha's editor, which alice's admin covers", api("editor", false), alphaEditor},
 		{"a token with a permission subset and no product role", api("plain", true), nil},
-		{"a token with a permission subset naming alpha's viewer", api("viewer-only", true), []string{"viewer"}},
+		{"a token with a permission subset naming alpha's viewer", api("viewer-only", true), alphaViewer},
 	} {
 		if got := answerFor(c.prin); !slices.Equal(got, c.want) {
 			t.Errorf("%s: answered %v, want %v", c.name, got, c.want)

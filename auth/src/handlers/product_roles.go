@@ -19,19 +19,21 @@ import (
 // This file implements the `product_roles` feature: one identity for the
 // project's PRODUCTS — domains whose (w17.domain).identity names this one.
 // A product keeps no users. Its gateway authenticates every caller here,
-// saying which product asks (x-w17-product), and the answer carries the KEYS
-// of the roles the caller holds in that product (AuthResp.product_roles) —
+// saying which product asks (x-w17-product), and the answer carries the
+// product's PERMISSION CODES the caller holds there (AuthResp.product_roles,
+// the keys the product's gateway translates) — through the roles they hold
 // realm-wide and in the active organization — and no permission ids of this
-// domain. The product turns the keys into its own ids from its own
-// (w17.acl_roles), so nothing here holds another domain's permissions, and a
-// product's deploy alone changes what its roles mean.
+// domain. The product resolves the codes against its own lock.
 //
-// The catalogue is the products' roles, baked in at codegen
-// (w17_product_roles). Who holds what:
+// The roles are the identity's (product_role_defs.go): presets the products
+// declare in their (w17.acl_roles), baked into the catalogue at codegen
+// (w17_product_roles) with the codes they grant, and roles the identity
+// composes itself from every product's permissions — the backoffice's and an
+// organization's own. Who holds what:
 //
-//   - inside an organization a member hands out and takes the product roles
-//     covered by one they hold there themselves (the ceiling: it carries
-//     every permission of the other), to members only;
+//   - inside an organization a member hands out and takes the roles whose
+//     every permission they hold there themselves (the ceiling), to members
+//     only;
 //   - the backoffice, acting realm-wide and gated by the endpoint ACL, hands
 //     out any — realm-wide ones too, which count in every organization.
 //
@@ -50,10 +52,12 @@ func init() {
 	orgRemovalCascades = append(orgRemovalCascades, endProductRolesOfOrg)
 }
 
-// productRoleBounds narrow the product roles an organization's members hold
-// to what the organization may hold (product_plans). Each returns whether
-// the organization may hold `role` of `product`; nil when it bounds nothing.
-var productRoleBounds []func(ctx context.Context, h *AuthServiceHandler, orgID, product string) (func(role string) bool, error)
+// productRoleBounds narrow what an organization's members hold through the
+// roles granted there to what the organization may hold (product_plans).
+// Each returns whether a role (roleProduct, roleKey — a preset, or the
+// identity's own as `*`) may grant its permissions of `product` there; nil
+// when it bounds nothing.
+var productRoleBounds []func(ctx context.Context, h *AuthServiceHandler, orgID string) (func(product, roleProduct, roleKey string) bool, error)
 
 // parseProductRoleCatalogue reads w17_product_roles once, at boot; one that
 // does not parse refuses to boot.
@@ -93,6 +97,11 @@ func readProductRoleCatalogue(raw string) (*productRoleCatalogue, error) {
 		}
 		c.byProduct[r.Product][r.Key] = r
 	}
+	for p := range c.Products {
+		if c.byProduct[p] == nil {
+			c.byProduct[p] = map[string]productRoleEntry{}
+		}
+	}
 	return c, nil
 }
 
@@ -110,62 +119,13 @@ func (c *productRoleCatalogue) role(ctx context.Context, product, key string) (p
 	return r, nil
 }
 
-// heldProductRoles is what userID holds in product, as Authenticate counts it:
-// the realm-wide grants, and those in orgID (empty = none) that the catalogue
-// still holds in an organization and the organization may hold. A role the
-// product no longer declares counts for nothing.
-func heldProductRoles(ctx context.Context, h *AuthServiceHandler, c *productRoleCatalogue, userID, product, orgID string) ([]*pb.ProductRoleGrantRow, error) {
-	resp, err := h.Query.ListProductRolesOfUser(ctx, &pb.ListProductRolesOfUserReq{UserId: userID, Product: product})
-	if err != nil && status.Code(err) != codes.NotFound {
-		return nil, err
-	}
-	var bounds []func(string) bool
-	if orgID != "" {
-		for _, b := range productRoleBounds {
-			allow, err := b(ctx, h, orgID, product)
-			if err != nil {
-				return nil, err
-			}
-			if allow != nil {
-				bounds = append(bounds, allow)
-			}
-		}
-	}
-	var out []*pb.ProductRoleGrantRow
-	for _, g := range resp.GetGrants() {
-		entry, ok := c.byProduct[product][g.GetRoleKey()]
-		if !ok {
-			continue
-		}
-		if g.GetOrgId() != "" {
-			if g.GetOrgId() != orgID || !entry.OrgScoped {
-				continue
-			}
-			if !allowedByAll(bounds, g.GetRoleKey()) {
-				continue
-			}
-		}
-		out = append(out, g)
-	}
-	return out, nil
-}
+// productRoleNarrowers narrow the permission codes Authenticate answers a
+// product by what the credential itself carries (product_roles with
+// api_token: an API token's own share). Appended by the combination's init.
+var productRoleNarrowers []func(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, orgID, product string, codes []string) ([]string, error)
 
-func allowedByAll(bounds []func(string) bool, role string) bool {
-	for _, allow := range bounds {
-		if !allow(role) {
-			return false
-		}
-	}
-	return true
-}
-
-// productRoleNarrowers narrow the product roles Authenticate answers by what
-// the credential itself carries (product_roles with api_token: an API token's
-// own subset). Appended by the combination's init.
-var productRoleNarrowers []func(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, product string, keys []string) ([]string, error)
-
-// answerProductRoles answers a product's gateway: the keys of the roles the
-// caller holds in it, and none of this domain's permission ids.
+// answerProductRoles answers a product's gateway: the product's permission
+// codes the caller holds, and none of this domain's permission ids.
 func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, resp *pb.AuthResp) error {
 	headers, _ := ctx.Value(authHeadersKey{}).(map[string]string)
 	product := headers[productHeader]
@@ -182,23 +142,22 @@ func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPr
 		// than answer a product nobody declared.
 		return status.Errorf(codes.FailedPrecondition, "product_roles: %q is no product of this identity — regenerate the identity with the product's (w17.domain).identity in place", product)
 	}
-	held, err := heldProductRoles(ctx, h, c, prin.userID, product, resp.GetScopes()["org_id"])
+	orgID := resp.GetScopes()["org_id"]
+	held, err := heldProductPermissions(ctx, h, c, prin.userID, orgID)
 	if err != nil {
 		return err
 	}
-	keys := make([]string, 0, len(held))
-	for _, g := range held {
-		if !slices.Contains(keys, g.GetRoleKey()) {
-			keys = append(keys, g.GetRoleKey())
-		}
+	codes := make([]string, 0, len(held[product]))
+	for code := range held[product] {
+		codes = append(codes, code)
 	}
 	for _, narrow := range productRoleNarrowers {
-		if keys, err = narrow(ctx, h, prin, product, keys); err != nil {
+		if codes, err = narrow(ctx, h, prin, orgID, product, codes); err != nil {
 			return err
 		}
 	}
-	sort.Strings(keys)
-	resp.ProductRoles = keys
+	sort.Strings(codes)
+	resp.ProductRoles = codes
 	resp.PermissionIds = nil
 	return nil
 }
@@ -224,7 +183,7 @@ func (h *AuthServiceHandler) ListProductRoles(ctx context.Context, req *pb.ListP
 	if err != nil {
 		return nil, err
 	}
-	if p := req.GetProduct(); p != "" {
+	if p := req.GetProduct(); p != "" && p != identityRoleProduct {
 		if _, ok := c.byProduct[p]; !ok {
 			return nil, refusal(ctx, codes.InvalidArgument, "product_roles: no such product", CodeProductUnknown, "product", MsgProductUnknown, nil)
 		}
@@ -232,7 +191,19 @@ func (h *AuthServiceHandler) ListProductRoles(ctx context.Context, req *pb.ListP
 	out := &pb.ListProductRolesResp{}
 	for _, r := range c.Roles {
 		if req.GetProduct() == "" || r.Product == req.GetProduct() {
-			out.Roles = append(out.Roles, &pb.ProductRoleInfo{Product: r.Product, Key: r.Key, Name: r.Name, OrgScoped: r.OrgScoped})
+			out.Roles = append(out.Roles, roleInfo(r.Product, r.Key, roleGrant{orgScoped: r.OrgScoped, perms: map[string][]string{r.Product: r.Permissions}, preset: true, name: r.Name}))
+		}
+	}
+	if req.GetProduct() == "" || req.GetProduct() == identityRoleProduct {
+		// The identity's own: the backoffice's, and the active
+		// organization's when the request acts in one.
+		orgID, _ := principal.Scope(ctx, "org_id")
+		defs, err := productRoleDefs(ctx, h, orgID)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range defs {
+			out.Roles = append(out.Roles, roleInfo(identityRoleProduct, d.GetKey(), roleGrant{orgScoped: d.GetOrgScoped(), perms: decodeRolePermissions(d.GetPermissions()), orgID: d.GetOrgId(), name: d.GetName()}))
 		}
 	}
 	return out, nil
@@ -316,48 +287,64 @@ func (h *AuthServiceHandler) orgProductRoleCall(ctx context.Context, req *pb.Org
 	return caller, orgID, nil
 }
 
-// checkOrgProductRole refuses a role the catalogue does not name or holds
-// realm-wide.
+// checkOrgProductRole refuses a role the catalogue does not name, the
+// identity does not define for orgID, or one held realm-wide only.
 func (h *AuthServiceHandler) checkOrgProductRole(ctx context.Context, c *productRoleCatalogue, orgID, product, role string) error {
-	entry, err := c.role(ctx, product, role)
+	r, err := h.lookupRole(ctx, c, orgID, product, role)
 	if err != nil {
 		return err
 	}
-	if !entry.OrgScoped {
+	if !r.orgScoped {
 		return refusal(ctx, codes.InvalidArgument, "product_roles: the role is held realm-wide, not in an organization",
 			CodeProductRoleRealmHeld, "role_key", MsgProductRoleRealmHeld, nil)
 	}
 	return nil
 }
 
-// checkProductRoleCeiling refuses a role no role the caller holds in orgID
-// (or realm-wide) covers — carries every permission of (Covers, computed at
-// codegen from the product's roles; a role always covers itself).
+// checkProductRoleCeiling refuses a role carrying a permission the caller
+// does not hold in orgID (or realm-wide): a caller hands out only what their
+// own roles there include.
 func (h *AuthServiceHandler) checkProductRoleCeiling(ctx context.Context, c *productRoleCatalogue, caller, orgID, product, role string) error {
-	held, err := heldProductRoles(ctx, h, c, caller, product, orgID)
+	r, err := h.lookupRole(ctx, c, orgID, product, role)
 	if err != nil {
 		return err
 	}
-	for _, g := range held {
-		if g.GetRoleKey() == role || slices.Contains(c.byProduct[product][g.GetRoleKey()].Covers, role) {
-			return nil
-		}
+	held, err := heldProductPermissions(ctx, h, c, caller, orgID)
+	if err != nil {
+		return err
+	}
+	if covers(held, r) {
+		return nil
 	}
 	return refusal(ctx, codes.PermissionDenied, "product_roles: no role the caller holds here covers this one",
 		CodeProductRoleAbove, "role_key", MsgProductRoleAbove, nil)
 }
 
 // checkProductRoleInPlan refuses a role the organization's plan does not
-// carry (product_plans; nothing bounds it without).
+// carry for every product it grants in (product_plans; nothing bounds it
+// without).
 func (h *AuthServiceHandler) checkProductRoleInPlan(ctx context.Context, orgID, product, role string) error {
+	c, err := h.productRoleCatalogue()
+	if err != nil {
+		return err
+	}
+	r, err := h.lookupRole(ctx, c, orgID, product, role)
+	if err != nil {
+		return err
+	}
 	for _, b := range productRoleBounds {
-		allow, err := b(ctx, h, orgID, product)
+		allow, err := b(ctx, h, orgID)
 		if err != nil {
 			return err
 		}
-		if allow != nil && !allow(role) {
-			return refusal(ctx, codes.FailedPrecondition, "product_roles: the organization's plan does not carry the role",
-				CodeProductRoleNotInPlan, "role_key", MsgProductRoleNotInPlan, nil)
+		if allow == nil {
+			continue
+		}
+		for p := range r.perms {
+			if !allow(p, product, role) {
+				return refusal(ctx, codes.FailedPrecondition, "product_roles: the organization's plan does not carry the role",
+					CodeProductRoleNotInPlan, "role_key", MsgProductRoleNotInPlan, nil)
+			}
 		}
 	}
 	return nil
@@ -393,7 +380,8 @@ func (h *AuthServiceHandler) orgProductRoleRefs(ctx context.Context, orgID, call
 
 // encodeProductRoleRefs is the column form of a set of product roles:
 // `<product>:<role key>` pairs, sorted and deduplicated, comma-separated.
-// Neither a domain name nor a role key carries ':' or ','.
+// Neither a domain name (or `*`, the identity's own) nor a role key carries
+// ':' or ','.
 func encodeProductRoleRefs(refs []*pb.ProductRoleRef) string {
 	pairs := make([]string, 0, len(refs))
 	for _, r := range refs {
@@ -492,11 +480,11 @@ func (h *AuthServiceHandler) backofficeProductRoleCall(ctx context.Context, meth
 	if err != nil {
 		return "", err
 	}
-	entry, err := c.role(ctx, req.GetProduct(), req.GetRoleKey())
+	entry, err := h.lookupRole(ctx, c, req.GetOrgId(), req.GetProduct(), req.GetRoleKey())
 	if err != nil {
 		return "", err
 	}
-	if req.GetOrgId() != "" && !entry.OrgScoped {
+	if req.GetOrgId() != "" && !entry.orgScoped {
 		return "", refusal(ctx, codes.InvalidArgument, "product_roles: the role is held realm-wide, not in an organization",
 			CodeProductRoleRealmHeld, "role_key", MsgProductRoleRealmHeld, nil)
 	}

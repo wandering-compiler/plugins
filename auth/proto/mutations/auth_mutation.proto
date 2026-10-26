@@ -2036,6 +2036,33 @@ message EndOrgPackageResp {
 
 // Product role grants (product_roles) and plan lines (product_plans): new
 // live rows, and rows ended — nothing is deleted.
+// The identity's own roles (ProductRoleDef): defined, redefined, retired.
+message InsertProductRoleDefReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string org_id      = 1 [(w17.field) = { type: UUID, null: true, blank: true }];
+  string key         = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string name        = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
+  bool   org_scoped  = 4;
+  string permissions = 5 [(w17.field) = { type: TEXT, blank: true }];
+  string created_by  = 6 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message UpdateProductRoleDefReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id          = 1 [(w17.field) = { type: UUID }];
+  string name        = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  bool   org_scoped  = 3;
+  string permissions = 4 [(w17.field) = { type: TEXT, blank: true }];
+}
+message EndProductRoleDefReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message ProductRoleDefChangeResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id = 1;
+}
+
 // AddTokenProductRole — one product role an API token may use (product_roles
 // with api_token), written in the token's mint transaction.
 message AddTokenProductRoleReq {
@@ -5432,6 +5459,47 @@ service AuthMutation {
     };
   }
 
+  rpc InsertProductRoleDef(InsertProductRoleDefReq) returns (ProductRoleDefChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ProductRoleDef SET "
+          "org_id = :org_id, "
+          "key = :key, "
+          "name = :name, "
+          "org_scoped = :org_scoped, "
+          "permissions = :permissions, "
+          "created_by = :created_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  rpc UpdateProductRoleDef(UpdateProductRoleDefReq) returns (ProductRoleDefChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductRoleDef SET name = :name, org_scoped = :org_scoped, permissions = :permissions "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  rpc EndProductRoleDef(EndProductRoleDefReq) returns (ProductRoleDefChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductRoleDef SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
   rpc AddTokenProductRole(AddTokenProductRoleReq) returns (AddTokenProductRoleResp) {
     option (w17.contrib.plugin_feature_rpc) = "product_roles";
     option (w17.db.method) = {

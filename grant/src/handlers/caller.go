@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -87,6 +89,26 @@ func activeOrg(ctx context.Context) string {
 	return org
 }
 
+// heldRealmWide: the request's credential holds the call being served
+// realm-wide while it acts inside an organization — the backoffice, also a
+// member there. The auth plugin's Authenticate sets realm_permissions (`*`
+// for a realm-wide wildcard, else the permission ids its realm-wide roles
+// grant); the gateway writes it.
+func (h *GrantServiceHandler) heldRealmWide(ctx context.Context, method string) bool {
+	v, _ := principal.Scope(ctx, "realm_permissions")
+	if v == "*" {
+		return true
+	}
+	if v == "" {
+		return false
+	}
+	id, ok := lockIDOfCall(ctx, h.Lock, pb.GrantService_ServiceDesc.ServiceName, method)
+	if !ok {
+		return false
+	}
+	return slices.Contains(strings.Split(v, ","), strconv.Itoa(id))
+}
+
 // inOrg is the caller and the organization they act in; refused when the
 // request acts in none.
 func inOrg(ctx context.Context) (caller, orgID string, err error) {
@@ -102,8 +124,10 @@ func inOrg(ctx context.Context) (caller, orgID string, err error) {
 // realmOnly is the backoffice caller; refused when the request acts inside an
 // organization, whatever roles its admins hold — an organization does not
 // approve its own envelope or bind its own hosts. A request acts in an
-// organization when it names one or when its caller belongs to exactly one,
-// so the backoffice acts from accounts that belong to no organization.
+// organization when it names one or when its caller belongs to exactly one;
+// the backoffice may be a member somewhere, so a request whose credential
+// holds the method realm-wide (the auth plugin's realm_permissions scope) is
+// the backoffice's wherever it acts.
 //
 // Who may call it at all is the project's endpoint ACL: the method must be in
 // the deployed lock, or nobody may — without an ACL any signed-in account
@@ -114,7 +138,7 @@ func (h *GrantServiceHandler) realmOnly(ctx context.Context, method string) (str
 	if err != nil {
 		return "", err
 	}
-	if activeOrg(ctx) != "" {
+	if activeOrg(ctx) != "" && !h.heldRealmWide(ctx, method) {
 		return "", status.Error(codes.PermissionDenied, "grant: the platform decides this, realm-wide, not from inside an organization")
 	}
 	if !lockGatesCall(ctx, h.Lock, pb.GrantService_ServiceDesc.ServiceName, method) {
@@ -130,6 +154,13 @@ func (h *GrantServiceHandler) realmOnly(ctx context.Context, method string) (str
 // plugin's own service name stands in; either way a method the lock does not
 // name refuses.
 func lockGatesCall(ctx context.Context, l *acllock.Lock, ownService, method string) bool {
+	_, ok := lockIDOfCall(ctx, l, ownService, method)
+	return ok
+}
+
+// lockIDOfCall is the permission the deployed lock allocates for the call
+// being served, found as lockGatesCall finds it.
+func lockIDOfCall(ctx context.Context, l *acllock.Lock, ownService, method string) (int, bool) {
 	svc, m := ownService, method
 	if full, ok := grpc.Method(ctx); ok {
 		if i := strings.LastIndex(full, "/"); i > 0 {
@@ -138,12 +169,11 @@ func lockGatesCall(ctx context.Context, l *acllock.Lock, ownService, method stri
 	}
 	dot := strings.LastIndex(svc, ".")
 	if dot < 0 {
-		return false
+		return 0, false
 	}
 	pkg, name := svc[:dot], svc[dot+1:]
 	module := pkg[strings.LastIndex(pkg, ".")+1:]
-	_, ok := acllock.IDByString(l, module+"."+name+"."+m)
-	return ok
+	return acllock.IDByString(l, module+"."+name+"."+m)
 }
 
 // isUniqueConflict is a write refused by a unique index: storage reports it as

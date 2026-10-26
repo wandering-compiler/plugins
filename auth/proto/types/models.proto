@@ -2319,6 +2319,41 @@ message OrgSignUpPolicy {
   ];
 }
 
+// ProductRoleDef is a role the identity defines from its products'
+// permissions (product_roles): the backoffice's (org_id NULL — usable in every
+// organization, or realm-wide) or an organization's own (org_id set — under
+// the role ceiling there). A grant names it as product `*` (it may span
+// products); a product's preset roles (its (w17.acl_roles)) stay in the
+// catalogue and are not rows here. Retiring ends the row; nothing is deleted.
+message ProductRoleDef {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "key" }, { name: "ended_key" }],
+        where: "org_id IS NULL", name: "productroledef_realm_uidx" },
+      { unique: true, fields: [{ name: "org_id" }, { name: "key" }, { name: "ended_key" }],
+        where: "org_id IS NOT NULL", name: "productroledef_org_uidx" }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "product_roles";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  // org_id — the organization that defined it; NULL = the backoffice's.
+  string org_id      = 2 [(w17.field) = { type: UUID, null: true }, (w17.db.column) = { index: true }];
+  string key         = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string name        = 4 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // org_scoped — held in an organization; false = held realm-wide only (the
+  // backoffice's roles only).
+  bool   org_scoped  = 5;
+  // permissions — `<product>:<permission code>` pairs, sorted, comma-separated.
+  string permissions = 6 [(w17.field) = { type: TEXT, blank: true, default_string: "" }];
+  string created_by  = 7 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at   = 9 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by    = 10 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once retired.
+  string ended_key   = 11 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
 // TokenProductRole is one product role an API token may use (product_roles
 // with api_token): the token's own narrowing on the products' axis, as
 // TokenPermission is on this domain's permissions. Authenticate answers a

@@ -1590,6 +1590,16 @@ message ProductRoleInfo {
   string name    = 3;
   // org_scoped — held in an organization; false = held realm-wide only.
   bool   org_scoped = 4;
+  // permissions — what the role grants: `<permission code>` for a product's
+  // preset, `<product>:<permission code>` for the identity's own (product
+  // `*`, which may span products).
+  repeated string permissions = 5;
+  // preset — the product declares it ((w17.acl_roles)); it is not edited
+  // here, a copy is.
+  bool preset = 6;
+  // org_id — the organization that defined it; '' for a preset or the
+  // backoffice's.
+  string org_id = 7;
 }
 message ListProductRolesReq {
   option (w17.contrib.plugin_feature) = "product_roles";
@@ -1599,6 +1609,55 @@ message ListProductRolesReq {
 message ListProductRolesResp {
   option (w17.contrib.plugin_feature) = "product_roles";
   repeated ProductRoleInfo roles = 1;
+}
+
+// The products' permissions: what the identity's own roles are made of.
+message ListProductPermissionsReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  // product — only this product's; empty = every product's.
+  string product = 1 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+}
+message ListProductPermissionsResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  repeated ProductPermissionSet products = 1;
+}
+message ProductPermissionSet {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string product = 1;
+  // permissions — the product's permission codes (`<module>.<Service>.<Method>`).
+  repeated string permissions = 2;
+}
+
+// An identity's own role (product `*`): a key, a name and the products'
+// permissions it grants (`<product>:<permission code>`). Defining a key that
+// is live redefines it; grants of it keep holding it.
+message DefineProductRoleReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string key  = 1 [(w17.field) = { type: CHAR, max_len: 64, pattern: "^[a-z0-9][a-z0-9_-]*$" }];
+  string name = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
+  // org_scoped — held in an organization; false = held realm-wide only.
+  bool   org_scoped = 3;
+  repeated string permissions = 4;
+}
+message DefineOrgProductRoleReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string org  = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string key  = 2 [(w17.field) = { type: CHAR, max_len: 64, pattern: "^[a-z0-9][a-z0-9_-]*$" }];
+  string name = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
+  repeated string permissions = 4;
+}
+message RetireProductRoleReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string key = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message RetireOrgProductRoleReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string key = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message ProductRoleDefResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  ProductRoleInfo role = 1;
 }
 message ProductRoleGrantInfo {
   option (w17.contrib.plugin_feature) = "product_roles";
@@ -2325,6 +2384,23 @@ service AuthService {
 
   // The roles users hold in the project's products (handlers/product_roles.go).
   rpc ListProductRoles(ListProductRolesReq) returns (ListProductRolesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+  }
+  rpc ListProductPermissions(ListProductPermissionsReq) returns (ListProductPermissionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+  }
+  // The identity's own roles: the backoffice's (realm-wide, under the
+  // endpoint ACL) and an organization's (under the role ceiling there).
+  rpc DefineProductRole(DefineProductRoleReq) returns (ProductRoleDefResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+  }
+  rpc RetireProductRole(RetireProductRoleReq) returns (ProductRoleChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+  }
+  rpc DefineOrgProductRole(DefineOrgProductRoleReq) returns (ProductRoleDefResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+  }
+  rpc RetireOrgProductRole(RetireOrgProductRoleReq) returns (ProductRoleChangeResp) {
     option (w17.contrib.plugin_feature_rpc) = "product_roles";
   }
   rpc ListOrgProductRoleGrants(ListOrgProductRoleGrantsReq) returns (ProductRoleGrantsResp) {

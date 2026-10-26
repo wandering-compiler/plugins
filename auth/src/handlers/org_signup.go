@@ -58,12 +58,10 @@ func init() {
 }
 
 // requestSignupHost is signupHostOf: the host a SignUp or an OAuth exchange
-// names.
+// names. Asked of the field, not of the type: OAuthExchangeReq exists only
+// with oauth, and this file stages without it.
 func requestSignupHost(req proto.Message) string {
-	switch r := req.(type) {
-	case *pb.SignUpReq:
-		return r.GetSignupHost()
-	case *pb.OAuthExchangeReq:
+	if r, ok := req.(interface{ GetSignupHost() string }); ok {
 		return r.GetSignupHost()
 	}
 	return ""

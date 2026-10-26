@@ -301,9 +301,6 @@ func TestNarrowGrants_ActiveOrg(t *testing.T) {
 	if !m.calledOrg || m.sawOrgID != "org-a" {
 		t.Errorf("the active org was not passed to the scoped query: calledOrg=%v orgID=%q", m.calledOrg, m.sawOrgID)
 	}
-	if m.calledRealm {
-		t.Error("an active org was resolved — the realm-wide query must not run")
-	}
 	if got := p.effectivePermissions(h.Lock); !reflect.DeepEqual(got, []int32{1, 2}) {
 		t.Errorf("permissions from another organization survived: got %v, want [1 2]", got)
 	}
@@ -317,6 +314,43 @@ func TestNarrowGrants_ActiveOrg(t *testing.T) {
 // two sets both contained the bare id 5 and nothing recorded where it came
 // from. That is the hole that made api_token + org_membership refuse to be
 // enabled together.
+// Inside an organization a credential is told what it holds realm-wide
+// (realm_permissions): `*` for a realm-wide wildcard, otherwise the ids its
+// realm-wide roles grant — another plugin's backoffice method acts realm-wide
+// on it. An organization's own roles, a realm-wide role this credential does
+// not carry (another token realm's) and a request in no organization mark
+// nothing. The mark adds no permission.
+func TestNarrowGrants_MarksTheRealmPermissions(t *testing.T) {
+	wild := func(role string) *pb.RoleGrant { return &pb.RoleGrant{RoleId: role, AllPermissions: true} }
+	for _, c := range []struct {
+		name  string
+		org   string
+		prin  *authPrincipal
+		realm []*pb.RoleGrant
+		inOrg []*pb.RoleGrant
+		want  string
+	}{
+		{"the backoffice's wildcard, a member of the organization", "org-a", sessionPrincipal(wild("platform-admin"), wild("tenant-admin")), []*pb.RoleGrant{wild("platform-admin")}, []*pb.RoleGrant{wild("platform-admin"), wild("tenant-admin")}, "*"},
+		{"the backoffice's listed role", "org-a", sessionPrincipal(grant("backoffice", 12, 7, 12), grant("member", 3)), []*pb.RoleGrant{grant("backoffice", 7, 12)}, []*pb.RoleGrant{grant("backoffice", 7, 12), grant("member", 3)}, "7,12"},
+		{"the organization's own wildcard", "org-a", sessionPrincipal(wild("tenant-admin")), nil, []*pb.RoleGrant{wild("tenant-admin")}, ""},
+		{"a realm-wide role this credential does not carry", "org-a", sessionPrincipal(wild("tenant-admin")), []*pb.RoleGrant{wild("api-admin")}, []*pb.RoleGrant{wild("tenant-admin")}, ""},
+		{"no organization", "", sessionPrincipal(wild("platform-admin")), []*pb.RoleGrant{wild("platform-admin")}, nil, ""},
+	} {
+		m := &permMock{orgGrants: c.inOrg, realmGrants: c.realm}
+		h := &AuthServiceHandler{Query: m}
+		scopes := map[string]string{}
+		if c.org != "" {
+			scopes["org_id"] = c.org
+		}
+		if err := narrowGrantsToActiveOrg(context.Background(), h, c.prin, scopes); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := scopes[realmPermissionsScope]; got != c.want {
+			t.Errorf("%s: realm_permissions %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestNarrowGrants_APermissionTwoDifferentRolesGrantDoesNotSurvive(t *testing.T) {
 	m := &permMock{orgGrants: []*pb.RoleGrant{grant("role-y", 5)}}
 	h := &AuthServiceHandler{Query: m}
