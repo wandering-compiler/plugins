@@ -29,6 +29,11 @@ type prodMock struct {
 	seq     int
 }
 
+// GetUserRealmWidePermissions: nobody here holds a role realm-wide.
+func (m *prodMock) GetUserRealmWidePermissions(context.Context, *pb.GetUserRealmWidePermissionsReq, ...grpc.CallOption) (*pb.GetUserRealmWidePermissionsResp, error) {
+	return &pb.GetUserRealmWidePermissionsResp{}, nil
+}
+
 func (m *prodMock) next() string { m.seq++; return fmt.Sprintf("id-%d", m.seq) }
 
 func (m *prodMock) live(keep func(*pb.ProductRoleGrantRow) bool) *pb.ProductRoleGrantRowsResp {

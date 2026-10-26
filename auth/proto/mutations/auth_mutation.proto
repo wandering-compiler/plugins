@@ -2036,6 +2036,18 @@ message EndOrgPackageResp {
 
 // Product role grants (product_roles) and plan lines (product_plans): new
 // live rows, and rows ended — nothing is deleted.
+// AddTokenProductRole — one product role an API token may use (product_roles
+// with api_token), written in the token's mint transaction.
+message AddTokenProductRoleReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+  string product  = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string role_key = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message AddTokenProductRoleResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id = 1;
+}
 message GrantProductRoleRowReq {
   option (w17.contrib.plugin_feature) = "product_roles";
   string user_id    = 1 [(w17.field) = { type: UUID }];
@@ -5420,6 +5432,20 @@ service AuthMutation {
     };
   }
 
+  rpc AddTokenProductRole(AddTokenProductRoleReq) returns (AddTokenProductRoleResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.TokenProductRole SET "
+          "token_id = :token_id, "
+          "product = :product, "
+          "role_key = :role_key "
+          "RETURNING id AS id"
+      }
+    };
+  }
   // GrantProductRoleRow — a new live grant; a live duplicate is refused by
   // the unique index (the caller checks first).
   rpc GrantProductRoleRow(GrantProductRoleRowReq) returns (GrantProductRoleRowResp) {

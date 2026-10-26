@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"strings"
 
@@ -586,4 +587,35 @@ func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrg
 		})
 	}
 	return &pb.ListOrgMembersResp{Members: out}, nil
+}
+
+// heldRealmWide reports whether the caller holds the call being served —
+// the backoffice method named method — through a realm-wide role: its
+// permission, or a wildcard (org_membership/realm-call-acts-realm-wide). The
+// backoffice's methods refuse a request acting inside an organization, which
+// a caller who belongs to one is whenever they name none (the sole
+// organization is inferred); held realm-wide, the call is the backoffice's
+// wherever the request acts, and is refused only to one who holds it inside
+// an organization alone. Asked of the store, not of the request's
+// permissions: those are the organization's too.
+func (h *AuthServiceHandler) heldRealmWide(ctx context.Context, method string) bool {
+	userID, err := callerUserID(ctx)
+	if err != nil {
+		return false
+	}
+	id, ok := lockIDOfCall(ctx, h.Lock, pb.AuthService_ServiceDesc.ServiceName, method)
+	if !ok {
+		return false
+	}
+	resp, err := h.Query.GetUserRealmWidePermissions(ctx, &pb.GetUserRealmWidePermissionsReq{UserId: userID})
+	if err != nil {
+		// Unknown: refused, as before.
+		return false
+	}
+	for _, g := range resp.GetGrants() {
+		if g.GetAllPermissions() || slices.Contains(g.GetPermissionIds(), int32(id)) {
+			return true
+		}
+	}
+	return false
 }

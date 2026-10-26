@@ -235,7 +235,7 @@ func answerOpenKinds(ctx context.Context, h *AuthServiceHandler, resp *pb.HostOr
 // refuseSignUpPoliciesInsideOrg holds the policy methods to the realm, as the
 // backoffice's other organization methods are.
 func (h *AuthServiceHandler) refuseSignUpPoliciesInsideOrg(ctx context.Context, method string) error {
-	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
+	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" && !h.heldRealmWide(ctx, method) {
 		return refusal(ctx, codes.PermissionDenied, "org_signup: registration policies are set realm-wide, not from inside an organization",
 			CodeSignUpPoliciesRealmOnly, "", MsgSignUpPoliciesRealmOnly, nil)
 	}

@@ -159,6 +159,11 @@ func allowedByAll(bounds []func(string) bool, role string) bool {
 	return true
 }
 
+// productRoleNarrowers narrow the product roles Authenticate answers by what
+// the credential itself carries (product_roles with api_token: an API token's
+// own subset). Appended by the combination's init.
+var productRoleNarrowers []func(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, product string, keys []string) ([]string, error)
+
 // answerProductRoles answers a product's gateway: the keys of the roles the
 // caller holds in it, and none of this domain's permission ids.
 func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPrincipal, resp *pb.AuthResp) error {
@@ -185,6 +190,11 @@ func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPr
 	for _, g := range held {
 		if !slices.Contains(keys, g.GetRoleKey()) {
 			keys = append(keys, g.GetRoleKey())
+		}
+	}
+	for _, narrow := range productRoleNarrowers {
+		if keys, err = narrow(ctx, h, prin, product, keys); err != nil {
+			return err
 		}
 	}
 	sort.Strings(keys)
@@ -496,7 +506,7 @@ func (h *AuthServiceHandler) backofficeProductRoleCall(ctx context.Context, meth
 // refuseProductRolesInsideOrg holds the backoffice's calls to the realm, and
 // to the callers the endpoint ACL lets make them (refuseInsideOrg's rule).
 func (h *AuthServiceHandler) refuseProductRolesInsideOrg(ctx context.Context, method string) error {
-	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
+	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" && !h.heldRealmWide(ctx, method) {
 		return refusal(ctx, codes.PermissionDenied, "product_roles: the backoffice's grants are made realm-wide, not from inside an organization",
 			CodeProductRolesRealmOnly, "", MsgProductRolesRealmOnly, nil)
 	}
