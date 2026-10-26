@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -135,5 +136,38 @@ func TestPushBans_LogsAChangeOfState(t *testing.T) {
 	h.pushBans(t.Context(), true)
 	if got := strings.Count(logged(), `relay "edge" did not take the ban set`) - before; got != 2 {
 		t.Errorf("a decision's push logged an unreached relay %d times over two pushes, want 2", got)
+	}
+}
+
+// A relay that stays down with an error naming an ephemeral port — a new one
+// every round — is one failure, not a new one each round. And a relay no
+// longer registered leaves no recorded outcome behind.
+func TestPushBans_AnEphemeralPortIsNotANewFailure(t *testing.T) {
+	var port atomic.Int32
+	port.Store(50000)
+	relays := &store{relays: []Relay{{ID: "1", Name: "edge", URL: "live"}}}
+	h := &ClusterServiceHandler{
+		Relays:      relays,
+		Workers:     &workerStore{banned: []string{"bb"}, banVersion: 3},
+		DialTimeout: 200 * time.Millisecond,
+		Dial: func(target, fp string) (*grpc.ClientConn, error) {
+			return nil, fmt.Errorf("read tcp 10.0.0.2:%d->10.0.0.5:443: connection reset by peer", port.Add(1))
+		},
+	}
+	buf := captureLog(t)
+	for range 3 {
+		h.pushBans(t.Context(), false)
+	}
+	if got := strings.Count(buf.String(), `relay "edge" did not take the ban set`); got != 1 {
+		t.Fatalf("a relay down three rounds, each on another local port, was logged %d times, want once:\n%s", got, buf.String())
+	}
+
+	relays.relays = nil
+	h.pushBans(t.Context(), false)
+	h.deliveredMu.Lock()
+	_, kept := h.delivered["1"]
+	h.deliveredMu.Unlock()
+	if kept {
+		t.Error("the outcome of a relay no longer registered was kept")
 	}
 }

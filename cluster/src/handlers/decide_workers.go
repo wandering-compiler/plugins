@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,6 +83,7 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 		return
 	}
 	h.deliveryOutcome(registryKey, nil, logFailures, "cluster: the ban set and the relay list are read again")
+	h.forgetDeliveries(relays)
 	// The relays get the set on a context of their own, each bounded by the
 	// dial timeout below: the read deadline is not theirs.
 	ctx = withBanSetFrom(base, readCtx)
@@ -141,29 +143,70 @@ func withBanSetFrom(to, from context.Context) context.Context {
 	return to
 }
 
+// forgetDeliveries drops the recorded outcome of relays no longer registered,
+// so the map does not keep every relay id this replica ever delivered to.
+func (h *ClusterServiceHandler) forgetDeliveries(registered []Relay) {
+	keep := make(map[string]bool, len(registered))
+	for _, r := range registered {
+		keep[r.ID] = true
+	}
+	h.deliveredMu.Lock()
+	defer h.deliveredMu.Unlock()
+	for key := range h.delivered {
+		if key != registryKey && !keep[key] {
+			delete(h.delivered, key)
+		}
+	}
+}
+
+// errShape is an error's text with every run of digits masked: two failures
+// that differ only in an ephemeral port, an address or a duration ("read tcp
+// 10.0.0.2:51234->…: connection reset") are the same failure, and comparing
+// the raw text would log a relay that stays down on every round.
+func errShape(err error) string {
+	var b strings.Builder
+	digits := false
+	for _, c := range err.Error() {
+		if c >= '0' && c <= '9' {
+			if !digits {
+				b.WriteByte('#')
+			}
+			digits = true
+			continue
+		}
+		digits = false
+		b.WriteRune(c)
+	}
+	return b.String()
+}
+
 // deliveryOutcome records how a ban-set delivery to key went and logs line:
 // every failure when always is set, otherwise only a change — the first
-// failure (or a different error) after a success or none, with the error,
-// and the recovery, with the error it recovered from.
+// failure (or a different error, by errShape) after a success or none, with
+// the error, and the recovery, with the error it recovered from.
 func (h *ClusterServiceHandler) deliveryOutcome(key string, err error, always bool, line string) {
-	now := ""
+	now := delivery{}
 	if err != nil {
-		now = err.Error()
+		now = delivery{shape: errShape(err), text: err.Error()}
 	}
 	h.deliveredMu.Lock()
 	if h.delivered == nil {
-		h.delivered = map[string]string{}
+		h.delivered = map[string]delivery{}
 	}
 	before, seen := h.delivered[key]
 	h.delivered[key] = now
 	h.deliveredMu.Unlock()
 	switch {
-	case err != nil && (always || !seen || before != now):
+	case err != nil && (always || !seen || before.shape != now.shape):
 		log.Printf("%s: %v", line, err)
-	case err == nil && seen && before != "":
-		log.Printf("%s (it failed with: %s)", line, before)
+	case err == nil && seen && before.shape != "":
+		log.Printf("%s (it failed with: %s)", line, before.text)
 	}
 }
+
+// delivery is one recorded outcome: shape is errShape of the failure ("" =
+// it went through), text the failure as it was.
+type delivery struct{ shape, text string }
 
 // BanRedeliveryInterval is how often every control-plane replica re-delivers
 // the ban set to every registered relay, enabled or not. A relay refuses
