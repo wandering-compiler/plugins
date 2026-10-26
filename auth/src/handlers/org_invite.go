@@ -39,6 +39,18 @@ import (
 
 const defaultOrgInviteTTLHours = 24 * 7 // 7 days
 
+// The sentence a person reads for this file's refusal. Mirrored into
+// plugin.yaml by `make plugin-msgids-sync` (see errors.go).
+//
+//w17:msgid
+const (
+	MsgInviteAlreadyMember = "This person is already a member of the organization."
+)
+
+// CodeInviteAlreadyMember: InviteToOrg named an address whose account already
+// holds a live membership of the organization (org_invite/no-invite-for-a-member).
+const CodeInviteAlreadyMember = "INVITE_ALREADY_MEMBER"
+
 // init installs the enforcing invite gate. The seam it replaces lives in
 // auth_service.go and defaults to permissive; this file is staged only
 // when the activation enables `org_invite`, so the enforcing version
@@ -311,6 +323,56 @@ func metadataOrEmptyObject(m string) string {
 	return m
 }
 
+// refuseInviteForMember refuses a bound invitation for an address whose
+// account is already a LIVE member of the organization
+// (org_invite/no-invite-for-a-member).
+//
+// Acceptance would refuse it anyway — the membership's unique index allows one
+// live row per (user, org) — but only then, so the invitation used to be
+// written, listed as pending and delivered, and could never be accepted. A
+// consumer mirroring invitations into its own tables got a row for a person
+// who was already there. The invariant belongs here, where the inviter can
+// still act on it.
+//
+// The account is found the way sign-in finds it (GetUserByEmail on the
+// normalised address); its membership here is GetOrgMember, the (user, org)
+// point lookup over live rows only: a REMOVED member is not found and may be
+// invited back (org_membership/removal-is-a-state). No account (NotFound) is
+// the ordinary case of an invitation — the invitee registers later. An open
+// invitation names no address, so there is nobody to look up.
+//
+// A membership that starts after this check (the person accepts another
+// invitation meanwhile) is still refused at acceptance by the index; this
+// closes the common case, not the race.
+func (h *AuthServiceHandler) refuseInviteForMember(ctx context.Context, orgID, email string) error {
+	if email == "" {
+		return nil
+	}
+	u, err := h.Query.GetUserByEmail(ctx, &pb.GetUserByEmailReq{Email: email})
+	if status.Code(err) == codes.NotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	userID := u.GetUser().GetId()
+	if userID == "" {
+		return nil
+	}
+	member, err := h.Query.GetOrgMember(ctx, &pb.GetOrgMemberReq{UserId: userID, OrgId: orgID})
+	if err != nil && status.Code(err) != codes.NotFound {
+		return err
+	}
+	if member.GetUserId() != "" {
+		// The address stays out of the developer message: it is logged, and the
+		// inviter already holds it.
+		return refusal(ctx, codes.AlreadyExists,
+			"org_invite: the invited address belongs to a live member of organization "+orgID,
+			CodeInviteAlreadyMember, "email", MsgInviteAlreadyMember, nil)
+	}
+	return nil
+}
+
 // InviteToOrg records an invitation for an address to join the caller's
 // active organization with a named role.
 // kindOfInvite / kindOfClaim carry an invitation's membership kind into the
@@ -389,6 +451,9 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 		if writeProductRoles, err = inviteProductRoles.check(ctx, h, inviter, orgID, req); err != nil {
 			return nil, err
 		}
+	}
+	if err := h.refuseInviteForMember(ctx, orgID, email); err != nil {
+		return nil, err
 	}
 	// The link's secret. Minted here, stored hashed, returned once — the same
 	// three steps a password reset takes, and for the same reason: a stored

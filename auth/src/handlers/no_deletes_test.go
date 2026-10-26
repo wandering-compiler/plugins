@@ -386,6 +386,28 @@ func (o *orgTables) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...g
 	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Email: o.users[in.GetUserId()]}}, nil
 }
 
+// GetUserByEmail: `WHERE u.email = :email`, NotFound for no row (the
+// generated single-row read).
+func (o *orgTables) GetUserByEmail(_ context.Context, in *pb.GetUserByEmailReq, _ ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
+	for id, email := range o.users {
+		if email == in.GetEmail() {
+			return &pb.GetUserByEmailResp{User: &pb.User{Id: id, Email: email}}, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "no rows")
+}
+
+// GetOrgMember: the user's membership of the organization, joined with
+// `m.removed_at IS NULL`; NotFound for no row (the generated single-row read).
+func (o *orgTables) GetOrgMember(_ context.Context, in *pb.GetOrgMemberReq, _ ...grpc.CallOption) (*pb.GetOrgMemberResp, error) {
+	for _, m := range o.memberships {
+		if m.userID == in.GetUserId() && m.orgID == in.GetOrgId() && m.removedAt == nil {
+			return &pb.GetOrgMemberResp{UserId: m.userID}, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "no rows")
+}
+
 func (o *orgTables) MarkEmailDerivedFromInvite(_ context.Context, in *pb.MarkEmailDerivedFromInviteReq, _ ...grpc.CallOption) (*pb.MarkEmailDerivedFromInviteResp, error) {
 	return &pb.MarkEmailDerivedFromInviteResp{UserId: in.GetUserId()}, nil
 }

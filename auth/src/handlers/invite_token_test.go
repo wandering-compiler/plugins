@@ -614,3 +614,8 @@ func (m *inviteTokenMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRole
 func (m *mintMock) ListOrgRoleRows(ctx context.Context, _ *pb.ListOrgRoleRowsReq, _ ...grpc.CallOption) (*pb.ListOrgRoleRowsResp, error) {
 	return rowsFromScoped(m.ListOrgScopedRoles(ctx, &pb.ListOrgScopedRolesReq{}))
 }
+
+// GetUserByEmail: no invited address here has an account (see inviteMock's).
+func (m *mintMock) GetUserByEmail(_ context.Context, _ *pb.GetUserByEmailReq, _ ...grpc.CallOption) (*pb.GetUserByEmailResp, error) {
+	return nil, status.Error(codes.NotFound, "no rows")
+}
