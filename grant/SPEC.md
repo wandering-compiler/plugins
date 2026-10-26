@@ -33,7 +33,48 @@ ACL.
 | grant/realm-decides | Approving and rejecting MUST be refused to a request acting inside an organization. | Security | `TestEnvelopeLifecycle` |
 | grant/one-approved | Approving a version MUST supersede the organization's previous approved one in the same transaction, and a unique index on `(org_id, approved_slot)` MUST keep two racing approvals from both committing (the loser is `Aborted`), on every dialect; nothing is deleted. | Data | `TestEnvelopeLifecycle`, `TestApproveEnvelopeRace`, the `Envelope` index |
 | grant/acl-required | The backoffice's methods MUST be refused unless they are in the deployed ACL lock. | Security | `TestRealmOnlyNeedsTheACL` |
+| grant/seed-contract | A fixture that writes `status = 'approved'` and `approved_slot = 'approved'` MUST be the organization's approved envelope, read publicly and held to one per organization, exactly as an approval leaves it. | Data | `TestEnvelopeStatementsUseTheContractValues` |
 | grant/safe-fields | Links MUST be absolute https (http only for localhost) without credentials; a colour #rrggbb; a host a lower-case DNS name. | Security | `TestCheckFields` |
+
+## Seeding an approved envelope
+
+The backoffice decides an envelope by approving a proposal. A project that
+decides it at deploy time instead, with a fixture (an organization the
+deployment itself creates), writes the row exactly as `ApproveEnvelope`
+leaves it:
+
+```json
+{
+  "model": "grant.Envelope",
+  "pk": ["<uuid>"],
+  "fields": {
+    "org_id": "<the organization>",
+    "status": "approved",
+    "approved_slot": "approved",
+    "display_name": "Acme",
+    "decided_at": "2026-10-26T00:00:00Z"
+  }
+}
+```
+
+(`grant` is the activation's name; use yours.)
+
+- `status: "approved"` is what the public read (`GetOrgEnvelope`) shows, and
+  `approved_slot: "approved"` is what the unique `(org_id, approved_slot)`
+  index holds to one per organization. Both are required: a row approved
+  without the slot is shown, but escapes the one-approved rule.
+- `decided_by` stays empty (no operator decided it), `decided_at` is set.
+- One per organization. To replace a seeded envelope, write the new one as
+  above and the previous one with `status: "superseded"` and no
+  `approved_slot` — what an approval does to its predecessor. Two rows
+  holding the slot for one organization are refused by the index.
+- The other fields are checked like a proposal's (`grant/safe-fields`):
+  links absolute https, a colour `#rrggbb`, a host a lower-case DNS name. A
+  fixture is not run through that check, so keep to it.
+
+The values are the plugin's public contract (`StatusApproved`,
+`ApprovedSlot`, `StatusSuperseded` in `src/handlers`), held to its own
+statements by `TestEnvelopeStatementsUseTheContractValues`.
 
 ## Gaps
 
