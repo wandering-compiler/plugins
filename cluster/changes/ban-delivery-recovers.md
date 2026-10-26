@@ -1,5 +1,0 @@
-### A stalled ban-set delivery recovers, and says so
-
-- The periodic delivery of the ban set (`KeepBansDelivered`, every 5 minutes) no longer stops for good when the control plane's database stops answering. Its registry reads ran with no deadline, so one statement that never returned — a database stalled on a full disk — held that delivery, and every later one, until the control plane was restarted. Meanwhile each relay refused every worker (`no ban set received since this relay started`). The reads are now bounded (`BanReadTimeout`, default 30 s), and the first round after the database answers again delivers.
-- The periodic delivery logs a change of state. A relay, or the ban/relay registry read, that starts failing is logged once with its error, and its recovery is logged once. A relay that is deliberately down is not repeated every 5 minutes. Before, the periodic delivery logged nothing at all, and the only visible line was the relay's.
-- A relay's refusals (`BAN_SET_UNKNOWN`, `BAN_SET_STALE`, a refused tunnel) now name the control plane as the one that owes the relay its ban set, and point at the control plane's log.
