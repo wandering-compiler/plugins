@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"reflect"
@@ -10,7 +11,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -285,5 +288,50 @@ func TestCeiling_UnderTheLockJudgesTheCallersGrantsNow(t *testing.T) {
 	// Outside a lock the request's permissions stand as resolved.
 	if got, _ := heldUnderOrgLock(ctx, h, held); !reflect.DeepEqual(got, held) {
 		t.Fatalf("outside the lock: %v", got)
+	}
+}
+
+// A machine account's transaction is under the organization's lock the way
+// withOrgLock's is: the context it goes on in says so, so the ceiling it
+// re-checks there (checkMayGrantRole, checkMayActAsBot) reads the caller's
+// grants now rather than as the request resolved them.
+func TestBotOrgLock_MarksTheTransactionAsUnderTheLock(t *testing.T) {
+	h := &AuthServiceHandler{}
+	ctx, err := lockBotOrg(h, context.Background(), "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ctx.Value(orgLockKey{}).(string); got != "org-1" {
+		t.Fatalf("lockBotOrg left the transaction unmarked (%q): the ceiling there re-reads nothing", got)
+	}
+}
+
+// A team's roles count for a session only (narrowGrantsToActiveOrg): an API
+// token whose own role was taken while it waited keeps nothing because a team
+// still carries the permission.
+func TestCeiling_UnderTheLockCountsTeamsForASessionOnly(t *testing.T) {
+	saved := orgGrantSources
+	t.Cleanup(func() { orgGrantSources = saved })
+	orgGrantSources = []func(context.Context, *AuthServiceHandler, string, string) ([]*pb.RoleGrant, error){
+		func(context.Context, *AuthServiceHandler, string, string) ([]*pb.RoleGrant, error) {
+			return []*pb.RoleGrant{{RoleId: "r-team", PermissionIds: []int32{2}}}, nil
+		},
+	}
+	held := map[int32]bool{1: true, 2: true}
+	h := &AuthServiceHandler{Query: &callerGrantsStore{org: []*pb.RoleGrant{{RoleId: "r-viewer", PermissionIds: []int32{1}}}}}
+
+	session := context.WithValue(inOrg(withHeldPermissions(context.Background(), "u1", 1, 2), "org-1"), orgLockKey{}, "org-1")
+	if got, err := heldUnderOrgLock(session, h, held); err != nil || !reflect.DeepEqual(got, held) {
+		t.Fatalf("session: got %v, %v; want the team's permission kept", got, err)
+	}
+
+	raw, err := proto.Marshal(&pb.AuthResp{UserId: "u1", PermissionIds: []int32{1, 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := metadata.Pairs(userMetadataKey, base64.StdEncoding.EncodeToString(raw), "x-w17-scope-org_id", "org-1")
+	token := context.WithValue(metadata.NewIncomingContext(context.Background(), md), orgLockKey{}, "org-1")
+	if got, err := heldUnderOrgLock(token, h, held); err != nil || !reflect.DeepEqual(got, map[int32]bool{1: true}) {
+		t.Fatalf("API token: got %v, %v; want the team's permission gone", got, err)
 	}
 }

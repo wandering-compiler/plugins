@@ -310,8 +310,8 @@ func init() { heldNow = heldUnderOrgLock }
 // resolved permissions held keep only those a grant of theirs still carries,
 // read now — the grants the organization narrowing reads (the active
 // organization's and realm-wide roles, or realm-wide alone with no active
-// organization) and the active organization's own (orgGrantSources: a team's
-// roles). It only ever removes: whatever Authenticate narrowed away (another
+// organization) and, for a session, the active organization's own
+// (orgGrantSources: a team's roles). It only ever removes: whatever Authenticate narrowed away (another
 // organization's roles, the packages, a token's subset) stays away, and a
 // permission the caller lost every grant of since the request arrived — a
 // demotion that committed while this request waited for the lock — is gone.
@@ -332,12 +332,20 @@ func heldUnderOrgLock(ctx context.Context, h *AuthServiceHandler, held map[int32
 			return nil, err
 		}
 		grants = resp.GetGrants()
-		for _, source := range orgGrantSources {
-			more, err := source(ctx, h, userID, active)
-			if err != nil {
-				return nil, err
+		// A team's roles count for a session only, as the narrowing adds them
+		// (narrowGrantsToActiveOrg): an API or OAuth token never carried them,
+		// so they cannot keep a permission its own roles no longer grant.
+		// Authenticate stamps session_token_id for a session and for nothing
+		// else.
+		var who pb.AuthResp
+		if principal.Envelope(ctx, &who) == nil && who.GetSessionTokenId() != "" {
+			for _, source := range orgGrantSources {
+				more, err := source(ctx, h, userID, active)
+				if err != nil {
+					return nil, err
+				}
+				grants = append(grants, more...)
 			}
-			grants = append(grants, more...)
 		}
 	} else {
 		resp, err := h.Query.GetUserRealmWidePermissions(ctx, &pb.GetUserRealmWidePermissionsReq{UserId: userID})

@@ -17,8 +17,19 @@ func init() {
 		enroll:   enrollBotInOrg,
 		accounts: orgMemberAccounts,
 		isMember: isOrgMember,
-		lock:     (*AuthServiceHandler).lockOrgRow,
+		lock:     lockBotOrg,
 	}
+}
+
+// lockBotOrg takes orgID's row lock in the machine account's transaction
+// (lockOrgRow) and marks txCtx as under it, as withOrgLock does: a ceiling
+// re-checked there then reads the caller's grants now (heldUnderOrgLock), and a
+// change composed into the transaction takes no second lock.
+func lockBotOrg(h *AuthServiceHandler, txCtx context.Context, orgID string) (context.Context, error) {
+	if err := h.lockOrgRow(txCtx, orgID); err != nil {
+		return nil, err
+	}
+	return context.WithValue(txCtx, orgLockKey{}, orgID), nil
 }
 
 // enrollBotInOrg makes the new machine account a member of the organization and
