@@ -32,6 +32,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
@@ -965,11 +966,25 @@ type orgJoin struct {
 }
 
 // signupOrgDecide decides, for a registration WITHOUT an invitation, whether
-// the organization of the host it arrived on takes it (org_signup.go): a
+// the organization of the host it comes from takes it (org_signup.go): a
 // join when an open policy covers it, a refusal when a closed one does, and
 // nil, nil when no policy speaks — invite_only decides then, as without the
-// feature. nil without org_signup.
-var signupOrgDecide func(ctx context.Context, h *AuthServiceHandler) (*orgJoin, error)
+// feature. bodyHost is the host the request names (signupHostOf), "" when
+// none; the gateway's host, when there is one, wins. nil without org_signup.
+var signupOrgDecide func(ctx context.Context, h *AuthServiceHandler, bodyHost string) (*orgJoin, error)
+
+// signupHostOf reads the host a registration request names (`signup_host`,
+// a field org_signup adds to SignUpReq and OAuthExchangeReq). nil without
+// org_signup, where no request carries one.
+var signupHostOf func(req proto.Message) string
+
+// signupHost is signupHostOf, or "" without org_signup.
+func signupHost(req proto.Message) string {
+	if signupHostOf == nil || req == nil {
+		return ""
+	}
+	return signupHostOf(req)
+}
 
 // signupOrgJoin writes the membership and its grant, in the registration's
 // own transaction. Set with signupOrgDecide.
@@ -982,9 +997,9 @@ var signupOrgJoin func(txCtx context.Context, h *AuthServiceHandler, userID stri
 // refuse it, or say nothing — and only when it says nothing does
 // invite_only decide. The join it returns is written by the caller inside
 // the account's transaction (joinSignedUpOrg).
-func signupGates(ctx context.Context, h *AuthServiceHandler, email, inviteToken string) (*orgJoin, error) {
+func signupGates(ctx context.Context, h *AuthServiceHandler, email, inviteToken, bodyHost string) (*orgJoin, error) {
 	if inviteToken == "" && signupOrgDecide != nil {
-		join, err := signupOrgDecide(ctx, h)
+		join, err := signupOrgDecide(ctx, h, bodyHost)
 		if err != nil {
 			return nil, err
 		}

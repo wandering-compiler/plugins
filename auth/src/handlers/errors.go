@@ -226,6 +226,7 @@ const (
 	CodeSignUpPoliciesRealmOnly = "SIGNUP_POLICIES_REALM_ONLY"
 	CodeSignUpPolicyInvalid     = "SIGNUP_POLICY_INVALID"
 	CodeSignUpKindAmbiguous     = "SIGNUP_KIND_AMBIGUOUS"
+	CodeSignUpHostConflict      = "SIGNUP_HOST_CONFLICT"
 	// product_roles: a product or a role the catalogue does not name; an
 	// org-held grant of a role the product holds realm-wide only; a grant
 	// above what the caller holds; one for someone outside the organization;
@@ -453,6 +454,7 @@ const (
 	MsgSignUpPolicyNoKind      = "This deployment has no kinds of membership; leave the kind empty."
 	MsgSignUpPolicyRole        = "Choose the role people get when they register."
 	MsgSignUpKindAmbiguous     = "Registration here is not set up correctly. Contact the organization."
+	MsgSignUpHostConflict      = "This registration names another address than the one it arrived on."
 	MsgProductUnknown          = "There is no such product."
 	MsgProductRoleUnknown      = "The product has no such role."
 	MsgProductRoleRealmHeld    = "This role is held across the whole platform, not in one organization."

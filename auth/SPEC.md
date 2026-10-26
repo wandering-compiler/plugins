@@ -905,9 +905,12 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 - Table `OrgSignUpPolicy` (org_id, kind, open, role, set_by/at, ended_by/at, ended_key): one live policy per (organization, kind); replacing or clearing ends the row; nothing is deleted.
 - `PendingSignUp.join_org_id / join_kind / join_role` (with `sign_up_confirmation`, `handlers/signup_confirm_org.go`): the join is decided when a registration is requested and written when it is confirmed.
 - Business: `SetOrgSignUpPolicy`, `ClearOrgSignUpPolicy`, `ListOrgSignUpPolicies` (realm-wide only; `PUT` / `GET /auth/admin/orgs/{org_id}/signup-policies`, `POST …/signup-policies/clear`). `GetHostOrg` answers `open_kinds`.
-- Errors `SIGNUP_POLICIES_REALM_ONLY` (403), `SIGNUP_POLICY_INVALID` (400), `SIGNUP_KIND_AMBIGUOUS` (412); a closed policy refuses with `SIGNUP_NOT_INVITED`.
+- `SignUpReq.signup_host` and `OAuthExchangeReq.signup_host` (field-gated `org_signup`): the host a registration page on the identity's own host names for the person registering.
+- Errors `SIGNUP_POLICIES_REALM_ONLY` (403), `SIGNUP_POLICY_INVALID` (400), `SIGNUP_KIND_AMBIGUOUS` (412), `SIGNUP_HOST_CONFLICT` (400, a body host naming another than the gateway's); a closed policy refuses with `SIGNUP_NOT_INVITED`; a body host that is no host name `HOST_INVALID` on `signup_host`.
 
 **How a registration decides** (SignUp, ConfirmSignUp, an OAuth sign-in that creates the account). With an invitation, the invitation decides its organization and `invite_only` applies as before. Without one, through an audience gateway that takes the tenant from the host (its context arrives as metadata, SDK `restgw.AudienceContextMiddleware`), on a host bound to an organization: the policies of the kinds the audience admits are read — one open: the account joins with that kind and role in its own transaction, whatever `invite_only` says; none open but some closed: refused; none: `invite_only` decides and the account joins nothing; two open: refused as a configuration error.
+
+**A registration page on the identity's own host.** A host that serves several organizations' sign-ups — the identity's own, bound to none of them — has no host of its own to decide by. Its page names the host the person comes from in the request (`signup_host`): with no gateway host, that host decides exactly as a registration arriving on it would — the organization bound to it (`org_hosts`) and that organization's policies, filtered by the audience's kinds when it names some and by none otherwise. The page shows the organization the same way: `GET /auth/hosts/{host}` (GetHostOrg, with `open_kinds`), then the grant plugin's approved envelope. Nothing is verified beyond the binding, and nothing needs to be: an open policy admits anyone who reaches that host, so naming it gains nothing more, and a closed or absent policy admits nothing either way. A gateway host is the request's own and wins; a body host naming another one is refused (`SIGNUP_HOST_CONFLICT`), never followed.
 
 **Requires / conflicts / combined files.** Requires `org_hosts` and `rbac`. Go file: `handlers/org_signup.go`; with `sign_up_confirmation`, `handlers/signup_confirm_org.go`.
 
@@ -915,13 +918,14 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 |---|---|---|---|
 | org_signup/policy-decides | Without an invitation, on a bound host, an open policy for the audience's kind MUST join the account to the host's organization with that kind and role; a closed one MUST refuse it; no policy MUST leave invite_only to decide; two open kinds MUST be refused, never guessed. | Security | `TestDecideSignUpJoin`, `TestSignUpGates_OpenPolicyAndInvitation` |
 | org_signup/invitation-first | A registration carrying an invitation MUST NOT consult the host. | Correctness | `TestSignUpGates_OpenPolicyAndInvitation` |
+| org_signup/body-host | Without a gateway host, the host a registration names (`signup_host`, normalised like a gateway host) MUST decide exactly as a registration arriving on it: its bound organization and policies, the audience's kinds when named; an unbound host MUST join nothing. With a gateway host, a body host naming another MUST be refused (`SIGNUP_HOST_CONFLICT`) and the gateway host MUST decide. An invitation still decides first. | Security | `TestDecideSignUpJoin_ABodyHost`, `TestSignUpGates_ABodyHostFromEachRequest` |
 | org_signup/same-transaction | The membership and its org-scoped grant MUST be written in the account's own transaction, the role resolved against the organization's catalogue then. | Consistency & concurrency | `TestWriteSignUpJoin`; live: `examples/grant-proof` |
 | org_signup/decided-at-request | With sign_up_confirmation, the join MUST be decided when the registration is requested and carried on the pending row. | Correctness | `TestPendingSignUpCarriesTheJoin` |
 | org_signup/realm-only | Policies MUST be set, cleared and listed realm-wide only, where the endpoint ACL is on; a policy MUST name a kind exactly when memberships have kinds, and an open one a role the organization can hand out. | Security | `TestSetOrgSignUpPolicy` |
 
 **Gaps / suspected defects**
 1. A policy is per (organization, kind) and set by the backoffice; an organization does not set its own.
-2. Only the host names the organization a registration joins; an organization in the path does not.
+2. The host names the organization a registration joins: the gateway's, or on the identity's own host the one the request names (`signup_host`); an organization in the path does not.
 
 ### product_roles
 

@@ -254,6 +254,20 @@ message SignUpReq {
   // storage only. Echoed on the response. Ignored under sign_up_confirmation, where SignUp issues no
   // session: ConfirmSignUp takes its own.
   bool public_computer = 5;
+  // signup_host — the host this registration comes from, named by a
+  // registration page on the identity's own host (one that serves several
+  // organizations' sign-ups and is bound to none of them). Without a gateway
+  // host (an audience taking the tenant from the host), org_signup decides on
+  // it exactly as for a registration arriving on that host: the organization
+  // bound to it (org_hosts) and its policies. A gateway host is the request's
+  // own and wins; a body host naming another one is refused
+  // (SIGNUP_HOST_CONFLICT). Nothing is verified beyond the binding: an open
+  // policy admits anyone who reaches that host, so naming it gains nothing
+  // more. Field-gated by `org_signup`.
+  string signup_host = 6 [
+    (w17.field) = { type: CHAR, max_len: 253, null: true },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
 }
 message SignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_turnkey";
@@ -616,6 +630,20 @@ message OAuthExchangeReq {
   // started the flow, and nothing about the choice needs to travel through
   // the provider. An OAuth sign-in never trusts the device anyway.
   bool public_computer = 4;
+  // signup_host — the host this registration comes from, named by a
+  // registration page on the identity's own host (one that serves several
+  // organizations' sign-ups and is bound to none of them). Without a gateway
+  // host (an audience taking the tenant from the host), org_signup decides on
+  // it exactly as for a registration arriving on that host: the organization
+  // bound to it (org_hosts) and its policies. A gateway host is the request's
+  // own and wins; a body host naming another one is refused
+  // (SIGNUP_HOST_CONFLICT). Nothing is verified beyond the binding: an open
+  // policy admits anyone who reaches that host, so naming it gains nothing
+  // more. Field-gated by `org_signup`.
+  string signup_host = 5 [
+    (w17.field) = { type: CHAR, max_len: 253, null: true },
+    (w17.contrib.plugin_feature_field) = "org_signup"
+  ];
 }
 message OAuthExchangeResp {
   option (w17.contrib.plugin_feature) = "oauth";

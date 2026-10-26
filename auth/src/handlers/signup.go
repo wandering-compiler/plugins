@@ -99,7 +99,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 		return nil, err
 	}
 	// The invitation, or the organization of the host it arrived on (org_signup).
-	join, err := signupGates(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken())
+	join, err := signupGates(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken(), signupHost(req))
 	if err != nil {
 		return nil, err
 	}

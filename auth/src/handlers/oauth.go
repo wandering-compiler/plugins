@@ -296,7 +296,7 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 		if userID == "" {
 			// This is the sign-up, and the invitation (if any) comes with
 			// this request.
-			userID, err = h.createOAuthAccount(ctx, providerID, subject, email, consumed.GetEmailVerified(), req.GetInviteToken())
+			userID, err = h.createOAuthAccount(ctx, providerID, subject, email, consumed.GetEmailVerified(), req.GetInviteToken(), signupHost(req))
 			if isEmailTaken(err) {
 				// The unique address, lost to a registration racing this one
 				// after the lookup above: answered as SignUp answers it.
@@ -643,7 +643,7 @@ func (h *AuthServiceHandler) findOAuthAccount(ctx context.Context, providerID, s
 // invitation (which names no address) works too, and its link is spent by
 // this registration. The user, its roles, the verified address, the spent
 // invitation and the identity link commit together.
-func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID, subject, email string, emailVerified bool, inviteToken string) (string, error) {
+func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID, subject, email string, emailVerified bool, inviteToken, bodyHost string) (string, error) {
 	email = normalizeEmail(email)
 	// A provider may assert any address, the erased-account domain included.
 	if err := refuseReservedEmail(ctx, email); err != nil {
@@ -653,7 +653,7 @@ func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID,
 		return "", err
 	}
 	// The invitation, or the organization of the host it arrived on (org_signup).
-	join, err := signupGates(ctx, h, email, inviteToken)
+	join, err := signupGates(ctx, h, email, inviteToken, bodyHost)
 	if err != nil {
 		return "", err
 	}
