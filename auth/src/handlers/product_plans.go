@@ -94,6 +94,9 @@ func (h *AuthServiceHandler) checkPlanLine(ctx context.Context, product, role st
 // AllowOrgProduct adds a line to an organization's plan. One it already
 // carries changes nothing.
 func (h *AuthServiceHandler) AllowOrgProduct(ctx context.Context, req *pb.OrgProductPlanLineReq) (*pb.OrgProductPlanChangeResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, req.GetOrgId(), req, h.AllowOrgProduct); done {
+		return resp, err
+	}
 	caller, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
@@ -126,6 +129,9 @@ func (h *AuthServiceHandler) AllowOrgProduct(ctx context.Context, req *pb.OrgPro
 // carry changes nothing. A product or role the products no longer declare
 // may still be taken.
 func (h *AuthServiceHandler) DisallowOrgProduct(ctx context.Context, req *pb.OrgProductPlanLineReq) (*pb.OrgProductPlanChangeResp, error) {
+	if resp, done, err := underOrgLock(ctx, h, req.GetOrgId(), req, h.DisallowOrgProduct); done {
+		return resp, err
+	}
 	caller, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)

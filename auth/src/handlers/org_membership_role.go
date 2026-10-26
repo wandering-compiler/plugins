@@ -258,11 +258,27 @@ func (h *AuthServiceHandler) withOrgLock(ctx context.Context, orgID string, fn f
 		return fn(ctx)
 	}
 	return h.inOrgTx(ctx, func(txCtx context.Context) error {
-		if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: orgID}); err != nil && status.Code(err) != codes.NotFound {
+		if err := h.lockOrgRow(txCtx, orgID); err != nil {
 			return err
 		}
 		return fn(context.WithValue(txCtx, orgLockKey{}, orgID))
 	})
+}
+
+// lockOrgRow takes organization orgID's row lock (LockOrganization) in the
+// transaction txCtx runs in — the one statement withOrgLock, an open
+// registration's join and a machine account's transaction share. An
+// organization with no live row has nothing to serialise. Without a
+// coordinator (no DistTx) there is no transaction to hold the lock, and the
+// statement is not sent.
+func (h *AuthServiceHandler) lockOrgRow(txCtx context.Context, orgID string) error {
+	if h.DistTx == nil {
+		return nil
+	}
+	if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: orgID}); err != nil && status.Code(err) != codes.NotFound {
+		return err
+	}
+	return nil
 }
 
 // underOrgLock is withOrgLock for a whole method: when ctx is not under
@@ -302,6 +318,11 @@ func scopeOrg(ctx context.Context) string {
 func (h *AuthServiceHandler) membershipOrg(ctx context.Context, membershipID string) string {
 	if orgID := scopeOrg(ctx); orgID != "" {
 		return orgID
+	}
+	// The method's run under the lock (underOrgLock) asks again: the
+	// organization it locked is the answer, without a second read.
+	if held, _ := ctx.Value(orgLockKey{}).(string); held != "" {
+		return held
 	}
 	m, err := h.Query.GetOrgMembership(ctx, &pb.GetOrgMembershipReq{Id: membershipID})
 	if err != nil {

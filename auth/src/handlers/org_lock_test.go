@@ -80,6 +80,14 @@ func TestWithOrgLock(t *testing.T) {
 			t.Fatalf("err %v, ran %v: the change must answer for an organization the lock finds no row for", err, ran)
 		}
 	})
+	t.Run("no coordinator: no transaction to hold a lock, none sent", func(t *testing.T) {
+		h, q := newLockRecorder()
+		h.DistTx = nil
+		ran := false
+		if err := h.withOrgLock(context.Background(), "org-1", func(context.Context) error { ran = true; return nil }); err != nil || !ran || len(q.locks) != 0 {
+			t.Fatalf("err %v, ran %v, locks %q", err, ran, q.locks)
+		}
+	})
 	t.Run("a storage failure of the lock refuses", func(t *testing.T) {
 		h, q := newLockRecorder()
 		h.Query = failingLock{q}
@@ -132,6 +140,9 @@ func TestRoleChanges_RunUnderTheOrganizationsLock(t *testing.T) {
 		"org_invite.go":          {"InviteToOrg"},
 		"product_roles.go":       {"AssignOrgProductRole", "RevokeOrgProductRole", "AssignProductRole", "RevokeProductRole"},
 		"bot_roles.go":           {"SetBotRoles"},
+		// The plan bounds what a product role grant may give
+		// (checkProductRoleInPlan, read under the lock).
+		"product_plans.go": {"AllowOrgProduct", "DisallowOrgProduct"},
 	}
 	for file, methods := range whole {
 		src := handlerSource(t, file)
@@ -148,7 +159,7 @@ func TestRoleChanges_RunUnderTheOrganizationsLock(t *testing.T) {
 		{"service_account.go", "func (h *AuthServiceHandler) IssueBotToken(", "h.underBotOrgLock(txCtx)", "h.machineKeyDevice("},
 		{"service_account.go", "func (h *AuthServiceHandler) issueBotBearerToken(", "h.underBotOrgLock(txCtx)", "h.Mutation.IssueApiToken("},
 		{"service_account.go", "func (h *AuthServiceHandler) CreateBot(", "h.underBotOrgLock(txCtx)", "h.createBotUserTx("},
-		{"org_signup.go", "func writeSignUpJoin(", "h.Query.LockOrganization(txCtx", "h.Mutation.AssignRoleToUser("},
+		{"org_signup.go", "func writeSignUpJoin(", "h.lockOrgRow(txCtx", "h.Mutation.AssignRoleToUser("},
 	}
 	for _, c := range inside {
 		body := funcBody(t, handlerSource(t, c.file), c.fn)

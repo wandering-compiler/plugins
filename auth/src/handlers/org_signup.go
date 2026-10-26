@@ -116,7 +116,7 @@ func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler) (*orgJoin, err
 func writeSignUpJoin(txCtx context.Context, h *AuthServiceHandler, userID string, j *orgJoin) error {
 	// Under the organization's lock, as every grant there is: the role is
 	// resolved and granted with no edit or retirement of it in between.
-	if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: j.orgID}); err != nil && status.Code(err) != codes.NotFound {
+	if err := h.lockOrgRow(txCtx, j.orgID); err != nil {
 		return err
 	}
 	roleID, err := h.roleIDByName(txCtx, j.orgID, j.role)

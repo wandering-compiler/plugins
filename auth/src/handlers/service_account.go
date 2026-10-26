@@ -373,7 +373,7 @@ type botOrgScope struct {
 	// lock takes orgID's row lock inside the caller's transaction — the one
 	// every change to who holds what in the organization takes first
 	// (withOrgLock).
-	lock func(txCtx context.Context, h *AuthServiceHandler, orgID string) error
+	lock func(h *AuthServiceHandler, txCtx context.Context, orgID string) error
 }
 
 // underBotOrgLock is the start of a machine-account transaction whose
@@ -381,7 +381,9 @@ type botOrgScope struct {
 // caller's organization's lock, so a role change there (SetBotRoles, an edit
 // of the role) comes before or after this transaction, not between the
 // ceiling it is about to re-check and its write. Without organizations there
-// is nothing to lock.
+// is nothing to lock. A caller with no active organization was refused before
+// the transaction (operableBot, CreateBot); here that refuses too, rather than
+// re-checking with no lock.
 func (h *AuthServiceHandler) underBotOrgLock(txCtx context.Context) error {
 	orgs, err := botOrgScopeOrNil()
 	if err != nil || orgs == nil || orgs.lock == nil {
@@ -389,9 +391,9 @@ func (h *AuthServiceHandler) underBotOrgLock(txCtx context.Context) error {
 	}
 	orgID, err := orgs.active(txCtx)
 	if err != nil {
-		return nil
+		return err
 	}
-	return orgs.lock(txCtx, h, orgID)
+	return orgs.lock(h, txCtx, orgID)
 }
 
 // createBotUserTx creates the machine account and its grant — and, where the

@@ -3,9 +3,6 @@ package handlers
 import (
 	"context"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
@@ -20,17 +17,8 @@ func init() {
 		enroll:   enrollBotInOrg,
 		accounts: orgMemberAccounts,
 		isMember: isOrgMember,
-		lock:     lockBotOrg,
+		lock:     (*AuthServiceHandler).lockOrgRow,
 	}
-}
-
-// lockBotOrg takes orgID's row lock in the caller's transaction, as withOrgLock
-// does; an organization with no live row has nothing to serialise.
-func lockBotOrg(txCtx context.Context, h *AuthServiceHandler, orgID string) error {
-	if _, err := h.Query.LockOrganization(txCtx, &pb.LockOrganizationReq{OrgId: orgID}); err != nil && status.Code(err) != codes.NotFound {
-		return err
-	}
-	return nil
 }
 
 // enrollBotInOrg makes the new machine account a member of the organization and
