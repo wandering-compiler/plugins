@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
@@ -244,9 +247,10 @@ func TestDeleteOrgRole(t *testing.T) {
 
 type superadminMock struct {
 	*membershipRoleMock
-	others     int64    // other members' direct wildcard grants (CountOtherOrgSuperadmins)
-	teamOthers int64    // other members' wildcard team roles (CountOtherOrgTeamSuperadmins)
-	teamRoles  []string // what u2 holds in org-1 through a team
+	others         int64    // other members (u3…) holding a wildcard directly
+	othersDisabled bool     // …whose accounts are disabled (user_admin)
+	teamOthers     int64    // other members (u4…) holding a wildcard through a team
+	teamRoles      []string // what u2 holds in org-1 through team t-1
 }
 
 func (m *superadminMock) GetUserTeamRoleGrants(_ context.Context, in *pb.GetUserTeamRoleGrantsReq, _ ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
@@ -260,10 +264,6 @@ func (m *superadminMock) GetUserTeamRoleGrants(_ context.Context, in *pb.GetUser
 	return out, nil
 }
 
-func (m *superadminMock) CountOtherOrgTeamSuperadmins(context.Context, *pb.CountOtherOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.CountOtherOrgTeamSuperadminsResp, error) {
-	return &pb.CountOtherOrgTeamSuperadminsResp{Count: m.teamOthers}, nil
-}
-
 func (m *superadminMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
 	return &pb.ListRoleGrantsResp{Grants: []*pb.RoleGrant{
 		{RoleId: "r-super", AllPermissions: true},
@@ -271,8 +271,36 @@ func (m *superadminMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, 
 	}}, nil
 }
 
-func (m *superadminMock) CountOtherOrgSuperadmins(context.Context, *pb.CountOtherOrgSuperadminsReq, ...grpc.CallOption) (*pb.CountOtherOrgSuperadminsResp, error) {
-	return &pb.CountOtherOrgSuperadminsResp{Count: m.others}, nil
+// ListOrgSuperadmins: u2's direct wildcard grants, and `others` more.
+func (m *superadminMock) ListOrgSuperadmins(context.Context, *pb.ListOrgSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgSuperadminsResp, error) {
+	out := &pb.ListOrgSuperadminsResp{}
+	for _, id := range m.memberOrgRoles {
+		if id == "r-super" {
+			out.Grants = append(out.Grants, &pb.OrgSuperadminRow{UserId: "u2", RoleId: id})
+		}
+	}
+	for i := int64(0); i < m.others; i++ {
+		row := &pb.OrgSuperadminRow{UserId: fmt.Sprintf("u3-%d", i), RoleId: "r-super"}
+		if m.othersDisabled {
+			row.DisabledAt = timestamppb.Now()
+		}
+		out.Grants = append(out.Grants, row)
+	}
+	return out, nil
+}
+
+// ListOrgTeamSuperadmins: u2's wildcard through t-1, and `teamOthers` more.
+func (m *superadminMock) ListOrgTeamSuperadmins(context.Context, *pb.ListOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgTeamSuperadminsResp, error) {
+	out := &pb.ListOrgTeamSuperadminsResp{}
+	for _, id := range m.teamRoles {
+		if id == "r-super" {
+			out.Grants = append(out.Grants, &pb.OrgSuperadminRow{UserId: "u2", RoleId: id, TeamId: "t-1"})
+		}
+	}
+	for i := int64(0); i < m.teamOthers; i++ {
+		out.Grants = append(out.Grants, &pb.OrgSuperadminRow{UserId: fmt.Sprintf("u4-%d", i), RoleId: "r-super", TeamId: "t-2"})
+	}
+	return out, nil
 }
 
 // An organization keeps a superadmin: the last one is neither removed nor
@@ -299,7 +327,13 @@ func TestRefuseLastSuperadmin(t *testing.T) {
 	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
 		t.Errorf("another superadmin: %v", err)
 	}
-	m.others = 0
+	// A disabled (or erased) superadmin holds no working credential: they do
+	// not keep the organization administered.
+	m.othersDisabled = true
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Errorf("a disabled other superadmin counted: %v", err)
+	}
+	m.others, m.othersDisabled = 0, false
 	mm.memberOrgRoles = []string{"r-admin"}
 	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
 		t.Errorf("not a superadmin: %v", err)
@@ -371,27 +405,26 @@ func TestRefuseLastSuperadmin_TeamHeldWildcards(t *testing.T) {
 	}
 }
 
-// Who counts as "another superadmin" is decided in SQL, so the statements
-// are what is asserted: a grant counts only when it, its role, the membership
-// (and, through a team, the team, its role grant and the team membership) are
-// live, and the account is neither disabled nor erased. A disabled superadmin
-// holds no working credential; counting one let the last ACTIVE superadmin
-// leave. **Unit (statement) only** — no database runs here.
-func TestOtherSuperadminCounts_OnlyActiveLiveAccounts(t *testing.T) {
+// Which grants are a superadmin's is decided in SQL — liveness — and in
+// orgSuperadmins — the account's disabled / erased stamps, which only a gated
+// projection can carry (a SELECT's WHERE conjunct cannot be gated). The
+// statements are what is asserted: a grant counts only when it, its role, the
+// membership (and, through a team, the team, its role grant and the team
+// membership) are live, and both stamps are projected for the handler.
+// **Unit (statement) only** for the SQL half — no database runs here.
+func TestSuperadminQueries_ReadOnlyLiveGrantsAndProjectTheAccountsStamps(t *testing.T) {
 	q := authProtos(t)["queries/auth_query.proto"]
 	for marker, want := range map[string][]string{
-		"rpc CountOtherOrgSuperadmins(": {
+		"rpc ListOrgSuperadmins(": {
 			"ur.revoked_at IS NULL", "r.deleted_at IS NULL", "r.all_permissions = TRUE",
-			"m.removed_at IS NULL", "ur.user_id <> :user_id",
-			"JOIN @module.User u ON u.id = ur.user_id",
-			"?feature(user_admin) u.disabled_at IS NULL", "?feature(user_admin) u.erased_at IS NULL",
+			"m.removed_at IS NULL", "JOIN @module.User u ON u.id = ur.user_id",
+			"?feature(user_admin) u.disabled_at AS disabled_at", "?feature(user_admin) u.erased_at AS erased_at",
 		},
-		"rpc CountOtherOrgTeamSuperadmins(": {
+		"rpc ListOrgTeamSuperadmins(": {
 			"tm.removed_at IS NULL", "t.deleted_at IS NULL", "tr.revoked_at IS NULL",
 			"r.deleted_at IS NULL", "r.all_permissions = TRUE", "m.removed_at IS NULL",
-			"m.created_at <= tm.created_at", "tm.user_id <> :user_id",
-			"JOIN @module.User u ON u.id = tm.user_id",
-			"?feature(user_admin) u.disabled_at IS NULL", "?feature(user_admin) u.erased_at IS NULL",
+			"m.created_at <= tm.created_at", "t.id AS team_id", "JOIN @module.User u ON u.id = tm.user_id",
+			"?feature(user_admin) u.disabled_at AS disabled_at", "?feature(user_admin) u.erased_at AS erased_at",
 		},
 	} {
 		body := dqlText(methodDQL(t, q, marker))
@@ -400,6 +433,30 @@ func TestOtherSuperadminCounts_OnlyActiveLiveAccounts(t *testing.T) {
 				t.Errorf("%s does not say %q:\n%s", marker, w, body)
 			}
 		}
+	}
+}
+
+// orgSuperadmins drops a disabled or an erased account's grants, from every
+// source.
+func TestOrgSuperadmins_DropsDisabledAndErasedAccounts(t *testing.T) {
+	_, mm := newMembershipRoleHandler("r-super")
+	m := &superadminMock{membershipRoleMock: mm, others: 2, othersDisabled: true, teamRoles: []string{"r-super"}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	rows, err := h.orgSuperadmins(context.Background(), "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 { // u2 directly and through t-1; u3-* are disabled
+		t.Fatalf("rows = %v, want u2's two", rows)
+	}
+	prev := superadminSources
+	t.Cleanup(func() { superadminSources = prev })
+	superadminSources = append(append([]func(context.Context, *AuthServiceHandler, string) ([]*pb.OrgSuperadminRow, error){}, prev...),
+		func(context.Context, *AuthServiceHandler, string) ([]*pb.OrgSuperadminRow, error) {
+			return []*pb.OrgSuperadminRow{{UserId: "u9", RoleId: "r-super", ErasedAt: timestamppb.Now()}}, nil
+		})
+	if rows, _ := h.orgSuperadmins(context.Background(), "org-1"); len(rows) != 2 {
+		t.Fatalf("an erased account counted: %v", rows)
 	}
 }
 

@@ -229,3 +229,35 @@ func TestDQL_AGatedRequestFieldBoundUngatedIsReported(t *testing.T) {
 		t.Fatalf("a gated item binding the field was reported: %v", err)
 	}
 }
+
+// Staging can cut a gate only from a SET assignment, a RETURNING target, a
+// SELECT projection target and a top-level AND operand of a mutation's WHERE;
+// a gated conjunct of a SELECT's WHERE fails the consumer's code generation.
+func TestDQL_AGateOnlyWhereStagingCanCutIt(t *testing.T) {
+	ok := []string{
+		"SELECT t.id AS id, ?feature(tokens) t.kind AS kind FROM @module.Token t WHERE t.user_id = :user_id",
+		"UPDATE @module.Token SET user_id = :user_id, ?feature(tokens) kind = :kind WHERE id = :id",
+		"DELETE FROM @module.Token WHERE user_id = :user_id AND ?feature(tokens) kind = 1",
+		"UPDATE @module.Token SET user_id = :user_id WHERE id = :id RETURNING id, ?feature(tokens) kind",
+	}
+	for _, stmt := range ok {
+		if bad := misplacedGates(stmt); len(bad) != 0 {
+			t.Errorf("a legal gate reported in %q: %q", stmt, bad)
+		}
+	}
+	refused := []string{
+		"SELECT t.id AS id FROM @module.Token t WHERE t.user_id = :user_id AND ?feature(tokens) t.kind = 1",
+		"SELECT t.id AS id FROM @module.Token t JOIN @module.Token u ON u.id = t.id AND ?feature(tokens) u.kind = 1",
+		"DELETE FROM @module.Token WHERE (user_id = :user_id OR ?feature(tokens) kind = 1)",
+		"DELETE FROM @module.Token WHERE user_id = :user_id OR ?feature(tokens) kind = 1",
+	}
+	for _, stmt := range refused {
+		if bad := misplacedGates(stmt); len(bad) != 1 {
+			t.Errorf("%q: %d gates reported, want 1", stmt, len(bad))
+		}
+	}
+	err := checkDQLColumns(dqlPlugin(t, "tokens", "SELECT t.id AS id FROM @module.Token t WHERE t.user_id = :user_id AND ?feature(tokens) t.kind = 1"), nil)
+	if err == nil || !strings.Contains(err.Error(), "where staging cannot resolve one") {
+		t.Fatalf("err = %v, want the gate in a SELECT's WHERE reported", err)
+	}
+}

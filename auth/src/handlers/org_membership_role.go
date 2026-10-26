@@ -144,12 +144,11 @@ var membershipRemovalCascades []func(ctx context.Context, h *AuthServiceHandler,
 // caller to cover them too.
 var memberHeldRoleSources []func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) ([]string, error)
 
-// otherSuperadminCounters count the members of an organization other than
-// userID who hold a wildcard role there through another feature — teams
-// counts its members' wildcard team roles — for refuseLastSuperadmin, beside
-// CountOtherOrgSuperadmins' direct grants. Same liveness: an account that is
-// disabled or erased does not count.
-var otherSuperadminCounters []func(ctx context.Context, h *AuthServiceHandler, orgID, userID string) (int64, error)
+// superadminSources are the organization's superadmins through another
+// feature — teams answers the wildcard roles its members hold through a team
+// — read with ListOrgSuperadmins' direct grants by orgSuperadmins, the one
+// definition of who keeps an organization administered.
+var superadminSources []func(ctx context.Context, h *AuthServiceHandler, orgID string) ([]*pb.OrgSuperadminRow, error)
 
 // roleHolderCounters count who else holds a role through another feature — a
 // team (teams) — for a role that may not be deleted while anyone holds it
@@ -336,34 +335,92 @@ func isAPIRealmRow(m proto.Message) bool {
 }
 
 // refuseLastSuperadmin keeps an organization from losing its last
-// superadmin — a member holding a wildcard (all_permissions) role there,
-// directly or through a team (memberHeldRoleSources). A role change to another
-// wildcard role (newRoleID) keeps them one, and so does a wildcard they hold
-// through a team, which a role change leaves in place; a removal passes "" and
-// ends both (RemoveOrgMembership ends the team memberships too). Holds for
-// everyone, the member who created the organization included: whoever is its
-// last superadmin cannot demote or remove themselves (organization ownership,
-// which once counted as a superadmin here, grants nothing).
-//
-// "Another superadmin" is one who can act: CountOtherOrgSuperadmins and
-// otherSuperadminCounters count only live grants of active (not disabled, not
-// erased) accounts with a live membership.
+// superadmin through a membership change or removal: m's role change to
+// newRoleID ends their direct grants there (a wildcard newRoleID keeps them a
+// superadmin; what they hold through a team stays), and a removal (newRoleID
+// "") ends their team memberships too. Holds for everyone, the member who
+// created the organization included: whoever is its last superadmin cannot
+// demote or remove themselves (organization ownership, which once counted as
+// a superadmin here, grants nothing).
 func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.OrgMembership, newRoleID string) error {
-	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
-	if err != nil {
-		return err
-	}
-	var throughTeams []string
-	for _, source := range memberHeldRoleSources {
-		more, err := source(ctx, h, m.GetUserId(), m.GetOrgId())
+	if newRoleID != "" {
+		wildcard, err := h.wildcardRoleIDs(ctx)
 		if err != nil {
 			return err
 		}
-		throughTeams = append(throughTeams, more...)
+		if wildcard[newRoleID] {
+			return nil
+		}
 	}
-	catalogue, err := h.Query.ListRoleGrants(ctx, &pb.ListRoleGrantsReq{})
+	return h.refuseLeavingNoSuperadmin(ctx, m.GetOrgId(), func(g *pb.OrgSuperadminRow) bool {
+		return g.GetUserId() == m.GetUserId() && (newRoleID == "" || g.GetTeamId() == "")
+	})
+}
+
+// orgSuperadmins is the ONE answer to who keeps an organization administered:
+// every live wildcard grant there of an account that can act (not disabled,
+// not erased, with a live membership) — held directly (ListOrgSuperadmins) or
+// through another feature (superadminSources: a team's wildcard role).
+func (h *AuthServiceHandler) orgSuperadmins(ctx context.Context, orgID string) ([]*pb.OrgSuperadminRow, error) {
+	direct, err := h.Query.ListOrgSuperadmins(ctx, &pb.ListOrgSuperadminsReq{OrgId: orgID})
+	if notFoundOK(err) != nil {
+		return nil, err
+	}
+	all := append([]*pb.OrgSuperadminRow(nil), direct.GetGrants()...)
+	for _, source := range superadminSources {
+		more, err := source(ctx, h, orgID)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, more...)
+	}
+	// A disabled or erased account holds no working credential. The stamps
+	// are projected (user_admin) rather than filtered in SQL: a SELECT's WHERE
+	// conjunct cannot be feature-gated.
+	rows := all[:0]
+	for _, g := range all {
+		if g.GetDisabledAt() == nil && g.GetErasedAt() == nil {
+			rows = append(rows, g)
+		}
+	}
+	return rows, nil
+}
+
+// refuseLeavingNoSuperadmin refuses a change that would leave the organization
+// with no superadmin (LAST_SUPERADMIN, FailedPrecondition): ends names the
+// grants the change ends, and the change goes through while one grant of
+// orgSuperadmins survives it. An organization that has none already is not
+// one a change can take its last from, so nothing is refused there.
+//
+// Every path that can take a superadmin away asks this, with what it ends: a
+// membership's role change or removal (refuseLastSuperadmin), and with teams
+// a team member's removal, a change of the team's roles and the team's
+// deletion. An operator's DisableUsers / EraseUsers is realm-level and not
+// held to it, by design.
+func (h *AuthServiceHandler) refuseLeavingNoSuperadmin(ctx context.Context, orgID string, ends func(*pb.OrgSuperadminRow) bool) error {
+	rows, err := h.orgSuperadmins(ctx, orgID)
 	if err != nil {
 		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	for _, g := range rows {
+		if !ends(g) {
+			return nil
+		}
+	}
+	return refusal(ctx, codes.FailedPrecondition,
+		"the change leaves organization "+orgID+" without a superadmin",
+		CodeLastSuperadmin, "", MsgLastSuperadmin, nil)
+}
+
+// wildcardRoleIDs is the set of roles that carry every permission
+// (all_permissions), off the role catalogue.
+func (h *AuthServiceHandler) wildcardRoleIDs(ctx context.Context) (map[string]bool, error) {
+	catalogue, err := h.Query.ListRoleGrants(ctx, &pb.ListRoleGrantsReq{})
+	if err != nil {
+		return nil, err
 	}
 	wildcard := map[string]bool{}
 	for _, g := range catalogue.GetGrants() {
@@ -371,40 +428,7 @@ func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.Org
 			wildcard[g.GetRoleId()] = true
 		}
 	}
-	direct, viaTeam := false, false
-	for _, id := range held.GetRoleIds() {
-		direct = direct || wildcard[id]
-	}
-	for _, id := range throughTeams {
-		viaTeam = viaTeam || wildcard[id]
-	}
-	if !direct && !viaTeam {
-		return nil
-	}
-	// A role change keeps what the member holds through a team; a removal
-	// (newRoleID "") ends it with the membership.
-	if newRoleID != "" && (wildcard[newRoleID] || viaTeam) {
-		return nil
-	}
-	others, err := h.Query.CountOtherOrgSuperadmins(ctx, &pb.CountOtherOrgSuperadminsReq{OrgId: m.GetOrgId(), UserId: m.GetUserId()})
-	if err != nil {
-		return err
-	}
-	if others.GetCount() > 0 {
-		return nil
-	}
-	for _, count := range otherSuperadminCounters {
-		n, err := count(ctx, h, m.GetOrgId(), m.GetUserId())
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			return nil
-		}
-	}
-	return refusal(ctx, codes.FailedPrecondition,
-		"member "+m.GetUserId()+" is the last superadmin of organization "+m.GetOrgId(),
-		CodeLastSuperadmin, "", MsgLastSuperadmin, nil)
+	return wildcard, nil
 }
 
 // roleIDByName resolves an assignable Role.name to its id.

@@ -156,6 +156,9 @@ func checkDQLColumns(dir string, requires map[string][]string) error {
 			}
 		}
 		for _, stmt := range r.stmts {
+			for _, bad := range misplacedGates(stmt) {
+				report(r, "a ?feature gate where staging cannot resolve one — it may prefix a SET assignment, a RETURNING target, a SELECT projection target, or a top-level AND operand of an UPDATE / DELETE WHERE (dropping a conjunct of a SELECT's WHERE would return MORE rows)", bad)
+			}
 			named, alias := tablesOf(stmt)
 			items := splitItems(stmt)
 			for _, tname := range sortedKeys(named) {
@@ -197,13 +200,83 @@ func checkDQLColumns(dir string, requires map[string][]string) error {
 		return nil
 	}
 	sort.Strings(problems)
-	return fmt.Errorf("a statement names a table, column or request field that some activations do not have:\n%s\n\n"+
+	return fmt.Errorf("a statement names a table, column or request field that some activations do not have, or gates an item where staging cannot cut it:\n%s\n\n"+
 		"  An activation with the rpc's feature but without the other one stages the\n"+
 		"  rpc without what it names, and its code generation fails on the statement.\n\n"+
 		"  fix: gate the item that names a column or a parameter —\n"+
 		"  `?feature(<its feature>) <item>` — or move the statement to an rpc staged\n"+
 		"  only with that feature (a table cannot be gated: require its feature).",
 		strings.Join(problems, "\n"))
+}
+
+// # A gate where staging cannot resolve one
+//
+// Staging resolves a `?feature(<g>)` gate by cutting the item it prefixes, and
+// only four positions are cuttable: a SET assignment, a RETURNING target, a
+// SELECT projection target, and a top-level AND operand of a mutation's
+// (UPDATE / DELETE) WHERE. Anywhere else the consumer's code generation stops
+// on the statement ("feature gate … is not in a position that can be gated").
+// A SELECT's WHERE is the trap: the gate reads like a filter, but cutting it
+// with the feature off would return more rows, so it is refused — filter in
+// the handler on a gated projection instead. `w17ctl plugin gen` does not
+// resolve gates, so nothing else here sees it; it shipped once in auth
+// (CountOtherOrgSuperadmins) and failed the first consumer that staged it.
+
+// misplacedGates returns the text around every gate of stmt that is not in one
+// of the four positions.
+func misplacedGates(stmt string) []string {
+	var bad []string
+	kind, clause, prev := "", "", ""
+	depth := 0
+	inQuote := false
+	for i := 0; i < len(stmt); i++ {
+		c := stmt[i]
+		switch {
+		case inQuote:
+			if c == '\'' {
+				inQuote = false
+			}
+		case c == '\'':
+			inQuote = true
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth > 0 {
+				depth--
+			}
+		case c == ',' && depth == 0:
+			prev = ","
+		case c == '?' && strings.HasPrefix(stmt[i:], "?feature("):
+			legal := depth == 0 && (clause == "SET" || clause == "RETURNING" ||
+				(clause == "SELECT" && kind == "SELECT") ||
+				(clause == "WHERE" && (kind == "UPDATE" || kind == "DELETE") && (prev == "AND" || prev == "WHERE")))
+			if !legal {
+				from, to := max(0, i-40), min(len(stmt), i+60)
+				bad = append(bad, stmt[from:to])
+			}
+			i += len("?feature(") - 1
+			depth++ // the gate's own parenthesis
+		case isWordByte(c) && (i == 0 || !isWordByte(stmt[i-1])):
+			j := i
+			for j < len(stmt) && isWordByte(stmt[j]) {
+				j++
+			}
+			w := strings.ToUpper(stmt[i:j])
+			if depth == 0 {
+				if kind == "" {
+					kind = w
+				}
+				switch w {
+				case "SELECT", "FROM", "JOIN", "ON", "WHERE", "SET", "RETURNING", "GROUP", "ORDER",
+					"HAVING", "LIMIT", "OFFSET", "VALUES", "INTO", "USING":
+					clause = w
+				}
+				prev = w
+			}
+			i = j - 1
+		}
+	}
+	return bad
 }
 
 // parseMessage reads a message body's gate and its fields. Nested messages
