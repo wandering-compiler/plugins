@@ -250,6 +250,9 @@ func TestDQL_AGateOnlyWhereStagingCanCutIt(t *testing.T) {
 		"SELECT t.id AS id FROM @module.Token t JOIN @module.Token u ON u.id = t.id AND ?feature(tokens) u.kind = 1",
 		"DELETE FROM @module.Token WHERE (user_id = :user_id OR ?feature(tokens) kind = 1)",
 		"DELETE FROM @module.Token WHERE user_id = :user_id OR ?feature(tokens) kind = 1",
+		"UPDATE @module.Token SET user_id = ?feature(tokens) kind WHERE id = :id",
+		"SELECT t.id + ?feature(tokens) t.kind AS id FROM @module.Token t",
+		"SELECT CASE WHEN ?feature(tokens) t.kind = 1 THEN 1 END AS id FROM @module.Token t",
 	}
 	for _, stmt := range refused {
 		if bad := misplacedGates(stmt); len(bad) != 1 {

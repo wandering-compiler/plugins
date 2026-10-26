@@ -358,8 +358,8 @@ func (h *AuthServiceHandler) refuseLastSuperadmin(ctx context.Context, m *pb.Org
 }
 
 // orgSuperadmins is the ONE answer to who keeps an organization administered:
-// every live wildcard grant there of an account that can act (not disabled,
-// not erased, with a live membership) — held directly (ListOrgSuperadmins) or
+// every live session-realm wildcard grant there of an account that can act
+// (not disabled, not erased, with a live membership) — held directly (ListOrgSuperadmins) or
 // through another feature (superadminSources: a team's wildcard role).
 func (h *AuthServiceHandler) orgSuperadmins(ctx context.Context, orgID string) ([]*pb.OrgSuperadminRow, error) {
 	direct, err := h.Query.ListOrgSuperadmins(ctx, &pb.ListOrgSuperadminsReq{OrgId: orgID})
@@ -374,12 +374,14 @@ func (h *AuthServiceHandler) orgSuperadmins(ctx context.Context, orgID string) (
 		}
 		all = append(all, more...)
 	}
-	// A disabled or erased account holds no working credential. The stamps
-	// are projected (user_admin) rather than filtered in SQL: a SELECT's WHERE
+	// A disabled or erased account holds no working credential, and an
+	// API-realm wildcard is a machine account's (SetBotRoles revokes it
+	// without asking this rule). The stamps and the realm are projected
+	// (user_admin, api_token) rather than filtered in SQL: a SELECT's WHERE
 	// conjunct cannot be feature-gated.
 	rows := all[:0]
 	for _, g := range all {
-		if g.GetDisabledAt() == nil && g.GetErasedAt() == nil {
+		if g.GetDisabledAt() == nil && g.GetErasedAt() == nil && !isAPIRealmRow(g) {
 			rows = append(rows, g)
 		}
 	}

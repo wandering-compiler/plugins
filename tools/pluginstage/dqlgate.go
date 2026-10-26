@@ -223,7 +223,8 @@ func checkDQLColumns(dir string, requires map[string][]string) error {
 // (CountOtherOrgSuperadmins) and failed the first consumer that staged it.
 
 // misplacedGates returns the text around every gate of stmt that is not in one
-// of the four positions.
+// of the four positions, or that sits inside an item rather than prefixing it
+// (`SET a = ?feature(g) b`, `SELECT a + ?feature(g) b`).
 func misplacedGates(stmt string) []string {
 	var bad []string
 	kind, clause, prev := "", "", ""
@@ -247,8 +248,11 @@ func misplacedGates(stmt string) []string {
 		case c == ',' && depth == 0:
 			prev = ","
 		case c == '?' && strings.HasPrefix(stmt[i:], "?feature("):
-			legal := depth == 0 && (clause == "SET" || clause == "RETURNING" ||
-				(clause == "SELECT" && kind == "SELECT") ||
+			// The gate prefixes a whole item: a list item follows the clause
+			// keyword or a comma, a WHERE operand the WHERE or an AND.
+			listItem := prev == "," || prev == clause || (clause == "SELECT" && prev == "DISTINCT")
+			legal := depth == 0 && (((clause == "SET" || clause == "RETURNING") && listItem) ||
+				(clause == "SELECT" && kind == "SELECT" && listItem) ||
 				(clause == "WHERE" && (kind == "UPDATE" || kind == "DELETE") && (prev == "AND" || prev == "WHERE")))
 			if !legal {
 				from, to := max(0, i-40), min(len(stmt), i+60)

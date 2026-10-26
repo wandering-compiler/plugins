@@ -375,7 +375,9 @@ message CountRoleGrantsResp {
 //
 // Only a superadmin who can act counts: a live grant of a live role, on a live
 // membership, of an account that is neither disabled nor erased (user_admin:
-// the query projects both stamps and orgSuperadmins drops such rows).
+// the query projects both stamps and orgSuperadmins drops such rows), of a
+// session-realm role (api_token: the realm is projected the same way; a bot's
+// API-realm wildcard is no superadmin who administers the organization).
 // A disabled superadmin holds no working credential, so counting one let the
 // last ACTIVE superadmin leave an organization nobody could administer.
 message ListOrgSuperadminsReq {
@@ -399,6 +401,11 @@ message OrgSuperadminRow {
   // orgSuperadmins drops it.
   google.protobuf.Timestamp disabled_at = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp erased_at   = 5 [(w17.field) = { type: DATETIME, null: true }];
+  // token_type — the role's realm (api_token; unset without it). An API-realm
+  // wildcard is a machine account's: it administers nothing through a
+  // session, and SetBotRoles takes it away unasked, so orgSuperadmins drops
+  // the row. A team's roles are session-realm by construction.
+  TokenType token_type = 6 [(w17.contrib.plugin_feature_field) = "api_token"];
 }
 
 message ListRolesResp {
@@ -2419,7 +2426,8 @@ service AuthQuery {
         dql:
           "SELECT ur.user_id AS user_id, r.id AS role_id, "
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
-          "       ?feature(user_admin) u.erased_at AS erased_at "
+          "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?feature(api_token) r.token_type AS token_type "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
           "JOIN @module.OrgMembership m ON m.user_id = ur.user_id AND m.org_id = ur.org_id AND m.removed_at IS NULL "

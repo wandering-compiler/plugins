@@ -419,6 +419,7 @@ func TestSuperadminQueries_ReadOnlyLiveGrantsAndProjectTheAccountsStamps(t *test
 			"ur.revoked_at IS NULL", "r.deleted_at IS NULL", "r.all_permissions = TRUE",
 			"m.removed_at IS NULL", "JOIN @module.User u ON u.id = ur.user_id",
 			"?feature(user_admin) u.disabled_at AS disabled_at", "?feature(user_admin) u.erased_at AS erased_at",
+			"?feature(api_token) r.token_type AS token_type",
 		},
 		"rpc ListOrgTeamSuperadmins(": {
 			"tm.removed_at IS NULL", "t.deleted_at IS NULL", "tr.revoked_at IS NULL",
@@ -437,7 +438,7 @@ func TestSuperadminQueries_ReadOnlyLiveGrantsAndProjectTheAccountsStamps(t *test
 }
 
 // orgSuperadmins drops a disabled or an erased account's grants, from every
-// source.
+// source, and an API-realm (a bot's) wildcard grant.
 func TestOrgSuperadmins_DropsDisabledAndErasedAccounts(t *testing.T) {
 	_, mm := newMembershipRoleHandler("r-super")
 	m := &superadminMock{membershipRoleMock: mm, others: 2, othersDisabled: true, teamRoles: []string{"r-super"}}
@@ -453,10 +454,13 @@ func TestOrgSuperadmins_DropsDisabledAndErasedAccounts(t *testing.T) {
 	t.Cleanup(func() { superadminSources = prev })
 	superadminSources = append(append([]func(context.Context, *AuthServiceHandler, string) ([]*pb.OrgSuperadminRow, error){}, prev...),
 		func(context.Context, *AuthServiceHandler, string) ([]*pb.OrgSuperadminRow, error) {
-			return []*pb.OrgSuperadminRow{{UserId: "u9", RoleId: "r-super", ErasedAt: timestamppb.Now()}}, nil
+			return []*pb.OrgSuperadminRow{
+				{UserId: "u9", RoleId: "r-super", ErasedAt: timestamppb.Now()},
+				{UserId: "bot-1", RoleId: "r-bot-super", TokenType: pb.TokenType_TOKEN_TYPE_API},
+			}, nil
 		})
 	if rows, _ := h.orgSuperadmins(context.Background(), "org-1"); len(rows) != 2 {
-		t.Fatalf("an erased account counted: %v", rows)
+		t.Fatalf("an erased account or a bot's API-realm wildcard counted: %v", rows)
 	}
 }
 
