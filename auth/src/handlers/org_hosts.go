@@ -36,9 +36,15 @@ var hostRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9
 // normalHost is a host as the gateway reports it: lower-case, without a
 // trailing dot. A port, a scheme or a path is no host.
 func normalHost(ctx context.Context, host string) (string, error) {
+	return normalHostOf(ctx, host, "host")
+}
+
+// normalHostOf is normalHost refusing on the request field that carried the
+// host (org_signup's `signup_host`, for one).
+func normalHostOf(ctx context.Context, host, field string) (string, error) {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if len(h) > 253 || !hostRE.MatchString(h) {
-		return "", refusal(ctx, codes.InvalidArgument, "org_hosts: not a host name", CodeHostInvalid, "host", MsgHostInvalid, nil)
+		return "", refusal(ctx, codes.InvalidArgument, "org_hosts: "+field+" is not a host name", CodeHostInvalid, field, MsgHostInvalid, nil)
 	}
 	return h, nil
 }

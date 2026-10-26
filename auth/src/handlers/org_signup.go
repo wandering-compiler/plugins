@@ -96,10 +96,9 @@ func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler, bodyHost strin
 	if bodyHost != "" {
 		// Normalised as the gateway reports a host, and refused on the field
 		// the caller sent.
-		named := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(bodyHost)), ".")
-		if len(named) > 253 || !hostRE.MatchString(named) {
-			return nil, refusal(ctx, codes.InvalidArgument, "org_signup: signup_host is not a host name",
-				CodeHostInvalid, "signup_host", MsgHostInvalid, nil)
+		named, err := normalHostOf(ctx, bodyHost, "signup_host")
+		if err != nil {
+			return nil, err
 		}
 		switch {
 		case host == "":
