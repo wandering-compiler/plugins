@@ -190,7 +190,33 @@ func (h *GrantServiceHandler) approved(ctx context.Context, orgID string) (*pb.P
 	if err != nil {
 		return nil, err
 	}
-	return &pb.PublicEnvelope{Found: true, OrgId: orgID, Fields: fieldsOf(e)}, nil
+	return &pb.PublicEnvelope{Found: true, OrgId: orgID, Fields: publicFields(fieldsOf(e))}, nil
+}
+
+// publicFields is what the public read serves of an approved envelope: every
+// field that passes the proposal's check (checkFields), and nothing in place
+// of one that does not. A proposal is checked when it is written, but a row a
+// project seeds by fixture is not, and the read is what reaches the consent,
+// invitation and sign-in pages — a `javascript:` link or a colour that is not
+// one must not. Dropping the one field rather than the envelope keeps a
+// version the backoffice approved under older, looser rules on the page.
+func publicFields(f *pb.EnvelopeFields) *pb.EnvelopeFields {
+	link := func(v string) string {
+		if v != "" && !safeURL(v) {
+			return ""
+		}
+		return v
+	}
+	f.LogoLightUrl, f.LogoDarkUrl = link(f.GetLogoLightUrl()), link(f.GetLogoDarkUrl())
+	f.WebsiteUrl, f.SupportUrl = link(f.GetWebsiteUrl()), link(f.GetSupportUrl())
+	f.PrivacyUrl, f.TermsUrl = link(f.GetPrivacyUrl()), link(f.GetTermsUrl())
+	if c := f.GetAccentColor(); c != "" && !accentRE.MatchString(c) {
+		f.AccentColor = ""
+	}
+	if h := f.GetVerifiedHost(); h != "" && !hostRE.MatchString(h) {
+		f.VerifiedHost = ""
+	}
+	return f
 }
 
 func fieldsOf(e *pb.EnvelopeRow) *pb.EnvelopeFields {

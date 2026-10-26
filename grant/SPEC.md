@@ -34,7 +34,7 @@ ACL.
 | grant/one-approved | Approving a version MUST supersede the organization's previous approved one in the same transaction, and a unique index on `(org_id, approved_slot)` MUST keep two racing approvals from both committing (the loser is `Aborted`), on every dialect; nothing is deleted. | Data | `TestEnvelopeLifecycle`, `TestApproveEnvelopeRace`, the `Envelope` index |
 | grant/acl-required | The backoffice's methods MUST be refused unless they are in the deployed ACL lock. | Security | `TestRealmOnlyNeedsTheACL` |
 | grant/seed-contract | A fixture that writes `status = 'approved'` and `approved_slot = 'approved'` MUST be the organization's approved envelope, read publicly and held to one per organization, exactly as an approval leaves it. | Data | `TestEnvelopeStatementsUseTheContractValues` (the values only: it holds the statements and the index to them; that a seeded row is read and that the index refuses a second one is **unit (mock) only** — a live test seeds an approved envelope, reads it with `GetOrgEnvelope`, and asserts a second seeded approved row for the organization is refused) |
-| grant/safe-fields | Links MUST be absolute https (http only for localhost) without credentials; a colour #rrggbb; a host a lower-case DNS name. | Security | `TestCheckFields` |
+| grant/safe-fields | Links MUST be absolute https (http only for localhost) without credentials; a colour #rrggbb; a host a lower-case DNS name. A proposal breaking a rule MUST be refused, and the public read MUST serve no field of an approved envelope that breaks one (a row seeded by fixture is checked nowhere else): the field is left out, the envelope stays. | Security | `TestCheckFields`, `TestGetOrgEnvelope_LeavesOutAFieldThatBreaksTheRules` |
 
 ## Seeding an approved envelope
 
@@ -84,10 +84,11 @@ plugin is activated in) is a JSON array of rows:
   either the fixture alone, or, after the first approval by the backoffice,
   change the seeded row in the fixture to `superseded` with
   `"approved_slot": null`.
-- The other fields are NOT checked: a proposal is held to
-  `grant/safe-fields` (links absolute https, a colour `#rrggbb`, a host a
-  lower-case DNS name), but a fixture bypasses that check and the public read
-  serves the row as written (gap 3), so keep to it.
+- The other fields are not checked when the fixture is applied: a proposal
+  is held to `grant/safe-fields` (links absolute https, a colour `#rrggbb`, a
+  host a lower-case DNS name) when it is written. The public read holds a
+  seeded row to the same rules and leaves out any field that breaks one, so a
+  bad link is simply missing from the page — keep to the rules.
 
 The VALUES are the public contract — what a fixture writes. The handlers
 name them (`StatusApproved`, `ApprovedSlot`, `StatusSuperseded` in
@@ -99,4 +100,3 @@ statements to them.
 
 1. The verified host is the organization's claim until the backoffice approves the version; nothing checks DNS.
 2. The envelope of a host is two reads — the auth plugin's host binding, then the organization's envelope here.
-3. `grant/safe-fields` is enforced on a proposal only. An envelope seeded by fixture is never run through `checkFields`, and `GetOrgEnvelope` serves it as stored: a seeded `javascript:` link or a malformed colour reaches the pages. The fixture's author is the deployment, not an organization, but nothing refuses it.

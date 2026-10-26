@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	pb "github.com/wandering-compiler/plugins/grant/gen/pb"
 )
 
 // A project seeds an approved envelope by fixture with the values the plugin's
@@ -58,5 +60,33 @@ func TestEnvelopeStatementsUseTheContractValues(t *testing.T) {
 	}
 	if n, _ := strconv.Atoi(slot[1]); len(ApprovedSlot) > n {
 		t.Errorf("approved_slot is CHAR(%d), too short for %q", n, ApprovedSlot)
+	}
+}
+
+// The public read holds an approved envelope to the proposal's rules field by
+// field: a seeded row is checked nowhere else, and what it serves reaches the
+// consent, invitation and sign-in pages. A field that breaks a rule is left
+// out; the envelope and its good fields stay.
+func TestGetOrgEnvelope_LeavesOutAFieldThatBreaksTheRules(t *testing.T) {
+	got := publicFields(&pb.EnvelopeFields{
+		DisplayName:  "Acme",
+		LogoLightUrl: "https://acme.example/logo.svg",
+		WebsiteUrl:   "javascript:alert(1)",
+		SupportUrl:   "http://evil.example/help",
+		PrivacyUrl:   "https://user:pw@acme.example/privacy",
+		AccentColor:  "red",
+		VerifiedHost: "ACME.example",
+		OperatedBy:   "Acme Ltd",
+	})
+	if got.GetDisplayName() != "Acme" || got.GetLogoLightUrl() != "https://acme.example/logo.svg" || got.GetOperatedBy() != "Acme Ltd" {
+		t.Errorf("a good field was dropped: %+v", got)
+	}
+	for name, v := range map[string]string{
+		"website_url": got.GetWebsiteUrl(), "support_url": got.GetSupportUrl(), "privacy_url": got.GetPrivacyUrl(),
+		"accent_color": got.GetAccentColor(), "verified_host": got.GetVerifiedHost(),
+	} {
+		if v != "" {
+			t.Errorf("%s breaks the rules and was served: %q", name, v)
+		}
 	}
 }
