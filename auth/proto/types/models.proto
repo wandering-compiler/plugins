@@ -2139,6 +2139,15 @@ message OrgInvite {
     (w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" },
     (w17.contrib.plugin_feature_field) = "membership_kinds"
   ];
+  // product_roles — the products' roles accepting gives in the organization
+  // (product_roles): `<product>:<role key>` pairs, sorted, comma-separated;
+  // '' gives none. Held to the inviter's ceiling and the organization's plan
+  // when the invitation is made, and to the plan and the catalogue again at
+  // acceptance, which writes the grants in its own transaction.
+  string product_roles = 15 [
+    (w17.field) = { type: TEXT, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "product_roles"
+  ];
 }
 
 // ── teams — groups of an organization's members that hold roles ──
@@ -2306,6 +2315,12 @@ message OrgSignUpPolicy {
   string ended_by  = 9 [(w17.field) = { type: UUID, null: true }];
   // ended_key — '' while live, the row's own id once replaced or cleared.
   string ended_key = 10 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+  // product_roles — the products' roles an open registration is given in the
+  // organization (product_roles), as OrgInvite.product_roles holds them.
+  string product_roles = 11 [
+    (w17.field) = { type: TEXT, blank: true, default_string: "" },
+    (w17.contrib.plugin_feature_field) = "product_roles"
+  ];
 }
 
 // ProductRoleGrant — a role a user holds in a PRODUCT: another domain of the

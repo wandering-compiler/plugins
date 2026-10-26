@@ -322,6 +322,25 @@ var (
 	kindOfClaim  func(claimed *pb.ConsumeOrgInviteByTokenResp, add *pb.AddOrgMembershipReq)
 )
 
+// inviteProductRoles carries the products' roles an invitation gives into
+// the rows it writes and the summaries it shows (product_roles_invite.go);
+// nil without product_roles.
+var inviteProductRoles *inviteProductRoleHooks
+
+type inviteProductRoleHooks struct {
+	// check holds the roles to the inviter's ceiling and the organization's
+	// plan, and returns what writes them onto the create request.
+	check func(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (func(*pb.CreateOrgInviteReq), error)
+	// verify holds them to the catalogue and the plan again at acceptance,
+	// before anything of the acceptance is written.
+	verify func(txCtx context.Context, h *AuthServiceHandler, orgID string, claimed *pb.ConsumeOrgInviteByTokenResp) error
+	// grant writes them for the accepting member, in the acceptance's
+	// transaction, and reports them on the response.
+	grant   func(txCtx context.Context, h *AuthServiceHandler, userID, orgID string, claimed *pb.ConsumeOrgInviteByTokenResp, resp *pb.AcceptOrgInviteResp) error
+	summary func(row *pb.OrgInvite, out *pb.OrgInviteSummary)
+	mine    func(row *pb.PendingInviteRow, out *pb.MyInvite)
+}
+
 func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
@@ -360,6 +379,14 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	var writeKind func(*pb.CreateOrgInviteReq)
 	if kindOfInvite != nil {
 		if writeKind, err = kindOfInvite(ctx, h, inviter, orgID, req); err != nil {
+			return nil, err
+		}
+	}
+	// The products' roles it gives (product_roles), held to what the inviter
+	// holds and to the organization's plan.
+	var writeProductRoles func(*pb.CreateOrgInviteReq)
+	if inviteProductRoles != nil {
+		if writeProductRoles, err = inviteProductRoles.check(ctx, h, inviter, orgID, req); err != nil {
 			return nil, err
 		}
 	}
@@ -433,22 +460,29 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	if writeKind != nil {
 		writeKind(createReq)
 	}
+	if writeProductRoles != nil {
+		writeProductRoles(createReq)
+	}
 	created, err := h.Mutation.CreateOrgInvite(ctx, createReq)
 	if err != nil {
 		return nil, err
 	}
 	inv := created.GetInvite()
+	summary := &pb.OrgInviteSummary{
+		InviteId:  inv.GetId(),
+		Email:     inv.GetEmail(),
+		Role:      inv.GetRole(),
+		ExpiresAt: inv.GetExpiresAt(),
+		CreatedAt: inv.GetCreatedAt(),
+		// Echoed from the WRITTEN row rather than from the request, so the
+		// caller sees what was actually stored.
+		Metadata: inv.GetMetadata(),
+	}
+	if inviteProductRoles != nil {
+		inviteProductRoles.summary(inv, summary)
+	}
 	return &pb.InviteToOrgResp{
-		Invite: &pb.OrgInviteSummary{
-			InviteId:  inv.GetId(),
-			Email:     inv.GetEmail(),
-			Role:      inv.GetRole(),
-			ExpiresAt: inv.GetExpiresAt(),
-			CreatedAt: inv.GetCreatedAt(),
-			// Echoed from the WRITTEN row rather than from the request, so the
-			// caller sees what was actually stored.
-			Metadata: inv.GetMetadata(),
-		},
+		Invite: summary,
 		// Handed back ONCE. The row keeps only the hash, so there is no second
 		// chance to read it and no list that can show it — the inviter is the
 		// delivery channel and this is the moment they are holding the link.
@@ -474,7 +508,7 @@ func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, req *pb.ListOrg
 	}
 	out := make([]*pb.OrgInviteSummary, 0, len(resp.GetInvites()))
 	for _, i := range resp.GetInvites() {
-		out = append(out, &pb.OrgInviteSummary{
+		summary := &pb.OrgInviteSummary{
 			InviteId:  i.GetId(),
 			Email:     i.GetEmail(),
 			Role:      i.GetRole(),
@@ -482,7 +516,11 @@ func (h *AuthServiceHandler) ListOrgInvites(ctx context.Context, req *pb.ListOrg
 			CreatedAt: i.GetCreatedAt(),
 			// So an admin screen can show WHAT each pending invitation is for.
 			Metadata: i.GetMetadata(),
-		})
+		}
+		if inviteProductRoles != nil {
+			inviteProductRoles.summary(i, summary)
+		}
+		out = append(out, summary)
 	}
 	return &pb.ListOrgInvitesResp{Invites: out}, nil
 }
@@ -532,13 +570,17 @@ func (h *AuthServiceHandler) ListMyInvites(ctx context.Context, _ *pb.ListMyInvi
 	}
 	out := make([]*pb.MyInvite, 0, len(resp.GetInvites()))
 	for _, i := range resp.GetInvites() {
-		out = append(out, &pb.MyInvite{
+		mine := &pb.MyInvite{
 			InviteId:  i.GetInviteId(),
 			OrgSlug:   i.GetOrgSlug(),
 			OrgName:   i.GetOrgName(),
 			Role:      i.GetRole(),
 			ExpiresAt: i.GetExpiresAt(),
-		})
+		}
+		if inviteProductRoles != nil {
+			inviteProductRoles.mine(i, mine)
+		}
+		out = append(out, mine)
 	}
 	return &pb.ListMyInvitesResp{Invites: out}, nil
 }
@@ -663,6 +705,14 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 	if err := h.checkRoleWithinSnapshot(txCtx, roleID, claimed.GetRoleSnapshot()); err != nil {
 		return nil, err
 	}
+	// The products' roles it gives must still be the catalogue's and the
+	// plan's — checked before the membership is written, so a refusal leaves
+	// nothing behind even without a distributed transaction.
+	if inviteProductRoles != nil {
+		if err := inviteProductRoles.verify(txCtx, h, orgID, claimed); err != nil {
+			return nil, err
+		}
+	}
 
 	addReq := &pb.AddOrgMembershipReq{
 		UserId: userID,
@@ -709,5 +759,13 @@ func (h *AuthServiceHandler) acceptInviteTx(txCtx context.Context, tokenHash, us
 	// invitation — so a caller acting on the pairing knows the acceptance
 	// committed. Reading it back with a second query could answer for a row a
 	// different request had since consumed.
-	return &pb.AcceptOrgInviteResp{OrgId: orgID, Role: roleName, Metadata: claimed.GetMetadata()}, nil
+	resp := &pb.AcceptOrgInviteResp{OrgId: orgID, Role: roleName, Metadata: claimed.GetMetadata()}
+	// The products' roles it gives (product_roles), once the person is a
+	// member, in this transaction.
+	if inviteProductRoles != nil {
+		if err := inviteProductRoles.grant(txCtx, h, userID, orgID, claimed, resp); err != nil {
+			return nil, err
+		}
+	}
+	return resp, nil
 }

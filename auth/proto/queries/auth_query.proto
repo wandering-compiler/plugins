@@ -1514,6 +1514,8 @@ message PendingInviteRow {
   string org_name  = 4;
   string role      = 5;
   google.protobuf.Timestamp expires_at = 6;
+  // See OrgInvite.product_roles.
+  string product_roles = 7 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 message ListPendingInvitesForEmailResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -1766,6 +1768,8 @@ message OrgSignUpPolicyRow {
   bool   open = 2;
   string role = 3;
   google.protobuf.Timestamp set_at = 4;
+  // See OrgSignUpPolicy.product_roles.
+  string product_roles = 5 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 
 // The product roles users hold (product_roles) and an organization's plan
@@ -3730,7 +3734,8 @@ service AuthQuery {
           "       i.expires_at AS expires_at, "
           "       i.accepted_at AS accepted_at, "
           "       i.created_at AS created_at, "
-          "       i.metadata AS metadata "
+          "       i.metadata AS metadata, "
+          "       ?feature(product_roles) i.product_roles AS product_roles "
           "FROM @module.OrgInvite i "
           "WHERE i.org_id = :org_id AND i.accepted_at IS NULL AND i.closed_at IS NULL "
           "ORDER BY i.created_at DESC"
@@ -3759,7 +3764,8 @@ service AuthQuery {
           "       o.slug AS org_slug, "
           "       o.name AS org_name, "
           "       i.role AS role, "
-          "       i.expires_at AS expires_at "
+          "       i.expires_at AS expires_at, "
+          "       ?feature(product_roles) i.product_roles AS product_roles "
           "FROM @module.OrgInvite i "
           "JOIN @module.Organization o ON o.id = i.org_id "
           "WHERE i.email = :email AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
@@ -3993,7 +3999,8 @@ service AuthQuery {
       ops: {
         name: "main"
         dql:
-          "SELECT p.kind AS kind, p.open AS open, p.role AS role, p.set_at AS set_at "
+          "SELECT p.kind AS kind, p.open AS open, p.role AS role, p.set_at AS set_at, "
+          "?feature(product_roles) p.product_roles AS product_roles "
           "FROM @module.OrgSignUpPolicy p "
           "WHERE p.org_id = :org_id AND p.ended_at IS NULL "
           "ORDER BY p.kind ASC"

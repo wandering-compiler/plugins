@@ -1020,6 +1020,13 @@ message InviteToOrgReq {
     (w17.field) = { type: SLUG, max_len: 32, blank: true },
     (w17.contrib.plugin_feature_field) = "membership_kinds"
   ];
+  // product_roles — the products' roles accepting gives in the organization
+  // (product_roles): each held there and covered by one the inviter holds
+  // there (PRODUCT_ROLE_ABOVE_CALLER), and carried by the organization's plan
+  // (product_plans; PRODUCT_ROLE_NOT_IN_PLAN). Acceptance holds them to the
+  // catalogue and the plan again: one that left either refuses it, and the
+  // invitation stays unspent for the inviter to replace. Empty = none.
+  repeated ProductRoleRef product_roles = 6 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 message InviteToOrgResp {
   option (w17.contrib.plugin_feature) = "org_invite";
@@ -1052,6 +1059,8 @@ message OrgInviteSummary {
   // WHAT each one is for. Opaque — see OrgInvite.metadata. (The plaintext token is
   // deliberately NOT here; it is returned once, by InviteToOrgResp.)
   string metadata = 6;
+  // The products' roles accepting gives (product_roles).
+  repeated ProductRoleRef product_roles = 7 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 
 message ListOrgInvitesReq {
@@ -1092,6 +1101,8 @@ message MyInvite {
   string org_name  = 3;
   string role      = 4;
   google.protobuf.Timestamp expires_at = 5;
+  // The products' roles accepting gives (product_roles).
+  repeated ProductRoleRef product_roles = 6 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 message ListMyInvitesReq  { option (w17.contrib.plugin_feature) = "org_invite"; }
 message ListMyInvitesResp {
@@ -1119,6 +1130,8 @@ message AcceptOrgInviteResp {
   // invitation — so the caller can act on the pairing knowing the acceptance
   // committed. Empty when nothing was pinned.
   string metadata = 3;
+  // The products' roles accepting gave (product_roles).
+  repeated ProductRoleRef product_roles = 4 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 
 // ── password_change ─────────────────────────────────────────
@@ -1569,6 +1582,14 @@ message ListOrgProductRoleGrantsReq {
   string user_id = 2 [(w17.field) = { type: UUID, blank: true }];
   string product = 3 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
 }
+// ProductRoleRef names one role of one product — what an invitation and an
+// open registration give in an organization.
+message ProductRoleRef {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string product  = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string role_key = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+
 message OrgProductRoleReq {
   option (w17.contrib.plugin_feature) = "product_roles";
   string org      = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
@@ -1642,6 +1663,12 @@ message SetOrgSignUpPolicyReq {
   bool   open   = 3;
   // role — the org-scoped role an open registration gets; required when open.
   string role   = 4 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  // product_roles — the products' roles an open registration is given in the
+  // organization (product_roles): each held there, and carried by the
+  // organization's plan (product_plans). A registration holds them to the
+  // catalogue and the plan again: one that left either is not given. Empty =
+  // none; a closed policy gives none.
+  repeated ProductRoleRef product_roles = 5 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 message SetOrgSignUpPolicyResp {
   option (w17.contrib.plugin_feature) = "org_signup";
@@ -1668,6 +1695,7 @@ message OrgSignUpPolicyInfo {
   bool   open = 2;
   string role = 3;
   google.protobuf.Timestamp set_at = 4;
+  repeated ProductRoleRef product_roles = 5 [(w17.contrib.plugin_feature_field) = "product_roles"];
 }
 
 message OrgPackageInfo {
