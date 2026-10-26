@@ -1909,12 +1909,26 @@ message OAuthRefreshToken {
 // removes every membership and revokes every grant scoped to it, and releases
 // its slug (ended_key, see Role.ended_key) so a new organization may take it.
 // Every organization reader reads live organizations only, so a deleted one is
-// invisible, cannot be selected, and its owner_id grants nothing.
+// invisible and cannot be selected.
+//
+// An organization has no owner. Who administers it is decided by roles alone:
+// the person who creates one is made its administrator by an org-scoped role
+// granted on their membership, like anybody they later promote.
 message Organization {
   option (w17.db.table) = {
     indexes: [ { unique: true, fields: [{ name: "slug" }, { name: "ended_key" }] } ]
   };
   option (w17.contrib.plugin_feature) = "org_membership";
+
+  // 6 = owner_id, the account that "owned" the organization. It was read as
+  // root authority — a synthetic wildcard grant over the whole deployed
+  // permission lock, selection of the organization without a membership, a
+  // membership nobody could change — and nothing in the plugin ever wrote it.
+  // Dropped: a project's next generated migration drops the column (a lossy
+  // step the migrator asks to confirm); nothing it held granted anything a
+  // role should not.
+  reserved 6;
+  reserved "owner_id";
 
   string id   = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string slug = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
@@ -1923,26 +1937,6 @@ message Organization {
   // "company". Free-form (not an enum) so a project can add its own kinds.
   string kind = 4 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
   google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
-  // owner_id — the account that OWNS this organization, and the only
-  // authorization fact that is not a role grant.
-  //
-  // Ownership is a property of the organization, not a permission somebody
-  // was handed, so it is recorded here rather than as a row in UserRole. A
-  // principal whose id matches this column is granted the whole permission
-  // catalogue by GetUserOrgPermissions — see that query for why the
-  // expansion cannot happen in SQL.
-  //
-  // This deliberately replaces reading `OrgMembership.role == "owner"`.
-  // That column is free-form and documented as such ("project policy owns
-  // the vocabulary; the plugin only passes it through"), so hanging
-  // authorization on one of its values would turn every writer of that
-  // string into a privilege-granting path.
-  //
-  // Nullable, and left so: organizations created before this column existed
-  // have no owner, and an absent owner must read as "nobody is
-  // auto-granted" rather than as an error. App-enforced, no DB-level FK —
-  // the same caveat every other link in this plugin carries.
-  string owner_id = 6 [(w17.field) = { type: UUID, null: true }, (w17.db.column) = { index: true }];
   // deleted_at — when DeleteOrganization retired it. NULL = live.
   google.protobuf.Timestamp deleted_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   // ended_key — '' while live, the row's own id once deleted (Role.ended_key).
@@ -1976,8 +1970,9 @@ message OrgMembership {
   string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
   string org_id  = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  // role: owner | admin | member. Free-form CHAR — project policy owns the
-  // vocabulary; the plugin only passes it through. An accepted invitation and
+  // role: a label (admin | member, a Role.name). Free-form CHAR — project
+  // policy owns the vocabulary; the plugin only passes it through, and it
+  // grants nothing: authority comes from the roles granted on the membership. An accepted invitation and
   // the admin's role edit write a Role.name here, so it is as wide as one.
   string role    = 4 [(w17.field) = { type: CHAR, max_len: 100 }];
   google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];

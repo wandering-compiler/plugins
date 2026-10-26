@@ -36,7 +36,7 @@ func errorDetailOf(t *testing.T, err error) *w17pb.ErrorDetail {
 // hides. Same code as every authentication refusal, so no contract moves; the
 // detail is what a person reads, and it survives the decorator loop.
 func TestOrgNotMember_SaysWhatIsWrong(t *testing.T) {
-	h := &AuthServiceHandler{Query: &orgMock{bySlug: map[string]*pb.GetUserOrgBySlugResp{}, owned: map[string]string{}}}
+	h := &AuthServiceHandler{Query: &orgMock{bySlug: map[string]*pb.GetUserOrgBySlugResp{}}}
 
 	prev := scopeDecorators
 	scopeDecorators = []scopeDecorator{resolveOrgScope}

@@ -2,12 +2,16 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
@@ -243,8 +247,21 @@ func TestDeleteOrgRole(t *testing.T) {
 
 type superadminMock struct {
 	*membershipRoleMock
-	others  int64
-	ownerID string
+	others         int64    // other members (u3…) holding a wildcard directly
+	othersDisabled bool     // …whose accounts are disabled (user_admin)
+	teamOthers     int64    // other members (u4…) holding a wildcard through a team
+	teamRoles      []string // what u2 holds in org-1 through team t-1
+}
+
+func (m *superadminMock) GetUserTeamRoleGrants(_ context.Context, in *pb.GetUserTeamRoleGrantsReq, _ ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
+	if in.GetUserId() != "u2" || in.GetOrgId() != "org-1" || len(m.teamRoles) == 0 {
+		return noTeamRoles()
+	}
+	out := &pb.GetUserTeamRoleGrantsResp{}
+	for _, id := range m.teamRoles {
+		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: id, AllPermissions: id == "r-super"})
+	}
+	return out, nil
 }
 
 func (m *superadminMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
@@ -254,17 +271,42 @@ func (m *superadminMock) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, 
 	}}, nil
 }
 
-func (m *superadminMock) CountOtherOrgSuperadmins(context.Context, *pb.CountOtherOrgSuperadminsReq, ...grpc.CallOption) (*pb.CountOtherOrgSuperadminsResp, error) {
-	return &pb.CountOtherOrgSuperadminsResp{Count: m.others}, nil
+// ListOrgSuperadmins: u2's direct wildcard grants, and `others` more.
+func (m *superadminMock) ListOrgSuperadmins(context.Context, *pb.ListOrgSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgSuperadminsResp, error) {
+	out := &pb.ListOrgSuperadminsResp{}
+	for _, id := range m.memberOrgRoles {
+		if id == "r-super" {
+			out.Grants = append(out.Grants, &pb.OrgSuperadminRow{UserId: "u2", RoleId: id})
+		}
+	}
+	for i := int64(0); i < m.others; i++ {
+		row := &pb.OrgSuperadminRow{UserId: fmt.Sprintf("u3-%d", i), RoleId: "r-super"}
+		if m.othersDisabled {
+			row.DisabledAt = timestamppb.Now()
+		}
+		out.Grants = append(out.Grants, row)
+	}
+	return out, nil
 }
 
-func (m *superadminMock) GetOrganization(context.Context, *pb.GetOrganizationReq, ...grpc.CallOption) (*pb.Organization, error) {
-	return &pb.Organization{Id: "org-1", OwnerId: m.ownerID}, nil
+// ListOrgTeamSuperadmins: u2's wildcard through t-1, and `teamOthers` more.
+func (m *superadminMock) ListOrgTeamSuperadmins(context.Context, *pb.ListOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgTeamSuperadminsResp, error) {
+	out := &pb.ListOrgTeamSuperadminsResp{}
+	for _, id := range m.teamRoles {
+		if id == "r-super" {
+			out.Grants = append(out.Grants, &pb.OrgSuperadminRow{UserId: "u2", RoleId: id, TeamId: "t-1"})
+		}
+	}
+	for i := int64(0); i < m.teamOthers; i++ {
+		out.Grants = append(out.Grants, &pb.OrgSuperadminRow{UserId: fmt.Sprintf("u4-%d", i), RoleId: "r-super", TeamId: "t-2"})
+	}
+	return out, nil
 }
 
 // An organization keeps a superadmin: the last one is neither removed nor
-// moved to a lesser role — unless another member or the owner is one, or the
-// new role is a wildcard too.
+// moved to a lesser role — unless another member is one, or the new role is a
+// wildcard too. Nobody is exempt: organization ownership once counted as a
+// superadmin here and let the last one leave; it grants nothing now.
 func TestRefuseLastSuperadmin(t *testing.T) {
 	_, mm := newMembershipRoleHandler("r-super")
 	m := &superadminMock{membershipRoleMock: mm}
@@ -285,14 +327,140 @@ func TestRefuseLastSuperadmin(t *testing.T) {
 	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
 		t.Errorf("another superadmin: %v", err)
 	}
-	m.others, m.ownerID = 0, "u1"
-	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
-		t.Errorf("an owner: %v", err)
+	// A disabled (or erased) superadmin holds no working credential: they do
+	// not keep the organization administered.
+	m.othersDisabled = true
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Errorf("a disabled other superadmin counted: %v", err)
 	}
+	m.others, m.othersDisabled = 0, false
 	mm.memberOrgRoles = []string{"r-admin"}
-	m.ownerID = ""
 	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
 		t.Errorf("not a superadmin: %v", err)
+	}
+}
+
+// The last superadmin cannot demote or remove THEMSELVES — the case an
+// organization's creator is in: they made it, hold its only wildcard role, and
+// with ownership gone nothing else keeps it administered. Through the
+// business methods, so the refusal is shown to come before either write.
+func TestLastSuperadmin_CannotDemoteOrRemoveThemselves(t *testing.T) {
+	_, mm := newMembershipRoleHandler("r-super")
+	m := &superadminMock{membershipRoleMock: mm}
+	mm.all = append(mm.all, &pb.Role{Id: "r-super", Name: "org-super"})
+	mm.orgScoped = append(mm.orgScoped, &pb.OrgScopedRole{Id: "r-super", Name: "org-super"})
+	h := &AuthServiceHandler{Query: m, Mutation: m, Lock: wildcardLock()}
+	// u2 is the member of mem-1 and the caller, holding everything the lock has.
+	self := inOrg(withHeldPermissions(context.Background(), "u2", 1, 2, 3), "org-1")
+
+	_, err := h.UpdateOrgMembershipRole(self, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-admin"})
+	if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Fatalf("self-demotion of the last superadmin: %v", err)
+	}
+	_, err = h.RemoveOrgMembership(self, &pb.RemoveOrgMembershipReq{Id: "mem-1"})
+	if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Fatalf("self-removal of the last superadmin: %v", err)
+	}
+	if mm.updated != nil || mm.deleted != nil {
+		t.Fatalf("a refused request wrote: updated=%v deleted=%v", mm.updated, mm.deleted)
+	}
+
+	// Control: with another superadmin in the organization, both go through.
+	m.others = 1
+	if _, err := h.UpdateOrgMembershipRole(self, &pb.UpdateOrgMembershipRoleReq{Id: "mem-1", Role: "org-admin"}); err != nil {
+		t.Fatalf("self-demotion beside another superadmin: %v", err)
+	}
+}
+
+// A wildcard role held through a TEAM makes a superadmin on both sides of the
+// rule, as checkMayManageMembership already counts team roles for the ceiling.
+func TestRefuseLastSuperadmin_TeamHeldWildcards(t *testing.T) {
+	ctx := context.Background()
+	mem := &pb.OrgMembership{Id: "mem-1", UserId: "u2", OrgId: "org-1"}
+
+	// The member: a superadmin only through a team. Removing them ends the
+	// team membership too, so it is refused; a role change leaves the team's
+	// wildcard in place, so it is not.
+	_, mm := newMembershipRoleHandler("r-admin")
+	m := &superadminMock{membershipRoleMock: mm, teamRoles: []string{"r-super"}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Errorf("removing the last superadmin, a superadmin through a team: %v", err)
+	}
+	if err := h.refuseLastSuperadmin(ctx, mem, "r-admin"); err != nil {
+		t.Errorf("a role change keeps the team's wildcard: %v", err)
+	}
+
+	// The others: the member is the last DIRECT superadmin, and another member
+	// holds a wildcard through a team — the organization keeps a superadmin.
+	_, mm = newMembershipRoleHandler("r-super")
+	m = &superadminMock{membershipRoleMock: mm, teamOthers: 1}
+	h = &AuthServiceHandler{Query: m, Mutation: m}
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); err != nil {
+		t.Errorf("another member is a superadmin through a team: %v", err)
+	}
+	m.teamOthers = 0
+	if err := h.refuseLastSuperadmin(ctx, mem, ""); detailOf(t, err).GetCode() != CodeLastSuperadmin {
+		t.Errorf("control, nobody else: %v", err)
+	}
+}
+
+// Which grants are a superadmin's is decided in SQL — liveness — and in
+// orgSuperadmins — the account's disabled / erased stamps, which only a gated
+// projection can carry (a SELECT's WHERE conjunct cannot be gated). The
+// statements are what is asserted: a grant counts only when it, its role, the
+// membership (and, through a team, the team, its role grant and the team
+// membership) are live, and both stamps are projected for the handler.
+// **Unit (statement) only** for the SQL half — no database runs here.
+func TestSuperadminQueries_ReadOnlyLiveGrantsAndProjectTheAccountsStamps(t *testing.T) {
+	q := authProtos(t)["queries/auth_query.proto"]
+	for marker, want := range map[string][]string{
+		"rpc ListOrgSuperadmins(": {
+			"ur.revoked_at IS NULL", "r.deleted_at IS NULL", "r.all_permissions = TRUE",
+			"m.removed_at IS NULL", "JOIN @module.User u ON u.id = ur.user_id",
+			"?feature(user_admin) u.disabled_at AS disabled_at", "?feature(user_admin) u.erased_at AS erased_at",
+			"?feature(api_token) r.token_type AS token_type",
+		},
+		"rpc ListOrgTeamSuperadmins(": {
+			"tm.removed_at IS NULL", "t.deleted_at IS NULL", "tr.revoked_at IS NULL",
+			"r.deleted_at IS NULL", "r.all_permissions = TRUE", "m.removed_at IS NULL",
+			"m.created_at <= tm.created_at", "t.id AS team_id", "JOIN @module.User u ON u.id = tm.user_id",
+			"?feature(user_admin) u.disabled_at AS disabled_at", "?feature(user_admin) u.erased_at AS erased_at",
+		},
+	} {
+		body := dqlText(methodDQL(t, q, marker))
+		for _, w := range want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s does not say %q:\n%s", marker, w, body)
+			}
+		}
+	}
+}
+
+// orgSuperadmins drops a disabled or an erased account's grants, from every
+// source, and an API-realm (a bot's) wildcard grant.
+func TestOrgSuperadmins_DropsDisabledAndErasedAccounts(t *testing.T) {
+	_, mm := newMembershipRoleHandler("r-super")
+	m := &superadminMock{membershipRoleMock: mm, others: 2, othersDisabled: true, teamRoles: []string{"r-super"}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	rows, err := h.orgSuperadmins(context.Background(), "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 { // u2 directly and through t-1; u3-* are disabled
+		t.Fatalf("rows = %v, want u2's two", rows)
+	}
+	prev := superadminSources
+	t.Cleanup(func() { superadminSources = prev })
+	superadminSources = append(append([]func(context.Context, *AuthServiceHandler, string) ([]*pb.OrgSuperadminRow, error){}, prev...),
+		func(context.Context, *AuthServiceHandler, string) ([]*pb.OrgSuperadminRow, error) {
+			return []*pb.OrgSuperadminRow{
+				{UserId: "u9", RoleId: "r-super", ErasedAt: timestamppb.Now()},
+				{UserId: "bot-1", RoleId: "r-bot-super", TokenType: pb.TokenType_TOKEN_TYPE_API},
+			}, nil
+		})
+	if rows, _ := h.orgSuperadmins(context.Background(), "org-1"); len(rows) != 2 {
+		t.Fatalf("an erased account or a bot's API-realm wildcard counted: %v", rows)
 	}
 }
 

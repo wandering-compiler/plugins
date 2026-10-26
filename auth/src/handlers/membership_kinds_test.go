@@ -103,39 +103,18 @@ func TestResolveOrgScopeByKind(t *testing.T) {
 	})
 }
 
-// Ownership is root authority its staff exercise: through an audience that
-// admits only some kinds, it does not widen.
-func TestOwnershipDoesNotWidenThroughAKindFilter(t *testing.T) {
-	q := &ownsMock{owner: true}
-	p := &authPrincipal{userID: "u1", realm: pb.TokenType_TOKEN_TYPE_SESSION}
-	ctx := context.WithValue(context.Background(), authHeadersKey{}, admits("client"))
-	if err := narrowGrantsToActiveOrg(ctx, &AuthServiceHandler{Query: q}, p, map[string]string{"org_id": "org-acme"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, g := range p.grants {
-		if g.GetAllPermissions() {
-			t.Fatal("an owner reached the client's surface with the owner's wildcard")
-		}
-	}
-}
-
-// ownsMock answers the queries narrowGrantsToActiveOrg and the invite check
-// make.
-type ownsMock struct {
+// kindsQueryMock answers the queries narrowGrantsToActiveOrg and the invite
+// check make.
+type kindsQueryMock struct {
 	pb.AuthQueryClient
-	owner bool
-	orgs  []*pb.UserOrg
+	orgs []*pb.UserOrg
 }
 
-func (m *ownsMock) GetUserOrgPermissions(context.Context, *pb.GetUserOrgPermissionsReq, ...grpc.CallOption) (*pb.GetUserOrgPermissionsResp, error) {
+func (m *kindsQueryMock) GetUserOrgPermissions(context.Context, *pb.GetUserOrgPermissionsReq, ...grpc.CallOption) (*pb.GetUserOrgPermissionsResp, error) {
 	return &pb.GetUserOrgPermissionsResp{}, nil
 }
 
-func (m *ownsMock) GetUserOwnsOrg(context.Context, *pb.GetUserOwnsOrgReq, ...grpc.CallOption) (*pb.GetUserOwnsOrgResp, error) {
-	return &pb.GetUserOwnsOrgResp{Owner: m.owner}, nil
-}
-
-func (m *ownsMock) ListUserOrgs(context.Context, *pb.ListUserOrgsReq, ...grpc.CallOption) (*pb.ListUserOrgsResp, error) {
+func (m *kindsQueryMock) ListUserOrgs(context.Context, *pb.ListUserOrgsReq, ...grpc.CallOption) (*pb.ListUserOrgsResp, error) {
 	return &pb.ListUserOrgsResp{Orgs: m.orgs}, nil
 }
 
@@ -183,15 +162,16 @@ func TestParseAudienceTable(t *testing.T) {
 	}
 }
 
-// A member invites only the kinds their audiences may invite; the owner and
-// an inviter from outside the organization (backoffice) may invite any kind
-// the table knows; a kind no audience admits is refused to everyone.
+// A member invites only the kinds their audiences may invite — whoever created
+// the organization included, now that ownership widens nothing; an inviter
+// from outside the organization (backoffice) may invite any kind the table
+// knows; a kind no audience admits is refused to everyone.
 func TestCheckInviteKind(t *testing.T) {
 	table := []audienceEntry{
 		{name: "staff", kinds: []string{"staff"}, invites: []string{"staff", "client"}},
 		{name: "client", kinds: []string{"client"}}, // names none: invites its own
 	}
-	invite := func(q *ownsMock, kind string) error {
+	invite := func(q *kindsQueryMock, kind string) error {
 		h := &AuthServiceHandler{Query: q, audiences: table, audiencesRead: true}
 		_, err := checkInviteKind(context.Background(), h, "u1", "org-acme", &pb.InviteToOrgReq{Kind: kind})
 		return err
@@ -199,17 +179,16 @@ func TestCheckInviteKind(t *testing.T) {
 	staff := []*pb.UserOrg{{OrgId: "org-acme", MembershipKind: "staff"}}
 	client := []*pb.UserOrg{{OrgId: "org-acme", MembershipKind: "client"}}
 	for name, tc := range map[string]struct {
-		q    *ownsMock
+		q    *kindsQueryMock
 		kind string
 		ok   bool
 	}{
-		"staff invite a client":           {&ownsMock{orgs: staff}, "client", true},
-		"a client invites a client":       {&ownsMock{orgs: client}, "client", true},
-		"a client invites staff":          {&ownsMock{orgs: client}, "staff", false},
-		"the owner invites staff":         {&ownsMock{orgs: client, owner: true}, "staff", true},
-		"an outsider invites staff":       {&ownsMock{}, "staff", true},
-		"a kind no audience admits":       {&ownsMock{owner: true}, "staf", false},
-		"no kind (no audience admits it)": {&ownsMock{orgs: client}, "", true},
+		"staff invite a client":           {&kindsQueryMock{orgs: staff}, "client", true},
+		"a client invites a client":       {&kindsQueryMock{orgs: client}, "client", true},
+		"a client invites staff":          {&kindsQueryMock{orgs: client}, "staff", false},
+		"an outsider invites staff":       {&kindsQueryMock{}, "staff", true},
+		"a kind no audience admits":       {&kindsQueryMock{}, "staf", false},
+		"no kind (no audience admits it)": {&kindsQueryMock{orgs: client}, "", true},
 	} {
 		err := invite(tc.q, tc.kind)
 		if tc.ok && err != nil {
@@ -219,25 +198,25 @@ func TestCheckInviteKind(t *testing.T) {
 			t.Errorf("%s: err = %v, want PermissionDenied", name, err)
 		}
 	}
-	if _, err := checkInviteKind(context.Background(), &AuthServiceHandler{Query: &ownsMock{orgs: client}}, "u1", "org-acme",
+	if _, err := checkInviteKind(context.Background(), &AuthServiceHandler{Query: &kindsQueryMock{orgs: client}}, "u1", "org-acme",
 		&pb.InviteToOrgReq{Kind: "staff"}); err != nil {
 		t.Errorf("no audiences, no rule: %v", err)
 	}
 	// A handler that skipped ValidateConfig reads the table itself.
-	h := &AuthServiceHandler{Query: &ownsMock{orgs: client}, Audiences: "staff:staff::staff|client;client:client::"}
+	h := &AuthServiceHandler{Query: &kindsQueryMock{orgs: client}, Audiences: "staff:staff::staff|client;client:client::"}
 	if _, err := checkInviteKind(context.Background(), h, "u1", "org-acme", &pb.InviteToOrgReq{Kind: "staff"}); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("without ValidateConfig the check fell open: %v", err)
 	}
 }
 
-func (m *ownsMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserTeamRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
+func (m *kindsQueryMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserTeamRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
 	return &pb.GetUserTeamRoleGrantsResp{}, nil
 }
 
 // The kind answered is the caller's membership in the organization THIS
 // request acts in: u1 is staff of acme and a client of beta, so two requests
 // at once, one per tab, answer one kind each. No organization, or one the
-// caller only owns, answers none.
+// caller holds no membership in, answers none.
 func TestAnswerMembershipKind(t *testing.T) {
 	h := kindsHandler()
 	answer := func(ctx context.Context, org string) string {
@@ -251,7 +230,7 @@ func TestAnswerMembershipKind(t *testing.T) {
 		}
 		return resp.GetMembershipKind()
 	}
-	for org, want := range map[string]string{"org-acme": "staff", "org-beta": "client", "": "", "org-owned-only": ""} {
+	for org, want := range map[string]string{"org-acme": "staff", "org-beta": "client", "": "", "org-not-a-member": ""} {
 		if got := answer(context.Background(), org); got != want {
 			t.Errorf("org %q: kind %q, want %q", org, got, want)
 		}

@@ -535,9 +535,9 @@ message OrganizationCreated {
 }
 
 // OrgMembershipAdded — emitted on AuthMutation.AddOrgMembership after the
-// OrgMembership row commits (the creator's owner grant + every later
+// OrgMembership row commits (the creator's membership + every later
 // invite accept). Subscribers audit grants, invalidate per-user org
-// caches, or notify. `role` is the granted role (owner | admin | member).
+// caches, or notify. `role` is the membership's role label (admin | member).
 message OrgMembershipAdded {
   option (w17.event) = {
     channel: "events"
@@ -548,7 +548,7 @@ message OrgMembershipAdded {
   string                    membership_id = 1;
   string                    user_id       = 2;
   string                    org_id        = 3;
-  string                    role          = 4; // owner | admin | member
+  string                    role          = 4; // a label: admin | member
   google.protobuf.Timestamp created_at    = 5;
 }
 

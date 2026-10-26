@@ -1495,7 +1495,9 @@ message ConsumeCliAuthCodeResp {
 // Write primitives for the multi-org model: create an Organization
 // and link a User to one via OrgMembership. The symmetric counterpart
 // to CreateUser — a project composes them (create org → add the
-// creator as owner) in its own handler/subscriber, atomically via
+// creator's membership, with an org-scoped admin role: an organization
+// has no owner, and roles are what make someone its administrator) in
+// its own handler/subscriber, atomically via
 // distx exactly like SignUp composes CreateUser + IssueToken. There is
 // no plugin-provided turnkey business RPC and no create/invite REST
 // preset: org administration is the consuming project's web/admin
@@ -1519,7 +1521,8 @@ message AddOrgMembershipReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string user_id = 1 [(w17.field) = { type: UUID }];
   string org_id  = 2 [(w17.field) = { type: UUID }];
-  // role: owner | admin | member. Free-form CHAR — project policy owns
+  // role: a label (admin | member, a Role.name). Free-form CHAR — it
+  // grants nothing (an organization has no owner); project policy owns
   // the vocabulary; the plugin passes it through (mirrors OrgMembership.role).
   string role    = 3 [(w17.field) = { type: CHAR, max_len: 100 }];
   // kind — the kind of membership (membership_kinds); '' = none.
@@ -4502,9 +4505,12 @@ service AuthMutation {
   // ────────────────────────────────────────────────────────────
   // org_membership mutations — the two org write primitives (the
   // symmetric counterpart to CreateUser). A consuming handler /
-  // subscriber composes them: CreateOrganization then
-  // AddOrgMembership(creator, org, "owner"), atomically via distx
-  // like SignUp. Both gated `org_membership`.
+  // subscriber composes them: CreateOrganization, AddOrgMembership
+  // for the creator, and an org-scoped admin role granted on that
+  // membership (AssignRoleToUser with the org) — the role, not the
+  // membership's `role` label, is what lets the creator administer it:
+  // an organization has no owner. Atomically via distx like SignUp.
+  // Both gated `org_membership`.
   // ────────────────────────────────────────────────────────────
 
   // CreateOrganization — INSERT Organization. Refuses a duplicate slug
@@ -4620,8 +4626,7 @@ service AuthMutation {
   //                which frees its slug for a new organization.
   //
   // Every organization reader reads live rows only, so the org disappears
-  // from every list and lookup, cannot be selected, and its owner_id grants
-  // nothing. Its invitations are not touched here — org_invite is a feature
+  // from every list and lookup and cannot be selected. Its invitations are not touched here — org_invite is a feature
   // of its own, and a statement cannot name a table its activation may not
   // have — so AuthService.RemoveOrganization (which the admin page binds)
   // closes them first, in the same transaction (CloseOrgInvitesOfOrg); and

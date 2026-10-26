@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
@@ -46,6 +47,24 @@ func (m *membershipRoleMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserT
 
 func (m *membershipRoleMock) EndUserTeamMemberships(context.Context, *pb.EndUserTeamMembershipsReq, ...grpc.CallOption) (*pb.EndUserTeamMembershipsResp, error) {
 	return &pb.EndUserTeamMembershipsResp{}, nil
+}
+
+// None of these fakes has a superadmin: the last-superadmin rule has nothing
+// to protect in them.
+func (o *orgTables) ListOrgSuperadmins(context.Context, *pb.ListOrgSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgSuperadminsResp, error) {
+	return &pb.ListOrgSuperadminsResp{}, nil
+}
+
+func (o *orgTables) ListOrgTeamSuperadmins(context.Context, *pb.ListOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgTeamSuperadminsResp, error) {
+	return &pb.ListOrgTeamSuperadminsResp{}, nil
+}
+
+func (m *membershipRoleMock) ListOrgSuperadmins(context.Context, *pb.ListOrgSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgSuperadminsResp, error) {
+	return &pb.ListOrgSuperadminsResp{}, nil
+}
+
+func (m *membershipRoleMock) ListOrgTeamSuperadmins(context.Context, *pb.ListOrgTeamSuperadminsReq, ...grpc.CallOption) (*pb.ListOrgTeamSuperadminsResp, error) {
+	return &pb.ListOrgTeamSuperadminsResp{}, nil
 }
 
 func (m *botAdminMock) GetUserTeamRoleGrants(context.Context, *pb.GetUserTeamRoleGrantsReq, ...grpc.CallOption) (*pb.GetUserTeamRoleGrantsResp, error) {
@@ -180,6 +199,42 @@ type teamStore struct {
 	roles   []*teamRoleRow
 	// orgMembers — org-1's live members, true for a machine account.
 	orgMembers map[string]bool
+	// wildcard — the catalogue's all_permissions roles (none by default);
+	// directSupers — org-1's members holding one directly, and which of them
+	// are disabled (user_admin).
+	wildcard       map[string]bool
+	directSupers   []string
+	disabledSupers map[string]bool
+}
+
+func (s *teamStore) ListOrgSuperadmins(_ context.Context, in *pb.ListOrgSuperadminsReq, _ ...grpc.CallOption) (*pb.ListOrgSuperadminsResp, error) {
+	out := &pb.ListOrgSuperadminsResp{}
+	for _, u := range s.directSupers {
+		row := &pb.OrgSuperadminRow{UserId: u, RoleId: "r-direct-super"}
+		if s.disabledSupers[u] {
+			row.DisabledAt = timestamppb.Now()
+		}
+		out.Grants = append(out.Grants, row)
+	}
+	return out, nil
+}
+
+// ListOrgTeamSuperadmins: every live member of a live team of the
+// organization, once per wildcard role the team holds.
+func (s *teamStore) ListOrgTeamSuperadmins(_ context.Context, in *pb.ListOrgTeamSuperadminsReq, _ ...grpc.CallOption) (*pb.ListOrgTeamSuperadminsResp, error) {
+	out := &pb.ListOrgTeamSuperadminsResp{}
+	for _, m := range s.members {
+		t := s.teams[m.team]
+		if m.ended || t.deleted || t.org != in.GetOrgId() {
+			continue
+		}
+		for _, r := range s.liveRoles(m.team) {
+			if s.wildcard[r] {
+				out.Grants = append(out.Grants, &pb.OrgSuperadminRow{UserId: m.user, RoleId: r, TeamId: m.team})
+			}
+		}
+	}
+	return out, nil
 }
 
 func newTeams() (*AuthServiceHandler, *teamStore) {
@@ -214,6 +269,10 @@ func (s *teamStore) ListOrgRoleRows(context.Context, *pb.ListOrgRoleRowsReq, ...
 func (s *teamStore) ListRoleGrants(context.Context, *pb.ListRoleGrantsReq, ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
 	out := &pb.ListRoleGrantsResp{}
 	for id, perms := range teamRolePerms {
+		if s.wildcard[id] {
+			out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: id, AllPermissions: true})
+			continue
+		}
 		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: id, PermissionIds: perms})
 	}
 	return out, nil
@@ -523,6 +582,80 @@ func TestSetOrgTeamRoles(t *testing.T) {
 	s.roles = append(s.roles, &teamRoleRow{team: "t-admin", role: "r-viewer"})
 	if _, err := h.SetOrgTeamRoles(workerCaller(), &pb.SetOrgTeamRolesReq{TeamId: "t-admin", RoleIds: []string{"r-admin", "r-viewer"}}); err != nil {
 		t.Errorf("an unchanged set was refused: %v", err)
+	}
+}
+
+// --- the last superadmin through a team ---------------------------------------
+
+// superTeams: org-admin is a wildcard role, and t-admin (which holds it) has
+// one member, u3 — the organization's only superadmin.
+func superTeams() (*AuthServiceHandler, *teamStore) {
+	h, s := newTeams()
+	s.wildcard = map[string]bool{"r-admin": true}
+	s.members = append(s.members, &teamMemberRow{team: "t-admin", user: "u3"})
+	return h, s
+}
+
+// A caller covering everything the lock has (org-admin is a wildcard).
+func superCaller() context.Context { return orgCaller(1, 2, 3, 4, 5) }
+
+// The team's methods are held to the last-superadmin rule like the
+// membership's: each refuses (LAST_SUPERADMIN, nothing written) when it would
+// end the organization's last wildcard, and goes through when another
+// superadmin who can act remains. A disabled one does not count.
+func TestTeamMethods_KeepTheLastSuperadmin(t *testing.T) {
+	type change struct {
+		name    string
+		do      func(h *AuthServiceHandler) error
+		changed func(s *teamStore) bool
+	}
+	for _, c := range []change{
+		{"RemoveOrgTeamMember", func(h *AuthServiceHandler) error {
+			_, err := h.RemoveOrgTeamMember(superCaller(), &pb.RemoveOrgTeamMemberReq{TeamId: "t-admin", UserId: "u3"})
+			return err
+		}, func(s *teamStore) bool { return len(s.liveMembers("t-admin")) == 0 }},
+		{"SetOrgTeamRoles", func(h *AuthServiceHandler) error {
+			_, err := h.SetOrgTeamRoles(superCaller(), &pb.SetOrgTeamRolesReq{TeamId: "t-admin", RoleIds: []string{"r-viewer"}})
+			return err
+		}, func(s *teamStore) bool { return !reflect.DeepEqual(s.liveRoles("t-admin"), []string{"r-admin"}) }},
+		{"DeleteOrgTeam", func(h *AuthServiceHandler) error {
+			_, err := h.DeleteOrgTeam(superCaller(), &pb.DeleteOrgTeamReq{TeamId: "t-admin"})
+			return err
+		}, func(s *teamStore) bool { return s.teams["t-admin"].deleted }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, s := superTeams()
+			err := c.do(h)
+			if status.Code(err) != codes.FailedPrecondition || detailOf(t, err).GetCode() != CodeLastSuperadmin {
+				t.Fatalf("ending the last superadmin's wildcard: %v", err)
+			}
+			if c.changed(s) {
+				t.Fatal("a refused change was written")
+			}
+
+			h, s = superTeams()
+			s.directSupers, s.disabledSupers = []string{"u1"}, map[string]bool{"u1": true}
+			if err := c.do(h); detailOf(t, err).GetCode() != CodeLastSuperadmin {
+				t.Fatalf("a disabled superadmin counted as another one: %v", err)
+			}
+
+			h, s = superTeams()
+			s.directSupers = []string{"u1"}
+			if err := c.do(h); err != nil {
+				t.Fatalf("another active superadmin remains: %v", err)
+			}
+			if !c.changed(s) {
+				t.Fatal("the allowed change was not written")
+			}
+		})
+	}
+
+	// Another member of the same team stays a superadmin through it: removing
+	// one of them goes through.
+	h, s := superTeams()
+	s.members = append(s.members, &teamMemberRow{team: "t-admin", user: "u2"})
+	if _, err := h.RemoveOrgTeamMember(superCaller(), &pb.RemoveOrgTeamMemberReq{TeamId: "t-admin", UserId: "u3"}); err != nil {
+		t.Errorf("another member of the team keeps its wildcard: %v", err)
 	}
 }
 

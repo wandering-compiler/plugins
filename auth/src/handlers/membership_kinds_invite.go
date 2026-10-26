@@ -34,8 +34,11 @@ func init() {
 //     kind, which no kind-filtering gateway admits);
 //   - a member may invite the union of `invites` over the audiences that
 //     admit their own kind (an audience naming none invites its own kinds);
-//   - the owner, and an inviter from outside the organization (a backoffice
-//     admin), may invite any kind the table knows.
+//   - an inviter from outside the organization (a backoffice admin) may
+//     invite any kind the table knows.
+//
+// Organization ownership widens nothing here: a member who created the
+// organization is held to their own kind's audiences like every other member.
 //
 // With no table — a domain without audiences — any kind goes.
 func checkInviteKind(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (string, error) {
@@ -70,13 +73,6 @@ func checkInviteKind(ctx context.Context, h *AuthServiceHandler, inviterID, orgI
 		if slices.Contains(a.kinds, m.GetMembershipKind()) && slices.Contains(a.invitable(), kind) {
 			return kind, nil
 		}
-	}
-	owns, err := h.Query.GetUserOwnsOrg(ctx, &pb.GetUserOwnsOrgReq{UserId: inviterID, OrgId: orgID})
-	if err != nil {
-		return "", err
-	}
-	if owns.GetOwner() {
-		return kind, nil
 	}
 	return refuse()
 }

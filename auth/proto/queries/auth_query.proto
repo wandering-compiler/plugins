@@ -301,27 +301,6 @@ message GetDefaultRolesResp {
 message ListRolesReq {
   option (w17.contrib.plugin_feature) = "rbac";
 }
-message GetUserOwnsAnyOrgReq {
-  option (w17.contrib.plugin_feature) = "org_membership";
-  string user_id = 1 [(w17.field) = { type: UUID }];
-}
-message GetUserOwnsAnyOrgResp {
-  option (w17.contrib.plugin_feature) = "org_membership";
-  bool owns = 1;
-}
-
-message GetOwnedOrgBySlugReq {
-  option (w17.contrib.plugin_feature) = "org_membership";
-  string user_id = 1 [(w17.field) = { type: UUID }];
-  string slug    = 2;
-}
-message GetOwnedOrgBySlugResp {
-  option (w17.contrib.plugin_feature) = "org_membership";
-  // Empty org_id = no organization with this slug is OWNED by this user
-  // (unknown slug, or a real org someone else owns).
-  string org_id = 1;
-}
-
 message ListOrgScopedRolesReq {
   option (w17.contrib.plugin_feature) = "org_membership";
 }
@@ -386,18 +365,47 @@ message CountRoleGrantsResp {
   int64 count = 1;
 }
 
-// CountOtherOrgSuperadmins — how many live grants of a wildcard role
-// (all_permissions) members of the organization OTHER than user_id hold there.
-// Zero means user_id is the organization's last superadmin, whom a role change
-// or a removal must not take away (handlers/org_membership_role.go).
-message CountOtherOrgSuperadminsReq {
+// ListOrgSuperadmins — the organization's superadmins who can act, one row per
+// live grant of a wildcard role (all_permissions) held there DIRECTLY. With
+// the rows of every other source (a team's wildcard role,
+// ListOrgTeamSuperadmins) it is the ONE definition of "the organization's
+// superadmins" the last-superadmin rule reads (handlers/org_membership_role.go,
+// orgSuperadmins): a membership change, a removal and the team methods each
+// drop the rows they would end and refuse when none is left.
+//
+// Only a superadmin who can act counts: a live grant of a live role, on a live
+// membership, of an account that is neither disabled nor erased (user_admin:
+// the query projects both stamps and orgSuperadmins drops such rows), of a
+// session-realm role (api_token: the realm is projected the same way; a bot's
+// API-realm wildcard is no superadmin who administers the organization).
+// A disabled superadmin holds no working credential, so counting one let the
+// last ACTIVE superadmin leave an organization nobody could administer.
+message ListOrgSuperadminsReq {
   option (w17.contrib.plugin_feature) = "org_membership";
-  string org_id  = 1 [(w17.field) = { type: UUID }];
-  string user_id = 2 [(w17.field) = { type: UUID }];
+  string org_id = 1 [(w17.field) = { type: UUID }];
 }
-message CountOtherOrgSuperadminsResp {
+message ListOrgSuperadminsResp {
   option (w17.contrib.plugin_feature) = "org_membership";
-  int64 count = 1;
+  repeated OrgSuperadminRow grants = 1;
+}
+// OrgSuperadminRow — one wildcard grant a superadmin holds in an organization:
+// directly (team_id empty) or through a team.
+message OrgSuperadminRow {
+  option (w17.contrib.plugin_feature) = "org_membership";
+  string user_id = 1;
+  string role_id = 2;
+  // team_id — the team the role is held through; empty for a direct grant.
+  string team_id = 3;
+  // disabled_at / erased_at — the account's (user_admin; unset without it).
+  // A row of a disabled or erased account is no superadmin who can act, and
+  // orgSuperadmins drops it.
+  google.protobuf.Timestamp disabled_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp erased_at   = 5 [(w17.field) = { type: DATETIME, null: true }];
+  // token_type — the role's realm (api_token; unset without it). An API-realm
+  // wildcard is a machine account's: it administers nothing through a
+  // session, and SetBotRoles takes it away unasked, so orgSuperadmins drops
+  // the row. A team's roles are session-realm by construction.
+  TokenType token_type = 6 [(w17.contrib.plugin_feature_field) = "api_token"];
 }
 
 message ListRolesResp {
@@ -926,11 +934,11 @@ message UserOrg {
   string name   = 3;
   string kind   = 4; // private | company
   string role   = 5; // a name from the org role catalogue
-  // owner — TRUE when this caller IS the organization's owner
-  // (Organization.owner_id). Distinct from `role`, which is a GRANT somebody
-  // was given and can be changed by an admin; ownership is a property of the
-  // organization. Without this the person who created an org is
-  // indistinguishable from anyone they promoted.
+  // owner — DEPRECATED, always false. Ownership is no longer an
+  // authorization fact (Organization.owner_id is dropped; see Organization in
+  // types/models.proto): whoever administers an organization holds a role in
+  // it. ListUserOrgs no longer projects it; the field stays, unset, so a
+  // client reading UserOrg (ListMyOrgs answers it) does not break.
   bool   owner  = 6;
   // membership_kind — the kind of this membership (membership_kinds):
   // `staff`, `client`, … One membership per organization, so one kind.
@@ -986,45 +994,9 @@ message GetUserOrgPermissionsResp {
   repeated RoleGrant grants = 3;
 
 
-  // 1 = permission_ids, 2 = all_permissions (wildcard OR ownership).
+  // 1 = permission_ids, 2 = all_permissions (a wildcard role, which then
+  // also meant ownership).
   reserved 1, 2;
-}
-
-// GetUserOwnsOrg — is this user the organization's owner?
-//
-// Its OWN query rather than a field beside `grants`, for two reasons. The
-// shape: that message is now one row per role, and a scalar riding along a
-// fan-out is the ambiguity `w17.Paging` had to be carved out of. And the
-// meaning: ownership is not a role grant, so putting it in the message that
-// carries role grants would re-create the conflation this change exists to
-// undo.
-message GetUserOwnsOrgReq {
-  option (w17.contrib.plugin_feature) = "org_membership";
-  string user_id = 1 [(w17.field) = { type: UUID }];
-  string org_id  = 2 [(w17.field) = { type: UUID }];
-}
-message GetUserOwnsOrgResp {
-  option (w17.contrib.plugin_feature) = "org_membership";
-  // owner — Organization.owner_id is this user.
-  //
-  // Split out of `all_permissions`, which used to mean "a wildcard role OR
-  // ownership". Conflating them made ownership INERT: it arrived in the
-  // narrowing step, narrowing can only subtract, and an owner holding no
-  // role intersected "everything" with "nothing" and got nothing — owner_id
-  // set, auth_userrole empty ⇒ PermissionDenied — so owners needed seeded
-  // grants like anybody else.
-  //
-  // ⚠️ This is the ONE flag in the plugin that WIDENS rather than narrows,
-  // and the exception is deliberate, argued here rather than slipped in:
-  //
-  //   · ownership is not a permission anybody handed out — it is root
-  //     authority over the organization, read off the organization itself;
-  //   · it applies on the SESSION realm ONLY. An API token's ceiling stays
-  //     its holder's api-realm roles, so a stolen CI token is not an owner
-  //     login even when its owner owns the org;
-  //   · and the per-project CI lock runs ABOVE the ACL, so a locked project
-  //     still refuses a push from the owner.
-  bool owner = 1;
 }
 
 // The no-active-org half of the pair above. A separate query rather
@@ -1040,8 +1012,6 @@ message GetUserRealmWidePermissionsReq {
 message GetUserRealmWidePermissionsResp {
   option (w17.contrib.plugin_feature) = "org_membership";
   // Realm-wide roles only — every org-scoped role is out of context here.
-  // No `owner` twin: ownership is per organization, and this is the answer
-  // for a request that named none.
   repeated RoleGrant grants = 3;
   reserved 1, 2;
 }
@@ -1458,11 +1428,13 @@ message OrgMemberRow {
   string email   = 2;
   string role    = 3;
   google.protobuf.Timestamp joined_at = 4;
-  // owner — see UserOrg.owner. A member list that cannot show who owns the
-  // organization makes the owner look like any other admin.
-  bool   owner   = 5;
   // The membership row's id (OrgMember.membership_id).
   string membership_id = 6;
+
+  // 5 = owner, (Organization.owner_id = user_id): dropped with the column.
+  // OrgMember.owner, which this filled, stays — deprecated, always false.
+  reserved 5;
+  reserved "owner";
 }
 
 message ListOrgMembersByOrgReq {
@@ -1909,6 +1881,20 @@ message GetOrgMemberAccountReq {
 message GetOrgMemberAccountResp {
   option (w17.contrib.plugin_feature) = "teams";
   User user = 1;
+}
+
+// ListOrgTeamSuperadmins — ListOrgSuperadmins' team half: one row per member
+// and team through which they hold a wildcard role in the organization, read
+// with GetUserTeamRoleGrants' liveness (the team membership, the team, its role
+// grant, the role, the organization membership it was made under) and an
+// account that is neither disabled nor erased.
+message ListOrgTeamSuperadminsReq {
+  option (w17.contrib.plugin_feature) = "teams";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgTeamSuperadminsResp {
+  option (w17.contrib.plugin_feature) = "teams";
+  repeated OrgSuperadminRow grants = 1;
 }
 
 // CountTeamRoleGrants — how many live teams hold a role: a role a team holds
@@ -2364,56 +2350,6 @@ service AuthQuery {
   // them needs feature-variant DQL, which this vocabulary does not have.
   // The consequence worth knowing: a caller cannot tell an org-scoped
   // role from a global one through the API, only through the seed.
-  // GetUserOwnsAnyOrg — does this principal own an organization at all.
-  //
-  // The base principal query (GetUserByTokenWithPermissions) cannot ask this:
-  // it is BASE TIER, present in every activation, and `Organization` only
-  // exists when `org_membership` is on. Naming it there would fail the
-  // typecheck for every project without the feature — the same wall
-  // ListRoles hits with `org_scoped`.
-  //
-  // "ANY", deliberately, and it is not as wide as it reads. This answer only
-  // widens the BASE set; narrowGrantsToActiveOrg still runs after it and
-  // re-asks per organization, so owning one org buys nothing in another. What
-  // it fixes is the opposite order: ownership resolved only in the narrowing
-  // step could never widen anything, so an owner holding no role grant
-  // intersected "everything" with "nothing" and got nothing.
-  rpc GetUserOwnsAnyOrg(GetUserOwnsAnyOrgReq) returns (GetUserOwnsAnyOrgResp) {
-    option (w17.contrib.plugin_feature_rpc) = "org_membership";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
-          "              WHERE o.owner_id = :user_id AND o.deleted_at IS NULL) AS owns "
-          "FROM @module.User u WHERE u.id = :user_id"
-      }
-    };
-  }
-
-  // GetOwnedOrgBySlug — resolve a slug to an org the caller OWNS.
-  //
-  // The membership lookup's counterpart, and deliberately a second query
-  // rather than an OR bolted onto GetUserOrgBySlug: that one reads FROM
-  // OrgMembership and joins Organization, so admitting owners would mean
-  // inverting which table it starts from — the kind of edit that keeps the
-  // text almost identical while changing which rows can come back at all.
-  // Two flat single-table reads say what they mean, and the membership path
-  // (the common one) keeps the shape it has been tested in.
-  //
-  // Runs only when the membership lookup found nothing, so it costs the
-  // owner-without-membership case one query and everyone else nothing.
-  rpc GetOwnedOrgBySlug(GetOwnedOrgBySlugReq) returns (GetOwnedOrgBySlugResp) {
-    option (w17.contrib.plugin_feature_rpc) = "org_membership";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "SELECT o.id AS org_id FROM @module.Organization o "
-          "WHERE o.slug = :slug AND o.owner_id = :user_id AND o.deleted_at IS NULL"
-      }
-    };
-  }
 
   // ListOrgScopedRoles — the role catalogue restricted to roles that mean
   // something INSIDE an organization.
@@ -2475,20 +2411,30 @@ service AuthQuery {
     };
   }
 
-  // CountOtherOrgSuperadmins — see its request message. Only grants of a live
+  // ListOrgSuperadmins — see its request message. Only grants of a live
   // membership count: a removed member's grants are revoked with it, but the
-  // join says so rather than relying on it.
-  rpc CountOtherOrgSuperadmins(CountOtherOrgSuperadminsReq) returns (CountOtherOrgSuperadminsResp) {
+  // join says so rather than relying on it. The account's disabled_at and
+  // erased_at exist only with user_admin, so they are PROJECTED behind a gate
+  // (a SELECT's WHERE conjunct cannot be gated: dropping one would return more
+  // rows) and orgSuperadmins drops a disabled or erased account's rows;
+  // without user_admin no account can be disabled or erased.
+  rpc ListOrgSuperadmins(ListOrgSuperadminsReq) returns (ListOrgSuperadminsResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "SELECT COUNT(*) AS count FROM @module.UserRole ur "
+          "SELECT ur.user_id AS user_id, r.id AS role_id, "
+          "       ?feature(user_admin) u.disabled_at AS disabled_at, "
+          "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?feature(api_token) r.token_type AS token_type "
+          "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
           "JOIN @module.OrgMembership m ON m.user_id = ur.user_id AND m.org_id = ur.org_id AND m.removed_at IS NULL "
-          "WHERE ur.org_id = :org_id AND ur.user_id <> :user_id AND ur.revoked_at IS NULL "
-          "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL"
+          "JOIN @module.User u ON u.id = ur.user_id "
+          "WHERE ur.org_id = :org_id AND ur.revoked_at IS NULL "
+          "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL "
+          "ORDER BY ur.user_id ASC, r.id ASC"
       }
     };
   }
@@ -3182,8 +3128,7 @@ service AuthQuery {
       ops: {
         name: "main"
         dql:
-          "SELECT (o.owner_id = m.user_id) AS owner, "
-          "       o.id AS org_id, "
+          "SELECT o.id AS org_id, "
           "       o.slug AS slug, "
           "       o.name AS name, "
           "       o.kind AS kind, "
@@ -3271,22 +3216,6 @@ service AuthQuery {
     };
   }
 
-  // GetUserOwnsOrg — the ownership probe, kept apart from the grants above
-  // because ownership is not a grant. A correlated EXISTS; see
-  // GetUserOwnsOrgResp for why this one flag is allowed to widen.
-  rpc GetUserOwnsOrg(GetUserOwnsOrgReq) returns (GetUserOwnsOrgResp) {
-    option (w17.contrib.plugin_feature_rpc) = "org_membership";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "SELECT EXISTS(SELECT 1 FROM @module.Organization o "
-          "              WHERE o.id = :org_id AND o.owner_id = u.id AND o.deleted_at IS NULL) AS owner "
-          "FROM @module.User u WHERE u.id = :user_id"
-      }
-    };
-  }
-
   // GetUserRealmWidePermissions — what the caller holds when NO active
   // organization could be resolved (they belong to none, or to several
   // and sent no `W17-Org` header). Only realm-wide grants count; every
@@ -3365,8 +3294,7 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
-          "       o.kind AS kind, o.created_at AS created_at, "
-          "       o.owner_id AS owner_id "
+          "       o.kind AS kind, o.created_at AS created_at "
           "FROM @module.Organization o WHERE o.id = :id AND o.deleted_at IS NULL"
       }
     };
@@ -3674,7 +3602,6 @@ service AuthQuery {
           "SELECT m.user_id AS user_id, "
           "       u.email AS email, "
           "       m.role AS role, "
-          "       (o.owner_id = m.user_id) AS owner, "
           "       m.created_at AS joined_at, "
           "       m.id AS membership_id "
           "FROM @module.OrgMembership m "
@@ -4198,6 +4125,31 @@ service AuthQuery {
           "FROM @module.OrgMembership m "
           "JOIN @module.User u ON u.id = m.user_id "
           "WHERE m.user_id = :user_id AND m.org_id = :org_id AND m.removed_at IS NULL"
+      }
+    };
+  }
+
+  // ListOrgTeamSuperadmins — see its request message. The joins are
+  // GetUserTeamRoleGrants', narrowed to wildcard roles.
+  rpc ListOrgTeamSuperadmins(ListOrgTeamSuperadminsReq) returns (ListOrgTeamSuperadminsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "teams";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT tm.user_id AS user_id, r.id AS role_id, t.id AS team_id, "
+          "       ?feature(user_admin) u.disabled_at AS disabled_at, "
+          "       ?feature(user_admin) u.erased_at AS erased_at "
+          "FROM @module.TeamMember tm "
+          "JOIN @module.Team t ON t.id = tm.team_id AND t.deleted_at IS NULL "
+          "JOIN @module.OrgMembership m ON m.user_id = tm.user_id AND m.org_id = t.org_id "
+          "  AND m.removed_at IS NULL AND m.created_at <= tm.created_at "
+          "JOIN @module.TeamRole tr ON tr.team_id = t.id AND tr.revoked_at IS NULL "
+          "JOIN @module.Role r ON r.id = tr.role_id AND r.deleted_at IS NULL AND r.org_scoped = TRUE "
+          "  AND r.all_permissions = TRUE "
+          "JOIN @module.User u ON u.id = tm.user_id "
+          "WHERE t.org_id = :org_id AND tm.removed_at IS NULL "
+          "ORDER BY tm.user_id ASC, t.id ASC, r.id ASC"
       }
     };
   }

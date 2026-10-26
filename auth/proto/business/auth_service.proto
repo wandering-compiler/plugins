@@ -153,7 +153,7 @@ message AuthResp {
   // this request acts in, scopes[org_id]. Like the organization it is the
   // request's context, not the person's: the same user may be staff of one
   // organization and a client of another. Empty when the request acts in no
-  // organization, or in one the caller only owns. The gateway copies it into
+  // organization. The gateway copies it into
   // every request record (RequestEventMeta.membership_kind). Field-gated
   // `membership_kinds`.
   string              membership_kind = 8 [(w17.contrib.plugin_feature_field) = "membership_kinds"];
@@ -862,10 +862,11 @@ message OrgMember {
   string email   = 2;
   string role    = 3;
   google.protobuf.Timestamp joined_at = 4;
-  // owner — TRUE for the organization's owner (Organization.owner_id).
-  // Distinct from `role`: a role is a grant an admin can change, ownership is
-  // a property of the organization. Without it the founder is
-  // indistinguishable from anyone they promoted.
+  // owner — DEPRECATED, always false. Ownership is no longer an
+  // authorization fact (Organization.owner_id is dropped; see Organization in
+  // types/models.proto): whoever administers an organization holds a role in
+  // it. Kept, unset, so a client reading it does not break; it will be
+  // removed with a later breaking release.
   bool   owner   = 5;
   // membership_id — the OrgMembership row, what UpdateOrgMembershipRole and
   // RemoveOrgMembership take: a member list a UI manages from has to name it.

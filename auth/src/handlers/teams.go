@@ -35,7 +35,11 @@ import (
 // asks the caller to cover their team roles too (memberHeldRoleSources) and
 // ends their team memberships in the same transaction
 // (membershipRemovalCascades); deleting the organization ends its teams
-// (orgRemovalCascades); a role a team holds is in use (roleHolderCounters).
+// (orgRemovalCascades); a role a team holds is in use (roleHolderCounters);
+// and a wildcard role held through a team makes its member a superadmin of
+// the organization for the last-superadmin rule (superadminSources), which
+// removing a member from a team, changing a team's roles and deleting a team
+// are held to as well (refuseLeavingNoSuperadmin).
 
 // The sentences a person reads for these refusals. Mirrored into plugin.yaml
 // by `make plugin-msgids-sync` (see errors.go).
@@ -70,6 +74,7 @@ func init() {
 	membershipRemovalCascades = append(membershipRemovalCascades, endTeamMemberships)
 	orgRemovalCascades = append(orgRemovalCascades, endTeamsOfOrg)
 	roleHolderCounters = append(roleHolderCounters, countTeamRoleHolders)
+	superadminSources = append(superadminSources, teamSuperadmins)
 }
 
 // teamRoleGrants is teams' orgGrantSource: the roles the user holds through
@@ -109,6 +114,16 @@ func endTeamMemberships(ctx context.Context, h *AuthServiceHandler, userID, orgI
 func endTeamsOfOrg(ctx context.Context, h *AuthServiceHandler, orgID, by string) error {
 	_, err := h.Mutation.EndTeamsOfOrg(ctx, &pb.EndTeamsOfOrgReq{OrgId: orgID, DeletedBy: by})
 	return err
+}
+
+// teamSuperadmins is teams' superadminSource: the wildcard roles members of
+// the organization hold through a team, one row per member, team and role.
+func teamSuperadmins(ctx context.Context, h *AuthServiceHandler, orgID string) ([]*pb.OrgSuperadminRow, error) {
+	resp, err := h.Query.ListOrgTeamSuperadmins(ctx, &pb.ListOrgTeamSuperadminsReq{OrgId: orgID})
+	if notFoundOK(err) != nil {
+		return nil, err
+	}
+	return resp.GetGrants(), nil
 }
 
 // countTeamRoleHolders is teams' roleHolderCounter.
@@ -236,6 +251,12 @@ func (h *AuthServiceHandler) DeleteOrgTeam(ctx context.Context, req *pb.DeleteOr
 	if _, err := h.coverTeamRoles(ctx, req.GetTeamId()); err != nil {
 		return nil, err
 	}
+	// Deleting the team ends every wildcard its members hold through it.
+	if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
+		return g.GetTeamId() == req.GetTeamId()
+	}); err != nil {
+		return nil, err
+	}
 	resp, err := h.Mutation.DeleteTeam(ctx, &pb.DeleteTeamReq{Id: req.GetTeamId(), OrgId: orgID, DeletedBy: callerID})
 	if err != nil {
 		return nil, err
@@ -290,10 +311,17 @@ func (h *AuthServiceHandler) RemoveOrgTeamMember(ctx context.Context, req *pb.Re
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if _, err := h.ownTeam(ctx, req.GetOrg(), req.GetTeamId()); err != nil {
+	orgID, err := h.ownTeam(ctx, req.GetOrg(), req.GetTeamId())
+	if err != nil {
 		return nil, err
 	}
 	if _, err := h.coverTeamRoles(ctx, req.GetTeamId()); err != nil {
+		return nil, err
+	}
+	// The member loses every wildcard they hold through this team.
+	if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
+		return g.GetTeamId() == req.GetTeamId() && g.GetUserId() == req.GetUserId()
+	}); err != nil {
 		return nil, err
 	}
 	resp, err := h.Mutation.RemoveTeamMember(ctx, &pb.RemoveTeamMemberReq{TeamId: req.GetTeamId(), UserId: req.GetUserId(), RemovedBy: callerID})
@@ -364,6 +392,25 @@ func (h *AuthServiceHandler) SetOrgTeamRoles(ctx context.Context, req *pb.SetOrg
 			if !grantable[id] {
 				return nil, refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
 					CodeRoleAboveCaller, "role_ids", MsgRoleAboveCaller, nil)
+			}
+		}
+	}
+	// A team left with no wildcard role ends every wildcard its members hold
+	// through it; one that keeps or gains a wildcard keeps them superadmins.
+	if len(removed) > 0 {
+		wildcard, err := h.wildcardRoleIDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		keepsWildcard := false
+		for _, id := range wanted {
+			keepsWildcard = keepsWildcard || wildcard[id]
+		}
+		if !keepsWildcard {
+			if err := h.refuseLeavingNoSuperadmin(ctx, orgID, func(g *pb.OrgSuperadminRow) bool {
+				return g.GetTeamId() == req.GetTeamId()
+			}); err != nil {
+				return nil, err
 			}
 		}
 	}
