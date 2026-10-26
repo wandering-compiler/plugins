@@ -156,3 +156,52 @@ func TestApproveEnvelopeRace(t *testing.T) {
 		t.Errorf("err = %v, want Aborted", err)
 	}
 }
+
+// The backoffice may be a member of an organization: a request acting inside
+// one whose credential holds the method realm-wide (the auth plugin's
+// realm_permissions scope: `*`, or the ids) decides envelopes realm-wide. An
+// organization's own admin, with no such role, is refused there as before,
+// and so is a realm-wide role that does not carry the method.
+func TestEnvelopeDecisions_TheBackofficeFromInsideAnOrganization(t *testing.T) {
+	s := &store{}
+	h := &GrantServiceHandler{Query: s, Mutation: s, Lock: &acllock.Lock{Permissions: map[string]int{
+		"GRANT_GRANT_SERVICE_APPROVE_ENVELOPE": 1, "GRANT_GRANT_SERVICE_REJECT_ENVELOPE": 2, "GRANT_GRANT_SERVICE_LIST_ENVELOPE_PROPOSALS": 3}}}
+	backoffice := func(orgID string) context.Context {
+		ctx := as("ops", orgID)
+		md, _ := metadata.FromIncomingContext(ctx)
+		md = md.Copy()
+		md.Set("x-w17-scope-realm_permissions", "*")
+		return metadata.NewIncomingContext(context.Background(), md)
+	}
+	v1, err := h.ProposeEnvelope(as("admin", "org-acme"), &pb.ProposeEnvelopeReq{Fields: &pb.EnvelopeFields{DisplayName: "Acme"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := func(ids string) context.Context {
+		ctx := as("ops", "org-ops")
+		md, _ := metadata.FromIncomingContext(ctx)
+		md = md.Copy()
+		md.Set("x-w17-scope-realm_permissions", ids)
+		return metadata.NewIncomingContext(context.Background(), md)
+	}
+	if _, err := h.realmOnly(listed("1,3"), "ListEnvelopeProposals"); err != nil {
+		t.Errorf("a realm-wide role listing ListEnvelopeProposals (3): %v", err)
+	}
+	if _, err := h.realmOnly(listed("1,3"), "RejectEnvelope"); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("a realm-wide role without RejectEnvelope (2): err = %v, want PermissionDenied", err)
+	}
+	for _, m := range []string{"ListEnvelopeProposals", "RejectEnvelope"} {
+		if _, err := h.realmOnly(backoffice("org-ops"), m); err != nil {
+			t.Errorf("the backoffice's %s from inside its own organization: %v", m, err)
+		}
+		if _, err := h.realmOnly(as("admin", "org-acme"), m); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("an organization's admin's %s: err = %v, want PermissionDenied", m, err)
+		}
+	}
+	if _, err := h.ApproveEnvelope(as("admin", "org-acme"), &pb.ApproveEnvelopeReq{Id: v1.GetId()}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("an organization's admin approving its own envelope: err = %v, want PermissionDenied", err)
+	}
+	if _, err := h.ApproveEnvelope(backoffice("org-ops"), &pb.ApproveEnvelopeReq{Id: v1.GetId()}); err != nil {
+		t.Errorf("the backoffice approving from inside its own organization: %v", err)
+	}
+}

@@ -347,6 +347,9 @@ const CodeCreateNeedsStepUp = "API_TOKEN_NEEDS_STEP_UP"
 // products' roles. Declared here because the handler holds one in every build.
 type productRoleCatalogue struct {
 	Roles []productRoleEntry `json:"roles"`
+	// Products are every product's permission codes: what the identity's
+	// own roles are composed from.
+	Products map[string][]string `json:"products"`
 	// byProduct maps product → role key → its entry.
 	byProduct map[string]map[string]productRoleEntry
 }
@@ -358,8 +361,11 @@ type productRoleEntry struct {
 	OrgScoped bool   `json:"org_scoped"`
 	// Covers are the product's roles whose every permission this one carries
 	// too (itself included), computed at codegen from the product's own
-	// roles: the ceiling, with no permission of the product here.
+	// roles. Kept as the catalogue carries it; the ceiling is computed from
+	// Permissions.
 	Covers []string `json:"covers"`
+	// Permissions are the product's permission codes the preset grants.
+	Permissions []string `json:"permissions"`
 }
 
 // orgPackageTable is the generated w17_packages table.
@@ -513,6 +519,12 @@ type authPrincipal struct {
 	tokenID string
 	realm   pb.TokenType
 	grants  []*pb.RoleGrant
+
+	// realmWide are the role ids among grants held realm-wide (with no
+	// organization), set by the organization narrower when the request acts
+	// in one: what an organization's packages bound is its own roles, not
+	// the backoffice's (org_packages).
+	realmWide map[string]bool
 
 	// permissionSubset: the API token carries a permission subset
 	// (api_token) — it was minted narrow, which the products' axis honours

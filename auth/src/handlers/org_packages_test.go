@@ -20,13 +20,15 @@ type pkgMock struct {
 	pb.AuthQueryClient
 	pb.AuthMutationClient
 	live    map[string][]string // org → live package names
+	realm   map[string][]*pb.RoleGrant
 	enabled []string
 	ended   []string
 }
 
-// GetUserRealmWidePermissions: nobody here holds a role realm-wide.
-func (m *pkgMock) GetUserRealmWidePermissions(context.Context, *pb.GetUserRealmWidePermissionsReq, ...grpc.CallOption) (*pb.GetUserRealmWidePermissionsResp, error) {
-	return &pb.GetUserRealmWidePermissionsResp{}, nil
+// GetUserRealmWidePermissions: who holds which realm-wide roles (realm);
+// nobody, unless a test says so.
+func (m *pkgMock) GetUserRealmWidePermissions(_ context.Context, in *pb.GetUserRealmWidePermissionsReq, _ ...grpc.CallOption) (*pb.GetUserRealmWidePermissionsResp, error) {
+	return &pb.GetUserRealmWidePermissionsResp{Grants: m.realm[in.GetUserId()]}, nil
 }
 
 func (m *pkgMock) ListOrgPackages(_ context.Context, in *pb.ListOrgPackagesReq, _ ...grpc.CallOption) (*pb.ListOrgPackagesResp, error) {
@@ -131,6 +133,38 @@ func TestRefuseAudienceOutsidePackages(t *testing.T) {
 	}
 	if err := call("org-a", "partner"); err != nil {
 		t.Errorf("an audience no package names is open: %v", err)
+	}
+}
+
+// The backoffice may be a member of an organization: its realm-wide roles are
+// not the organization's, so packages bound neither what they grant nor which
+// audience a realm-wide wildcard reaches there. The organization's own roles
+// are bounded as before.
+func TestPackagesBoundTheOrganizationsRolesOnly(t *testing.T) {
+	h, m := pkgHandler(t, map[string][]string{"org-a": {"base"}})
+	p := &authPrincipal{grants: []*pb.RoleGrant{
+		{RoleId: "backoffice", AllPermissions: true},
+		{RoleId: "r", PermissionIds: []int32{1, 2}},
+	}, realmWide: map[string]bool{"backoffice": true}}
+	if err := narrowGrantsToPackages(context.Background(), h, p, map[string]string{"org_id": "org-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if !p.grants[0].GetAllPermissions() {
+		t.Errorf("the realm-wide wildcard was bounded by org-a's packages: %v", p.grants[0])
+	}
+	if slices.Contains(p.grants[1].GetPermissionIds(), 2) {
+		t.Errorf("org-a's own role kept Ask, which no package of org-a grants: %v", p.grants[1])
+	}
+	m.realm = map[string][]*pb.RoleGrant{"ops": {{RoleId: "backoffice", AllPermissions: true}}}
+	call := func(user string) error {
+		return refuseAudienceOutsidePackages(context.Background(), h, user,
+			map[string]string{audienceHeader: "client"}, map[string]string{"org_id": "org-a"}, nil)
+	}
+	if err := call("ops"); err != nil {
+		t.Errorf("the backoffice, a member of org-a, on an audience org-a's packages leave closed: %v", err)
+	}
+	if err := call("u"); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("a member with no realm-wide wildcard: err = %v, want PermissionDenied", err)
 	}
 }
 

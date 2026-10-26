@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 
 	"strings"
 
@@ -123,6 +124,18 @@ var orgGrantSources []func(ctx context.Context, h *AuthServiceHandler, userID, o
 // endpoint not row-scoped by org_id — and nothing in the plugin ever wrote the
 // column. Whoever administers an organization holds a role in it, like
 // everyone else (the column is gone; see Organization in models.proto).
+// realmPermissionsScope is the scope Authenticate sets on a request acting
+// inside an organization whose credential holds roles realm-wide: `*` for a
+// realm-wide wildcard, otherwise the permission ids those roles grant,
+// sorted and comma-separated. The backoffice may be a member somewhere: a
+// plugin's backoffice method that refuses inside an organization reads it to
+// act realm-wide for a caller holding the method realm-wide (the grant
+// plugin's envelope decisions; this plugin's own ask heldRealmWide). Per
+// credential and organization, never per method, so the gateway's auth cache
+// keeps it right. Gateway-written (x-w17-scope-*, cleared from client input
+// at the edge).
+const realmPermissionsScope = "realm_permissions"
+
 func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
 	orgID := scopes["org_id"]
 
@@ -155,6 +168,46 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 		}
 	}
 	p.grants = survivors
+
+	// A request acting inside an organization tells the backend what its
+	// credential holds realm-wide there (realmPermissionsScope): another
+	// plugin's backoffice method (the grant plugin's envelope decisions)
+	// acts realm-wide on it, as this plugin's do on heldRealmWide; it cannot
+	// read who holds what itself.
+	if orgID != "" {
+		realm, err := h.Query.GetUserRealmWidePermissions(ctx, &pb.GetUserRealmWidePermissionsReq{UserId: p.userID})
+		if err != nil {
+			return err
+		}
+		p.realmWide = make(map[string]bool, len(realm.GetGrants()))
+		for _, g := range realm.GetGrants() {
+			p.realmWide[g.GetRoleId()] = true
+		}
+		var ids []int32
+		wildcard := false
+		for _, g := range p.grants {
+			if !p.realmWide[g.GetRoleId()] {
+				continue
+			}
+			if g.GetAllPermissions() {
+				wildcard = true
+				break
+			}
+			ids = append(ids, g.GetPermissionIds()...)
+		}
+		switch {
+		case wildcard:
+			scopes[realmPermissionsScope] = "*"
+		case len(ids) > 0:
+			slices.Sort(ids)
+			ids = slices.Compact(ids)
+			parts := make([]string, len(ids))
+			for i, id := range ids {
+				parts[i] = strconv.Itoa(int(id))
+			}
+			scopes[realmPermissionsScope] = strings.Join(parts, ",")
+		}
+	}
 
 	// Grants that exist only INSIDE the active organization and only for a
 	// session — a team's roles (teams). They are added after the intersection
@@ -599,6 +652,9 @@ func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrg
 // an organization alone. Asked of the store, not of the request's
 // permissions: those are the organization's too.
 func (h *AuthServiceHandler) heldRealmWide(ctx context.Context, method string) bool {
+	if v, _ := principal.Scope(ctx, realmPermissionsScope); v == "*" {
+		return true
+	}
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return false

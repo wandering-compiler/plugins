@@ -133,7 +133,7 @@ func readOrgPackages(ctx context.Context, h *AuthServiceHandler, t *orgPackageTa
 // refuseAudienceOutsidePackages is the audience half: a scope decorator, so
 // its refusal reaches the caller as the 403 it is rather than a sign-in
 // prompt.
-func refuseAudienceOutsidePackages(ctx context.Context, h *AuthServiceHandler, _ string, headers, scopes, _ map[string]string) error {
+func refuseAudienceOutsidePackages(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, _ map[string]string) error {
 	t, err := h.packageTable()
 	if err != nil {
 		return err
@@ -149,6 +149,15 @@ func refuseAudienceOutsidePackages(ctx context.Context, h *AuthServiceHandler, _
 	for _, p := range pkgs {
 		if slices.Contains(p.Audiences, aud) {
 			return nil
+		}
+	}
+	// The backoffice may be a member of the organization: a realm-wide
+	// wildcard opens any audience, the endpoint ACL deciding what it may call.
+	if held, err := h.Query.GetUserRealmWidePermissions(ctx, &pb.GetUserRealmWidePermissionsReq{UserId: userID}); err == nil {
+		for _, g := range held.GetGrants() {
+			if g.GetAllPermissions() {
+				return nil
+			}
 		}
 	}
 	return &notAdmittedError{err: refusal(ctx, codes.PermissionDenied, errPackageAudienceOff.Error(),
@@ -191,6 +200,12 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 		return nil
 	}
 	for _, g := range p.grants {
+		if p.realmWide[g.GetRoleId()] {
+			// A role held realm-wide is the backoffice's, not the
+			// organization's: packages bound what the organization's roles
+			// grant, as a plan bounds its product roles.
+			continue
+		}
 		ids := g.GetPermissionIds()
 		if g.GetAllPermissions() {
 			// A wildcard is expanded here, so the expansion is bounded too.

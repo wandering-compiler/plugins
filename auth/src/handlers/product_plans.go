@@ -26,23 +26,25 @@ func init() {
 }
 
 // boundByProductPlan is product_plans' productRoleBound: the organization's
-// lines for product, read once per request (the memo).
-func boundByProductPlan(ctx context.Context, h *AuthServiceHandler, orgID, product string) (func(string) bool, error) {
+// lines, read once per request (the memo). A whole-product line carries every
+// role's permissions there; a role's line carries that role (a preset, or the
+// identity's own as `*`) in every product it grants in.
+func boundByProductPlan(ctx context.Context, h *AuthServiceHandler, orgID string) (func(product, roleProduct, roleKey string) bool, error) {
 	lines, err := orgProductPlan(ctx, h, orgID)
 	if err != nil {
 		return nil, err
 	}
-	whole, roles := false, map[string]bool{}
+	whole, roles := map[string]bool{}, map[string]bool{}
 	for _, l := range lines {
-		if l.GetProduct() != product {
+		if l.GetRoleKey() == "" {
+			whole[l.GetProduct()] = true
 			continue
 		}
-		if l.GetRoleKey() == "" {
-			whole = true
-		}
-		roles[l.GetRoleKey()] = true
+		roles[l.GetProduct()+":"+l.GetRoleKey()] = true
 	}
-	return func(role string) bool { return whole || roles[role] }, nil
+	return func(product, roleProduct, roleKey string) bool {
+		return whole[product] || roles[roleProduct+":"+roleKey]
+	}, nil
 }
 
 func orgProductPlan(ctx context.Context, h *AuthServiceHandler, orgID string) ([]*pb.OrgProductAllowanceRow, error) {
@@ -75,19 +77,21 @@ func (h *AuthServiceHandler) refusePlansInsideOrg(ctx context.Context, method st
 	return nil
 }
 
-// checkPlanLine refuses a product or a role the catalogue does not name.
-func (h *AuthServiceHandler) checkPlanLine(ctx context.Context, product, role string) error {
+// checkPlanLine refuses a product or a role the catalogue does not name, or
+// an identity role orgID cannot hold; the identity's own roles (`*`) are
+// carried by role, never as a whole.
+func (h *AuthServiceHandler) checkPlanLine(ctx context.Context, orgID, product, role string) error {
 	c, err := h.productRoleCatalogue()
 	if err != nil {
 		return err
 	}
 	if role == "" {
-		if _, ok := c.byProduct[product]; !ok {
+		if _, ok := c.byProduct[product]; !ok || product == identityRoleProduct {
 			return refusal(ctx, codes.InvalidArgument, "product_plans: no such product", CodeProductUnknown, "product", MsgProductUnknown, nil)
 		}
 		return nil
 	}
-	_, err = c.role(ctx, product, role)
+	_, err = h.lookupRole(ctx, c, orgID, product, role)
 	return err
 }
 
@@ -104,7 +108,7 @@ func (h *AuthServiceHandler) AllowOrgProduct(ctx context.Context, req *pb.OrgPro
 	if err := h.refusePlansInsideOrg(ctx, "AllowOrgProduct"); err != nil {
 		return nil, err
 	}
-	if err := h.checkPlanLine(ctx, req.GetProduct(), req.GetRoleKey()); err != nil {
+	if err := h.checkPlanLine(ctx, req.GetOrgId(), req.GetProduct(), req.GetRoleKey()); err != nil {
 		return nil, err
 	}
 	lines, err := orgProductPlan(ctx, h, req.GetOrgId())

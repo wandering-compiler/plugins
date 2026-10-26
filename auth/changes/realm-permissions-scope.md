@@ -1,0 +1,5 @@
+### The backoffice is marked inside an organization (`realm_permissions`)
+
+- A request acting inside an organization whose credential holds roles realm-wide (granted with no organization) now carries the scope `realm_permissions`: `*` for a wildcard, otherwise the permission ids those roles grant. It adds no permission. Another plugin's backoffice method reads it to act realm-wide: the grant plugin's envelope decisions (grant 0.1.0-rc.3). This plugin's own backoffice methods already act realm-wide for such a caller.
+- Inside an organization Authenticate reads the caller's realm-wide roles once more to decide it (one query).
+- **Packages bound the organization's roles, not the backoffice's (`org_packages`).** A role held realm-wide is no longer narrowed by the packages of the organization a request acts in, and a realm-wide wildcard reaches any audience there (no `PACKAGE_AUDIENCE_OFF`); the endpoint ACL still decides what it calls. Before, a backoffice operator who was also a member of a packaged organization lost the backoffice there. Plans already left realm-wide product roles unbounded.

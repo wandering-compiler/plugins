@@ -1760,6 +1760,27 @@ message OrgSignUpPolicyRow {
 
 // The product roles users hold (product_roles) and an organization's plan
 // (product_plans).
+// ListProductRoleDefs — the identity's own roles live for an organization:
+// the backoffice's, and (org_id set) that organization's.
+message ListProductRoleDefsReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string org_id = 1 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message ListProductRoleDefsResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  repeated ProductRoleDefRow roles = 1;
+}
+message ProductRoleDefRow {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string id          = 1;
+  // org_id — '' for the backoffice's.
+  string org_id      = 2;
+  string key         = 3;
+  string name        = 4;
+  bool   org_scoped  = 5;
+  string permissions = 6;
+}
+
 // ListTokenProductRoles — the products' roles an API token may use
 // (TokenProductRole); none = the token names none.
 message ListTokenProductRolesReq {
@@ -3986,6 +4007,19 @@ service AuthQuery {
   // ListProductRolesOfUser — read on every Authenticate a product's gateway
   // asks: the user's live grants in the product, in every organization and
   // realm-wide; the handler keeps the active organization's and the realm's.
+  rpc ListProductRoleDefs(ListProductRoleDefsReq) returns (ListProductRoleDefsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.id AS id, r.org_id AS org_id, r.key AS key, r.name AS name, r.org_scoped AS org_scoped, r.permissions AS permissions "
+          "FROM @module.ProductRoleDef r "
+          "WHERE r.ended_at IS NULL AND (r.org_id IS NULL OR r.org_id = :org_id) "
+          "ORDER BY r.key ASC"
+      }
+    };
+  }
   rpc ListTokenProductRoles(ListTokenProductRolesReq) returns (ListTokenProductRolesResp) {
     option (w17.contrib.plugin_feature_rpc) = "product_roles";
     option (w17.db.method) = {
