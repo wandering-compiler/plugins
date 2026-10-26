@@ -1,6 +1,30 @@
 # agent — changelog
 
-## Unreleased
+## 0.1.0-rc.6
+
+### The final text can be cleaned
+
+- **Two filters for the answer a caller keeps** — `CompleteResp.text` and `Finished.text`; the deltas stay the model's own, so a stream is as fast as before and a caller swaps the streamed text for the clean one at the end. Both are off unless the activation switches them on:
+  - `final_text_scripts` drops letters of every Unicode script the activation does not allow: `<DOMAIN>_AGENT_ALLOWED_SCRIPTS`, comma-separated Go script names, default `Latin`. A Thai token a model leaked into a Czech sentence goes; diacritics, digits, punctuation and emoji stay. An unknown script name refuses the boot.
+  - `final_text_invisible` drops control and invisible characters: zero-width spaces, the byte-order mark, bidi overrides, U+FFFD. The zero-width joiner (emoji) stays.
+- **A call has its say** with `FinalText` on `CompleteReq` and `RunAgentReq.Start`: `allowed_scripts` for an answer in another language, `raw` for none. A name the filter cannot use is refused before the model is called.
+- `Finished.text` is no longer always exactly the deltas: with a filter on it is the cleaned text. Without one nothing changes: the same activation, the same env variables, no migration.
+
+### `src/gen` is generated, not shipped
+
+- **Needs w17ctl v0.1.0-rc.75 or newer.** The release no longer carries `src/gen` (the pb, the `EnvConfig` / `ClientSet` / `HandlerRegistry` contract and the feature constants). A consumer's staging generates all of it for each activation from `plugin.yaml` and the protos, and w17ctl does that from rc.75 on. An older w17ctl expects the release to carry the contract; upgrade it before you take this release.
+- Nothing in your project changes: the same activation, the same env variables, the same configuration, no migration.
+
+### Built on SDK go/v0.1.0-rc.24
+
+- **The plugin's module requires `github.com/wandering-compiler/sdk/go` v0.1.0-rc.24.** A w17ctl that knows the request data annotations (`gdpr`, `sensitive`) generates a redaction plan next to every pb file of the plugin's `src/gen`, and that plan imports the SDK's `lib/redact`, which rc.24 is the first to have. The plugin's own code does not change.
+- Nothing in your project changes: the same activation, the same env variables, no migration. Your project's own `go.mod` moves to rc.24 with the same w17ctl.
+
+### Your own final-text filters
+
+- **The `text_filter` hook** runs business methods of your domain on the final text, after the built-in `final_text_*` filters, in the order the activation binds them: `hooks: [ { slot: "text_filter", methods: [ "filters.Filters.Clean" ] } ]`. A method takes `TextFilterReq` (the text, the plugin method, the model, the usage scope and labels) and returns `TextFilterResp` (the text that replaces it), as the activation stages them. The deltas are never filtered.
+- **A filter that fails or does not answer in time is skipped and logged** (its gRPC code, never the text): the answer still reaches the caller. `<DOMAIN>_AGENT_TEXT_FILTER_TIMEOUT_SECONDS` (default 5) bounds each. `FinalText.raw` skips them too.
+- **Needs platform 1.14** (`requires_w17: ">=1.14"`): a console that knows plugin hooks. An activation that binds no hook behaves exactly as before.
 
 ### Spending limits hold
 
