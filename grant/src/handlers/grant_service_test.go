@@ -25,14 +25,14 @@ type store struct {
 
 func (s *store) InsertEnvelope(_ context.Context, in *pb.InsertEnvelopeReq, _ ...grpc.CallOption) (*pb.InsertEnvelopeResp, error) {
 	id := "env-" + string(rune('a'+len(s.envelopes)))
-	s.envelopes = append(s.envelopes, &pb.EnvelopeRow{Id: id, OrgId: in.GetOrgId(), Status: "proposed", DisplayName: in.GetDisplayName()})
+	s.envelopes = append(s.envelopes, &pb.EnvelopeRow{Id: id, OrgId: in.GetOrgId(), Status: StatusProposed, DisplayName: in.GetDisplayName()})
 	return &pb.InsertEnvelopeResp{Id: id}, nil
 }
 
 func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowReq, _ ...grpc.CallOption) (*pb.ApproveEnvelopeRowResp, error) {
 	var target *pb.EnvelopeRow
 	for _, e := range s.envelopes {
-		if e.GetId() == in.GetId() && e.GetStatus() == "proposed" {
+		if e.GetId() == in.GetId() && e.GetStatus() == StatusProposed {
 			target = e
 		}
 	}
@@ -40,17 +40,17 @@ func (s *store) ApproveEnvelopeRow(_ context.Context, in *pb.ApproveEnvelopeRowR
 		return nil, status.Error(codes.NotFound, "not pending")
 	}
 	for _, e := range s.envelopes {
-		if e.GetOrgId() == target.GetOrgId() && e.GetStatus() == "approved" {
-			e.Status = "superseded"
+		if e.GetOrgId() == target.GetOrgId() && e.GetStatus() == StatusApproved {
+			e.Status = StatusSuperseded
 		}
 	}
-	target.Status = "approved"
+	target.Status = StatusApproved
 	return &pb.ApproveEnvelopeRowResp{Id: target.GetId(), OrgId: target.GetOrgId()}, nil
 }
 
 func (s *store) GetApprovedEnvelope(_ context.Context, in *pb.GetApprovedEnvelopeReq, _ ...grpc.CallOption) (*pb.EnvelopeRow, error) {
 	for _, e := range s.envelopes {
-		if e.GetOrgId() == in.GetOrgId() && e.GetStatus() == "approved" {
+		if e.GetOrgId() == in.GetOrgId() && e.GetStatus() == StatusApproved {
 			return e, nil
 		}
 	}
@@ -96,7 +96,7 @@ func TestEnvelopeLifecycle(t *testing.T) {
 	if _, err := h.ApproveEnvelope(as("ops", ""), &pb.ApproveEnvelopeReq{Id: v2.GetId()}); err != nil {
 		t.Fatal(err)
 	}
-	if s.envelopes[0].GetStatus() != "superseded" {
+	if s.envelopes[0].GetStatus() != StatusSuperseded {
 		t.Errorf("v1 is %s after v2's approval, want superseded", s.envelopes[0].GetStatus())
 	}
 	if got, _ := h.GetOrgEnvelope(context.Background(), &pb.GetOrgEnvelopeReq{OrgId: "org-acme"}); got.GetFields().GetDisplayName() != "Acme Inc." {
