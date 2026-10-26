@@ -83,9 +83,11 @@ leaves it:
   links absolute https, a colour `#rrggbb`, a host a lower-case DNS name. A
   fixture is not run through that check, so keep to it.
 
-The values are the plugin's public contract (`StatusApproved`,
-`ApprovedSlot`, `StatusSuperseded` in `src/handlers`), held to its own
-statements by `TestEnvelopeStatementsUseTheContractValues`.
+The VALUES are the public contract — what a fixture writes. The handlers
+name them (`StatusApproved`, `ApprovedSlot`, `StatusSuperseded` in
+`src/handlers`; a project cannot import them, the handlers are staged into
+it), and `TestEnvelopeStatementsUseTheContractValues` holds the plugin's own
+statements to them.
 
 ## Gaps
 
