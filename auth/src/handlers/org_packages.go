@@ -219,7 +219,7 @@ func narrowGrantsToPackages(ctx context.Context, h *AuthServiceHandler, p *authP
 // account outside an organization would pass. method is the RPC's name
 // (lockGatesCall finds its key).
 func (h *AuthServiceHandler) refuseInsideOrg(ctx context.Context, method string) error {
-	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
+	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" && !h.heldRealmWide(ctx, method) {
 		return refusal(ctx, codes.PermissionDenied, "org_packages: packages are given realm-wide, not from inside an organization",
 			CodePackagesRealmOnly, "", MsgPackagesRealmOnly, nil)
 	}

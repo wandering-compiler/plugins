@@ -31,6 +31,11 @@ type hostMock struct {
 	policyEnded []string                            // EndOrgSignUpPolicyRow: org/kind
 }
 
+// GetUserRealmWidePermissions: nobody here holds a role realm-wide.
+func (m *hostMock) GetUserRealmWidePermissions(context.Context, *pb.GetUserRealmWidePermissionsReq, ...grpc.CallOption) (*pb.GetUserRealmWidePermissionsResp, error) {
+	return &pb.GetUserRealmWidePermissionsResp{}, nil
+}
+
 func (m *hostMock) GetOrgOfHost(_ context.Context, in *pb.GetOrgOfHostReq, _ ...grpc.CallOption) (*pb.OrgHostRow, error) {
 	if r := m.hosts[in.GetHost()]; r != nil {
 		return r, nil

@@ -60,7 +60,7 @@ func lookupOrgSlugOfHost(ctx context.Context, h *AuthServiceHandler, host string
 // call acting inside an organization is refused, and so is one the endpoint
 // ACL does not gate.
 func (h *AuthServiceHandler) refuseHostsInsideOrg(ctx context.Context, method string) error {
-	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
+	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" && !h.heldRealmWide(ctx, method) {
 		return refusal(ctx, codes.PermissionDenied, "org_hosts: hosts are bound realm-wide, not from inside an organization",
 			CodeHostsRealmOnly, "", MsgHostsRealmOnly, nil)
 	}

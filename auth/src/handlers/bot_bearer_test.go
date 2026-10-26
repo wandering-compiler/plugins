@@ -118,7 +118,7 @@ func TestIssueBotToken_ABearerTokenIsForAMachineAccountOnly(t *testing.T) {
 func TestIssueApiTokenTx_MintsNothingWithoutADevice(t *testing.T) {
 	s := newKeyStore()
 	h := &AuthServiceHandler{Query: s, Mutation: s}
-	_, _, err := h.issueApiTokenTx(context.Background(), &signInAttempt{}, "u1", "x", nil, nil, signInDevice{thumbprint: testJKT}, "")
+	_, _, err := h.issueApiTokenTx(context.Background(), &signInAttempt{}, "u1", "x", nil, nil, nil, signInDevice{thumbprint: testJKT}, "")
 	if err != errDeviceNotRegistered {
 		t.Fatalf("err = %v, want errDeviceNotRegistered", err)
 	}

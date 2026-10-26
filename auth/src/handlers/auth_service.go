@@ -513,6 +513,11 @@ type authPrincipal struct {
 	realm   pb.TokenType
 	grants  []*pb.RoleGrant
 
+	// permissionSubset: the API token carries a permission subset
+	// (api_token) — it was minted narrow, which the products' axis honours
+	// too (product_roles with api_token).
+	permissionSubset bool
+
 	// usedTokenID / lastUsedAt are the row the bearer resolved to, whatever
 	// its kind (tokenID is a session's only), and when it was last recorded
 	// as used — read by recordTokenUse once authentication succeeded.

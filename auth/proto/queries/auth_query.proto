@@ -1746,6 +1746,22 @@ message OrgSignUpPolicyRow {
 
 // The product roles users hold (product_roles) and an organization's plan
 // (product_plans).
+// ListTokenProductRoles — the products' roles an API token may use
+// (TokenProductRole); none = the token names none.
+message ListTokenProductRolesReq {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string token_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListTokenProductRolesResp {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  repeated TokenProductRoleRow roles = 1;
+}
+message TokenProductRoleRow {
+  option (w17.contrib.plugin_feature) = "product_roles";
+  string product  = 1;
+  string role_key = 2;
+}
+
 message ListProductRolesOfUserReq {
   option (w17.contrib.plugin_feature) = "product_roles";
   string user_id = 1 [(w17.field) = { type: UUID }];
@@ -3938,6 +3954,19 @@ service AuthQuery {
   // ListProductRolesOfUser — read on every Authenticate a product's gateway
   // asks: the user's live grants in the product, in every organization and
   // realm-wide; the handler keeps the active organization's and the realm's.
+  rpc ListTokenProductRoles(ListTokenProductRolesReq) returns (ListTokenProductRolesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_roles";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT t.product AS product, t.role_key AS role_key "
+          "FROM @module.TokenProductRole t "
+          "WHERE t.token_id = :token_id "
+          "ORDER BY t.product ASC, t.role_key ASC"
+      }
+    };
+  }
   rpc ListProductRolesOfUser(ListProductRolesOfUserReq) returns (ProductRoleGrantRowsResp) {
     option (w17.contrib.plugin_feature_rpc) = "product_roles";
     option (w17.db.method) = {

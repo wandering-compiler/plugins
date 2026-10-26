@@ -126,8 +126,12 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED
 		return nil, status.Error(codes.FailedPrecondition, "machine account is disabled; enable it first")
 	}
+	extras, err := h.checkTokenMint(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	if req.GetPublicKey() == "" {
-		return h.issueBotBearerToken(ctx, attempt, callerID, req)
+		return h.issueBotBearerToken(ctx, attempt, callerID, req, extras)
 	}
 	key, err := parseTokenKey(ctx, req.GetPublicKey())
 	if err != nil {
@@ -164,7 +168,7 @@ func (h *AuthServiceHandler) IssueBotToken(ctx context.Context, req *pb.IssueBot
 		if err != nil {
 			return err
 		}
-		token, tokenID, err = h.issueApiTokenTx(txCtx, attempt, target, req.GetName(), req.GetPermissionSubset(), expiresAt, dev, approver)
+		token, tokenID, err = h.issueApiTokenTx(txCtx, attempt, target, req.GetName(), req.GetPermissionSubset(), extras, expiresAt, dev, approver)
 		return err
 	})
 	if err != nil {
@@ -215,7 +219,7 @@ func (h *AuthServiceHandler) botBearerExpiry(ctx context.Context, requested *tim
 // `bearer`, with the bot-bearer prefix and an expiry, its narrowing and the
 // history row in one transaction — the reason IssueBotToken gives for one
 // holds here unchanged. The operator's device is the approver.
-func (h *AuthServiceHandler) issueBotBearerToken(ctx context.Context, attempt *signInAttempt, callerID string, req *pb.IssueBotTokenReq) (*pb.IssueBotTokenResp, error) {
+func (h *AuthServiceHandler) issueBotBearerToken(ctx context.Context, attempt *signInAttempt, callerID string, req *pb.IssueBotTokenReq, extras []tokenMintWrite) (*pb.IssueBotTokenResp, error) {
 	expiresAt, err := h.botBearerExpiry(ctx, req.GetExpiresAt())
 	if err != nil {
 		return nil, err
@@ -257,6 +261,9 @@ func (h *AuthServiceHandler) issueBotBearerToken(ctx context.Context, attempt *s
 			}); err != nil {
 				return err
 			}
+		}
+		if err := writeTokenMint(txCtx, extras, tokenID); err != nil {
+			return err
 		}
 		return h.recordSignInOK(txCtx, attempt, target, signInDevice{})
 	})

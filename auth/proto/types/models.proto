@@ -2318,6 +2318,29 @@ message OrgSignUpPolicy {
   ];
 }
 
+// TokenProductRole is one product role an API token may use (product_roles
+// with api_token): the token's own narrowing on the products' axis, as
+// TokenPermission is on this domain's permissions. Authenticate answers a
+// product the roles the token's holder holds there AND the token names; a
+// token that names none and carries no permission subset is not narrowed. A
+// revoked token's rows stay, as its permission subset does.
+message TokenProductRole {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "token_id" }, { name: "product" }, { name: "role_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "product_roles";
+
+  string id       = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string token_id = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  // product — the product domain, as its (w17.domain).identity names this one.
+  string product  = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // role_key — the product's (w17.acl_roles) key.
+  string role_key = 4 [(w17.field) = { type: CHAR, max_len: 64 }];
+  google.protobuf.Timestamp created_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
 // ProductRoleGrant — a role a user holds in a PRODUCT: another domain of the
 // project, whose (w17.domain).identity names this one (product_roles). Held in
 // one organization (org_id), or realm-wide (org_id NULL — the backoffice's

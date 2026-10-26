@@ -27,6 +27,13 @@ func lockHasPermissions(l *acllock.Lock) bool {
 // plugin's own service name stands in; either way a method the lock does not
 // name refuses.
 func lockGatesCall(ctx context.Context, l *acllock.Lock, ownService, method string) bool {
+	_, ok := lockIDOfCall(ctx, l, ownService, method)
+	return ok
+}
+
+// lockIDOfCall is the permission the deployed lock allocates for the call
+// being served, found as lockGatesCall finds it.
+func lockIDOfCall(ctx context.Context, l *acllock.Lock, ownService, method string) (int, bool) {
 	svc, m := ownService, method
 	if full, ok := grpc.Method(ctx); ok {
 		if i := strings.LastIndex(full, "/"); i > 0 {
@@ -35,10 +42,9 @@ func lockGatesCall(ctx context.Context, l *acllock.Lock, ownService, method stri
 	}
 	dot := strings.LastIndex(svc, ".")
 	if dot < 0 {
-		return false
+		return 0, false
 	}
 	pkg, name := svc[:dot], svc[dot+1:]
 	module := pkg[strings.LastIndex(pkg, ".")+1:]
-	_, ok := acllock.IDByString(l, module+"."+name+"."+m)
-	return ok
+	return acllock.IDByString(l, module+"."+name+"."+m)
 }

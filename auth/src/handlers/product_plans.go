@@ -65,7 +65,7 @@ func orgProductPlan(ctx context.Context, h *AuthServiceHandler, orgID string) ([
 // refusePlansInsideOrg holds the backoffice's plan calls to the realm, and to
 // the callers the endpoint ACL lets make them.
 func (h *AuthServiceHandler) refusePlansInsideOrg(ctx context.Context, method string) error {
-	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" {
+	if orgID, ok := principal.Scope(ctx, "org_id"); ok && orgID != "" && !h.heldRealmWide(ctx, method) {
 		return refusal(ctx, codes.PermissionDenied, "product_plans: an organization's plan is set realm-wide, not from inside an organization",
 			CodeProductPlansRealmOnly, "", MsgProductPlansRealmOnly, nil)
 	}

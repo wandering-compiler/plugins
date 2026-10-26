@@ -159,6 +159,7 @@ func resolvePrincipalRealmAware(ctx context.Context, h *AuthServiceHandler, toke
 		}
 		if subset := sub.GetPermissionIds(); len(subset) > 0 {
 			applyTokenSubset(prin, subset, h.Lock)
+			prin.permissionSubset = true
 		}
 	}
 	// Only a SESSION token is stamped as the caller's session_token_id. Two
@@ -231,6 +232,10 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 			return nil, err
 		}
 	}
+	extras, err := h.checkTokenMint(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	expiresAt, err := h.personTokenExpiry(ctx, req.GetExpiresAt())
 	if err != nil {
 		return nil, err
@@ -259,7 +264,7 @@ func (h *AuthServiceHandler) CreateApiToken(ctx context.Context, req *pb.CreateA
 		if err != nil {
 			return err
 		}
-		token, tokenID, err = h.issueApiTokenTx(txCtx, attempt, userID, req.GetName(), req.GetPermissionSubset(), expiresAt, dev, approver)
+		token, tokenID, err = h.issueApiTokenTx(txCtx, attempt, userID, req.GetName(), req.GetPermissionSubset(), extras, expiresAt, dev, approver)
 		return err
 	})
 	if err != nil {
@@ -397,6 +402,44 @@ func (h *AuthServiceHandler) approverDevice(txCtx context.Context, callerID stri
 	return resp.GetDeviceId(), nil
 }
 
+// tokenMintWrite is a staged combination's write in a token's mint
+// transaction, once the token row exists (tokenID).
+type tokenMintWrite func(txCtx context.Context, tokenID string) error
+
+// tokenMintChecks are what a staged combination adds to minting an API token
+// (product_roles: the products' roles the token may use), read off the mint
+// request — CreateApiTokenReq, IssueBotTokenReq — before anything is written.
+// Each refuses a request it cannot honour, or returns the write that records
+// it beside the token's permission subset, in the same transaction (nil when
+// the request asks nothing of it). Appended by the combination's init, so
+// several can stage.
+var tokenMintChecks []func(ctx context.Context, h *AuthServiceHandler, req any) (tokenMintWrite, error)
+
+// checkTokenMint runs tokenMintChecks for req.
+func (h *AuthServiceHandler) checkTokenMint(ctx context.Context, req any) ([]tokenMintWrite, error) {
+	var writes []tokenMintWrite
+	for _, check := range tokenMintChecks {
+		w, err := check(ctx, h, req)
+		if err != nil {
+			return nil, err
+		}
+		if w != nil {
+			writes = append(writes, w)
+		}
+	}
+	return writes, nil
+}
+
+// writeTokenMint runs the writes checkTokenMint returned, for tokenID.
+func writeTokenMint(txCtx context.Context, writes []tokenMintWrite, tokenID string) error {
+	for _, w := range writes {
+		if err := w(txCtx, tokenID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // issueApiTokenTx mints the token bound to dev, writes its permission subset
 // and the history's success row, all on the SAME context, so a transaction
 // wrapped around them holds every one. Separated for exactly that reason: a
@@ -410,7 +453,7 @@ func (h *AuthServiceHandler) approverDevice(txCtx context.Context, callerID stri
 // left minting never-expiring tokens. No device, no token
 // (device/no-unbound-credential): this guard is the only one —
 // IssueApiTokenReq.device_id is nullable for the bearer token.
-func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAttempt, userID, name string, subset []int32, expiresAt *timestamppb.Timestamp, dev signInDevice, approvedBy string) (token, tokenID string, err error) {
+func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAttempt, userID, name string, subset []int32, extras []tokenMintWrite, expiresAt *timestamppb.Timestamp, dev signInDevice, approvedBy string) (token, tokenID string, err error) {
 	if dev.id == "" {
 		return "", "", errDeviceNotRegistered
 	}
@@ -444,6 +487,9 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAtt
 		}); err != nil {
 			return "", "", err
 		}
+	}
+	if err := writeTokenMint(txCtx, extras, id); err != nil {
+		return "", "", err
 	}
 	if err := h.recordSignInOK(txCtx, a, userID, dev); err != nil {
 		return "", "", err

@@ -13,9 +13,9 @@ import (
 
 // org_invite/no-invite-for-a-member: an address whose account is already a
 // live member of the organization is refused at invite time, before anything
-// is written. Reported by a consumer: the invitation used to be written and
-// listed as pending, and acceptance — the membership's unique index — was the
-// first place that refused it, so it could never be accepted.
+// is written. Without it the invitation was written and listed as pending,
+// and acceptance — the membership's unique index — was the first place that
+// refused it, so it could never be accepted.
 //
 // Over orgTables (no_deletes_test.go), whose reads apply the statements'
 // predicates: GetOrgMember finds live memberships only.

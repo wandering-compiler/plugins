@@ -24,6 +24,11 @@ type pkgMock struct {
 	ended   []string
 }
 
+// GetUserRealmWidePermissions: nobody here holds a role realm-wide.
+func (m *pkgMock) GetUserRealmWidePermissions(context.Context, *pb.GetUserRealmWidePermissionsReq, ...grpc.CallOption) (*pb.GetUserRealmWidePermissionsResp, error) {
+	return &pb.GetUserRealmWidePermissionsResp{}, nil
+}
+
 func (m *pkgMock) ListOrgPackages(_ context.Context, in *pb.ListOrgPackagesReq, _ ...grpc.CallOption) (*pb.ListOrgPackagesResp, error) {
 	out := &pb.ListOrgPackagesResp{}
 	for _, n := range m.live[in.GetOrgId()] {
