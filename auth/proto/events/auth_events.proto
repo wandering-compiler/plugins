@@ -568,8 +568,13 @@ message OrganizationDeleted {
 }
 
 // OrganizationUpdated — emitted on AuthMutation.UpdateOrganization (the
-// admin Organizations page detail edit). A subscriber re-syncs anything
-// keyed on the org's slug, which is its public handle.
+// admin Organizations page detail edit), carrying the organization's
+// columns as they now are. The slug is its public handle — the W17-Org
+// selector and the `/orgs/{org}/` path segment — so a subscriber that knows
+// the organization by org_id learns its new slug here: the old one no longer
+// selects it, and a client still naming the old one is refused (or, should
+// another organization take the slug later, reaches only what its own
+// membership there admits).
 message OrganizationUpdated {
   option (w17.event) = {
     channel: "events"
@@ -578,6 +583,9 @@ message OrganizationUpdated {
   option (w17.contrib.plugin_feature) = "org_membership";
 
   string org_id = 1;
+  string slug   = 2;
+  string name   = 3;
+  string kind   = 4;
 }
 
 // OrgMembershipUpdated — emitted on AuthMutation.UpdateOrgMembership
