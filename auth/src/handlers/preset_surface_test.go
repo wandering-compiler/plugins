@@ -143,8 +143,14 @@ func presetSurface(t *testing.T, manifest string) map[string]string {
 		if strings.HasPrefix(trimmed, "#") || trimmed == "" {
 			continue
 		}
-		if line == "  rest:" || line == "  mcp:" || line == "  admin:" {
+		if line == "  rest:" || line == "  mcp:" || line == "  admin:" || line == "  rpc:" {
 			section = strings.TrimSuffix(trimmed, ":")
+			continue
+		}
+		// The rpc preset publishes nothing by itself: a private surface serves
+		// a method only once it confirms it by name (born opt-in), so an
+		// upgrade that offers one adds nothing to any activation.
+		if section == "rpc" {
 			continue
 		}
 		switch section {

@@ -87,7 +87,7 @@ func TestTokenProductRoles_AProductIsAnsweredTheTokensShare(t *testing.T) {
 
 	answerFor := func(prin *authPrincipal) []string {
 		t.Helper()
-		ctx := context.WithValue(context.Background(), authHeadersKey{}, map[string]string{productHeader: "alpha"})
+		ctx := context.WithValue(privateCallerCtx("alpha"), authHeadersKey{}, map[string]string{productHeader: "alpha"})
 		ctx = context.WithValue(ctx, requestMemoKey{}, map[string]any{})
 		resp := &pb.AuthResp{Scopes: map[string]string{"user_id": "alice", "org_id": "org-a"}}
 		if err := answerProductRoles(ctx, h, prin, resp); err != nil {

@@ -1,6 +1,6 @@
 name: grant
 version: 0.1.0-rc.3
-requires_w17: ">=1.14"
+requires_w17: ">=1.15"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in
 # src/handlers/ + src/lib/ + plugin.go to the per-activation pb path.
@@ -16,6 +16,14 @@ requires_plugins:
   - name: auth
 
 presets:
+  rpc:
+    # What this plugin offers OTHER domains' services, through the domain's
+    # private surface ((w17.private_api)): the approved envelope of an
+    # organization — its name, logos, verified host — so a product's sign-in
+    # on a co-brand host shows whose it is. Served only when that surface
+    # confirms the method.
+    methods:
+      - { ref: GrantService.GetOrgEnvelope }
   rest:
     groups:
       # The organization's own envelope — the org is IN THE PATH, resolved

@@ -162,7 +162,7 @@ func prodHandler(t *testing.T) (*AuthServiceHandler, *prodMock) {
 // headers and memo on the context, the resolved scopes on the response.
 func answer(t *testing.T, h *AuthServiceHandler, userID, orgID, product string) (*pb.AuthResp, error) {
 	t.Helper()
-	ctx := context.WithValue(context.Background(), authHeadersKey{}, map[string]string{productHeader: product})
+	ctx := context.WithValue(privateCallerCtx(product), authHeadersKey{}, map[string]string{productHeader: product})
 	ctx = context.WithValue(ctx, requestMemoKey{}, map[string]any{})
 	resp := &pb.AuthResp{PermissionIds: []int32{7, 8}, Scopes: map[string]string{"user_id": userID}}
 	if orgID != "" {
@@ -215,7 +215,7 @@ func TestAnswerProductRolesIsInstalled(t *testing.T) {
 	// installed, as Authenticate does — another feature's enricher, which
 	// reads what this mock does not answer, is skipped.
 	h, _ := prodHandler(t)
-	ctx := context.WithValue(context.Background(), authHeadersKey{}, map[string]string{productHeader: "alpha"})
+	ctx := context.WithValue(privateCallerCtx("alpha"), authHeadersKey{}, map[string]string{productHeader: "alpha"})
 	ctx = context.WithValue(ctx, requestMemoKey{}, map[string]any{})
 	resp := &pb.AuthResp{PermissionIds: []int32{7}, Scopes: map[string]string{"user_id": "alice", "org_id": "org-a"}}
 	for _, enrich := range authRespEnrichers {

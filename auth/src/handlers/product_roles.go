@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wandering-compiler/sdk/go/lib/principal"
@@ -44,6 +45,10 @@ import (
 // only a gateway writes it). The plugin keeps its own copy, as it does for the
 // other gateway headers, so it builds against SDK releases that predate it.
 const productHeader = "x-w17-product"
+
+// callerDomainKey is the calling domain the identity's private gateway
+// admitted (sdk privatesurface.CallerDomainKey): only that gateway writes it.
+const callerDomainKey = "x-w17-caller-domain"
 
 func init() {
 	configChecks = append(configChecks, parseProductRoleCatalogue)
@@ -132,6 +137,14 @@ func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPr
 	product := headers[productHeader]
 	if product == "" {
 		return nil
+	}
+	// A product asks only through this identity's PRIVATE surface, and only
+	// for itself: its private gateway admitted the calling domain by its
+	// certificate and says which one it was. Anything else — a product
+	// dialing this domain's tiers, one product asking as another — is refused.
+	md, _ := metadata.FromIncomingContext(ctx)
+	if caller := firstMeta(md, callerDomainKey); caller != product {
+		return status.Errorf(codes.PermissionDenied, "product_roles: %q may ask only through the identity's private surface, as itself (the private gateway admitted %q)", product, caller)
 	}
 	c, err := h.productRoleCatalogue()
 	if err != nil {
