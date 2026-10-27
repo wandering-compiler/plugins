@@ -27,6 +27,11 @@ auth plugin's `org_packages` feature, which enforces them on every request.
 Which members and which operators may call a method is the project's endpoint
 ACL.
 
+`GetOrgEnvelope` is also offered to other domains' services (`presets.rpc`):
+a domain whose `(w17.private_api)` confirms it serves it on its private
+surface, over mutual TLS, to the domains it admits — a product's sign-in on a
+co-brand host reads whose it is there, never from this domain's tiers.
+
 | id | invariant | category | proof |
 |---|---|---|---|
 | grant/approved-only | Only an APPROVED envelope MUST be readable publicly; a proposal or a rejected one never is. | Security | `TestEnvelopeLifecycle` |

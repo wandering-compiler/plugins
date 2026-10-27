@@ -106,6 +106,10 @@ Behaviour that is deliberate, and easy to build against wrongly.
 - **Revoking a client is for good, and the row stays.** `DeleteClient` (`DELETE /auth/clients/{id}`) revokes: it stamps `revoked_at`: the redirect is refused exactly as an unregistered one, `SetClientEnabled` cannot restore it, and `ListClients` still shows it. Its `(client_id, redirect_uri)` stays taken: registering it again is refused with `CLIENT_REVOKED`; register the callback under a new `client_id`.
 - **A client that lost its secret keeps its `client_id`.** `RotateClientSecret` (`POST /auth/clients/{id}/rotate-secret`, published by the opt-in feature `client_secret_rotation`, which requires `cli_login`) gives a live registration a new secret, returned once; the old one stops working. A revoked registration cannot be rotated. Loopback CLI login (a `w17ctl`-style client on `127.0.0.1`) needs no registration.
 
+**Products reach the identity through its private surface**
+- **A product never dials the identity's tiers.** Its gateway and admin call `Authenticate`, `AuthenticateAdmin`, `SignIn` (and `OAuthExchange`, `GetHostOrg` when they need them) on the identity's private surface, over mutual TLS. The identity declares it in `proto/domains/<identity>/private.proto`: `(w17.private_api) = { include: [{ plugin: "auth", methods: [...] }], callers: [<products>] }`. Codegen refuses a product whose identity serves it nothing there.
+- **A product is answered only for itself.** `Authenticate` answers a product's roles only when the private gateway reports the call comes from that product; any other call naming a product is `PERMISSION_DENIED`.
+
 **Errors**
 - **The sentence for a person is in `details[0].message`.** The envelope's top-level `message` is the generic sentence for the code: for `EMAIL_TAKEN` it reads "Another change reached this first. Please try again." A client must render the detail.
 

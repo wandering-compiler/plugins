@@ -1,6 +1,6 @@
 name: auth
 version: 0.1.0-rc.38
-requires_w17: ">=1.12"
+requires_w17: ">=1.15"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -996,6 +996,19 @@ presets:
     # its OWN tools an MCP token can reach.
     tools:
       - { ref: AuthService.WhoAmI, feature: authenticate_turnkey }
+  rpc:
+    # What this plugin offers OTHER domains' services, through the identity
+    # domain's private surface ((w17.private_api), mutual TLS, callers
+    # admitted by domain). Nothing is served until that surface confirms a
+    # method by name. A product authenticates its callers here (Authenticate
+    # with x-w17-product; its admin signs in, looks up and federates), and
+    # reads which organization a host serves for a co-brand sign-in.
+    methods:
+      - { ref: AuthService.Authenticate,      feature: authenticate_turnkey }
+      - { ref: AuthService.AuthenticateAdmin, feature: authenticate_turnkey }
+      - { ref: AuthService.SignIn,            feature: sign_in_turnkey }
+      - { ref: AuthService.OAuthExchange,     feature: oauth }
+      - { ref: AuthService.GetHostOrg,        feature: org_hosts }
   admin:
     # Auto-wire the admin surface's auth to this plugin's canonical
     # methods, so an admin author who activates auth writes NO auth
