@@ -4663,7 +4663,10 @@ service AuthMutation {
       event: "OrganizationUpdated"
       payload: {
         fields: [
-          { key: "org_id", value: "$response.org_id" }
+          { key: "org_id", value: "$response.org_id" },
+          { key: "slug",   value: "$request.slug" },
+          { key: "name",   value: "$request.name" },
+          { key: "kind",   value: "$request.kind" }
         ]
       }
     };

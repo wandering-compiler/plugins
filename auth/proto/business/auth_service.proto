@@ -913,10 +913,19 @@ message ListOrgMembersReq {
   // naming one org in this field and another in its metadata). Empty = the
   // org comes from W17-Org alone.
   string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  // page_size — members per page: 100 when unset, at most 500 (a larger
+  // value is cut to 500).
+  int32 page_size = 2;
+  // page_token — the previous page's next_page_token; '' = the first page.
+  // Opaque to the caller.
+  string page_token = 3;
 }
 message ListOrgMembersResp {
   option (w17.contrib.plugin_feature) = "org_membership";
+  // The members ordered by address.
   repeated OrgMember members = 1;
+  // next_page_token — set when another page follows; pass it as page_token.
+  string next_page_token = 2;
 }
 message OrgMember {
   option (w17.contrib.plugin_feature) = "org_membership";

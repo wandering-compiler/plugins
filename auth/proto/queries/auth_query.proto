@@ -1454,6 +1454,13 @@ message OrgMemberRow {
 message ListOrgMembersByOrgReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string org_id = 1 [(w17.field) = { type: UUID }];
+  // after_email — the last address of the previous page; '' = the first page
+  // (every address sorts after the empty one).
+  // The keyset of the list's order (u.email, unique).
+  string after_email = 2 [(w17.field) = { type: CHAR, max_len: 320, blank: true }];
+  // limit — the rows read. The handler asks one more than the page it
+  // returns, to tell whether another page follows.
+  int32 limit = 3 [(w17.field) = { type: NUMBER, gte: 1, lte: 501 }];
 }
 message ListOrgMembersByOrgResp {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -3662,7 +3669,8 @@ service AuthQuery {
   // org member + invite reads
   // ────────────────────────────────────────────────────────────
 
-  // ListOrgMembersByOrg — everyone in ONE organization. The ByOrg
+  // ListOrgMembersByOrg — ONE organization's members, a page at a time
+  // (keyset on the address, which is unique). The ByOrg
   // suffix is not decoration: every proto in this plugin generates into
   // ONE Go package, so a query message may not share a name with the
   // business message that wraps it — and the business RPC is the one
@@ -3687,7 +3695,9 @@ service AuthQuery {
           "JOIN @module.User u ON u.id = m.user_id "
           "JOIN @module.Organization o ON o.id = m.org_id "
           "WHERE m.org_id = :org_id AND m.removed_at IS NULL AND o.deleted_at IS NULL "
-          "ORDER BY u.email ASC"
+          "AND u.email > :after_email "
+          "ORDER BY u.email ASC "
+          "LIMIT :limit"
       }
     };
   }

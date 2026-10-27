@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"slices"
 	"strconv"
 
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -628,12 +630,30 @@ func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrg
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.Query.ListOrgMembersByOrg(ctx, &pb.ListOrgMembersByOrgReq{OrgId: orgID})
+	size := int(req.GetPageSize())
+	switch {
+	case size <= 0:
+		size = orgMembersPageDefault
+	case size > orgMembersPageMax:
+		size = orgMembersPageMax
+	}
+	after, err := orgMembersPageAfter(req.GetPageToken())
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*pb.OrgMember, 0, len(resp.GetMembers()))
-	for _, m := range resp.GetMembers() {
+	// One row more than the page tells whether another page follows.
+	resp, err := h.Query.ListOrgMembersByOrg(ctx, &pb.ListOrgMembersByOrgReq{OrgId: orgID, AfterEmail: after, Limit: int32(size + 1)})
+	if err != nil {
+		return nil, err
+	}
+	rows := resp.GetMembers()
+	next := ""
+	if len(rows) > size {
+		rows = rows[:size]
+		next = base64.RawURLEncoding.EncodeToString([]byte(rows[size-1].GetEmail()))
+	}
+	out := make([]*pb.OrgMember, 0, len(rows))
+	for _, m := range rows {
 		out = append(out, &pb.OrgMember{
 			UserId:   m.GetUserId(),
 			Email:    m.GetEmail(),
@@ -643,7 +663,29 @@ func (h *AuthServiceHandler) ListOrgMembers(ctx context.Context, req *pb.ListOrg
 			MembershipId: m.GetMembershipId(),
 		})
 	}
-	return &pb.ListOrgMembersResp{Members: out}, nil
+	return &pb.ListOrgMembersResp{Members: out, NextPageToken: next}, nil
+}
+
+// An organization's members are listed a page at a time
+// (org_membership/members-paged): a large organization is never read whole
+// into one answer.
+const (
+	orgMembersPageDefault = 100
+	orgMembersPageMax     = 500
+)
+
+// orgMembersPageAfter decodes a page token — the last address of the previous
+// page — into the keyset the query seeks past. An empty token is the first
+// page.
+func orgMembersPageAfter(token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(b) == 0 || len(b) > 320 || !utf8.Valid(b) {
+		return "", status.Error(codes.InvalidArgument, "org_membership: page_token is not one this list issued")
+	}
+	return string(b), nil
 }
 
 // heldRealmWide reports whether the caller holds the call being served —
