@@ -1231,7 +1231,7 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	mcpSurface := req.GetHeaders()[surfaceKey] == surfaceMCP
 	botBearer := serviceAccountStaged && !viaDPoP && !mcpSurface && !onAdminPlane(ctx) && isBotBearerToken(token)
 	if !proofed && !mcpSurface && !botBearer {
-		return nil, Unauthenticated(deviceProofRequired(ctx))
+		return nil, Unauthenticated(deviceProofRequired(ctx, false))
 	}
 
 	// Resolve identity + permission IDs. Default = single-realm

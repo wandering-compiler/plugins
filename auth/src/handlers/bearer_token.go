@@ -201,9 +201,20 @@ func sessionExpired(ctx context.Context, expiresAt time.Time, kind pb.TokenType)
 // without a proof of possession, or an authenticated request without one (no
 // proof, or the token sent as Bearer) — decided before the token is looked
 // up, so it says nothing about the token.
-func deviceProofRequired(ctx context.Context) error {
-	return unauthenticatedWithInfo(ctx, CodeDeviceProofRequired,
-		"a DPoP proof of the device key is required", MsgDeviceProofRequired, nil, nil)
+//
+// The developer text is what a client prints when it does not know the code —
+// a client too old to sign proofs is exactly such a client — so it names the
+// cause and the fix itself instead of leaving the reader with "required".
+func deviceProofRequired(ctx context.Context, mint bool) error {
+	dev := "this request carried no DPoP proof of the device key its token is bound to: the token was sent " +
+		"as a plain Bearer, or by a client that does not sign proofs — send it with a proof signed by that key " +
+		"(an outdated client must be updated)"
+	if mint {
+		dev = "this sign-in carried no DPoP proof of a device key: the client does not sign one, so it is " +
+			"outdated or not a client of this deployment — update it (a client that signs makes its device key " +
+			"at its first sign-in)"
+	}
+	return unauthenticatedWithInfo(ctx, CodeDeviceProofRequired, dev, MsgDeviceProofRequired, nil, nil)
 }
 
 // deviceRevoked is the DEVICE_REVOKED refusal: the (user, device) pair was
