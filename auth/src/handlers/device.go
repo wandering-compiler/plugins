@@ -106,7 +106,7 @@ func mintThumbprint(ctx context.Context) (string, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	jkt := firstMeta(md, dpopJKTKey)
 	if !validThumbprint(jkt) {
-		return "", deviceProofRequired(ctx)
+		return "", deviceProofRequired(ctx, true)
 	}
 	return jkt, nil
 }
