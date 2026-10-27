@@ -1,5 +1,32 @@
 # auth — changelog
 
+## 0.1.0-rc.39
+
+### A sign-in without a device proof says the client is outdated
+
+- **`DEVICE_PROOF_REQUIRED` names its cause in the developer text**, which a client that does not know the code prints as it is — and a client too old to sign proofs is exactly such a client. A sign-in without a proof: the client does not sign one, so it is outdated or not this deployment's client — update it. A request without one: the token went as a plain Bearer or from a client that does not sign — send it with a proof by its key. The code and the user-facing message are unchanged.
+
+### Invitations accepted from the caller's own list; invitation and member management within the ceiling
+
+- **`invite_accept_from_list`** (off by default): register first, accept later. `AcceptMyOrgInvite` (`POST /auth/invites/{invite_id}/accept`) accepts a pending invitation bound to the caller's address, by its id from `ListMyInvites`. No link reached the address, so nothing is derived: under `email_proof_required` `derived` or `full` the account must already hold that proof. An open invitation is accepted through its link only.
+- **`invite_accept_at_signup`** (off by default): a registration through an invitation's link joins at once — SignUp, an OAuth account's creation and ConfirmSignUp (which takes the link again, `invite_token`) accept it in the transaction that creates the account. It declines, leaving the invitation for AcceptOrgInvite, when the address does not reach `email_proof_required` without a proof of its own.
+- **A member's kind changes in place (`membership_kinds`).** `UpdateOrgMembershipKind` (`PUT /auth/orgs/{org}/members/{id}/kind`), under the role ceiling and the kinds the caller may hand out, instead of removing and re-inviting the member.
+- **Fixed: a bind racing an acceptance could hand a bound invitation to another account.** The statement that spends an invitation through its link matches only an open one or one bound to the accepting address.
+- **Fixed: any member could read and withdraw every pending invitation.** `ListOrgInvites` lists, and `RevokeOrgInvite` withdraws, only invitations whose role the caller could give (`INVITE_ABOVE_CALLER`).
+- **Fixed: a member holding the products' roles in an organization could be removed by a member below them** (`product_roles`). Changing or removing them needs every permission of those roles there.
+- **`email_proof_required` above `none` without `email_verification`, or an unknown value, refuses to boot.** It was silently ignored.
+- **Fixed: under an audience naming no kind, every invitation of a kind was refused (`INVITE_KIND_NOT_ALLOWED`)** (`membership_kinds`). Kinds are gated only when some audience names one; otherwise any kind is handed out, as without audiences.
+
+### An organization's members a page at a time; the new slug in OrganizationUpdated
+
+- **Changed: `ListOrgMembers` (`GET /auth/orgs/{org}/members`) answers one page**, ordered by address: 100 members unless `page_size` asks otherwise, at most 500. `next_page_token` is set while members remain; pass it back as `page_token`. A client that read the whole list in one call reads only its first page for an organization of more than 100 members — walk the tokens.
+- **`OrganizationUpdated` carries `slug`, `name` and `kind`** as they are after the change. The slug is the organization's selector (`W17-Org`, `/orgs/{org}/`); a subscriber that keys anything on it learns the new one from the event instead of reading the organization back.
+
+### A product reaches its identity through the identity's private surface (`product_roles`) (read first)
+
+- **`presets.rpc` (requires w17 ≥ 1.15).** The plugin offers other domains' services `AuthService.Authenticate` and `AuthService.AuthenticateAdmin` (`authenticate_turnkey`), `AuthService.SignIn` (`sign_in_turnkey`), `AuthService.OAuthExchange` (`oauth`) and `AuthService.GetHostOrg` (`org_hosts`). Nothing is served until the domain's `(w17.private_api)` confirms a method by name; a product's gateway and admin call them there, over mutual TLS, never the identity's storage tier.
+- **Changed: a product is answered only for itself.** `Authenticate` answers a product's roles (`x-w17-product`) only when the identity's private gateway reports that the call comes from that product (`x-w17-caller-domain`); otherwise it refuses with `PERMISSION_DENIED`. A product's gateway or admin generated before this release dials the storage tier directly and is refused: **regenerate the products with the identity**, and declare the identity's private surface (`proto/domains/<identity>/private.proto`, `callers: [<products>]`).
+
 ## 0.1.0-rc.38
 
 ### The identity composes the products' roles (`product_roles`) (read first)
