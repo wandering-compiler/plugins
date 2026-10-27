@@ -156,6 +156,11 @@ var membershipRemovalCascades []func(ctx context.Context, h *AuthServiceHandler,
 // another feature, which removing them takes away as surely as their own
 // grants: teams answers their teams' roles. checkMayManageMembership asks the
 // caller to cover them too.
+// memberManageChecks refuse a change to a member who holds, in the
+// organization, something the caller could not give (set by features that
+// grant inside an organization outside its role catalogue).
+var memberManageChecks []func(ctx context.Context, h *AuthServiceHandler, memberID, orgID string) error
+
 var memberHeldRoleSources []func(ctx context.Context, h *AuthServiceHandler, userID, orgID string) ([]string, error)
 
 // superadminSources are the organization's superadmins through another
@@ -456,6 +461,14 @@ func (h *AuthServiceHandler) checkMayManageMembership(ctx context.Context, membe
 	held, err := h.Query.ListUserOrgGrants(ctx, &pb.ListUserOrgGrantsReq{UserId: m.GetUserId(), OrgId: m.GetOrgId()})
 	if err != nil {
 		return nil, err
+	}
+	// What the member holds there beyond org roles (the products' roles,
+	// product_roles) must be within the caller's reach as well: a removal ends
+	// it, and a relabel leaves it under someone who could not have given it.
+	for _, check := range memberManageChecks {
+		if err := check(ctx, h, m.GetUserId(), m.GetOrgId()); err != nil {
+			return nil, err
+		}
 	}
 	roleIDs := held.GetRoleIds()
 	for _, source := range memberHeldRoleSources {

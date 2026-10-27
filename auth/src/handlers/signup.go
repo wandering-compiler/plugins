@@ -190,6 +190,13 @@ func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, 
 	if err := joinSignedUpOrg(txCtx, h, userID, join); err != nil {
 		return nil, err
 	}
+	// Joined by the host's policy, the person is a member already; the
+	// invitation stays for them to accept.
+	if join == nil {
+		if err := signupAcceptInvite(txCtx, h, userID, normalizeEmail(req.GetEmail()), req.GetInviteToken(), false); err != nil {
+			return nil, err
+		}
+	}
 	// A new account's device is new and untrusted: the registration passed
 	// no second factor. Stamp the absolute session TTL like SignIn
 	// (issueSession): a SignUp-minted bearer expires too — sooner on a public

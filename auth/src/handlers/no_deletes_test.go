@@ -195,7 +195,8 @@ func TestEveryWriteThatUsesARowSkipsAnEndedOne(t *testing.T) {
 		"ConsumeRecoveryCode":        "AND used_at IS NULL AND revoked_at IS NULL",
 		"RecordPendingSignUpAttempt": "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW()",
 		"BindOpenOrgInvite":          "WHERE i.token_hash = :token_hash AND i.email IS NULL AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL)",
-		"ConsumeOrgInviteByToken":    "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL)",
+		"ConsumeOrgInviteByToken":    "WHERE i.token_hash = :token_hash AND (i.email IS NULL OR i.email = :email) AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND EXISTS (SELECT o.id FROM @module.Organization o WHERE o.id = i.org_id AND o.deleted_at IS NULL)",
+		"SetOrgMembershipKind":       "WHERE id = :id AND removed_at IS NULL",
 		"UpdateRole":                 "WHERE id = :role_id AND deleted_at IS NULL",
 		"UpdateOrganization":         "WHERE id = :id AND deleted_at IS NULL",
 	} {

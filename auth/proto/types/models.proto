@@ -2015,14 +2015,11 @@ message OrgMembership {
 // adds a column and two RPCs; it blocks nothing. A project can turn it on,
 // verify nobody, and every account still has the column NULL.
 //
-// What closes it today is `invite_requires_verified_email`, which refuses an
-// acceptance from an unverified account. It is off by default, so the weak
-// proof is still the shipped behaviour and is now named rather than implied.
-//
-// What closes it PROPERLY is moving the proof off the address and onto the
-// link — a single-use token on the invitation, which also removes the need to
-// verify anything. That is a model change, made deliberately rather than
-// guessed at.
+// The proof moved onto the link: an invitation carries a single-use token, and
+// accepting through it (AcceptOrgInvite) needs no proved address. Accepting
+// from the account's own list without the link (AcceptMyOrgInvite) has only
+// the address to go on, and `email_proof_required` (none | derived | full)
+// sets how proved it must be; `none`, the default, leaves the window open.
 //
 // `role` is a Role.name, not free text: accepting writes BOTH the
 // OrgMembership row (carrying this name as its label) and the UserRole grant

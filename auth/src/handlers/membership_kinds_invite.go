@@ -2,9 +2,6 @@ package handlers
 
 import (
 	"context"
-	"slices"
-
-	"google.golang.org/grpc/codes"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -43,36 +40,8 @@ func init() {
 // With no table — a domain without audiences — any kind goes.
 func checkInviteKind(ctx context.Context, h *AuthServiceHandler, inviterID, orgID string, req *pb.InviteToOrgReq) (string, error) {
 	kind := req.GetKind()
-	table, err := h.audienceTable()
-	if err != nil {
+	if err := checkKindWithinCaller(ctx, h, inviterID, orgID, kind, true); err != nil {
 		return "", err
 	}
-	if len(table) == 0 || kind == "" {
-		return kind, nil
-	}
-	refuse := func() (string, error) {
-		return "", refusal(ctx, codes.PermissionDenied, "membership_kinds: the inviter's kind of membership may not invite this kind",
-			CodeInviteKindNotAllowed, "kind", MsgInviteKindNotAllowed, nil)
-	}
-	known := false
-	for _, a := range table {
-		known = known || slices.Contains(a.kinds, kind)
-	}
-	if !known {
-		return refuse()
-	}
-	_, all, err := admittedOrgs(ctx, h, inviterID, nil)
-	if err != nil {
-		return "", err
-	}
-	m := orgByID(all, orgID)
-	if m == nil {
-		return kind, nil
-	}
-	for _, a := range table {
-		if slices.Contains(a.kinds, m.GetMembershipKind()) && slices.Contains(a.invitable(), kind) {
-			return kind, nil
-		}
-	}
-	return refuse()
+	return kind, nil
 }

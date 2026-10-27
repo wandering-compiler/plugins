@@ -683,6 +683,9 @@ func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID,
 	if err == nil {
 		err = joinSignedUpOrg(txCtx, h, userID, join)
 	}
+	if err == nil && join == nil {
+		err = signupAcceptInvite(txCtx, h, userID, email, inviteToken, emailVerified)
+	}
 	if err == nil {
 		_, err = h.Mutation.CreateOAuthIdentity(txCtx, &pb.CreateOAuthIdentityReq{
 			UserId:     userID,

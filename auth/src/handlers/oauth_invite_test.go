@@ -41,7 +41,13 @@ func TestOAuthExchange_SignsUpWithTheInvitationItCarries(t *testing.T) {
 		claimed = token
 		return nil
 	}
-	t.Cleanup(func() { signupInviteGate, signupClaimInvite = savedGate, savedClaim })
+	savedAccept := signupAcceptInvite
+	var accepted string
+	signupAcceptInvite = func(_ context.Context, _ *AuthServiceHandler, _, _, token string, _ bool) error {
+		accepted = token
+		return nil
+	}
+	t.Cleanup(func() { signupInviteGate, signupClaimInvite, signupAcceptInvite = savedGate, savedClaim, savedAccept })
 
 	resp, err := h.OAuthCallback(context.Background(), &pb.OAuthCallbackReq{Provider: "google", Code: "c", State: state})
 	if err != nil {
@@ -51,8 +57,8 @@ func TestOAuthExchange_SignsUpWithTheInvitationItCarries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exchange with the invitation: %v", err)
 	}
-	if gated != "open-invite" || claimed != "open-invite" {
-		t.Errorf("the invitation did not reach the gate (%q) and the claim (%q)", gated, claimed)
+	if gated != "open-invite" || claimed != "open-invite" || accepted != "open-invite" {
+		t.Errorf("the invitation did not reach the gate (%q), the claim (%q) and the acceptance at sign-up (%q)", gated, claimed, accepted)
 	}
 	if ex.GetToken() == "" || m.createdUser == nil || m.createdIdent == nil {
 		t.Errorf("no account, link or session after the invited sign-up: %+v", ex)

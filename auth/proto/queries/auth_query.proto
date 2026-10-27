@@ -1460,6 +1460,16 @@ message ListOrgMembersByOrgResp {
   repeated OrgMemberRow members = 1;
 }
 
+message GetPendingOrgInviteForEmailReq {
+  option (w17.contrib.plugin_feature) = "invite_accept_from_list";
+  string invite_id = 1 [(w17.field) = { type: UUID }];
+  string email     = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message GetPendingOrgInviteForEmailResp {
+  option (w17.contrib.plugin_feature) = "invite_accept_from_list";
+  string org_id     = 1;
+  string token_hash = 2;
+}
 message GetPendingOrgInviteByTokenReq {
   option (w17.contrib.plugin_feature) = "org_invite";
   string token_hash = 1 [(w17.field) = { type: CHAR, max_len: 128 }];
@@ -3711,6 +3721,26 @@ service AuthQuery {
           "FROM @module.OrgInvite i "
           "JOIN @module.Organization o ON o.id = i.org_id "
           "WHERE i.token_hash = :token_hash AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
+          "LIMIT 1"
+      }
+    };
+  }
+
+  // GetPendingOrgInviteForEmail — a pending invitation by its id, only if it
+  // is bound to this address (invite_accept_from_list). Answers the hash the
+  // acceptance then spends it by, through the one claim (and the one
+  // OrgInviteAccepted) accepting through the link uses.
+  rpc GetPendingOrgInviteForEmail(GetPendingOrgInviteForEmailReq) returns (GetPendingOrgInviteForEmailResp) {
+    option (w17.contrib.plugin_feature_rpc) = "invite_accept_from_list";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.org_id AS org_id, "
+          "       i.token_hash AS token_hash "
+          "FROM @module.OrgInvite i "
+          "JOIN @module.Organization o ON o.id = i.org_id "
+          "WHERE i.id = :invite_id AND i.email = :email AND i.accepted_at IS NULL AND i.closed_at IS NULL AND i.expires_at > NOW() AND o.deleted_at IS NULL "
           "LIMIT 1"
       }
     };
