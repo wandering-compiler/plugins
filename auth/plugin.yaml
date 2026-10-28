@@ -1,6 +1,6 @@
 name: auth
 version: 0.1.0-rc.39
-requires_w17: ">=1.15"
+requires_w17: ">=1.16"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -181,8 +181,10 @@ features:
       # `undefined: pb.GetUserByTokenWithPermissionsReq`, pointing at a file
       # the project never wrote and cannot edit.
       - rbac
-    description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids. AuthService.AuthenticateAdmin (the admin preset's user_lookup) is the same resolver with no organization selected, so only realm-wide roles count."
+    description: "AuthService.Authenticate handler dispatchable from gateway (w17.rest_api).auth_methods[]. Authored Go handler in handlers/auth_service.go: extracts bearer token, delegates to AuthQuery.GetUserByTokenWithPermissions, passes the int32 permission IDs straight into AuthResp.permission_ids. AuthService.AuthenticateAdmin (the admin preset's user_lookup) is the same resolver with no organization selected, so only realm-wide roles count. AuthService.ResolveUser is the same resolver again starting from a user id instead of a credential (a session's roles, the organization the headers select): the envelope the identity domain's own code stamps with principal.ActAs when it acts for a person another domain named in a request, so the role ceiling judges what that person holds. It trusts its caller with any user, so no preset surfaces it."
     default: true
+    go_files:
+      - handlers/resolve_user.go
   - name: sign_up_turnkey
     description: "AuthService.SignUp — authored Go handler composing PasswordHash.Hash + CreateUser + IssueToken. Project's REST endpoint points directly at SignUp — no business glue. Disable for custom register flows (rate limit, captcha, email confirmation, invite codes). Staged from handlers/signup.go so the pb.SignUpReq/Resp reference vanishes with the feature (an admin auth realm omits it and seeds accounts instead)."
     default: true

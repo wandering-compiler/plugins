@@ -75,6 +75,16 @@ message AuthReq {
   map<string, string> headers = 1 [(w17.field) = { sensitive: true }];
 }
 
+// ResolveUserReq names the person whose principal ResolveUser answers, and
+// the request they act in: `headers` are read exactly as Authenticate reads an
+// AuthReq's — `w17-org` selects the organization (by slug), an audience's
+// membership kinds, a product — less the credential, which there is none of.
+message ResolveUserReq {
+  option (w17.contrib.plugin_feature) = "authenticate_turnkey";
+  string              user_id = 1 [(w17.field) = { type: UUID }];
+  map<string, string> headers = 2;
+}
+
 // AuthResp matches the gateway's auth contract. The router
 // reads `permission_ids` to seed the per-request ACL check
 // (validateAuthResponseShape rejects an AuthResp missing this
@@ -165,6 +175,13 @@ message AuthResp {
   // this domain's ids mean nothing in the product, whose gateway turns these
   // keys into its own.
   repeated string     product_roles = 9 [(w17.contrib.plugin_feature_field) = "product_roles"];
+  // acted_for marks a person this domain's own code acts for: an envelope
+  // AuthService.ResolveUser answered, without a credential. It is held as the
+  // person's session (session_token_id is how a check tells a session from a
+  // token, and there is no session to name), so a re-read of their grants —
+  // the role ceiling under an organization's lock — counts the session's
+  // roles. Only ResolveUser sets it; Authenticate never does.
+  bool                acted_for = 10;
 }
 
 // SignInReq / SignInResp — canonical email+password sign-in
@@ -1941,6 +1958,20 @@ service AuthService {
   // console that spans them all.
   rpc AuthenticateAdmin(AuthReq) returns (AuthResp) {
     option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
+  }
+  // ResolveUser — what a person holds, answered as Authenticate answers it
+  // for their session: the same roles, organization, narrowing and wildcard
+  // expansion, starting from a user id instead of a credential. For the
+  // identity domain's own code acting for someone another domain named in a
+  // request (principal.ActAs with the answer), so a check that reads the
+  // envelope — the role ceiling — judges that person. It trusts its caller
+  // with any user, so it is for code inside the domain: no preset surfaces
+  // it, and it is marked internal — codegen refuses it on every surface (a
+  // REST endpoint, an rpc or private group, an admin source, an MCP tool)
+  // and a whole-service ref leaves it out.
+  rpc ResolveUser(ResolveUserReq) returns (AuthResp) {
+    option (w17.contrib.plugin_feature_rpc) = "authenticate_turnkey";
+    option (w17.contrib.plugin_internal_rpc) = true;
   }
   rpc SignIn(SignInReq) returns (SignInResp) {
     option (w17.contrib.plugin_feature_rpc) = "sign_in_turnkey";

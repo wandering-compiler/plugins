@@ -232,19 +232,49 @@ func TestAcceptOrgInvite_RefusesARoleWidenedSinceTheInvitation(t *testing.T) {
 	}
 }
 
-// The snapshot an invitation stores for a wildcard role in an empty-catalogue
-// domain is accepted against the same role at acceptance.
-func TestRoleSnapshot_AWildcardOverAnEmptyCatalogueRoundTrips(t *testing.T) {
-	carried := expandRoleGrant(&pb.RoleGrant{AllPermissions: true}, &acllock.Lock{Version: 1})
-	if carried == nil {
-		t.Fatal("a wildcard over an empty catalogue expanded to nil (unexpandable)")
+// A role of all_permissions is snapshotted as that, not as the lock it
+// expanded to: the lock grows with every method the project adds — an empty
+// one included — and the role has not changed. Before, every such growth made
+// every pending invitation to the role unacceptable.
+func TestRoleSnapshot_AWildcardRoleOutlivesTheLockGrowing(t *testing.T) {
+	m := newRoleCatalogue()
+	m.wildcards = map[string]bool{"r-admin": true}
+	h := &AuthServiceHandler{Query: m, Lock: &acllock.Lock{Permissions: map[string]int{"a": 1, "b": 2}}}
+
+	snap, err := h.checkMayGrantRole(withHeldPermissions(context.Background(), "u1", 1, 2), "r-admin")
+	if err != nil {
+		t.Fatalf("checkMayGrantRole: %v", err)
 	}
-	snap := encodeRoleSnapshot("r-tenant-admin", carried)
-	_, snapPerms, ok := decodeRoleSnapshot(snap)
-	if !ok {
-		t.Fatalf("decode %q failed", snap)
+	if snap != "r-admin:*" {
+		t.Fatalf("snapshot = %q, want r-admin:*", snap)
 	}
-	if !allHeld(carried, snapPerms) {
-		t.Fatalf("the role no longer fits its own snapshot %q", snap)
+
+	h.Lock = &acllock.Lock{Permissions: map[string]int{"a": 1, "b": 2, "c": 3, "d": 4}}
+	if err := h.checkRoleWithinSnapshot(context.Background(), "r-admin", snap); err != nil {
+		t.Errorf("the lock grew and the invitation was refused: %v", err)
+	}
+
+	// No longer a wildcard: another role under the name, whatever it lists.
+	m.wildcards = nil
+	m.rolePerms = map[string][]int32{"r-admin": {1}}
+	if err := h.checkRoleWithinSnapshot(context.Background(), "r-admin", snap); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("a role that stopped granting everything: code = %v, want FailedPrecondition", status.Code(err))
+	}
+}
+
+// A snapshot written before the wildcard spelling lists the lock it expanded
+// to, and is held to that list: an empty one cannot tell "everything, over an
+// empty lock" from "a role that carried nothing", so it is not read as either.
+func TestRoleSnapshot_AnEnumeratedSnapshotOfAWildcardRoleIsHeldToItsList(t *testing.T) {
+	m := newRoleCatalogue()
+	m.wildcards = map[string]bool{"r-admin": true}
+	h := &AuthServiceHandler{Query: m, Lock: &acllock.Lock{Permissions: map[string]int{"a": 1, "b": 2}}}
+	ctx := context.Background()
+
+	if err := h.checkRoleWithinSnapshot(ctx, "r-admin", "r-admin:1,2"); err != nil {
+		t.Errorf("the list still covers the lock: %v", err)
+	}
+	if err := h.checkRoleWithinSnapshot(ctx, "r-admin", "r-admin:"); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("an empty list under a lock that grew: code = %v, want FailedPrecondition", status.Code(err))
 	}
 }
