@@ -61,6 +61,9 @@ const (
 // in every activation.
 const scopeNewDevices = "new_devices"
 
+// scopeAllLogins challenges every sign-in the policy applies to (the default).
+const scopeAllLogins = "all_logins"
+
 // scopeOff is the two_factor_scope value that challenges NO sign-in — for a
 // development stack whose scripts sign in with a password, under the same
 // rule the SDK applies to its other development allowances: honoured only
@@ -127,6 +130,12 @@ func (h *AuthServiceHandler) twoFactorOff() bool {
 // checkTwoFactorScope refuses two_factor_scope=off outside W17_ENV=dev: a
 // production console that read it would sign everyone in on one factor.
 func checkTwoFactorScope(h *AuthServiceHandler) error {
+	switch h.TwoFactorScope {
+	case "", scopeAllLogins, scopeNewDevices, scopeOff:
+	default:
+		// A typo silently meant all_logins.
+		return fmt.Errorf("two_factor_scope = %q is not one of all_logins, new_devices, off", h.TwoFactorScope)
+	}
 	if h.TwoFactorScope == scopeOff && os.Getenv(envEnvironment) != devEnvironment {
 		return fmt.Errorf("two_factor_scope = off is honoured only with %s=%s (a development stack); this environment is %q — set all_logins or new_devices", envEnvironment, devEnvironment, os.Getenv(envEnvironment))
 	}
@@ -701,7 +710,10 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	if ch.GetConsumedAt() != nil {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
-	if created := ch.GetCreatedAt(); created != nil && time.Now().After(created.AsTime().Add(h.mfaTTL())) {
+	// No creation time is no proof of age: refused, not waved through. The
+	// expiry used to apply only when the time was there, so a challenge read
+	// without it never expired.
+	if created := ch.GetCreatedAt(); created == nil || time.Now().After(created.AsTime().Add(h.mfaTTL())) {
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
 	// Brute-force lockout. The budget is CLAIMED before the
@@ -751,22 +763,32 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	}
 	userID := ch.GetUserId()
 
-	if !h.verifyMfaCode(ctx, userID, ch.GetCodeHash(), req.GetCode()) {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
-	}
-
-	// Single-use consume — RETURNING user_id empty means another request
-	// already consumed it (race); fail closed.
-	consumed, err := h.Mutation.ConsumeMfaChallenge(ctx, &pb.ConsumeMfaChallengeReq{ChallengeId: req.GetChallengeId(), Thumbprint: thumbprint})
-	if err != nil {
-		return nil, Unauthenticated(err)
-	}
-	if consumed.GetUserId() == "" {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
-	}
-
-	account, err := refuseUnsignableAccount(ctx, h, userID)
-	attempt.account = account
+	// The code, the account and the consume are ONE transaction. Separately,
+	// a recovery code was spent before the consume, so a concurrent request
+	// that consumed the challenge first burned it and got no session; and the
+	// consume (which announces MfaVerified) ran before the account check, so
+	// a disabled account was recorded as verified. A lost race or a refused
+	// account now rolls the spent code back.
+	err = h.inTx(ctx, func(txCtx context.Context) error {
+		if !h.verifyMfaCode(txCtx, userID, ch.GetCodeHash(), req.GetCode()) {
+			return Unauthenticated(errMfaChallengeInvalid)
+		}
+		account, err := refuseUnsignableAccount(txCtx, h, userID)
+		attempt.account = account
+		if err != nil {
+			return err
+		}
+		// Single-use consume — RETURNING user_id empty means another request
+		// already consumed it (race); fail closed.
+		consumed, err := h.Mutation.ConsumeMfaChallenge(txCtx, &pb.ConsumeMfaChallengeReq{ChallengeId: req.GetChallengeId(), Thumbprint: thumbprint})
+		if err != nil {
+			return Unauthenticated(err)
+		}
+		if consumed.GetUserId() == "" {
+			return Unauthenticated(errMfaChallengeInvalid)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
