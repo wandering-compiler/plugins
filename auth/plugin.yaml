@@ -30,6 +30,10 @@ env:
     type: bool
     default: "true"
     description: "Built-in TOTP second factor (two_factor feature). false = the plugin never verifies TOTP; every challenge goes out via MfaChallengeRequested for a hand-written delivery channel (SMS/e-mail)."
+  - name: two_factor_policy
+    type: string
+    default: required
+    description: "Who signs in with a second factor (two_factor feature): required (every account is challenged; an account without a confirmed authenticator gets its code through MfaChallengeRequested, so without a hand-written SMS/e-mail channel it cannot sign in — required suits a project that enrols from the first account), optional (an account that confirmed an authenticator is challenged, the others sign in with the password — how 2FA is offered on a running product) or disabled (nobody is challenged and EnrollTotp is refused; an authenticator already confirmed stays stored and counts again when the policy changes). two_factor_scope says WHEN a challenged account is asked. The activation's default: with org_two_factor_policy an organization overrides it per kind of membership. Another value refuses the boot."
   - name: two_factor_scope
     type: string
     default: all_logins
@@ -270,7 +274,7 @@ features:
       # mfa.go names pb.SignInResp: the two-step sign-in RETURNS one
       # (mfa_required instead of a token). No sign-in, no build.
       - sign_in_turnkey
-    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (seed encrypted at rest, codes single-use) + UserRecoveryCode + MfaChallenge tables, the EnrollTotp (returns the otpauth URI and a QR code as SVG)/ConfirmTotp (returns ten recovery codes)/DisableTotp/GetMfaStatus/GenerateRecoveryCodes enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (an untrusted (account, device) pair only). Off by default."
+    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (seed encrypted at rest, codes single-use) + UserRecoveryCode + MfaChallenge tables, the EnrollTotp (returns the otpauth URI and a QR code as SVG)/ConfirmTotp (returns ten recovery codes)/DisableTotp/GetMfaStatus/GenerateRecoveryCodes enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (an untrusted (account, device) pair only); policy required | optional | disabled (two_factor_policy: who is challenged at all), per organization with org_two_factor_policy. Off by default."
     default: false
     go_files:
       - handlers/mfa.go
@@ -453,6 +457,14 @@ features:
       - org_membership
     go_files:
       - handlers/org_hosts.go
+  - name: org_two_factor_policy
+    description: "An organization's own second-factor policy (two_factor_policy: required | optional | disabled) per kind of membership, over the activation's default. Kind '' is the organization's own and covers every kind without a row of its own. The backoffice sets it realm-wide (SetOrgTwoFactorPolicy / ClearOrgTwoFactorPolicy / ListOrgTwoFactorPolicies — PUT / GET /auth/admin/orgs/{org_id}/two-factor-policies, POST …/clear; TWO_FACTOR_POLICIES_REALM_ONLY from inside an organization), the organization its own from inside it (SetMyOrgTwoFactorPolicy / ClearMyOrgTwoFactorPolicy / ListMyOrgTwoFactorPolicies — PUT / GET /auth/orgs/{org}/two-factor-policies, POST …/clear). Both are gated by the project's endpoint ACL and refuse a method the lock does not gate: who may switch an organization's second factor off is the project's decision, never every member's. A password sign-in reads the policy of the organization it arrives for — the host bound to it (org_hosts, through an audience that takes the tenant from the host), the W17-Org selector, or the person's only organization — for the kind of the person's membership there, then the organization's own, then the default; enrolling an authenticator reads the one of the organization the caller acts in. Nothing is deleted. Off by default; a migration adds the table."
+    default: false
+    requires:
+      - two_factor
+      - org_membership
+    go_files:
+      - handlers/org_two_factor_policy.go
   - name: org_signup
     description: "Registration on an organization's own host. Per organization and kind of membership, the backoffice sets whether people may register without an invitation and with which org-scoped role (SetOrgSignUpPolicy / ClearOrgSignUpPolicy / ListOrgSignUpPolicies — PUT / GET /auth/admin/orgs/{org_id}/signup-policies, POST /auth/admin/orgs/{org_id}/signup-policies/clear; realm-wide only, SIGNUP_POLICIES_REALM_ONLY from inside an organization). A registration without an invitation — SignUp, ConfirmSignUp, an OAuth sign-in that creates the account — arriving on a host bound to the organization (org_hosts), through an audience that takes the tenant from the host, of a kind the audience admits: an open policy makes the new account a member of that kind with that role in the same transaction, whatever invite_only says; a closed one refuses it (SIGNUP_NOT_INVITED); with no policy for the kind, invite_only decides as before and the account joins nothing. Two open kinds on one audience are a configuration error (SIGNUP_KIND_AMBIGUOUS), never a guess. An invitation still decides its own organization. GetHostOrg answers the open kinds, so a sign-up page knows whether to show its form. A registration page on the identity's own host (bound to no organization) names the host the person comes from (SignUpReq / OAuthExchangeReq `signup_host`): with no gateway host it decides exactly as a registration on that host would; a gateway host bound to an organization wins and a body host naming another is refused (SIGNUP_HOST_CONFLICT); an unbound gateway host (the identity's own) leaves the body host to decide. Nothing is deleted. Off by default; a migration adds the table."
     default: false
@@ -854,6 +866,9 @@ presets:
         endpoints:
           - { ref: AuthService.ListOrgSignUpPolicies, method: GET,  path: "/{org_id}/signup-policies",       feature: org_signup }
           - { ref: AuthService.SetOrgSignUpPolicy,    method: PUT,  path: "/{org_id}/signup-policies",       feature: org_signup }
+          - { ref: AuthService.ListOrgTwoFactorPolicies, method: GET,  path: "/{org_id}/two-factor-policies",       feature: org_two_factor_policy }
+          - { ref: AuthService.SetOrgTwoFactorPolicy,    method: PUT,  path: "/{org_id}/two-factor-policies",       feature: org_two_factor_policy }
+          - { ref: AuthService.ClearOrgTwoFactorPolicy,  method: POST, path: "/{org_id}/two-factor-policies/clear", feature: org_two_factor_policy }
           - { ref: AuthService.ClearOrgSignUpPolicy,  method: POST, path: "/{org_id}/signup-policies/clear", feature: org_signup }
           - { ref: AuthService.ListOrgProductPlan, method: GET,  path: "/{org_id}/product-plan",        feature: product_plans }
           - { ref: AuthService.AllowOrgProduct,    method: PUT,  path: "/{org_id}/product-plan",        feature: product_plans }
@@ -954,6 +969,10 @@ presets:
           - { ref: AuthService.DefineOrgProductRole,     method: PUT,  path: /product-roles,              feature: product_roles }
           - { ref: AuthService.RetireOrgProductRole,     method: POST, path: /product-roles/retire,       feature: product_roles }
           - { ref: AuthService.ListMyOrgProductPlan,     method: GET,  path: /product-plan,               feature: product_plans }
+          # Who signs in with a second factor here (handlers/org_two_factor_policy.go).
+          - { ref: AuthService.ListMyOrgTwoFactorPolicies, method: GET,  path: /two-factor-policies,       feature: org_two_factor_policy }
+          - { ref: AuthService.SetMyOrgTwoFactorPolicy,    method: PUT,  path: /two-factor-policies,       feature: org_two_factor_policy }
+          - { ref: AuthService.ClearMyOrgTwoFactorPolicy,  method: POST, path: /two-factor-policies/clear, feature: org_two_factor_policy }
           - { ref: AuthService.ListOrgTeams,        method: GET,    path: /teams,                               feature: teams }
           - { ref: AuthService.CreateOrgTeam,       method: POST,   path: /teams,                               feature: teams }
           - { ref: AuthService.UpdateOrgTeam,       method: PUT,    path: "/teams/{team_id}",                   feature: teams }
@@ -1415,11 +1434,13 @@ msgids:
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Choose at least one permission for the role."
   - "Choose one of your organizations for this application."
+  - "Choose required, optional or disabled."
   - "Choose the role people get when they register."
   - "Confirm it is you before creating a token."
   - "Confirm it is you with your authenticator app or the code we email you."
   - "Confirm your email address before accepting this invitation."
   - "Every organization has this package; it is not given or taken."
+  - "From inside an organization, change its two-step sign-in in the organization's own settings."
   - "Give the public key of the program that will use this token."
   - "Give the role a name."
   - "Give the team a name."
@@ -1484,6 +1505,7 @@ msgids:
   - "This team holds a role with permissions you do not have, so you cannot change its members or delete it."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait 15 minutes and try again."
+  - "Two-step sign-in is switched off here."
   - "Which organization a host serves is set by the platform, not from inside an organization."
   - "Who may register into an organization is set by the platform, not from inside the organization."
   - "Wrong email or password."

@@ -31,6 +31,13 @@ type keepsSignInBudget interface{ keepsSignInBudget() }
 // them; the tests about the re-read use one, through the production code.
 type keepsCallerGrants interface{ keepsCallerGrants() }
 
+// keepsTwoFactorPolicies marks a test store that answers the organizations'
+// second-factor policies (org_two_factor_policy). The package compiles every
+// feature file, so org_two_factor_policy.go's init replaces the policy seam
+// for every test; a store that does not keep policies gets the activation's
+// default, which is what the activation without the feature reads.
+type keepsTwoFactorPolicies interface{ keepsTwoFactorPolicies() }
+
 func TestMain(m *testing.M) {
 	signInBudgetApplies = func(h *AuthServiceHandler) bool {
 		_, ok := h.Mutation.(keepsSignInBudget)
@@ -49,6 +56,13 @@ func TestMain(m *testing.M) {
 			return held, nil
 		}
 		return reread(ctx, h, held)
+	}
+	policyOf := twoFactorPolicyOf
+	twoFactorPolicyOf = func(ctx context.Context, h *AuthServiceHandler, userID string, enrol bool) (string, error) {
+		if _, ok := h.Query.(keepsTwoFactorPolicies); !ok {
+			return h.defaultTwoFactorPolicy(), nil
+		}
+		return policyOf(ctx, h, userID, enrol)
 	}
 	os.Exit(m.Run())
 }

@@ -1757,6 +1757,21 @@ message ListOrgHostRowsResp {
   repeated OrgHostRow hosts = 1;
 }
 
+message ListOrgTwoFactorPolicyRowsReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgTwoFactorPolicyRowsResp {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  repeated OrgTwoFactorPolicyRow policies = 1;
+}
+message OrgTwoFactorPolicyRow {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string kind   = 1;
+  string policy = 2;
+  google.protobuf.Timestamp set_at = 3;
+}
+
 message ListOrgSignUpPolicyRowsReq {
   option (w17.contrib.plugin_feature) = "org_signup";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -4025,6 +4040,23 @@ service AuthQuery {
           "JOIN @module.Organization o ON o.id = h.org_id "
           "WHERE h.ended_at IS NULL AND o.deleted_at IS NULL "
           "ORDER BY h.host ASC"
+      }
+    };
+  }
+
+  // ListOrgTwoFactorPolicyRows — an organization's live second-factor
+  // policies, by kind. Read on every password sign-in into the organization
+  // and on enrolling an authenticator there.
+  rpc ListOrgTwoFactorPolicyRows(ListOrgTwoFactorPolicyRowsReq) returns (ListOrgTwoFactorPolicyRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.kind AS kind, p.policy AS policy, p.set_at AS set_at "
+          "FROM @module.OrgTwoFactorPolicy p "
+          "WHERE p.org_id = :org_id AND p.ended_at IS NULL "
+          "ORDER BY p.kind ASC"
       }
     };
   }

@@ -68,6 +68,50 @@ const scopeNewDevices = "new_devices"
 // and a handler built without that check challenges anyway (twoFactorOff).
 const scopeOff = "off"
 
+// The two_factor_policy values: who is challenged at all.
+const (
+	// policyRequired challenges every account (the default): one without a
+	// confirmed authenticator gets its code through MfaChallengeRequested.
+	policyRequired = "required"
+	// policyOptional challenges an account that confirmed an authenticator;
+	// the others sign in with the password.
+	policyOptional = "optional"
+	// policyDisabled challenges nobody and refuses enrolment.
+	policyDisabled = "disabled"
+)
+
+// validTwoFactorPolicy reports whether p is one of the three.
+func validTwoFactorPolicy(p string) bool {
+	return p == policyRequired || p == policyOptional || p == policyDisabled
+}
+
+// defaultTwoFactorPolicy is the activation's two_factor_policy; empty is
+// required, today's behaviour for every activation that predates the knob.
+func (h *AuthServiceHandler) defaultTwoFactorPolicy() string {
+	if h.TwoFactorPolicy == "" {
+		return policyRequired
+	}
+	return h.TwoFactorPolicy
+}
+
+// checkTwoFactorPolicy refuses a two_factor_policy that is none of the three:
+// a typo must not quietly mean "required" — or anything else.
+func checkTwoFactorPolicy(h *AuthServiceHandler) error {
+	if h.TwoFactorPolicy != "" && !validTwoFactorPolicy(h.TwoFactorPolicy) {
+		return fmt.Errorf("two_factor_policy = %q is not one of required, optional, disabled", h.TwoFactorPolicy)
+	}
+	return nil
+}
+
+// twoFactorPolicyOf is the policy that applies to userID on this request:
+// the activation's default, and with org_two_factor_policy the policy of the
+// organization the request is for (org_two_factor_policy.go). enrol says
+// which request: a sign-in (the organization it arrives for) or an
+// enrolment (the organization the caller acts in).
+var twoFactorPolicyOf = func(ctx context.Context, h *AuthServiceHandler, userID string, enrol bool) (string, error) {
+	return h.defaultTwoFactorPolicy(), nil
+}
+
 // The deployment environment, as the SDK reads it (fieldcrypt, ratelimit).
 const (
 	envEnvironment = "W17_ENV"
@@ -115,7 +159,7 @@ var errMfaChallengeBudget = &wireError{
 // share of an erasure.
 func init() {
 	signInMfaGate = mfaSignInGate
-	configChecks = append(configChecks, checkTwoFactorScope)
+	configChecks = append(configChecks, checkTwoFactorScope, checkTwoFactorPolicy)
 	erasers = append(erasers, eraseTwoFactorData)
 	signInOutcomeRules = append(signInOutcomeRules,
 		outcomeRule{errMfaChallengeInvalid, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
@@ -143,10 +187,21 @@ func eraseTwoFactorData(ctx context.Context, h *AuthServiceHandler, userID, _, _
 // No key check any more: the seed is a CRYPTED_SECRET column, and a bundle
 // with one refuses to BOOT without its keyring (W17_FIELD_KEYS), so a
 // running handler always has it.
-func (h *AuthServiceHandler) enrolmentAllowed(ctx context.Context) error {
+//
+// Nor under a disabled policy: nobody is asked for the factor there, so an
+// authenticator would protect nothing while the person believed it did.
+func (h *AuthServiceHandler) enrolmentAllowed(ctx context.Context, userID string) error {
 	if !h.TwoFactorTOTP {
 		return refusal(ctx, codes.FailedPrecondition, "two_factor: the built-in authenticator is off (two_factor_totp=false)",
 			CodeTotpUnavailable, "", MsgTotpUnavailable, nil)
+	}
+	policy, err := twoFactorPolicyOf(ctx, h, userID, true)
+	if err != nil {
+		return err
+	}
+	if policy == policyDisabled {
+		return refusal(ctx, codes.FailedPrecondition, "two_factor: the second factor is disabled for this account (two_factor_policy)",
+			CodeTwoFactorDisabled, "", MsgTwoFactorDisabled, nil)
 	}
 	return nil
 }
@@ -359,6 +414,21 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, th
 		// because the enrolment store was unreachable.
 		return nil, false, err
 	}
+	// Who is challenged at all (two_factor_policy): disabled — nobody;
+	// optional — an account with a confirmed authenticator, so 2FA can be
+	// offered on a running product where nobody has enrolled yet; required —
+	// everyone, an account without one getting its code by message. A policy
+	// that cannot be read refuses the sign-in, as the enrolment store does.
+	policy, err := twoFactorPolicyOf(ctx, h, user.GetId(), false)
+	if err != nil {
+		return nil, false, err
+	}
+	switch {
+	case policy == policyDisabled:
+		return nil, false, nil
+	case policy == policyOptional && !(enrolled && h.TwoFactorTOTP):
+		return nil, false, nil
+	}
 
 	// Code path: a confirmed authenticator with the built-in verifier on
 	// needs no stored code (verified against the secret). Otherwise the
@@ -415,7 +485,7 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 	if err := requireSessionCaller(ctx); err != nil {
 		return nil, err
 	}
-	if err := h.enrolmentAllowed(ctx); err != nil {
+	if err := h.enrolmentAllowed(ctx, userID); err != nil {
 		return nil, err
 	}
 	// Same reasoning as DisableTotp's step-up: without this, the code DisableTotp
@@ -469,7 +539,7 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := h.enrolmentAllowed(ctx); err != nil {
+	if err := h.enrolmentAllowed(ctx, userID); err != nil {
 		return nil, err
 	}
 	resp, err := h.Query.GetTotpSecret(ctx, &pb.GetTotpSecretReq{UserId: userID})

@@ -2316,6 +2316,36 @@ message OrgSignUpPolicy {
   ];
 }
 
+// OrgTwoFactorPolicy — whether an organization's people sign in with a second
+// factor, per kind of membership (org_two_factor_policy): `required` (every
+// account is challenged), `optional` (an account that confirmed an
+// authenticator is challenged, the others sign in with the password) or
+// `disabled` (nobody is challenged and no authenticator can be enrolled).
+// Absent, the activation's two_factor_policy decides. Set by the backoffice
+// realm-wide and by the organization itself. One live row per (organization,
+// kind); replacing or clearing it ends the row, and nothing is deleted.
+message OrgTwoFactorPolicy {
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "org_id" }, { name: "kind" }, { name: "ended_key" }] } ]
+  };
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+
+  string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id  = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  // kind — the membership kind it is for; '' is the organization's own
+  // (every kind without a row of its own, and every member without
+  // membership_kinds).
+  string kind    = 3 [(w17.field) = { type: CHAR, max_len: 32, blank: true, default_string: "" }];
+  // policy — required | optional | disabled.
+  string policy  = 4 [(w17.field) = { type: CHAR, max_len: 16 }];
+  string set_by  = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp set_at   = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by  = 8 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once replaced or cleared.
+  string ended_key = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
 // ProductRoleDef is a role the identity defines from its products'
 // permissions (product_roles): the backoffice's (org_id NULL — usable in every
 // organization, or realm-wide) or an organization's own (org_id set — under

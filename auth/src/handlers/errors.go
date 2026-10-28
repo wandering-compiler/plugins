@@ -168,6 +168,10 @@ const (
 	// already confirmed (new recovery codes are GenerateRecoveryCodes).
 	CodeTotpAlreadyConfirmed = "TOTP_ALREADY_CONFIRMED"
 
+	// CodeTwoFactorDisabled: an enrolment where the second factor is
+	// disabled (two_factor_policy, or the organization's policy).
+	CodeTwoFactorDisabled = "TWO_FACTOR_DISABLED"
+
 	// CodeStepUpLocked: too many wrong codes for a change to the
 	// authenticator; it is refused for a while, whatever the code.
 	CodeStepUpLocked = "STEP_UP_LOCKED"
@@ -227,6 +231,11 @@ const (
 	CodeSignUpPolicyInvalid     = "SIGNUP_POLICY_INVALID"
 	CodeSignUpKindAmbiguous     = "SIGNUP_KIND_AMBIGUOUS"
 	CodeSignUpHostConflict      = "SIGNUP_HOST_CONFLICT"
+	// org_two_factor_policy: the backoffice's policy calls from inside an
+	// organization; a policy value that is none of the three, or a kind the
+	// deployment's memberships do not have.
+	CodeTwoFactorPoliciesRealmOnly = "TWO_FACTOR_POLICIES_REALM_ONLY"
+	CodeTwoFactorPolicyInvalid     = "TWO_FACTOR_POLICY_INVALID"
 	// product_roles: a product or a role the catalogue does not name; an
 	// org-held grant of a role the product holds realm-wide only; a grant
 	// above what the caller holds; one for someone outside the organization;
@@ -403,6 +412,8 @@ const (
 
 	MsgTotpAlreadyConfirmed = "This authenticator app is already set up. To get new recovery codes, generate them."
 
+	MsgTwoFactorDisabled = "Two-step sign-in is switched off here."
+
 	MsgStepUpLocked = "Too many wrong codes. Wait 15 minutes and try again."
 
 	// Names what to do instead: the caller holds a working credential, just
@@ -437,35 +448,37 @@ const (
 	MsgClientKeySignsIn = "That key belongs to a device you sign in with. Generate a separate key for the program."
 	MsgBotKeyMismatch   = "This machine account already has a different key. Use that key, or revoke the account's device to replace it."
 
-	MsgOAuthRequestGone         = "This sign-in request has expired or was already answered. Start again from the application."
-	MsgOAuthAppUnknown          = "This connected app is not one of yours, or was already disconnected."
-	MsgOAuthOrgRequired         = "Choose one of your organizations for this application."
-	MsgMembershipNotAdmitted    = "This part of the service is not open to you: none of your memberships is of a kind it admits."
-	MsgInviteKindNotAllowed     = "You cannot invite someone as this kind of member."
-	MsgPackageAudienceOff       = "Your organization's plan does not include this part of the service."
-	MsgPackagesRealmOnly        = "An organization's plan is changed by the platform, not from inside the organization."
-	MsgPackageUnknown           = "There is no such package."
-	MsgPackageDefault           = "Every organization has this package; it is not given or taken."
-	MsgHostsRealmOnly           = "Which organization a host serves is set by the platform, not from inside an organization."
-	MsgHostTaken                = "This host already serves another organization."
-	MsgHostInvalid              = "This is not a host name."
-	MsgOrgHostConflict          = "This address belongs to another organization than the one you chose."
-	MsgOrgSelectorNotAccepted   = "The organization is taken from the address here, not chosen."
-	MsgSignUpPoliciesRealmOnly  = "Who may register into an organization is set by the platform, not from inside the organization."
-	MsgSignUpPolicyKind         = "Name the kind of membership this applies to."
-	MsgSignUpPolicyNoKind       = "This deployment has no kinds of membership; leave the kind empty."
-	MsgSignUpPolicyRole         = "Choose the role people get when they register."
-	MsgSignUpKindAmbiguous      = "Registration here is not set up correctly. Contact the organization."
-	MsgSignUpHostConflict       = "This registration names another address than the one it arrived on."
-	MsgProductUnknown           = "There is no such product."
-	MsgProductRoleUnknown       = "The product has no such role."
-	MsgProductRoleRealmHeld     = "This role is held across the whole platform, not in one organization."
-	MsgProductRoleAbove         = "You can only give a role that your own role includes."
-	MsgProductRoleNotMember     = "This person is not a member of the organization."
-	MsgProductRolesRealmOnly    = "This is managed by the platform, not from inside an organization."
-	MsgProductPermissionUnknown = "No product has this permission."
-	MsgProductRoleNotInPlan     = "Your organization's plan does not include this role."
-	MsgProductPlansRealmOnly    = "An organization's plan is changed by the platform, not from inside the organization."
+	MsgOAuthRequestGone           = "This sign-in request has expired or was already answered. Start again from the application."
+	MsgOAuthAppUnknown            = "This connected app is not one of yours, or was already disconnected."
+	MsgOAuthOrgRequired           = "Choose one of your organizations for this application."
+	MsgMembershipNotAdmitted      = "This part of the service is not open to you: none of your memberships is of a kind it admits."
+	MsgInviteKindNotAllowed       = "You cannot invite someone as this kind of member."
+	MsgPackageAudienceOff         = "Your organization's plan does not include this part of the service."
+	MsgPackagesRealmOnly          = "An organization's plan is changed by the platform, not from inside the organization."
+	MsgPackageUnknown             = "There is no such package."
+	MsgPackageDefault             = "Every organization has this package; it is not given or taken."
+	MsgHostsRealmOnly             = "Which organization a host serves is set by the platform, not from inside an organization."
+	MsgHostTaken                  = "This host already serves another organization."
+	MsgHostInvalid                = "This is not a host name."
+	MsgOrgHostConflict            = "This address belongs to another organization than the one you chose."
+	MsgOrgSelectorNotAccepted     = "The organization is taken from the address here, not chosen."
+	MsgSignUpPoliciesRealmOnly    = "Who may register into an organization is set by the platform, not from inside the organization."
+	MsgSignUpPolicyKind           = "Name the kind of membership this applies to."
+	MsgSignUpPolicyNoKind         = "This deployment has no kinds of membership; leave the kind empty."
+	MsgSignUpPolicyRole           = "Choose the role people get when they register."
+	MsgSignUpKindAmbiguous        = "Registration here is not set up correctly. Contact the organization."
+	MsgSignUpHostConflict         = "This registration names another address than the one it arrived on."
+	MsgTwoFactorPoliciesRealmOnly = "From inside an organization, change its two-step sign-in in the organization's own settings."
+	MsgTwoFactorPolicyValue       = "Choose required, optional or disabled."
+	MsgProductUnknown             = "There is no such product."
+	MsgProductRoleUnknown         = "The product has no such role."
+	MsgProductRoleRealmHeld       = "This role is held across the whole platform, not in one organization."
+	MsgProductRoleAbove           = "You can only give a role that your own role includes."
+	MsgProductRoleNotMember       = "This person is not a member of the organization."
+	MsgProductRolesRealmOnly      = "This is managed by the platform, not from inside an organization."
+	MsgProductPermissionUnknown   = "No product has this permission."
+	MsgProductRoleNotInPlan       = "Your organization's plan does not include this role."
+	MsgProductPlansRealmOnly      = "An organization's plan is changed by the platform, not from inside the organization."
 )
 
 // isUniqueConflict is a write refused by a unique index: storage reports it as

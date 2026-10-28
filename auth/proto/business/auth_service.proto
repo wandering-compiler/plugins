@@ -1805,6 +1805,64 @@ message OrgProductPlanChangeResp {
   option (w17.contrib.plugin_feature) = "product_plans";
 }
 
+// An organization's second-factor policies (org_two_factor_policy): per kind
+// of membership, required | optional | disabled. The backoffice sets them
+// realm-wide (…OrgTwoFactorPolicy, org_id), the organization its own (…MyOrg…,
+// acting inside it).
+message SetOrgTwoFactorPolicyReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+  // kind — '' is the organization's own policy (every kind without one of
+  // its own); a kind with membership_kinds.
+  string kind   = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  string policy = 3 [(w17.field) = { type: CHAR, max_len: 16 }];
+}
+message SetOrgTwoFactorPolicyResp {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+}
+message ClearOrgTwoFactorPolicyReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+  string kind   = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+}
+message ClearOrgTwoFactorPolicyResp {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+}
+message ListOrgTwoFactorPoliciesReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgTwoFactorPoliciesResp {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  repeated OrgTwoFactorPolicyInfo policies = 1;
+  // default_policy — the activation's two_factor_policy, which decides for
+  // every kind without a policy of its own and without the organization's.
+  string default_policy = 2;
+}
+message OrgTwoFactorPolicyInfo {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string kind   = 1;
+  string policy = 2;
+  google.protobuf.Timestamp set_at = 3;
+}
+// The organization's own, acting inside it: `org` is its slug (the W17-Org
+// header), refused when it names another.
+message SetMyOrgTwoFactorPolicyReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org    = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string kind   = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  string policy = 3 [(w17.field) = { type: CHAR, max_len: 16 }];
+}
+message ClearMyOrgTwoFactorPolicyReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org  = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+  string kind = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+}
+message ListMyOrgTwoFactorPoliciesReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org = 1 [(w17.field) = { type: SLUG, max_len: 64, blank: true }];
+}
+
 // An organization's registration policies (org_signup): per kind of
 // membership, whether a registration on the organization's host joins
 // without an invitation, and with which role. The backoffice sets them,
@@ -2545,6 +2603,26 @@ service AuthService {
   }
   rpc GetHostOrg(GetHostOrgReq) returns (HostOrgResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_hosts";
+  }
+
+  // An organization's second-factor policies (handlers/org_two_factor_policy.go).
+  rpc SetOrgTwoFactorPolicy(SetOrgTwoFactorPolicyReq) returns (SetOrgTwoFactorPolicyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+  }
+  rpc ClearOrgTwoFactorPolicy(ClearOrgTwoFactorPolicyReq) returns (ClearOrgTwoFactorPolicyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+  }
+  rpc ListOrgTwoFactorPolicies(ListOrgTwoFactorPoliciesReq) returns (ListOrgTwoFactorPoliciesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+  }
+  rpc SetMyOrgTwoFactorPolicy(SetMyOrgTwoFactorPolicyReq) returns (SetOrgTwoFactorPolicyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+  }
+  rpc ClearMyOrgTwoFactorPolicy(ClearMyOrgTwoFactorPolicyReq) returns (ClearOrgTwoFactorPolicyResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+  }
+  rpc ListMyOrgTwoFactorPolicies(ListMyOrgTwoFactorPoliciesReq) returns (ListOrgTwoFactorPoliciesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
   }
 
   // An organization's registration policies (handlers/org_signup.go).
