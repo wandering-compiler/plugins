@@ -1269,6 +1269,33 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
+	if prin.oauthOrgID != "" {
+		ctx = context.WithValue(ctx, oauthTokenOrgKey{}, prin.oauthOrgID)
+	}
+	resp, err := h.principalResp(ctx, prin, req.GetHeaders())
+	if err != nil {
+		return nil, err
+	}
+
+	// Written only now that the request passed every check — the binding
+	// included — so a refused request (a stolen token with the wrong key, a
+	// narrower's refusal) changes nothing.
+	if prin.legacyToken != "" {
+		h.upgradeLegacyToken(ctx, prin.legacyToken, sha256Hex(prin.legacyToken), "")
+	}
+	recordTokenUse(ctx, h, prin)
+	if botBearer {
+		recordBotUse(ctx, h, prin, req.GetHeaders())
+	}
+	return resp, nil
+}
+
+// principalResp is the half of Authenticate after the credential: what a
+// principal holds in the request its headers describe. Authenticate reaches it
+// from a token, ResolveUser from a user id; both answer through this one
+// function, so there is one resolver of permissions and scopes, not two that
+// have to agree.
+func (h *AuthServiceHandler) principalResp(ctx context.Context, prin *authPrincipal, headers map[string]string) (*pb.AuthResp, error) {
 	userID := prin.userID
 
 	// Publish the authenticated principal as the
@@ -1282,17 +1309,14 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 	// Feature-gated scope decorators (e.g. tenant_scope) append
 	// their own scopes here. Empty when no feature file is staged.
 	labels := map[string]string{}
-	if prin.oauthOrgID != "" {
-		ctx = context.WithValue(ctx, oauthTokenOrgKey{}, prin.oauthOrgID)
-	}
 	// The request's headers ride the context too, for the narrowers below:
 	// an audience gateway's admitted membership kinds decide which roles
 	// count (membership_kinds), and a narrower is handed no headers.
-	ctx = context.WithValue(ctx, authHeadersKey{}, req.GetHeaders())
+	ctx = context.WithValue(ctx, authHeadersKey{}, headers)
 	// A memo the decorators and narrowers of this one request share, so what
 	// two of them read (an organization's packages) is read once.
 	ctx = context.WithValue(ctx, requestMemoKey{}, map[string]any{})
-	if err := runScopeDecorators(ctx, h, userID, req.GetHeaders(), scopes, labels); err != nil {
+	if err := runScopeDecorators(ctx, h, userID, headers, scopes, labels); err != nil {
 		return nil, err
 	}
 
@@ -1307,17 +1331,6 @@ func (h *AuthServiceHandler) authenticate(ctx context.Context, req *pb.AuthReq) 
 		if err := narrow(ctx, h, prin, scopes); err != nil {
 			return nil, Unauthenticated(err)
 		}
-	}
-
-	// Written only now that the request passed every check — the binding
-	// included — so a refused request (a stolen token with the wrong key, a
-	// narrower's refusal) changes nothing.
-	if prin.legacyToken != "" {
-		h.upgradeLegacyToken(ctx, prin.legacyToken, sha256Hex(prin.legacyToken), "")
-	}
-	recordTokenUse(ctx, h, prin)
-	if botBearer {
-		recordBotUse(ctx, h, prin, req.GetHeaders())
 	}
 
 	// Flatten LAST. Every axis has had its say on the roles by now, so a

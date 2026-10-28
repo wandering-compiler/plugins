@@ -337,9 +337,11 @@ func heldUnderOrgLock(ctx context.Context, h *AuthServiceHandler, held map[int32
 	// eligible where the caller acts — the active organization's and
 	// realm-wide ones, or realm-wide alone with none active — then, for a
 	// session, the active organization's own (orgGrantSources: a team's).
-	// Authenticate stamps session_token_id for a session and nothing else.
+	// Authenticate stamps session_token_id for a session and nothing else;
+	// ResolveUser, which answers a person as their session without one,
+	// stamps acted_for.
 	var who pb.AuthResp
-	session := principal.Envelope(ctx, &who) == nil && who.GetSessionTokenId() != ""
+	session := principal.Envelope(ctx, &who) == nil && (who.GetSessionTokenId() != "" || who.GetActedFor())
 	realmGrants, err := callerRealmGrants(ctx, h, userID, session)
 	if err != nil {
 		return nil, err

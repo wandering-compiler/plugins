@@ -26,6 +26,7 @@ type roleCatalogueMock struct {
 	all       []*pb.Role          // ListRoles
 	orgScoped []*pb.OrgScopedRole // ListOrgScopedRoles
 	rolePerms map[string][]int32  // ListRoleGrants; a role absent here carries nothing
+	wildcards map[string]bool     // ListRoleGrants: roles of all_permissions
 
 	listRolesCalls int
 }
@@ -38,7 +39,7 @@ func (m *roleCatalogueMock) ListRoles(ctx context.Context, in *pb.ListRolesReq, 
 func (m *roleCatalogueMock) ListRoleGrants(ctx context.Context, _ *pb.ListRoleGrantsReq, _ ...grpc.CallOption) (*pb.ListRoleGrantsResp, error) {
 	out := &pb.ListRoleGrantsResp{}
 	for _, r := range m.all {
-		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: r.GetId(), PermissionIds: m.rolePerms[r.GetId()]})
+		out.Grants = append(out.Grants, &pb.RoleGrant{RoleId: r.GetId(), PermissionIds: m.rolePerms[r.GetId()], AllPermissions: m.wildcards[r.GetId()]})
 	}
 	return out, nil
 }

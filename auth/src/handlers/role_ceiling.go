@@ -35,7 +35,10 @@ import (
 //
 // Checked at the moment of granting. An invitation's grant is written LATER,
 // at accept, so the invitation also stores what the role carried when it was
-// checked, and accept refuses a role that has since grown past it. A ceiling
+// checked, and accept refuses a role that has since grown past it. A role of
+// all_permissions is stored as that (`<role>:*`), not as the lock it expanded
+// to: the lock grows with every method the project adds, and a role that
+// still grants everything has not changed. A ceiling
 // that later drops does not revoke what was granted under it — that is
 // membership management, not this.
 //
@@ -122,13 +125,27 @@ func callerHeldPermissions(ctx context.Context) (map[int32]bool, error) {
 // caller refuses it. An empty expansion would otherwise be a subset of
 // anything, and the most powerful role would be the one anyone could hand out.
 func (h *AuthServiceHandler) roleCatalogue(ctx context.Context) (map[string][]int32, error) {
+	grants, err := h.roleGrants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]int32, len(grants))
+	for id, g := range grants {
+		out[id] = expandRoleGrant(g, h.Lock)
+	}
+	return out, nil
+}
+
+// roleGrants maps every role id to its grant as declared, the wildcard
+// unexpanded.
+func (h *AuthServiceHandler) roleGrants(ctx context.Context) (map[string]*pb.RoleGrant, error) {
 	resp, err := h.Query.ListRoleGrants(ctx, &pb.ListRoleGrantsReq{})
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]int32, len(resp.GetGrants()))
+	out := make(map[string]*pb.RoleGrant, len(resp.GetGrants()))
 	for _, g := range resp.GetGrants() {
-		out[g.GetRoleId()] = expandRoleGrant(g, h.Lock)
+		out[g.GetRoleId()] = g
 	}
 	return out, nil
 }
@@ -180,11 +197,15 @@ func (h *AuthServiceHandler) checkMayGrantRole(ctx context.Context, roleID strin
 		return "", refusal(ctx, codes.PermissionDenied, errRoleAboveCaller.Error(),
 			CodeRoleAboveCaller, "role", MsgRoleAboveCaller, nil)
 	}
-	catalogue, err := h.roleCatalogue(ctx)
+	grants, err := h.roleGrants(ctx)
 	if err != nil {
 		return "", err
 	}
-	return encodeRoleSnapshot(roleID, catalogue[roleID]), nil
+	g := grants[roleID]
+	if g.GetAllPermissions() {
+		return encodeWildcardSnapshot(roleID), nil
+	}
+	return encodeRoleSnapshot(roleID, expandRoleGrant(g, h.Lock)), nil
 }
 
 // checkRoleWithinSnapshot is the accept half: the role about to be granted
@@ -192,16 +213,28 @@ func (h *AuthServiceHandler) checkMayGrantRole(ctx context.Context, roleID strin
 //
 // Narrower is fine — the inviter covered more than is now handed out. Wider is
 // not, and neither is a different role under the same name.
+//
+// A wildcard snapshot holds while the role still grants all permissions,
+// however far the lock has grown since: the inviter was checked against
+// everything, and the role still means everything. A role that stopped being
+// a wildcard is a different role, whatever it now lists.
 func (h *AuthServiceHandler) checkRoleWithinSnapshot(ctx context.Context, roleID, snapshot string) error {
 	snapRole, snapPerms, ok := decodeRoleSnapshot(snapshot)
 	if !ok || snapRole != roleID {
 		return status.Error(codes.FailedPrecondition, errRoleMovedSinceInvite.Error())
 	}
-	catalogue, err := h.roleCatalogue(ctx)
+	grants, err := h.roleGrants(ctx)
 	if err != nil {
 		return err
 	}
-	carried, known := catalogue[roleID]
+	g, known := grants[roleID]
+	if known && snapPerms == nil {
+		if g.GetAllPermissions() {
+			return nil
+		}
+		return status.Error(codes.FailedPrecondition, errRoleMovedSinceInvite.Error())
+	}
+	carried := expandRoleGrant(g, h.Lock)
 	if !known || carried == nil || !allHeld(carried, snapPerms) {
 		return status.Error(codes.FailedPrecondition, errRoleMovedSinceInvite.Error())
 	}
@@ -220,13 +253,26 @@ func encodeRoleSnapshot(roleID string, carried []int32) string {
 	return roleID + ":" + strings.Join(parts, ",")
 }
 
-// decodeRoleSnapshot parses encodeRoleSnapshot. An empty or malformed value is
-// not a snapshot (ok=false) — that includes every invitation made before the
-// ceiling existed, which were never checked.
+// wildcardSnapshot is the permission list of a role of all_permissions.
+const wildcardSnapshot = "*"
+
+// encodeWildcardSnapshot renders `<role id>:*`, the snapshot of a role of
+// all_permissions.
+func encodeWildcardSnapshot(roleID string) string {
+	return roleID + ":" + wildcardSnapshot
+}
+
+// decodeRoleSnapshot parses encodeRoleSnapshot and encodeWildcardSnapshot; a
+// wildcard decodes to nil perms. An empty or malformed value is not a snapshot
+// (ok=false) — that includes every invitation made before the ceiling existed,
+// which were never checked.
 func decodeRoleSnapshot(s string) (roleID string, perms map[int32]bool, ok bool) {
 	roleID, list, found := strings.Cut(s, ":")
 	if !found || roleID == "" {
 		return "", nil, false
+	}
+	if list == wildcardSnapshot {
+		return roleID, nil, true
 	}
 	perms = map[int32]bool{}
 	if list == "" {

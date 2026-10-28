@@ -3011,9 +3011,9 @@ service AuthQuery {
     option (w17.contrib.plugin_feature_rpc) = "oauth";
   }
 
-  // GetUserById — resolve a user by id, password_hash included. Two
-  // callers today: the EnrollTotp otpauth label (which wants the email)
-  // and ChangePassword (which must verify the CURRENT password of the
+  // GetUserById — resolve a user by id, password_hash included. Callers
+  // include ResolveUser (the account a principal is answered for), the
+  // EnrollTotp otpauth label (which wants the email) and ChangePassword (which must verify the CURRENT password of the
   // authenticated principal, and must not look that principal up by an
   // address the request supplied). Ungated — see the messages above.
   rpc GetUserById(GetUserByIdReq) returns (GetUserByIdResp) {
@@ -3043,6 +3043,9 @@ service AuthQuery {
           // tenant_id (`tenant_scope`): IssueBotToken holds the target to the
           // operator's tenant (service_account_tenant.go) through this read.
           "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
+          // marketing_consent (`marketing_consent`): ResolveUser answers it in
+          // AuthResp as Authenticate does from GetUserByTokenWithPermissions.
+          "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
           "       u.created_at AS user.created_at "
           "FROM @module.User u WHERE u.id = :user_id"
       }
