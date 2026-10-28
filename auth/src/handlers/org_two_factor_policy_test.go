@@ -105,7 +105,7 @@ func challenged(t *testing.T, h *AuthServiceHandler, ctx context.Context) bool {
 }
 
 // The three policies, with no organization in play: the activation's default.
-// optional is the one deinvo needs — 2FA offered on a running product where
+// optional is the one a running product needs — 2FA offered where
 // nobody has enrolled yet must not lock everyone out.
 func TestTwoFactorPolicy_TheDefaultDecidesWhoIsChallenged(t *testing.T) {
 	for _, tc := range []struct {
