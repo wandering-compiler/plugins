@@ -1,5 +1,15 @@
 # auth — changelog
 
+## 0.1.0-rc.40
+
+### Acting for a person another domain names: `ResolveUser`
+
+- **`AuthService.ResolveUser` (`authenticate_turnkey`)** answers what a person holds — the `AuthResp` `Authenticate` would answer for their session, the organization chosen by the request's `headers` (`w17-org`) — from a user id instead of a credential. It is the same resolution as `Authenticate`'s, not a second one. The identity domain's own code, serving a private method that names the person another domain acts for, stamps the answer as the envelope: `principal.ActAs(ctx, who, who.GetScopes())`. Every check that reads the envelope then judges that person — the role ceiling above all: stamped with a bare user id, they held nothing and could grant no role carrying a permission (`InviteToOrg` and every other grant of a role refused them). It trusts its caller with any user, so no preset surfaces it, and it is marked `(w17.contrib.plugin_internal_rpc)`: codegen refuses it on every surface a project could name it on (a REST endpoint or auth method, an rpc or private group, an admin source, an MCP tool), and a whole-service ref leaves it out. **Requires w17 1.16**: an older platform does not know the option. A disabled or unknown account is refused. The answer carries `AuthResp.acted_for`, which says it was resolved without a credential: the role ceiling's re-read under an organization's lock counts the person's session roles for it.
+
+### Pending invitations to a role of all permissions survive the lock growing
+
+- **Fixed: every pending invitation to a role of `all_permissions` became unacceptable when the project added a method** ("this invitation's role has changed since it was sent"). The invitation stored the lock the role expanded to; it now stores `<role>:*`, accepted while the role still grants all permissions. Invitations sent before this release keep their list and are held to it: one sent while the lock was smaller is refused — send it again.
+
 ## 0.1.0-rc.39
 
 ### A sign-in without a device proof says the client is outdated
