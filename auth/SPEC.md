@@ -534,7 +534,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 - REST (`/auth/mfa`): `POST /verify` (**public, failed_only**), `POST /totp`, `POST /totp/confirm`, `DELETE /totp`, `GET /status`, `POST /recovery-codes`. All endpoints except `/verify` need a bearer.
 - Storage RPCs: `GetTotpSecret`, `CountRecoveryCodes`, `GetMfaChallenge`, `LockUserForIssuance` (SELECT … FOR UPDATE on the user row), `CountRecentMfaChallenges`; `CreateTotpSecret`, `ConfirmTotpSecret`, `MoveTotpSeed`, `ClaimTotpStep`, `RecordStepUpAttempt`, `LockStepUp`, `ResetStepUp`, `CreateRecoveryCode`, `RevokeRecoveryCodes`, `ConsumeRecoveryCode`, `RevokeTotpSecret`, `CreateMfaChallenge`, `ConsumeMfaChallenge`, `RecordMfaAttempt`, `SupersedePendingMfaChallenges`.
 - Events: `MfaChallengeRequested` (carries `totp_enrolled`, `email`, the **plaintext** fallback `code`, `expires_at`), `MfaVerified`, `TotpEnrolled`, `TotpConfirmed`, `TotpDisabled`, `RecoveryCodeUsed`.
-- Env knobs: `two_factor_totp` (default true), `two_factor_scope` (`all_logins` | `new_devices`), `mfa_code_ttl_seconds` (300), `mfa_max_challenges_per_window` (10), `mfa_challenge_window_seconds` (900), `totp_issuer`, `two_factor_secret_key` (legacy; only used to open seeds sealed by earlier releases).
+- Env knobs: `two_factor_totp` (default true), `two_factor_scope` (`all_logins` | `new_devices`), `two_factor_policy` (`required` | `optional` | `disabled`, default `required`; who is challenged at all — with `org_two_factor_policy`, per organization and kind), `mfa_code_ttl_seconds` (300), `mfa_max_challenges_per_window` (10), `mfa_challenge_window_seconds` (900), `totp_issuer`, `two_factor_secret_key` (legacy; only used to open seeds sealed by earlier releases).
 - Constants: 5 attempts per challenge; ±1 time step of skew; 6 digits; 10 recovery codes of 10 characters from a 31-symbol alphabet (about 49.5 bits each); step-up locks for 15 min after 5 wrong codes.
 
 **Requires:** `sign_in_turnkey`. **Conflicts:** none. **Combined files:** none. `two_factor_scope=new_devices` needs no other feature (device identity is base tier).
@@ -577,6 +577,9 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `two_factor/fail-closed-on-unaccounted-guess` | If the attempt counter, the step claim or the issuance count cannot be written or read, the request MUST be refused. | Failure & configuration | TestTotp_AnUnansweredClaimFailsClosed, TestMfaIssuance_CapFailsClosedWhenTheCountIsUnreadable |
 | `two_factor/budget-refusal-is-distinct` | A spent issuance budget MUST answer ResourceExhausted with a retry message, not "invalid credentials". | Failure & configuration | TestMfaIssuance_CapRefusalIsNotInvalidCredentials |
 | `two_factor/enrol-refused-when-totp-off` | With `two_factor_totp=false`, EnrollTotp and ConfirmTotp MUST be refused (FailedPrecondition). | Failure & configuration | TestEnrollTotp_RefusedWhenTheAuthenticatorIsOff |
+| `two_factor/policy-decides-who` | `required` (or unset) MUST challenge every account; `optional` MUST challenge only an account with a confirmed authenticator the built-in verifier checks, and sign the others in with the password; `disabled` MUST challenge nobody. `two_factor_scope` applies only to an account the policy challenges. | Security | TestTwoFactorPolicy_TheDefaultDecidesWhoIsChallenged, TestTwoFactorPolicy_OptionalWithoutTheAuthenticatorChallengesNobody |
+| `two_factor/disabled-refuses-enrolment` | Under `disabled`, EnrollTotp and ConfirmTotp MUST be refused (`TWO_FACTOR_DISABLED`): an authenticator nothing asks for would protect nothing. One already confirmed MUST stay stored and count again when the policy changes. | Security | TestTwoFactorPolicy_DisabledRefusesEnrolment |
+| `two_factor/unknown-policy-fails-boot` | A `two_factor_policy` that is none of the three MUST fail boot. | Failure & configuration | TestTwoFactorPolicy_TheBootRefusesAnUnknownValue |
 
 **Gaps / suspected defects**
 
@@ -586,6 +589,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 4. `mfa.go:604` and `mfa_recovery.go:66–74`: On the TOTP path, a recovery code is spent inside `verifyMfaCode` *before* `ConsumeMfaChallenge`. If a concurrent supersede or consume wins, the code is burned and no session is issued. `ConsumeMfaChallenge` also emits `MfaVerified` before `refuseUnsignableAccount`/`issueSession`, so a disabled account still logs a "verified" event.
 5. `two_factor_scope` is not validated at all. A typo silently means `all_logins`.
 6. No retention: `MfaChallenge` rows are never purged, and the table grows with every challenged sign-in.
+7. `required` with an account that has no confirmed authenticator challenges it by message (`MfaChallengeRequested`): a project without its own SMS/e-mail channel locks such an account out. There is no enrolment-only session that would make a required policy enrol the person at their next sign-in instead; until there is, such a project uses `optional`.
 
 ---
 
@@ -899,6 +903,28 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 **Gaps / suspected defects**
 1. On MCP the organization is the OAuth grant's, chosen on the consent page; a bound host does not yet preselect it there.
 2. A host is read on every `Authenticate` through an audience that takes the tenant from it (one indexed query); there is no cache across requests beyond the gateway's auth cache, which keys on the host.
+
+### org_two_factor_policy
+
+**Purpose.** An organization's own second-factor policy — `required`, `optional` or `disabled` — per kind of membership, over the activation's `two_factor_policy`. One deployment can then require a second factor of an organization's staff, leave it to its clients, and switch it off for another organization altogether.
+
+**Adds**
+- Table `OrgTwoFactorPolicy` (org_id, kind, policy, set_by/at, ended_by/at, ended_key): one live policy per (organization, kind); kind `''` is the organization's own; replacing or clearing ends the row; nothing is deleted.
+- Business: `SetOrgTwoFactorPolicy`, `ClearOrgTwoFactorPolicy`, `ListOrgTwoFactorPolicies` (the backoffice's, realm-wide; `PUT` / `GET /auth/admin/orgs/{org_id}/two-factor-policies`, `POST …/clear`) and `SetMyOrgTwoFactorPolicy`, `ClearMyOrgTwoFactorPolicy`, `ListMyOrgTwoFactorPolicies` (the organization's, from inside it; `PUT` / `GET /auth/orgs/{org}/two-factor-policies`, `POST …/clear`). A list answers the activation's default beside the rows.
+- Errors `TWO_FACTOR_POLICIES_REALM_ONLY` (403), `TWO_FACTOR_POLICY_INVALID` (400); `TWO_FACTOR_DISABLED` (412) on an enrolment where it is disabled.
+
+**Which policy applies.** A password sign-in reads the organization it arrives for, decided as Authenticate decides the active organization: the host bound to it (through an audience that takes the tenant from the host), the W17-Org selector, or the person's only organization. The kind of the person's membership there picks the row; without one of its own, the organization's own row; without that, the activation's default. A sign-in for an organization the person is not a member of, or for none, reads the default. An enrolment reads the organization the caller acts in. A selector conflicting with the host refuses the sign-in, as it refuses every request.
+
+**Who sets it.** The backoffice realm-wide and the organization from inside itself — both only where the project's endpoint ACL gates the method: a method nobody gates is refused, because otherwise any member could switch the organization's second factor off.
+
+**Requires / conflicts / combined files.** Requires `two_factor` and `org_membership`. Go file: `handlers/org_two_factor_policy.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| org_two_factor_policy/per-kind-then-org-then-default | The policy MUST be the row of the person's membership kind in the organization the request is for, else the organization's own (kind `''`), else the activation's default; no membership there (or no organization) MUST read the default. | Security | `TestTwoFactorPolicy_TheOrganizationOverridesPerKind`, `TestTwoFactorPolicy_NoMembershipThereIsTheDefault` |
+| org_two_factor_policy/org-as-authenticate | The organization of a sign-in MUST be the one Authenticate would choose (host, selector, sole membership); a selector conflicting with the host MUST refuse. | Security | `TestTwoFactorPolicy_TheOrganizationOverridesPerKind`, `TestTwoFactorPolicy_AConflictingSelectorRefuses` |
+| org_two_factor_policy/acl-gated | Every policy method MUST be refused unless the endpoint ACL gates it; the backoffice's MUST be refused from inside an organization; the organization's MUST act in the active organization only. | Security | `TestSetOrgTwoFactorPolicy`, `TestSetMyOrgTwoFactorPolicy` |
+| org_two_factor_policy/values | A policy MUST be one of required, optional, disabled; a kind MUST be `''` where memberships have no kinds. | Correctness | `TestSetOrgTwoFactorPolicy` |
 
 ### org_signup
 

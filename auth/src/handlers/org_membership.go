@@ -236,6 +236,11 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 // it — and then no token carries an organization.
 var oauthOrgScope func(ctx context.Context, h *AuthServiceHandler, userID, orgID string, headers, scopes, labels map[string]string) error
 
+// membershipKindOf is the kind of a membership: "" here, its kind with
+// membership_kinds (UserOrg.membership_kind is field-gated, so only that
+// feature's file may name it).
+var membershipKindOf = func(*pb.UserOrg) string { return "" }
+
 // orgScopeByKind replaces resolveOrgScope's resolution when membership
 // kinds are staged (membership_kinds.go); nil without them.
 var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error

@@ -72,6 +72,7 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		// verify path defaults ON.
 		TwoFactorTOTP:             cfg.TwoFactorTotp,
 		TwoFactorScope:            cfg.TwoFactorScope,
+		TwoFactorPolicy:           cfg.TwoFactorPolicy,
 		MfaCodeTTLSeconds:         cfg.MfaCodeTtlSeconds,
 		MaxMfaChallengesPerWindow: cfg.MfaMaxChallengesPerWindow,
 		MfaChallengeWindowSeconds: cfg.MfaChallengeWindowSeconds,

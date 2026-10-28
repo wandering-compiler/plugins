@@ -43,6 +43,7 @@ func init() {
 	configChecks = append(configChecks, parseAudienceTable)
 	authRespEnrichers = append(authRespEnrichers, answerMembershipKind)
 	kindOfJoin = func(kind string, add *pb.AddOrgMembershipReq) { add.Kind = kind }
+	membershipKindOf = (*pb.UserOrg).GetMembershipKind
 }
 
 // answerMembershipKind answers the kind of the caller's membership in the

@@ -2150,6 +2150,28 @@ message EndOrgProductAllowanceRowResp {
   string id = 1;
 }
 
+message SetOrgTwoFactorPolicyRowReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+  string kind   = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  string policy = 3 [(w17.field) = { type: CHAR, max_len: 16 }];
+  string set_by = 4 [(w17.field) = { type: UUID, null: true }];
+}
+message SetOrgTwoFactorPolicyRowResp {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string id = 1;
+}
+message EndOrgTwoFactorPolicyRowReq {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string org_id   = 1 [(w17.field) = { type: UUID }];
+  string kind     = 2 [(w17.field) = { type: CHAR, max_len: 32, blank: true }];
+  string ended_by = 3 [(w17.field) = { type: UUID, null: true }];
+}
+message EndOrgTwoFactorPolicyRowResp {
+  option (w17.contrib.plugin_feature) = "org_two_factor_policy";
+  string id = 1;
+}
+
 message SetOrgSignUpPolicyRowReq {
   option (w17.contrib.plugin_feature) = "org_signup";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -5687,6 +5709,41 @@ service AuthMutation {
         dql:
           "UPDATE @module.OrgHost SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
           "WHERE host = :host AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // SetOrgTwoFactorPolicyRow — a new live second-factor policy for
+  // (organization, kind); the caller ends the live one first
+  // (EndOrgTwoFactorPolicyRow) in the same transaction, and the unique index
+  // refuses a racing second.
+  rpc SetOrgTwoFactorPolicyRow(SetOrgTwoFactorPolicyRowReq) returns (SetOrgTwoFactorPolicyRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgTwoFactorPolicy SET "
+          "org_id = :org_id, "
+          "kind = :kind, "
+          "policy = :policy, "
+          "set_by = :set_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // EndOrgTwoFactorPolicyRow — ends the live second-factor policy of
+  // (organization, kind); nothing is deleted.
+  rpc EndOrgTwoFactorPolicyRow(EndOrgTwoFactorPolicyRowReq) returns (EndOrgTwoFactorPolicyRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "org_two_factor_policy";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgTwoFactorPolicy SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE org_id = :org_id AND kind = :kind AND ended_at IS NULL "
           "RETURNING id AS id"
       }
     };

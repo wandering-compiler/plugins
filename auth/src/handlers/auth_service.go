@@ -198,6 +198,7 @@ type AuthServiceHandler struct {
 	// imports; mfa.go builds the secretbox cipher from TwoFactorSecretKey.
 	TwoFactorTOTP     bool   // built-in TOTP verify path enabled (two_factor_totp)
 	TwoFactorScope    string // all_logins | new_devices (two_factor_scope)
+	TwoFactorPolicy   string // required | optional | disabled (two_factor_policy)
 	MfaCodeTTLSeconds int    // event-flow challenge code lifetime (mfa_code_ttl_seconds)
 	// Issuance cap: at most MaxMfaChallengesPerWindow challenges
 	// per user per MfaChallengeWindowSeconds. The per-challenge attempt
