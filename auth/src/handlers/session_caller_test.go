@@ -121,3 +121,28 @@ func TestResolvePrincipalRealmAware_OnlyASessionCarriesItsTokenID(t *testing.T) 
 		}
 	}
 }
+
+// A leaked API token must not read its holder's other credentials or revoke
+// them — every token of the holder at once. Listing and revoking take a
+// session, as minting does.
+func TestApiTokenManagement_AnAPITokenCallerIsRefused(t *testing.T) {
+	m := &apiTokenMgmtMock{listResult: []*pb.ApiTokenInfo{{Id: "t1"}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	apiCaller := sessionCallerCtx("u1", "")
+	if _, err := h.ListApiTokens(apiCaller, &pb.ListApiTokensReq{}); status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
+		t.Errorf("an API-token caller listed tokens: %v", err)
+	}
+	if _, err := h.RevokeApiToken(apiCaller, &pb.RevokeApiTokenReq{TokenId: "t1"}); status.Code(err) != codes.PermissionDenied || detailOf(t, err).GetCode() != CodeSessionRequired {
+		t.Errorf("an API-token caller revoked a token: %v", err)
+	}
+	if m.revokeReq != nil {
+		t.Errorf("a refused revoke still wrote: %+v", m.revokeReq)
+	}
+	// A session still manages them.
+	if resp, err := h.ListApiTokens(ctxWithCaller("u1"), &pb.ListApiTokensReq{}); err != nil || len(resp.GetTokens()) != 1 {
+		t.Errorf("a session's list: %v, %v", resp, err)
+	}
+	if _, err := h.RevokeApiToken(ctxWithCaller("u1"), &pb.RevokeApiTokenReq{TokenId: "t1"}); err != nil || m.revokeReq == nil {
+		t.Errorf("a session's revoke: %v", err)
+	}
+}

@@ -519,10 +519,17 @@ func (h *AuthServiceHandler) issueApiTokenTx(txCtx context.Context, a *signInAtt
 
 // ListApiTokens returns the calling user's API tokens (management view —
 // id / label / audit timestamps, never the secret token string).
+//
+// A session only, as CreateApiToken: an API token is a credential for
+// automation, and one that leaked must not be able to read the holder's
+// other credentials, or revoke them (below).
 func (h *AuthServiceHandler) ListApiTokens(ctx context.Context, req *pb.ListApiTokensReq) (*pb.ListApiTokensResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
 	}
 	resp, err := h.Query.ListApiTokensByUser(ctx, &pb.ListApiTokensByUserReq{
 		UserId:    userID,
@@ -542,10 +549,16 @@ func (h *AuthServiceHandler) ListApiTokens(ctx context.Context, req *pb.ListApiT
 // stay too: they narrow a token that is refused anyway, and they record what
 // it was allowed to do. Idempotent — revoking a token that is already revoked,
 // unknown or not the caller's matches no row (NotFound) and is no error.
+//
+// A session only: a leaked API token revoking every other token of its holder
+// is a denial of service to all of the holder's automation at once.
 func (h *AuthServiceHandler) RevokeApiToken(ctx context.Context, req *pb.RevokeApiTokenReq) (*pb.RevokeApiTokenResp, error) {
 	userID, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	if err := requireSessionCaller(ctx); err != nil {
+		return nil, err
 	}
 	if _, err := h.Mutation.MarkApiTokenRevoked(ctx, &pb.MarkApiTokenRevokedReq{
 		TokenId:   req.GetTokenId(),

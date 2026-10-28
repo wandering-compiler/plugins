@@ -2094,38 +2094,12 @@ service AuthQuery {
     };
   }
 
-  // GetUserByTokenWithPermissions — the canonical auth-backend
-  // lookup. ONE round-trip resolves the bearer token into the
-  // User row + the deduped permission IDs the user holds.
-  // Hand-written Authenticate composes:
-  //
-  //   resp, _ := authQuery.GetUserByTokenWithPermissions(...)
-  //   return &AuthResp{PermissionIds: resp.GetPermissionIds()}
-  //
-  // Notes on the DQL:
-  //   - LEFT JOIN through UserRole / RolePermission means a
-  //     user with no roles still yields one row (rather than
-  //     NotFound); the ROWS_TO_ARRAY then carries an empty
-  //     list. The token JOIN stays inner — no token, no row,
-  //     and the consumer's gateway middleware returns 401.
-  //   - GROUP BY pins the row to the User's primary identity
-  //     so the aggregate folds the join cross-product into one
-  //     row per user.
-  //   - ROWS_TO_ARRAY maps per-dialect to PG
-  //     `array_agg + FILTER + COALESCE`, MySQL `JSON_ARRAYAGG`,
-  //     SQLite `json_group_array` — always returns a list,
-  //     never NULL. The repeated-scalar scan path
-  //     decodes the column into `[]int32` regardless of which
-  //     wire shape the dialect chose.
-  //   - DISTINCT-equivalent dedup: the M2M topology guarantees
-  //     unique (user_id, permission_id) pairs via the composite-
-  //     unique indexes on UserRole + RolePermission, so the
-  //     aggregate doesn't observe duplicates even across
-  //     multiple roles overlapping on a permission.
-  //
-  // Permission table is gone (the activating domain's
-  // AclPermission proto enum IS the catalog). RolePermission.
-  // permission_id carries the int32 enum value directly.
+  // GetUserByTokenWithPermissions — Authenticate's bearer lookup: the live
+  // token (by its hash, or the legacy plaintext column), its user, and the
+  // device it is bound to. Despite the name it returns no permissions: those
+  // are a second read, GetUserRoleGrants, which the resolver narrows (realm,
+  // organization, token subset). The token JOIN is inner — no live token, no
+  // row (NotFound), and the gateway answers 401.
   rpc GetUserByTokenWithPermissions(GetUserByTokenWithPermissionsReq) returns (GetUserByTokenWithPermissionsResp) {
     option (w17.db.method) = {
       ops: {
