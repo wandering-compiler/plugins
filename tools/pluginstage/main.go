@@ -33,14 +33,17 @@
 // The fix is never to add a `requires` edge that forces an unrelated feature
 // on: a seam spans the features it joins, so it belongs in a file above both.
 //
+// Proto FIELDS a feature adds vanish from a consumer's generated pb the same
+// way: a call of such a field's getter from a file staged without the
+// feature is reported too (fieldgate.go), and so is a DQL statement naming a
+// table, column or request field another feature adds (dqlgate.go).
+//
 // # What it does NOT catch
 //
-// Proto FIELDS that a feature adds, which vanish from a consumer's generated
-// pb the same way. Those need the pb to be regenerated per activation, which
-// this cannot do from source. A consumer build is still the only full proof;
-// this closes the half that is checkable from here — including the DQL half:
-// a statement naming a table, column or request field another feature adds
-// (dqlgate.go).
+// A getter whose name another message declares ungated (or gated on another
+// feature): the call site names the getter, not the message, so it cannot be
+// told apart from source. A gated MESSAGE named as a type. A consumer build is
+// still the only full proof.
 package main
 
 import (
@@ -171,6 +174,9 @@ func check(dir string) error {
 	}
 
 	dqlErr := checkDQLColumns(dir, requires)
+	if gErr := checkGatedGetters(dir, gates, inReach); gErr != nil {
+		dqlErr = errors.Join(dqlErr, gErr)
+	}
 
 	declIn, refs, err := scan(filepath.Join(dir, "src"))
 	if err != nil {
