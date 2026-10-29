@@ -695,10 +695,13 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	}
 	resp, err := h.Query.GetMfaChallenge(ctx, &pb.GetMfaChallengeReq{ChallengeId: req.GetChallengeId()})
 	if err != nil || resp.GetChallenge() == nil {
-		// The caller hears an invalid challenge either way; the history
-		// tells an outage from an unknown challenge.
+		// An unknown challenge is refused opaquely; an outage is said as one
+		// (Unavailable), so the person retries instead of retyping.
 		if err != nil && status.Code(err) != codes.NotFound {
 			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
+		if operationalCode(err) != codes.OK {
+			return nil, Unauthenticated(err)
 		}
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}
@@ -740,6 +743,11 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		// where its error could be discarded harmlessly.
 		if status.Code(attErr) != codes.NotFound {
 			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
+		// An outage is still refused, but said as one (Unavailable): the
+		// code was not wrong, and the person should retry, not retype.
+		if operationalCode(attErr) != codes.OK {
+			return nil, Unauthenticated(attErr)
 		}
 		return nil, Unauthenticated(errMfaChallengeInvalid)
 	}

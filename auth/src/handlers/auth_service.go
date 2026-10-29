@@ -736,6 +736,12 @@ type signupRoles struct {
 // `password_change` without `password_reset` stages nothing it cannot build.
 var spendResetLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error { return nil }
 
+// spendVerifyLinks marks every live email-verification link of an account
+// used. An admin address change calls it: a link mailed to the old address
+// would otherwise verify the new one. Base no-op — the table exists only under
+// `email_verification`, whose file installs the real one via init().
+var spendVerifyLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error { return nil }
+
 // eraser erases one feature's share of an account's personal data, inside the
 // erasure's transaction (AuthService.EraseUsers, `user_admin`): email is the
 // address being erased (as stored), placeholder the one replacing it. Nothing
@@ -1372,8 +1378,8 @@ func (h *AuthServiceHandler) presentedToken(raw string) (token string, viaDPoP b
 		token, viaDPoP = raw[len(dpopScheme)+1:], true
 	case h.Scheme == "":
 		token = raw
-	case strings.HasPrefix(raw, h.Scheme+" "):
-		token = strings.TrimPrefix(raw, h.Scheme+" ")
+	case len(raw) > len(h.Scheme) && strings.EqualFold(raw[:len(h.Scheme)], h.Scheme) && raw[len(h.Scheme)] == ' ':
+		token = raw[len(h.Scheme)+1:]
 	default:
 		return "", false, errAuthnSchemeMismatch
 	}

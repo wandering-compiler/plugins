@@ -129,10 +129,10 @@ suspected defect until a build of that feature combination confirms it.
 
 **Gaps / suspected defects**
 
-1. **Canonical email is a handler convention, not a storage rule.** `normalizeEmail` runs in SignUp, SignIn, password reset and OAuth. `AuthMutation.CreateUser` and `UpdateUser` (`user_admin`, `auth_mutation.proto:2149`) write `:email` as given, and the unique index on `User.email` is case-sensitive. An address written with upper-case letters by an admin form, a fixture or hand-written code can never be found by `SignIn`, which looks up the lower-cased form. Normalise in the DQL or the field type, or use a case-insensitive unique index.
+1. **Canonical email is a handler convention, not a storage rule.** `normalizeEmail` runs on every handler path that writes or looks up an address: SignUp, SignIn, password reset, OAuth, and (fixed in rc.44) the admin's `UpdateAccount` and `CreateBot`. The statements themselves (`AuthMutation.CreateUser`, `UpdateUser`) still write `:email` as given and the unique index on `User.email` is case-sensitive, so a fixture or hand-written code that calls them directly with upper-case letters writes an address `SignIn` can never find.
 2. **No password rehash on login.** `SignIn` calls `VerifyAndRotate(..., nil)` (`auth_service.go:773`), so a stored hash is never upgraded. Changing `password_hash_algo` or raising cost parameters affects only passwords set afterwards, and weaker hashes stay at rest indefinitely.
 3. **Unhashed legacy tokens persist until a later release drops the column.** A legacy token that is never presented stays in plaintext at rest. This is documented, but nothing enforces or reports how many remain.
-4. **No password policy.** The only plugin-level rule is "non-empty" (`passwordhash.Hash`), and there is no maximum length either. Under `password_hash_algo=bcrypt`, a password longer than 72 bytes makes `Hash` return an error, which the sign-up and reset paths surface as an internal error instead of a validation refusal.
+4. **No password policy.** The only plugin-level rule is "non-empty" (the PASSWORD field is required), and there is no maximum length either. Fixed: under `password_hash_algo=bcrypt` a password longer than 72 bytes is refused on its field (`PASSWORD_TOO_LONG`, InvalidArgument) by sign-up, confirmation, reset and change, instead of surfacing as an internal error.
 
 ---
 
@@ -269,7 +269,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 
 **Gaps / suspected defects**
 
-1. **The scheme prefix is case-sensitive.** `Authenticate` requires the exact prefix `"<Scheme> "` (`auth_service.go:684`), so `authorization: bearer <t>` is refused. RFC 7235 treats the scheme name as case-insensitive.
+1. **Fixed: the scheme prefix was case-sensitive.** `authorization: bearer <t>` was refused; the configured scheme is now matched case-insensitively (RFC 9110 §11.1), as `DPoP` already was.
 2. **No direct test of `Authenticate`.** Header lookup, scheme stripping, decorator and narrower ordering, and the final `AuthResp` are untested end to end at unit level. Tests reach only the resolvers and the error constructor.
 3. **`kind` is not re-checked per request.** `Authenticate` refuses a disabled account on every request (under `user_admin`, both resolvers run the disabled gate on the token's owner), but it does not read `kind`: a machine account authenticates with its API tokens by design.
 
@@ -321,7 +321,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 
 1. **Account enumeration by design.** Without `sign_up_confirmation`, `SignUp` answers `EMAIL_TAKEN` for a registered address, so the endpoint reveals which addresses have accounts, at the gateway limiter's rate. This is accepted, but should be stated in the consumer documentation next to `sign_in_turnkey/indistinguishable-refusals`.
 2. **The transaction silently degrades.** When `DistTx` is nil, SignUp runs its writes as separate statements (`signup.go:111`). That is intended for tests, but a mis-wired bundle would degrade to non-atomic registration without any error. A wired handler should refuse to boot without a coordinator. Under `rbac` it also commits the `BootstrapClaim` ahead of the role links, so a failure between them leaves the claim taken by an account without the `first_user` roles, and the claim is never reopened.
-3. **An empty or over-long password is a server error.** It reaches `PasswordHash.Hash`, which returns an error that is passed through raw, so the caller gets an internal error instead of InvalidArgument. Whether the PASSWORD field type rejects an empty value at the gateway is outside the plugin.
+3. **Fixed: an over-long password was a server error.** See base gap 4. An empty one is refused by the required PASSWORD field before it reaches the handler.
 4. **Bootstrap admin.** See `rbac` gap 1.
 
 ---
@@ -353,7 +353,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 
 1. **The plaintext code rides the event bus.** `SignUpConfirmationRequested.code` (and likewise the reset and verification tokens) is published on the plugin's `events` channel. Every auth event is internal (`public: false`), so none reaches the gateway's client stream (`/w17-events`); what remains is the transport: a durable channel keeps the code in the broker for its retention, and a hand-written consumer that republishes the event exposes it. "Never persisted" holds only for the plugin's own tables. See also `password_reset` gap 1.
 2. **The invite gate is not re-run at confirmation.** Only the allowlist is. An invitation revoked or expired between SignUp and ConfirmSignUp still produces an account. The open-invitation claim made at SignUp persists.
-3. **An outage reads as a wrong code.** `RecordPendingSignUpAttempt` errors of every kind map to `errSignUpConfirmInvalid` (`signup_confirm.go:233`), so the person is told the code is wrong while the store is down. `VerifyMfa` does the same with `RecordMfaAttempt` (`two_factor/fail-closed-on-unaccounted-guess`); failing closed is right in both, but neither reports the outage as `Unavailable` the way `Authenticate` and the consume paths do.
+3. **Fixed: an outage read as a wrong code.** `ConfirmSignUp` (`RecordPendingSignUpAttempt`) and `VerifyMfa` (`GetMfaChallenge`, `RecordMfaAttempt`) still fail closed, but answer an outage as `Unavailable`, the way `Authenticate` and the consume paths do, so the person retries instead of registering again or retyping a right code. An unknown or spent registration or challenge is still the one opaque refusal.
 4. **Pending rows are kept for good.** Nothing deletes one (`auth/nothing-is-deleted`): claimed, superseded and expired rows stay, and the table grows with every registration. Each keeps its password and code hashes (a claimed row's password hash is the account's).
 5. **Every SignUp costs two password-hash derivations.** One is for the password and one for an 8-character code. On a public endpoint guarded only by the per-address limiter, that is a deliberate CPU and memory cost per request. A fast keyed hash of the code would carry the same security given the attempt budget.
 
@@ -461,7 +461,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 
 1. **Fixed: build failure without `api_token`.** The session-realm filter of `RevokeOtherSessionTokens` (then `DeleteOtherSessionTokens`) is now gated `?feature(api_token)`. Without `api_token`, every token is a session.
 2. **No attempt limit on the current-password check.** `ChangePassword` is bearer-authenticated, so the gateway's `failed_only` limiter for public endpoints does not apply. Whoever holds a session can guess the current password without bound.
-3. **Outstanding reset tokens survive a change.** Live `PasswordResetToken` rows (`password_reset`) are not invalidated, so a reset link issued before the change can still override it.
+3. **Fixed: outstanding reset tokens survived a change.** `ChangePassword` spends every live reset link in its transaction (see `password_reset` gap 2).
 4. **The wrong-password refusal looks like an expired session.** It is `Unauthenticated` (`password_change.go:68`), which REST clients commonly treat as "session expired" and answer by signing the user out. FailedPrecondition or InvalidArgument with a field detail fits a request from an authenticated caller.
 
 ---
@@ -516,9 +516,9 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 
 **Gaps / suspected defects**
 
-1. **Tokens are not bound to an address.** `EmailVerificationToken` has no email column, and `MarkEmailVerified` stamps whatever address the user holds at redemption time (`emailverify.go:114`). If the address changes between request and click (an admin edit through `UpdateUser`), a link mailed to the old address verifies the new one. Store the address on the token and require a match at consume, or delete the user's tokens when the address changes.
-2. **An address change leaves `email_proof` stale.** `UpdateUser` clears `email_verified_at` (`auth_mutation.proto:2167`) but leaves `email_proof`, so the two columns disagree after every change. `DERIVED_FROM_INVITE` carried over from the old address satisfies the `derived` floor for the new one. A stale `SELF_CONFIRMED` blocks `MarkEmailDerivedFromInvite` (`WHERE email_proof < 2`) indefinitely.
-3. **The floor fails open on configuration.** `ValidateConfig` does not check `email_proof_required`. A typo (`"ful"`) happens to fail closed, because anything other than `none` or `derived` demands a timestamp. Setting `derived` or `full` in an activation without `email_verification` leaves the gate at its permissive default, so the configured floor is silently not enforced.
+1. **Fixed: a link mailed to the old address verified the new one.** `EmailVerificationToken` still has no email column, but the only path that changes an address, the admin's `UpdateAccount`, spends every live verification link (and every reset link, which would let the old mailbox set the password) in the transaction that changes it. Saving the address the account already has writes nothing, so it keeps its verification.
+2. **Fixed: an address change left `email_proof` stale.** `UpdateUser` and `BeginUserErasure` reset it with `email_verified_at` (see `user_admin` gap 3).
+3. **Fixed: the floor failed open on configuration.** An unknown `email_proof_required`, or one above `none` without `email_verification`, refuses to boot (`checkEmailProofFloor`, see `org_invite` gap 3).
 4. **Requests are not limited.** `RequestEmailVerification` is bearer-authenticated, so no public limiter applies. One session can mint unlimited tokens and mails, including for an already-verified address, and every token stays redeemable for its TTL.
 5. **Verification tokens on the events channel.** See `password_reset` gap 1.
 
@@ -1080,7 +1080,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 **Gaps / suspected defects**
 1. **Fixed in rc.25: a disabled machine account could get a fresh, working token.** `IssueBotToken` checked only `kind` and visibility, and `Authenticate` never read `disabled_at`. It now refuses a disabled bot with `FailedPrecondition`, and `Authenticate` refuses a disabled account's token.
-2. **The email is not normalized.** `src/handlers/service_account.go:240` stores `CreateBotReq.email` as given. `Bot@X` and `bot@x` can coexist alongside a human `bot@x` that differs only by case, unlike every other account path.
+2. **Fixed: the email was not normalized.** `CreateBot` stores the address lower-cased and trimmed, as every other account path does.
 3. **The membership label does not match the grant.** `src/handlers/service_account_org.go` writes `OrgMembership.role = "member"` whatever role was granted, so `ListOrgMembers` reports a label unrelated to the bot's permissions.
 4. **Without organizations, every operator manages every bot.** By design the realm is one organization, so any authenticated caller whose ceiling covers a bot's role can mint tokens for it. Only the endpoint ACL limits this, which is the project's job, and nothing in the plugin enforces that an ACL exists.
 5. **No audit events.** Bot creation emits no `UserCreated`, and token minting emits nothing.

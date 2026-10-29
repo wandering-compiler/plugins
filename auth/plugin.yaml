@@ -1495,6 +1495,7 @@ msgids:
   - "This membership belongs to another organization."
   - "This organization already has a team named {name}."
   - "This part of the service is not open to you: none of your memberships is of a kind it admits."
+  - "This password is too long. Use a shorter one."
   - "This person is already a member of the organization."
   - "This person is already in the team."
   - "This person is not a member of the organization."

@@ -1087,19 +1087,21 @@ func (m mfaOutage) RecordMfaAttempt(ctx context.Context, in *pb.RecordMfaAttempt
 }
 
 // VerifyMfa records an outage of the challenge read or of the attempt claim
-// as ERROR, and a missing challenge as WRONG_CODE; the caller hears the same
-// opaque refusal for all of them.
+// as ERROR, and a missing challenge as WRONG_CODE. The caller hears one opaque
+// refusal for both refusals, and Unavailable for both outages — the code may
+// have been right, so the person retries rather than retypes.
 func TestSignInHistory_VerifyMfaTellsAnOutageFromAWrongCode(t *testing.T) {
-	var answers []error
+	answers := map[codes.Code][]error{}
 	for _, c := range []struct {
 		name            string
 		readErr, claimE error
 		want            pb.SignInOutcome
+		answer          codes.Code
 	}{
-		{"read outage", status.Error(codes.Unavailable, "down"), nil, pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
-		{"no challenge", status.Error(codes.NotFound, "no rows"), nil, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
-		{"claim outage", nil, status.Error(codes.Unavailable, "down"), pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR},
-		{"claim matched nothing", nil, status.Error(codes.NotFound, "no rows"), pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE},
+		{"read outage", status.Error(codes.Unavailable, "down"), nil, pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR, codes.Unavailable},
+		{"no challenge", status.Error(codes.NotFound, "no rows"), nil, pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE, codes.Unauthenticated},
+		{"claim outage", nil, status.Error(codes.Unavailable, "down"), pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR, codes.Unavailable},
+		{"claim matched nothing", nil, status.Error(codes.NotFound, "no rows"), pb.SignInOutcome_SIGN_IN_OUTCOME_WRONG_CODE, codes.Unauthenticated},
 	} {
 		m := &mfaMock{chUserID: "u1", chThumb: testJKT, chCreatedAt: timestamppb.Now()}
 		o := mfaOutage{mfaMock: m, readErr: c.readErr, claimErr: c.claimE}
@@ -1107,13 +1109,18 @@ func TestSignInHistory_VerifyMfaTellsAnOutageFromAWrongCode(t *testing.T) {
 		h.Query, h.Mutation = o, o
 		log := keepHistory(h)
 		_, err := h.VerifyMfa(historyCtx(testJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: "000000"})
-		answers = append(answers, err)
+		if status.Code(err) != c.answer {
+			t.Errorf("%s: answered %v, want %v", c.name, err, c.answer)
+		}
+		answers[c.answer] = append(answers[c.answer], err)
 		if len(log.rows) != 1 || log.rows[0].GetOutcome() != c.want {
 			t.Errorf("%s: rows %v, want one %v", c.name, log.rows, c.want)
 		}
 	}
-	for _, a := range answers[1:] {
-		sameAnswer(t, "the four refusals", a, answers[0])
+	for code, as := range answers {
+		for _, a := range as[1:] {
+			sameAnswer(t, code.String()+" answers", a, as[0])
+		}
 	}
 }
 

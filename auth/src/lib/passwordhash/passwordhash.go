@@ -102,6 +102,11 @@ func DefaultParams() Params {
 	}
 }
 
+// ErrTooLong is Hash's refusal of a password the algorithm cannot take whole:
+// bcrypt reads at most 72 bytes, and refuses more rather than ignore the rest.
+// It is the person's input, not a fault, so callers answer it as one.
+var ErrTooLong = bcrypt.ErrPasswordTooLong
+
 // saltSize for newly-generated hashes (16 bytes = 128 bits,
 // well above the 64-bit minimum every modern algo recommends).
 const saltSize = 16

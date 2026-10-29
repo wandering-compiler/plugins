@@ -12,6 +12,8 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/i18n"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+
+	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
 )
 
 // authnError is the opaque error every auth-handler failure
@@ -180,6 +182,10 @@ const (
 	// token, a CLI session, an authenticator, recovery codes, a trusted
 	// callback) called with an API token. It needs a signed-in session.
 	CodeSessionRequired = "SESSION_REQUIRED"
+
+	// CodePasswordTooLong: the new password is longer than the configured
+	// algorithm can hash (bcrypt: 72 bytes).
+	CodePasswordTooLong = "PASSWORD_TOO_LONG"
 
 	// CodePasswordNotConfirmed: ConfirmPassword (step_up) was given a password
 	// that is not the caller's.
@@ -419,6 +425,8 @@ const (
 	// Names what to do instead: the caller holds a working credential, just
 	// not one this operation accepts.
 	MsgSessionRequired = "Sign in to do this. An API token cannot create credentials."
+
+	MsgPasswordTooLong = "This password is too long. Use a shorter one."
 
 	// step_up: the password the caller typed to confirm it is them is not
 	// theirs. Says no more than that — they are signed in already.
@@ -780,4 +788,16 @@ func refuseOtherOrg(ctx context.Context, org string) error {
 	return refusal(ctx, codes.InvalidArgument,
 		"request field org "+org+" is not the organization this request was authenticated in",
 		CodeOrgMismatch, "org", MsgOrgMismatch, nil)
+}
+
+// hashPasswordErr answers a failed hash of a person's new password: a password
+// the algorithm cannot take (passwordhash.ErrTooLong) is their input to fix,
+// so it is refused on the field, not passed on as a server error.
+func hashPasswordErr(ctx context.Context, err error, field string) error {
+	if errors.Is(err, passwordhash.ErrTooLong) {
+		return refusal(ctx, codes.InvalidArgument,
+			"the password is longer than the password hash accepts (bcrypt: 72 bytes)",
+			CodePasswordTooLong, field, MsgPasswordTooLong, nil)
+	}
+	return err
 }

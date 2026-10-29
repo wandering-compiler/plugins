@@ -184,8 +184,8 @@ func TestOAuthAccountCreation_RefusesTheErasedDomain(t *testing.T) {
 // The admin's update goes through UpdateAccount, which refuses it; any other
 // address reaches UpdateUser.
 func TestUpdateAccount_RefusesTheErasedDomain(t *testing.T) {
-	m := &updateUserRecorder{}
-	h := &AuthServiceHandler{Mutation: m}
+	m := &updateUserRecorder{current: "u2@example.com"}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
 	ctx := sessionCallerCtx("admin", "t-admin")
 	_, err := h.UpdateAccount(ctx, &pb.UpdateAccountReq{UserId: "u2", Email: "erased-u1@erased.invalid"})
 	assertReservedRefused(t, "UpdateAccount", err)
@@ -202,8 +202,8 @@ func TestUpdateAccount_RefusesTheErasedDomain(t *testing.T) {
 // admin could never sign in, and would sit beside its lower-case twin past the
 // case-sensitive unique index.
 func TestUpdateAccount_NormalizesTheAddress(t *testing.T) {
-	m := &updateUserRecorder{}
-	h := &AuthServiceHandler{Mutation: m}
+	m := &updateUserRecorder{current: "u2@example.com"}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
 	if _, err := h.UpdateAccount(sessionCallerCtx("admin", "t-admin"), &pb.UpdateAccountReq{UserId: "u2", Email: "  Bob@Example.COM "}); err != nil {
 		t.Fatal(err)
 	}
@@ -212,14 +212,78 @@ func TestUpdateAccount_NormalizesTheAddress(t *testing.T) {
 	}
 }
 
+// An address change spends the links mailed to the old address, in the
+// change's transaction: a verification link would verify the new address, a
+// reset link would let the old mailbox set the password.
+func TestUpdateAccount_SpendsTheOldAddressLinks(t *testing.T) {
+	m := &updateUserRecorder{current: "old@example.com"}
+	tx := &recordingDistTx{}
+	h := &AuthServiceHandler{Query: m, Mutation: m, DistTx: tx}
+	if _, err := h.UpdateAccount(sessionCallerCtx("admin", "t-admin"), &pb.UpdateAccountReq{UserId: "u2", Email: "new@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.resetSpent != "u2" || m.verifySpent != "u2" {
+		t.Errorf("links spent: reset %q, verification %q, want both u2", m.resetSpent, m.verifySpent)
+	}
+	if got := tx.settled(); got != "committed" {
+		t.Errorf("the change was %s, want committed", got)
+	}
+}
+
+// A spend that fails rolls the address change back with it.
+func TestUpdateAccount_AFailedSpendRollsTheChangeBack(t *testing.T) {
+	m := &updateUserRecorder{current: "old@example.com", spendErr: status.Error(codes.Unavailable, "db down")}
+	tx := &recordingDistTx{}
+	h := &AuthServiceHandler{Query: m, Mutation: m, DistTx: tx}
+	if _, err := h.UpdateAccount(sessionCallerCtx("admin", "t-admin"), &pb.UpdateAccountReq{UserId: "u2", Email: "new@example.com"}); err == nil {
+		t.Fatal("a failed spend was reported as a change")
+	}
+	if got := tx.settled(); got != "rolled back" {
+		t.Errorf("the change was %s, want rolled back", got)
+	}
+}
+
+// Saving the address the account has (as typed, in another case) writes
+// nothing, so the address keeps its verification and proof.
+func TestUpdateAccount_TheSameAddressWritesNothing(t *testing.T) {
+	m := &updateUserRecorder{current: "bob@example.com"}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	resp, err := h.UpdateAccount(sessionCallerCtx("admin", "t-admin"), &pb.UpdateAccountReq{UserId: "u2", Email: "Bob@Example.com"})
+	if err != nil || resp.GetEmail() != "bob@example.com" {
+		t.Fatalf("UpdateAccount: %v, %v", resp, err)
+	}
+	if m.req != nil || m.resetSpent != "" || m.verifySpent != "" {
+		t.Errorf("an unchanged address wrote: update %v, reset %q, verification %q", m.req, m.resetSpent, m.verifySpent)
+	}
+}
+
 type updateUserRecorder struct {
 	pb.AuthMutationClient
-	req *pb.UpdateUserReq
+	pb.AuthQueryClient
+	current     string
+	req         *pb.UpdateUserReq
+	resetSpent  string
+	verifySpent string
+	spendErr    error
+}
+
+func (u *updateUserRecorder) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Email: u.current}}, nil
 }
 
 func (u *updateUserRecorder) UpdateUser(_ context.Context, in *pb.UpdateUserReq, _ ...grpc.CallOption) (*pb.UpdateUserResp, error) {
 	u.req = in
 	return &pb.UpdateUserResp{UserId: in.GetUserId(), Email: in.GetEmail()}, nil
+}
+
+func (u *updateUserRecorder) SpendPasswordResetTokens(_ context.Context, in *pb.SpendPasswordResetTokensReq, _ ...grpc.CallOption) (*pb.SpendPasswordResetTokensResp, error) {
+	u.resetSpent = in.GetUserId()
+	return &pb.SpendPasswordResetTokensResp{}, u.spendErr
+}
+
+func (u *updateUserRecorder) SpendEmailVerificationTokens(_ context.Context, in *pb.SpendEmailVerificationTokensReq, _ ...grpc.CallOption) (*pb.SpendEmailVerificationTokensResp, error) {
+	u.verifySpent = in.GetUserId()
+	return &pb.SpendEmailVerificationTokensResp{}, u.spendErr
 }
 
 // A machine account's address is the operator's input too.

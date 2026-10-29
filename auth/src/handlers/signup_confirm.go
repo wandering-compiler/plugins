@@ -174,7 +174,7 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 
 	hashed, err := h.PasswordHash.Hash(req.GetPassword())
 	if err != nil {
-		return nil, err
+		return nil, hashPasswordErr(ctx, err, "password")
 	}
 	code, err := generateSignUpCode()
 	if err != nil {
@@ -272,10 +272,13 @@ func (h *AuthServiceHandler) ConfirmSignUp(ctx context.Context, req *pb.ConfirmS
 	att, err := h.Mutation.RecordPendingSignUpAttempt(ctx, &pb.RecordPendingSignUpAttemptReq{PendingId: req.GetPendingId()})
 	if err != nil {
 		// Fail closed: an attempt that could not be counted is not granted.
-		// The caller cannot tell an outage from an unknown registration here;
-		// the history can.
+		// An outage is said as one (Unavailable), not as a wrong code: the
+		// person should retry, not register again.
 		if status.Code(err) != codes.NotFound {
 			attempt.outcome = pb.SignInOutcome_SIGN_IN_OUTCOME_ERROR
+		}
+		if operationalCode(err) != codes.OK {
+			return nil, Unauthenticated(err)
 		}
 		return nil, errSignUpConfirmInvalid
 	}
