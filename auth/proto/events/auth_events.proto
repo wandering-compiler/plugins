@@ -65,6 +65,40 @@ message UserDeleted {
   string user_id = 1;
 }
 
+// UserDisabled — emitted on AuthMutation.DisableUser, once per account the
+// admin Disable action (AuthService.DisableAccounts) disables. The disable
+// already revoked every token of the account, so a subscriber can end what
+// it holds for the person too (a cached session, a websocket). An account
+// that was already disabled emits nothing. Gated user_admin.
+message UserDisabled {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.user.disabled"
+  };
+  option (w17.contrib.plugin_feature) = "user_admin";
+
+  string user_id     = 1;
+  string disabled_by = 2;
+  // device_id — the key thumbprint of the operator's device.
+  string device_id   = 3;
+}
+
+// UserEnabled — emitted on AuthMutation.EnableUser, once per account the admin
+// Enable action (AuthService.EnableAccounts) re-enables. Nothing comes back
+// with it: the person signs in again. Gated user_admin.
+message UserEnabled {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.user.enabled"
+  };
+  option (w17.contrib.plugin_feature) = "user_admin";
+
+  string user_id    = 1;
+  string enabled_by = 2;
+  // device_id — the key thumbprint of the operator's device.
+  string device_id  = 3;
+}
+
 // UserUpdated — emitted on AuthMutation.UpdateUser (the admin Users page
 // detail edit). Carries the new email so a subscriber can re-sync any
 // denormalised copy of it (mailing list, billing contact, search index)
@@ -138,6 +172,23 @@ message UserTokenRevoked {
   // AuthResp.device_id and principal.DeviceID carry): the operator's device,
   // not the revoked token's.
   string device_id = 2;
+}
+
+// ApiTokenRevoked — emitted on AuthMutation.MarkApiTokenRevoked, when a person
+// revokes one of their API tokens (RevokeApiToken). The counterpart of
+// ApiTokenCreated: a long-lived credential ending is as much an audit fact as
+// one being made. A token already revoked emits nothing. Gated api_token.
+message ApiTokenRevoked {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.api_token.revoked"
+  };
+  option (w17.contrib.plugin_feature) = "api_token";
+
+  string token_id   = 1;
+  string user_id    = 2;
+  // device_id — the key thumbprint of the device that revoked it.
+  string device_id  = 3;
 }
 
 // ApiTokenCreated — emitted on AuthMutation.IssueApiToken after the token
@@ -667,4 +718,25 @@ message OrgInviteRevoked {
 
   string invite_id = 1;
   string org_id    = 2;
+}
+
+// OAuthIdentityLinked — emitted on AuthMutation.CreateOAuthIdentity, when a
+// provider identity is linked to an account: at its creation through the
+// provider, or to an existing account whose address the provider asserted.
+// Linking grants a new way into the account — a sign-in through the provider
+// alone — so it is the event an owner should hear about ("Google was linked
+// to your account"). Never the provider's token or subject. Gated oauth.
+message OAuthIdentityLinked {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.oauth.identity_linked"
+  };
+  option (w17.contrib.plugin_feature) = "oauth";
+
+  string identity_id = 1;
+  string user_id     = 2;
+  string provider_id = 3;
+  // device_id — the key thumbprint of the device that signed in through the
+  // provider (the exchange's), empty when it carried none.
+  string device_id   = 4;
 }

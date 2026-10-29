@@ -341,6 +341,17 @@ func (h *AuthServiceHandler) confirmSignUpTx(txCtx context.Context, pendingID, i
 	if err := refuseReservedEmail(txCtx, claimed.GetEmail()); err != nil {
 		return nil, err
 	}
+	// The invitation that admitted the registration must still stand: one
+	// revoked or expired since SignUp no longer lets the address in, as it
+	// would not let a new SignUp in. An open link was bound to the address
+	// when the registration started, so the address finds it here too. A
+	// registration an organization's open policy took (claimedSignUpJoin)
+	// came through no invitation and is not asked.
+	if claimedSignUpJoin(claimed) == nil {
+		if err := signupInviteGate(txCtx, h, claimed.GetEmail(), inviteToken); err != nil {
+			return nil, err
+		}
+	}
 	userID, err := confirmCreateUser(txCtx, h, claimed)
 	if err != nil {
 		if isEmailTaken(err) {

@@ -163,6 +163,7 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 		"RevokeAllUserTokens":      {pb.RevokeReason_REVOKE_REASON_ALL_TOKENS_REVOKED, ":user_id"},
 		"RevokeUserToken":          {pb.RevokeReason_REVOKE_REASON_ADMIN_REVOKED, ":revoked_by"},
 		"DisableUsers":             {pb.RevokeReason_REVOKE_REASON_USER_DISABLED, ""},
+		"DisableUser":              {pb.RevokeReason_REVOKE_REASON_USER_DISABLED, ":by"},
 		"BeginUserErasure":         {pb.RevokeReason_REVOKE_REASON_USER_ERASED, ":revoked_by"},
 		"RevokeOAuthGrant":         {pb.RevokeReason_REVOKE_REASON_GRANT_REVOKED, ":revoked_by"},
 		"RevokeOAuthCodeSession":   {pb.RevokeReason_REVOKE_REASON_CODE_REPLAYED, ""},
@@ -203,10 +204,12 @@ func TestEveryTokenRevocationIsAGuardedUpdate(t *testing.T) {
 	// No reason is stamped twice for different paths: each reason names one
 	// cause. RevokeApprovedApiTokens is not another path — it runs beside
 	// RevokeDeviceTokens in the same device revocation, for the API tokens
-	// the device created — so it shares its reason.
+	// the device created — so it shares its reason. Nor is DisableUser: it is
+	// DisableUsers for one account (the admin's Disable action, with its
+	// event), the same cause.
 	reasons := map[pb.RevokeReason]string{}
 	for name, w := range paths {
-		if name == "RevokeApprovedApiTokens" {
+		if name == "RevokeApprovedApiTokens" || name == "DisableUser" {
 			continue
 		}
 		if other, dup := reasons[w.reason]; dup {

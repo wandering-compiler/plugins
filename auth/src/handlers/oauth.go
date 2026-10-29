@@ -630,6 +630,7 @@ func (h *AuthServiceHandler) findOAuthAccount(ctx context.Context, providerID, s
 		ProviderId: providerID,
 		ExternalId: subject,
 		Email:      email,
+		Thumbprint: requestThumbprint(ctx),
 	}); err != nil {
 		return "", err
 	}
@@ -692,6 +693,7 @@ func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID,
 			ProviderId: providerID,
 			ExternalId: subject,
 			Email:      email,
+			Thumbprint: requestThumbprint(ctx),
 		})
 	}
 	if err != nil {

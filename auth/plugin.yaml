@@ -533,10 +533,11 @@ features:
       # active feature is staged once.
       - handlers/role_ceiling.go
   - name: user_admin
-    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, and a Sessions page to review and revoke tokens. Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser behind AuthService.EraseAccount (the Users and ServiceAccounts pages' delete) and its bulk form AuthService.EraseUsers (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserDeleted), AuthMutation.DisableUsers / EnableUsers (bulk; an erased account stays disabled) and AuthService.RevokeSession (the Sessions page's delete, which revokes) with its bulk form AuthService.RevokeSessions, plus the queries and the action the opt-in SignIns and Devices pages use (AuthQuery.ListSignInEvents + GetSignInEvent, AuthQuery.ListAllDevices + GetDevice, AuthService.RevokeDevices). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount + delete EraseAccount, which erases; actions Disable / Enable) and the Sessions page (delete RevokeSession, which revokes; revoked tokens listed as revoked; each session's device, whether it is a public-computer session, and for a CLI session the device that approved it). The SignIns and Devices pages are NOT contributed by this feature: they are the admin_sign_ins and admin_devices features, so an upgrade adds no page to an existing activation (an admin that declares nav groups must list every page). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
+    description: "Turnkey admin user management — a Django-style Users admin page (list + detail) plus soft-disable / enable / erase of accounts, and a Sessions page to review and revoke tokens. Nothing is deleted. Adds nullable User.disabled_at and User.erased_at columns (SignIn rejects a disabled account before issuing a token, and DisableUsers revokes every token of the accounts it disables — sessions and API tokens), AuthQuery.ListUsers + GetUser (both project WITHOUT password_hash), AuthMutation.UpdateUser (email only — password_hash stays with UpdateUserPassword, emits UserUpdated) behind AuthService.UpdateAccount (refuses the erased.invalid domain), AuthMutation.BeginUserErasure + EraseUser behind AuthService.EraseAccount (the Users and ServiceAccounts pages' delete) and its bulk form AuthService.EraseUsers (GDPR erasure by pseudonymisation: the row stays; first the account's access ends — disabled, password unusable, tokens and devices revoked — then the personal data in the other features' tables and in the sign-in history is blanked or spent, then the address becomes a placeholder; one transaction with a transaction coordinator, otherwise running it again completes a partial erasure; emits UserDeleted), AuthService.DisableAccounts / EnableAccounts (the pages' Disable / Enable actions: refuse the operator's own account and the last account holding a wildcard role, emit UserDisabled / UserEnabled per account; an erased account stays disabled; the storage bulk forms AuthMutation.DisableUsers / EnableUsers remain, without the rule or events) and AuthService.RevokeSession (the Sessions page's delete, which revokes) with its bulk form AuthService.RevokeSessions, plus the queries and the action the opt-in SignIns and Devices pages use (AuthQuery.ListSignInEvents + GetSignInEvent, AuthQuery.ListAllDevices + GetDevice, AuthService.RevokeDevices). The plugin admin preset contributes the Users page (list ListUsers; detail read GetUser + update UpdateAccount + delete EraseAccount, which erases; actions Disable / Enable) and the Sessions page (delete RevokeSession, which revokes; revoked tokens listed as revoked; each session's device, whether it is a public-computer session, and for a CLI session the device that approved it). The SignIns and Devices pages are NOT contributed by this feature: they are the admin_sign_ins and admin_devices features, so an upgrade adds no page to an existing activation (an admin that declares nav groups must list every page). Off by default — opt in on the realm whose admin manages end-user accounts (typically a staff/admin realm)."
     default: false
     go_files:
       - handlers/user_admin.go
+      - handlers/admin_lockout.go
   # The two admin pages below are features of their own, not part of
   # user_admin, because they arrived after user_admin had adopters: an admin
   # that declares `nav` groups must list EVERY page, including the pages a
@@ -626,6 +627,10 @@ go_files_combined:
   # registration on the host joins; the fields exist only with both.
   - features: [sign_up_confirmation, org_signup]
     files: [handlers/signup_confirm_org.go]
+  # The last-admin rule of the admin's Disable action and the erasure reads
+  # who holds a wildcard role, which exists only with rbac.
+  - features: [user_admin, rbac]
+    files: [handlers/admin_lockout_rbac.go]
 
 # Preset surfaces this plugin injects into a consuming project's
 # gateway at activation time. On by default when the gating feature
@@ -1113,12 +1118,12 @@ presets:
           readonly_fields: [id, disabled_at, erased_at, created_at]
         actions:
           - name: disable
-            source: AuthMutation.DisableUsers
+            source: AuthService.DisableAccounts
             label: "Disable"
             confirm: "Disable the selected accounts? They won't be able to sign in until re-enabled."
             target: both
           - name: enable
-            source: AuthMutation.EnableUsers
+            source: AuthService.EnableAccounts
             label: "Enable"
             confirm: "Re-enable the selected accounts? An erased account stays disabled."
             target: both
@@ -1163,12 +1168,12 @@ presets:
           readonly_fields: [id, disabled_at, erased_at, created_at]
         actions:
           - name: disable
-            source: AuthMutation.DisableUsers
+            source: AuthService.DisableAccounts
             label: "Disable"
             confirm: "Disable the selected machine accounts? Their tokens stop working until re-enabled."
             target: both
           - name: enable
-            source: AuthMutation.EnableUsers
+            source: AuthService.EnableAccounts
             label: "Enable"
             confirm: "Re-enable the selected machine accounts?"
             target: both
@@ -1504,6 +1509,7 @@ msgids:
   - "This role is held across the whole platform, not in one organization."
   - "This sign-in request has expired or was already answered. Start again from the application."
   - "This team holds a role with permissions you do not have, so you cannot change its members or delete it."
+  - "This would leave no active account able to administer the realm. Give someone else an administrator role first."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait a while and try again."
@@ -1513,6 +1519,7 @@ msgids:
   - "Wrong email or password."
   - "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
   - "You can only give a role that your own role includes."
+  - "You cannot disable or erase your own account. Ask another administrator."
   - "You cannot invite someone as this kind of member."
   - "Your organization's plan does not include this part of the service."
   - "Your organization's plan does not include this role."

@@ -127,6 +127,9 @@ func (h *AuthServiceHandler) EraseUsers(ctx context.Context, req *pb.EraseUsersR
 	if len(req.GetIds()) == 0 {
 		return nil, errEmptySelection
 	}
+	if err := refuseOwnAccount(ctx, operator, req.GetIds()); err != nil {
+		return nil, err
+	}
 	for _, id := range req.GetIds() {
 		if err := h.eraseUser(ctx, id, operator); err != nil {
 			return nil, err
@@ -144,6 +147,9 @@ func (h *AuthServiceHandler) EraseAccount(ctx context.Context, req *pb.EraseAcco
 	operator, err := callerUserID(ctx)
 	if err != nil {
 		return nil, Unauthenticated(err)
+	}
+	if err := refuseOwnAccount(ctx, operator, []string{req.GetUserId()}); err != nil {
+		return nil, err
 	}
 	if err := h.eraseUser(ctx, req.GetUserId(), operator); err != nil {
 		return nil, err
@@ -193,6 +199,12 @@ func (h *AuthServiceHandler) eraseUser(ctx context.Context, userID, operator str
 		if tx != nil {
 			_ = tx.Rollback(ctx)
 		}
+	}
+	// Under the lock the check takes on the realm's administrators, so an
+	// erasure and a disable running at once cannot together leave none.
+	if err := refuseLeavingNoAdmin(txCtx, h, []string{userID}); err != nil {
+		rollback()
+		return err
 	}
 	if _, err := h.Mutation.BeginUserErasure(txCtx, &pb.BeginUserErasureReq{UserId: userID, RevokedBy: operator}); err != nil {
 		rollback()

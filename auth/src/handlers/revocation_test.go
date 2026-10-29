@@ -72,6 +72,11 @@ type revocationStore struct {
 	// The SignInEvent table: RecordSignInEvent appends, EraseSignInEvents
 	// rewrites the personal columns as its statement does.
 	signIns []*pb.SignInEvent
+
+	// admins: the accounts holding a live wildcard role (ListRealmSuperadmins).
+	admins []string
+	// locked: the accounts LockUsers was asked to lock, in call order.
+	locked []string
 }
 
 func newRevocationStore() *revocationStore {
@@ -380,6 +385,58 @@ func (s *revocationStore) DisableUsers(_ context.Context, in *pb.DisableUsersReq
 		}
 	}
 	return &pb.DisableUsersResp{}, nil
+}
+
+// ListRealmSuperadmins: one row per wildcard holder, with the account's stamps.
+func (s *revocationStore) ListRealmSuperadmins(_ context.Context, _ *pb.ListRealmSuperadminsReq, _ ...grpc.CallOption) (*pb.ListRealmSuperadminsResp, error) {
+	resp := &pb.ListRealmSuperadminsResp{}
+	for _, id := range s.admins {
+		row := &pb.RealmSuperadminRow{UserId: id, RoleId: "r-admin"}
+		if u := s.users[id]; u != nil {
+			row.DisabledAt, row.ErasedAt = u.disabledAt, u.erasedAt
+		}
+		resp.Grants = append(resp.Grants, row)
+	}
+	return resp, nil
+}
+
+// LockUsers: the lock itself is the database's; the store records the call.
+func (s *revocationStore) LockUsers(_ context.Context, in *pb.LockUsersReq, _ ...grpc.CallOption) (*pb.LockUsersResp, error) {
+	s.locked = append(s.locked, in.GetIds()...)
+	resp := &pb.LockUsersResp{}
+	for _, id := range in.GetIds() {
+		resp.Users = append(resp.Users, &pb.LockedUser{UserId: id})
+	}
+	return resp, nil
+}
+
+// DisableUser: one account's tokens revoked and the account disabled; NotFound
+// (no event) when it was disabled already. UserDisabled fires on a match.
+func (s *revocationStore) DisableUser(_ context.Context, in *pb.DisableUserReq, _ ...grpc.CallOption) (*pb.DisableUserResp, error) {
+	for _, t := range s.tokens {
+		if t.userID == in.GetUserId() {
+			revoke(t, in.GetBy(), pb.RevokeReason_REVOKE_REASON_USER_DISABLED)
+		}
+	}
+	u := s.users[in.GetUserId()]
+	if u == nil || u.disabledAt != nil {
+		return nil, notFound()
+	}
+	u.disabledAt = now()
+	s.emitted = append(s.emitted, "UserDisabled:"+in.GetUserId()+":"+in.GetBy())
+	return &pb.DisableUserResp{UserId: in.GetUserId()}, nil
+}
+
+// EnableUser: disabled_at = NULL on a disabled, unerased account; NotFound (no
+// event) otherwise. UserEnabled fires on a match.
+func (s *revocationStore) EnableUser(_ context.Context, in *pb.EnableUserReq, _ ...grpc.CallOption) (*pb.EnableUserResp, error) {
+	u := s.users[in.GetUserId()]
+	if u == nil || u.disabledAt == nil || u.erasedAt != nil {
+		return nil, notFound()
+	}
+	u.disabledAt = nil
+	s.emitted = append(s.emitted, "UserEnabled:"+in.GetUserId()+":"+in.GetBy())
+	return &pb.EnableUserResp{UserId: in.GetUserId()}, nil
 }
 
 // EnableUsers: disabled_at = NULL WHERE disabled AND erased_at IS NULL.

@@ -264,6 +264,9 @@ message MarkApiTokenRevokedReq {
   string    token_id   = 1 [(w17.field) = { type: UUID }];
   string    user_id    = 2 [(w17.field) = { type: UUID }];
   TokenType token_type = 3;
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the revoking device, ApiTokenRevoked's device_id.
+  string    thumbprint = 4;
 }
 message MarkApiTokenRevokedResp {
   option (w17.contrib.plugin_feature) = "api_token";
@@ -279,6 +282,9 @@ message CreateOAuthIdentityReq {
   string provider_id = 2 [(w17.field) = { type: UUID }];
   string external_id = 3 [(w17.field) = { type: CHAR, max_len: 255 }];
   string email       = 4 [(w17.field) = { type: EMAIL, max_len: 320, blank: true }];
+  // event-only (no w17.field: not persisted, not validated): the key
+  // thumbprint of the exchanging device, OAuthIdentityLinked's device_id.
+  string thumbprint  = 5;
 }
 message CreateOAuthIdentityResp {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -1251,6 +1257,34 @@ message EnableUsersReq {
 }
 message EnableUsersResp {
   option (w17.contrib.plugin_feature) = "user_admin";
+}
+// DisableUser / EnableUser — one account, for AuthService.DisableAccounts /
+// EnableAccounts, which check the operator against the last-admin rule and
+// emit an event per account.
+message DisableUserReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  // The operator: revoked_by on the account's tokens, and the event's
+  // disabled_by.
+  string by         = 2 [(w17.field) = { type: UUID }];
+  // event-only: the key thumbprint of the operator's device.
+  string thumbprint = 3;
+}
+message DisableUserResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+}
+message EnableUserReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id    = 1 [(w17.field) = { type: UUID }];
+  // event-only (no w17.field: not persisted, not validated): the operator and
+  // the key thumbprint of their device, for UserEnabled.
+  string by         = 2;
+  string thumbprint = 3;
+}
+message EnableUserResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
 }
 
 message AssignRoleToUserReq {
@@ -2650,6 +2684,16 @@ service AuthMutation {
           "RETURNING id AS token_id"
       }
     };
+    option (w17.event_emit) = {
+      event: "ApiTokenRevoked"
+      payload: {
+        fields: [
+          { key: "token_id",  value: "$response.token_id" },
+          { key: "user_id",   value: "$request.user_id" },
+          { key: "device_id", value: "$request.thumbprint" }
+        ]
+      }
+    };
   }
 
   // RevokeApprovedApiTokens — revoke (reason DEVICE_REVOKED, the caller as
@@ -2697,6 +2741,17 @@ service AuthMutation {
           "          external_id AS identity.external_id, "
           "          email AS identity.email, "
           "          created_at AS identity.created_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "OAuthIdentityLinked"
+      payload: {
+        fields: [
+          { key: "identity_id", value: "$response.identity.id" },
+          { key: "user_id",     value: "$response.identity.user_id" },
+          { key: "provider_id", value: "$response.identity.provider_id" },
+          { key: "device_id",   value: "$request.thumbprint" }
+        ]
       }
     };
   }
@@ -3805,7 +3860,9 @@ service AuthMutation {
   // signs in again. revoked_by stays NULL: the admin action binds this
   // storage mutation directly, and a statement cannot name its caller. One
   // unit of work, both legs on the same id set (an `IN (:ids)` on a
-  // non-final leg needs w17 platform 1.9). Gated user_admin.
+  // non-final leg needs w17 platform 1.9). Gated user_admin. The storage bulk
+  // form: no last-admin rule and no event — the admin's Disable action is
+  // AuthService.DisableAccounts, which has both (through DisableUser).
   rpc DisableUsers(DisableUsersReq) returns (DisableUsersResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";
     option (w17.db.method) = {
@@ -3839,6 +3896,65 @@ service AuthMutation {
         name: "main"
         dql:  "UPDATE @module.User SET disabled_at = NULL "
               "WHERE id IN (:ids) AND disabled_at IS NOT NULL AND erased_at IS NULL"
+      }
+    };
+  }
+
+  // DisableUser — DisableUsers for ONE account, with its event: the account's
+  // tokens are revoked (USER_DISABLED, the operator as revoked_by) and it is
+  // disabled, in one unit of work. An account already disabled matches no row
+  // on the final leg (NotFound, which the caller treats as done) and emits
+  // nothing.
+  rpc DisableUser(DisableUserReq) returns (DisableUserResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: [
+        {
+          name: "tokens"
+          dql:  "UPDATE @module.UserToken SET revoked_at = NOW(), revoked_by = :by, revoke_reason = 8 "
+                "WHERE user_id = :user_id AND revoked_at IS NULL"
+        },
+        {
+          name: "main"
+          dql:  "UPDATE @module.User SET disabled_at = NOW(), "
+                "device_trust_revoked_at = NOW() "
+                "WHERE id = :user_id AND disabled_at IS NULL "
+                "RETURNING id AS user_id"
+        }
+      ]
+    };
+    option (w17.event_emit) = {
+      event: "UserDisabled"
+      payload: {
+        fields: [
+          { key: "user_id",     value: "$response.user_id" },
+          { key: "disabled_by", value: "$request.by" },
+          { key: "device_id",   value: "$request.thumbprint" }
+        ]
+      }
+    };
+  }
+
+  // EnableUser — EnableUsers for ONE account, with its event. An erased or
+  // already enabled account matches no row (NotFound, done) and emits nothing.
+  rpc EnableUser(EnableUserReq) returns (EnableUserResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:  "UPDATE @module.User SET disabled_at = NULL "
+              "WHERE id = :user_id AND disabled_at IS NOT NULL AND erased_at IS NULL "
+              "RETURNING id AS user_id"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "UserEnabled"
+      payload: {
+        fields: [
+          { key: "user_id",    value: "$response.user_id" },
+          { key: "enabled_by", value: "$request.by" },
+          { key: "device_id",  value: "$request.thumbprint" }
+        ]
       }
     };
   }
