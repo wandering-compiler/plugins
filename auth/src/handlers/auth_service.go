@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/wandering-compiler/plugins/auth/lib/passwordhash"
@@ -1871,4 +1872,15 @@ func runScopeDecorators(ctx context.Context, h *AuthServiceHandler, userID strin
 		}
 	}
 	return nil
+}
+
+// isAPIRealmRow reports whether a role row read off the catalogue belongs to
+// the API realm. By reflection, because its token_type field exists only with
+// api_token: without it there is one realm and no row is an API one.
+func isAPIRealmRow(m proto.Message) bool {
+	fd := m.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("token_type"))
+	if fd == nil {
+		return false
+	}
+	return m.ProtoReflect().Get(fd).Enum() == protoreflect.EnumNumber(pb.TokenType_TOKEN_TYPE_API)
 }

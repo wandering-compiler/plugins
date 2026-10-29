@@ -5,8 +5,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
@@ -553,17 +551,6 @@ func (h *AuthServiceHandler) orgScopedRoles(ctx context.Context, orgID string) (
 // roles and every organization shares ListOrgScopedRoles.
 var orgRoleCatalogue func(ctx context.Context, h *AuthServiceHandler, orgID string) ([]*pb.OrgScopedRole, error)
 
-// isAPIRealmRow reports whether a role row read off the catalogue belongs to
-// the API realm. By reflection, because its token_type field exists only with
-// api_token: without it there is one realm and no row is an API one.
-func isAPIRealmRow(m proto.Message) bool {
-	fd := m.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("token_type"))
-	if fd == nil {
-		return false
-	}
-	return m.ProtoReflect().Get(fd).Enum() == protoreflect.EnumNumber(pb.TokenType_TOKEN_TYPE_API)
-}
-
 // refuseLastSuperadmin keeps an organization from losing its last
 // superadmin through a membership change or removal: m's role change to
 // newRoleID ends their direct grants there (a wildcard newRoleID keeps them a
@@ -627,8 +614,9 @@ func (h *AuthServiceHandler) orgSuperadmins(ctx context.Context, orgID string) (
 // Every path that can take a superadmin away asks this, with what it ends: a
 // membership's role change or removal (refuseLastSuperadmin), and with teams
 // a team member's removal, a change of the team's roles and the team's
-// deletion. An operator's DisableUsers / EraseUsers is realm-level and not
-// held to it, by design.
+// deletion. An operator's DisableAccounts / EraseUsers is realm-level and not
+// held to it, by design: it has its own rule, the realm's last administrator
+// (admin_lockout.go).
 func (h *AuthServiceHandler) refuseLeavingNoSuperadmin(ctx context.Context, orgID string, ends func(*pb.OrgSuperadminRow) bool) error {
 	rows, err := h.orgSuperadmins(ctx, orgID)
 	if err != nil {

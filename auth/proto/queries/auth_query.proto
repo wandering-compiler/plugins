@@ -422,6 +422,34 @@ message OrgSuperadminRow {
   TokenType token_type = 6 [(w17.contrib.plugin_feature_field) = "api_token"];
 }
 
+// ListRealmSuperadmins — every account that can administer the realm: one row
+// per live grant of a live wildcard role (all_permissions), in any
+// organization or none. The last-admin rule of DisableAccounts / EraseUsers
+// reads it (handlers/admin_lockout.go): disabling or erasing the accounts it
+// would leave with none is refused. It LOCKS the rows it reads (the accounts'
+// User rows, in user_id order), so two operators disabling each other at once
+// run one after the other and the second sees what the first disabled.
+//
+// The account's disabled_at / erased_at exist only with user_admin and the
+// role's realm only with api_token, so they are PROJECTED behind gates and
+// the handler drops a disabled or erased account and an API-realm grant (a
+// machine account's wildcard administers nothing through a session).
+message ListRealmSuperadminsReq {
+  option (w17.contrib.plugin_feature) = "rbac";
+}
+message ListRealmSuperadminsResp {
+  option (w17.contrib.plugin_feature) = "rbac";
+  repeated RealmSuperadminRow grants = 1;
+}
+message RealmSuperadminRow {
+  option (w17.contrib.plugin_feature) = "rbac";
+  string user_id = 1;
+  string role_id = 2;
+  google.protobuf.Timestamp disabled_at = 3 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp erased_at   = 4 [(w17.field) = { type: DATETIME, null: true }];
+  TokenType token_type = 5 [(w17.contrib.plugin_feature_field) = "api_token"];
+}
+
 message ListRolesResp {
   option (w17.contrib.plugin_feature) = "rbac";
   repeated Role roles = 1;
@@ -2511,6 +2539,32 @@ service AuthQuery {
           "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL "
           "ORDER BY ur.user_id ASC, r.id ASC"
       }
+    };
+  }
+
+  // ListRealmSuperadmins — see its request message.
+  rpc ListRealmSuperadmins(ListRealmSuperadminsReq) returns (ListRealmSuperadminsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "rbac";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT ur.user_id AS user_id, r.id AS role_id, "
+          "       ?feature(user_admin) u.disabled_at AS disabled_at, "
+          "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?feature(api_token) r.token_type AS token_type "
+          "FROM @module.UserRole ur "
+          "JOIN @module.Role r ON r.id = ur.role_id "
+          "JOIN @module.User u ON u.id = ur.user_id "
+          "WHERE ur.revoked_at IS NULL "
+          "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL "
+          "ORDER BY ur.user_id ASC, r.id ASC"
+      }
+    };
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "User", kind: SELECT_FOR_UPDATE }
+      ]
     };
   }
 

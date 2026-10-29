@@ -970,8 +970,8 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("%s's request %s declares no thumbprint", rpc, req[1])
 		}
 	}
-	if emits != 13 {
-		t.Errorf("%d emits of a device-carrying event, want 13 (one per event)", emits)
+	if emits != 17 {
+		t.Errorf("%d emits of a device-carrying event, want 17 (one per event)", emits)
 	}
 }
 

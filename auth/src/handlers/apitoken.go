@@ -561,9 +561,10 @@ func (h *AuthServiceHandler) RevokeApiToken(ctx context.Context, req *pb.RevokeA
 		return nil, err
 	}
 	if _, err := h.Mutation.MarkApiTokenRevoked(ctx, &pb.MarkApiTokenRevokedReq{
-		TokenId:   req.GetTokenId(),
-		UserId:    userID,
-		TokenType: pb.TokenType_TOKEN_TYPE_API,
+		TokenId:    req.GetTokenId(),
+		UserId:     userID,
+		TokenType:  pb.TokenType_TOKEN_TYPE_API,
+		Thumbprint: requestThumbprint(ctx),
 	}); notFoundOK(err) != nil {
 		return nil, err
 	}
