@@ -428,7 +428,7 @@ func TestCliAuthorize_LoopbackStillNeedsNoRegistration(t *testing.T) {
 		"http://[::1]:8080/cb",
 	} {
 		if _, err := h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-			CodeChallenge: "chal", RedirectUri: uri,
+			CodeChallenge: testS256Challenge, RedirectUri: uri,
 		}); err != nil {
 			t.Errorf("loopback %s was refused — the CLI flow must be unchanged: %v", uri, err)
 		}
@@ -441,7 +441,7 @@ func TestCliAuthorize_ARegisteredCallbackIsAccepted(t *testing.T) {
 	h := newCliHandler(m)
 
 	resp, err := h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-		CodeChallenge: "chal",
+		CodeChallenge: testS256Challenge,
 		ClientId:      "acme-web",
 		RedirectUri:   "https://app.acme.example/auth/callback",
 	})
@@ -476,7 +476,7 @@ func TestCliAuthorize_RefusesEverythingNotRegistered(t *testing.T) {
 		{"empty", "acme-web", ""},
 	} {
 		if _, err := h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-			CodeChallenge: "chal", ClientId: tc.clientID, RedirectUri: tc.redirect,
+			CodeChallenge: testS256Challenge, ClientId: tc.clientID, RedirectUri: tc.redirect,
 		}); err == nil {
 			t.Errorf("%s: a code was minted for %q", tc.what, tc.redirect)
 		}
@@ -491,7 +491,7 @@ func TestCliAuthorize_AFailedRegistryLookupRefuses(t *testing.T) {
 	h := newCliHandler(m.cliMock)
 	h.Query = m
 	if _, err := h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-		CodeChallenge: "chal", ClientId: "acme-web", RedirectUri: "https://app.acme.example/auth/callback",
+		CodeChallenge: testS256Challenge, ClientId: "acme-web", RedirectUri: "https://app.acme.example/auth/callback",
 	}); err == nil {
 		t.Error("the registry was unreachable and the redirect was authorised anyway")
 	}
@@ -636,7 +636,7 @@ func TestCliAuthorize_RefusesARowThatIsNotTheOneItAskedFor(t *testing.T) {
 	h.Query = m
 
 	if _, err := h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-		CodeChallenge: "chal",
+		CodeChallenge: testS256Challenge,
 		ClientId:      "acme-web",
 		RedirectUri:   "https://app.acme.example.evil.example/auth/callback",
 	}); err == nil {
@@ -661,7 +661,7 @@ func TestCliAuthorize_EchoesStateUnchanged(t *testing.T) {
 
 	const state = "9f1c-not-guessable"
 	resp, err := h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-		CodeChallenge: "chal", ClientId: "acme-web",
+		CodeChallenge: testS256Challenge, ClientId: "acme-web",
 		RedirectUri: "https://app.acme.example/cb", State: state,
 	})
 	if err != nil {
@@ -673,7 +673,7 @@ func TestCliAuthorize_EchoesStateUnchanged(t *testing.T) {
 	// And the loopback path too: a CLI that starts using state must not have
 	// it silently dropped.
 	resp, err = h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-		CodeChallenge: "chal", RedirectUri: "http://127.0.0.1:16201/cb", State: state,
+		CodeChallenge: testS256Challenge, RedirectUri: "http://127.0.0.1:16201/cb", State: state,
 	})
 	if err != nil {
 		t.Fatalf("loopback authorize: %v", err)
@@ -694,7 +694,7 @@ func TestCliAuthorize_RefusesAPlaintextRegisteredCallback(t *testing.T) {
 	h := newCliHandler(m)
 
 	if _, err := h.CliAuthorize(cliCtx("u1"), &pb.CliAuthorizeReq{
-		CodeChallenge: "chal", ClientId: "legacy", RedirectUri: "http://app.example.com/cb",
+		CodeChallenge: testS256Challenge, ClientId: "legacy", RedirectUri: "http://app.example.com/cb",
 	}); err == nil {
 		t.Error("a plaintext non-loopback callback was authorised because a row existed for it")
 	}
@@ -702,4 +702,22 @@ func TestCliAuthorize_RefusesAPlaintextRegisteredCallback(t *testing.T) {
 
 func (m *cliMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
 	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId()}}, nil
+}
+
+// testS256Challenge is a well-formed S256 challenge, for the tests that never
+// redeem the code.
+var testS256Challenge = pkceChallenge("a-verifier-the-test-never-sends-back-at-all")
+
+// A challenge that is not an S256 digest can match no verifier: the code it
+// would mint could never be redeemed, so it is refused up front.
+func TestCliAuthorize_AMalformedChallengeIsRefused(t *testing.T) {
+	h := newCliHandler(newCliMock())
+	for _, c := range []string{"", "chal", testS256Challenge[:42], testS256Challenge + "A", strings.Repeat("!", 43), strings.Repeat("A", 42) + "B"} {
+		if _, err := h.CliAuthorize(cliCtx("user-1"), &pb.CliAuthorizeReq{CodeChallenge: c, RedirectUri: "http://127.0.0.1:54123/cb"}); !errors.Is(err, errCliChallengeMissing) {
+			t.Errorf("%q: %v, want the challenge refused", c, err)
+		}
+	}
+	if _, err := h.CliAuthorize(cliCtx("user-1"), &pb.CliAuthorizeReq{CodeChallenge: testS256Challenge, RedirectUri: "http://127.0.0.1:54123/cb"}); err != nil {
+		t.Fatalf("a well-formed challenge: %v", err)
+	}
 }

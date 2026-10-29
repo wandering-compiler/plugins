@@ -861,19 +861,6 @@ func isChallengeDigest(d string) bool {
 	return true
 }
 
-// isPKCEChallenge accepts exactly an S256 challenge: 43 base64url characters.
-func isPKCEChallenge(c string) bool {
-	if len(c) != 43 {
-		return false
-	}
-	for _, r := range c {
-		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
-			return false
-		}
-	}
-	return true
-}
-
 func oauthStateSig(secret, payload string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(payload))

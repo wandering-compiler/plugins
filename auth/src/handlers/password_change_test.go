@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -128,8 +127,8 @@ func TestChangePassword_RefusesWhenTheHashMovedUnderneath(t *testing.T) {
 	if err == nil {
 		t.Fatal("a lost CAS must not report success — the password was NOT changed")
 	}
-	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("want Unauthenticated (identical to the wrong-password refusal), got %v", status.Code(err))
+	if c, code := detailCode(t, err); c != codes.PermissionDenied || code != CodePasswordNotConfirmed {
+		t.Fatalf("want the wrong-password refusal (PermissionDenied %s), got %v", CodePasswordNotConfirmed, err)
 	}
 }
 
@@ -162,8 +161,10 @@ func TestChangePassword_WrongCurrentPasswordWritesNothing(t *testing.T) {
 		CurrentPassword: "not-the-password",
 		NewPassword:     "a-different-long-password",
 	})
-	if !errors.Is(err, errCurrentPasswordWrong) && status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("want the wrong-password refusal, got %v", err)
+	// On the field, not Unauthenticated: a client answers that by signing
+	// the person out of a session that is fine.
+	if c, code := detailCode(t, err); c != codes.PermissionDenied || code != CodePasswordNotConfirmed {
+		t.Fatalf("want the wrong-password refusal (PermissionDenied %s), got %v", CodePasswordNotConfirmed, err)
 	}
 	if m.casCalls != 0 || m.plainCall != 0 {
 		t.Fatalf("nothing may be written when the proof fails (cas=%d plain=%d)", m.casCalls, m.plainCall)
@@ -345,5 +346,64 @@ func TestChangePassword_AsksForNoSecondFactor(t *testing.T) {
 		NewPassword:     "a-different-long-password",
 	}); err != nil {
 		t.Fatalf("ChangePassword with the current password alone: %v", err)
+	}
+}
+
+// budgetedPasswordChange keeps the account's sign-in budget: a count per
+// account, and no signed-in device of the caller's key.
+type budgetedPasswordChange struct {
+	*passwordChangeMock
+	attempts int64
+	resets   int
+}
+
+func (*budgetedPasswordChange) keepsSignInBudget() {}
+
+func (b *budgetedPasswordChange) CountSignInAttempt(context.Context, *pb.CountSignInAttemptReq, ...grpc.CallOption) (*pb.CountSignInAttemptResp, error) {
+	b.attempts++
+	return &pb.CountSignInAttemptResp{Attempts: b.attempts}, nil
+}
+
+func (b *budgetedPasswordChange) CountDeviceSignInAttempt(context.Context, *pb.CountDeviceSignInAttemptReq, ...grpc.CallOption) (*pb.CountDeviceSignInAttemptResp, error) {
+	return nil, status.Error(codes.NotFound, "no rows")
+}
+
+func (b *budgetedPasswordChange) ResetSignInAttempts(context.Context, *pb.ResetSignInAttemptsReq, ...grpc.CallOption) (*pb.ResetSignInAttemptsResp, error) {
+	b.resets++
+	b.attempts = 0
+	return &pb.ResetSignInAttemptsResp{}, nil
+}
+
+// password_change/guess-budget: the current password spends the account's
+// sign-in budget. Past it, even the right password is refused and nothing
+// is written; a right password within it starts the budget over.
+func TestChangePassword_TheCurrentPasswordSpendsTheSignInBudget(t *testing.T) {
+	h, m := newPasswordChangeHandler(t, "correct-horse-battery-staple")
+	b := &budgetedPasswordChange{passwordChangeMock: m}
+	h.Mutation = b
+	h.SignInFailureBudget = 3
+	change := func(current string) error {
+		_, err := h.ChangePassword(orgAuthedCtx("u1"), &pb.ChangePasswordReq{CurrentPassword: current, NewPassword: "a-different-long-password"})
+		return err
+	}
+	for i := range 3 {
+		if _, code := detailCode(t, change("guess")); code != CodePasswordNotConfirmed {
+			t.Fatalf("guess %d: want %s", i+1, CodePasswordNotConfirmed)
+		}
+	}
+	err := change("correct-horse-battery-staple")
+	if c, code := detailCode(t, err); c != codes.ResourceExhausted || code != CodePasswordAttemptsSpent {
+		t.Fatalf("the right password over the budget: %v, want ResourceExhausted %s", err, CodePasswordAttemptsSpent)
+	}
+	if m.casCalls != 0 || m.plainCall != 0 {
+		t.Fatalf("a change over the budget wrote (cas=%d plain=%d)", m.casCalls, m.plainCall)
+	}
+
+	b.attempts = 0
+	if err := change("correct-horse-battery-staple"); err != nil {
+		t.Fatalf("the right password within the budget: %v", err)
+	}
+	if b.resets != 1 {
+		t.Errorf("a right password reset the budget %d times, want 1", b.resets)
 	}
 }

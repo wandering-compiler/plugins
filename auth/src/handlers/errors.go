@@ -183,6 +183,10 @@ const (
 	// callback) called with an API token. It needs a signed-in session.
 	CodeSessionRequired = "SESSION_REQUIRED"
 
+	// CodePasswordAttemptsSpent: ChangePassword's current password was
+	// guessed wrong too often; it spends the account's sign-in budget.
+	CodePasswordAttemptsSpent = "PASSWORD_ATTEMPTS_SPENT"
+
 	// CodePasswordTooLong: the new password is longer than the configured
 	// algorithm can hash (bcrypt: 72 bytes).
 	CodePasswordTooLong = "PASSWORD_TOO_LONG"
@@ -427,6 +431,8 @@ const (
 	MsgSessionRequired = "Sign in to do this. An API token cannot create credentials."
 
 	MsgPasswordTooLong = "This password is too long. Use a shorter one."
+
+	MsgPasswordAttemptsSpent = "Too many wrong passwords. Wait a while and try again." //nolint:gosec // G101: a message about passwords, not one
 
 	// step_up: the password the caller typed to confirm it is them is not
 	// theirs. Says no more than that — they are signed in already.

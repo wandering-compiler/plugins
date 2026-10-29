@@ -8,6 +8,7 @@ import (
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
@@ -30,6 +31,14 @@ import (
 // no password set" would say something about the account's auth method
 // that the caller has not proven they may know.
 var errCurrentPasswordWrong = errors.New("current password does not match")
+
+// currentPasswordWrong is the refusal of a wrong current password: on the
+// field, as ConfirmPassword's. Not Unauthenticated — the caller's session is
+// fine, and a client answers Unauthenticated by signing the person out.
+func currentPasswordWrong(ctx context.Context) error {
+	return refusal(ctx, codes.PermissionDenied, errCurrentPasswordWrong.Error(),
+		CodePasswordNotConfirmed, "current_password", MsgPasswordNotConfirmed, nil)
+}
 
 // nilUUID names no token: RevokeOtherSessionTokens keeps none when the caller
 // holds no session (an API-token bearer). The column is a uuid, so an empty
@@ -63,11 +72,24 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 	if err != nil {
 		return nil, err
 	}
+	// The current password is a guess like a sign-in's, so it spends the same
+	// per-account budget, counted before it is checked: a stolen session is
+	// no unlimited oracle for the password (password_change/guess-budget).
+	md, _ := metadata.FromIncomingContext(ctx)
+	thumbprint := firstMeta(md, dpopJKTKey)
+	if err := spendSignInBudget(ctx, h, userID, thumbprint); err != nil {
+		if errors.Is(err, errSignInThrottled) {
+			return nil, refusal(ctx, codes.ResourceExhausted, "password_change: the account's password guess budget is spent",
+				CodePasswordAttemptsSpent, "current_password", MsgPasswordAttemptsSpent, nil)
+		}
+		return nil, err
+	}
 	currentHash := got.GetUser().GetPasswordHash()
 	ok, _, _ := h.PasswordHash.VerifyAndRotate(currentHash, req.GetCurrentPassword(), nil)
 	if !ok {
-		return nil, Unauthenticated(errCurrentPasswordWrong)
+		return nil, currentPasswordWrong(ctx)
 	}
+	resetSignInBudget(ctx, h, userID, thumbprint)
 
 	// Hashing is CPU-bound and deliberately outside any transaction, the
 	// same shape SignUp uses.
@@ -122,7 +144,7 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 		CurrentHash:  currentHash,
 	}); err != nil {
 		if status.Code(err) == codes.NotFound {
-			return fail(Unauthenticated(errCurrentPasswordWrong))
+			return fail(currentPasswordWrong(ctx))
 		}
 		return fail(err)
 	}

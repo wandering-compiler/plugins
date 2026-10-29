@@ -455,14 +455,14 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 | `password_change/ends-device-trust` | A successful change MUST end the trust of every device of the account, the caller's own included, in the same statement as the new hash. The caller's session keeps working; its device passes the second factor again on the next sign-in under `new_devices`. | Security | `TestChangePassword_RevokesDeviceTrustInTheSameStatement` (the statement), `TestMintDevice_TrustRevokedByACredentialChange_NotTrusted` (the read side). **Unit (mock) only:** a live test would change the password and show the same device key is challenged again. |
 | `password_change/errors-not-disguised` | A non-NotFound write failure MUST surface as itself. It MUST NOT surface as a wrong password. | Failure & configuration | `TestChangePassword_OtherWriteErrorsAreNotDisguised` |
 | `password_change/hash-outside-tx` | The new hash MUST be derived before the transaction opens, so no row lock is held during the derivation. | Performance | `TestChangePassword_HashesBeforeTheTransactionOpens` |
-| `password_change/guess-budget` | Verifying the current password MUST be bounded per account, because a stolen session must not become an unlimited offline-speed oracle for the password. | Security | none (see gap 2) |
+| `password_change/guess-budget` | Verifying the current password MUST be bounded per account, because a stolen session must not become an unlimited offline-speed oracle for the password. | Security | `TestChangePassword_TheCurrentPasswordSpendsTheSignInBudget` |
 
 **Gaps / suspected defects**
 
 1. **Fixed: build failure without `api_token`.** The session-realm filter of `RevokeOtherSessionTokens` (then `DeleteOtherSessionTokens`) is now gated `?feature(api_token)`. Without `api_token`, every token is a session.
-2. **No attempt limit on the current-password check.** `ChangePassword` is bearer-authenticated, so the gateway's `failed_only` limiter for public endpoints does not apply. Whoever holds a session can guess the current password without bound.
+2. **Fixed: no attempt limit on the current-password check.** `ChangePassword` is bearer-authenticated, so the gateway's `failed_only` limiter does not apply. Its current password now spends the account's sign-in budget (`sign_in_turnkey/failure-budget`), counted before it is checked; past it the request is `PASSWORD_ATTEMPTS_SPENT` (ResourceExhausted), the right password included, and a right password within it starts the budget over.
 3. **Fixed: outstanding reset tokens survived a change.** `ChangePassword` spends every live reset link in its transaction (see `password_reset` gap 2).
-4. **The wrong-password refusal looks like an expired session.** It is `Unauthenticated` (`password_change.go:68`), which REST clients commonly treat as "session expired" and answer by signing the user out. FailedPrecondition or InvalidArgument with a field detail fits a request from an authenticated caller.
+4. **Fixed: the wrong-password refusal looked like an expired session.** It was `Unauthenticated`, which clients answer by signing the person out. It is now `PermissionDenied` with `PASSWORD_NOT_CONFIRMED` on `current_password`, as `ConfirmPassword` answers a wrong password; a concurrent change (the compare-and-swap missing) answers the same.
 
 ---
 
@@ -727,7 +727,7 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 
 1. **Fixed: a credential could renew itself.** CliAuthorize accepted any resolved principal, and CliToken minted a fresh session with the full `session_token_ttl_seconds`. Since rc.25 only a session may approve; the minted session now inherits the approving session's expiry (`cli_login/no-lifetime-extension`).
 2. `cli_login.go:351–425`: **The registry endpoints only check authentication.** Any signed-in account can register a callback (and receive its secret), list every registration, or disable or delete other clients, unless the project's ACL forbids it. A project with the endpoint ACL axis off has no gate at all. The README documents this, but the plugin enforces nothing.
-3. `cli_login.go:69`: `code_challenge` is checked only for being non-empty. No length or charset check, and no `code_challenge_method` (S256 is implied). A malformed challenge mints a code that can never be redeemed, instead of being refused up front.
+3. **Fixed: `code_challenge` was checked only for being non-empty.** `CliAuthorize` (and the OAuth server's authorization) accepts exactly an S256 challenge — 43 characters of canonical unpadded base64url decoding to a SHA-256 digest (`isPKCEChallenge`) — and refuses anything else up front instead of minting a code that can never be redeemed. S256 stays implied: the request has no `code_challenge_method`.
 4. Mutation proto, `RegisterAuthClient`: the comment says a repeat registration is a no-op, but the unique index makes it an AlreadyExists error. Fixed: a lost secret is replaced with `RotateClientSecret`, keeping the client_id; revoking is for good.
 5. No retention: `CliAuthCode` rows are never deleted. No events: there is no audit trail for client registration or CLI token issuance.
 

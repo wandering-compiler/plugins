@@ -89,6 +89,18 @@ func s256Challenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// isPKCEChallenge accepts exactly an S256 challenge: a SHA-256 digest in
+// unpadded base64url, 43 characters. Any other value can match no verifier,
+// so a code issued for it could never be redeemed. Here, not in oauth.go,
+// because the CLI login and the OAuth server check it too.
+func isPKCEChallenge(c string) bool {
+	if len(c) != 43 {
+		return false
+	}
+	b, err := base64.RawURLEncoding.Strict().DecodeString(c)
+	return err == nil && len(b) == sha256.Size
+}
+
 // verifyPKCES256 reports whether s256Challenge(verifier) equals the stored
 // challenge, compared in constant time.
 func verifyPKCES256(verifier, challenge string) bool {
