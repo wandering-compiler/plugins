@@ -262,6 +262,16 @@ func TestEraseStatements(t *testing.T) {
 	if !strings.Contains(m["UpdateUser"], "WHERE id = :user_id AND erased_at IS NULL") {
 		t.Errorf("UpdateUser can re-personalise an erased account:\n%s", m["UpdateUser"])
 	}
+	// A new address is unproved: the proof LEVEL goes with the timestamp, or a
+	// DERIVED_FROM_INVITE carries over to an address nobody proved. The
+	// erasure ends the proof the same way.
+	for _, name := range []string{"UpdateUser", "BeginUserErasure"} {
+		for _, want := range []string{"?feature(email_verification) email_verified_at = NULL, ", "?feature(email_verification) email_proof = 0"} {
+			if !strings.Contains(m[name], want) {
+				t.Errorf("%s lacks %q:\n%s", name, want, m[name])
+			}
+		}
+	}
 	for name, wants := range map[string][]string{
 		"EraseOAuthData": {
 			// The codes of the sign-in that created the account carry no

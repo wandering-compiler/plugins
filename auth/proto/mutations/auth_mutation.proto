@@ -3687,7 +3687,13 @@ service AuthMutation {
           // Both fix it; this one cannot drift, because there is no second copy
           // to keep in step — and re-verifying after an address change is what
           // a person expects anyway.
-          "?feature(email_verification) email_verified_at = NULL "
+          //
+          // The proof level goes with it, for the same reason: a
+          // DERIVED_FROM_INVITE kept across the change let the account accept an
+          // OPEN invitation under email_proof_required=derived on an address it
+          // never proved.
+          "?feature(email_verification) email_verified_at = NULL, "
+          "?feature(email_verification) email_proof = 0 "
           // An erased account keeps its placeholder: re-personalising it
           // would undo the erasure (User.erased_at).
           "WHERE id = :user_id AND erased_at IS NULL "
@@ -3751,6 +3757,7 @@ service AuthMutation {
           // provider identity to a VERIFIED account by address, and a link
           // made while the erasers run would survive the erasure.
           "?feature(email_verification) email_verified_at = NULL, "
+          "?feature(email_verification) email_proof = 0, "
           "device_trust_revoked_at = NOW() "
           "WHERE id = :user_id "
           "RETURNING id AS user_id"

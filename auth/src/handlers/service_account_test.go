@@ -183,6 +183,7 @@ type botAdminMock struct {
 
 	apiRoles    []*pb.ApiRealmRole
 	created     bool
+	botEmail    string
 	assigned    string
 	grantOrg    string
 	memberOf    string
@@ -230,6 +231,7 @@ func (m *botAdminMock) ListApiRealmRoles(ctx context.Context, _ *pb.ListApiRealm
 
 func (m *botAdminMock) CreateBotUser(ctx context.Context, in *pb.CreateBotUserReq, _ ...grpc.CallOption) (*pb.CreateBotUserResp, error) {
 	m.created = true
+	m.botEmail = in.GetEmail()
 	m.botTenant = in.GetTenantId()
 	return &pb.CreateBotUserResp{User: &pb.User{Id: "bot-1", Email: in.GetEmail()}}, nil
 }
@@ -278,6 +280,19 @@ func TestCreateBot_AcceptsAnApiRealmRoleAndGrantsIt(t *testing.T) {
 	// The grant is the point of doing both in one call.
 	if m.assigned != "role-api" {
 		t.Errorf("role assigned = %q, want role-api — a bot with no role holds a token that does nothing", m.assigned)
+	}
+}
+
+// A machine account's address is stored as every other account's is, so the
+// unique index sees one spelling.
+func TestCreateBot_NormalizesTheAddress(t *testing.T) {
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if _, err := h.CreateBot(ctxWithCallerInOrg("admin-1", "org-1"), &pb.CreateBotReq{Email: " CI@Example.com", RoleId: "role-api"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.botEmail != "ci@example.com" {
+		t.Errorf("CreateBotUser got %q, want ci@example.com", m.botEmail)
 	}
 }
 
