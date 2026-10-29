@@ -265,7 +265,7 @@ func (h *AuthServiceHandler) beginOAuthAuthorization(ctx context.Context, req *p
 	if req.GetResponseType() != "code" {
 		return "", oauthRefuse(oauthUnsupportedResponseType, "only response_type=code is supported")
 	}
-	if req.GetCodeChallengeMethod() != "S256" || len(req.GetCodeChallenge()) != 43 {
+	if req.GetCodeChallengeMethod() != "S256" || !isPKCEChallenge(req.GetCodeChallenge()) {
 		return "", oauthRefuse(oauthInvalidRequest, "PKCE with code_challenge_method=S256 is required")
 	}
 	if len(req.GetState()) > 1024 {

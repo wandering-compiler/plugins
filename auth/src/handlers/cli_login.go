@@ -38,7 +38,7 @@ import (
 const defaultCliAuthCodeTTL = 60 * time.Second
 
 var (
-	errCliChallengeMissing = errors.New("cli auth: code_challenge required")
+	errCliChallengeMissing = errors.New("cli auth: code_challenge must be an S256 challenge (43 base64url characters)")
 	errCliRedirectUnsafe   = errors.New("cli auth: redirect_uri must be loopback (http://127.0.0.1 / ::1 / localhost) or a registered client callback")
 	errCliVerifierInvalid  = errors.New("cli auth: code_verifier invalid")
 	errCliCodeInvalid      = errors.New("cli auth: authorization code invalid/expired/used")
@@ -80,7 +80,7 @@ func (h *AuthServiceHandler) CliAuthorize(ctx context.Context, req *pb.CliAuthor
 	if err := requireSessionCaller(ctx); err != nil {
 		return nil, err
 	}
-	if req.GetCodeChallenge() == "" {
+	if !isPKCEChallenge(req.GetCodeChallenge()) {
 		return nil, Unauthenticated(errCliChallengeMissing)
 	}
 	if err := h.checkRedirectAllowed(ctx, req.GetClientId(), req.GetRedirectUri()); err != nil {

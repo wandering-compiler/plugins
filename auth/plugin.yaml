@@ -1506,6 +1506,7 @@ msgids:
   - "This team holds a role with permissions you do not have, so you cannot change its members or delete it."
   - "Too many wrong codes. Wait 15 minutes and try again."
   - "Too many wrong passwords. Wait 15 minutes and try again."
+  - "Too many wrong passwords. Wait a while and try again."
   - "Two-step sign-in is switched off here."
   - "Which organization a host serves is set by the platform, not from inside an organization."
   - "Who may register into an organization is set by the platform, not from inside the organization."
