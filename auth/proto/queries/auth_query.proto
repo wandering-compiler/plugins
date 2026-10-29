@@ -2553,14 +2553,16 @@ service AuthQuery {
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
           "       ?feature(user_admin) u.erased_at AS erased_at, "
           "       ?feature(api_token) r.token_type AS token_type "
-          "FROM @module.UserRole ur "
+          "FROM @module.User u "
+          "JOIN @module.UserRole ur ON ur.user_id = u.id "
           "JOIN @module.Role r ON r.id = ur.role_id "
-          "JOIN @module.User u ON u.id = ur.user_id "
           "WHERE ur.revoked_at IS NULL "
           "  AND r.all_permissions = TRUE AND r.deleted_at IS NULL "
           "ORDER BY ur.user_id ASC, r.id ASC"
       }
     };
+    // FROM the User rows: the lock targets the FROM relation, and those are
+    // the rows a disable or an erasure writes.
     option (w17.db.lock) = {
       locks: [
         { resource: "User", kind: SELECT_FOR_UPDATE }
