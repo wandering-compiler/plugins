@@ -425,15 +425,27 @@ message OrgSuperadminRow {
 // ListRealmSuperadmins — every account that can administer the realm: one row
 // per live grant of a live wildcard role (all_permissions), in any
 // organization or none. The last-admin rule of DisableAccounts / EraseUsers
-// reads it (handlers/admin_lockout.go): disabling or erasing the accounts it
-// would leave with none is refused. It LOCKS the rows it reads (the accounts'
-// User rows, in user_id order), so two operators disabling each other at once
+// reads it (handlers/admin_lockout_rbac.go): disabling or erasing the accounts
+// it would leave with none is refused. The rule locks the accounts it finds
+// (LockUsers) and reads again, so two operators disabling each other at once
 // run one after the other and the second sees what the first disabled.
 //
 // The account's disabled_at / erased_at exist only with user_admin and the
 // role's realm only with api_token, so they are PROJECTED behind gates and
 // the handler drops a disabled or erased account and an API-realm grant (a
 // machine account's wildcard administers nothing through a session).
+message LockUsersReq {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated string ids = 1;
+}
+message LockUsersResp {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  repeated LockedUser users = 1;
+}
+message LockedUser {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string user_id = 1;
+}
 message ListRealmSuperadminsReq {
   option (w17.contrib.plugin_feature) = "rbac";
 }
@@ -2561,8 +2573,21 @@ service AuthQuery {
           "ORDER BY ur.user_id ASC, r.id ASC"
       }
     };
-    // FROM the User rows: the lock targets the FROM relation, and those are
-    // the rows a disable or an erasure writes.
+  }
+
+  // LockUsers — SELECT … FOR UPDATE on the named accounts' User rows, in id
+  // order. The last-admin rule locks the realm's administrators with it and
+  // then reads them again (a JOIN-shaped read cannot carry the lock itself),
+  // so two operators disabling each other at once take the same rows in the
+  // same order and the second one's read sees what the first one wrote.
+  rpc LockUsers(LockUsersReq) returns (LockUsersResp) {
+    option (w17.contrib.plugin_feature_rpc) = "user_admin";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT u.id AS user_id FROM @module.User u WHERE u.id IN (:ids) ORDER BY u.id ASC"
+      }
+    };
     option (w17.db.lock) = {
       locks: [
         { resource: "User", kind: SELECT_FOR_UPDATE }

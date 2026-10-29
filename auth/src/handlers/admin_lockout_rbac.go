@@ -17,12 +17,31 @@ func init() {
 // listRealmAdmins is the realm's administrators who can act: the accounts of
 // AuthQuery.ListRealmSuperadmins (a live grant of a live wildcard role), minus
 // a disabled or erased account and an API-realm grant — a machine account's
-// wildcard administers nothing through a session. The query locks the rows it
-// reads.
+// wildcard administers nothing through a session.
+//
+// Read, lock, read again. The JOIN-shaped read cannot carry a row lock, so
+// the accounts it finds are locked (LockUsers, in id order) and the read is
+// repeated under the lock: two operators disabling each other at once take
+// the same rows in the same order, and the second one's second read sees the
+// account the first one disabled. An administrator added between the reads is
+// in the second one, which can only keep the realm administered.
 func listRealmAdmins(ctx context.Context, h *AuthServiceHandler) ([]string, bool, error) {
+	first, err := readRealmAdmins(ctx, h)
+	if err != nil || len(first) == 0 {
+		return first, true, err
+	}
+	if _, err := h.Query.LockUsers(ctx, &pb.LockUsersReq{Ids: first}); err != nil {
+		return nil, true, err
+	}
+	ids, err := readRealmAdmins(ctx, h)
+	return ids, true, err
+}
+
+// readRealmAdmins is one unlocked read of the administrators who can act.
+func readRealmAdmins(ctx context.Context, h *AuthServiceHandler) ([]string, error) {
 	resp, err := h.Query.ListRealmSuperadmins(ctx, &pb.ListRealmSuperadminsReq{})
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 	seen := map[string]bool{}
 	var ids []string
@@ -33,5 +52,5 @@ func listRealmAdmins(ctx context.Context, h *AuthServiceHandler) ([]string, bool
 		seen[g.GetUserId()] = true
 		ids = append(ids, g.GetUserId())
 	}
-	return ids, true, nil
+	return ids, nil
 }

@@ -75,6 +75,8 @@ type revocationStore struct {
 
 	// admins: the accounts holding a live wildcard role (ListRealmSuperadmins).
 	admins []string
+	// locked: the accounts LockUsers was asked to lock, in call order.
+	locked []string
 }
 
 func newRevocationStore() *revocationStore {
@@ -394,6 +396,16 @@ func (s *revocationStore) ListRealmSuperadmins(_ context.Context, _ *pb.ListReal
 			row.DisabledAt, row.ErasedAt = u.disabledAt, u.erasedAt
 		}
 		resp.Grants = append(resp.Grants, row)
+	}
+	return resp, nil
+}
+
+// LockUsers: the lock itself is the database's; the store records the call.
+func (s *revocationStore) LockUsers(_ context.Context, in *pb.LockUsersReq, _ ...grpc.CallOption) (*pb.LockUsersResp, error) {
+	s.locked = append(s.locked, in.GetIds()...)
+	resp := &pb.LockUsersResp{}
+	for _, id := range in.GetIds() {
+		resp.Users = append(resp.Users, &pb.LockedUser{UserId: id})
 	}
 	return resp, nil
 }

@@ -52,6 +52,12 @@ func TestDisableAccounts_KeepsTheLastAdministrator(t *testing.T) {
 		t.Fatal("the last administrator was disabled")
 	}
 
+	// The administrators were locked before the decision (both, in id order),
+	// so a concurrent change to either waits for this transaction.
+	if !slices.Equal(s.locked, []string{"u1"}) {
+		t.Errorf("locked %v, want the active administrators [u1]", s.locked)
+	}
+
 	// With another active administrator, the same disable goes through.
 	s.admins = append(s.admins, "u2")
 	if _, err := h.DisableAccounts(sessionCallerCtx("op", "t-op"), &pb.DisableAccountsReq{Ids: []string{"u1"}}); err != nil {
