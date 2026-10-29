@@ -198,6 +198,20 @@ func TestUpdateAccount_RefusesTheErasedDomain(t *testing.T) {
 	}
 }
 
+// SignIn looks an address up lower-cased; an address stored as typed in the
+// admin could never sign in, and would sit beside its lower-case twin past the
+// case-sensitive unique index.
+func TestUpdateAccount_NormalizesTheAddress(t *testing.T) {
+	m := &updateUserRecorder{}
+	h := &AuthServiceHandler{Mutation: m}
+	if _, err := h.UpdateAccount(sessionCallerCtx("admin", "t-admin"), &pb.UpdateAccountReq{UserId: "u2", Email: "  Bob@Example.COM "}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.req.GetEmail(); got != "bob@example.com" {
+		t.Errorf("UpdateUser got %q, want bob@example.com", got)
+	}
+}
+
 type updateUserRecorder struct {
 	pb.AuthMutationClient
 	req *pb.UpdateUserReq

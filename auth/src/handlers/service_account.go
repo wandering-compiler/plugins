@@ -566,7 +566,9 @@ func (h *AuthServiceHandler) CreateBot(ctx context.Context, req *pb.CreateBotReq
 	}
 	var userID string
 	if err == nil {
-		userID, err = h.createBotUserTx(txCtx, req.GetEmail(), orgID, req.GetRoleId())
+		// Normalized as every other account's address, so the unique index
+		// sees one address in one spelling.
+		userID, err = h.createBotUserTx(txCtx, normalizeEmail(req.GetEmail()), orgID, req.GetRoleId())
 	}
 	if err != nil {
 		if tx != nil {

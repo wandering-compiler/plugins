@@ -54,10 +54,13 @@ func (h *AuthServiceHandler) UpdateAccount(ctx context.Context, req *pb.UpdateAc
 	if _, err := callerUserID(ctx); err != nil {
 		return nil, Unauthenticated(err)
 	}
-	if err := refuseReservedEmail(ctx, req.GetEmail()); err != nil {
+	// Stored as SignIn looks it up: a mixed-case address could never sign in,
+	// and would pass the case-sensitive unique index beside its lower-case twin.
+	email := normalizeEmail(req.GetEmail())
+	if err := refuseReservedEmail(ctx, email); err != nil {
 		return nil, err
 	}
-	resp, err := h.Mutation.UpdateUser(ctx, &pb.UpdateUserReq{UserId: req.GetUserId(), Email: req.GetEmail()})
+	resp, err := h.Mutation.UpdateUser(ctx, &pb.UpdateUserReq{UserId: req.GetUserId(), Email: email})
 	if err != nil {
 		return nil, err
 	}
