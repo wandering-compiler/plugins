@@ -73,7 +73,7 @@ func (h *AuthServiceHandler) ChangePassword(ctx context.Context, req *pb.ChangeP
 	// same shape SignUp uses.
 	hashed, err := h.PasswordHash.Hash(req.GetNewPassword())
 	if err != nil {
-		return nil, err
+		return nil, hashPasswordErr(ctx, err, "new_password")
 	}
 	// COMPARE-AND-SWAP on the hash that was just verified, not a bare write
 	// keyed on the user id.

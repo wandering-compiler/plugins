@@ -125,6 +125,9 @@ func init() {
 	markEmailDerived = markEmailDerivedImpl
 	markEmailConfirmed = markEmailConfirmedImpl
 	erasers = append(erasers, spendVerificationLinks)
+	spendVerifyLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error {
+		return spendVerificationLinks(ctx, h, userID, "", "")
+	}
 }
 
 // spendVerificationLinks is email_verification's eraser: every live

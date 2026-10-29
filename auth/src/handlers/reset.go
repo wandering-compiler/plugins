@@ -144,7 +144,7 @@ func (h *AuthServiceHandler) consumeAndSetPassword(txCtx context.Context, tokenH
 	}
 	hash, err := h.PasswordHash.Hash(newPassword)
 	if err != nil {
-		return "", err
+		return "", hashPasswordErr(txCtx, err, "new_password")
 	}
 	if _, err := h.Mutation.UpdateUserPassword(txCtx, &pb.UpdateUserPasswordReq{
 		UserId:       userID,

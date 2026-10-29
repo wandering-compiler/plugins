@@ -60,9 +60,47 @@ func (h *AuthServiceHandler) UpdateAccount(ctx context.Context, req *pb.UpdateAc
 	if err := refuseReservedEmail(ctx, email); err != nil {
 		return nil, err
 	}
-	resp, err := h.Mutation.UpdateUser(ctx, &pb.UpdateUserReq{UserId: req.GetUserId(), Email: email})
+	userID := req.GetUserId()
+	got, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID})
 	if err != nil {
 		return nil, err
+	}
+	// Saving the address the account already has changes nothing, so it does
+	// not cost the address its verification and proof, as a write would.
+	if got.GetUser().GetEmail() == email {
+		return &pb.UpdateAccountResp{UserId: userID, Email: email}, nil
+	}
+
+	var tx *distx.TxHandle
+	txCtx := ctx
+	if h.DistTx != nil {
+		if tx, txCtx, err = distx.Begin(ctx, h.DistTx, &distxpb.BeginRequest{ConnectionName: h.Connection}); err != nil {
+			return nil, err
+		}
+	}
+	fail := func(err error) (*pb.UpdateAccountResp, error) {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		return nil, err
+	}
+	resp, err := h.Mutation.UpdateUser(txCtx, &pb.UpdateUserReq{UserId: userID, Email: email})
+	if err != nil {
+		return fail(err)
+	}
+	// Links mailed to the old address no longer act on the account: a
+	// verification link would verify the new address, which never saw it, and
+	// a reset link would hand the account to whoever holds the old mailbox.
+	if err := spendResetLinks(txCtx, h, userID); err != nil {
+		return fail(err)
+	}
+	if err := spendVerifyLinks(txCtx, h, userID); err != nil {
+		return fail(err)
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return &pb.UpdateAccountResp{UserId: resp.GetUserId(), Email: resp.GetEmail()}, nil
 }

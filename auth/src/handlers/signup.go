@@ -120,7 +120,7 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 
 	hashed, err := h.PasswordHash.Hash(req.GetPassword())
 	if err != nil {
-		return nil, err
+		return nil, hashPasswordErr(ctx, err, "password")
 	}
 
 	// Role decision from committed state, before the tx (see
