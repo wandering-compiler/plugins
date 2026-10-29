@@ -3676,6 +3676,7 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.User SET "
+          "email = :email, "
           // ⚠️ `email_verified_at` records only THAT something was
           // verified, never WHICH address — so a verified account whose email
           // was changed stayed "verified" for an address it had never proved.
@@ -3692,8 +3693,7 @@ service AuthMutation {
           // OPEN invitation under email_proof_required=derived on an address it
           // never proved.
           "?feature(email_verification) email_verified_at = NULL, "
-          "?feature(email_verification) email_proof = 0, "
-          "email = :email "
+          "?feature(email_verification) email_proof = 0 "
           // An erased account keeps its placeholder: re-personalising it
           // would undo the erasure (User.erased_at).
           "WHERE id = :user_id AND erased_at IS NULL "

@@ -266,7 +266,7 @@ func TestEraseStatements(t *testing.T) {
 	// DERIVED_FROM_INVITE carries over to an address nobody proved. The
 	// erasure ends the proof the same way.
 	for _, name := range []string{"UpdateUser", "BeginUserErasure"} {
-		for _, want := range []string{"?feature(email_verification) email_verified_at = NULL, ", "?feature(email_verification) email_proof = 0, "} {
+		for _, want := range []string{"?feature(email_verification) email_verified_at = NULL, ", "?feature(email_verification) email_proof = 0"} {
 			if !strings.Contains(m[name], want) {
 				t.Errorf("%s lacks %q:\n%s", name, want, m[name])
 			}
