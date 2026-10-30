@@ -455,8 +455,13 @@ func TestVerifyMfa_OnlyTheChallengedKeyCompletesTheSignIn(t *testing.T) {
 	}
 	code := m.createdChallenge.GetCode()
 	_, err := h.VerifyMfa(withJKT(ctx, otherJKT), &pb.VerifyMfaReq{ChallengeId: "ch-1", Code: code})
-	if st, _ := status.FromError(err); st.Code() != codes.Unauthenticated || len(st.Details()) != 0 {
+	// The same answer as a wrong code: Unauthenticated with the code-refused
+	// pair, and nothing that says it was the key.
+	if st, _ := status.FromError(err); st.Code() != codes.Unauthenticated {
 		t.Fatalf("another key: err = %v, want the opaque refusal", err)
+	}
+	if d := errorDetailOf(t, err); d == nil || d.GetCode() != CodeMfaCodeRefused || d.GetMessage() != MsgMfaCodeRefused {
+		t.Fatalf("another key: detail = %v, want the code-refused pair a wrong code gets", d)
 	}
 	if m.chConsumed || m.issuedHash != "" || m.chAttempts != 1 {
 		t.Fatalf("another key: consumed=%v issued=%q attempts=%d, want an attempt spent and nothing else", m.chConsumed, m.issuedHash, m.chAttempts)
