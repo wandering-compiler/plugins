@@ -523,6 +523,7 @@ func (s *memStore) CreatePayment(_ context.Context, in *pb.CreatePaymentReq, _ .
 		IdempotencyKey: in.GetIdempotencyKey(), Description: in.GetDescription(), CreatedAt: now, UpdatedAt: now,
 	}
 	s.payments[p.Id] = p
+	s.emitted = append(s.emitted, "PaymentCreated")
 	return &pb.CreatePaymentResp{Payment: clone(p)}, s.leave("CreatePayment", nil)
 }
 
@@ -633,6 +634,7 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(), IdempotencyKey: in.GetIdempotencyKey(),
 		Status: pb.Refund_Status(in.GetStatus())}
 	s.refunds[r.Id] = r
+	s.emitted = append(s.emitted, "RefundCreated")
 	return &pb.CreateRefundResp{Refund: clone(r)}, s.leave("CreateRefund", nil)
 }
 
@@ -657,6 +659,7 @@ func (s *memStore) RecordProviderRefund(_ context.Context, in *pb.RecordProvider
 	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(),
 		Status: pb.Refund_Status(in.GetStatus())}
 	s.refunds[r.Id] = r
+	s.emitted = append(s.emitted, "ProviderRefundRecorded")
 	return &pb.RecordProviderRefundResp{Refund: clone(r)}, s.leave("RecordProviderRefund", nil)
 }
 
@@ -677,6 +680,7 @@ func (s *memStore) MarkRefundStatus(_ context.Context, in *pb.MarkRefundStatusRe
 			break
 		}
 		r.Status = pb.Refund_Status(in.GetStatus())
+		s.emitted = append(s.emitted, "RefundStatusChanged:"+r.Status.String())
 		return &pb.MarkRefundStatusResp{Refund: clone(r)}, s.leave("MarkRefundStatus", nil)
 	}
 	return nil, s.leave("MarkRefundStatus", noRows("MarkRefundStatus"))
@@ -743,8 +747,9 @@ func (s *memStore) CreateDispute(_ context.Context, in *pb.CreateDisputeReq, _ .
 		}
 	}
 	d := &pb.Dispute{Id: s.nextID("dp"), PaymentId: in.GetPaymentId(), ProviderDisputeId: in.GetProviderDisputeId(), Amount: fmt4(amt), Currency: in.GetCurrency(),
-		Status: pb.Dispute_Status(in.GetStatus()), ProviderEventAt: in.GetProviderEventAt()}
+		Status: pb.Dispute_Status(in.GetStatus()), ProviderEventAt: in.GetProviderEventAt(), CreatedAt: timestamppb.Now()}
 	s.disputes[d.Id] = d
+	s.emitted = append(s.emitted, "DisputeOpened:"+d.Status.String())
 	return &pb.CreateDisputeResp{Dispute: clone(d)}, s.leave("CreateDispute", nil)
 }
 
@@ -772,6 +777,24 @@ func (s *memStore) MarkDisputeStatus(_ context.Context, in *pb.MarkDisputeStatus
 		return &pb.MarkDisputeStatusResp{Dispute: clone(d)}, s.leave("MarkDisputeStatus", nil)
 	}
 	return nil, s.leave("MarkDisputeStatus", noRows("MarkDisputeStatus"))
+}
+
+// MarkDisputeClosed: `WHERE … AND closed_at IS NULL AND (status = 5 OR
+// status = 6)`, stamping closed_at.
+func (s *memStore) MarkDisputeClosed(_ context.Context, in *pb.MarkDisputeClosedReq, _ ...grpc.CallOption) (*pb.MarkDisputeClosedResp, error) {
+	if err := s.enter("MarkDisputeClosed"); err != nil {
+		return nil, s.leave("", err)
+	}
+	for _, d := range s.disputes {
+		if d.GetProviderDisputeId() != in.GetProviderDisputeId() || d.GetClosedAt() != nil ||
+			(d.GetStatus() != pb.Dispute_WON && d.GetStatus() != pb.Dispute_LOST) {
+			continue
+		}
+		d.ClosedAt = timestamppb.Now()
+		s.emitted = append(s.emitted, "DisputeClosed:"+d.Status.String())
+		return &pb.MarkDisputeClosedResp{Dispute: clone(d)}, s.leave("MarkDisputeClosed", nil)
+	}
+	return nil, s.leave("MarkDisputeClosed", noRows("MarkDisputeClosed"))
 }
 
 // SumLostDisputesForPayment: SUM(amount) over status = 6 (LOST).

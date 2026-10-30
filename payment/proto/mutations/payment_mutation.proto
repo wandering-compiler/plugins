@@ -117,6 +117,15 @@ message MarkDisputeStatusResp {
   Dispute dispute = 1;
 }
 
+message MarkDisputeClosedReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string provider_dispute_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message MarkDisputeClosedResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  Dispute dispute = 1;
+}
+
 message MarkWebhookProcessedReq {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
   string provider_event_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
@@ -265,7 +274,8 @@ service PaymentMutation {
   // CreatePayment — INSERT the local Payment at intent time. The
   // handler has already created the provider payment object and passes
   // its id + the chosen initial status. Duplicate idempotency_key →
-  // AlreadyExists (the retry guard).
+  // AlreadyExists (the retry guard). Emits PaymentCreated: the INSERT
+  // succeeds once per payment, so the event does too.
   rpc CreatePayment(CreatePaymentReq) returns (CreatePaymentResp) {
     option (w17.db.method) = {
       ops: {
@@ -289,6 +299,21 @@ service PaymentMutation {
           "          description AS payment.description, "
           "          created_at AS payment.created_at, "
           "          updated_at AS payment.updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "PaymentCreated"
+      payload: {
+        fields: [
+          { key: "payment_id",          value: "$response.payment.id" },
+          { key: "customer_id",         value: "$response.payment.customer_id" },
+          { key: "provider_payment_id", value: "$response.payment.provider_payment_id" },
+          { key: "amount",              value: "$response.payment.amount" },
+          { key: "currency",            value: "$response.payment.currency" },
+          { key: "status",              value: "$response.payment.status" },
+          { key: "description",         value: "$response.payment.description" },
+          { key: "created_at",          value: "$response.payment.created_at" }
+        ]
       }
     };
   }
@@ -507,7 +532,8 @@ service PaymentMutation {
 
   // CreateRefund — INSERT a Refund row after the backend confirms the
   // provider refund, with the outcome the provider answered. Duplicate
-  // provider_refund_id or idempotency_key → UNIQUE_VIOLATION.
+  // provider_refund_id or idempotency_key → UNIQUE_VIOLATION. Emits
+  // RefundCreated, once per refund: the INSERT is.
   rpc CreateRefund(CreateRefundReq) returns (CreateRefundResp) {
     option (w17.db.method) = {
       ops: {
@@ -530,6 +556,20 @@ service PaymentMutation {
           "          status AS refund.status"
       }
     };
+    option (w17.event_emit) = {
+      event: "RefundCreated"
+      payload: {
+        fields: [
+          { key: "refund_id",          value: "$response.refund.id" },
+          { key: "payment_id",         value: "$response.refund.payment_id" },
+          { key: "provider_refund_id", value: "$response.refund.provider_refund_id" },
+          { key: "amount",             value: "$response.refund.amount" },
+          { key: "currency",           value: "$response.refund.currency" },
+          { key: "status",             value: "$response.refund.status" },
+          { key: "created_at",         value: "$response.refund.created_at" }
+        ]
+      }
+    };
   }
 
   // RecordProviderRefund — INSERT a refund the webhook found at the provider
@@ -538,7 +578,8 @@ service PaymentMutation {
   // idempotency_key stays NULL — the unique column admits any number of
   // NULLs, and an empty string would let only one such refund ever be
   // recorded. Duplicate provider_refund_id → UNIQUE_VIOLATION (a concurrent
-  // delivery recorded it first).
+  // delivery recorded it first). Emits ProviderRefundRecorded, once per
+  // refund.
   rpc RecordProviderRefund(RecordProviderRefundReq) returns (RecordProviderRefundResp) {
     option (w17.db.method) = {
       ops: {
@@ -559,6 +600,20 @@ service PaymentMutation {
           "          status AS refund.status"
       }
     };
+    option (w17.event_emit) = {
+      event: "ProviderRefundRecorded"
+      payload: {
+        fields: [
+          { key: "refund_id",          value: "$response.refund.id" },
+          { key: "payment_id",         value: "$response.refund.payment_id" },
+          { key: "provider_refund_id", value: "$response.refund.provider_refund_id" },
+          { key: "amount",             value: "$response.refund.amount" },
+          { key: "currency",           value: "$response.refund.currency" },
+          { key: "status",             value: "$response.refund.status" },
+          { key: "created_at",         value: "$response.refund.created_at" }
+        ]
+      }
+    };
   }
 
   // MarkRefundStatus — reconcile a refund's outcome from the provider.
@@ -570,7 +625,8 @@ service PaymentMutation {
   // terminal: a provider can fail a refund it reported as succeeded. A
   // same-status write matches zero rows too, so the handler can tell a real
   // transition from a redelivery. Zero rows is NotFound; the handler looks
-  // the refund up to tell "already there" from "no such row".
+  // the refund up to tell "already there" from "no such row". Emits
+  // RefundStatusChanged, once per transition: the guard is what makes it so.
   rpc MarkRefundStatus(MarkRefundStatusReq) returns (MarkRefundStatusResp) {
     option (w17.db.method) = {
       ops: {
@@ -585,6 +641,19 @@ service PaymentMutation {
           "          amount AS refund.amount, "
           "          currency AS refund.currency, "
           "          status AS refund.status"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "RefundStatusChanged"
+      payload: {
+        fields: [
+          { key: "refund_id",          value: "$response.refund.id" },
+          { key: "payment_id",         value: "$response.refund.payment_id" },
+          { key: "provider_refund_id", value: "$response.refund.provider_refund_id" },
+          { key: "amount",             value: "$response.refund.amount" },
+          { key: "currency",           value: "$response.refund.currency" },
+          { key: "status",             value: "$response.refund.status" }
+        ]
       }
     };
   }
@@ -614,7 +683,7 @@ service PaymentMutation {
   // time one of its charge.dispute.* events arrives. Duplicate
   // provider_dispute_id → UNIQUE_VIOLATION (a concurrent delivery recorded
   // it first; the handler then applies its status with MarkDisputeStatus).
-  // Gated stripe_webhooks.
+  // Emits DisputeOpened, once per dispute. Gated stripe_webhooks.
   rpc CreateDispute(CreateDisputeReq) returns (CreateDisputeResp) {
     option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
     option (w17.db.method) = {
@@ -633,7 +702,22 @@ service PaymentMutation {
           "          provider_dispute_id AS dispute.provider_dispute_id, "
           "          amount AS dispute.amount, "
           "          currency AS dispute.currency, "
-          "          status AS dispute.status"
+          "          status AS dispute.status, "
+          "          created_at AS dispute.created_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "DisputeOpened"
+      payload: {
+        fields: [
+          { key: "dispute_id",          value: "$response.dispute.id" },
+          { key: "payment_id",          value: "$response.dispute.payment_id" },
+          { key: "provider_dispute_id", value: "$response.dispute.provider_dispute_id" },
+          { key: "amount",              value: "$response.dispute.amount" },
+          { key: "currency",            value: "$response.dispute.currency" },
+          { key: "status",              value: "$response.dispute.status" },
+          { key: "opened_at",           value: "$response.dispute.created_at" }
+        ]
       }
     };
   }
@@ -663,6 +747,47 @@ service PaymentMutation {
           "          amount AS dispute.amount, "
           "          currency AS dispute.currency, "
           "          status AS dispute.status"
+      }
+    };
+  }
+
+  // MarkDisputeClosed — announce a closed dispute, once. Stamps closed_at on
+  // a dispute that is WON or LOST and not yet announced, and emits
+  // DisputeClosed. The guard (`closed_at IS NULL`) is the once: every later
+  // call matches zero rows (NotFound) and emits nothing. A separate write
+  // because an emit fires on every successful return and cannot depend on
+  // the status MarkDisputeStatus or CreateDispute wrote; the handler calls it
+  // after either, whatever the event said. Gated stripe_webhooks.
+  rpc MarkDisputeClosed(MarkDisputeClosedReq) returns (MarkDisputeClosedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Dispute SET closed_at = NOW() "
+          "WHERE provider_dispute_id = :provider_dispute_id AND closed_at IS NULL "
+          "AND (status = 5 OR status = 6) "
+          "RETURNING id AS dispute.id, "
+          "          payment_id AS dispute.payment_id, "
+          "          provider_dispute_id AS dispute.provider_dispute_id, "
+          "          amount AS dispute.amount, "
+          "          currency AS dispute.currency, "
+          "          status AS dispute.status, "
+          "          closed_at AS dispute.closed_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "DisputeClosed"
+      payload: {
+        fields: [
+          { key: "dispute_id",          value: "$response.dispute.id" },
+          { key: "payment_id",          value: "$response.dispute.payment_id" },
+          { key: "provider_dispute_id", value: "$response.dispute.provider_dispute_id" },
+          { key: "amount",              value: "$response.dispute.amount" },
+          { key: "currency",            value: "$response.dispute.currency" },
+          { key: "status",              value: "$response.dispute.status" },
+          { key: "closed_at",           value: "$response.dispute.closed_at" }
+        ]
       }
     };
   }

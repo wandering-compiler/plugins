@@ -182,9 +182,18 @@ hold it. **Partly fixed** says what is still open.
    (ISK and UGX as the two it takes as two-decimal values), so a currency
    outside it is two-decimal by Stripe's rule; three-decimal currencies stay
    refused (`TestZeroDecimalTable_IsStripesList`).
-6. **No event for a partial refund or for a created payment.**
-   `PaymentRefunded` is emitted once, when the payment is fully refunded; a
-   consumer learns of a partial refund only by polling.
+6. **Fixed: every refund, its outcome and every payment are announced.**
+   `PaymentCreated` (`CreatePayment`), `RefundCreated` for a refund this
+   plugin made (`CreateRefund`), `ProviderRefundRecorded` for one made at the
+   provider directly (`RecordProviderRefund`), and `RefundStatusChanged` once
+   per transition (`MarkRefundStatus`, guarded `status <> :status`). Two
+   refund events, not one with an origin field: the platform allows one emit
+   site per event, and the two are different facts
+   (`TestEvents_EachIsEmittedByTheWriteThatRecordsIt`,
+   `TestEvents_PaymentCreatedOncePerPayment`,
+   `TestEvents_APartialRefundIsAnnounced`,
+   `TestEvents_ARefundMadeAtTheProviderIsAnnouncedAsTheProviders`,
+   `TestEvents_ARefundsOutcomeIsAnnouncedOnce`).
 
 ---
 
@@ -275,8 +284,16 @@ hold it. **Partly fixed** says what is still open.
    subscribed to `refund.updated` / `refund.failed` for a refund that fails
    later to be seen promptly; otherwise only the next `charge.refunded` (or
    the caller's retry of a `RefundPayment`) reconciles it. A dispute does
-   not change `Payment.status` (no status says "charged back"), and there is
-   no dispute event on the bus yet.
+   not change `Payment.status` (no status says "charged back"). Disputes are
+   announced (fixed): `DisputeOpened` once per dispute (`CreateDispute`) and
+   `DisputeClosed` once it is WON or LOST (`MarkDisputeClosed`, guarded by
+   `closed_at IS NULL`, called after every dispute write, so a first event
+   that is already the closing one announces both, and a failed
+   announcement is retried by the redelivery). A closed inquiry withdrew
+   nothing and is not a closed dispute (`TestEvents_ADisputeOpensAndClosesOnce`,
+   `TestEvents_ADisputeFirstSeenClosed_IsOpenedThenClosed`,
+   `TestEvents_AFailedCloseAnnouncementIsRetriedByTheRedelivery`,
+   `TestEvents_AClosedInquiryIsNotADisputeClosed`).
 2. **The event's amount and currency are not compared with the local row.**
    Reconciliation trusts the event type alone; `PaymentSucceeded` and the
    top-up grant use the locally recorded amount. An intent whose amount was
@@ -602,10 +619,10 @@ a fake store proves the handler's sequencing only.
 
 | ID | MUST hold | Proof |
 |---|---|---|
-| `payment/events-no-secrets` | No event carries a client secret, an API key, a signing secret, an idempotency key, card or bank data, or an e-mail address. `PaymentSucceeded`, `PaymentRefunded` and `PaymentRefundReversed` carry local and provider ids, amount and currency; `PaymentFailed` and `PaymentCanceled` ids only; `CreditApplied`, `UsageRecorded`, `SubscriptionStarted` and `SubscriptionStatusChanged` carry ids, amounts or quantities, and status. | `TestEventEmitPayloads_MapEveryEventFieldFromASourceOfItsType` (field mapping only; no test scans payloads for secrets) |
-| `payment/events-once-per-transition` | Each event is emitted only by its own mutation, only when the mutation returned a row, so a refused guard or a duplicate key emits nothing. | `TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing`, `TestFlow_TopUp_ConcurrentDuplicateDeliveries`, `TestEventEmitPayloads_MapEveryEventFieldFromASourceOfItsType` |
+| `payment/events-no-secrets` | No event carries a client secret, an API key, a signing secret, an idempotency key, card or bank data, or an e-mail address. `PaymentSucceeded`, `PaymentRefunded` and `PaymentRefundReversed` carry local and provider ids, amount and currency; `PaymentCreated` those plus status and the caller's description; `RefundCreated`, `ProviderRefundRecorded`, `RefundStatusChanged`, `DisputeOpened` and `DisputeClosed` ids, amount, currency and status; `PaymentFailed` and `PaymentCanceled` ids only; `CreditApplied`, `UsageRecorded`, `SubscriptionStarted` and `SubscriptionStatusChanged` carry ids, amounts or quantities, and status. | `TestEventEmitPayloads_MapEveryEventFieldFromASourceOfItsType` (field mapping only; no test scans payloads for secrets) |
+| `payment/events-once-per-transition` | Each event is emitted only by its own mutation, only when the mutation returned a row, so a refused guard or a duplicate key emits nothing. | `TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing`, `TestFlow_TopUp_ConcurrentDuplicateDeliveries`, `TestEventEmitPayloads_MapEveryEventFieldFromASourceOfItsType`, `TestEvents_EachIsEmittedByTheWriteThatRecordsIt` (the emit sites and the guards `MarkRefundStatus` / `MarkDisputeClosed` rely on), and the `TestEvents_*` flows |
 | `payment/events-after-commit` | An event is published only after its row commits; a rolled-back `ApplyCredit` or `RecordUsage` emits nothing. | none (live only) |
-| `payment/events-internal-channel` | All nine topics are on the `events` channel. They identify principals and amounts, so the channel must not be bridged to a client-visible event surface without per-principal filtering. | `TestEvents_AllNineOnTheInternalChannelNonePublic` (all nine on `events`, none `public`, so the plugin never bridges them; a project that bridges the channel itself is outside the plugin) |
+| `payment/events-internal-channel` | All fifteen topics are on the `events` channel. They identify principals and amounts, so the channel must not be bridged to a client-visible event surface without per-principal filtering. | `TestEvents_AllOnTheInternalChannelNonePublic` (all fifteen on `events`, none `public`, so the plugin never bridges them; a project that bridges the channel itself is outside the plugin) |
 
 #### Transactions (one unit of work)
 
