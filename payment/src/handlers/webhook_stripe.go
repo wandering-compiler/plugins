@@ -32,12 +32,19 @@ const stripeSignatureMetadataKey = "stripe-signature"
 // handler, so the provider's redelivery short-circuited handled=false and
 // the side effect never re-ran).
 //
-// That ordering means a redelivery ALWAYS reaches the reconciliation
-// mutation again — the ledger is never read first, so it cannot stop
-// anything. The mutations therefore carry their own transition guards
-// (`… AND status <> 3`), so a redelivered or out-of-order event matches
-// zero rows and the generated emit wrapper, which fires after every
-// successful return, does not publish a second PaymentSucceeded.
+// That ordering also makes the ledger safe to read FIRST: a row is written
+// only after every side effect of its event completed, so an event found
+// there is acknowledged at once (handled=false) and nothing runs — neither
+// the store's reconciliation nor the provider calls it makes. That stops the
+// provider's own redeliveries of a processed event, and a signed request
+// replayed inside the signature's 300 s window, from costing anything.
+//
+// A delivery whose processing failed wrote no row, so its redelivery runs in
+// full; and two copies that both pass the read run concurrently. The
+// mutations therefore keep their own transition guards (`… AND status <>
+// 3`), so a redelivered or out-of-order event matches zero rows and the
+// generated emit wrapper, which fires after every successful return, does
+// not publish a second PaymentSucceeded.
 //
 // A guard that matched zero rows arrives here as NotFound, and it is
 // ambiguous, so reconcile looks the provider object up to tell:
@@ -70,6 +77,13 @@ func (h *PaymentServiceHandler) IngestStripe(ctx context.Context, req *pb.Ingest
 	if err != nil {
 		// Opaque: a forged / malformed webhook gets the same answer.
 		return nil, status.Error(codes.Unauthenticated, "invalid webhook signature")
+	}
+
+	// Processed in full already: nothing left to do (see above).
+	if seen, err := h.Query.GetProcessedWebhookEvent(ctx, &pb.GetProcessedWebhookEventReq{ProviderEventId: ev.ID}); err != nil && !absent(err) {
+		return nil, err
+	} else if seen.GetEvent() != nil {
+		return &pb.IngestStripeResp{Handled: false, EventId: ev.ID, EventType: ev.Type}, nil
 	}
 
 	if err := h.reconcile(ctx, ev); err != nil {

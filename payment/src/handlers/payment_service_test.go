@@ -148,6 +148,9 @@ func (q *fakeQuery) LockPaymentForRefund(_ context.Context, _ *pb.LockPaymentFor
 	}
 	return &pb.LockPaymentForRefundResp{Id: q.payment.GetId(), Amount: q.payment.GetAmount(), Status: int32(q.payment.GetStatus())}, nil
 }
+func (q *fakeQuery) GetProcessedWebhookEvent(_ context.Context, _ *pb.GetProcessedWebhookEventReq, _ ...grpc.CallOption) (*pb.GetProcessedWebhookEventResp, error) {
+	return nil, noRow()
+}
 func (q *fakeQuery) GetCreditBalance(_ context.Context, _ *pb.GetCreditBalanceReq, _ ...grpc.CallOption) (*pb.GetCreditBalanceResp, error) {
 	if q.balance == nil {
 		return nil, noRow()

@@ -58,6 +58,17 @@ message LockPaymentForRefundResp {
   string received_currency = 5;
 }
 
+// GetProcessedWebhookEvent — one ledger row by its provider event id (the
+// primary key). Gated stripe_webhooks.
+message GetProcessedWebhookEventReq {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  string provider_event_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+}
+message GetProcessedWebhookEventResp {
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+  ProcessedWebhookEvent event = 1;
+}
+
 // GetDisputeByProviderId — provider_dispute_id is UNIQUE. Gated
 // stripe_webhooks.
 message GetDisputeByProviderIdReq {
@@ -384,6 +395,27 @@ service PaymentQuery {
   // GetDisputeByProviderId — one Dispute by the provider's dispute id. The
   // webhook reads it when MarkDisputeStatus matched no row: a row that exists
   // is already closed or newer (acknowledge), a missing one is created.
+  // GetProcessedWebhookEvent — whether a delivery's event was already
+  // processed in full. IngestStripe reads it first, after the signature: the
+  // ledger is written only once every side effect of an event has completed,
+  // so an event found here has nothing left to do, and a copy of it — the
+  // provider's own redelivery, or a signed request replayed inside the
+  // signature's 300 s window — is acknowledged without touching the store or
+  // the provider again.
+  rpc GetProcessedWebhookEvent(GetProcessedWebhookEventReq) returns (GetProcessedWebhookEventResp) {
+    option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT e.provider_event_id AS event.provider_event_id, "
+          "       e.event_type AS event.event_type, "
+          "       e.received_at AS event.received_at "
+          "FROM @module.ProcessedWebhookEvent e WHERE e.provider_event_id = :provider_event_id"
+      }
+    };
+  }
+
   rpc GetDisputeByProviderId(GetDisputeByProviderIdReq) returns (GetDisputeByProviderIdResp) {
     option (w17.contrib.plugin_feature_rpc) = "stripe_webhooks";
     option (w17.db.method) = {
