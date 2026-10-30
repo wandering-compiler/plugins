@@ -212,7 +212,7 @@ func TestGetPayment(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/v1/payment_intents/pi_1":
-			_, _ = w.Write([]byte(`{"id":"pi_1","status":"succeeded","amount":1999,"currency":"USD","customer":"cus_1","metadata":{"w17_payment":"charge"}}`))
+			_, _ = w.Write([]byte(`{"id":"pi_1","status":"succeeded","amount":1999,"amount_received":999,"currency":"USD","customer":"cus_1","metadata":{"w17_payment":"charge"}}`))
 		case "/v1/payment_intents/pi_other":
 			_, _ = w.Write([]byte(`{"id":"pi_1","status":"succeeded","amount":1999,"currency":"usd"}`))
 		default:
@@ -230,7 +230,8 @@ func TestGetPayment(t *testing.T) {
 	if gotMethod != http.MethodGet || gotPath != "/v1/payment_intents/pi_1" {
 		t.Errorf("request %s %s", gotMethod, gotPath)
 	}
-	if p.ProviderPaymentID != "pi_1" || p.Status != "succeeded" || p.Amount.Amount != "19.99" || p.Amount.Currency != "usd" || p.ProviderCustomerID != "cus_1" {
+	if p.ProviderPaymentID != "pi_1" || p.Status != "succeeded" || p.Amount.Amount != "19.99" || p.Amount.Currency != "usd" || p.ProviderCustomerID != "cus_1" ||
+		p.Received != (backend.Money{Amount: "9.99", Currency: "usd"}) {
 		t.Errorf("payment = %+v", p)
 	}
 	if _, err := b.GetPayment(context.Background(), "pi_missing"); err == nil {

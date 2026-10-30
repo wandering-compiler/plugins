@@ -103,6 +103,19 @@ type fakeIntent struct {
 	failed                 bool // last_payment_error set
 }
 
+// changeIntent changes the intent's amount (minor units) and, unless cur is
+// "", its currency — what an intent changed at the provider by something
+// other than the plugin looks like. It then takes the changed amount.
+func (f *stripeFake) changeIntent(id string, amount int64, cur string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	in := f.intents[id]
+	in.amount = amount
+	if cur != "" {
+		in.currency = cur
+	}
+}
+
 func newStripeFake(t *testing.T) *stripeFake {
 	t.Helper()
 	f := &stripeFake{
@@ -600,9 +613,10 @@ func (f *stripeFake) intentObjects() map[string]map[string]any {
 		if in.failed {
 			lastErr = map[string]any{"code": "card_declined"}
 		}
+		// The fake does not model capture: an intent takes its amount.
 		out[id] = map[string]any{"id": id, "object": "payment_intent", "status": in.status, "amount": in.amount,
 			"currency": in.currency, "customer": in.customer, "description": in.description,
-			"metadata": f.marksOf(id), "last_payment_error": lastErr}
+			"metadata": f.marksOf(id), "last_payment_error": lastErr, "amount_received": in.amount}
 	}
 	return out
 }

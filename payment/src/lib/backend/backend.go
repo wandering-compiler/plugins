@@ -266,6 +266,10 @@ type PaymentObject struct {
 	Failed  bool
 	Created int64
 	Marks
+	// Received is what the payment took (amount_received), in its currency;
+	// empty (no Currency) when the provider reports none. A succeeded payment
+	// is checked against its local row by it (verifyReceived).
+	Received Money
 }
 
 // ListedRefund is a refund as the account-wide refund list returns it, with

@@ -54,6 +54,8 @@ type paymentIntentObject struct {
 	Created     int64             `json:"created"`
 	// The last attempt's error; null when no attempt failed.
 	LastPaymentError json.RawMessage `json:"last_payment_error"`
+	// What the intent took, in minor units of Currency.
+	AmountReceived *int64 `json:"amount_received"`
 }
 
 // refundResp ← POST /v1/refunds
@@ -141,6 +143,9 @@ type webhookEnvelope struct {
 			// On a refund or a dispute: its amount (minor units) and currency.
 			Amount   int64  `json:"amount"`
 			Currency string `json:"currency"`
+			// On a payment intent: what it took (minor units of Currency);
+			// absent on other objects.
+			AmountReceived *int64 `json:"amount_received"`
 		} `json:"object"`
 	} `json:"data"`
 }

@@ -66,6 +66,13 @@ message Payment {
     FAILED             = 4;
     CANCELED           = 5;
     REFUNDED           = 6;
+    // The provider reported the payment succeeded for another amount or
+    // currency than this row holds (someone changed the intent at the
+    // provider). Held: not SUCCEEDED, no PaymentSucceeded, no top-up credit;
+    // PaymentAmountMismatch says so and an operator decides. A refund of it
+    // goes back up to what was received (received_amount, received_currency).
+    // Terminal for the webhook: no later event moves it.
+    AMOUNT_MISMATCH    = 7;
   }
 
   string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
@@ -78,6 +85,10 @@ message Payment {
   string description         = 8 [(w17.field) = { type: CHAR, max_len: 500, blank: true }];
   google.protobuf.Timestamp created_at = 9  [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   google.protobuf.Timestamp updated_at = 10 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+  // What the provider reported received, set only with AMOUNT_MISMATCH (NULL
+  // otherwise): the amount the payment actually took, in its currency.
+  string received_amount     = 11 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0, null: true }];
+  string received_currency   = 12 [(w17.field) = { type: CHAR, max_len: 3, null: true }];
 }
 
 // Refund — a reversal of a Payment: the provider refund id, amount and

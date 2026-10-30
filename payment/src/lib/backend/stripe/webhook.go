@@ -61,7 +61,11 @@ type Event struct {
 	// of the currency (a dispute's disputed amount, a refund's amount);
 	// empty when the object carries no currency.
 	Amount backend.Money
-	Raw    []byte
+	// Received is data.object.amount_received with data.object.currency on a
+	// payment intent: what the payment took. Empty (no Currency) when the
+	// object carries none.
+	Received backend.Money
+	Raw      []byte
 }
 
 // ErrBadSignature is returned when the Stripe-Signature HMAC does not
@@ -133,12 +137,16 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 	if raw.ID == "" || raw.Type == "" {
 		return Event{}, fmt.Errorf("stripe: malformed webhook body: missing event id or type")
 	}
-	var amount backend.Money
+	var amount, received backend.Money
 	if cur := strings.ToLower(raw.Data.Object.Currency); cur != "" {
 		amount = backend.Money{Amount: fromMinorUnits(raw.Data.Object.Amount, cur), Currency: cur}
+		if r := raw.Data.Object.AmountReceived; r != nil {
+			received = backend.Money{Amount: fromMinorUnits(*r, cur), Currency: cur}
+		}
 	}
 	return Event{
 		Amount:              amount,
+		Received:            received,
 		ID:                  raw.ID,
 		Type:                raw.Type,
 		ObjectID:            raw.Data.Object.ID,
