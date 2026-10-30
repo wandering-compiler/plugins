@@ -175,10 +175,9 @@ which.
    that named it dangling. This is deliberate (the column is a location
    refreshed by the next sweep), but `ListWorkers` then shows ids that resolve
    to nothing until a sweep runs.
-3. **Stale contract comments.** `Relay` says its history survives "if the
-   ledger is on" and `ScheduleTaskReq.label` says it is "recorded by the
-   ledger when that feature is on". No ledger exists, and `label` is passed to
-   the relay and read by nothing.
+3. **Fixed: stale contract comments.** `Relay` no longer promises history
+   "if the ledger is on", `ScheduleTaskReq.label` says nothing records it, and
+   the pin comments no longer call a row edit an audit trail (see gap 1).
 4. **Unpaged lists.** `ListRelays` and `ListWorkers` return every row. The
    Workers page loads the whole fleet, including every banned worker ever
    recorded.
@@ -271,12 +270,13 @@ which.
 
 **Gaps / suspected defects**
 
-1. **Caller metadata reaches the worker unfiltered.** The proxy copies every
-   incoming header to the worker, including the spent ticket and any
-   authorization header the caller sent. The ticket is useless once spent,
-   but a caller that sends a bearer token for another service hands it to a
-   machine on the public internet. Strip `w17-cluster-ticket` and document
-   that headers are forwarded.
+1. **Fixed in part: the spent ticket stops at the relay.** The picker names
+   the headers it consumed (`tunnel.Backend.Consumed`) and the proxy removes
+   them before forwarding (`TestHandler_TheKeysThePickerConsumedStopAtTheRelay`,
+   `TestTunnel_ACallReachesTheWorkerAndComesBack`). Every other header still reaches the
+   worker, an authorization header the caller sent included: a caller must
+   not send a machine the deploy enrolled credentials meant for another
+   service. Stated in `proxy.go`; whether the proxy should strip more is open.
 2. **No connection limit on the callers port.** It is the only port the deploy
    block publishes. TLS handshakes are bounded at 20 s, but nothing limits
    concurrent unauthenticated connections or failed ticket attempts per
@@ -399,10 +399,14 @@ which.
 
 **Gaps / suspected defects**
 
-1. `dial_timeout_seconds <= 0` silently becomes 5 s instead of refusing.
-2. `--control-plane-fingerprint` is not checked for shape at boot; a mistyped
-   value fails closed (nothing can manage the relay) but only shows up as
-   refused handshakes in the log.
+1. Fixed: a negative `dial_timeout_seconds` is refused at boot. Zero stays the
+   5 s default, because the configuration's zero value is also what an unset
+   field reads as (`TestRegisterPlugin_RefusesAnUnusableConfiguration`,
+   `TestRegisterPlugin_DialTimeoutDefaults`).
+2. Fixed: `--control-plane-fingerprint` must be 64 hex characters at boot
+   (case and surrounding space normalised; openssl's colon form refused). It
+   used to start and refuse every control plane
+   (`TestServe_RefusesToStartMisconfigured`).
 3. Fixed: `ticket_ttl_seconds`, which was accepted and ignored, is removed (finding 6).
 
 ---
@@ -509,10 +513,10 @@ id IN (…)`.
 
 | id | Condition | Enforced | Proof |
 |---|---|---|---|
-| `cluster/boot-identity` | Missing or unusable `client_cert_path`/`client_key_path` | `RegisterPlugin` | `TestRegisterPlugin_RefusesAnUnusableConfiguration` |
-| `cluster/boot-relay` | Relay without proxy address, control-plane pin, identity or CA; conflicting identity sources; malformed `RELAY_*`; poll timeout under twice the interval | relay `serve`, `parseConfig` | `TestServe_RefusesToStartMisconfigured`, `TestParseConfig_RefusesAMalformedVariable` |
+| `cluster/boot-identity` | Missing or unusable `client_cert_path`/`client_key_path`; a negative `dial_timeout_seconds` | `RegisterPlugin` | `TestRegisterPlugin_RefusesAnUnusableConfiguration` |
+| `cluster/boot-relay` | Relay without proxy address, control-plane pin (or one that is not 64 hex characters), identity or CA; conflicting identity sources; malformed `RELAY_*`; poll timeout under twice the interval | relay `serve`, `parseConfig` | `TestServe_RefusesToStartMisconfigured`, `TestParseConfig_RefusesAMalformedVariable` |
 | `cluster/boot-no-inert-knob` | A knob the manifest documents MUST have the documented effect, or refuse | — | none (the inert `ticket_ttl_seconds` was removed; the claim window is the relay's `--ticket-ttl`) |
-| **Not** boot-checked (gaps) | `dial_timeout_seconds <= 0` (becomes 5 s); a malformed `--control-plane-fingerprint` (fails closed at every handshake) | — | none |
+| Defaulted, not refused | `dial_timeout_seconds` of 0 (unset) becomes 5 s | `RegisterPlugin` | `TestRegisterPlugin_DialTimeoutDefaults` |
 
 ---
 

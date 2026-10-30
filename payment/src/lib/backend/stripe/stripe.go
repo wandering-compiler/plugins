@@ -63,9 +63,10 @@ func New(apiKey string, opts ...Option) *Backend {
 // Name identifies the driver.
 func (b *Backend) Name() string { return "stripe" }
 
-// EnsureCustomer creates a Stripe customer for the principal. v1 always
-// creates (the local Customer table's unique user_id is the idempotency
-// guard at the plugin layer); a follow-up can search-or-create.
+// EnsureCustomer creates a Stripe customer for the principal, under the
+// spec's idempotency key: a retry of the same create returns the customer the
+// first one made. The local Customer table's unique user_id stays the guard
+// across keys.
 func (b *Backend) EnsureCustomer(ctx context.Context, spec backend.CustomerSpec) (string, error) {
 	form := url.Values{}
 	if spec.Email != "" {
@@ -82,7 +83,7 @@ func (b *Backend) EnsureCustomer(ctx context.Context, spec backend.CustomerSpec)
 		form.Set("metadata["+backend.InstallMetadataKey+"]", spec.Install)
 	}
 	var resp customerResp
-	if err := b.post(ctx, "/v1/customers", form, "", &resp); err != nil {
+	if err := b.post(ctx, "/v1/customers", form, spec.IdempotencyKey, &resp); err != nil {
 		return "", err
 	}
 	if resp.ID == "" {
@@ -200,8 +201,9 @@ func (b *Backend) ListRefunds(ctx context.Context, providerPaymentID string) ([]
 }
 
 // UpsertPlan creates a recurring Stripe Price (with an inline product)
-// for the plan and returns its id. v1 always creates; search-or-reuse
-// is a follow-up (the local Plan.provider_price_id is the dedup anchor).
+// for the plan and returns its id, under the spec's idempotency key: a retry
+// of the same create returns the price the first one made (the local
+// Plan.provider_price_id stays the dedup anchor across keys).
 func (b *Backend) UpsertPlan(ctx context.Context, spec backend.PlanSpec) (string, error) {
 	minor, err := positiveMinorUnits(spec.Amount.Amount, spec.Amount.Currency)
 	if err != nil {
@@ -217,7 +219,7 @@ func (b *Backend) UpsertPlan(ctx context.Context, spec backend.PlanSpec) (string
 	}
 	form.Set("product_data[name]", name)
 	var resp priceResp
-	if err := b.post(ctx, "/v1/prices", form, "", &resp); err != nil {
+	if err := b.post(ctx, "/v1/prices", form, spec.IdempotencyKey, &resp); err != nil {
 		return "", err
 	}
 	if resp.ID == "" {

@@ -39,9 +39,10 @@ type Identity struct {
 
 // certLifetime is long because this certificate is PINNED, not validated:
 // the control plane holds its exact fingerprint on the relay's row, and a
-// caller receives it with every grant. Replacing it is an edit to that row —
-// the audit trail — and an expiry would only force that edit on a calendar
-// instead of when the key is actually in doubt.
+// caller receives it with every grant. Replacing it takes an operator's edit to
+// that row (the plugin keeps no history of the edit; SPEC cluster/no-events),
+// and an expiry would only force that edit on a calendar instead of when the
+// key is actually in doubt.
 //
 // Workers are the opposite case and get the opposite answer: their
 // certificates are issued by the relay's CA and short-lived (ca.go), because

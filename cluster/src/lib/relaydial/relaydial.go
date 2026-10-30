@@ -41,8 +41,9 @@ type Config struct {
 //
 // A relay is one machine an operator registers on purpose, by pasting its
 // fingerprint into a row: the trust decision is explicit and local, and
-// rotating its certificate is an edit to that row — an audit trail a
-// CA-issued swap would not leave. The certificate may be self-signed and
+// rotating its certificate takes an operator's edit to that row, where a
+// CA-issued swap needs nobody (the plugin keeps no history of the edit; SPEC
+// cluster/no-events). The certificate may be self-signed and
 // long-lived, because what it is trusted by is the pin, not a calendar.
 //
 // Workers are the other case: a fleet that comes and goes is not pinned row

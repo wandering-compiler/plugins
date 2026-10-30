@@ -335,10 +335,10 @@ message IssueRegistrationCodeResp {
 }
 
 message ScheduleTaskReq {
-  // Opaque caller-supplied label, shown to operators and recorded by the
-  // ledger when that feature is on. Never parsed — it exists so that a queue
-  // an operator is staring at during an incident has words in it instead of
-  // uuids.
+  // Opaque caller-supplied label. It is passed to the relay with the request
+  // and nothing reads or records it yet; never parsed. Kept so that a queue an
+  // operator inspects can carry words instead of uuids once something shows
+  // it.
   string label = 1 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
 
   // Give up after this long without a slot. Zero means "wait as long as my own

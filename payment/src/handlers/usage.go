@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"strings"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
@@ -54,10 +56,17 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 		IdempotencyKey: scopedKey("usage", req.GetUserId(), req.GetMeter(), req.GetPeriod(), req.GetIdempotencyKey()),
 	})
 	if err != nil {
-		if constraintCode(err) == codeUniqueViolation {
+		switch constraintCode(err) {
+		case codeUniqueViolation:
 			// Already recorded under this key → idempotent: return the
 			// current meter total.
 			return h.currentMeter(ctx, req.GetUserId(), req.GetMeter(), req.GetPeriod())
+		case codeValueOutOfRange:
+			// The meter's total + quantity overflowed its 64-bit column
+			// (usage gap 2). Nothing was recorded (the record and the
+			// meter are one transaction); say what, not "a value does not
+			// fit the column".
+			return nil, status.Error(codes.FailedPrecondition, "the meter's total would exceed its maximum; nothing was recorded")
 		}
 		return nil, err
 	}

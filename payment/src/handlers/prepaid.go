@@ -122,8 +122,9 @@ func (k creditKind) debit() bool { return k == creditSpend }
 //
 //   - UNIQUE_VIOLATION on idempotency_key → the apply already happened
 //     (a retry); idempotent — return the current balance, no error.
-//   - INVALID_VALUE → the balance CHECK rejected an overdraw (the only
-//     INVALID_VALUE-class constraint on this path) → FailedPrecondition.
+//   - INVALID_VALUE from the balance CHECKs → an overdraw →
+//     FailedPrecondition. Any other INVALID_VALUE names its field and goes
+//     back as the caller's input error (isOverdraw).
 //
 // The ledger key is the caller's key SCOPED by (kind, principal) —
 // CreditLedger.idempotency_key is one table-wide UNIQUE, and the caller's
@@ -171,10 +172,10 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 		IdempotencyKey: ledgerKey(kind, userID, idem),
 	})
 	if err != nil {
-		switch constraintCode(err) {
-		case codeUniqueViolation:
+		if constraintCode(err) == codeUniqueViolation {
 			return h.currentBalance(ctx, userID)
-		case codeInvalidValue:
+		}
+		if isOverdraw(err) {
 			return nil, status.Error(codes.FailedPrecondition, "insufficient credit balance")
 		}
 		return nil, err
@@ -464,10 +465,10 @@ func (h *PaymentServiceHandler) settleTopup(ctx context.Context, payment *pb.Pay
 		_, err = h.Mutation.ApplyCredit(ctx, &pb.ApplyCreditReq{
 			UserId: userID, Delta: apply, Reason: reason, Ref: payment.GetId(), IdempotencyKey: topupStepKey(userID, pid, step),
 		})
-		switch constraintCode(err) {
-		case codeUniqueViolation:
+		if constraintCode(err) == codeUniqueViolation {
 			continue // a concurrent reconciliation took this step: read again
-		case codeInvalidValue:
+		}
+		if isOverdraw(err) {
 			if strict {
 				return status.Error(codes.FailedPrecondition, "insufficient credit balance")
 			}

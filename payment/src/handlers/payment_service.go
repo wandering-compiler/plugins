@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -100,10 +101,16 @@ func (h *PaymentServiceHandler) CreateCustomer(ctx context.Context, req *pb.NewC
 // createCustomer creates the provider customer and persists the link.
 // Two first-charges for one principal can race past the existence check;
 // the loser's INSERT hits the unique user_id, and the winner's row is
-// the answer (the loser's provider customer is left unreferenced — the
-// provider offers no create-if-absent to avoid it).
+// the answer. The create carries an idempotency key derived from what it
+// sends (base gap 3), so the provider returns the SAME customer to a retry
+// or a racing twin within its window instead of a second, unreferenced one;
+// a different address is a different create, and a different key.
 func (h *PaymentServiceHandler) createCustomer(ctx context.Context, userID, email string) (*pb.Customer, error) {
-	providerID, err := h.Backend.EnsureCustomer(ctx, backend.CustomerSpec{UserID: userID, Email: email, Install: h.installID()})
+	install := h.installID()
+	providerID, err := h.Backend.EnsureCustomer(ctx, backend.CustomerSpec{
+		UserID: userID, Email: email, Install: install,
+		IdempotencyKey: scopedKey("customer", install, userID, email),
+	})
 	if err != nil {
 		return nil, providerFailure(err)
 	}
@@ -205,6 +212,12 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 	if err != nil {
 		return nil, "", err
 	}
+	if callerKey != "" {
+		recorded, err := h.recordedCharge(ctx, cust, idemKey, amount, currency)
+		if err != nil || recorded != nil {
+			return recorded, "", err
+		}
+	}
 	pr, err := h.Backend.CreatePayment(ctx, backend.PaymentSpec{
 		ProviderCustomerID: cust.GetProviderCustomerId(),
 		Amount:             backend.Money{Amount: amount, Currency: currency},
@@ -245,6 +258,49 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 		return p, pr.ClientSecret, nil
 	}
 	return nil, "", status.Error(codes.AlreadyExists, "idempotency_key already used for a different payment")
+}
+
+// recordedCharge answers a retried charge from the local row, before the
+// provider is asked (base gap 2): the provider forgets an idempotency key after
+// its window (a day), and a retry after that minted a NEW, unconfirmed intent —
+// an orphan at the provider — and answered AlreadyExists instead of the
+// payment the key recorded.
+//
+// Only a payment past confirmation is answered here: SUCCEEDED, FAILED,
+// CANCELED, REFUNDED, or PROCESSING (confirmed, the outcome pending). Those
+// need no client secret. One still REQUIRES_ACTION goes to the provider as
+// before: inside the window the provider replays it WITH the secret the client
+// needs to confirm it, and nothing stores that secret here. A recorded payment
+// of another customer, or of another amount or currency under the same key,
+// is AlreadyExists — the key names a different payment.
+func (h *PaymentServiceHandler) recordedCharge(ctx context.Context, cust *pb.Customer, idemKey, amount, currency string) (*pb.Payment, error) {
+	got, err := h.Query.GetPaymentByIdempotencyKey(ctx, &pb.GetPaymentByIdempotencyKeyReq{IdempotencyKey: idemKey})
+	if err != nil {
+		if absent(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	p := got.GetPayment()
+	if p == nil {
+		return nil, nil
+	}
+	if p.GetCustomerId() != cust.GetId() || !sameAmount(p.GetAmount(), amount) || !strings.EqualFold(p.GetCurrency(), currency) {
+		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different payment")
+	}
+	switch p.GetStatus() {
+	case pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_PROCESSING:
+		return p, nil
+	}
+	return nil, nil
+}
+
+// sameAmount compares two decimal amounts by value: the column renders its
+// scale ("12.5000") where the request may not ("12.5").
+func sameAmount(a, b string) bool {
+	x, okA := new(big.Rat).SetString(a)
+	y, okB := new(big.Rat).SetString(b)
+	return okA && okB && x.Cmp(y) == 0
 }
 
 // chargeKey is the key a charge is stored under and sent to the provider

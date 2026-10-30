@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"math"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -177,5 +179,18 @@ func TestFlow_ReportUsage_NeverSpendsCredit(t *testing.T) {
 	}
 	if n := r.store.events("CreditApplied"); n != 1 {
 		t.Errorf("CreditApplied emitted %d times, want 1 (the grant)", n)
+	}
+}
+
+// usage gap 2: a quantity that overflows the meter's 64-bit total is refused
+// as the meter being full, not as "a value does not fit the column".
+func TestReportUsage_MeterOverflowIsSaid(t *testing.T) {
+	m := &fakeMutation{recordErr: constraintErr(t, "VALUE_OUT_OF_RANGE")}
+	h := usageHandler(&fakeQuery{}, m)
+	_, err := h.ReportUsage(context.Background(), &pb.ReportUsageReq{
+		UserId: "u1", Meter: "api_calls", Period: "2026-06", Quantity: math.MaxInt64, IdempotencyKey: "big",
+	})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("overflowing report = %v, want FailedPrecondition naming the meter's maximum", err)
 	}
 }

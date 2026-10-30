@@ -297,12 +297,13 @@ func TestRegisterPlugin_AnotherIdentityIsRefusedByTheRelay(t *testing.T) {
 	}
 }
 
-// Zero and negative timeouts fall back to the documented default rather than
+// An unset (zero) timeout falls back to the documented default rather than
 // to "no deadline", which would hold ScheduleTask on a black-holed relay until
-// the caller's own deadline.
+// the caller's own deadline. A negative one is refused
+// (TestRegisterPlugin_RefusesAnUnusableConfiguration).
 func TestRegisterPlugin_DialTimeoutDefaults(t *testing.T) {
 	certPath, keyPath, _ := identityFiles(t, "console")
-	for _, secs := range []int{0, -4} {
+	for _, secs := range []int{0} {
 		reg := &registry{}
 		if err := RegisterPlugin(&gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath, DialTimeoutSeconds: secs}, reg, clientSet{t: &tables{}}); err != nil {
 			t.Fatal(err)
@@ -349,6 +350,8 @@ func TestRegisterPlugin_RefusesAnUnusableConfiguration(t *testing.T) {
 		{"a truncated key", &gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: truncated}, "key pair"},
 		{"garbage where the key goes", &gen.EnvConfig{ClientCertPath: otherCert, ClientKeyPath: garbage}, "key pair"},
 		{"the certificate where the key goes", &gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: certPath}, "key pair"},
+		// It used to become the 5 s default unannounced.
+		{"a negative dial timeout", &gen.EnvConfig{ClientCertPath: certPath, ClientKeyPath: keyPath, DialTimeoutSeconds: -4}, "dial_timeout_seconds"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := &registry{}

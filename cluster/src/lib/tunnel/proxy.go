@@ -17,6 +17,10 @@ import (
 type Backend struct {
 	Conn    *grpc.ClientConn
 	Release func()
+	// Consumed names the metadata keys the picker spent to admit the call
+	// (the relay's ticket). They are the relay's, not the worker's contract,
+	// and are removed before the call is forwarded; everything else travels.
+	Consumed []string
 }
 
 // Picker chooses a worker for one incoming call. It must block, or fail, when
@@ -42,11 +46,19 @@ func Handler(pick Picker) grpc.StreamHandler {
 		}
 		defer be.Release()
 
-		// The caller's metadata travels as-is. The relay adds nothing and
-		// removes nothing: it is a pipe, and a pipe that edited headers would
-		// be a second place where the worker's contract lives.
+		// The caller's metadata travels as-is, less what the picker consumed
+		// to admit the call. The relay adds nothing and removes nothing of the
+		// worker's: it is a pipe, and a pipe that edited the worker's headers
+		// would be a second place where the worker's contract lives. Every
+		// other header, an authorization header the caller sent included,
+		// reaches the worker — a machine the deploy enrolled, so a caller must
+		// not send it credentials meant for another service.
 		md, _ := metadata.FromIncomingContext(ss.Context())
-		ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(ss.Context(), md.Copy()))
+		md = md.Copy()
+		for _, k := range be.Consumed {
+			md.Delete(k)
+		}
+		ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(ss.Context(), md))
 		defer cancel()
 
 		// Bidirectional in the DESCRIPTOR regardless of what the real method

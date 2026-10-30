@@ -253,3 +253,34 @@ func TestApplyCredit_ADebitNeverProposesANegativeRow(t *testing.T) {
 		t.Errorf("ApplyCredit must make the CreditBalance row at zero (DO NOTHING) once, before the UPDATE; zero-row ops at %v, UPDATE at %v", zeroRowAt, updateAt)
 	}
 }
+
+// prepaid gap 1: only the balance CHECKs read as an overdraw. Any other
+// INVALID_VALUE on the apply path names its field and is the caller's input.
+func TestApplyCredit_OnlyTheBalanceCheckIsAnOverdraw(t *testing.T) {
+	fieldErr := func(field string) error {
+		st, err := status.New(codes.InvalidArgument, "constraint").WithDetails(&w17pb.ErrorDetail{Code: "INVALID_VALUE", Field: field})
+		if err != nil {
+			t.Fatalf("detail: %v", err)
+		}
+		return st.Err()
+	}
+	for _, c := range []struct {
+		field string
+		want  codes.Code
+	}{
+		{"", codes.FailedPrecondition},        // credit_balance_nonneg
+		{"balance", codes.FailedPrecondition}, // the column's gte 0
+		{"reason", codes.InvalidArgument},     // not a slug: the caller's input
+		{"ref", codes.InvalidArgument},
+	} {
+		m := &fakeMutation{applyErr: fieldErr(c.field)}
+		h := prepaidHandler(&fakeQuery{}, m)
+		_, err := h.SpendCredit(context.Background(), &pb.SpendCreditReq{UserId: "u1", Amount: "1", IdempotencyKey: "s"})
+		if status.Code(err) != c.want {
+			t.Errorf("INVALID_VALUE on %q = %v, want %v", c.field, err, c.want)
+		}
+		if c.want == codes.InvalidArgument && strings.Contains(err.Error(), "insufficient") {
+			t.Errorf("INVALID_VALUE on %q told the caller its balance was insufficient: %v", c.field, err)
+		}
+	}
+}

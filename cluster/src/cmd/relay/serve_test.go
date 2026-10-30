@@ -656,6 +656,11 @@ func TestServe_RefusesToStartMisconfigured(t *testing.T) {
 		{"no advertised proxy address", base("--control-plane-fingerprint", cpFP, "--identity-dir", t.TempDir()), "--proxy-address"},
 		{"no control-plane pin", base("--proxy-address", "relay.example.com:9000", "--identity-dir", t.TempDir()), "--control-plane-fingerprint"},
 		{"a blank control-plane pin", base("--proxy-address", "x:1", "--control-plane-fingerprint", "  ", "--identity-dir", t.TempDir()), "--control-plane-fingerprint"},
+		// These started and refused every control plane, visible only as
+		// refused handshakes in the log.
+		{"a pin with separators", base("--proxy-address", "x:1", "--control-plane-fingerprint", colonPin(cpFP), "--identity-dir", t.TempDir()), "not a SHA-256 fingerprint"},
+		{"a truncated pin", base("--proxy-address", "x:1", "--control-plane-fingerprint", cpFP[:63], "--identity-dir", t.TempDir()), "not a SHA-256 fingerprint"},
+		{"a pin that is not hex", base("--proxy-address", "x:1", "--control-plane-fingerprint", "g"+cpFP[1:], "--identity-dir", t.TempDir()), "not a SHA-256 fingerprint"},
 		{"no identity at all", base(ok...), "no identity"},
 		{"two identities", withID("--cert", crt, "--key", key), "two identities"},
 		{"a certificate without its key", base(append(append([]string{}, ok...), "--cert", crt)...), "go together"},
@@ -982,4 +987,16 @@ func TestParseConfig_RefusesAStrayArgument(t *testing.T) {
 	if _, err := parseConfig([]string{"--no-such-flag"}, io.Discard); err == nil {
 		t.Fatal("an unknown flag was accepted")
 	}
+}
+
+// colonPin writes a fingerprint the way openssl's -fingerprint prints one.
+func colonPin(fp string) string {
+	var b strings.Builder
+	for i := 0; i < len(fp); i += 2 {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		b.WriteString(strings.ToUpper(fp[i : i+2]))
+	}
+	return b.String()
 }

@@ -20,7 +20,8 @@ option go_package = "@project;@pkg";
 // This row is the WHITELIST. The control plane dials out, and it dials only to
 // a url that appears here with `enabled` set; a relay that is not in this table
 // cannot be reached by accident, and one that is disabled stops receiving work
-// without being deleted (so its history, if the ledger is on, survives).
+// without being deleted (its row, pin and observed state stay for when it is
+// enabled again).
 message Relay {
   option (w17.db.table) = {};
 
@@ -57,9 +58,10 @@ message Relay {
   // The relay's identity is PINNED to this fingerprint rather than validated
   // against a CA, which means a relay may hold a self-signed certificate and
   // needs no enrolment ceremony — the operator pastes a fingerprint and that is
-  // the whole trust decision. Rotating a relay's certificate is an edit here,
-  // and an edit is exactly the audit trail that a silent CA-issued swap would
-  // not leave.
+  // the whole trust decision. Rotating a relay's certificate takes an
+  // operator's edit here, where a CA-issued swap would need nobody. The edit
+  // overwrites the previous value and records neither who nor when (SPEC
+  // cluster/no-events).
   //
   // Deliberately NOT a shared secret. A bearer secret would have to be stored
   // in a form this control plane can read back in order to present it, which
