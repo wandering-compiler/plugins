@@ -956,6 +956,18 @@ func (s *memStore) MarkWebhookProcessed(_ context.Context, in *pb.MarkWebhookPro
 	return &pb.MarkWebhookProcessedResp{ProviderEventId: in.GetProviderEventId()}, s.leave("MarkWebhookProcessed", nil)
 }
 
+func (s *memStore) GetProcessedWebhookEvent(_ context.Context, in *pb.GetProcessedWebhookEventReq, _ ...grpc.CallOption) (*pb.GetProcessedWebhookEventResp, error) {
+	if err := s.enter("GetProcessedWebhookEvent"); err != nil {
+		return nil, s.leave("", err)
+	}
+	typ, ok := s.processed[in.GetProviderEventId()]
+	if !ok {
+		return nil, s.leave("GetProcessedWebhookEvent", noRow())
+	}
+	return &pb.GetProcessedWebhookEventResp{Event: &pb.ProcessedWebhookEvent{ProviderEventId: in.GetProviderEventId(), EventType: typ}},
+		s.leave("GetProcessedWebhookEvent", nil)
+}
+
 func (s *memStore) ApplyCredit(_ context.Context, in *pb.ApplyCreditReq, _ ...grpc.CallOption) (*pb.ApplyCreditResp, error) {
 	if err := s.enter("ApplyCredit"); err != nil {
 		return nil, s.leave("", err)

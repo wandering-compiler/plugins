@@ -299,9 +299,11 @@ hold it. **Partly fixed** says what is still open.
    `stripe_webhooks/success-checked-against-the-row`. A payment that took
    another amount or currency (its intent changed at the provider) is held
    at `AMOUNT_MISMATCH`, never marked succeeded at the asked amount.
-3. **The ledger is never read.** Idempotency comes from the guards; the
-   ledger only distinguishes `handled=false`. It grows by one row per event
-   and nothing prunes it, by decision (see `payment/unbounded-tables`).
+3. **Fixed: the ledger is read first.** After the signature,
+   `GetProcessedWebhookEvent` answers a copy of a processed event
+   (`handled=false`) before anything runs; the guards still keep two
+   concurrent copies from acting twice. It grows by one row per event and
+   nothing prunes it, by decision (see `payment/unbounded-tables`).
 6. **Objects made before the marks.** `ReconcileProvider` recognises an
    object as this installation's by its marks. Customers carry them from this
    version on; a customer made earlier, and any object made before the
@@ -316,9 +318,11 @@ hold it. **Partly fixed** says what is still open.
    created under the old mark reads as foreign — its webhook acknowledged,
    and `ReconcileProvider` never touching it again — unless the old mark is
    listed in `previous_install_marks`.
-5. **A replay inside the 300 s window is accepted** and re-runs the
-   (guarded) reconciliation. Harmless by the guards, but nothing records the
-   signed timestamp to refuse it outright.
+5. **Fixed: a replay inside the 300 s window costs nothing** once its event
+   is processed: the ledger read answers it before any store or provider
+   work (`TestIngestStripe_ACopyOfAProcessedEventDoesNoWork`). A copy of an
+   event still being processed, or one whose processing failed, runs again,
+   guarded, which is what a redelivery needs.
 
 ---
 

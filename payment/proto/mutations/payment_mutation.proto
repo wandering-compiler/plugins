@@ -858,10 +858,12 @@ service PaymentMutation {
   // UNIQUE to InvalidArgument, so it is NOT AlreadyExists; match on the
   // detail code, never on the gRPC status alone.
   //
-  // Because it is written last and never read first, this ledger cannot
-  // prevent a side effect from re-running — the reconciliation
-  // mutations' own transition guards do that. What the ledger still
-  // decides is what a redelivery is TOLD (handled=false). It is NOT the
+  // Because it is written last, a row here means the event's side effects
+  // all completed, and IngestStripe reads it FIRST (GetProcessedWebhookEvent):
+  // a copy of a processed event is acknowledged without running anything.
+  // A delivery that failed wrote no row, so its redelivery runs in full, and
+  // the reconciliation mutations' own transition guards still keep a
+  // concurrent copy (both past the read) from acting twice. It is NOT the
   // discriminator for a guard that matched zero rows: an out-of-order
   // event has its own id, so a clean insert proves nothing about the
   // row. IngestStripe looks the provider object up instead, and writes
