@@ -1,3 +1,0 @@
-### A refused second-factor code says so
-
-`ConfirmTotp`, `VerifyMfa` and the step-up of `EnrollTotp` (replacing an authenticator), `DisableTotp` and `GenerateRecoveryCodes` refuse a code with the same `Unauthenticated` status as before, now with the detail `MFA_CODE_REFUSED` and the sentence "That code is not valid. Check it and try again, or request a new one." It used to render "You are not signed in.", to a caller who on `ConfirmTotp` was. The pair is identical for every cause (wrong, expired, used or unknown code, attempts spent, another device), so it reveals nothing the status did not. An outage still answers `AUTH_UNAVAILABLE`.
