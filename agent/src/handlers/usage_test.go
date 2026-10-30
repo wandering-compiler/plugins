@@ -330,3 +330,25 @@ func TestAPreflightRefusalIsNotRecordedAsACall(t *testing.T) {
 		t.Fatalf("a call that never reached the provider recorded %d usage event(s); spend that did not happen", len(sink.events))
 	}
 }
+
+// usage_persistence gap 4: two limits for one scope and window with the same
+// valid_from answer the same one every time — the one set last — instead of
+// whichever row the plan reads first.
+func TestGetScopeLimit_TwoLimitsWithOneStartAnswerTheLastSet(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "proto", "queries", "usage_query.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	i := strings.Index(s, "rpc GetScopeLimit(")
+	if i < 0 {
+		t.Fatal("GetScopeLimit not found")
+	}
+	body := s[i:]
+	if j := strings.Index(body, "\n  }\n"); j > 0 {
+		body = body[:j]
+	}
+	if !strings.Contains(body, `"ORDER BY l.valid_from DESC, l.recorded_at DESC, l.id DESC LIMIT 1"`) {
+		t.Errorf("GetScopeLimit has no deterministic tie-break on valid_from:\n%s", body)
+	}
+}

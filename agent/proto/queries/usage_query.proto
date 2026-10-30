@@ -356,7 +356,9 @@ service UsageQuery {
           "FROM @module.ScopeLimit l "
           "WHERE l.scope_id = :scope_id AND l.window = :window "
           "  AND l.valid_from <= :at "
-          "ORDER BY l.valid_from DESC LIMIT 1"
+          // The tie-break makes two limits with one valid_from answer the
+          // same one every time: the one set last (usage_persistence gap 4).
+          "ORDER BY l.valid_from DESC, l.recorded_at DESC, l.id DESC LIMIT 1"
       }
     };
   }

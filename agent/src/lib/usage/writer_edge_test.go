@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"log"
 	"strings"
 	"sync"
@@ -227,3 +230,61 @@ func TestAFlushHasADeadline(t *testing.T) {
 type flusherFunc func(context.Context, []Event) error
 
 func (f flusherFunc) Flush(ctx context.Context, b []Event) error { return f(ctx, b) }
+
+// usage_persistence gap 6: a failed flush is logged by its counts and the
+// KIND of failure, never the error's text — a database error can quote the
+// row it refused, and a scope or label is the caller's free text. The decoy is
+// in the error message on both log lines (a whole failure and a partial one).
+func TestAFailedFlushLogsNoErrorText(t *testing.T) {
+	const decoy = "acme-secret-label-value"
+	for name, ferr := range map[string]error{
+		"whole":   status.Error(codes.InvalidArgument, `value "`+decoy+`" too long for column`),
+		"partial": &PartialFlushError{Failed: 1, Unlabelled: 1, Err: status.Error(codes.InvalidArgument, `label "`+decoy+`" refused`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := log.Writer()
+			log.SetOutput(&buf)
+			defer log.SetOutput(prev)
+
+			f := newRecordingFlusher()
+			f.err = ferr
+			w := New(Config{BatchSize: 2, FlushInterval: time.Hour}, f)
+			w.Record(Event{Scope: "t1"})
+			w.Record(Event{Scope: "t1"})
+			select {
+			case <-f.calls:
+			case <-time.After(2 * time.Second):
+				t.Fatal("no flush attempt")
+			}
+			w.Close(context.Background())
+
+			out := buf.String()
+			if strings.Contains(out, decoy) {
+				t.Errorf("the log quotes the error's text:\n%s", out)
+			}
+			if !strings.Contains(out, "code InvalidArgument") {
+				t.Errorf("the log does not name the kind of failure:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestFailureClass(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{status.Error(codes.Unavailable, "db down: secret"), "code Unavailable"},
+		{fmt.Errorf("wrapped: %w", status.Error(codes.AlreadyExists, "x")), "code AlreadyExists"},
+		{context.DeadlineExceeded, "deadline exceeded"},
+		{fmt.Errorf("flush: %w", context.Canceled), "canceled"},
+		{&PartialFlushError{Failed: 1, Err: status.Error(codes.Internal, "y")}, "code Internal"},
+		{errors.New("plain text: secret"), "error *errors.errorString"},
+		{nil, "no error"},
+	} {
+		if got := failureClass(c.err); got != c.want {
+			t.Errorf("failureClass(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
+}

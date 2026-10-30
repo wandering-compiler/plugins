@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"math"
 	"testing"
 
 	pb "github.com/wandering-compiler/plugins/agent/gen/pb"
@@ -75,5 +76,30 @@ func TestUsageOf(t *testing.T) {
 	if got.GetModel() != "m" || !got.GetMeasured() || got.GetInputTokens() != 1 || got.GetOutputTokens() != 2 ||
 		got.GetTotalTokens() != 3 || got.GetCachedInputTokens() != 4 || got.GetReasoningTokens() != 5 {
 		t.Errorf("usageOf = %v", got)
+	}
+}
+
+// base gap 2: a count past the wire's int32 clamps at the bound instead of
+// wrapping. Wrapped, 2^31 tokens arrived as −2^31 and 2^32+5 as 5 — usage
+// that undercounts by billions. Every field is checked, at and past the bound.
+func TestUsageOf_ClampsCountsPastTheWire(t *testing.T) {
+	const max, past = math.MaxInt32, int64(math.MaxInt32) + 1
+	got := usageOf(llm.Usage{InputTokens: past, OutputTokens: 1<<32 + 5, TotalTokens: math.MaxInt64,
+		CachedInputTokens: max, ReasoningTokens: past * 3})
+	for name, v := range map[string]int32{
+		"input": got.GetInputTokens(), "output": got.GetOutputTokens(), "total": got.GetTotalTokens(),
+		"cached": got.GetCachedInputTokens(), "reasoning": got.GetReasoningTokens(),
+	} {
+		if v != max {
+			t.Errorf("%s = %d, want the clamp %d", name, v, max)
+		}
+	}
+	// Within the bound nothing changes, and a negative input (none is ever
+	// produced) clamps rather than wraps too.
+	if s := saturate32(12345); s != 12345 {
+		t.Errorf("saturate32(12345) = %d", s)
+	}
+	if s := saturate32(math.MinInt64); s != math.MinInt32 {
+		t.Errorf("saturate32(MinInt64) = %d, want MinInt32", s)
 	}
 }

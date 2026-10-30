@@ -9,6 +9,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"math"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -172,12 +173,27 @@ func usageOf(u llm.Usage) *pb.ModelUsage {
 	return &pb.ModelUsage{
 		Model:             u.Model,
 		Measured:          u.Measured,
-		InputTokens:       int32(u.InputTokens),
-		OutputTokens:      int32(u.OutputTokens),
-		TotalTokens:       int32(u.TotalTokens),
-		CachedInputTokens: int32(u.CachedInputTokens),
-		ReasoningTokens:   int32(u.ReasoningTokens),
+		InputTokens:       saturate32(u.InputTokens),
+		OutputTokens:      saturate32(u.OutputTokens),
+		TotalTokens:       saturate32(u.TotalTokens),
+		CachedInputTokens: saturate32(u.CachedInputTokens),
+		ReasoningTokens:   saturate32(u.ReasoningTokens),
 	}
+}
+
+// saturate32 narrows a 64-bit token count to the wire's int32 by clamping at
+// the bound instead of wrapping. A plain int32() conversion turned a run past
+// 2^31 − 1 tokens into a negative or small number on the wire — a usage
+// figure that undercounts by billions. Clamped, the answer is "at least this
+// many", never wrong in the cheap direction; the persisted row keeps 64 bits.
+func saturate32(n int64) int32 {
+	switch {
+	case n > math.MaxInt32:
+		return math.MaxInt32
+	case n < math.MinInt32:
+		return math.MinInt32
+	}
+	return int32(n)
 }
 
 func messagesFrom(in []*pb.Message) []llm.Message {
