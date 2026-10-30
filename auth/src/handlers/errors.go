@@ -759,11 +759,6 @@ func UnauthenticatedSignIn(cause error) error {
 	}
 }
 
-// UnauthenticatedOrgNotMember is the refusal of a request scoped into an
-// organization the caller does not belong to. Same code and status message as
-// every other authentication refusal — the contract — plus the pair a gateway
-// renders, so the person reads what is actually wrong. Here rather than beside
-// its caller because this file is staged with every feature.
 // UnauthenticatedMfaCode is the refusal of a second-factor code: the same
 // opaque Unauthenticated status, plus the pair a gateway renders so the
 // person reads that the CODE was refused. Every refusal of a code carries the
@@ -776,6 +771,11 @@ func UnauthenticatedMfaCode(cause error) error {
 	return &authnError{cause: cause, userCode: CodeMfaCodeRefused, userMsg: MsgMfaCodeRefused}
 }
 
+// UnauthenticatedOrgNotMember is the refusal of a request scoped into an
+// organization the caller does not belong to. Same code and status message as
+// every other authentication refusal — the contract — plus the pair a gateway
+// renders, so the person reads what is actually wrong. Here rather than beside
+// its caller because this file is staged with every feature.
 func UnauthenticatedOrgNotMember(cause error) error {
 	return &authnError{cause: cause, userCode: CodeOrgNotMember, userMsg: MsgOrgNotMember}
 }

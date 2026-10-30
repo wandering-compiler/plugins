@@ -6,6 +6,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 // A refused second-factor code used to read "You are not signed in." — on
@@ -39,5 +41,20 @@ func TestMfaCodeRefusal_SaysTheCodeAndIsTheSameForEveryCause(t *testing.T) {
 	outage := status.Error(codes.Unavailable, "store down")
 	if d := errorDetailOf(t, UnauthenticatedMfaCode(outage)); d != nil && d.GetCode() == CodeMfaCodeRefused {
 		t.Errorf("an outage was reported as a refused code: %v", d)
+	}
+}
+
+// An outage while ConfirmTotp reads the pending authenticator is said as one
+// (AUTH_UNAVAILABLE): the person should retry, not retype a code that was
+// never checked.
+func TestConfirmTotp_AnOutageIsNotARefusedCode(t *testing.T) {
+	m := &mfaMock{userEmail: "a@b.c", totpReadErr: status.Error(codes.Unavailable, "store down")}
+	h := newMfaHandler(m)
+	_, err := h.ConfirmTotp(ctxWithCaller("u1"), &pb.ConfirmTotpReq{Code: "123456"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("err = %v (%v), want Unavailable", err, status.Code(err))
+	}
+	if d := errorDetailOf(t, err); d == nil || d.GetCode() != CodeAuthUnavailable {
+		t.Fatalf("detail = %v, want %s", d, CodeAuthUnavailable)
 	}
 }

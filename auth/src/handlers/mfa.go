@@ -553,6 +553,11 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	}
 	resp, err := h.Query.GetTotpSecret(ctx, &pb.GetTotpSecretReq{UserId: userID})
 	if err != nil || resp.GetSecret() == nil {
+		// An outage is said as one; no pending authenticator answers as a
+		// refused code, the same as a wrong one.
+		if err != nil && operationalCode(err) != codes.OK {
+			return nil, Unauthenticated(err)
+		}
 		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	// Confirming is for a PENDING authenticator. Re-confirming a confirmed one
