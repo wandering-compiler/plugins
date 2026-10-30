@@ -740,3 +740,23 @@ message OAuthIdentityLinked {
   // provider (the exchange's), empty when it carried none.
   string device_id   = 4;
 }
+
+// BotCreated — emitted on AuthMutation.CreateBotUser, when an operator creates
+// a machine account (AuthService.CreateBot). A machine account acts with the
+// roles it is given, so its creation is an audit fact like a person's
+// sign-up; UserCreated stays the sign-up's event (one emit site per event).
+// Its tokens are ApiTokenCreated, emitted by IssueApiToken. Gated
+// service_account.
+message BotCreated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.bot.created"
+  };
+  option (w17.contrib.plugin_feature) = "service_account";
+
+  string user_id    = 1;
+  string email      = 2;
+  string created_by = 3;
+  // device_id — the key thumbprint of the operator's device.
+  string device_id  = 4;
+}

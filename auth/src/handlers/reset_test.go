@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -23,6 +24,8 @@ type tokenFlowMock struct {
 
 	// recorded
 	createdReset      *pb.CreatePasswordResetTokenReq
+	createResetErr    error
+	mintCtxErr        error
 	consumedResetHash string
 	consumeResetUser  string // user_id ConsumePasswordResetToken returns ("" = no live token)
 	updatedPassword   *pb.UpdateUserPasswordReq
@@ -48,6 +51,10 @@ func (m *tokenFlowMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, 
 }
 func (m *tokenFlowMock) CreatePasswordResetToken(ctx context.Context, in *pb.CreatePasswordResetTokenReq, _ ...grpc.CallOption) (*pb.CreatePasswordResetTokenResp, error) {
 	m.createdReset = in
+	m.mintCtxErr = ctx.Err()
+	if m.createResetErr != nil {
+		return nil, m.createResetErr
+	}
 	return &pb.CreatePasswordResetTokenResp{Token: &pb.PasswordResetToken{Id: "prt-1", UserId: in.GetUserId(), TokenHash: in.GetTokenHash()}}, nil
 }
 func (m *tokenFlowMock) ConsumePasswordResetToken(ctx context.Context, in *pb.ConsumePasswordResetTokenReq, _ ...grpc.CallOption) (*pb.ConsumePasswordResetTokenResp, error) {
@@ -134,6 +141,63 @@ func TestRequestPasswordReset_KnownEmail_StoresHashEmitsPlaintext(t *testing.T) 
 	}
 	if m.createdReset.GetEmail() != "u@x.com" {
 		t.Errorf("event email = %q, want the canonical stored email", m.createdReset.GetEmail())
+	}
+}
+
+// password_reset gap 3: a registered address answers BEFORE its link is
+// minted — the mint is held here, and the answer still arrives — so the
+// response takes the lookup's time for every address, registered or not.
+// The held mint then runs, on a context the finished request no longer
+// cancels.
+func TestRequestPasswordReset_AnswersBeforeTheLinkIsMinted(t *testing.T) {
+	var held func()
+	prev := runDetached
+	t.Cleanup(func() { runDetached = prev })
+	runDetached = func(f func()) { held = f }
+
+	m := &tokenFlowMock{userByEmail: map[string]*pb.User{"u@x.com": {Id: "u1", Email: "u@x.com"}}}
+	h := newTokenFlowHandler(m)
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, err := h.RequestPasswordReset(ctx, &pb.RequestPasswordResetReq{Email: "u@x.com"}); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if m.createdReset != nil {
+		t.Fatal("the link was minted before the answer — a registered address answers slower than an unknown one")
+	}
+	if held == nil {
+		t.Fatal("nothing was scheduled for a registered address")
+	}
+	cancel() // the request is over
+	held()
+	if m.createdReset == nil || m.createdReset.GetUserId() != "u1" {
+		t.Fatalf("the detached mint did not run to completion after the request ended: %+v", m.createdReset)
+	}
+	if m.mintCtxErr != nil {
+		t.Errorf("the mint ran on the request's cancelled context: %v", m.mintCtxErr)
+	}
+
+	// An unknown address schedules nothing at all.
+	held = nil
+	if _, err := h.RequestPasswordReset(context.Background(), &pb.RequestPasswordResetReq{Email: "ghost@x.com"}); err != nil || held != nil {
+		t.Fatalf("unknown address: %v, scheduled %v", err, held != nil)
+	}
+}
+
+// The error channel is closed too: a mint that fails (only a registered
+// address ever reaches it) answers exactly what an unknown address answers.
+func TestRequestPasswordReset_AFailedMintAnswersLikeAnUnknownAddress(t *testing.T) {
+	known := &tokenFlowMock{userByEmail: map[string]*pb.User{"u@x.com": {Id: "u1", Email: "u@x.com"}}, createResetErr: status.Error(codes.Internal, "insert failed")}
+	unknown := &tokenFlowMock{userByEmail: map[string]*pb.User{}}
+	a, errA := newTokenFlowHandler(known).RequestPasswordReset(context.Background(), &pb.RequestPasswordResetReq{Email: "u@x.com"})
+	b, errB := newTokenFlowHandler(unknown).RequestPasswordReset(context.Background(), &pb.RequestPasswordResetReq{Email: "ghost@x.com"})
+	if errA != nil || errB != nil {
+		t.Fatalf("known-with-failed-mint %v, unknown %v — both must be a plain success", errA, errB)
+	}
+	if !proto.Equal(a, b) {
+		t.Errorf("the answers differ: %v vs %v", a, b)
+	}
+	if known.createdReset == nil {
+		t.Error("the failing mint never ran — this arm is not exercising the error")
 	}
 }
 
@@ -237,10 +301,17 @@ type resetSweepMock struct {
 	*tokenFlowMock
 	sweepErr error
 	swept    bool
+	// tx, when set, is read at the sweep: whether the reset's transaction
+	// was still open when the sessions were revoked.
+	tx          *recordingDistTx
+	sweptInOpen bool
 }
 
 func (m *resetSweepMock) RevokeTokensForReset(ctx context.Context, in *pb.RevokeTokensForResetReq, o ...grpc.CallOption) (*pb.RevokeTokensForResetResp, error) {
 	m.swept = true
+	if m.tx != nil {
+		m.sweptInOpen = m.tx.settled() == "left open"
+	}
 	if m.sweepErr != nil {
 		return nil, m.sweepErr
 	}
@@ -355,6 +426,56 @@ func TestResetPassword_BeginRefused_SpendsNothing(t *testing.T) {
 	}
 	if m.updatedPassword != nil {
 		t.Error("the password was written with no transaction open")
+	}
+}
+
+// password_reset gap 4: with a coordinator the session sweep runs INSIDE the
+// reset's transaction — before the commit — so the reset and the end of every
+// old session land together. The answer then says the sessions were revoked,
+// and it is true.
+func TestResetPassword_SweepsSessionsInsideTheTransaction(t *testing.T) {
+	tx := &recordingDistTx{}
+	base := &tokenFlowMock{consumeResetUser: "u1"}
+	m := &resetSweepMock{tokenFlowMock: base, tx: tx}
+	h := newTokenFlowHandlerTx(base, tx)
+	h.Mutation = m
+	resp, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"})
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if !m.swept || !m.sweptInOpen {
+		t.Fatalf("the sweep ran %v, inside the open transaction %v — it must run before the commit", m.swept, m.sweptInOpen)
+	}
+	if base.revokedFor != "u1" {
+		t.Errorf("swept %q, want u1", base.revokedFor)
+	}
+	if got := tx.settled(); got != "committed" || !resp.GetSessionsRevoked() {
+		t.Errorf("transaction %s, sessions_revoked %v — want committed and true", got, resp.GetSessionsRevoked())
+	}
+}
+
+// The arm the move exists for: a sweep that fails rolls the WHOLE reset back.
+// Committing the new password while the thief's session lives on is the
+// outcome a reset must never have; refused, the person retries with the same
+// link (it was not spent) and the old password still stands.
+func TestResetPassword_AFailedSweepRollsTheResetBack(t *testing.T) {
+	tx := &recordingDistTx{}
+	base := &tokenFlowMock{consumeResetUser: "u1"}
+	m := &resetSweepMock{tokenFlowMock: base, tx: tx, sweepErr: status.Error(codes.Unavailable, "store down")}
+	h := newTokenFlowHandlerTx(base, tx)
+	h.Mutation = m
+	resp, err := h.ResetPassword(context.Background(), &pb.ResetPasswordReq{Token: "plain-tok", NewPassword: "new-secret-123"})
+	if err == nil || resp != nil {
+		t.Fatalf("a failed sweep: %v, %v — want the reset refused", resp, err)
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("the refusal is %v, want the sweep's own Unavailable (retry), not a bad-token answer", status.Code(err))
+	}
+	if got := tx.settled(); got != "rolled back" || len(tx.committed) != 0 {
+		t.Fatalf("transaction %s (committed %v), want rolled back — the new password must not land without the sweep", got, tx.committed)
+	}
+	if base.updatedPassword == nil {
+		t.Error("the password write never ran — this arm is not past the consume")
 	}
 }
 

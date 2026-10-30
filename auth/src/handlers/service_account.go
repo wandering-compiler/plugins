@@ -413,7 +413,9 @@ func (h *AuthServiceHandler) underBotOrgLock(txCtx context.Context) (context.Con
 // realm has organizations, its membership. Kept together so one transaction
 // can hold them; this is about all of them or none.
 func (h *AuthServiceHandler) createBotUserTx(txCtx context.Context, email, orgID, roleID string) (string, error) {
-	req := &pb.CreateBotUserReq{Email: email}
+	// The operator and their device, for BotCreated.
+	operator, _ := callerUserID(txCtx)
+	req := &pb.CreateBotUserReq{Email: email, CreatedBy: operator, Thumbprint: requestThumbprint(txCtx)}
 	for _, fill := range botUserFillers {
 		if err := fill(txCtx, req); err != nil {
 			return "", err

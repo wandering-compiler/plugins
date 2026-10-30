@@ -1408,16 +1408,15 @@ func (h *AuthServiceHandler) presentedToken(raw string) (token string, viaDPoP b
 //  1. GetUserByEmail resolves the principal (and returns the
 //     stored password hash).
 //  2. PasswordHash.VerifyAndRotate compares against the plain
-//     password. Rotation update-fn is nil for v1 — the plugin
-//     doesn't expose an UpdateUserPasswordHash mutation in its
-//     client surface yet; rehash-on-login is parked.
+//     password, and when the stored hash is weaker than the current
+//     settings (an older algorithm or cost) stores the same password
+//     rehashed (rehashOnSignIn). Without it a project that raised its
+//     hashing cost kept every existing account on the old one forever.
 //  3. IssueToken mints the bearer token.
 //
 // Anti-enumeration: every failure path emits the same status.
-// VerifyAndRotate's `err` return is non-fatal when ok=true (a
-// failed rehash doesn't invalidate the auth) — discarded here
-// since the plugin doesn't yet have an UpdateUserPasswordHash
-// mutation to apply the new hash anyway.
+// A failed rehash never fails the sign-in: the password was verified, and
+// the next sign-in tries again.
 //
 // Every attempt appends one SignInEvent (method PASSWORD), the refusals too
 // (signin_history.go); the row changes nothing the caller gets.
@@ -1458,7 +1457,7 @@ func (h *AuthServiceHandler) SignIn(ctx context.Context, req *pb.SignInReq) (_ *
 		signInDummyVerify(h, req.GetPassword())
 		return nil, UnauthenticatedSignIn(err)
 	}
-	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), nil)
+	ok, _, _ := h.PasswordHash.VerifyAndRotate(user.GetPasswordHash(), req.GetPassword(), h.rehashOnSignIn(ctx, user))
 	if !ok {
 		return nil, UnauthenticatedSignIn(errAuthnPasswordMismatch)
 	}
@@ -1872,6 +1871,24 @@ func runScopeDecorators(ctx context.Context, h *AuthServiceHandler, userID strin
 		}
 	}
 	return nil
+}
+
+// rehashOnSignIn is VerifyAndRotate's update for a sign-in: it stores the
+// password rehashed under the current settings, compare-and-swap on the hash
+// that was just verified (AuthMutation.RehashUserPassword). A hash changed
+// since the read — a password change or reset racing the sign-in — matches no
+// row and is left as it is: the newer password wins, not the old one's
+// rehash. Its error never reaches the caller; VerifyAndRotate reports it and
+// the sign-in goes on.
+func (h *AuthServiceHandler) rehashOnSignIn(ctx context.Context, user *pb.User) func(string) error {
+	return func(newHash string) error {
+		_, err := h.Mutation.RehashUserPassword(ctx, &pb.RehashUserPasswordReq{
+			UserId:       user.GetId(),
+			PasswordHash: newHash,
+			CurrentHash:  user.GetPasswordHash(),
+		})
+		return notFoundOK(err)
+	}
 }
 
 // isAPIRealmRow reports whether a role row read off the catalogue belongs to
