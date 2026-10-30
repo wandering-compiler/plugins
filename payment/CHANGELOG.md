@@ -1,5 +1,77 @@
 # payment — changelog
 
+## 0.1.0-rc.6
+
+### A success for another amount than was asked is held, not trusted
+
+- A payment the provider reports succeeded for another amount or currency
+  than its row holds (its intent was changed at the provider by something
+  other than this plugin) is held at the new status `AMOUNT_MISMATCH`, with
+  what it took in `received_amount` / `received_currency`. It emits
+  `PaymentAmountMismatch` once, and no `PaymentSucceeded`; a top-up grants no
+  credit. The webhook and the provider reconciliation check the same way.
+- What a payment took is read from the signed event (`amount_received`), or
+  from the provider when the event does not say; a success nobody can check
+  is redelivered, not trusted.
+- No later event moves a held payment. `RefundPayment` returns up to what it
+  took, in its currency, and takes back no credit for a held top-up.
+- `Payment` gains `received_amount` and `received_currency`, and its status a
+  value: consumer projects get a migration.
+
+### Partial refunds, refund outcomes, new payments and disputes are announced on the bus
+
+- `PaymentCreated` — a payment was recorded, at its initial status.
+- `RefundCreated` — a refund this plugin made, partial or full, with the
+  provider's outcome. `PaymentRefunded` still announces the whole amount.
+- `ProviderRefundRecorded` — a refund made at the provider directly, found by
+  the webhook or the reconciliation. A subscriber that wants every refund
+  listens to both refund events.
+- `RefundStatusChanged` — a refund succeeded, failed or was canceled.
+- `DisputeOpened` / `DisputeClosed` (`stripe_webhooks`) — a dispute was
+  recorded, and it ended WON or LOST.
+- Each is emitted once, by the write that records the fact. `Dispute` gains
+  `closed_at`, set when the dispute's closing is announced.
+
+### Refunds are checked against the plugin's own records before any provider is asked
+
+- A refund past what remains of the payment (its amount less its pending and
+  succeeded refunds) is refused as `InvalidArgument`, before the provider is
+  asked. Two refunds of one payment run one after the other under the
+  payment's row lock, so together they never exceed it, whatever the gateway
+  does.
+- A refund of a failed or canceled payment is refused as `FailedPrecondition`.
+  One whose success webhook has not arrived is read from the provider first
+  and goes ahead only when the provider reports it succeeded.
+- Concurrent refunds of one top-up no longer both pass the credit check.
+- The backend interface gains `GetPayment`. A driver for another provider
+  must implement it.
+- The plugin now needs the bundle's distributed-transaction client; a bundle
+  without one fails at boot.
+
+### Retries after the provider forgets a key are recognised, and refusals say what they are
+
+- A charge retried after the provider forgot its key is answered with the
+  payment the key recorded, once that payment is past confirmation. It used to
+  mint a second, unconfirmed intent at the provider and answer
+  `AlreadyExists`. The same key with another amount or currency is
+  `AlreadyExists` before the provider is asked.
+- The provider customer and the plan's provider price are created under an
+  idempotency key. A retried or racing create gets the object the first one
+  made instead of leaving an orphan.
+- Only the balance CHECKs read as "insufficient credit balance". Any other
+  `INVALID_VALUE` on a credit apply goes back as the caller's input error.
+- A usage report that would overflow the meter's total is refused as
+  `FailedPrecondition` with a message that says so.
+- The zero-decimal currency table is Stripe's whole documented list.
+
+### A copy of a processed webhook event costs nothing
+
+- After the signature, the webhook reads its ledger first: an event already
+  processed in full — the provider's own redelivery, or a signed request
+  replayed inside the signature's 300 s window — is acknowledged
+  (`handled=false`) before any store or provider work. A delivery whose
+  processing failed recorded nothing and still runs in full.
+
 ## 0.1.0-rc.5
 
 ### The provider's client secret stays out of every sink
