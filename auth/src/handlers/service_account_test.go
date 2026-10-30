@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -182,6 +184,7 @@ type botAdminMock struct {
 	pb.AuthMutationClient
 
 	apiRoles    []*pb.ApiRealmRole
+	createdReq  *pb.CreateBotUserReq
 	created     bool
 	botEmail    string
 	assigned    string
@@ -233,6 +236,7 @@ func (m *botAdminMock) CreateBotUser(ctx context.Context, in *pb.CreateBotUserRe
 	m.created = true
 	m.botEmail = in.GetEmail()
 	m.botTenant = in.GetTenantId()
+	m.createdReq = in
 	return &pb.CreateBotUserResp{User: &pb.User{Id: "bot-1", Email: in.GetEmail()}}, nil
 }
 
@@ -773,3 +777,34 @@ func TestCreateBot_BeginRefused_WritesNothing(t *testing.T) {
 }
 
 var errTestGrantFailed = errors.New("test: the role grant failed")
+
+// service_account gap 5: creating a machine account is an event (BotCreated,
+// emitted by CreateBotUser) that names the operator and their device — the
+// request carries both, from the caller, never from the wire.
+func TestCreateBot_TheCreationNamesTheOperatorAndTheirDevice(t *testing.T) {
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	ctx := withHeldPermissions(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		scopeUserIDKey, "admin-1", "x-w17-scope-org_id", "org-1", "x-w17-scope-tenant_id", "tenant-acme", dpopJKTKey, testJKT)), "admin-1")
+	if _, err := h.CreateBot(ctx, &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if r := m.createdReq; r.GetCreatedBy() != "admin-1" || r.GetThumbprint() != testJKT {
+		t.Errorf("CreateBotUser carried created_by %q, thumbprint %q — want the operator admin-1 and their device", r.GetCreatedBy(), r.GetThumbprint())
+	}
+}
+
+// The statement emits BotCreated with the created account, the operator and
+// the device bound from the request — and UserCreated stays the sign-up's
+// alone (one emit site per event).
+func TestCreateBotUser_EmitsBotCreated(t *testing.T) {
+	body := rpcBodies(readProto(t, filepath.Join("..", "..", "proto", "mutations", "auth_mutation.proto")))["CreateBotUser"]
+	for _, want := range []string{`event: "BotCreated"`, `"$response.user.id"`, `"$request.created_by"`, `"$request.thumbprint"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("CreateBotUser lacks %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `"UserCreated"`) {
+		t.Error("CreateBotUser emits UserCreated — that event belongs to the sign-up")
+	}
+}

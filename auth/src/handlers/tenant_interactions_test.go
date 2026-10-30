@@ -211,6 +211,40 @@ func TestAuthenticate_TenantAndOrgScopesAreStampedIndependently(t *testing.T) {
 	}
 }
 
+// noTenantStore is twoScopeStore with an account whose tenant reads empty.
+type noTenantStore struct{ twoScopeStore }
+
+func (noTenantStore) GetUserTenant(context.Context, *pb.GetUserTenantReq, ...grpc.CallOption) (*pb.GetUserTenantResp, error) {
+	return &pb.GetUserTenantResp{}, nil
+}
+
+// End to end: a valid, device-bound session whose account resolves to no
+// tenant gets NO principal — Unauthenticated, no scopes, no answer — while the
+// same session with a tenant authenticates (the control, so the refusal is the
+// tenant and not the setup).
+func TestAuthenticate_AnAccountWithNoTenantIsRefused(t *testing.T) {
+	pinResolver(t, resolvePrincipalSession)
+	prevDec, prevNarrow := scopeDecorators, grantNarrowers
+	t.Cleanup(func() { scopeDecorators, grantNarrowers = prevDec, prevNarrow })
+	grantNarrowers = nil
+	scopeDecorators = []scopeDecorator{resolveTenantScope}
+
+	base := twoScopeStore{&orgMock{}}
+	h := &AuthServiceHandler{Query: base, Mutation: &touchRecorder{}, HeaderName: "Authorization", Scheme: "Bearer"}
+	if resp, err := h.Authenticate(context.Background(), boundAuthReq("plain", testJKT)); err != nil || resp.GetScopes()["tenant_id"] != "tenant-acme" {
+		t.Fatalf("control: %v, %v", resp, err)
+	}
+
+	h.Query = noTenantStore{base}
+	resp, err := h.Authenticate(context.Background(), boundAuthReq("plain", testJKT))
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("no tenant: %v, want Unauthenticated", err)
+	}
+	if resp != nil {
+		t.Errorf("a refused principal still got an answer: %v", resp)
+	}
+}
+
 // --- service_account × authenticate -----------------------------------------
 
 // kindQuery answers GetUser with an account of one kind, or an error.

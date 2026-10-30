@@ -55,6 +55,11 @@ message CreateBotUserReq {
     (w17.field) = { type: UUID },
     (w17.contrib.plugin_feature_field) = "tenant_scope"
   ];
+  // event-only (no w17.field: not persisted, not validated): the operator
+  // who created the machine account and the key thumbprint of their device,
+  // BotCreated's created_by and device_id.
+  string created_by = 3;
+  string thumbprint = 4;
 }
 message CreateBotUserResp {
   option (w17.contrib.plugin_feature) = "service_account";
@@ -712,6 +717,20 @@ message UpdateUserPasswordReq {
   string password_hash = 2 [(w17.field) = { type: PASSWORD }];
 }
 message UpdateUserPasswordResp {
+  string user_id = 1;
+}
+
+// RehashUserPassword — the same password, stored under the current hashing
+// settings. SignIn writes it after a verify that says the stored hash is
+// weaker than the settings (an older algorithm or cost). Compare-and-swap on
+// the hash that was verified: a password changed or reset meanwhile is never
+// overwritten with the old one's rehash. Base tier: every activation signs in.
+message RehashUserPasswordReq {
+  string user_id       = 1 [(w17.field) = { type: UUID }];
+  string password_hash = 2 [(w17.field) = { type: PASSWORD }];
+  string current_hash  = 3 [(w17.field) = { type: PASSWORD }];
+}
+message RehashUserPasswordResp {
   string user_id = 1;
 }
 
@@ -2367,6 +2386,17 @@ service AuthMutation {
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "service_account";
+    option (w17.event_emit) = {
+      event: "BotCreated"
+      payload: {
+        fields: [
+          { key: "user_id",    value: "$response.user.id" },
+          { key: "email",      value: "$response.user.email" },
+          { key: "created_by", value: "$request.created_by" },
+          { key: "device_id",  value: "$request.thumbprint" }
+        ]
+      }
+    };
   }
 
   rpc CreateUser(CreateUserReq) returns (CreateUserResp) {
@@ -4229,6 +4259,23 @@ service AuthMutation {
           "UPDATE @module.User SET "
           "password_hash = :password_hash "
           "WHERE id = :user_id "
+          "RETURNING id AS user_id"
+      }
+    };
+  }
+
+  // RehashUserPassword — see its request. Unlike a password CHANGE it does
+  // NOT end device trust and revokes nothing: the credential is the same, only
+  // its stored form is stronger. No row (the hash changed since the verify) is
+  // NotFound, which SignIn leaves alone.
+  rpc RehashUserPassword(RehashUserPasswordReq) returns (RehashUserPasswordResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "password_hash = :password_hash "
+          "WHERE id = :user_id AND password_hash = :current_hash "
           "RETURNING id AS user_id"
       }
     };

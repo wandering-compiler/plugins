@@ -39,6 +39,10 @@ type keepsCallerGrants interface{ keepsCallerGrants() }
 type keepsTwoFactorPolicies interface{ keepsTwoFactorPolicies() }
 
 func TestMain(m *testing.M) {
+	// Follow-up work after an answer (a reset link's mint) runs inline, so a
+	// test reads its effect right after the call. The detachment itself has
+	// its own test, which holds the runner.
+	runDetached = func(f func()) { f() }
 	signInBudgetApplies = func(h *AuthServiceHandler) bool {
 		_, ok := h.Mutation.(keepsSignInBudget)
 		return ok

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
@@ -155,16 +156,26 @@ func hostFromContext(ctx context.Context) string {
 // tenant, events unlabelled and therefore broadcast to every authenticated
 // client of every tenant, which the second test above calls a leak by name.
 //
-// A tenant that resolves to no id stamps neither, so nothing gains an audience
-// key it did not already have as a row filter.
+// A tenant that resolves to no id REFUSES the authentication (errNoTenant,
+// answered as Unauthenticated). It used to stamp nothing and succeed, which
+// handed a tenant_scope project a principal with no tenant filter at all: a
+// scope that exists for isolation must not degrade into "unscoped" when it is
+// missing. User.tenant_id is NOT NULL, so this is a row the schema should
+// never hold — exactly the case to fail closed on rather than trust.
 func resolveTenantScope(ctx context.Context, h *AuthServiceHandler, userID string, _, scopes, labels map[string]string) error {
 	resp, err := h.Query.GetUserTenant(ctx, &pb.GetUserTenantReq{UserId: userID})
 	if err != nil {
 		return err
 	}
-	if tid := resp.GetTenantId(); tid != "" {
-		scopes["tenant_id"] = tid
-		labels["tenant_id"] = tid
+	tid := resp.GetTenantId()
+	if tid == "" {
+		return errNoTenant
 	}
+	scopes["tenant_id"] = tid
+	labels["tenant_id"] = tid
 	return nil
 }
+
+// errNoTenant is a principal under tenant_scope whose account resolves to no
+// tenant. Refused rather than authenticated unscoped.
+var errNoTenant = errors.New("tenant_scope: the account resolves to no tenant")

@@ -50,21 +50,44 @@ func TestResolveTenantScope_PublishesBothKeys(t *testing.T) {
 	}
 }
 
-// The control case, and it is not a formality: a decorator that stamped
-// unconditionally would pass the assertion above while handing a label to a
-// principal who has no tenant — an audience key nobody can satisfy, or worse
-// an empty one that matches everything.
-func TestResolveTenantScope_NoTenantStampsNeither(t *testing.T) {
+// An account that resolves to no tenant is REFUSED, not authenticated
+// unscoped (tenant_scope gap 3). It used to stamp nothing and succeed, so a
+// tenant_scope project got a principal with no tenant filter at all — the one
+// case where isolation must not quietly degrade. Nothing is stamped either: an
+// empty label would be an audience key that matches everything.
+func TestResolveTenantScope_NoTenantRefuses(t *testing.T) {
 	h := &AuthServiceHandler{Query: &tenantScopeMock{tenantByUser: map[string]string{}}}
 	sc, lb := map[string]string{}, map[string]string{}
-	if err := resolveTenantScope(context.Background(), h, "nobody", nil, sc, lb); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	err := resolveTenantScope(context.Background(), h, "nobody", nil, sc, lb)
+	if !errors.Is(err, errNoTenant) {
+		t.Fatalf("a principal with no tenant: %v, want errNoTenant", err)
 	}
-	if _, ok := sc["tenant_id"]; ok {
-		t.Error("a user with no tenant must not get a scope")
+	if len(sc) != 0 || len(lb) != 0 {
+		t.Errorf("a refused principal was stamped: scopes %v labels %v", sc, lb)
 	}
-	if _, ok := lb["tenant_id"]; ok {
-		t.Error("a user with no tenant must not get a broadcast label either")
+}
+
+// Through the decorator chain the refusal is an authentication refusal —
+// Unauthenticated, the opaque answer every other failure gets — and the
+// decorators after it do not run.
+func TestRunScopeDecorators_NoTenantIsUnauthenticated(t *testing.T) {
+	prev := scopeDecorators
+	t.Cleanup(func() { scopeDecorators = prev })
+	ranAfter := false
+	scopeDecorators = []scopeDecorator{
+		resolveTenantScope,
+		func(context.Context, *AuthServiceHandler, string, map[string]string, map[string]string, map[string]string) error {
+			ranAfter = true
+			return nil
+		},
+	}
+	h := &AuthServiceHandler{Query: &tenantScopeMock{tenantByUser: map[string]string{}}}
+	err := runScopeDecorators(context.Background(), h, "nobody", nil, map[string]string{}, map[string]string{})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("no tenant through the chain: %v, want Unauthenticated", err)
+	}
+	if ranAfter {
+		t.Error("a decorator after the refusal still ran")
 	}
 }
 
