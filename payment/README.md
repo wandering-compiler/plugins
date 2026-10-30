@@ -35,6 +35,13 @@ by the `payment_provider` env. **The core ships with one driver, Stripe.**
     metadata. The provider's answer is recorded as the refund's `status`
     (`PENDING`, `SUCCEEDED`, `FAILED`, `CANCELED`); a refund that fails
     later is settled by the refund webhooks below.
+    Before any provider is asked, the refund is checked against the plugin's
+    own records under the payment's row lock: a payment that failed or was
+    canceled is refused (`FailedPrecondition`), one whose success webhook has
+    not arrived is read from the provider first, and an amount past what
+    remains (the payment less its pending and succeeded refunds) is refused
+    (`InvalidArgument`). Two refunds of one payment run one after the other,
+    so together they never exceed it.
     Privileged / internal (not REST-exposed).
   - `IngestStripe` — webhook sink (gated `stripe_webhooks`): verify the
     `Stripe-Signature` HMAC (constant-time, multi-`v1`) + timestamp

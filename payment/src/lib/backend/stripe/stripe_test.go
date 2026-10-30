@@ -2,8 +2,10 @@ package stripe
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,5 +199,51 @@ func TestCreatePayment_StripeError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("want error on stripe 400")
+	}
+}
+
+// GetPayment reads one intent by id and answers it in the provider-neutral
+// form; an id the provider does not know, or an answer for another id, is an
+// error — RefundPayment must never proceed on an empty object.
+func TestGetPayment(t *testing.T) {
+	var gotPath, gotMethod, gotURI string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod, gotURI = r.URL.Path, r.Method, r.RequestURI
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/payment_intents/pi_1":
+			_, _ = w.Write([]byte(`{"id":"pi_1","status":"succeeded","amount":1999,"currency":"USD","customer":"cus_1","metadata":{"w17_payment":"charge"}}`))
+		case "/v1/payment_intents/pi_other":
+			_, _ = w.Write([]byte(`{"id":"pi_1","status":"succeeded","amount":1999,"currency":"usd"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"No such payment_intent"}}`))
+		}
+	}))
+	defer srv.Close()
+	b := testBackend(srv)
+
+	p, err := b.GetPayment(context.Background(), "pi_1")
+	if err != nil {
+		t.Fatalf("GetPayment: %v", err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/v1/payment_intents/pi_1" {
+		t.Errorf("request %s %s", gotMethod, gotPath)
+	}
+	if p.ProviderPaymentID != "pi_1" || p.Status != "succeeded" || p.Amount.Amount != "19.99" || p.Amount.Currency != "usd" || p.ProviderCustomerID != "cus_1" {
+		t.Errorf("payment = %+v", p)
+	}
+	if _, err := b.GetPayment(context.Background(), "pi_missing"); err == nil {
+		t.Error("an unknown intent answered without an error")
+	}
+	if _, err := b.GetPayment(context.Background(), "pi_other"); err == nil {
+		t.Error("an answer for another intent was accepted")
+	}
+	if _, err := b.GetPayment(context.Background(), ""); !errors.Is(err, backend.ErrInvalidRequest) {
+		t.Errorf("an empty id: %v, want ErrInvalidRequest", err)
+	}
+	// The id is one path segment, whatever it holds.
+	if _, err := b.GetPayment(context.Background(), "pi_1/../../v1/refunds"); err == nil || !strings.HasPrefix(gotURI, "/v1/payment_intents/pi_1%2F..%2F..%2Fv1%2Frefunds") {
+		t.Errorf("an id with a path in it was sent as %s (err %v)", gotURI, err)
 	}
 }

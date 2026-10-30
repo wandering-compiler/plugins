@@ -70,6 +70,9 @@ type memStore struct {
 	failAfter  map[string][]error // returned AFTER the op committed (lost response)
 	before     map[string]func()  // runs (unlocked) before the op, once
 	calls      map[string]int
+
+	// locks models LockPaymentForRefund's row lock (refund_guard_test.go).
+	locks rowLocks
 }
 
 func newMemStore() *memStore {

@@ -56,11 +56,14 @@ type stripeFake struct {
 	// refundStatus is the status a created refund answers with ("" =
 	// succeeded); setRefundStatus moves one later.
 	refundStatus string
-	subs         []fakeSub // in creation order
-	customers    []fakeCustomer
-	created      map[string]int64 // object id → its created time (Unix seconds)
-	order        []string         // every object id, in creation order
-	listFail     map[string][]int // GET path → statuses the next lists answer, in turn
+	// erring makes the fake a gateway that errs: it refunds past what is
+	// left on the intent, so a test can show the plugin's own guard.
+	erring    bool
+	subs      []fakeSub // in creation order
+	customers []fakeCustomer
+	created   map[string]int64 // object id → its created time (Unix seconds)
+	order     []string         // every object id, in creation order
+	listFail  map[string][]int // GET path → statuses the next lists answer, in turn
 	// dateOffset shifts the Date the account-wide lists answer with: the
 	// provider's clock, against the local one.
 	dateOffset time.Duration
@@ -184,6 +187,10 @@ func (f *stripeFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/customers" {
 		f.listAccount(w, r, f.customerObjects)
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/payment_intents/") {
+		f.getIntent(w, strings.TrimPrefix(r.URL.Path, "/v1/payment_intents/"))
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/payment_intents" {
@@ -316,7 +323,7 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 			}
 			amount = n
 		}
-		if amount > in.amount-in.refunded {
+		if amount > in.amount-in.refunded && !f.erring {
 			return stripeErr(w, http.StatusBadRequest, "invalid_request_error",
 				"Refund amount is greater than unrefunded amount on charge")
 		}

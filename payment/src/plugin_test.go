@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/secret"
 
 	"github.com/wandering-compiler/plugins/payment/gen"
@@ -25,6 +26,12 @@ func (fakeClients) PaymentQuery() pb.PaymentQueryClient {
 func (fakeClients) PaymentMutation() pb.PaymentMutationClient {
 	return struct{ pb.PaymentMutationClient }{}
 }
+func (fakeClients) DistributedTransaction() distxpb.W17DistributedTransactionClient {
+	return struct {
+		distxpb.W17DistributedTransactionClient
+	}{}
+}
+func (fakeClients) Connection() string { return "payment" }
 
 type fakeRegistry struct {
 	server     pb.PaymentServiceServer

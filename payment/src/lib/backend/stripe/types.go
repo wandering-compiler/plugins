@@ -38,19 +38,22 @@ type paymentIntentResp struct {
 
 // paymentIntentList ← GET /v1/payment_intents
 type paymentIntentList struct {
-	Data []struct {
-		ID          string            `json:"id"`
-		Status      string            `json:"status"`
-		Amount      int64             `json:"amount"` // minor units
-		Currency    string            `json:"currency"`
-		Customer    string            `json:"customer"` // the id (not expanded)
-		Description string            `json:"description"`
-		Metadata    map[string]string `json:"metadata"`
-		Created     int64             `json:"created"`
-		// The last attempt's error; null when no attempt failed.
-		LastPaymentError json.RawMessage `json:"last_payment_error"`
-	} `json:"data"`
-	HasMore bool `json:"has_more"`
+	Data    []paymentIntentObject `json:"data"`
+	HasMore bool                  `json:"has_more"`
+}
+
+// paymentIntentObject is one payment intent, listed or read by id.
+type paymentIntentObject struct {
+	ID          string            `json:"id"`
+	Status      string            `json:"status"`
+	Amount      int64             `json:"amount"` // minor units
+	Currency    string            `json:"currency"`
+	Customer    string            `json:"customer"` // the id (not expanded)
+	Description string            `json:"description"`
+	Metadata    map[string]string `json:"metadata"`
+	Created     int64             `json:"created"`
+	// The last attempt's error; null when no attempt failed.
+	LastPaymentError json.RawMessage `json:"last_payment_error"`
 }
 
 // refundResp ← POST /v1/refunds

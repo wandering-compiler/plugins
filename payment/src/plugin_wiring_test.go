@@ -1,6 +1,7 @@
 package payment
 
 import (
+	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"testing"
 
 	"github.com/wandering-compiler/sdk/go/service/secret"
@@ -64,6 +65,10 @@ type nilClients struct{ gen.ClientSet }
 
 func (nilClients) PaymentQuery() pb.PaymentQueryClient       { return nil }
 func (nilClients) PaymentMutation() pb.PaymentMutationClient { return nil }
+func (nilClients) DistributedTransaction() distxpb.W17DistributedTransactionClient {
+	return nil
+}
+func (nilClients) Connection() string { return "" }
 
 // Unwired storage clients fail at boot, not on the first request.
 func TestRegisterPlugin_UnwiredClientsFailLoud(t *testing.T) {

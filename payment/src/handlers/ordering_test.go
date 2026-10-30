@@ -19,7 +19,7 @@ import (
 // went back twice. The key is kept and looked up first.
 func TestFlow_RefundRetriedAfterTheProviderForgotTheKey_RefundsOnce(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
+	p := r.paid("user-a", "10", "k")
 	first, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestFlow_RefundRetriedAfterTheProviderForgotTheKey_RefundsOnce(t *testing.T
 // the caller believed 6 had gone back.
 func TestFlow_RefundKeyReusedForADifferentAmount_IsRefused(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
+	p := r.paid("user-a", "10", "k")
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +82,8 @@ func TestFlow_RefundKeyReusedForADifferentAmount_IsRefused(t *testing.T) {
 // whenever it happens.
 func TestFlow_RefundKeyReusedOnAnotherPayment_IsRefused(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
-	q := r.charge("user-a", "10", "k2")
+	p := r.paid("user-a", "10", "k")
+	q := r.paid("user-a", "10", "k2")
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestFlow_RefundMadeBeforeTheUpgrade_StampOutcomes(t *testing.T) {
 // refund answers this one only when it is the same refund.
 func TestFlow_RefundKeyRace_ComparesTheRecordedRefund(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
+	p := r.paid("user-a", "10", "k")
 	r.store.onceBefore("CreateRefund", func() {
 		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: p.GetId(), ProviderRefundId: "re_concurrent", Amount: "3", Currency: "usd", IdempotencyKey: refundKey("race"), Status: int32(pb.Refund_SUCCEEDED)})
 	})
@@ -279,7 +279,7 @@ func TestFlow_ALateSuccessDoesNotResurrectACanceledPayment(t *testing.T) {
 // that refund instead of making a second one.
 func TestFlow_RefundWhoseLocalRecordFailed_RetriedAfterTheProviderForgotTheKey_RefundsOnce(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
+	p := r.paid("user-a", "10", "k")
 	r.store.injectBefore("CreateRefund", errTransient)
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"}); err == nil {
 		t.Fatal("the first attempt was meant to fail at the local insert")
@@ -341,7 +341,7 @@ func TestFlow_SubscribeRetriedAfterTheProviderForgotTheKey_SubscribesOnce(t *tes
 // its own idempotency check would have refused the changed amount.
 func TestFlow_RefundFoundUnderTheKeyForAnotherAmount_IsRefused(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
+	p := r.paid("user-a", "10", "k")
 	r.store.injectBefore("CreateRefund", errTransient)
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"}); err == nil {
 		t.Fatal("the first attempt was meant to fail at the local insert")

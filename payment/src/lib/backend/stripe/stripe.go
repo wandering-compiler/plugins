@@ -325,21 +325,43 @@ func (b *Backend) ListPaymentPage(ctx context.Context, q backend.ListQuery) ([]b
 		if p.ID == "" {
 			return nil, false, fmt.Errorf("stripe: /v1/payment_intents: an intent without an id")
 		}
-		cur := strings.ToLower(p.Currency)
-		out = append(out, backend.PaymentObject{
-			ProviderPaymentID:  p.ID,
-			ProviderCustomerID: p.Customer,
-			Status:             p.Status,
-			Amount:             backend.Money{Amount: fromMinorUnits(p.Amount, cur), Currency: cur},
-			Description:        p.Description,
-			// A failed attempt leaves the intent requires_payment_method
-			// with the attempt's error, which a fresh intent has none of.
-			Failed:  p.Status == "requires_payment_method" && len(p.LastPaymentError) > 0 && string(p.LastPaymentError) != "null",
-			Created: p.Created,
-			Marks:   marks(p.Metadata),
-		})
+		out = append(out, paymentObject(p))
 	}
 	return out, list.HasMore, nil
+}
+
+// GetPayment reads one payment intent by id. An id the provider does not
+// know is an error, never an empty object: RefundPayment proceeds only on a
+// payment the provider reports succeeded.
+func (b *Backend) GetPayment(ctx context.Context, providerPaymentID string) (backend.PaymentObject, error) {
+	if providerPaymentID == "" {
+		return backend.PaymentObject{}, &backend.InputError{Msg: "stripe: a payment intent id is required"}
+	}
+	var p paymentIntentObject
+	if err := b.get(ctx, "/v1/payment_intents/"+url.PathEscape(providerPaymentID), url.Values{}, &p); err != nil {
+		return backend.PaymentObject{}, err
+	}
+	if p.ID != providerPaymentID {
+		return backend.PaymentObject{}, fmt.Errorf("stripe: /v1/payment_intents: asked for %s, answered %q", providerPaymentID, p.ID)
+	}
+	return paymentObject(p), nil
+}
+
+// paymentObject is the provider-neutral form of a payment intent.
+func paymentObject(p paymentIntentObject) backend.PaymentObject {
+	cur := strings.ToLower(p.Currency)
+	return backend.PaymentObject{
+		ProviderPaymentID:  p.ID,
+		ProviderCustomerID: p.Customer,
+		Status:             p.Status,
+		Amount:             backend.Money{Amount: fromMinorUnits(p.Amount, cur), Currency: cur},
+		Description:        p.Description,
+		// A failed attempt leaves the intent requires_payment_method
+		// with the attempt's error, which a fresh intent has none of.
+		Failed:  p.Status == "requires_payment_method" && len(p.LastPaymentError) > 0 && string(p.LastPaymentError) != "null",
+		Created: p.Created,
+		Marks:   marks(p.Metadata),
+	}
 }
 
 // ListRefundPage lists one page of the account's refunds, of every payment.

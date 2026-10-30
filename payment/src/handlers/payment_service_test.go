@@ -23,6 +23,13 @@ type fakeBackend struct {
 	createErr  error
 	lastCharge backend.PaymentSpec
 
+	// GetPayment knobs: the status it answers ("" = succeeded), an error,
+	// and the ids it was asked for.
+	refundCalls    int
+	providerStatus string
+	getPaymentErr  error
+	gotPayment     []string
+
 	// subscriptions knobs
 	priceID  string
 	subRes   backend.SubscriptionResult
@@ -47,6 +54,7 @@ func (f *fakeBackend) CreatePayment(_ context.Context, spec backend.PaymentSpec)
 	return f.createRes, f.createErr
 }
 func (f *fakeBackend) RefundPayment(_ context.Context, providerPaymentID string, amount backend.Money, idemKey string) (backend.RefundResult, error) {
+	f.refundCalls++
 	f.lastRefund = amount
 	f.lastRefundFor = providerPaymentID
 	f.lastRefundIdem = idemKey
@@ -63,6 +71,13 @@ func (f *fakeBackend) ListRefunds(_ context.Context, _ string) ([]backend.Refund
 }
 func (f *fakeBackend) ListCustomerPage(context.Context, backend.ListQuery) ([]backend.CustomerObject, bool, error) {
 	return nil, false, nil
+}
+func (f *fakeBackend) GetPayment(_ context.Context, id string) (backend.PaymentObject, error) {
+	f.gotPayment = append(f.gotPayment, id)
+	if f.getPaymentErr != nil {
+		return backend.PaymentObject{}, f.getPaymentErr
+	}
+	return backend.PaymentObject{ProviderPaymentID: id, Status: orDefault(f.providerStatus, "succeeded")}, nil
 }
 func (f *fakeBackend) ListPaymentPage(context.Context, backend.ListQuery) ([]backend.PaymentObject, bool, error) {
 	return nil, false, nil
@@ -125,6 +140,12 @@ func (q *fakeQuery) GetPayment(_ context.Context, _ *pb.GetPaymentReq, _ ...grpc
 		return nil, noRow()
 	}
 	return &pb.GetPaymentResp{Payment: q.payment}, nil
+}
+func (q *fakeQuery) LockPaymentForRefund(_ context.Context, _ *pb.LockPaymentForRefundReq, _ ...grpc.CallOption) (*pb.LockPaymentForRefundResp, error) {
+	if q.payment == nil {
+		return nil, noRow()
+	}
+	return &pb.LockPaymentForRefundResp{Id: q.payment.GetId(), Amount: q.payment.GetAmount(), Status: int32(q.payment.GetStatus())}, nil
 }
 func (q *fakeQuery) GetCreditBalance(_ context.Context, _ *pb.GetCreditBalanceReq, _ ...grpc.CallOption) (*pb.GetCreditBalanceResp, error) {
 	if q.balance == nil {
@@ -324,7 +345,7 @@ func (m *fakeMutation) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _
 }
 
 func newHandler(q *fakeQuery, m *fakeMutation, be backend.Backend) *PaymentServiceHandler {
-	return &PaymentServiceHandler{Query: q, Mutation: m, Backend: be, DefaultCurrency: "usd"}
+	return &PaymentServiceHandler{Query: q, Mutation: m, Backend: be, DefaultCurrency: "usd", DistTx: &fakeDistTx{}}
 }
 
 // ── tests ───────────────────────────────────────────────────────────
