@@ -207,7 +207,7 @@ func TestMetadataValue(t *testing.T) {
 }
 
 func TestValidateConfigAndShutdown(t *testing.T) {
-	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, WebhookSecret: "whsec_test"}
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, DistTx: &fakeDistTx{}, WebhookSecret: "whsec_test"}
 	if err := ValidateConfig(h); err != nil {
 		t.Errorf("fully wired handler refused: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestRequiredFieldRefusals(t *testing.T) {
 // With stripe_webhooks staged, a bundle without the signing secret must not
 // boot: it would refuse every delivery and leave payments pending forever.
 func TestValidateConfig_RequiresTheWebhookSecretWhileWebhooksAreOn(t *testing.T) {
-	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, DistTx: &fakeDistTx{}}
 	if err := ValidateConfig(h); err == nil || !strings.Contains(err.Error(), "webhook_signing_secret") {
 		t.Fatalf("err = %v, want the missing webhook secret refused", err)
 	}
@@ -305,7 +305,7 @@ func TestValidateConfig_RequiresTheWebhookSecretWhileWebhooksAreOn(t *testing.T)
 
 // A blank secret refuses every delivery exactly like a missing one.
 func TestValidateConfig_RefusesABlankWebhookSecret(t *testing.T) {
-	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, WebhookSecret: " \n"}
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, DistTx: &fakeDistTx{}, WebhookSecret: " \n"}
 	if err := ValidateConfig(h); err == nil || !strings.Contains(err.Error(), "webhook_signing_secret") {
 		t.Fatalf("err = %v, want the blank webhook secret refused", err)
 	}
@@ -317,7 +317,7 @@ func TestValidateConfig_RefusesABlankWebhookSecret(t *testing.T) {
 func TestValidateConfig_NoWebhookSecretNeededWhileWebhooksAreOff(t *testing.T) {
 	t.Cleanup(func() { webhooksStaged = true })
 	webhooksStaged = false
-	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, DistTx: &fakeDistTx{}}
 	if err := ValidateConfig(h); err != nil {
 		t.Fatalf("webhooks off, no secret: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestTopUpCredit_RefusesWithoutWebhooks(t *testing.T) {
 	saved := webhooksStaged
 	webhooksStaged = false
 	t.Cleanup(func() { webhooksStaged = saved })
-	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}}
+	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, DistTx: &fakeDistTx{}}
 	_, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: "5.00", Currency: "usd"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("err = %v, want FailedPrecondition", err)

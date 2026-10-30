@@ -33,6 +33,7 @@ func newRig(t *testing.T) *rig {
 	return &rig{t: t, store: store, stripe: sf, h: &PaymentServiceHandler{
 		Query: store, Mutation: store, Backend: sf.backend(),
 		WebhookSecret: testWebhookSecret, DefaultCurrency: "usd",
+		DistTx: &fakeDistTx{store: store},
 	}}
 }
 
@@ -55,6 +56,19 @@ func (r *rig) charge(user, amount, key string) *pb.Payment {
 		r.t.Fatalf("CreatePayment(%s, %s): %v", user, amount, err)
 	}
 	return resp.GetPayment()
+}
+
+// paid charges and settles the payment as succeeded, at the provider and
+// locally — the state a refund needs (RefundPayment refuses any other).
+func (r *rig) paid(user, amount, key string) *pb.Payment {
+	r.t.Helper()
+	p := r.charge(user, amount, key)
+	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
+	r.store.mu.Lock()
+	r.store.payments[p.GetId()].Status = pb.Payment_SUCCEEDED
+	r.store.mu.Unlock()
+	p.Status = pb.Payment_SUCCEEDED
+	return p
 }
 
 func (r *rig) topUp(user, amount, key string) *pb.Payment {
@@ -769,7 +783,7 @@ func TestFlow_TopUp_RetryAfterLostResponse(t *testing.T) {
 
 func TestFlow_Refunds(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "20.00", "o-ref")
+	p := r.paid("user-a", "20.00", "o-ref")
 	refund := func(amount, key string) (*pb.RefundPaymentResp, error) {
 		return r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: amount, IdempotencyKey: key})
 	}
@@ -809,7 +823,7 @@ func TestFlow_Refunds(t *testing.T) {
 
 func TestFlow_Refund_FullAndLostResponse(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "12.34", "o-full")
+	p := r.paid("user-a", "12.34", "o-full")
 	r.store.injectAfter("CreateRefund", errTransient)
 	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "full-1"})
 	wantCode(t, err, codes.Unavailable, "lost response")
@@ -848,7 +862,7 @@ func TestFlow_Refund_RefusalsNeverReachTheProvider(t *testing.T) {
 // returned as this one's.
 func TestFlow_Refund_ReplayLookupChecksThePayment(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "20.00", "o-x")
+	p := r.paid("user-a", "20.00", "o-x")
 	// The provider replays a refund id that is locally recorded against a
 	// different payment (corrupt state / a reused key across payments).
 	r.store.onceBefore("CreateRefund", func() {
@@ -1295,7 +1309,7 @@ func TestFlow_ReplayLookupFailureSurfaces(t *testing.T) {
 	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "1.00", IdempotencyKey: "k"})
 	wantCode(t, err, codes.Unavailable, "lookup failure on the replay path")
 
-	p := r.charge("user-a", "5", "k2")
+	p := r.paid("user-a", "5", "k2")
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: "rk"}); err != nil {
 		t.Fatal(err)
 	}

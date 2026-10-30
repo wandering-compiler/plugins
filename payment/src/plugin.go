@@ -41,6 +41,8 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		Backend:         be,
 		WebhookSecret:   cfg.WebhookSigningSecret.Reveal(),
 		DefaultCurrency: defaultCurrency(cfg),
+		DistTx:          clients.DistributedTransaction(),
+		Connection:      clients.Connection(),
 	}
 	if h.PreviousInstallMarks, err = previousInstallMarks(cfg.PreviousInstallMarks); err != nil {
 		return err

@@ -309,6 +309,12 @@ type Backend interface {
 	// the given idempotency key (so retries never double-charge).
 	CreatePayment(ctx context.Context, spec PaymentSpec) (PaymentResult, error)
 
+	// GetPayment reads one payment object as the provider holds it now.
+	// RefundPayment asks it when the local status does not yet say whether
+	// the payment succeeded (its webhook has not arrived): the refund goes
+	// ahead only for a payment the provider reports succeeded.
+	GetPayment(ctx context.Context, providerPaymentID string) (PaymentObject, error)
+
 	// RefundPayment reverses (part of) a payment. idemKey guards retries.
 	RefundPayment(ctx context.Context, providerPaymentID string, amount Money, idemKey string) (RefundResult, error)
 	// FindRefund returns the refund of providerPaymentID made under idemKey,
