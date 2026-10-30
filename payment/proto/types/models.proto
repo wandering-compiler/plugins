@@ -151,6 +151,10 @@ message Dispute {
   google.protobuf.Timestamp provider_event_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at = 8 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   google.protobuf.Timestamp updated_at = 9 [(w17.field) = { type: DATETIME, default_auto: NOW }];
+  // When DisputeClosed was announced: set once, by MarkDisputeClosed, after
+  // the dispute reached WON or LOST. NULL until then — and for a dispute
+  // closed before this column existed, until its next event announces it.
+  google.protobuf.Timestamp closed_at = 10 [(w17.field) = { type: DATETIME, null: true }];
 }
 
 // ProcessedWebhookEvent — the inbound-idempotency ledger. The webhook

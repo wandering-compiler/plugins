@@ -203,3 +203,124 @@ message SubscriptionStatusChanged {
   Subscription.Status       status                   = 3;
   google.protobuf.Timestamp changed_at               = 4;
 }
+
+// PaymentCreated — a payment was recorded, at whatever status the provider
+// created it in (usually REQUIRES_ACTION: it awaits the client's
+// confirmation). Emitted once per payment, by CreatePayment; a retried charge
+// answered with the recorded payment emits nothing. A top-up's charge emits
+// it too (description "credit top-up"), and so does a payment the provider
+// reconciliation recorded for an intent whose own row never landed.
+message PaymentCreated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.payment.created"
+  };
+
+  string                    payment_id          = 1;
+  string                    customer_id         = 2;
+  string                    provider_payment_id = 3;
+  string                    amount              = 4;
+  string                    currency            = 5;
+  Payment.Status            status              = 6;
+  string                    description         = 7;
+  google.protobuf.Timestamp created_at          = 8;
+}
+
+// RefundCreated — a refund this plugin made (RefundPayment) was recorded,
+// partial or full, with the outcome the provider answered (PENDING,
+// SUCCEEDED, or already FAILED / CANCELED). Once per refund, also when the
+// refund webhook records it before RefundPayment's own insert lands.
+// PaymentRefunded still announces the payment refunded in full.
+message RefundCreated {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.refund.created"
+  };
+
+  string                    refund_id          = 1;
+  string                    payment_id         = 2;
+  string                    provider_refund_id = 3;
+  string                    amount             = 4;
+  string                    currency           = 5;
+  Refund.Status             status             = 6;
+  google.protobuf.Timestamp created_at         = 7;
+}
+
+// ProviderRefundRecorded — a refund made at the provider directly (its
+// dashboard, its API, another tool), not through this plugin, was found by
+// the refund webhook or the provider reconciliation and recorded. A distinct
+// fact from RefundCreated, and so a distinct event: money left without
+// anyone calling RefundPayment. Once per refund. A subscriber that wants
+// every refund listens to both.
+message ProviderRefundRecorded {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.refund.provider_recorded"
+  };
+
+  string                    refund_id          = 1;
+  string                    payment_id         = 2;
+  string                    provider_refund_id = 3;
+  string                    amount             = 4;
+  string                    currency           = 5;
+  Refund.Status             status             = 6;
+  google.protobuf.Timestamp created_at         = 7;
+}
+
+// RefundStatusChanged — a recorded refund moved: PENDING to SUCCEEDED, or
+// to FAILED / CANCELED (terminal; the money stayed). Once per transition;
+// a redelivered or older observation emits nothing.
+message RefundStatusChanged {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.refund.status_changed"
+  };
+
+  string        refund_id          = 1;
+  string        payment_id         = 2;
+  string        provider_refund_id = 3;
+  string        amount             = 4;
+  string        currency           = 5;
+  Refund.Status status             = 6;
+}
+
+// DisputeOpened — the first event of a provider dispute (a chargeback or an
+// inquiry) was recorded. status is the dispute's status then: an inquiry
+// (INQUIRY: no funds withdrawn yet) or NEEDS_RESPONSE / UNDER_REVIEW (the
+// disputed amount is withdrawn). Once per dispute. Gated stripe_webhooks,
+// like the disputes.
+message DisputeOpened {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.dispute.opened"
+  };
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+
+  string                    dispute_id          = 1;
+  string                    payment_id          = 2;
+  string                    provider_dispute_id = 3;
+  string                    amount              = 4;
+  string                    currency            = 5;
+  Dispute.Status            status              = 6;
+  google.protobuf.Timestamp opened_at           = 7;
+}
+
+// DisputeClosed — the dispute ended: WON (funds reinstated) or LOST (the
+// amount is gone for good, and a top-up's credit follows it). Once per
+// dispute, also when the first event the plugin sees is already the closing
+// one (DisputeOpened then comes first). Gated stripe_webhooks.
+message DisputeClosed {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.dispute.closed"
+  };
+  option (w17.contrib.plugin_feature) = "stripe_webhooks";
+
+  string                    dispute_id          = 1;
+  string                    payment_id          = 2;
+  string                    provider_dispute_id = 3;
+  string                    amount              = 4;
+  string                    currency            = 5;
+  Dispute.Status            status              = 6;
+  google.protobuf.Timestamp closed_at           = 7;
+}

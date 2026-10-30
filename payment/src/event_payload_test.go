@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
+	dbpb "github.com/wandering-compiler/sdk/go/pb/w17/db"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
@@ -67,7 +68,7 @@ func TestEventEmitPayloads_MapEveryEventFieldFromASourceOfItsType(t *testing.T) 
 // name principals and amounts, and a public event is bridged to the gateway's
 // client-visible event stream. A project that bridges the channel itself must
 // filter per principal; the plugin never does it for it.
-func TestEvents_AllNineOnTheInternalChannelNonePublic(t *testing.T) {
+func TestEvents_AllOnTheInternalChannelNonePublic(t *testing.T) {
 	msgs := pb.File_events_payment_events_proto.Messages()
 	events := 0
 	for i := 0; i < msgs.Len(); i++ {
@@ -84,8 +85,8 @@ func TestEvents_AllNineOnTheInternalChannelNonePublic(t *testing.T) {
 			t.Errorf("%s is public: it would reach the client event stream unfiltered", m.Name())
 		}
 	}
-	if events != 9 {
-		t.Errorf("found %d events, want the nine the SPEC lists", events)
+	if events != 15 {
+		t.Errorf("found %d events, want the fifteen the SPEC lists", events)
 	}
 }
 
@@ -152,4 +153,50 @@ func typeName(f protoreflect.FieldDescriptor) string {
 		return "message " + string(f.Message().FullName())
 	}
 	return f.Kind().String()
+}
+
+// Which write announces what. The refund, dispute and payment-created events
+// are emitted by the INSERT or the transition-guarded UPDATE that records the
+// fact, so an event is never sent for something the database does not hold,
+// and never twice for one fact. A refund made outside the plugin is its own
+// event (ProviderRefundRecorded): the platform allows one emit site per event.
+func TestEvents_EachIsEmittedByTheWriteThatRecordsIt(t *testing.T) {
+	want := map[string]string{
+		"CreatePayment":        "PaymentCreated",
+		"CreateRefund":         "RefundCreated",
+		"RecordProviderRefund": "ProviderRefundRecorded",
+		"MarkRefundStatus":     "RefundStatusChanged",
+		"CreateDispute":        "DisputeOpened",
+		"MarkDisputeClosed":    "DisputeClosed",
+	}
+	methods := pb.File_mutations_payment_mutation_proto.Services().ByName("PaymentMutation").Methods()
+	for name, w := range want {
+		m := methods.ByName(protoreflect.Name(name))
+		if m == nil {
+			t.Errorf("PaymentMutation.%s does not exist", name)
+			continue
+		}
+		emit, _ := proto.GetExtension(m.Options(), w17pb.E_EventEmit).(*w17pb.EmitConfig)
+		if emit.GetEvent() != w {
+			t.Errorf("%s emits %q, want %s", name, emit.GetEvent(), w)
+		}
+	}
+	// The once-only guards the events rely on.
+	for _, g := range []struct{ name, guard string }{
+		{"MarkRefundStatus", "status <> :status"},
+		{"MarkDisputeClosed", "closed_at IS NULL"},
+		// Only WON and LOST close a dispute; a closed inquiry withdrew nothing.
+		{"MarkDisputeClosed", "(status = 5 OR status = 6)"},
+	} {
+		name, guard := g.name, g.guard
+		m := methods.ByName(protoreflect.Name(name))
+		db, _ := proto.GetExtension(m.Options(), dbpb.E_Method).(*dbpb.Method)
+		found := false
+		for _, op := range db.GetOps() {
+			found = found || strings.Contains(op.GetDql(), guard)
+		}
+		if !found {
+			t.Errorf("%s lost its guard %q: its event would repeat", name, guard)
+		}
+	}
 }

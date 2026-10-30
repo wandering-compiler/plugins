@@ -406,8 +406,30 @@ func (h *PaymentServiceHandler) reconcileDispute(ctx context.Context, ev stripe.
 	return reconcileTopupCredit(ctx, h, payment)
 }
 
-// recordDispute writes the dispute's status, creating its row the first time.
+// recordDispute writes the dispute's status, creating its row the first time,
+// then announces it closed if it is (announceDisputeClosed). The announcement
+// runs after every write, stale ones included: one that failed is retried by
+// the provider's redelivery, whose own status write then changes nothing.
 func (h *PaymentServiceHandler) recordDispute(ctx context.Context, ev stripe.Event, payment *pb.Payment) error {
+	if err := h.writeDispute(ctx, ev, payment); err != nil {
+		return err
+	}
+	return h.announceDisputeClosed(ctx, ev.ObjectID)
+}
+
+// announceDisputeClosed emits DisputeClosed for a dispute that is WON or LOST
+// and not yet announced (MarkDisputeClosed). Zero rows — still open, or
+// announced already — is done.
+func (h *PaymentServiceHandler) announceDisputeClosed(ctx context.Context, providerDisputeID string) error {
+	_, err := h.Mutation.MarkDisputeClosed(ctx, &pb.MarkDisputeClosedReq{ProviderDisputeId: providerDisputeID})
+	if guardRefused(err) {
+		return nil
+	}
+	return err
+}
+
+// writeDispute writes the dispute's status, creating its row the first time.
+func (h *PaymentServiceHandler) writeDispute(ctx context.Context, ev stripe.Event, payment *pb.Payment) error {
 	amount, currency := ev.Amount.Amount, ev.Amount.Currency
 	if amount == "" {
 		amount, currency = payment.GetAmount(), payment.GetCurrency()

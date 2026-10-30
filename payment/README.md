@@ -93,9 +93,15 @@ before any provider call.
 `PaymentService.GetMy*`, which answer only with the signed-in caller's
 rows (see "Who a request acts for"). The storage `PaymentQuery` tier
 takes any id and is for the project's own code only.
-- **Events** — `PaymentSucceeded`, `PaymentFailed`, `PaymentCanceled`,
-  `PaymentRefunded`, `PaymentRefundReversed` (provider-neutral), emitted
-  from the reconciliation mutations after the provider confirms. A payment
+- **Events** — `PaymentCreated`, `PaymentSucceeded`, `PaymentFailed`,
+  `PaymentCanceled`, `PaymentRefunded`, `PaymentRefundReversed`,
+  `RefundCreated` (a refund this plugin made, partial or full),
+  `ProviderRefundRecorded` (one made at the provider directly, found by the
+  webhook or the reconciliation), `RefundStatusChanged` (a refund's outcome)
+  and, with `stripe_webhooks`, `DisputeOpened` / `DisputeClosed` (WON or
+  LOST), all provider-neutral and each emitted once by the write that records
+  the fact. A subscriber that wants every refund listens to both refund
+  events. A payment
   reads `REFUNDED` once its pending and succeeded refunds reach its amount:
   `RefundPayment` sets it when its refund completes the amount, and the
   refund webhooks settle it otherwise; a failed or canceled refund does not
