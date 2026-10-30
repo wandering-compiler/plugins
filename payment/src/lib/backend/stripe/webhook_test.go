@@ -103,3 +103,26 @@ func TestVerifyAndParse_MissingHeaderParts(t *testing.T) {
 		t.Fatalf("want ErrBadSignature for unparseable header, got %v", err)
 	}
 }
+
+// A payment intent's event carries what it took (amount_received) beside
+// what was asked; an event without it reports none, never zero.
+func TestVerifyAndParse_PaymentReceived(t *testing.T) {
+	pinClock(t, 123)
+	secret := "whsec_x"
+	body := []byte(`{"id":"evt_1","type":"payment_intent.succeeded","created":120,"data":{"object":{"id":"pi_1","status":"succeeded","amount":100000,"amount_received":1000,"currency":"CZK"}}}`)
+	ev, err := VerifyAndParse(body, sign(body, secret, "123"), secret)
+	if err != nil {
+		t.Fatalf("VerifyAndParse: %v", err)
+	}
+	if ev.Received != (backend.Money{Amount: "10.00", Currency: "czk"}) || ev.Amount != (backend.Money{Amount: "1000.00", Currency: "czk"}) {
+		t.Errorf("received %+v, amount %+v", ev.Received, ev.Amount)
+	}
+	body = []byte(`{"id":"evt_2","type":"payment_intent.succeeded","created":120,"data":{"object":{"id":"pi_1","amount":100,"currency":"usd"}}}`)
+	if ev, err = VerifyAndParse(body, sign(body, secret, "123"), secret); err != nil || ev.Received != (backend.Money{}) {
+		t.Errorf("no amount_received: %+v, %v — want none", ev.Received, err)
+	}
+	body = []byte(`{"id":"evt_3","type":"payment_intent.succeeded","created":120,"data":{"object":{"id":"pi_1","amount":100,"amount_received":0,"currency":"usd"}}}`)
+	if ev, err = VerifyAndParse(body, sign(body, secret, "123"), secret); err != nil || ev.Received != (backend.Money{Amount: "0.00", Currency: "usd"}) {
+		t.Errorf("amount_received 0: %+v, %v — want a received 0", ev.Received, err)
+	}
+}

@@ -527,6 +527,19 @@ func (s *memStore) CreatePayment(_ context.Context, in *pb.CreatePaymentReq, _ .
 	return &pb.CreatePaymentResp{Payment: clone(p)}, s.leave("CreatePayment", nil)
 }
 
+// allBut is every Payment status except from: the refusals of a guard written
+// `status = <from>`. Derived from the enum, so a status added later is refused
+// too, as the SQL refuses it (a listed set once let AMOUNT_MISMATCH through).
+func allBut(from pb.Payment_Status) []pb.Payment_Status {
+	var out []pb.Payment_Status
+	for n := range pb.Payment_Status_name {
+		if st := pb.Payment_Status(n); st != from {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
 func (s *memStore) setPaymentStatus(method, pid string, to pb.Payment_Status, refused ...pb.Payment_Status) (*pb.Payment, error) {
 	for _, p := range s.payments {
 		if p.GetProviderPaymentId() != pid {
@@ -544,11 +557,36 @@ func (s *memStore) setPaymentStatus(method, pid string, to pb.Payment_Status, re
 	return nil, noRows(method)
 }
 
+// MarkPaymentAmountMismatch: status 7 + received_*, `WHERE … AND status <> 3
+// AND <> 5 AND <> 6 AND <> 7`.
+func (s *memStore) MarkPaymentAmountMismatch(_ context.Context, in *pb.MarkPaymentAmountMismatchReq, _ ...grpc.CallOption) (*pb.MarkPaymentAmountMismatchResp, error) {
+	if err := s.enter("MarkPaymentAmountMismatch"); err != nil {
+		return nil, s.leave("", err)
+	}
+	amt, err := decimal4(in.GetReceivedAmount())
+	if err != nil {
+		return nil, s.leave("MarkPaymentAmountMismatch", err)
+	}
+	p, err := s.setPaymentStatus("MarkPaymentAmountMismatch", in.GetProviderPaymentId(), pb.Payment_AMOUNT_MISMATCH,
+		pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_AMOUNT_MISMATCH)
+	if err != nil {
+		return nil, s.leave("MarkPaymentAmountMismatch", err)
+	}
+	for _, row := range s.payments {
+		if row.GetId() == p.GetId() {
+			row.ReceivedAmount, row.ReceivedCurrency = fmt4(amt), in.GetReceivedCurrency()
+			p = clone(row)
+		}
+	}
+	s.emitted = append(s.emitted, "PaymentAmountMismatch")
+	return &pb.MarkPaymentAmountMismatchResp{Payment: p}, s.leave("MarkPaymentAmountMismatch", nil)
+}
+
 func (s *memStore) MarkPaymentSucceeded(_ context.Context, in *pb.MarkPaymentSucceededReq, _ ...grpc.CallOption) (*pb.MarkPaymentSucceededResp, error) {
 	if err := s.enter("MarkPaymentSucceeded"); err != nil {
 		return nil, s.leave("", err)
 	}
-	p, err := s.setPaymentStatus("MarkPaymentSucceeded", in.GetProviderPaymentId(), pb.Payment_SUCCEEDED, pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
+	p, err := s.setPaymentStatus("MarkPaymentSucceeded", in.GetProviderPaymentId(), pb.Payment_SUCCEEDED, pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_AMOUNT_MISMATCH)
 	if err != nil {
 		return nil, s.leave("MarkPaymentSucceeded", err)
 	}
@@ -560,7 +598,7 @@ func (s *memStore) MarkPaymentFailed(_ context.Context, in *pb.MarkPaymentFailed
 	if err := s.enter("MarkPaymentFailed"); err != nil {
 		return nil, s.leave("", err)
 	}
-	p, err := s.setPaymentStatus("MarkPaymentFailed", in.GetProviderPaymentId(), pb.Payment_FAILED, pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
+	p, err := s.setPaymentStatus("MarkPaymentFailed", in.GetProviderPaymentId(), pb.Payment_FAILED, pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_AMOUNT_MISMATCH)
 	if err != nil {
 		return nil, s.leave("MarkPaymentFailed", err)
 	}
@@ -573,8 +611,7 @@ func (s *memStore) MarkPaymentRefunded(_ context.Context, in *pb.MarkPaymentRefu
 	if err := s.enter("MarkPaymentRefunded"); err != nil {
 		return nil, s.leave("", err)
 	}
-	p, err := s.setPaymentStatus("MarkPaymentRefunded", in.GetProviderPaymentId(), pb.Payment_REFUNDED,
-		pb.Payment_STATUS_UNSPECIFIED, pb.Payment_REQUIRES_ACTION, pb.Payment_PROCESSING, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
+	p, err := s.setPaymentStatus("MarkPaymentRefunded", in.GetProviderPaymentId(), pb.Payment_REFUNDED, allBut(pb.Payment_SUCCEEDED)...)
 	if err != nil {
 		return nil, s.leave("MarkPaymentRefunded", err)
 	}
@@ -588,7 +625,7 @@ func (s *memStore) MarkPaymentCanceled(_ context.Context, in *pb.MarkPaymentCanc
 		return nil, s.leave("", err)
 	}
 	p, err := s.setPaymentStatus("MarkPaymentCanceled", in.GetProviderPaymentId(), pb.Payment_CANCELED,
-		pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED)
+		pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_AMOUNT_MISMATCH)
 	if err != nil {
 		return nil, s.leave("MarkPaymentCanceled", err)
 	}
@@ -691,8 +728,7 @@ func (s *memStore) MarkPaymentRefundReversed(_ context.Context, in *pb.MarkPayme
 	if err := s.enter("MarkPaymentRefundReversed"); err != nil {
 		return nil, s.leave("", err)
 	}
-	p, err := s.setPaymentStatus("MarkPaymentRefundReversed", in.GetProviderPaymentId(), pb.Payment_SUCCEEDED,
-		pb.Payment_STATUS_UNSPECIFIED, pb.Payment_REQUIRES_ACTION, pb.Payment_PROCESSING, pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED)
+	p, err := s.setPaymentStatus("MarkPaymentRefundReversed", in.GetProviderPaymentId(), pb.Payment_SUCCEEDED, allBut(pb.Payment_REFUNDED)...)
 	if err != nil {
 		return nil, s.leave("MarkPaymentRefundReversed", err)
 	}

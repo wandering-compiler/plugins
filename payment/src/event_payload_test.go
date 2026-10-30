@@ -85,8 +85,8 @@ func TestEvents_AllOnTheInternalChannelNonePublic(t *testing.T) {
 			t.Errorf("%s is public: it would reach the client event stream unfiltered", m.Name())
 		}
 	}
-	if events != 15 {
-		t.Errorf("found %d events, want the fifteen the SPEC lists", events)
+	if events != 16 {
+		t.Errorf("found %d events, want the sixteen the SPEC lists", events)
 	}
 }
 
@@ -162,12 +162,13 @@ func typeName(f protoreflect.FieldDescriptor) string {
 // event (ProviderRefundRecorded): the platform allows one emit site per event.
 func TestEvents_EachIsEmittedByTheWriteThatRecordsIt(t *testing.T) {
 	want := map[string]string{
-		"CreatePayment":        "PaymentCreated",
-		"CreateRefund":         "RefundCreated",
-		"RecordProviderRefund": "ProviderRefundRecorded",
-		"MarkRefundStatus":     "RefundStatusChanged",
-		"CreateDispute":        "DisputeOpened",
-		"MarkDisputeClosed":    "DisputeClosed",
+		"CreatePayment":             "PaymentCreated",
+		"CreateRefund":              "RefundCreated",
+		"RecordProviderRefund":      "ProviderRefundRecorded",
+		"MarkRefundStatus":          "RefundStatusChanged",
+		"CreateDispute":             "DisputeOpened",
+		"MarkDisputeClosed":         "DisputeClosed",
+		"MarkPaymentAmountMismatch": "PaymentAmountMismatch",
 	}
 	methods := pb.File_mutations_payment_mutation_proto.Services().ByName("PaymentMutation").Methods()
 	for name, w := range want {
@@ -187,6 +188,11 @@ func TestEvents_EachIsEmittedByTheWriteThatRecordsIt(t *testing.T) {
 		{"MarkDisputeClosed", "closed_at IS NULL"},
 		// Only WON and LOST close a dispute; a closed inquiry withdrew nothing.
 		{"MarkDisputeClosed", "(status = 5 OR status = 6)"},
+		// A held payment is held once, and no later event moves it.
+		{"MarkPaymentAmountMismatch", "AND status <> 7"},
+		{"MarkPaymentSucceeded", "AND status <> 7"},
+		{"MarkPaymentFailed", "AND status <> 7"},
+		{"MarkPaymentCanceled", "AND status <> 7"},
 	} {
 		name, guard := g.name, g.guard
 		m := methods.ByName(protoreflect.Name(name))

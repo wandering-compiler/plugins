@@ -537,7 +537,7 @@ func TestFlow_FailureThenRetriedSuccess(t *testing.T) {
 func TestFlow_WebhookOutrunsLocalRow_FailsUntilTheRowLands(t *testing.T) {
 	r := newRig(t)
 	// The plugin's own intent (origin-marked), whose local row has not landed.
-	body := eventJSON("evt_fast", "payment_intent.succeeded", "pi_not_yet", map[string]any{"metadata": ownMark("charge")})
+	body := eventJSON("evt_fast", "payment_intent.succeeded", "pi_not_yet", map[string]any{"metadata": ownMark("charge"), "amount_received": 100, "currency": "usd"})
 	for i := 1; i <= 2; i++ {
 		_, err := r.deliver(body)
 		wantCode(t, err, codes.NotFound, "delivery before the row exists")

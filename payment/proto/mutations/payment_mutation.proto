@@ -56,6 +56,13 @@ message MarkPaymentRefundReversedResp { Payment payment = 1; }
 message MarkPaymentCanceledReq  { string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }]; }
 message MarkPaymentCanceledResp { Payment payment = 1; }
 
+message MarkPaymentAmountMismatchReq {
+  string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string received_amount     = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  string received_currency   = 3 [(w17.field) = { type: CHAR, max_len: 3 }];
+}
+message MarkPaymentAmountMismatchResp { Payment payment = 1; }
+
 message CreateRefundReq {
   string payment_id         = 1 [(w17.field) = { type: UUID }];
   string provider_refund_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
@@ -322,7 +329,7 @@ service PaymentMutation {
   // during webhook reconciliation. RETURNING the row lets the emit
   // carry full context. Emits PaymentSucceeded.
   //
-  // TRANSITION-GUARDED (`status <> 3 AND <> 5 AND <> 6`), and the guard is what makes
+  // TRANSITION-GUARDED (`status <> 3 AND <> 5 AND <> 6 AND <> 7`), and the guard is what makes
   // the emission correct rather than the write. The write on its own is
   // idempotent — 3 → 3 changes nothing — but the row still MATCHED, so
   // the method still returned successfully, and the generated emit
@@ -351,7 +358,7 @@ service PaymentMutation {
           "UPDATE @module.Payment SET "
           "status = 3, "
           "updated_at = NOW() "
-          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 5 AND status <> 6 "
+          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 5 AND status <> 6 AND status <> 7 "
           "RETURNING id AS payment.id, "
           "          customer_id AS payment.customer_id, "
           "          provider_payment_id AS payment.provider_payment_id, "
@@ -465,7 +472,7 @@ service PaymentMutation {
           "UPDATE @module.Payment SET "
           "status = 5, "
           "updated_at = NOW() "
-          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 5 AND status <> 6 "
+          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 5 AND status <> 6 AND status <> 7 "
           "RETURNING id AS payment.id, "
           "          customer_id AS payment.customer_id, "
           "          provider_payment_id AS payment.provider_payment_id, "
@@ -486,7 +493,9 @@ service PaymentMutation {
   }
 
   // MarkPaymentFailed — flip the Payment to FAILED (status 4). Emits
-  // PaymentFailed.
+  // PaymentFailed. Never from AMOUNT_MISMATCH (7): money was received, and
+  // the hold is the operator's to resolve; the same holds for
+  // MarkPaymentSucceeded and MarkPaymentCanceled.
   //
   // TRANSITION-GUARDED (`status <> 3, 4, 5, 6`). One
   // PaymentIntent whose first charge attempt fails and whose second
@@ -510,7 +519,7 @@ service PaymentMutation {
           "UPDATE @module.Payment SET "
           "status = 4, "
           "updated_at = NOW() "
-          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 4 AND status <> 5 AND status <> 6 "
+          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 4 AND status <> 5 AND status <> 6 AND status <> 7 "
           "RETURNING id AS payment.id, "
           "          customer_id AS payment.customer_id, "
           "          provider_payment_id AS payment.provider_payment_id, "
@@ -525,6 +534,50 @@ service PaymentMutation {
           { key: "customer_id",         value: "$response.payment.customer_id" },
           { key: "provider_payment_id", value: "$response.payment.provider_payment_id" },
           { key: "failed_at",           value: "$response.payment.updated_at" }
+        ]
+      }
+    };
+  }
+
+  // MarkPaymentAmountMismatch — hold a payment the provider reported
+  // succeeded for another amount or currency (status 7), recording what was
+  // received. Same origin states as MarkPaymentSucceeded, which it replaces
+  // for such a payment; guarded so a redelivery emits nothing. Emits
+  // PaymentAmountMismatch.
+  rpc MarkPaymentAmountMismatch(MarkPaymentAmountMismatchReq) returns (MarkPaymentAmountMismatchResp) {
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Payment SET "
+          "status = 7, "
+          "received_amount = :received_amount, "
+          "received_currency = :received_currency, "
+          "updated_at = NOW() "
+          "WHERE provider_payment_id = :provider_payment_id AND status <> 3 AND status <> 5 AND status <> 6 AND status <> 7 "
+          "RETURNING id AS payment.id, "
+          "          customer_id AS payment.customer_id, "
+          "          provider_payment_id AS payment.provider_payment_id, "
+          "          amount AS payment.amount, "
+          "          currency AS payment.currency, "
+          "          status AS payment.status, "
+          "          received_amount AS payment.received_amount, "
+          "          received_currency AS payment.received_currency, "
+          "          updated_at AS payment.updated_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "PaymentAmountMismatch"
+      payload: {
+        fields: [
+          { key: "payment_id",          value: "$response.payment.id" },
+          { key: "customer_id",         value: "$response.payment.customer_id" },
+          { key: "provider_payment_id", value: "$response.payment.provider_payment_id" },
+          { key: "amount",              value: "$response.payment.amount" },
+          { key: "currency",            value: "$response.payment.currency" },
+          { key: "received_amount",     value: "$response.payment.received_amount" },
+          { key: "received_currency",   value: "$response.payment.received_currency" },
+          { key: "detected_at",         value: "$response.payment.updated_at" }
         ]
       }
     };

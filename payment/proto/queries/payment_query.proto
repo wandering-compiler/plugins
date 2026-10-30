@@ -51,9 +51,11 @@ message SumRefundsForPaymentResp { string total = 1 [(w17.field) = { type: DECIM
 // lock (see the rpc).
 message LockPaymentForRefundReq { string id = 1 [(w17.field) = { type: UUID }]; }
 message LockPaymentForRefundResp {
-  string id     = 1;
-  string amount = 2;
-  int32  status = 3;
+  string id                = 1;
+  string amount            = 2;
+  int32  status            = 3;
+  string received_amount   = 4;
+  string received_currency = 5;
 }
 
 // GetDisputeByProviderId — provider_dispute_id is UNIQUE. Gated
@@ -237,7 +239,9 @@ service PaymentQuery {
           "       p.idempotency_key AS payment.idempotency_key, "
           "       p.description AS payment.description, "
           "       p.created_at AS payment.created_at, "
-          "       p.updated_at AS payment.updated_at "
+          "       p.updated_at AS payment.updated_at, "
+          "       p.received_amount AS payment.received_amount, "
+          "       p.received_currency AS payment.received_currency "
           "FROM @module.Payment p WHERE p.id = :id"
       }
     };
@@ -268,7 +272,9 @@ service PaymentQuery {
           "       p.idempotency_key AS payment.idempotency_key, "
           "       p.description AS payment.description, "
           "       p.created_at AS payment.created_at, "
-          "       p.updated_at AS payment.updated_at "
+          "       p.updated_at AS payment.updated_at, "
+          "       p.received_amount AS payment.received_amount, "
+          "       p.received_currency AS payment.received_currency "
           "FROM @module.Payment p WHERE p.provider_payment_id = :provider_payment_id"
       }
     };
@@ -292,7 +298,9 @@ service PaymentQuery {
           "       p.idempotency_key AS payment.idempotency_key, "
           "       p.description AS payment.description, "
           "       p.created_at AS payment.created_at, "
-          "       p.updated_at AS payment.updated_at "
+          "       p.updated_at AS payment.updated_at, "
+          "       p.received_amount AS payment.received_amount, "
+          "       p.received_currency AS payment.received_currency "
           "FROM @module.Payment p WHERE p.idempotency_key = :idempotency_key"
       }
     };
@@ -329,7 +337,7 @@ service PaymentQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT p.id AS id, p.amount AS amount, p.status AS status FROM @module.Payment p WHERE p.id = :id"
+        dql: "SELECT p.id AS id, p.amount AS amount, p.status AS status, p.received_amount AS received_amount, p.received_currency AS received_currency FROM @module.Payment p WHERE p.id = :id"
       }
     };
     option (w17.db.lock) = {

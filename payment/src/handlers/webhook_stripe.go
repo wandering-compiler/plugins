@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -104,7 +105,11 @@ func (h *PaymentServiceHandler) IngestStripe(ctx context.Context, req *pb.Ingest
 func (h *PaymentServiceHandler) reconcile(ctx context.Context, ev stripe.Event) error {
 	switch {
 	case ev.Type == "payment_intent.succeeded":
-		_, err := h.Mutation.MarkPaymentSucceeded(ctx, &pb.MarkPaymentSucceededReq{
+		held, err := h.holdAmountMismatch(ctx, ev)
+		if err != nil || held {
+			return err
+		}
+		_, err = h.Mutation.MarkPaymentSucceeded(ctx, &pb.MarkPaymentSucceededReq{
 			ProviderPaymentId: ev.PaymentIntentID,
 		})
 		if guardRefused(err) {
@@ -509,11 +514,65 @@ func (h *PaymentServiceHandler) refundNotSettled(ctx context.Context, providerPa
 		return nil
 	}
 	switch p.GetStatus() {
-	case pb.Payment_REFUNDED, pb.Payment_CANCELED:
+	case pb.Payment_REFUNDED, pb.Payment_CANCELED, pb.Payment_AMOUNT_MISMATCH:
+		// A held payment never reads REFUNDED: its refunds are recorded and
+		// it stays held, so there is nothing for a redelivery to wait for.
 		return nil
 	}
 	return status.Errorf(codes.FailedPrecondition,
 		"charge.refunded for %q before its success landed locally; redeliver", providerPaymentID)
+}
+
+// holdAmountMismatch checks a succeeded payment's received amount and
+// currency against its local row, before anything trusts the success. A
+// payment that took something else — its intent was changed at the provider
+// by something other than this plugin — is held at AMOUNT_MISMATCH
+// (MarkPaymentAmountMismatch, which emits PaymentAmountMismatch) instead of
+// SUCCEEDED: no PaymentSucceeded, and no top-up credit for money that did not
+// arrive. held reports that it was, or already is, held.
+//
+// What was received comes from the signed event (amount_received); an event
+// without it is read from the provider (GetPayment). A payment with no local
+// row, or past the point a success could move it, is left to the success path
+// and its guards as before.
+func (h *PaymentServiceHandler) holdAmountMismatch(ctx context.Context, ev stripe.Event) (held bool, err error) {
+	local, err := h.paymentByProviderID(ctx, ev.PaymentIntentID)
+	if err != nil || local == nil {
+		return false, err
+	}
+	switch local.GetStatus() {
+	case pb.Payment_AMOUNT_MISMATCH:
+		return true, nil
+	case pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED:
+		return false, nil
+	}
+	received := ev.Received
+	if received.Currency == "" {
+		obj, err := h.Backend.GetPayment(ctx, ev.PaymentIntentID)
+		if err != nil {
+			return false, providerFailure(err)
+		}
+		received = obj.Received
+	}
+	if received.Currency == "" {
+		return false, status.Errorf(codes.FailedPrecondition,
+			"payment %s: the provider reported no received amount to check the success against; redeliver", ev.PaymentIntentID)
+	}
+	if strings.EqualFold(received.Currency, local.GetCurrency()) && sameDecimal(received.Amount, local.GetAmount()) {
+		return false, nil
+	}
+	slog.Warn("payment: a payment succeeded for another amount than was asked; held",
+		"payment_id", local.GetId(), "amount", local.GetAmount(), "currency", local.GetCurrency(),
+		"received_amount", received.Amount, "received_currency", received.Currency)
+	_, err = h.Mutation.MarkPaymentAmountMismatch(ctx, &pb.MarkPaymentAmountMismatchReq{
+		ProviderPaymentId: ev.PaymentIntentID,
+		ReceivedAmount:    received.Amount,
+		ReceivedCurrency:  strings.ToLower(received.Currency),
+	})
+	if guardRefused(err) {
+		return true, nil // a concurrent delivery held it, or another write moved it first
+	}
+	return err == nil, err
 }
 
 // metadataValue reads the first value for a lowercase metadata key from

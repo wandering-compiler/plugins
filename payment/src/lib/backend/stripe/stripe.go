@@ -358,10 +358,19 @@ func paymentObject(p paymentIntentObject) backend.PaymentObject {
 		Description:        p.Description,
 		// A failed attempt leaves the intent requires_payment_method
 		// with the attempt's error, which a fresh intent has none of.
-		Failed:  p.Status == "requires_payment_method" && len(p.LastPaymentError) > 0 && string(p.LastPaymentError) != "null",
-		Created: p.Created,
-		Marks:   marks(p.Metadata),
+		Failed:   p.Status == "requires_payment_method" && len(p.LastPaymentError) > 0 && string(p.LastPaymentError) != "null",
+		Created:  p.Created,
+		Marks:    marks(p.Metadata),
+		Received: received(p.AmountReceived, cur),
 	}
+}
+
+// received is an intent's amount_received as Money, empty when absent.
+func received(minor *int64, cur string) backend.Money {
+	if minor == nil || cur == "" {
+		return backend.Money{}
+	}
+	return backend.Money{Amount: fromMinorUnits(*minor, cur), Currency: cur}
 }
 
 // ListRefundPage lists one page of the account's refunds, of every payment.

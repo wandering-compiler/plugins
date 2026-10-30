@@ -418,7 +418,7 @@ func (h *PaymentServiceHandler) reconcilePayment(ctx context.Context, o backend.
 	if typ := paymentEventType(o); typ != "" {
 		err := h.reconcile(ctx, stripe.Event{
 			Type: typ, ObjectID: o.ProviderPaymentID, PaymentIntentID: o.ProviderPaymentID,
-			Origin: o.Origin, Install: o.Install,
+			Origin: o.Origin, Install: o.Install, Received: o.Received,
 		})
 		if errors.Is(err, errNoLocalRecord) {
 			err = fmt.Errorf("payment %s: its local records are incomplete", o.ProviderPaymentID)

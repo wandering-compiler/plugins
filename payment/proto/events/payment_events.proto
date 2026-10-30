@@ -324,3 +324,24 @@ message DisputeClosed {
   Dispute.Status            status              = 6;
   google.protobuf.Timestamp closed_at           = 7;
 }
+
+// PaymentAmountMismatch — the provider reported a payment succeeded for
+// another amount or currency than was asked (the intent was changed at the
+// provider, by something other than this plugin). The payment is held at
+// AMOUNT_MISMATCH: no PaymentSucceeded, no top-up credit. An operator
+// decides — RefundPayment returns up to received_amount. Once per payment.
+message PaymentAmountMismatch {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "payment.payment.amount_mismatch"
+  };
+
+  string                    payment_id          = 1;
+  string                    customer_id         = 2;
+  string                    provider_payment_id = 3;
+  string                    amount              = 4;
+  string                    currency            = 5;
+  string                    received_amount     = 6;
+  string                    received_currency   = 7;
+  google.protobuf.Timestamp detected_at         = 8;
+}

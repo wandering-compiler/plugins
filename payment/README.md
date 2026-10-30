@@ -93,7 +93,7 @@ before any provider call.
 `PaymentService.GetMy*`, which answer only with the signed-in caller's
 rows (see "Who a request acts for"). The storage `PaymentQuery` tier
 takes any id and is for the project's own code only.
-- **Events** — `PaymentCreated`, `PaymentSucceeded`, `PaymentFailed`,
+- **Events** — `PaymentCreated`, `PaymentSucceeded`, `PaymentAmountMismatch`, `PaymentFailed`,
   `PaymentCanceled`, `PaymentRefunded`, `PaymentRefundReversed`,
   `RefundCreated` (a refund this plugin made, partial or full),
   `ProviderRefundRecorded` (one made at the provider directly, found by the
@@ -106,6 +106,12 @@ takes any id and is for the project's own code only.
   `RefundPayment` sets it when its refund completes the amount, and the
   refund webhooks settle it otherwise; a failed or canceled refund does not
   count.
+  A success is checked first: a payment the provider reports took another
+  amount or currency than its row holds (its intent was changed at the
+  provider) is held at `AMOUNT_MISMATCH` instead, with what it took
+  (`received_amount`, `received_currency`), and `PaymentAmountMismatch` says
+  so — no `PaymentSucceeded`, no top-up credit. An operator decides;
+  `RefundPayment` returns up to what it took.
 - **Stripe driver** (`src/lib/backend/stripe`) — `EnsureCustomer`,
   `CreatePayment`, `RefundPayment`, `FindRefund` (and the subscription
   calls below), `ListRefunds` over the Stripe REST API (no vendored SDK), plus webhook

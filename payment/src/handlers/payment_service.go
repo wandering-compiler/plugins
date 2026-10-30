@@ -303,7 +303,7 @@ func (h *PaymentServiceHandler) recordedCharge(ctx context.Context, cust *pb.Cus
 		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different payment")
 	}
 	switch p.GetStatus() {
-	case pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_PROCESSING:
+	case pb.Payment_SUCCEEDED, pb.Payment_FAILED, pb.Payment_CANCELED, pb.Payment_REFUNDED, pb.Payment_PROCESSING, pb.Payment_AMOUNT_MISMATCH:
 		return p, nil
 	}
 	return nil, nil
@@ -436,7 +436,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		return nil, notFound("payment not found")
 	}
 	if amount == "" {
-		amount = payment.GetAmount() // full refund
+		amount, _ = refundBasis(payment) // full refund: what the payment took
 	}
 
 	// The key is looked up HERE, before the provider is asked. The provider
@@ -509,7 +509,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 				return err
 			}
 			res, err = h.Backend.RefundPayment(ctx, payment.GetProviderPaymentId(),
-				backend.Money{Amount: amount, Currency: payment.GetCurrency()},
+				backend.Money{Amount: amount, Currency: refundCurrency(payment)},
 				req.GetIdempotencyKey())
 			if err != nil {
 				// A refusal the provider will repeat on every retry gives the
@@ -607,13 +607,20 @@ func (h *PaymentServiceHandler) underRefundLock(ctx context.Context, paymentID s
 //     SUCCEEDED refunds: InvalidArgument (base/refund-within-captured).
 //
 // A REFUNDED payment is judged by what remains: a refund that failed after
-// the payment was settled refunded leaves the rest refundable.
+// the payment was settled refunded leaves the rest refundable. A payment held
+// at AMOUNT_MISMATCH is judged by what it took (received_amount, in
+// received_currency), not by what was asked; and one whose success webhook
+// has not arrived is refused while the provider reports it took another amount
+// (its hold is on the way).
 //
 // locked is the payment row read under the lock; the sum is read under it
 // too, so a refund recorded by the refund before this one is counted.
 func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, payment *pb.Payment, locked *pb.LockPaymentForRefundResp, amount string) error {
+	took, currency := locked.GetAmount(), payment.GetCurrency()
 	switch st := pb.Payment_Status(locked.GetStatus()); st {
 	case pb.Payment_SUCCEEDED, pb.Payment_REFUNDED:
+	case pb.Payment_AMOUNT_MISMATCH:
+		took, currency = locked.GetReceivedAmount(), locked.GetReceivedCurrency()
 	case pb.Payment_FAILED, pb.Payment_CANCELED:
 		return status.Errorf(codes.FailedPrecondition, "payment %s did not succeed (%s); there is nothing to refund", payment.GetId(), st)
 	default:
@@ -624,20 +631,45 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 		if obj.Status != "succeeded" {
 			return status.Errorf(codes.FailedPrecondition, "payment %s has not succeeded at the provider (%s); it cannot be refunded yet", payment.GetId(), obj.Status)
 		}
+		if r := obj.Received; r.Currency != "" && (!strings.EqualFold(r.Currency, currency) || !sameDecimal(r.Amount, took)) {
+			return status.Errorf(codes.FailedPrecondition, "payment %s took %s %s at the provider, not the %s %s asked; it is being held — retry once its webhook has arrived",
+				payment.GetId(), r.Amount, r.Currency, took, currency)
+		}
+	}
+	// The refund is made in the currency of the payment as read before the
+	// lock; a payment held in the meantime may have taken another one.
+	if !strings.EqualFold(currency, refundCurrency(payment)) {
+		return status.Errorf(codes.FailedPrecondition, "payment %s changed while the refund waited; retry", payment.GetId())
 	}
 	sum, err := h.Query.SumRefundsForPayment(txCtx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
 	if err != nil {
 		return err
 	}
-	remaining := decimalSub(locked.GetAmount(), orDefault(sum.GetTotal(), "0"))
+	remaining := decimalSub(took, orDefault(sum.GetTotal(), "0"))
 	if !decimalAtLeast(remaining, amount) {
 		if decimalSign(remaining) < 0 {
 			remaining = "0"
 		}
 		return status.Errorf(codes.InvalidArgument, "a refund of %s exceeds what remains of payment %s: %s of %s %s",
-			amount, payment.GetId(), remaining, locked.GetAmount(), payment.GetCurrency())
+			amount, payment.GetId(), remaining, took, currency)
 	}
 	return nil
+}
+
+// refundBasis is what a refund of p can return at most, and in which
+// currency: what was asked, or for a payment held at AMOUNT_MISMATCH what it
+// actually took.
+func refundBasis(p *pb.Payment) (amount, currency string) {
+	if p.GetStatus() == pb.Payment_AMOUNT_MISMATCH && p.GetReceivedCurrency() != "" {
+		return p.GetReceivedAmount(), p.GetReceivedCurrency()
+	}
+	return p.GetAmount(), p.GetCurrency()
+}
+
+// refundCurrency is the currency a refund of p is made and recorded in.
+func refundCurrency(p *pb.Payment) string {
+	_, c := refundBasis(p)
+	return c
 }
 
 // recordOwnRefund records a refund this call made (or found at the provider
@@ -652,7 +684,7 @@ func (h *PaymentServiceHandler) recordOwnRefund(ctx context.Context, payment *pb
 		PaymentId:        payment.GetId(),
 		ProviderRefundId: res.ProviderRefundID,
 		Amount:           amount,
-		Currency:         payment.GetCurrency(),
+		Currency:         refundCurrency(payment),
 		IdempotencyKey:   storedKey,
 		Status:           int32(outcome),
 	})

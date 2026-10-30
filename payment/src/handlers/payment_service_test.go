@@ -27,6 +27,7 @@ type fakeBackend struct {
 	// and the ids it was asked for.
 	refundCalls    int
 	providerStatus string
+	received       backend.Money // GetPayment's Received ("" currency = none)
 	getPaymentErr  error
 	gotPayment     []string
 
@@ -77,7 +78,7 @@ func (f *fakeBackend) GetPayment(_ context.Context, id string) (backend.PaymentO
 	if f.getPaymentErr != nil {
 		return backend.PaymentObject{}, f.getPaymentErr
 	}
-	return backend.PaymentObject{ProviderPaymentID: id, Status: orDefault(f.providerStatus, "succeeded")}, nil
+	return backend.PaymentObject{ProviderPaymentID: id, Status: orDefault(f.providerStatus, "succeeded"), Received: f.received}, nil
 }
 func (f *fakeBackend) ListPaymentPage(context.Context, backend.ListQuery) ([]backend.PaymentObject, bool, error) {
 	return nil, false, nil

@@ -90,7 +90,8 @@ func (s *memStore) LockPaymentForRefund(ctx context.Context, in *pb.LockPaymentF
 	if !ok {
 		return nil, s.leave("LockPaymentForRefund", noRow())
 	}
-	return &pb.LockPaymentForRefundResp{Id: p.GetId(), Amount: p.GetAmount(), Status: int32(p.GetStatus())},
+	return &pb.LockPaymentForRefundResp{Id: p.GetId(), Amount: p.GetAmount(), Status: int32(p.GetStatus()),
+			ReceivedAmount: p.GetReceivedAmount(), ReceivedCurrency: p.GetReceivedCurrency()},
 		s.leave("LockPaymentForRefund", nil)
 }
 

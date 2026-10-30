@@ -555,6 +555,11 @@ func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment 
 	if got.GetTopup() == nil {
 		return nil, nil
 	}
+	// A held top-up (AMOUNT_MISMATCH) was never credited: its refund
+	// returns money and takes back nothing.
+	if payment.GetStatus() == pb.Payment_AMOUNT_MISMATCH {
+		return nil, nil
+	}
 	if got.GetTopup().GetGrantedAt() == nil {
 		return nil, status.Error(codes.FailedPrecondition, "payment: the top-up's credit is not granted yet; refund it after the payment has settled")
 	}
