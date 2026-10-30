@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/grpc/status"
 )
 
 // Event is what the writer queues. Deliberately the caller's vocabulary: the
@@ -81,6 +83,31 @@ func (e *PartialFlushError) Error() string {
 }
 
 func (e *PartialFlushError) Unwrap() error { return e.Err }
+
+// failureClass names a flush failure for the log WITHOUT its text: the gRPC
+// code, a context's deadline or cancellation, or the error's type. A database
+// error can quote the row it refused — a scope or a label, which are the
+// caller's free text — and a log line is read by people and kept by systems
+// that were never meant to hold it (usage_persistence gap 6). The counts on
+// the line are what an operator acts on; the code says which kind of failure.
+func failureClass(err error) string {
+	var partial *PartialFlushError
+	if errors.As(err, &partial) && partial.Err != nil {
+		err = partial.Err
+	}
+	switch {
+	case err == nil:
+		return "no error"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	if st, ok := status.FromError(err); ok {
+		return "code " + st.Code().String()
+	}
+	return fmt.Sprintf("error %T", err)
+}
 
 // Config bounds the queue and the wait.
 type Config struct {
@@ -247,8 +274,8 @@ func (w *Writer) loop() {
 				if partial.Unlabelled > 0 {
 					w.unlabelled.Add(uint64(partial.Unlabelled))
 					// Its own line, and NOT "not recorded": the rows exist.
-					log.Printf("agent usage: %d event(s) recorded without all their labels (the spend is written; only attribution is missing): %v",
-						partial.Unlabelled, partial.Err)
+					log.Printf("agent usage: %d event(s) recorded without all their labels (the spend is written; only attribution is missing): %s",
+						partial.Unlabelled, failureClass(partial.Err))
 				}
 			}
 			if failed > 0 {
@@ -259,8 +286,8 @@ func (w *Writer) loop() {
 				// and find it empty, after hundreds of calls, with no error
 				// anywhere. A best-effort layer
 				// may lose a batch; it may not lose it quietly.
-				log.Printf("agent usage: flush of %d event(s) failed for %d of them: %v (%d batch(es) failed so far)",
-					len(batch), failed, err, w.failedBatches.Load())
+				log.Printf("agent usage: flush of %d event(s) failed for %d of them: %s (%d batch(es) failed so far)",
+					len(batch), failed, failureClass(err), w.failedBatches.Load())
 			}
 		} else {
 			w.written.Add(uint64(len(batch)))
