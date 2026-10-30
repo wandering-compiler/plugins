@@ -212,11 +212,16 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 		return sameTerms(existing.GetPlan())
 	}
 
+	// Keyed by everything it sends (subscriptions gap 4): a retried or
+	// racing CreatePlan gets the price the first attempt made instead of an
+	// orphan at the provider.
+	name := orDefault(req.GetName(), slug)
 	priceID, err := h.Backend.UpsertPlan(ctx, backend.PlanSpec{
-		Slug:     slug,
-		Name:     orDefault(req.GetName(), slug),
-		Amount:   backend.Money{Amount: amount, Currency: currency},
-		Interval: req.GetInterval(),
+		Slug:           slug,
+		Name:           name,
+		Amount:         backend.Money{Amount: amount, Currency: currency},
+		Interval:       req.GetInterval(),
+		IdempotencyKey: scopedKey("plan", h.installID(), slug, name, amount, currency, req.GetInterval()),
 	})
 	if err != nil {
 		return nil, providerFailure(err)

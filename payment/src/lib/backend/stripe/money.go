@@ -10,8 +10,12 @@ import (
 )
 
 // zeroDecimalCurrencies are the ISO-4217 codes Stripe treats as having
-// no minor unit (the amount is already an integer of the major unit).
-// Not exhaustive — the common ones; extend as needed.
+// no minor unit (the amount is already an integer of the major unit): the
+// whole of Stripe's documented zero-decimal list, less ISK and UGX, which it
+// takes as two-decimal values (wholeUnitsSentAsCents). Every other currency
+// Stripe charges is two-decimal, except the three-decimal ones refused below,
+// so a currency absent from all three tables is two-decimal by Stripe's own
+// rule, not by a guess (TestZeroDecimalTable_IsStripesList pins the list).
 var zeroDecimalCurrencies = map[string]bool{
 	"bif": true, "clp": true, "djf": true, "gnf": true, "jpy": true,
 	"kmf": true, "krw": true, "mga": true, "pyg": true, "rwf": true,

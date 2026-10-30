@@ -46,3 +46,30 @@ func TestToMinorUnits_WholeUnitsOverflowOnTheWire(t *testing.T) {
 		t.Errorf("want an overflow refusal, got %v", err)
 	}
 }
+
+// base gap 5: the zero-decimal handling is Stripe's documented list, whole —
+// the sixteen zero-decimal currencies, ISK and UGX among them as the two it
+// takes as two-decimal values — so a currency outside it is two-decimal by
+// Stripe's rule. A change to the list is a change to this test.
+func TestZeroDecimalTable_IsStripesList(t *testing.T) {
+	stripe := []string{"bif", "clp", "djf", "gnf", "isk", "jpy", "kmf", "krw", "mga", "pyg", "rwf", "ugx", "vnd", "vuv", "xaf", "xof", "xpf"}
+	covered := map[string]bool{}
+	for c := range zeroDecimalCurrencies {
+		covered[c] = true
+	}
+	for c := range wholeUnitsSentAsCents {
+		if covered[c] {
+			t.Errorf("%s is in both the zero-decimal and the whole-units table", c)
+		}
+		covered[c] = true
+	}
+	for _, c := range stripe {
+		if !covered[c] {
+			t.Errorf("Stripe's zero-decimal %s is in neither table — it would be charged as two-decimal", c)
+		}
+		delete(covered, c)
+	}
+	for c := range covered {
+		t.Errorf("%s is treated as zero-decimal and is not on Stripe's list", c)
+	}
+}

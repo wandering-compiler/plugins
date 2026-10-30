@@ -266,6 +266,14 @@ func serve(cfg config, stop <-chan os.Signal, started func(listening)) (err erro
 			return fmt.Errorf("%s is required", req.flag)
 		}
 	}
+	// A pin of the wrong shape can match no certificate: the relay used to
+	// start and refuse every control plane, which showed only as refused
+	// handshakes in the log. Upper case and surrounding space are normalised
+	// below; colons (openssl's -fingerprint form) and any other length are not.
+	if pin := strings.ToLower(strings.TrimSpace(cfg.controlPin)); !isSHA256Hex(pin) {
+		return fmt.Errorf("--control-plane-fingerprint %q is not a SHA-256 fingerprint: it must be 64 hex characters "+
+			"with no separators, as the control plane prints it", cfg.controlPin)
+	}
 
 	crt, err := relayIdentity(cfg)
 	if err != nil {
@@ -688,4 +696,18 @@ func logControlPlaneRefused(leaf []byte, want string) error {
 	err := controlPlaneRefused(leaf, want)
 	log.Print(err)
 	return err
+}
+
+// isSHA256Hex reports whether s is 64 lowercase hex characters, the form
+// relaydial.Fingerprint prints and a pin is compared in.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

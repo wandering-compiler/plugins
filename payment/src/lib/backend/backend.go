@@ -78,6 +78,10 @@ type Money struct {
 type CustomerSpec struct {
 	UserID string
 	Email  string
+	// IdempotencyKey is sent with the create, so a retried first charge (the
+	// customer created, the local link not yet written) gets the customer the
+	// first attempt made instead of a second, unreferenced one.
+	IdempotencyKey string
 	// Install is written as the customer's install mark, beside the origin
 	// mark OriginCustomer (see PaymentSpec.Install). Empty writes neither.
 	Install string
@@ -184,6 +188,9 @@ type PlanSpec struct {
 	Name     string
 	Amount   Money
 	Interval string
+	// IdempotencyKey is sent with the create, so a retried or racing
+	// CreatePlan gets the price the first attempt made instead of an orphan.
+	IdempotencyKey string
 }
 
 // SubscriptionSpec is the input to StartSubscription.

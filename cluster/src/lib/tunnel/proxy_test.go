@@ -466,3 +466,27 @@ func TestHandler_ATunnelClosedMidCallEndsTheWorkAndIsWorkerLost(t *testing.T) {
 	}
 	rel.await(t)
 }
+
+// What the picker consumed to admit the call does not travel on; everything
+// else does (cluster proxy gap 1). The ticket used to reach the worker beside
+// the caller's own headers.
+func TestHandler_TheKeysThePickerConsumedStopAtTheRelay(t *testing.T) {
+	w := newWorker()
+	backend, _ := reversed(t, w, nil)
+	rel := newReleases()
+	cc := proxy(t, func(context.Context, string) (Backend, error) {
+		return Backend{Conn: backend, Release: rel.release, Consumed: []string{"w17-cluster-ticket"}}, nil
+	})
+	ctx := metadata.AppendToOutgoingContext(bounded(t), "w17-cluster-ticket", "t-acme", "x-tenant", "tenant-a")
+	if _, err := pb.NewClusterServiceClient(cc).ReserveTask(ctx, &pb.ReserveTaskReq{Label: "build acme"}); err != nil {
+		t.Fatalf("a call through the proxy failed: %v", err)
+	}
+	md := w.metadata()
+	if got := md.Get("w17-cluster-ticket"); len(got) != 0 {
+		t.Errorf("the worker saw the consumed ticket %q", got)
+	}
+	if got := md.Get("x-tenant"); len(got) != 1 || got[0] != "tenant-a" {
+		t.Errorf("the worker saw x-tenant = %q, want the caller's header untouched", got)
+	}
+	rel.await(t)
+}

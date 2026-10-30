@@ -24,8 +24,9 @@ import (
 // codes.InvalidArgument gRPC status carrying a w17.ErrorDetail; the
 // specific kind lives in ErrorDetail.code, NOT the top-level code.
 const (
-	codeUniqueViolation = "UNIQUE_VIOLATION" // duplicate key (PK / unique)
-	codeInvalidValue    = "INVALID_VALUE"    // FK / CHECK constraint
+	codeUniqueViolation = "UNIQUE_VIOLATION"   // duplicate key (PK / unique)
+	codeInvalidValue    = "INVALID_VALUE"      // FK / CHECK constraint
+	codeValueOutOfRange = "VALUE_OUT_OF_RANGE" // a value the column cannot hold (numeric overflow)
 )
 
 // constraintCode returns the w17 ErrorDetail.code carried by a storage
@@ -43,6 +44,25 @@ func constraintCode(err error) string {
 		}
 	}
 	return ""
+}
+
+// isOverdraw reports whether an ApplyCredit refusal is the balance going
+// below zero: an INVALID_VALUE from the CreditBalance CHECKs, which are the
+// table's raw credit_balance_nonneg (no field) and the balance column's own
+// gte (field "balance"). Any other INVALID_VALUE on that path — a reason that
+// is not a slug, a value another column refuses — names its field, and is
+// the caller's input, not a balance problem (prepaid gap 1).
+func isOverdraw(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	for _, d := range st.Details() {
+		if ed, ok := d.(*w17pb.ErrorDetail); ok {
+			return ed.GetCode() == codeInvalidValue && (ed.GetField() == "" || ed.GetField() == "balance")
+		}
+	}
+	return false
 }
 
 // invalidArg returns a codes.InvalidArgument status for a caller-input

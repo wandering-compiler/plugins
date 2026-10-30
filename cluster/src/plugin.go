@@ -31,6 +31,13 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 		return fmt.Errorf("cluster: RegisterPlugin needs both a registry and a client set")
 	}
 
+	// A negative timeout is a typo, not a choice: refused, where it used to
+	// become the 5 s default unannounced. Zero stays the default, because the
+	// configuration's zero value is also what an unset field reads as.
+	if cfg.DialTimeoutSeconds < 0 {
+		return fmt.Errorf("cluster: dial_timeout_seconds is %d; it must be positive (or unset for the 5 s default)", cfg.DialTimeoutSeconds)
+	}
+
 	// Loaded at BOOT, not at the first schedule. A control plane with no
 	// client identity cannot reach any relay, so every call it accepts is one
 	// it will fail — better to refuse to start than to look healthy and
@@ -46,7 +53,7 @@ func RegisterPlugin(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients ge
 	// ScheduleTask until the CALLER's deadline, which is the opposite of
 	// "skipped quickly enough that scheduling falls through to a healthy one".
 	dialTimeout := time.Duration(cfg.DialTimeoutSeconds) * time.Second
-	if dialTimeout <= 0 {
+	if dialTimeout == 0 {
 		dialTimeout = 5 * time.Second
 	}
 	h := &handlers.ClusterServiceHandler{

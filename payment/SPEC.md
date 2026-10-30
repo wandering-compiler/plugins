@@ -157,25 +157,29 @@ hold it. **Partly fixed** says what is still open.
    carries none and names the user itself, so `RefundPayment`,
    `GrantCredit`, `SpendCredit`, `ReportUsage`, `CreatePlan` and the storage
    tiers must stay off any client-facing surface.
-2. **A charge retried after the provider's window is not recognised.**
-   Unlike refunds, `charge` does not look the stored (scoped) key up
-   locally before calling the provider; `GetPaymentByIdempotencyKey` is read
-   only for a raw key an earlier version stored. After the window the
-   provider mints a new, unconfirmed intent (orphaned at the provider) and
-   the caller gets `AlreadyExists` instead of its recorded payment. No money
-   moves, but the retry promise in `ChargeReq` holds only inside the
-   window. A `GetPaymentByIdempotencyKey` read of the scoped key
-   before the provider call would close it.
-3. **`EnsureCustomer` sends no idempotency key.** A retried or racing first
-   charge leaves an unreferenced provider customer. Documented in the code,
-   but it accumulates without bound.
+2. **Fixed: a charge retried after the provider's window.** `charge` reads
+   the stored key locally before the provider call (`recordedCharge`). A
+   payment past confirmation (succeeded, failed, canceled, refunded,
+   processing) is the answer, with no provider call; one of another amount,
+   currency or customer is `AlreadyExists`. A payment still awaiting the
+   client's confirmation goes to the provider as before, which replays it
+   with the client secret inside its window. After the window such a retry
+   still mints a new intent: nothing stores the secret.
+   (`TestFlow_ChargeRetriedAfterTheProviderForgotTheKey_IsTheRecordedPayment`,
+   `TestFlow_ChargeKeyReusedForADifferentPayment_IsRefusedLocally`,
+   `TestFlow_ChargeRetriedBeforeConfirmation_StillGetsTheClientSecret`)
+3. **Fixed: `EnsureCustomer` sends an idempotency key**, derived from the
+   installation, the principal and the address. A retried or racing first
+   charge gets the customer the first create made, within the provider's
+   window (`TestFlow_CustomerAndPlanCreatesCarryAnIdempotencyKey`).
 4. **Refunds are not checked against the payment's state or remaining
    amount locally.** Both are left to the provider (see
    `base/refund-only-succeeded`, `base/refund-within-captured`); against the
    stateless sandbox nothing refuses them.
-5. **The zero-decimal table is not exhaustive** and every currency not in it
-   is treated as two-decimal. A zero-decimal currency missing from the table
-   is charged at 1/100 of the amount or refused, depending on the provider.
+5. **Fixed: the zero-decimal table is Stripe's whole documented list**
+   (ISK and UGX as the two it takes as two-decimal values), so a currency
+   outside it is two-decimal by Stripe's rule; three-decimal currencies stay
+   refused (`TestZeroDecimalTable_IsStripesList`).
 6. **No event for a partial refund or for a created payment.**
    `PaymentRefunded` is emitted once, when the payment is fully refunded; a
    consumer learns of a partial refund only by polling.
@@ -344,11 +348,10 @@ hold it. **Partly fixed** says what is still open.
 
 **Gaps / suspected defects**
 
-1. **Every `INVALID_VALUE` reads as an overdraw.** `applyCredit` maps any
-   `INVALID_VALUE` constraint code to "insufficient credit balance". A
-   `reason` that is not a slug, or another field-level refusal that the
-   storage tier reports with that code, would be told to the caller as a
-   balance problem.
+1. **Fixed: only the balance CHECKs read as an overdraw.** `isOverdraw`
+   takes an `INVALID_VALUE` with no field (`credit_balance_nonneg`) or on
+   `balance`; any other names its field and goes back as the caller's input
+   error (`TestApplyCredit_OnlyTheBalanceCheckIsAnOverdraw`).
 2. **Owed credit is recorded, not collected.** A refund made at the provider
    or a lost dispute over credit already spent takes the balance to zero and
    records the rest as `CreditTopup.credit_owed`. A later reconciliation of
@@ -392,8 +395,10 @@ hold it. **Partly fixed** says what is still open.
 
 1. **Usage is never billed.** `reported_total` is written as 0 and nothing
    pushes usage to the provider. The feature is a local meter only.
-2. **No upper bound on `quantity`.** `total + quantity` can overflow the
-   64-bit column; the database error would surface as an internal failure.
+2. **Fixed: a meter overflow is said.** `total + quantity` past the 64-bit
+   column is refused as `FailedPrecondition` ("the meter's total would
+   exceed its maximum"), with nothing recorded
+   (`TestReportUsage_MeterOverflowIsSaid`).
 3. **`period` is free-form.** Two spellings of one billing window are two
    meters.
 
@@ -448,8 +453,10 @@ hold it. **Partly fixed** says what is still open.
    for the subscription's first payment, and a customer the plugin created
    has no default payment method, so a new subscription typically stays
    `INCOMPLETE` until the provider expires it.
-4. **`UpsertPlan` sends no idempotency key.** A retried or racing
-   `CreatePlan` leaves an orphan provider price.
+4. **Fixed: `UpsertPlan` sends an idempotency key**, derived from the
+   installation and every term it sends. A retried or racing `CreatePlan`
+   gets the price the first create made, within the provider's window
+   (`TestFlow_CustomerAndPlanCreatesCarryAnIdempotencyKey`).
 5. **Ordering is to the second.** Two events created in the same second
    apply in delivery order (`provider_event_at <= :provider_event_at`). An
    event without a creation time is stamped "now", which then refuses every

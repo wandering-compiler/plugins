@@ -241,9 +241,10 @@ func TestTunnel_ACallReachesTheWorkerAndComesBack(t *testing.T) {
 	if resp.GetDiscovered() != 42 {
 		t.Errorf("discovered = %d, want the worker's 42", resp.GetDiscovered())
 	}
-	// The caller's metadata travels as-is; the relay is a pipe.
-	if len(r.work.seenTicket) != 1 || r.work.seenTicket[0] != grant.Ticket {
-		t.Errorf("the worker saw ticket %v, want the caller's", r.work.seenTicket)
+	// The ticket is the relay's: spent at the proxy, it does not travel on
+	// to the worker (cluster proxy gap 1).
+	if len(r.work.seenTicket) != 0 {
+		t.Errorf("the worker saw ticket %v, want none — the relay consumed it", r.work.seenTicket)
 	}
 }
 

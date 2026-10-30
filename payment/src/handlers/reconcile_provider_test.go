@@ -257,10 +257,14 @@ func TestReconcile_Customers(t *testing.T) {
 	wantCode(t, err, codes.Unavailable, "the customer whose row failed")
 	orphan := r.stripe.customers[0].id
 
+	// The retry carries another address, so it is another create: a retry
+	// of the SAME create gets the first customer back under its idempotency
+	// key (TestFlow_CustomerAndPlanCreatesCarryAnIdempotencyKey) and leaves
+	// nothing to supersede.
 	r.store.injectBefore("CreateCustomer", errTransient)
 	_, err = r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-b"})
 	wantCode(t, err, codes.Unavailable, "user-b's first customer")
-	if _, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-b"}); err != nil {
+	if _, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: "user-b", Email: "b@example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	r.stripe.foreignCustomer(map[string]string{"user_id": "user-c"}) // an earlier version's

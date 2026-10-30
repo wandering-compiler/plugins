@@ -688,6 +688,9 @@ func TicketPicker(pool *relaycore.Pool, backends *Backends, workers *workeradmit
 		var once sync.Once
 		return tunnel.Backend{
 			Conn: conn,
+			// Spent here; the worker has no use for it, and a header the
+			// relay consumed is not the caller's to hand on.
+			Consumed: []string{TicketHeader},
 			Release: func() {
 				once.Do(func() {
 					// Both books, exactly once: the pool's slot AND the
