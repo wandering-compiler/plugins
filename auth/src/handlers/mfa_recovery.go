@@ -91,7 +91,12 @@ func (h *AuthServiceHandler) acceptRecoveryCode(ctx context.Context, userID, cod
 func (h *AuthServiceHandler) stepUp(ctx context.Context, userID string, row *pb.UserTotpSecret, code string) error {
 	att, err := h.Mutation.RecordStepUpAttempt(ctx, &pb.RecordStepUpAttemptReq{Id: row.GetId()})
 	if err != nil && notFoundOK(err) != nil {
-		return Unauthenticated(errMfaChallengeInvalid) // an unaccounted guess is not granted
+		// An unaccounted guess is not granted. An outage is said as one
+		// (AUTH_UNAVAILABLE), so the person retries instead of retyping.
+		if operationalCode(err) != codes.OK {
+			return Unauthenticated(err)
+		}
+		return UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	if att.GetAttempts() == 0 {
 		return stepUpLocked(ctx)
@@ -113,7 +118,7 @@ func (h *AuthServiceHandler) stepUp(ctx context.Context, userID string, row *pb.
 		}
 	}
 	if !ok {
-		return Unauthenticated(errMfaChallengeInvalid)
+		return UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	_, _ = h.Mutation.ResetStepUp(ctx, &pb.ResetStepUpReq{Id: row.GetId()})
 	return nil

@@ -1462,6 +1462,7 @@ msgids:
   - "Signing in with the provider did not complete. Please start again."
   - "Someone still holds this role, directly or through a team. Give them another role first."
   - "That code is not right, or it has expired. Ask for a new one."
+  - "That code is not valid. Check it and try again, or request a new one."
   - "That expiry date is not a valid date."
   - "That is not your password. Type the password you sign in with."
   - "That key belongs to a device that was revoked. Generate a new key for the program."

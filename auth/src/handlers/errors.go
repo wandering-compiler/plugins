@@ -94,12 +94,13 @@ func (e *authnError) GRPCStatus() *status.Status {
 // that is the anti-enumeration rule this file exists for, and it is why the
 // sentence beside it names both.
 //
-// Only SIGN-IN mints CodeInvalidCredentials. Every other flow that refuses —
-// a missing bearer header, a bad MFA code, a spent reset token — goes out
-// with no detail at all and renders the gateway's generic sentence. That is
-// deliberate: those flows want their own wording, and inventing it here from
-// the cause is how the anti-enumeration rule gets broken by accident (see
-// UnauthenticatedSignIn).
+// Only SIGN-IN mints CodeInvalidCredentials, and only a second-factor code
+// refusal mints CodeMfaCodeRefused (UnauthenticatedMfaCode). Every other flow
+// that refuses — a missing bearer header, a spent reset token — goes out with
+// no detail at all and renders the gateway's generic sentence. That is
+// deliberate: those flows want their own wording, chosen by the flow that
+// knows it, and inventing it here from the cause is how the anti-enumeration
+// rule gets broken by accident (see UnauthenticatedSignIn).
 const (
 	CodeInvalidCredentials = "INVALID_CREDENTIALS" // #nosec G101 -- the NAME of the code a client dispatches on, not a credential value
 	CodeAuthUnavailable    = "AUTH_UNAVAILABLE"
@@ -118,6 +119,14 @@ const (
 	// sentence hides. It reveals nothing: an org that does not
 	// exist and one the caller is not in answer the same.
 	CodeOrgNotMember = "ORG_NOT_MEMBER"
+
+	// CodeMfaCodeRefused: a second-factor code (an authenticator code, an
+	// emailed code, a recovery code) was refused — wrong, expired, already
+	// used, out of attempts, or raised for another device. ONE code for every
+	// cause, so it stays as opaque as the status: it only stops the person
+	// being told they are not signed in when what failed was the code they
+	// typed (they were, on ConfirmTotp; they half were, on VerifyMfa).
+	CodeMfaCodeRefused = "MFA_CODE_REFUSED"
 
 	// CodeOrgMismatch: the request's `org` field names a different
 	// organization than the one authentication resolved for it. Through
@@ -384,6 +393,10 @@ const (
 	MsgOrgNotMember = "You are not a member of the organization this request names. The W17-Org header takes the organization's slug."
 
 	MsgOrgMismatch = "This request names two different organizations. Name one."
+
+	// About the CODE, and the same for every cause: naming the cause would
+	// tell a guesser which half of the attempt was wrong.
+	MsgMfaCodeRefused = "That code is not valid. Check it and try again, or request a new one."
 
 	MsgSignUpNotInvited = "Registration is by invitation only. Ask the organization you are joining to invite you."
 
@@ -744,6 +757,18 @@ func UnauthenticatedSignIn(cause error) error {
 		userCode: CodeInvalidCredentials,
 		userMsg:  MsgInvalidCredentials,
 	}
+}
+
+// UnauthenticatedMfaCode is the refusal of a second-factor code: the same
+// opaque Unauthenticated status, plus the pair a gateway renders so the
+// person reads that the CODE was refused. Every refusal of a code carries the
+// identical pair — a wrong code, an expired, consumed or unknown challenge,
+// a spent attempt budget, another device's key — or the sentence becomes the
+// oracle the status is opaque to avoid. An outage stays an outage
+// (operational causes keep their own pair) and a missing session stays the
+// generic answer: neither is about the code.
+func UnauthenticatedMfaCode(cause error) error {
+	return &authnError{cause: cause, userCode: CodeMfaCodeRefused, userMsg: MsgMfaCodeRefused}
 }
 
 // UnauthenticatedOrgNotMember is the refusal of a request scoped into an

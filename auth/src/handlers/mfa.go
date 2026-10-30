@@ -553,7 +553,12 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	}
 	resp, err := h.Query.GetTotpSecret(ctx, &pb.GetTotpSecretReq{UserId: userID})
 	if err != nil || resp.GetSecret() == nil {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		// An outage is said as one; no pending authenticator answers as a
+		// refused code, the same as a wrong one.
+		if err != nil && operationalCode(err) != codes.OK {
+			return nil, Unauthenticated(err)
+		}
+		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	// Confirming is for a PENDING authenticator. Re-confirming a confirmed one
 	// used to be a harmless no-op; now it would mint a new set of recovery
@@ -573,7 +578,7 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 		return nil, err
 	}
 	if !ok {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	// Confirmed and given its recovery codes together: an authenticator that
 	// protects the account with no way back from a lost phone is one support
@@ -703,7 +708,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		if operationalCode(err) != codes.OK {
 			return nil, Unauthenticated(err)
 		}
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	ch := resp.GetChallenge()
 	attempt.userID = ch.GetUserId()
@@ -711,13 +716,13 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	// cannot change it.
 	attempt.publicComputer = ch.GetPublicComputer()
 	if ch.GetConsumedAt() != nil {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	// No creation time is no proof of age: refused, not waved through. The
 	// expiry used to apply only when the time was there, so a challenge read
 	// without it never expired.
 	if created := ch.GetCreatedAt(); created == nil || time.Now().After(created.AsTime().Add(h.mfaTTL())) {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	// Brute-force lockout. The budget is CLAIMED before the
 	// code is checked, and the claim is the same statement that counts it.
@@ -749,7 +754,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 		if operationalCode(attErr) != codes.OK {
 			return nil, Unauthenticated(attErr)
 		}
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	// Zero is unambiguous HERE, and only here: a matched row always comes
 	// back with attempts+1, which is at least 1. So zero means the UPDATE
@@ -757,17 +762,17 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	// or is gone. (Everywhere else in this codebase a proto3 zero is the same
 	// answer as an absent field; this statement is what makes it a sentinel.)
 	if att.GetAttempts() == 0 {
-		return nil, Unauthenticated(errMfaChallengeInvalid)
+		return nil, UnauthenticatedMfaCode(errMfaChallengeInvalid)
 	}
 	if att.GetAttempts() > maxMfaAttempts {
-		return nil, Unauthenticated(errMfaAttemptsSpent)
+		return nil, UnauthenticatedMfaCode(errMfaAttemptsSpent)
 	}
 	// Only the key that passed the password completes its sign-in. Checked
 	// after the attempt is claimed, so a probe with another key spends the
 	// challenge's budget like a wrong code; the challenge is not consumed
 	// (consuming it records the factor as verified).
 	if !sameKey(ch.GetThumbprint(), thumbprint) {
-		return nil, Unauthenticated(errMfaChallengeOtherDevice)
+		return nil, UnauthenticatedMfaCode(errMfaChallengeOtherDevice)
 	}
 	userID := ch.GetUserId()
 
@@ -779,7 +784,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	// account now rolls the spent code back.
 	err = h.inTx(ctx, func(txCtx context.Context) error {
 		if !h.verifyMfaCode(txCtx, userID, ch.GetCodeHash(), req.GetCode()) {
-			return Unauthenticated(errMfaChallengeInvalid)
+			return UnauthenticatedMfaCode(errMfaChallengeInvalid)
 		}
 		account, err := refuseUnsignableAccount(txCtx, h, userID)
 		attempt.account = account
@@ -793,7 +798,7 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 			return Unauthenticated(err)
 		}
 		if consumed.GetUserId() == "" {
-			return Unauthenticated(errMfaChallengeInvalid)
+			return UnauthenticatedMfaCode(errMfaChallengeInvalid)
 		}
 		return nil
 	})
