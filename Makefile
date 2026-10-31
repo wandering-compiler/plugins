@@ -113,13 +113,16 @@ check-committed-pb: plugins-exist buf-image
 
 # The installable form a consumer's w17ctl renders a release into, rendered by
 # the pinned w17ctl: inert Go (.src), tests carried, no src/gen — not even when
-# a generated one sits in the author tree.
+# a generated one sits in the author tree — and a plugin's sandboxes/ carried,
+# because it is the build context of a sandbox image no registry publishes
+# (`sandboxes[].build`); the render refuses a declared build it does not ship.
 check-render: plugins-exist
 	@for p in $(PLUGINS); do \
 		work="$$(mktemp -d)"; trap 'rm -rf "$$work"' EXIT; $(W17CTL) plugin render "$$p" --out "$$work/$$p" || exit 1; \
 		[ ! -e "$$work/$$p/src/gen" ] || { echo "!! $$p rendered src/gen — it is generated, never published"; exit 1; }; \
 		[ "$$(find "$$work" -name '*_test.go.src' | wc -l)" -gt 0 ] || { echo "!! $$p rendered no tests"; exit 1; }; \
-		live="$$(find "$$work/$$p/src" -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) 2>/dev/null)"; \
+		[ ! -d "$$p/sandboxes" ] || [ -d "$$work/$$p/sandboxes" ] || { echo "!! $$p rendered no sandboxes/ — a project could not build its sandbox images (is tools/w17ctl-version older than sandbox source?)"; exit 1; }; \
+		live="$$(find "$$work/$$p" -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) 2>/dev/null)"; \
 		[ -z "$$live" ] || { echo "!! $$p rendered LIVE Go:"; echo "$$live"; exit 1; }; \
 		rm -rf "$$work"; \
 	done

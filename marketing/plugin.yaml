@@ -1,7 +1,7 @@
 name: marketing
 version: 0.1.0-rc.3
-# 1.13: request_consumers and subscriptions.
-requires_w17: ">=1.13"
+# 1.13: request_consumers and subscriptions; 1.17: a sandbox's build:.
+requires_w17: ">=1.17"
 
 # Explicit Go module anchor — staging text-rewrites this prefix in
 # src/handlers/ + src/lib/ + plugin.go to the per-activation paths.
@@ -88,12 +88,18 @@ sandboxes:
   # and keeps what they said (GET /_stub/contacts/{ext_id}, /_stub/events), so
   # a project's suite reads back what would have reached Brevo. Point the
   # activation at it: <DOMAIN>_MARKETING_BREVO_BASE_URL=http://brevostub:8080/v3
-  # and _BREVO_API_KEY=stub-key. Built locally from a clone of this repository:
+  # and _BREVO_API_KEY=stub-key. No registry publishes the image: the release
+  # ships its source, and `build:` makes the project's compose.w17.yaml build
+  # it from the vendored plugin (`w17ctl stack build`, `stack up --build`, or
+  # the first `stack up` that finds no image). From a clone of this repository:
   #   docker build -t ${W17_WORKSPACE:-w17}-w17-brevostub:dev marketing/sandboxes/brevostub
   - name: brevostub
     description: "Fake Brevo API (dev-only) for the brevo feature"
     feature: brevo
     image: ${W17_WORKSPACE:-w17}-w17-brevostub:dev
+    # Plugin-relative; the Dockerfile is the context's own.
+    build:
+      context: sandboxes/brevostub
     env:
       - name: PORT
         value: "8080"

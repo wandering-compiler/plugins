@@ -1,6 +1,6 @@
 name: auth
 version: 0.1.0-rc.51
-requires_w17: ">=1.16"
+requires_w17: ">=1.17"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -1399,8 +1399,12 @@ sandboxes:
   # feature without a real Google/GitHub. Gated `oauth`: only wired
   # when the activation enables that feature. Reachable in-network at
   # `http://fakeidp:8080` — seed an OAuthProvider row whose
-  # authorize/token/userinfo URLs point there. The image is built
-  # locally from a clone of github.com/wandering-compiler/plugins:
+  # authorize/token/userinfo URLs point there. No registry publishes the
+  # image: the release ships its source (sandboxes/fakeidp, a self-contained
+  # multi-stage Dockerfile, stdlib only), and `build:` makes the project's
+  # compose.w17.yaml build it from the vendored copy — `w17ctl stack build`,
+  # `stack up --build`, or the first `stack up` that finds no image. From a
+  # clone of github.com/wandering-compiler/plugins the same build is:
   #   docker build -t ${W17_WORKSPACE:-w17}-w17-fakeidp:dev auth/sandboxes/fakeidp
   # The tag is WORKSPACE-PREFIXED: an image tag is build output, and a fixed
   # one on a shared docker daemon is a name every checkout overwrites.
@@ -1408,6 +1412,9 @@ sandboxes:
     description: "Fake OIDC provider (dev-only) for the oauth feature"
     feature: oauth
     image: ${W17_WORKSPACE:-w17}-w17-fakeidp:dev
+    # Plugin-relative; the Dockerfile is the context's own.
+    build:
+      context: sandboxes/fakeidp
     # Documented default values the sandbox launches with — the e2e
     # test + the seeded OAuthProvider row are written against these.
     # Override in the hand-written compose.yaml / .env, never here.

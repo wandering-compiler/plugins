@@ -1,11 +1,15 @@
 # Relay image. Build from the PLUGIN directory, because the relay is part of
 # the plugin's Go module and shares its generated pb with the handlers — one
 # copy of the contract, so the two sides cannot drift. That pb is generated,
-# never committed, so a fresh clone has none — generate it first:
+# never committed:
 #
-#   w17ctl plugin gen-pb cluster
-#   docker build -f cluster/sandboxes/relay/Dockerfile \
-#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev cluster   (from a clone of github.com/wandering-compiler/plugins)
+#   in a project   `w17ctl codegen` writes it into the vendored plugin, and
+#                  the project's compose.w17.yaml builds this image from there
+#                  (the sandbox's `build:` in plugin.yaml);
+#   in a clone     generate it first:
+#                    w17ctl plugin gen-pb cluster
+#                    docker build -f cluster/sandboxes/relay/Dockerfile \
+#                      -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev cluster
 #
 # The tag is WORKSPACE-PREFIXED. An image tag is build output, and a fixed one
 # on a shared docker daemon is a name every checkout overwrites.
@@ -17,7 +21,7 @@
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY src/ .
-RUN test -d gen/pb || { echo "src/gen/pb is missing: run \`w17ctl plugin gen-pb cluster\` in the plugins clone, then build again" >&2; exit 1; }
+RUN test -d gen/pb || { echo "src/gen/pb is missing: in a project run \`w17ctl codegen\`, in the plugins clone \`w17ctl plugin gen-pb cluster\`, then build again" >&2; exit 1; }
 RUN CGO_ENABLED=0 go build -buildvcs=false -o /relay ./cmd/relay
 
 FROM alpine:3.23
