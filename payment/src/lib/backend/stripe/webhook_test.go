@@ -126,3 +126,28 @@ func TestVerifyAndParse_PaymentReceived(t *testing.T) {
 		t.Errorf("amount_received 0: %+v, %v — want a received 0", ev.Received, err)
 	}
 }
+
+// A customer.subscription.* event rendered in API 2025-03-31 or later carries
+// the period end on its item, not on the subscription; the webhook endpoint
+// keeps the version it was made with, so both are read. Its version is kept.
+func TestVerifyAndParse_SubscriptionPeriodInEitherShape(t *testing.T) {
+	pinClock(t, 123)
+	secret := "whsec_x"
+	for _, c := range []struct {
+		body    string
+		want    int64
+		version string
+	}{
+		{`{"id":"evt_1","type":"customer.subscription.updated","created":120,"api_version":"2024-06-20","data":{"object":{"id":"sub_1","status":"active","current_period_end":1800000000}}}`, 1800000000, "2024-06-20"},
+		{`{"id":"evt_2","type":"customer.subscription.updated","created":120,"api_version":"2025-03-31.basil","data":{"object":{"id":"sub_1","status":"active","items":{"data":[{"current_period_end":1900000000}]}}}}`, 1900000000, "2025-03-31.basil"},
+	} {
+		body := []byte(c.body)
+		ev, err := VerifyAndParse(body, sign(body, secret, "123"), secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.CurrentPeriodEnd != c.want || ev.APIVersion != c.version {
+			t.Errorf("%s: period end %d, version %q; want %d, %q", c.version, ev.CurrentPeriodEnd, ev.APIVersion, c.want, c.version)
+		}
+	}
+}

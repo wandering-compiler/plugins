@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -307,8 +308,72 @@ func TestSubscription_FirstPaymentSecret(t *testing.T) {
 		t.Errorf("an empty id: %v", err)
 	}
 	for i, v := range versions {
-		if v != subscriptionAPIVersion {
-			t.Errorf("call %d sent Stripe-Version %q, want %s", i, v, subscriptionAPIVersion)
+		if v != apiVersion {
+			t.Errorf("call %d sent Stripe-Version %q, want %s", i, v, apiVersion)
+		}
+	}
+}
+
+// Every call is made under the pinned API version, whatever the account's
+// default: a create, a read, a list.
+func TestEveryCall_PinsTheAPIVersion(t *testing.T) {
+	seen := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.Method+" "+r.URL.Path] = r.Header.Get("Stripe-Version")
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/customers":
+			_, _ = w.Write([]byte(`{"id":"cus_1"}`))
+		case "/v1/payment_intents/pi_1":
+			_, _ = w.Write([]byte(`{"id":"pi_1","status":"succeeded","amount":100,"currency":"usd"}`))
+		default:
+			_, _ = w.Write([]byte(`{"object":"list","data":[],"has_more":false}`))
+		}
+	}))
+	defer srv.Close()
+	b := testBackend(srv)
+	ctx := context.Background()
+	if _, err := b.EnsureCustomer(ctx, backend.CustomerSpec{UserID: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.GetPayment(ctx, "pi_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.ListPaymentPage(ctx, backend.ListQuery{Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ListRefunds(ctx, "pi_1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 4 {
+		t.Fatalf("calls seen: %v", seen)
+	}
+	for call, v := range seen {
+		if v != "2024-06-20" {
+			t.Errorf("%s sent Stripe-Version %q, want 2024-06-20", call, v)
+		}
+	}
+}
+
+// A subscription's period end is read where the answer's version puts it:
+// on the subscription (the pinned version), or on its first item (2025-03-31
+// on).
+func TestPeriodEnd_ReadsBothShapes(t *testing.T) {
+	var items subscriptionItems
+	if err := json.Unmarshal([]byte(`{"data":[{"price":{"id":"price_1"},"current_period_end":1900000000}]}`), &items); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		root  int64
+		items subscriptionItems
+		want  int64
+	}{
+		{1800000000, items, 1800000000}, // the root wins when present
+		{0, items, 1900000000},          // moved to the item
+		{0, subscriptionItems{}, 0},     // neither
+	} {
+		if got := periodEnd(c.root, c.items); got != c.want {
+			t.Errorf("periodEnd(%d, …) = %d, want %d", c.root, got, c.want)
 		}
 	}
 }

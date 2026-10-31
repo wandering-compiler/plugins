@@ -38,9 +38,13 @@ type Event struct {
 	// ObjectStatus is data.object.status — the subscription status on
 	// customer.subscription.* events (active / past_due / canceled / …).
 	ObjectStatus string
-	// CurrentPeriodEnd is data.object.current_period_end (Unix seconds)
-	// on subscription events; 0 otherwise.
+	// CurrentPeriodEnd is data.object.current_period_end (Unix seconds) on
+	// customer.subscription.* events — on the subscription, or (API version
+	// 2025-03-31 on) on its first item; 0 when neither carries it.
 	CurrentPeriodEnd int64
+	// APIVersion is the version the event was rendered in (the webhook
+	// endpoint's).
+	APIVersion string
 	// Created is the event's own creation time (Unix seconds) — the
 	// provider's order of events, which delivery order is not.
 	Created int64
@@ -152,7 +156,8 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 		ObjectID:            raw.Data.Object.ID,
 		PaymentIntentID:     raw.Data.Object.ID,
 		ObjectStatus:        raw.Data.Object.Status,
-		CurrentPeriodEnd:    raw.Data.Object.CurrentPeriodEnd,
+		CurrentPeriodEnd:    periodEnd(raw.Data.Object.CurrentPeriodEnd, raw.Data.Object.Items),
+		APIVersion:          raw.APIVersion,
 		Created:             raw.Created,
 		Origin:              raw.Data.Object.Metadata[backend.OriginMetadataKey],
 		Install:             raw.Data.Object.Metadata[backend.InstallMetadataKey],

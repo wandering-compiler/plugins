@@ -249,7 +249,7 @@ func (b *Backend) StartSubscription(ctx context.Context, spec backend.Subscripti
 	form.Set("payment_settings[save_default_payment_method]", "on_subscription")
 	form.Set("expand[]", "latest_invoice.payment_intent")
 	var resp subscriptionResp
-	if err := b.postVersioned(ctx, "/v1/subscriptions", form, spec.IdempotencyKey, &resp); err != nil {
+	if err := b.post(ctx, "/v1/subscriptions", form, spec.IdempotencyKey, &resp); err != nil {
 		return backend.SubscriptionResult{}, err
 	}
 	if resp.ID == "" {
@@ -258,19 +258,20 @@ func (b *Backend) StartSubscription(ctx context.Context, spec backend.Subscripti
 	return backend.SubscriptionResult{
 		ProviderSubscriptionID: resp.ID,
 		Status:                 resp.Status,
-		CurrentPeriodEnd:       resp.CurrentPeriodEnd,
+		CurrentPeriodEnd:       periodEnd(resp.CurrentPeriodEnd, resp.Items),
 		ProviderPriceID:        resp.priceID(),
 		ClientSecret:           resp.clientSecret(),
 	}, nil
 }
 
-// subscriptionAPIVersion is the API version the subscription calls that read
-// the first payment pin. It decides where that payment's client secret is
-// (latest_invoice.payment_intent here; an invoice confirmation_secret from
-// 2025-03-31 on) and that current_period_end is on the subscription itself;
-// unpinned, the account's default version would decide, and an account
-// moved to a newer one would answer no secret.
-const subscriptionAPIVersion = "2024-06-20"
+// apiVersion is the provider API version every call of this driver is made
+// under (Stripe-Version, set in doHeader). The driver parses the shapes of
+// this version; unpinned, the account's default version would decide them,
+// and an account on a newer one answers some elsewhere — from 2025-03-31 the
+// subscription's period end is on its items, its first invoice's payment
+// secret on the invoice's confirmation_secret. Moving it is a change to this
+// line and to the parsing the tests pin, made on purpose.
+const apiVersion = "2024-06-20"
 
 // GetSubscription reads one subscription by id, with its first payment
 // expanded. An id the provider does not know is an error.
@@ -283,7 +284,6 @@ func (b *Backend) GetSubscription(ctx context.Context, providerSubscriptionID st
 	if err != nil {
 		return backend.SubscriptionObject{}, err
 	}
-	req.Header.Set("Stripe-Version", subscriptionAPIVersion)
 	var s subscriptionResp
 	hdr, err := b.doHeader(req, "/v1/subscriptions", "", &s)
 	if err != nil {
@@ -300,7 +300,7 @@ func (b *Backend) GetSubscription(ctx context.Context, providerSubscriptionID st
 		SubscriptionResult: backend.SubscriptionResult{
 			ProviderSubscriptionID: s.ID,
 			Status:                 s.Status,
-			CurrentPeriodEnd:       s.CurrentPeriodEnd,
+			CurrentPeriodEnd:       periodEnd(s.CurrentPeriodEnd, s.Items),
 			ProviderPriceID:        s.priceID(),
 			ClientSecret:           s.clientSecret(),
 		},
@@ -309,17 +309,6 @@ func (b *Backend) GetSubscription(ctx context.Context, providerSubscriptionID st
 		ReadAt:             at,
 		Marks:              marks(s.Metadata),
 	}, nil
-}
-
-// postVersioned is post with the subscription calls' pinned API version.
-func (b *Backend) postVersioned(ctx context.Context, path string, form url.Values, idemKey string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.baseURL+path, strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Stripe-Version", subscriptionAPIVersion)
-	return b.do(req, path, idemKey, out)
 }
 
 // subscribeKeyMeta is the subscription metadata key carrying the caller's
@@ -344,7 +333,7 @@ func (b *Backend) FindSubscription(ctx context.Context, providerCustomerID, idem
 				return backend.SubscriptionResult{
 					ProviderSubscriptionID: s.ID,
 					Status:                 s.Status,
-					CurrentPeriodEnd:       s.CurrentPeriodEnd,
+					CurrentPeriodEnd:       periodEnd(s.CurrentPeriodEnd, s.Items),
 					ProviderPriceID:        s.priceID(),
 				}, true, nil
 			}
@@ -483,7 +472,7 @@ func (b *Backend) ListSubscriptionPage(ctx context.Context, q backend.ListQuery)
 			SubscriptionResult: backend.SubscriptionResult{
 				ProviderSubscriptionID: s.ID,
 				Status:                 s.Status,
-				CurrentPeriodEnd:       s.CurrentPeriodEnd,
+				CurrentPeriodEnd:       periodEnd(s.CurrentPeriodEnd, s.Items),
 				ProviderPriceID:        s.priceID(),
 			},
 			ProviderCustomerID: s.Customer,
@@ -577,6 +566,7 @@ func (b *Backend) do(req *http.Request, path, idemKey string, out any) error {
 func (b *Backend) doHeader(req *http.Request, path, idemKey string, out any) (http.Header, error) {
 	req.Header.Set("Authorization", "Bearer "+b.apiKey)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Stripe-Version", apiVersion)
 	if idemKey != "" {
 		req.Header.Set("Idempotency-Key", idemKey)
 	}
