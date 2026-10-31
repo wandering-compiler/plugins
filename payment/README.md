@@ -287,6 +287,12 @@ quantity carrying `item_ref`/`metadata`) are the SAME operation — one
     reports it).
   - read the caller's total via `GET /usage/{meter}/{period}` →
     `PaymentService.GetMyUsageMeter` (zero before the first report).
+- **Period** — an ISO 8601 window: a year `2026`, a month `2026-06`, an
+  ISO week `2026-W23` (Monday to Sunday), a day `2026-06-15`, or N days from
+  a day `2026-06-03/P7D` (1 to 366). It is stored in one canonical spelling,
+  so every spelling of a window counts on one meter; any other spelling is
+  refused (`InvalidArgument`). A rolling window starts where the caller says:
+  the plugin keeps no anchor.
 - **Event** — `UsageRecorded` (quantity + new total).
 
 ## Subscriptions (feature `subscriptions`)

@@ -1213,16 +1213,16 @@ func TestFlow_Usage_ConcurrentRetriesCountOnce(t *testing.T) {
 func TestFlow_Usage_TransientFailureSurfaces(t *testing.T) {
 	r := newRig(t)
 	r.store.injectBefore("RecordUsage", errTransient)
-	_, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "p", Quantity: 1, IdempotencyKey: "k"})
+	_, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "2026-06", Quantity: 1, IdempotencyKey: "k"})
 	wantCode(t, err, codes.Unavailable, "transient record")
 	// duplicate whose meter read fails
-	if _, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "p", Quantity: 1, IdempotencyKey: "k"}); err != nil {
+	if _, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "2026-06", Quantity: 1, IdempotencyKey: "k"}); err != nil {
 		t.Fatal(err)
 	}
 	r.store.injectBefore("GetUsageMeter", errTransient)
-	_, err = r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "p", Quantity: 1, IdempotencyKey: "k"})
+	_, err = r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "2026-06", Quantity: 1, IdempotencyKey: "k"})
 	wantCode(t, err, codes.Unavailable, "transient meter read on the duplicate path")
-	_, err = r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "p", Quantity: 1, IdempotencyKey: strings.Repeat("k", 256)})
+	_, err = r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "m", Period: "2026-06", Quantity: 1, IdempotencyKey: strings.Repeat("k", 256)})
 	wantCode(t, err, codes.InvalidArgument, "256-byte key")
 }
 

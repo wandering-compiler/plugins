@@ -410,6 +410,7 @@ hold it. **Partly fixed** says what is still open.
 | `usage/report-idempotent` | A report retried with its key, also concurrently, MUST be counted once and answer the current total. | Consistency & concurrency | `TestReportUsage_IdempotentOnDuplicate`, `TestFlow_Usage_ConcurrentRetriesCountOnce`, `TestFlow_Usage_ReportRetriedAcrossTheUpgrade_CountsOnce`. **Unit (mock) only** for the concurrent case. |
 | `usage/key-scoped` | A key MUST be scoped by principal, meter and period, so reuse elsewhere is a separate report and never a silent no-op. | Consistency & concurrency | `TestFlow_Usage_KeyReuseAcrossPrincipalsAndMeters_IsNotASilentNoOp`, `TestFlow_Usage_CallerKeyShapedLikeAScopedKey_IsNotAMatch` |
 | `usage/report-valid` | A report MUST name a principal, meter, period, a positive quantity and a key of at most 255 bytes. | Consistency & concurrency | `TestReportUsage_Validates`, `TestRequiredFieldRefusals` |
+| `usage/period-canonical` | A period MUST be an ISO 8601 window (year, month, ISO week, day, or N days from a day, 1 to 366) and MUST be stored and read in its one canonical spelling; any other spelling MUST be refused, never guessed at. | Consistency & concurrency | `TestCanonicalPeriod`, `TestReportUsage_OneWindowIsOneMeter`, `TestUsage_AnUnknownPeriodIsRefused` |
 | `usage/failure-surfaces` | A store failure MUST surface; it MUST NOT be answered as a duplicate. | Failure & configuration | `TestFlow_Usage_TransientFailureSurfaces` |
 | `usage/report-privileged` | `ReportUsage` MUST NOT be in the REST preset: the measuring service reports usage, not the consumer. | Security | none (manifest only) |
 | `usage/read-own-meter-only` | `GET /billing/usage/{meter}/{period}` MUST answer only the caller's meter, and zero before the caller's first report. | Security | `TestGetMyBalanceAndMeter_TheCallersOwn`, `TestGetMyBalanceAndMeter_ZeroBeforeTheFirstApply` |
@@ -423,8 +424,16 @@ hold it. **Partly fixed** says what is still open.
    column is refused as `FailedPrecondition` ("the meter's total would
    exceed its maximum"), with nothing recorded
    (`TestReportUsage_MeterOverflowIsSaid`).
-3. **`period` is free-form.** Two spellings of one billing window are two
-   meters.
+3. **Fixed: one window, one spelling.** `period` must be an ISO 8601 window
+   — a year `2026`, a month `2026-06`, an ISO week `2026-W23` (Monday to
+   Sunday), a day `2026-06-15`, or N days from a day `2026-06-03/P7D` (1 to
+   366) — and is stored canonical (`W`, `P`, `D` upper case, no leading
+   zeros in the count), on the report and on the read alike. Any other
+   spelling is refused (`InvalidArgument`, naming the shapes), never guessed
+   at (`TestCanonicalPeriod`, `TestReportUsage_OneWindowIsOneMeter`,
+   `TestUsage_AnUnknownPeriodIsRefused`). Rows written earlier under another
+   spelling stay as they were; a rolling window's start is the caller's,
+   not anchored by the plugin.
 
 ---
 

@@ -216,6 +216,10 @@ message UsageView {
 }
 
 // ReportUsageReq records consumption. quantity is integer meter units.
+// period is the billing window as ISO 8601: a year "2026", a month
+// "2026-06", an ISO week "2026-W23", a day "2026-06-15", or N days from a
+// day "2026-06-03/P7D" (1 to 366). It is stored canonical, so every spelling
+// of one window counts on one meter; anything else is InvalidArgument.
 // item_ref / metadata are optional (set for a concrete service order,
 // blank for raw time-burn). idempotency_key makes the report idempotent.
 message ReportUsageReq {
