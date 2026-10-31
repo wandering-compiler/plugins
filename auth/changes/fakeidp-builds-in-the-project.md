@@ -1,3 +1,0 @@
-### The fakeidp sandbox builds in the project
-
-The `fakeidp` sandbox (the `oauth` feature's fake OIDC provider) now declares `build: { context: sandboxes/fakeidp }`, and the release ships its source. A project's `compose.w17.yaml` builds the image from the vendored plugin (`<proto_dir>/plugins/auth/sandboxes/fakeidp`) on `w17ctl stack build`, `stack up --build`, or the first `stack up` that finds no image, instead of trying to pull a tag no registry publishes. Needs w17 platform 1.17 (`requires_w17: ">=1.17"`); install the release with a w17ctl that ships sandbox source, or the build context is missing and `stack up` skips the sandbox as before.
