@@ -280,7 +280,10 @@ message UsageRecord {
   string id              = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
   string meter           = 3 [(w17.field) = { type: SLUG, max_len: 64 }];
-  string period          = 4 [(w17.field) = { type: CHAR, max_len: 32 }]; // billing window key, e.g. "2026-06"
+  // The billing window, an ISO 8601 window in its canonical spelling:
+  // "2026", "2026-06", "2026-W23", "2026-06-15" or "2026-06-03/P7D"
+  // (ReportUsage refuses any other; see canonicalPeriod).
+  string period          = 4 [(w17.field) = { type: CHAR, max_len: 32 }];
   int64  quantity        = 5 [(w17.field) = { type: NUMBER, gte: 0 }];
   string item_ref        = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   string metadata        = 7 [(w17.field) = { type: JSON, blank: true }];

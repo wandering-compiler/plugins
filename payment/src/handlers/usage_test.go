@@ -39,12 +39,12 @@ func TestReportUsage(t *testing.T) {
 func TestReportUsage_Validates(t *testing.T) {
 	h := usageHandler(&fakeQuery{}, &fakeMutation{})
 	cases := []*pb.ReportUsageReq{
-		{Meter: "m", Period: "p", Quantity: 1, IdempotencyKey: "k"},               // no user
-		{UserId: "u", Period: "p", Quantity: 1, IdempotencyKey: "k"},              // no meter
-		{UserId: "u", Meter: "m", Quantity: 1, IdempotencyKey: "k"},               // no period
-		{UserId: "u", Meter: "m", Period: "p", Quantity: 0, IdempotencyKey: "k"},  // non-positive
-		{UserId: "u", Meter: "m", Period: "p", Quantity: -3, IdempotencyKey: "k"}, // negative
-		{UserId: "u", Meter: "m", Period: "p", Quantity: 1},                       // no idem key
+		{Meter: "m", Period: "2026-06", Quantity: 1, IdempotencyKey: "k"},               // no user
+		{UserId: "u", Period: "2026-06", Quantity: 1, IdempotencyKey: "k"},              // no meter
+		{UserId: "u", Meter: "m", Quantity: 1, IdempotencyKey: "k"},                     // no period
+		{UserId: "u", Meter: "m", Period: "2026-06", Quantity: 0, IdempotencyKey: "k"},  // non-positive
+		{UserId: "u", Meter: "m", Period: "2026-06", Quantity: -3, IdempotencyKey: "k"}, // negative
+		{UserId: "u", Meter: "m", Period: "2026-06", Quantity: 1},                       // no idem key
 	}
 	for i, req := range cases {
 		if _, err := h.ReportUsage(context.Background(), req); status.Code(err) != codes.InvalidArgument {

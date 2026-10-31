@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"strings"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"strings"
+	"google.golang.org/protobuf/proto"
 
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
@@ -20,9 +22,14 @@ func (h *PaymentServiceHandler) ReportUsage(ctx context.Context, req *pb.ReportU
 	if strings.TrimSpace(req.GetMeter()) == "" {
 		return nil, invalidArg("meter is required")
 	}
-	if strings.TrimSpace(req.GetPeriod()) == "" {
-		return nil, invalidArg("period is required (the billing-window key, e.g. \"2026-06\")")
+	// One window, one spelling (canonicalPeriod): everything below — the
+	// meter, the stored key, the raw-key lookup — sees the canonical one.
+	period, err := canonicalPeriod(req.GetPeriod())
+	if err != nil {
+		return nil, invalidArg(err.Error())
 	}
+	req = proto.Clone(req).(*pb.ReportUsageReq)
+	req.Period = period
 	if req.GetQuantity() <= 0 {
 		return nil, invalidArg("quantity must be positive")
 	}
@@ -130,10 +137,16 @@ func (h *PaymentServiceHandler) GetMyUsageMeter(ctx context.Context, req *pb.Get
 	if err != nil {
 		return nil, err
 	}
-	got, err := h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: caller, Meter: req.GetMeter(), Period: req.GetPeriod()})
+	// Read under the spelling the meter is stored under; a window that is
+	// none of the accepted ones has no meter to read.
+	period, err := canonicalPeriod(req.GetPeriod())
+	if err != nil {
+		return nil, invalidArg(err.Error())
+	}
+	got, err := h.Query.GetUsageMeter(ctx, &pb.GetUsageMeterReq{UserId: caller, Meter: req.GetMeter(), Period: period})
 	if absent(err) {
 		// Nothing reported yet: the meter row appears with the first report.
-		return &pb.GetUsageMeterResp{Meter: &pb.UsageMeter{UserId: caller, Meter: req.GetMeter(), Period: req.GetPeriod()}}, nil
+		return &pb.GetUsageMeterResp{Meter: &pb.UsageMeter{UserId: caller, Meter: req.GetMeter(), Period: period}}, nil
 	}
 	return got, err
 }
