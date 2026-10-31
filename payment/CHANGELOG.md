@@ -1,5 +1,44 @@
 # payment — changelog
 
+## 0.1.0-rc.7
+
+### Every Stripe call is made under one API version, and a newer webhook's period end is read
+
+- The Stripe driver sends `Stripe-Version: 2024-06-20` on every call, so the
+  answers it parses no longer depend on the account's default API version.
+- A webhook endpoint keeps the version it was created with. A subscription
+  event rendered in API `2025-03-31` or later carries the period end on its
+  item, and is now read there: before, `current_period_end` was stored empty
+  on every such event. A running subscription whose event carries no period
+  end in either place is logged with the event's `api_version`.
+
+### A subscription's first invoice is the client's to pay, and a plan is subscribed once (`subscriptions`) (read first)
+
+- `Subscribe` starts the subscription with its first invoice waiting for the
+  client, and **answers that payment's `client_secret`** (new field on
+  `SubscriptionView`). The frontend confirms it the way it confirms a
+  charge; the card it is paid with pays the renewals. The subscription reads
+  `INCOMPLETE` until its payment lands. Before, the provider tried a card the
+  plugin's customers never have, and the subscription expired unpaid.
+- **One open subscription per principal and plan.** A second `Subscribe`
+  while the first awaits its payment answers that subscription and its
+  `client_secret`; one beside a live subscription (trialing, active, past
+  due, paused, unpaid) is `AlreadyExists`. Concurrent subscribes start one.
+  Another plan, or after a cancel, is a new subscription.
+- The subscription calls pin Stripe API version `2024-06-20`.
+
+### A usage period is an ISO 8601 window, in one spelling (`usage`) (read first)
+
+- `ReportUsage` and `GetMyUsageMeter` take `period` only as an ISO 8601
+  window: a year `2026`, a month `2026-06`, an ISO week `2026-W23` (Monday
+  to Sunday), a day `2026-06-15`, or N days from a day `2026-06-03/P7D`
+  (1 to 366). It is stored canonical (`2026-w23` → `2026-W23`,
+  `P007D` → `P7D`), so every spelling of one window counts on one meter.
+- **Any other spelling is now refused** with `InvalidArgument` naming the
+  accepted shapes. Before, `2026/06`, `2026-6` and `June 2026` were each a
+  meter of their own. A caller that sent one of them must send the ISO form.
+  Meters written earlier under another spelling are left as they were.
+
 ## 0.1.0-rc.6
 
 ### A success for another amount than was asked is held, not trusted
