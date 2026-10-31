@@ -147,6 +147,7 @@ hold it. **Partly fixed** says what is still open.
 | `base/payment-status-reflects-provider` | `Payment.status` MUST follow the provider: initial status from the create response (unknown → `REQUIRES_ACTION`, never `SUCCEEDED` unless the provider said so), then `SUCCEEDED`, `FAILED`, `CANCELED` and `REFUNDED` from the provider's events, and `REFUNDED` back to `SUCCEEDED` when a refund that completed the amount fails. | Consistency & concurrency | `TestMapInitialStatus`, `TestFlow_RefundsMoveThePaymentToRefundedWhenComplete`, `TestWebhook_ChargeRefundedSettlesTheStatus`, `TestWebhook_ChargeRefundedBeforeTheSuccess`, `TestWebhook_PaymentIntentCanceled`, `TestWebhook_PaymentIntentCanceledAfterAFailure`, `TestWebhook_FailedRefundReversesRefunded` (finding 6 fixed). `REFUNDED` counts pending and succeeded refunds only; a payment whose completing refund fails goes back to `SUCCEEDED`. |
 | `base/provider-error-classes` | A declined payment MUST surface as `FailedPrecondition`, a request the provider or driver refuses as invalid (bad amount, over-refund, key reused with other parameters) as `InvalidArgument`, and only network, 5xx, 409, 429 and key failures as `Unavailable`, so automatic retries never loop on a request that cannot succeed. A call the caller cancelled MUST be `Canceled`. | Failure & configuration | `TestFlow_ProviderErrorMapping`, `TestProviderFailure_MapsByClass`, `TestProviderFailure_PassesTheReasonCode`, `TestPost_ClassifiesProviderErrors`, `TestCreatePayment_ProviderFailureIsUnavailable`, `TestDriver_EveryCallSurfacesProviderErrors` |
 | `base/no-store-failure-swallowed` | A store failure on any lookup, including the replay lookup after a unique violation, MUST surface as that failure. It MUST NOT become `AlreadyExists` or a success. | Failure & configuration | `TestFlow_StoreReadFailuresSurface`, `TestFlow_ReplayLookupFailureSurfaces`, `TestFlow_RawKeyKindLookupFailureSurfaces` |
+| `base/api-version-pinned` | Every provider call MUST be made under the driver's pinned API version (`Stripe-Version: 2024-06-20`), whatever the account's default, so the shapes it parses are the ones it was written for. A webhook endpoint keeps the version it was created with, which the plugin cannot pin: a subscription's period end MUST be read on the subscription or, as API `2025-03-31` on renders it, on its first item, and the event's `api_version` kept; a running subscription whose event carries neither is logged with that version. | Failure & configuration | `TestEveryCall_PinsTheAPIVersion`, `TestSubscription_FirstPaymentSecret`, `TestPeriodEnd_ReadsBothShapes`, `TestVerifyAndParse_SubscriptionPeriodInEitherShape`, `TestWebhook_APeriodEndOnTheItemIsStored` |
 | `base/provider-call-bounded` | Every provider call MUST be bounded in time (20 s client timeout and the request context) and read at most 1 MiB of response. A response without an object id MUST be an error, not an empty id stored locally. | Performance | `TestNew_DefaultsAndOptions`, `TestDriver_RefusesResponsesWithoutAnID`, `TestPost_TransportAndDecodeFailures` |
 
 **Gaps / suspected defects**
@@ -486,12 +487,8 @@ hold it. **Partly fixed** says what is still open.
 2. **`Plan.enabled` is never read** and nothing can set it false; a retired
    plan can only be abandoned by slug.
 3. **Fixed: the first invoice is the client's to pay.** See
-   `subscriptions/first-payment-is-the-clients`. The subscription calls pin
-   the provider's API version (`2024-06-20`); **every other call of the
-   driver does not**, so the account's default version shapes their answers.
-   An account on `2025-03-31` or later has no `current_period_end` on the
-   subscription itself, which the webhook and the reconciliation read: open,
-   a decision on pinning the whole driver.
+   `subscriptions/first-payment-is-the-clients`. Every call of the driver
+   pins the provider's API version (`base/api-version-pinned`).
 4. **Fixed: `UpsertPlan` sends an idempotency key**, derived from the
    installation and every term it sends. A retried or racing `CreatePlan`
    gets the price the first create made, within the provider's window

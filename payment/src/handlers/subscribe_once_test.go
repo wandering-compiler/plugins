@@ -201,3 +201,22 @@ func TestSubscribe_ConcurrentClicksStartOneSubscription(t *testing.T) {
 	}
 	wantNoLocksLeft(t, r)
 }
+
+// A webhook endpoint on API 2025-03-31 or later renders the period end on
+// the subscription's item; it is stored all the same, not as NULL.
+func TestWebhook_APeriodEndOnTheItemIsStored(t *testing.T) {
+	r := subRig(t)
+	v, err := subscribe(r, "pro", "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := v.GetSubscription().GetProviderSubscriptionId()
+	deliverOK(t, r, eventJSON("evt_basil", "customer.subscription.updated", sid, map[string]any{
+		"status": "active",
+		"items":  map[string]any{"data": []map[string]any{{"current_period_end": 1900000000}}},
+	}))
+	got := r.store.subs[v.GetSubscription().GetId()]
+	if got.GetStatus() != pb.Subscription_ACTIVE || got.GetCurrentPeriodEnd().GetSeconds() != 1900000000 {
+		t.Errorf("after a 2025-shaped event: %v, period end %v; want ACTIVE until 1900000000", got.GetStatus(), got.GetCurrentPeriodEnd())
+	}
+}

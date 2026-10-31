@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -141,6 +142,16 @@ func sameInstant(a, b *timestamppb.Timestamp) bool {
 func reconcileSubscriptionWebhook(ctx context.Context, h *PaymentServiceHandler, ev stripe.Event) error {
 	if ev.ObjectID == "" {
 		return nil
+	}
+	if ev.CurrentPeriodEnd == 0 {
+		switch mapSubscriptionStatus(ev.ObjectStatus) {
+		case pb.Subscription_ACTIVE, pb.Subscription_TRIALING, pb.Subscription_PAST_DUE:
+			// A running subscription always has a period: the event's shape
+			// is one this version does not read (the webhook endpoint's API
+			// version decides it, not the plugin).
+			slog.Warn("payment: a subscription event carries no period end this version can read",
+				"subscription", ev.ObjectID, "event", ev.ID, "api_version", ev.APIVersion)
+		}
 	}
 	_, err := h.Mutation.MarkSubscriptionStatus(ctx, &pb.MarkSubscriptionStatusReq{
 		ProviderSubscriptionId: ev.ObjectID,

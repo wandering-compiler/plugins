@@ -88,13 +88,7 @@ type subscriptionResp struct {
 	Status           string            `json:"status"`
 	CurrentPeriodEnd int64             `json:"current_period_end"`
 	Metadata         map[string]string `json:"metadata"`
-	Items            struct {
-		Data []struct {
-			Price struct {
-				ID string `json:"id"`
-			} `json:"price"`
-		} `json:"data"`
-	} `json:"items"`
+	Items            subscriptionItems `json:"items"`
 	// LatestInvoice is an id, or — expanded with its payment intent — the
 	// invoice object; clientSecret reads either.
 	LatestInvoice json.RawMessage `json:"latest_invoice"`
@@ -118,6 +112,29 @@ func (s subscriptionResp) clientSecret() string {
 		return inv.PaymentIntent.ClientSecret
 	}
 	return ""
+}
+
+// subscriptionItems is a subscription's items: its price, and — from API
+// version 2025-03-31 on — its billing period, which moved there from the
+// subscription itself.
+type subscriptionItems struct {
+	Data []struct {
+		Price struct {
+			ID string `json:"id"`
+		} `json:"price"`
+		CurrentPeriodEnd int64 `json:"current_period_end"`
+	} `json:"data"`
+}
+
+// periodEnd is the end of a subscription's current period: on the
+// subscription (the pinned version, and every version before 2025-03-31),
+// else on its first (only) item. A webhook endpoint keeps the version it was
+// created with, which the plugin cannot pin, so both shapes are read.
+func periodEnd(root int64, items subscriptionItems) int64 {
+	if root != 0 || len(items.Data) == 0 {
+		return root
+	}
+	return items.Data[0].CurrentPeriodEnd
 }
 
 // priceID is the price of the subscription's first (only) item.
@@ -153,11 +170,15 @@ type webhookEnvelope struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
 	Created int64  `json:"created"`
-	Data    struct {
+	// APIVersion is the version the event was rendered in: the webhook
+	// endpoint's, which the plugin cannot pin.
+	APIVersion string `json:"api_version"`
+	Data       struct {
 		Object struct {
 			ID               string            `json:"id"`
 			Status           string            `json:"status"`
 			CurrentPeriodEnd int64             `json:"current_period_end"`
+			Items            subscriptionItems `json:"items"`
 			Metadata         map[string]string `json:"metadata"`
 			// On a charge: the PaymentIntent it belongs to, and whether it
 			// is fully refunded.
