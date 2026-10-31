@@ -32,10 +32,11 @@ type pendingRow struct {
 
 type confirmStore struct {
 	*roundTripStore
-	pending   map[string]*pendingRow
-	codes     map[string]string // pending id -> plaintext code, as the event carried it
-	confirmed []string          // user ids markEmailConfirmed was called for
-	nextID    int
+	pending    map[string]*pendingRow
+	codes      map[string]string // pending id -> plaintext code, as the event carried it
+	confirmed  []string          // user ids markEmailConfirmed was called for
+	nextID     int
+	lastCreate *pb.CreatePendingSignUpReq // the last CreatePendingSignUp, as sent
 }
 
 func newConfirmStore() *confirmStore {
@@ -51,6 +52,7 @@ func (s *confirmStore) CreatePendingSignUp(_ context.Context, in *pb.CreatePendi
 	id := "p-" + string(rune('0'+s.nextID))
 	s.pending[id] = &pendingRow{email: in.GetEmail(), passwordHash: in.GetPasswordHash(), codeHash: in.GetCodeHash(), expiresAt: in.GetExpiresAt().AsTime()}
 	s.codes[id] = in.GetCode()
+	s.lastCreate = in
 	return &pb.CreatePendingSignUpResp{Pending: &pb.PendingSignUp{Id: id, Email: in.GetEmail()}}, nil
 }
 

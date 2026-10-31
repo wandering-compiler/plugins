@@ -529,6 +529,9 @@ message CreateMfaChallengeReq {
   string thumbprint = 7 [(w17.field) = { type: CHAR, max_len: 43 }];
   // The sign-in asked for a public-computer session; VerifyMfa honours it.
   bool public_computer = 8;
+  // The code sealed to delivery_recipient (age, base64) — event-only, like
+  // code; set INSTEAD of it when a recipient is configured.
+  string sealed_code = 9;
 }
 message CreateMfaChallengeResp {
   option (w17.contrib.plugin_feature) = "two_factor";
@@ -602,6 +605,9 @@ message CreatePendingSignUpReq {
     (w17.field) = { type: CHAR, max_len: 128, blank: true },
     (w17.contrib.plugin_feature_field) = "org_signup"
   ];
+  // The code sealed to delivery_recipient (age, base64) — event-only, like
+  // code; set INSTEAD of it when a recipient is configured.
+  string sealed_code = 10;
 }
 message CreatePendingSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
@@ -681,6 +687,9 @@ message CreatePasswordResetTokenReq {
   // event-only (no w17.field → not persisted, not validated):
   string email = 4;
   string token = 5 [(w17.field) = { blank: true, sensitive: true }];
+  // The token sealed to delivery_recipient (age, base64) — event-only, like
+  // token; set INSTEAD of it when a recipient is configured.
+  string sealed_token = 6;
 }
 message CreatePasswordResetTokenResp {
   option (w17.contrib.plugin_feature) = "password_reset";
@@ -815,6 +824,9 @@ message SetStepUpCodeReq {
   string                    code       = 6 [(w17.field) = { blank: true, sensitive: true }];
   google.protobuf.Timestamp expires_at = 7;
   string                    thumbprint = 8;
+  // The code sealed to delivery_recipient (age, base64) — event-only, like
+  // code; set INSTEAD of it when a recipient is configured.
+  string sealed_code = 9;
 }
 message SetStepUpCodeResp {
   option (w17.contrib.plugin_feature) = "step_up_code";
@@ -875,6 +887,9 @@ message CreateEmailVerificationTokenReq {
   // event-only:
   string email = 4;
   string token = 5 [(w17.field) = { blank: true, sensitive: true }];
+  // The token sealed to delivery_recipient (age, base64) — event-only, like
+  // token; set INSTEAD of it when a recipient is configured.
+  string sealed_token = 6;
 }
 message CreateEmailVerificationTokenResp {
   option (w17.contrib.plugin_feature) = "email_verification";
@@ -3125,6 +3140,7 @@ service AuthMutation {
           { key: "totp_enrolled", value: "$request.totp_enrolled" },
           { key: "email",         value: "$request.email" },
           { key: "code",          value: "$request.code" },
+          { key: "sealed_code", value: "$request.sealed_code" },
           { key: "expires_at",    value: "$request.expires_at" },
           { key: "device_id",     value: "$request.thumbprint" }
         ]
@@ -3163,6 +3179,7 @@ service AuthMutation {
           { key: "pending_id", value: "$response.pending.id" },
           { key: "email",      value: "$request.email" },
           { key: "code",       value: "$request.code" },
+          { key: "sealed_code", value: "$request.sealed_code" },
           { key: "expires_at", value: "$request.expires_at" }
         ]
       }
@@ -4209,6 +4226,7 @@ service AuthMutation {
           { key: "user_id",    value: "$response.token.user_id" },
           { key: "email",      value: "$request.email" },
           { key: "token",      value: "$request.token" },
+          { key: "sealed_token", value: "$request.sealed_token" },
           { key: "expires_at", value: "$response.token.expires_at" }
         ]
       }
@@ -4432,6 +4450,7 @@ service AuthMutation {
           { key: "token_id",   value: "$response.token_id" },
           { key: "email",      value: "$request.email" },
           { key: "code",       value: "$request.code" },
+          { key: "sealed_code", value: "$request.sealed_code" },
           { key: "expires_at", value: "$request.expires_at" },
           { key: "device_id",  value: "$request.thumbprint" }
         ]
@@ -4498,6 +4517,7 @@ service AuthMutation {
           { key: "user_id",    value: "$response.token.user_id" },
           { key: "email",      value: "$request.email" },
           { key: "token",      value: "$request.token" },
+          { key: "sealed_token", value: "$request.sealed_token" },
           { key: "expires_at", value: "$response.token.expires_at" }
         ]
       }

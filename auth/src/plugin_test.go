@@ -2,6 +2,8 @@ package auth_test
 
 import (
 	"context"
+
+	"filippo.io/age"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -12,6 +14,16 @@ import (
 	"github.com/wandering-compiler/sdk/go/lib/acllock"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 )
+
+// testRecipient is a mailer's age recipient: a configuration that boots
+// outside W17_ENV=dev names one (delivery_recipient).
+var testRecipient = func() string {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		panic(err)
+	}
+	return id.Recipient().String()
+}()
 
 // Smoke test for the v4 entry contract. Without it,
 // `RegisterPlugin` would have no in-module caller — the bundle
@@ -83,7 +95,7 @@ func TestRegisterPlugin_WiresHandlerAndShutdown(t *testing.T) {
 	reg := &fakeRegistry{}
 	clients := fakeClientSet{query: noopQuery{}, mutation: noopMutation{}}
 
-	if err := auth.RegisterPlugin(&gen.EnvConfig{}, reg, clients); err != nil {
+	if err := auth.RegisterPlugin(&gen.EnvConfig{DeliveryRecipient: testRecipient}, reg, clients); err != nil {
 		t.Fatalf("RegisterPlugin: %v", err)
 	}
 	if reg.auth == nil {
@@ -113,7 +125,7 @@ func TestRegisterPlugin_UnknownPasswordHashAlgoFailsBoot(t *testing.T) {
 		}
 	}
 	for _, algo := range []string{"", "argon2id", "bcrypt", "scrypt", "pbkdf2", "pbkdf2-sha256"} {
-		if err := auth.RegisterPlugin(&gen.EnvConfig{PasswordHashAlgo: algo}, &fakeRegistry{}, fakeClientSet{query: noopQuery{}, mutation: noopMutation{}}); err != nil {
+		if err := auth.RegisterPlugin(&gen.EnvConfig{PasswordHashAlgo: algo, DeliveryRecipient: testRecipient}, &fakeRegistry{}, fakeClientSet{query: noopQuery{}, mutation: noopMutation{}}); err != nil {
 			t.Errorf("password_hash_algo=%q refused: %v", algo, err)
 		}
 	}
