@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -46,6 +47,7 @@ require (
 )
 
 require (
+	filippo.io/age v1.3.1
 	github.com/wandering-compiler/sdk/go v0.1.0-rc.24
 	google.golang.org/protobuf v1.36.11
 	rsc.io/qr v0.2.0

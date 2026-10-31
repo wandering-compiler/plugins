@@ -418,6 +418,11 @@ message MfaChallengeRequested {
   // AuthResp.device_id and principal.DeviceID carry): the device that passed
   // the password and must complete the sign-in.
   string                    device_id     = 7;
+  // sealed_code — the code sealed to the activation's delivery_recipient (age,
+  // standard base64). Set INSTEAD of code whenever a recipient is configured,
+  // which every activation outside W17_ENV=dev must have; the mailer opens
+  // it with its identity (sdk/go/service/secret.OpenSealed, or `age -d`).
+  string sealed_code = 8;
 }
 
 // StepUpCodeRequested — emitted by SetStepUpCode when a signed-in person
@@ -439,6 +444,11 @@ message StepUpCodeRequested {
   google.protobuf.Timestamp expires_at = 5;
   // device_id — the key thumbprint of the session's device.
   string                    device_id  = 6;
+  // sealed_code — the code sealed to the activation's delivery_recipient (age,
+  // standard base64). Set INSTEAD of code whenever a recipient is configured,
+  // which every activation outside W17_ENV=dev must have; the mailer opens
+  // it with its identity (sdk/go/service/secret.OpenSealed, or `age -d`).
+  string sealed_code = 7;
 }
 
 // MfaVerified — emitted by ConsumeMfaChallenge on a successful second
@@ -515,6 +525,11 @@ message PasswordResetRequested {
   string                    email      = 2; // delivery hint
   string                    token      = 3 [(w17.field) = { blank: true, sensitive: true }]; // plaintext reset token; NEVER persisted
   google.protobuf.Timestamp expires_at = 4;
+  // sealed_token — the token sealed to the activation's delivery_recipient (age,
+  // standard base64). Set INSTEAD of token whenever a recipient is configured,
+  // which every activation outside W17_ENV=dev must have; the mailer opens
+  // it with its identity (sdk/go/service/secret.OpenSealed, or `age -d`).
+  string sealed_token = 5;
 }
 
 // sign_up_confirmation — emitted by CreatePendingSignUp when SignUp parks a
@@ -534,6 +549,11 @@ message SignUpConfirmationRequested {
   string                    email      = 2; // where the code must go
   string                    code       = 3 [(w17.field) = { blank: true, sensitive: true }]; // plaintext; NEVER persisted
   google.protobuf.Timestamp expires_at = 4;
+  // sealed_code — the code sealed to the activation's delivery_recipient (age,
+  // standard base64). Set INSTEAD of code whenever a recipient is configured,
+  // which every activation outside W17_ENV=dev must have; the mailer opens
+  // it with its identity (sdk/go/service/secret.OpenSealed, or `age -d`).
+  string sealed_code = 5;
 }
 
 // email_verification lifecycle — emitted by CreateEmailVerificationToken
@@ -550,6 +570,11 @@ message EmailVerificationRequested {
   string                    email      = 2; // delivery hint + the address being verified
   string                    token      = 3 [(w17.field) = { blank: true, sensitive: true }]; // plaintext verification token; NEVER persisted
   google.protobuf.Timestamp expires_at = 4;
+  // sealed_token — the token sealed to the activation's delivery_recipient (age,
+  // standard base64). Set INSTEAD of token whenever a recipient is configured,
+  // which every activation outside W17_ENV=dev must have; the mailer opens
+  // it with its identity (sdk/go/service/secret.OpenSealed, or `age -d`).
+  string sealed_token = 5;
 }
 
 // org_membership lifecycle — emitted by the two org write primitives

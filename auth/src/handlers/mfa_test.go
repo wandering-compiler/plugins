@@ -696,7 +696,7 @@ func TestDisableTotp_Unconfirmed_NoCodeNeeded(t *testing.T) {
 // comes from, so new_devices no longer needs the `devices` feature.
 func TestValidateConfig_NewDevicesNeedsNoFeature(t *testing.T) {
 	for _, scope := range []string{"new_devices", "all_logins"} {
-		if err := ValidateConfig(&AuthServiceHandler{TwoFactorScope: scope}); err != nil {
+		if err := ValidateConfig(&AuthServiceHandler{TwoFactorScope: scope, DeliveryRecipient: testRecipient}); err != nil {
 			t.Errorf("%s must validate in every activation: %v", scope, err)
 		}
 	}

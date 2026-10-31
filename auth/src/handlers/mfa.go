@@ -115,12 +115,6 @@ var twoFactorPolicyOf = func(ctx context.Context, h *AuthServiceHandler, userID 
 	return h.defaultTwoFactorPolicy(), nil
 }
 
-// The deployment environment, as the SDK reads it (fieldcrypt, ratelimit).
-const (
-	envEnvironment = "W17_ENV"
-	devEnvironment = "dev"
-)
-
 // twoFactorOff reports whether this sign-in is spared the challenge: scope
 // off, in a development environment only.
 func (h *AuthServiceHandler) twoFactorOff() bool {
@@ -167,6 +161,7 @@ var errMfaChallengeBudget = &wireError{
 // init wires the two_factor sign-in gate on package load, and this feature's
 // share of an erasure.
 func init() {
+	secretDeliveryFeatures = append(secretDeliveryFeatures, "two_factor")
 	signInMfaGate = mfaSignInGate
 	configChecks = append(configChecks, checkTwoFactorScope, checkTwoFactorPolicy)
 	erasers = append(erasers, eraseTwoFactorData)
@@ -457,12 +452,17 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, th
 	}
 
 	expiresAt := timestamppb.New(time.Now().Add(h.mfaTTL()))
+	clear, sealed, err := h.deliver(code)
+	if err != nil {
+		return nil, false, err
+	}
 	created, err := h.issueMfaChallenge(ctx, &pb.CreateMfaChallengeReq{
 		UserId:         user.GetId(),
 		CodeHash:       codeHash,
 		TotpEnrolled:   enrolled,
 		Email:          user.GetEmail(),
-		Code:           code,
+		Code:           clear,
+		SealedCode:     sealed,
 		ExpiresAt:      expiresAt,
 		Thumbprint:     thumbprint,
 		PublicComputer: public,

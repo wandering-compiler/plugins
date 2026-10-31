@@ -34,6 +34,10 @@ env:
     type: string
     default: required
     description: "Who signs in with a second factor (two_factor feature): required (every account is challenged; an account without a confirmed authenticator gets its code through MfaChallengeRequested, so without a hand-written SMS/e-mail channel it cannot sign in — required suits a project that enrols from the first account), optional (an account that confirmed an authenticator is challenged, the others sign in with the password — how 2FA is offered on a running product) or disabled (nobody is challenged and EnrollTotp is refused; an authenticator already confirmed stays stored and counts again when the policy changes). two_factor_scope says WHEN a challenged account is asked. The activation's default: with org_two_factor_policy an organization overrides it per kind of membership. Another value refuses the boot."
+  - name: delivery_recipient
+    type: string
+    default: ""
+    description: "The age public key (age1…) of the service that mails credentials — a reset link's token, a sign-up, step-up or second-factor code, an e-mail verification link. Each event that carries one (PasswordResetRequested, EmailVerificationRequested, SignUpConfirmationRequested, StepUpCodeRequested, MfaChallengeRequested) carries it sealed to this key in its sealed_* field, never in clear, so the event bus, its dead-letter queue and its backups hold ciphertext only; the mailer opens it with its identity (sdk/go/service/secret.OpenSealed, or `age -d`). Make the pair with `age-keygen`. Required, and refused at boot when missing, whenever one of those features is on — except with W17_ENV=dev, where the credential travels in clear as before. A value that is not an age recipient refuses the boot anywhere."
   - name: two_factor_scope
     type: string
     default: all_logins

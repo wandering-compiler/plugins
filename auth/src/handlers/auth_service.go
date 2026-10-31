@@ -209,8 +209,11 @@ type AuthServiceHandler struct {
 	// feature is off — only handlers/mfa.go reads them). Plain types so
 	// this always-compiled file stays free of the totp / secretbox
 	// imports; mfa.go builds the secretbox cipher from TwoFactorSecretKey.
-	TwoFactorTOTP     bool   // built-in TOTP verify path enabled (two_factor_totp)
-	TwoFactorScope    string // all_logins | new_devices (two_factor_scope)
+	TwoFactorTOTP  bool   // built-in TOTP verify path enabled (two_factor_totp)
+	TwoFactorScope string // all_logins | new_devices (two_factor_scope)
+	// DeliveryRecipient is the age recipient (age1…) credentials on events
+	// are sealed to (delivery_recipient; sealed_delivery.go).
+	DeliveryRecipient string
 	TwoFactorPolicy   string // required | optional | disabled (two_factor_policy)
 	MfaCodeTTLSeconds int    // event-flow challenge code lifetime (mfa_code_ttl_seconds)
 	// Issuance cap: at most MaxMfaChallengesPerWindow challenges

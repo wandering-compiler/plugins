@@ -61,6 +61,7 @@ const (
 )
 
 func init() {
+	secretDeliveryFeatures = append(secretDeliveryFeatures, "step_up_code")
 	passwordStepUpGates = append(passwordStepUpGates, passwordStepUpAllowed)
 }
 
@@ -113,13 +114,18 @@ func (h *AuthServiceHandler) RequestStepUpCode(ctx context.Context, _ *pb.Reques
 	}
 	now := time.Now()
 	expiresAt := timestamppb.New(now.Add(h.mfaTTL()))
+	clear, sealed, err := h.deliver(code)
+	if err != nil {
+		return nil, err
+	}
 	_, err = h.Mutation.SetStepUpCode(ctx, &pb.SetStepUpCodeReq{
 		TokenId:      session,
 		UserId:       userID,
 		CodeHash:     hash,
 		ResendBefore: timestamppb.New(now.Add(-stepUpCodeResendGap)),
 		Email:        got.GetUser().GetEmail(),
-		Code:         code,
+		Code:         clear,
+		SealedCode:   sealed,
 		ExpiresAt:    expiresAt,
 		Thumbprint:   requestThumbprint(ctx),
 	})

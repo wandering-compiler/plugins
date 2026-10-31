@@ -72,12 +72,17 @@ func (h *AuthServiceHandler) mintResetLink(ctx context.Context, user *pb.User) e
 		return err
 	}
 	expiresAt := timestamppb.New(time.Now().Add(h.passwordResetTTL()))
+	clear, sealed, err := h.deliver(token)
+	if err != nil {
+		return err
+	}
 	_, err = h.Mutation.CreatePasswordResetToken(ctx, &pb.CreatePasswordResetTokenReq{
-		UserId:    user.GetId(),
-		TokenHash: sha256Hex(token),
-		ExpiresAt: expiresAt,
-		Email:     user.GetEmail(), // canonical stored email for the delivery channel
-		Token:     token,           // plaintext — event-only, never persisted
+		UserId:      user.GetId(),
+		TokenHash:   sha256Hex(token),
+		ExpiresAt:   expiresAt,
+		Email:       user.GetEmail(), // canonical stored email for the delivery channel
+		Token:       clear,           // event-only, never persisted; empty when sealed
+		SealedToken: sealed,
 	})
 	return err
 }
@@ -187,6 +192,7 @@ func (h *AuthServiceHandler) consumeAndSetPassword(txCtx context.Context, tokenH
 // init lets the always-compiled password paths spend reset links when this
 // feature is staged (see spendResetLinks in auth_service.go).
 func init() {
+	secretDeliveryFeatures = append(secretDeliveryFeatures, "password_reset")
 	spendResetLinks = func(ctx context.Context, h *AuthServiceHandler, userID string) error {
 		_, err := h.Mutation.SpendPasswordResetTokens(ctx, &pb.SpendPasswordResetTokensReq{UserId: userID})
 		return err

@@ -99,6 +99,7 @@ var errSignUpConfirmInvalid = status.Error(codes.InvalidArgument,
 // stranger which addresses are registered.
 
 func init() {
+	secretDeliveryFeatures = append(secretDeliveryFeatures, "sign_up_confirmation")
 	signUpConfirmation = startSignUpConfirmation
 	erasers = append(erasers, erasePendingSignUps)
 	signInOutcomeRules = append(signInOutcomeRules,
@@ -214,12 +215,17 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 		return fail(err)
 	}
 
+	clear, sealed, err := h.deliver(code)
+	if err != nil {
+		return fail(err)
+	}
 	create := &pb.CreatePendingSignUpReq{
 		Email:        email,
 		PasswordHash: hashed,
 		CodeHash:     codeHash,
 		ExpiresAt:    timestamppb.New(time.Now().Add(h.signUpConfirmationTTL())),
-		Code:         code,
+		Code:         clear,
+		SealedCode:   sealed,
 	}
 	pendingSignUpJoin(create, join)
 	if err := pendingSignUpTenant(txCtx, h, req, create); err != nil {

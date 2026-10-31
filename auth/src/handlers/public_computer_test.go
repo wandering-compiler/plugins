@@ -204,14 +204,14 @@ func TestPublicSessionTTL(t *testing.T) {
 	if !within(h.sessionExpiry(true), time.Hour) {
 		t.Errorf("the public default outlived a one-hour session lifetime: %v", time.Until(h.sessionExpiry(true).AsTime()))
 	}
-	if err := ValidateConfig(&AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: 7200}); err == nil ||
+	if err := ValidateConfig(&AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: 7200, DeliveryRecipient: testRecipient}); err == nil ||
 		!strings.Contains(err.Error(), "public_session_ttl_seconds=7200") {
 		t.Errorf("a public lifetime longer than the session's was accepted: %v", err)
 	}
-	if err := ValidateConfig(&AuthServiceHandler{PublicSessionTTLSeconds: 28800}); err != nil {
+	if err := ValidateConfig(&AuthServiceHandler{PublicSessionTTLSeconds: 28800, DeliveryRecipient: testRecipient}); err != nil {
 		t.Errorf("the defaults were refused: %v", err)
 	}
-	if err := ValidateConfig(&AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: 3600}); err != nil {
+	if err := ValidateConfig(&AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: 3600, DeliveryRecipient: testRecipient}); err != nil {
 		t.Errorf("an equal lifetime was refused: %v", err)
 	}
 }
@@ -233,7 +233,7 @@ func TestPublicSessionTTL_TheManifestDefaultBootsWithShortSessions(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: def}
+	h := &AuthServiceHandler{SessionTokenTTLSeconds: 3600, PublicSessionTTLSeconds: def, DeliveryRecipient: testRecipient}
 	if err := ValidateConfig(h); err != nil {
 		t.Fatalf("the manifest default %d fails the boot of a deployment with one-hour sessions: %v", def, err)
 	}

@@ -5,7 +5,10 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
+
+	w17pb "github.com/wandering-compiler/sdk/go/pb/w17"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
@@ -79,4 +82,35 @@ func TestResolveUser_IsMarkedInternal(t *testing.T) {
 		raw = raw[n:]
 	}
 	t.Fatal("ResolveUser does not carry (w17.contrib.plugin_internal_rpc) = true: a project's own refs could put it on a surface")
+}
+
+// Every event that carries a credential for a person maps its sealed_* field
+// from the request beside the clear one: without the mapping the sealed value
+// never reaches the mailer, and the event goes out with neither.
+func TestSecretEvents_CarryTheSealedField(t *testing.T) {
+	methods := pb.File_mutations_auth_mutation_proto.Services().ByName("AuthMutation").Methods()
+	for rpc, field := range map[string]string{
+		"CreatePasswordResetToken":     "token",
+		"CreateEmailVerificationToken": "token",
+		"CreatePendingSignUp":          "code",
+		"CreateMfaChallenge":           "code",
+		"SetStepUpCode":                "code",
+	} {
+		m := methods.ByName(protoreflect.Name(rpc))
+		if m == nil {
+			t.Errorf("AuthMutation.%s does not exist", rpc)
+			continue
+		}
+		emit, _ := proto.GetExtension(m.Options(), w17pb.E_EventEmit).(*w17pb.EmitConfig)
+		mapped := map[string]string{}
+		for _, f := range emit.GetPayload().GetFields() {
+			mapped[f.GetKey()] = f.GetValue()
+		}
+		if mapped["sealed_"+field] != "$request.sealed_"+field {
+			t.Errorf("%s → %s maps sealed_%s from %q, want $request.sealed_%s", rpc, emit.GetEvent(), field, mapped["sealed_"+field], field)
+		}
+		if mapped[field] != "$request."+field {
+			t.Errorf("%s → %s lost the clear %s mapping (dev without a recipient)", rpc, emit.GetEvent(), field)
+		}
+	}
 }

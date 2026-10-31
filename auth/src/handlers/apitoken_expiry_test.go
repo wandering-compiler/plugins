@@ -81,10 +81,10 @@ func TestAPITokenExpiry_OutOfRange(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("year ~33658: code %v (%v)", status.Code(err), err)
 	}
-	if err := ValidateConfig(&AuthServiceHandler{APITokenDefaultTTLHours: 3_000_000}); err == nil {
+	if err := ValidateConfig(&AuthServiceHandler{APITokenDefaultTTLHours: 3_000_000, DeliveryRecipient: testRecipient}); err == nil {
 		t.Error("a default lifetime that overflows time.Duration was accepted at boot")
 	}
-	if err := ValidateConfig(&AuthServiceHandler{APITokenDefaultTTLHours: 2160}); err != nil {
+	if err := ValidateConfig(&AuthServiceHandler{APITokenDefaultTTLHours: 2160, DeliveryRecipient: testRecipient}); err != nil {
 		t.Errorf("the default was refused: %v", err)
 	}
 }

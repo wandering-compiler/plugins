@@ -53,12 +53,17 @@ func (h *AuthServiceHandler) RequestEmailVerification(ctx context.Context, req *
 		return nil, err
 	}
 	expiresAt := timestamppb.New(time.Now().Add(h.emailVerificationTTL()))
+	clear, sealed, err := h.deliver(token)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := h.Mutation.CreateEmailVerificationToken(ctx, &pb.CreateEmailVerificationTokenReq{
-		UserId:    user.GetId(),
-		TokenHash: sha256Hex(token),
-		ExpiresAt: expiresAt,
-		Email:     user.GetEmail(),
-		Token:     token,
+		UserId:      user.GetId(),
+		TokenHash:   sha256Hex(token),
+		ExpiresAt:   expiresAt,
+		Email:       user.GetEmail(),
+		Token:       clear,
+		SealedToken: sealed,
 	}); err != nil {
 		return nil, err
 	}
@@ -120,6 +125,7 @@ func (h *AuthServiceHandler) consumeAndMarkVerified(txCtx context.Context, token
 // `email_verification` is active, which is what makes the field reference
 // below safe to compile — `User.email_verified_at` does not exist otherwise.
 func init() {
+	secretDeliveryFeatures = append(secretDeliveryFeatures, "email_verification")
 	inviteVerifiedEmailGate = inviteVerifiedEmailGateImpl
 	emailProofEnforced = true
 	markEmailDerived = markEmailDerivedImpl
