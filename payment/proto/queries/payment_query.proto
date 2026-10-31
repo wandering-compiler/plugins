@@ -58,6 +58,34 @@ message LockPaymentForRefundResp {
   string received_currency = 5;
 }
 
+// LockCustomerForSubscribe — the customer row, locked (see the rpc).
+message LockCustomerForSubscribeReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message LockCustomerForSubscribeResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string id = 1;
+}
+
+// ListOpenSubscriptions — a customer's subscriptions to one plan that have
+// not ended (every status but CANCELED).
+message ListOpenSubscriptionsReq {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string customer_id = 1 [(w17.field) = { type: UUID }];
+  string plan_id     = 2 [(w17.field) = { type: UUID }];
+}
+message ListOpenSubscriptionsResp {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  repeated OpenSubscription subscriptions = 1;
+}
+message OpenSubscription {
+  option (w17.contrib.plugin_feature) = "subscriptions";
+  string id                       = 1;
+  string provider_subscription_id = 2;
+  int32  status                   = 3;
+}
+
 // GetProcessedWebhookEvent — one ledger row by its provider event id (the
 // primary key). Gated stripe_webhooks.
 message GetProcessedWebhookEventReq {
@@ -395,6 +423,43 @@ service PaymentQuery {
   // GetDisputeByProviderId — one Dispute by the provider's dispute id. The
   // webhook reads it when MarkDisputeStatus matched no row: a row that exists
   // is already closed or newer (acknowledge), a missing one is created.
+  // LockCustomerForSubscribe — SELECT … FOR UPDATE on one Customer row,
+  // inside Subscribe's transaction. Subscribes of one customer run one after
+  // the other from here until the subscription is recorded, so two clicks of
+  // "subscribe" under different keys cannot both find no open subscription
+  // to the plan and both start one. Outside a transaction it is a plain read.
+  rpc LockCustomerForSubscribe(LockCustomerForSubscribeReq) returns (LockCustomerForSubscribeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql: "SELECT c.id AS id FROM @module.Customer c WHERE c.id = :id"
+      }
+    };
+    option (w17.db.lock) = {
+      locks: [
+        { resource: "Customer", kind: SELECT_FOR_UPDATE }
+      ]
+    };
+  }
+
+  // ListOpenSubscriptions — the customer's subscriptions to a plan that have
+  // not ended: Subscribe allows one, and hands back one still waiting for its
+  // first payment instead of starting another. Newest first.
+  rpc ListOpenSubscriptions(ListOpenSubscriptionsReq) returns (ListOpenSubscriptionsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "subscriptions";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT s.id AS id, s.provider_subscription_id AS provider_subscription_id, s.status AS status "
+          "FROM @module.Subscription s "
+          "WHERE s.customer_id = :customer_id AND s.plan_id = :plan_id AND s.status <> 4 "
+          "ORDER BY s.created_at DESC"
+      }
+    };
+  }
+
   // GetProcessedWebhookEvent — whether a delivery's event was already
   // processed in full. IngestStripe reads it first, after the signature: the
   // ledger is written only once every side effect of an event has completed,

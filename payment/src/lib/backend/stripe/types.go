@@ -95,6 +95,29 @@ type subscriptionResp struct {
 			} `json:"price"`
 		} `json:"data"`
 	} `json:"items"`
+	// LatestInvoice is an id, or — expanded with its payment intent — the
+	// invoice object; clientSecret reads either.
+	LatestInvoice json.RawMessage `json:"latest_invoice"`
+}
+
+// clientSecret is the client secret of the subscription's latest invoice's
+// payment, while that payment awaits the client; "" when the invoice is not
+// expanded, has no payment, or the payment needs nothing from the client.
+func (s subscriptionResp) clientSecret() string {
+	var inv struct {
+		PaymentIntent *struct {
+			ClientSecret string `json:"client_secret"`
+			Status       string `json:"status"`
+		} `json:"payment_intent"`
+	}
+	if len(s.LatestInvoice) == 0 || s.LatestInvoice[0] != '{' || json.Unmarshal(s.LatestInvoice, &inv) != nil || inv.PaymentIntent == nil {
+		return ""
+	}
+	switch inv.PaymentIntent.Status {
+	case "requires_payment_method", "requires_confirmation", "requires_action":
+		return inv.PaymentIntent.ClientSecret
+	}
+	return ""
 }
 
 // priceID is the price of the subscription's first (only) item.

@@ -93,6 +93,9 @@ func (f *fakeBackend) UpsertPlan(_ context.Context, spec backend.PlanSpec) (stri
 	f.lastPlan = spec
 	return f.priceID, nil
 }
+func (f *fakeBackend) GetSubscription(_ context.Context, id string) (backend.SubscriptionObject, error) {
+	return backend.SubscriptionObject{SubscriptionResult: backend.SubscriptionResult{ProviderSubscriptionID: id, Status: "active"}}, nil
+}
 func (f *fakeBackend) StartSubscription(_ context.Context, spec backend.SubscriptionSpec) (backend.SubscriptionResult, error) {
 	f.lastSub = spec
 	return f.subRes, nil
@@ -150,6 +153,12 @@ func (q *fakeQuery) LockPaymentForRefund(_ context.Context, _ *pb.LockPaymentFor
 }
 func (q *fakeQuery) GetProcessedWebhookEvent(_ context.Context, _ *pb.GetProcessedWebhookEventReq, _ ...grpc.CallOption) (*pb.GetProcessedWebhookEventResp, error) {
 	return nil, noRow()
+}
+func (q *fakeQuery) LockCustomerForSubscribe(_ context.Context, in *pb.LockCustomerForSubscribeReq, _ ...grpc.CallOption) (*pb.LockCustomerForSubscribeResp, error) {
+	return &pb.LockCustomerForSubscribeResp{Id: in.GetId()}, nil
+}
+func (q *fakeQuery) ListOpenSubscriptions(_ context.Context, _ *pb.ListOpenSubscriptionsReq, _ ...grpc.CallOption) (*pb.ListOpenSubscriptionsResp, error) {
+	return &pb.ListOpenSubscriptionsResp{}, nil
 }
 func (q *fakeQuery) GetCreditBalance(_ context.Context, _ *pb.GetCreditBalanceReq, _ ...grpc.CallOption) (*pb.GetCreditBalanceResp, error) {
 	if q.balance == nil {

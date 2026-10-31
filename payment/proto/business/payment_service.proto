@@ -264,6 +264,11 @@ message SubscribeReq {
 message SubscriptionView {
   option (w17.contrib.plugin_feature) = "subscriptions";
   Subscription subscription = 1;
+  // client_secret — while the subscription waits for its first payment
+  // (INCOMPLETE), the provider token the frontend confirms that payment
+  // with, as for a charge (ChargeResp.client_secret). Empty once nothing is
+  // owed. Not persisted.
+  string client_secret = 2 [(w17.field) = { sensitive: true }];
 }
 
 // ── Reads of the caller's own billing ────────────────────────
@@ -345,6 +350,14 @@ service PaymentService {
   rpc CreatePlan(DefinePlanReq) returns (PlanView) {
     option (w17.contrib.plugin_feature_rpc) = "subscriptions";
   }
+  // Subscribe — start the principal's subscription to a plan. Its first
+  // invoice waits for the client to pay it: the answer carries the
+  // client_secret to confirm that payment with, and the card it is paid
+  // with pays the renewals. One open subscription per (principal, plan): a
+  // live one (TRIALING, ACTIVE, PAST_DUE, PAUSED, UNPAID) is AlreadyExists;
+  // one still waiting for its first payment (INCOMPLETE) is the answer, with
+  // that payment's client_secret, instead of a second subscription. A
+  // retry under the same key is the same subscription.
   rpc Subscribe(SubscribeReq) returns (SubscriptionView) {
     option (w17.contrib.plugin_feature_rpc) = "subscriptions";
   }

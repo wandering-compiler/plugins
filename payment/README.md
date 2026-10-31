@@ -317,7 +317,14 @@ webhooks). Off by default. This is the one feature that extends
     different amount / currency / interval is `AlreadyExists`).
     Privileged / admin — NOT REST-exposed.
   - `Subscribe` — ensure the customer, start the provider subscription,
-    persist the local record (`POST /subscriptions`). The
+    persist the local record (`POST /subscriptions`). The first invoice
+    waits for the client: the answer carries `client_secret`, which the
+    frontend confirms the way it confirms a charge, and the card it is paid
+    with pays the renewals; the subscription reads `INCOMPLETE` until the
+    payment lands (its webhook), `CANCELED` if the provider expires it
+    unpaid. One open subscription per (principal, plan): a second subscribe
+    while the first awaits its payment answers that subscription and its
+    `client_secret`; one beside a live subscription is `AlreadyExists`. The
     `idempotency_key` rides in the subscription's metadata
     (`w17_subscribe`); before starting one the plugin looks for the
     customer's subscription under that key, in any status, so a retry

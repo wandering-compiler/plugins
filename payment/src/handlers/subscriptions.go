@@ -297,6 +297,25 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 		return nil, err
 	}
 
+	var view *pb.SubscriptionView
+	err = h.inLockedTx(ctx, func(txCtx context.Context) error {
+		_, err := h.Query.LockCustomerForSubscribe(txCtx, &pb.LockCustomerForSubscribeReq{Id: cust.GetId()})
+		return err
+	}, func(txCtx context.Context) error {
+		var err error
+		view, err = h.subscribeLocked(ctx, txCtx, req, plan, cust)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
+// subscribeLocked is Subscribe under the customer's row lock: the open
+// subscriptions it reads cannot gain a sibling before it records its own.
+// Its writes use ctx and commit on their own (see inLockedTx).
+func (h *PaymentServiceHandler) subscribeLocked(ctx, txCtx context.Context, req *pb.SubscribeReq, plan *pb.Plan, cust *pb.Customer) (*pb.SubscriptionView, error) {
 	// The subscription keeps no key locally, so a retry after the provider
 	// forgot the key (a day) would start a second one — even when the first
 	// was recorded. The key in the subscription's metadata recognises it.
@@ -310,18 +329,81 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 		// subscription under this plan.
 		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different subscription")
 	}
-	if !found {
-		res, err = h.Backend.StartSubscription(ctx, backend.SubscriptionSpec{
-			ProviderCustomerID: cust.GetProviderCustomerId(),
-			ProviderPriceID:    plan.GetProviderPriceId(),
-			IdempotencyKey:     req.GetIdempotencyKey(),
-			Install:            h.installID(),
-		})
+	if found {
+		view, err := h.recordSubscription(ctx, cust, plan, res)
 		if err != nil {
-			return nil, providerFailure(err)
+			return nil, err
 		}
+		return h.withPendingPayment(ctx, view)
 	}
 
+	// One open subscription per (principal, plan). One still waiting for its
+	// first payment is handed back with that payment, so a second click
+	// pays the first subscription instead of starting another; one the
+	// provider has expired meanwhile is brought up to date and frees the
+	// place; any other open one is the principal's subscription already.
+	open, err := h.Query.ListOpenSubscriptions(txCtx, &pb.ListOpenSubscriptionsReq{CustomerId: cust.GetId(), PlanId: plan.GetId()})
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range open.GetSubscriptions() {
+		st := pb.Subscription_Status(o.GetStatus())
+		if st == pb.Subscription_INCOMPLETE {
+			obj, err := h.Backend.GetSubscription(ctx, o.GetProviderSubscriptionId())
+			if err != nil {
+				return nil, providerFailure(err)
+			}
+			if obj.Status == "incomplete" && obj.ClientSecret != "" {
+				row, err := h.subscriptionByProviderID(ctx, o.GetProviderSubscriptionId())
+				if err != nil {
+					return nil, err
+				}
+				if row != nil {
+					return &pb.SubscriptionView{Subscription: row, ClientSecret: obj.ClientSecret}, nil
+				}
+			}
+			// It moved at the provider (expired, paid, canceled): record
+			// that, and judge it by what it is now.
+			if _, err := reconcileProviderSubscription(ctx, h, obj); err != nil {
+				return nil, err
+			}
+			if st = mapSubscriptionStatus(obj.Status); st == pb.Subscription_CANCELED {
+				continue
+			}
+			if st == pb.Subscription_INCOMPLETE {
+				// Waiting for a payment the provider gives no secret for.
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"the principal's subscription to plan %q awaits a payment that cannot be confirmed from here", plan.GetSlug())
+			}
+		}
+		return nil, status.Errorf(codes.AlreadyExists,
+			"the principal is already subscribed to plan %q (%s)", plan.GetSlug(), st)
+	}
+
+	res, err = h.Backend.StartSubscription(ctx, backend.SubscriptionSpec{
+		ProviderCustomerID: cust.GetProviderCustomerId(),
+		ProviderPriceID:    plan.GetProviderPriceId(),
+		IdempotencyKey:     req.GetIdempotencyKey(),
+		Install:            h.installID(),
+	})
+	if err != nil {
+		return nil, providerFailure(err)
+	}
+	view, err := h.recordSubscription(ctx, cust, plan, res)
+	if err != nil {
+		return nil, err
+	}
+	if view.GetSubscription().GetStatus() == pb.Subscription_INCOMPLETE {
+		view.ClientSecret = res.ClientSecret
+	}
+	return view, nil
+}
+
+// recordSubscription writes the local row of a provider subscription this
+// Subscribe made or found under its key. A retried subscribe (same key) gets
+// the same provider subscription replayed, and its local row already exists:
+// that row is the answer — only when it is this customer's.
+func (h *PaymentServiceHandler) recordSubscription(ctx context.Context, cust *pb.Customer, plan *pb.Plan, res backend.SubscriptionResult) (*pb.SubscriptionView, error) {
 	created, err := h.Mutation.CreateSubscription(ctx, &pb.CreateSubscriptionReq{
 		CustomerId:             cust.GetId(),
 		PlanId:                 plan.GetId(),
@@ -329,23 +411,36 @@ func (h *PaymentServiceHandler) Subscribe(ctx context.Context, req *pb.Subscribe
 		Status:                 int32(mapSubscriptionStatus(res.Status)),
 		CurrentPeriodEnd:       unixToTimestamp(res.CurrentPeriodEnd),
 	})
-	if err != nil {
-		// A retried subscribe (same key) gets the same provider
-		// subscription replayed, and its local row already exists: that
-		// row is the answer — only when it is this customer's.
-		if constraintCode(err) == codeUniqueViolation {
-			got, gerr := h.Query.GetSubscriptionByProviderId(ctx, &pb.GetSubscriptionByProviderIdReq{ProviderSubscriptionId: res.ProviderSubscriptionID})
-			if gerr != nil && !absent(gerr) {
-				return nil, gerr
-			}
-			if sub := got.GetSubscription(); sub != nil && sub.GetCustomerId() == cust.GetId() {
-				return &pb.SubscriptionView{Subscription: sub}, nil
-			}
-			return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different subscription")
-		}
-		return nil, err
+	if err == nil {
+		return &pb.SubscriptionView{Subscription: created.GetSubscription()}, nil
 	}
-	return &pb.SubscriptionView{Subscription: created.GetSubscription()}, nil
+	if constraintCode(err) == codeUniqueViolation {
+		got, gerr := h.Query.GetSubscriptionByProviderId(ctx, &pb.GetSubscriptionByProviderIdReq{ProviderSubscriptionId: res.ProviderSubscriptionID})
+		if gerr != nil && !absent(gerr) {
+			return nil, gerr
+		}
+		if sub := got.GetSubscription(); sub != nil && sub.GetCustomerId() == cust.GetId() {
+			return &pb.SubscriptionView{Subscription: sub}, nil
+		}
+		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different subscription")
+	}
+	return nil, err
+}
+
+// withPendingPayment adds the first payment's client secret to a view of a
+// subscription still waiting for it (a retry of a subscribe whose payment
+// the client has not confirmed yet). The secret is never stored, so it is
+// read from the provider.
+func (h *PaymentServiceHandler) withPendingPayment(ctx context.Context, view *pb.SubscriptionView) (*pb.SubscriptionView, error) {
+	if view.GetSubscription().GetStatus() != pb.Subscription_INCOMPLETE {
+		return view, nil
+	}
+	obj, err := h.Backend.GetSubscription(ctx, view.GetSubscription().GetProviderSubscriptionId())
+	if err != nil {
+		return nil, providerFailure(err)
+	}
+	view.ClientSecret = obj.ClientSecret
+	return view, nil
 }
 
 // mapSubscriptionStatus maps the provider status string onto the local

@@ -469,6 +469,8 @@ hold it. **Partly fixed** says what is still open.
 | `subscriptions/older-event-ignored` | An event the provider created before the one last applied MUST NOT overwrite the row. | Consistency & concurrency | `TestFlow_AnOlderSubscriptionEventDoesNotOverwriteANewerOne`. **Unit (mock) only.** |
 | `subscriptions/own-subscription-without-row-retried` | An event for this installation's subscription with no local row MUST fail unrecorded; one for a subscription it did not create MUST be acknowledged. | Failure & configuration | `TestFlow_SubscriptionLifecycle_OutOfOrderAndUnknown`, `TestFlow_AnotherInstallationsObject_IsAcknowledged` |
 | `subscriptions/subscribe-once-per-key` | `Subscribe` MUST require a key and send it to the provider. A retry with the same key MUST return the recorded subscription, only when it is this customer's, and MUST NOT create a second provider subscription, also when the first attempt's local write failed. | Consistency & concurrency | `TestSubscribe_RequiresIdempotencyKey`, `TestSubscribe_DistinctKeysNotCollapsed`, `TestFlow_Subscribe_RetryAfterLostResponse`, `TestFlow_Subscribe_ReplayLookupChecksTheCustomer`, `TestFlow_SubscriptionFailurePaths`, `TestFlow_SubscribeRetriedAfterTheProviderForgotTheKey_SubscribesOnce`, `TestFlow_SubscriptionFoundUnderTheKeyOnAnotherPlan_IsRefused`, `TestFindSubscription_AllStatusesAndThePrice` (finding 4 fixed). **Not guaranteed** for a subscription an earlier version started: its metadata holds no key and the local row keeps none, so a retry after the provider's window starts a second subscription. **Unit (mock) only:** the lookup is a listing of the customer's subscriptions; a live test needs a provider test-mode account. |
+| `subscriptions/first-payment-is-the-clients` | `Subscribe` MUST start the subscription with its first invoice waiting for the client (`payment_behavior=default_incomplete`), save the card it is paid with for the renewals, and answer that payment's `client_secret` while the subscription is `INCOMPLETE` (also on a retry, read from the provider: it is not stored). The calls that read it MUST pin the API version it is read under. | Failure & configuration | `TestSubscribe_TheFirstPaymentIsTheClients`, `TestFlow_Subscribe_RetryAfterLostResponse`, `TestSubscription_FirstPaymentSecret` |
+| `subscriptions/one-open-per-plan` | A principal MUST hold at most one open subscription (any status but `CANCELED`) per plan. Under the customer's row lock (`LockCustomerForSubscribe`), `Subscribe` MUST answer one still `INCOMPLETE` with its payment instead of starting another, MUST bring one the provider has moved meanwhile up to date and judge it by that (expired frees the plan; paid is `AlreadyExists`), and MUST refuse any other open one with `AlreadyExists`. Another plan, or a plan whose subscription is `CANCELED`, is a new subscription. | Consistency & concurrency | `TestSubscribe_ASecondClickPaysTheFirstSubscription`, `TestSubscribe_ALiveSubscriptionIsNotStartedTwice`, `TestSubscribe_AnotherPlanOrAfterCancelIsANewSubscription`, `TestSubscribe_AWaitingSubscriptionIsJudgedByTheProvider`, `TestSubscribe_ConcurrentClicksStartOneSubscription`. **Unit (model) only** for the lock: the generated query takes `FOR UPDATE` only inside an adopted transaction. |
 | `subscriptions/plan-terms-immutable` | A plan's slug MUST name one set of terms. A repeated `CreatePlan` with the same terms MUST return the plan without a second provider price; different terms MUST be `AlreadyExists`. | Consistency & concurrency | `TestFlow_CreatePlan_IdempotentOnTermsNotJustSlug`, `TestCreatePlan_IdempotentReturnsExisting`, `TestCreatePlan` |
 | `subscriptions/plan-valid` | A plan MUST have a slug, a positive amount, a three-letter currency and an interval of `month` or `year`, checked before the provider call. | Consistency & concurrency | `TestCreatePlan_ValidatesInterval`, `TestCreatePlan_RejectsNonPositiveAmount`, `TestFlow_CreatePlan_Refusals` |
 | `subscriptions/plan-pushed-before-subscribe` | `Subscribe` MUST refuse an unknown plan (`NotFound`) and a plan without a provider price. | Failure & configuration | `TestSubscribe_PlanNotFound`, `TestSubscribe_PlanWithoutProviderPrice`, `TestSubscribe` |
@@ -477,15 +479,19 @@ hold it. **Partly fixed** says what is still open.
 
 **Gaps / suspected defects**
 
-1. **Nothing prevents duplicate subscriptions.** Two `Subscribe` calls with
-   distinct keys for one principal and plan create two billing
-   subscriptions.
+1. **Fixed: one open subscription per (principal, plan).** See
+   `subscriptions/one-open-per-plan`. Changing plan (an upgrade) is not a
+   feature yet: it is a new subscription beside the old one, until the old
+   one is canceled.
 2. **`Plan.enabled` is never read** and nothing can set it false; a retired
    plan can only be abandoned by slug.
-3. **No way to pay the first invoice.** `Subscribe` returns no client secret
-   for the subscription's first payment, and a customer the plugin created
-   has no default payment method, so a new subscription typically stays
-   `INCOMPLETE` until the provider expires it.
+3. **Fixed: the first invoice is the client's to pay.** See
+   `subscriptions/first-payment-is-the-clients`. The subscription calls pin
+   the provider's API version (`2024-06-20`); **every other call of the
+   driver does not**, so the account's default version shapes their answers.
+   An account on `2025-03-31` or later has no `current_period_end` on the
+   subscription itself, which the webhook and the reconciliation read: open,
+   a decision on pinning the whole driver.
 4. **Fixed: `UpsertPlan` sends an idempotency key**, derived from the
    installation and every term it sends. A retried or racing `CreatePlan`
    gets the price the first create made, within the provider's window

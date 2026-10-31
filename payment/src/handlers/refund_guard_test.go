@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -151,4 +152,40 @@ func (f *stripeFake) getIntent(w http.ResponseWriter, id string) {
 	st, body := okJSON(obj)
 	w.WriteHeader(st)
 	_, _ = w.Write(body)
+}
+
+// LockCustomerForSubscribe reads the customer; inside a transaction it locks
+// the row first, as the generated FOR-UPDATE variant does.
+func (s *memStore) LockCustomerForSubscribe(ctx context.Context, in *pb.LockCustomerForSubscribeReq, _ ...grpc.CallOption) (*pb.LockCustomerForSubscribeResp, error) {
+	if tx := txOf(ctx); tx != "" {
+		if err := s.locks.acquire(ctx, tx, in.GetId()); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.enter("LockCustomerForSubscribe"); err != nil {
+		return nil, s.leave("", err)
+	}
+	if _, ok := s.customers[in.GetId()]; !ok {
+		return nil, s.leave("LockCustomerForSubscribe", noRow())
+	}
+	return &pb.LockCustomerForSubscribeResp{Id: in.GetId()}, s.leave("LockCustomerForSubscribe", nil)
+}
+
+// ListOpenSubscriptions: status <> 4 (CANCELED), newest first.
+func (s *memStore) ListOpenSubscriptions(_ context.Context, in *pb.ListOpenSubscriptionsReq, _ ...grpc.CallOption) (*pb.ListOpenSubscriptionsResp, error) {
+	if err := s.enter("ListOpenSubscriptions"); err != nil {
+		return nil, s.leave("", err)
+	}
+	var rows []*pb.Subscription
+	for _, sub := range s.subs {
+		if sub.GetCustomerId() == in.GetCustomerId() && sub.GetPlanId() == in.GetPlanId() && sub.GetStatus() != pb.Subscription_CANCELED {
+			rows = append(rows, sub)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].GetId() > rows[j].GetId() })
+	out := &pb.ListOpenSubscriptionsResp{}
+	for _, sub := range rows {
+		out.Subscriptions = append(out.Subscriptions, &pb.OpenSubscription{Id: sub.GetId(), ProviderSubscriptionId: sub.GetProviderSubscriptionId(), Status: int32(sub.GetStatus())})
+	}
+	return out, s.leave("ListOpenSubscriptions", nil)
 }

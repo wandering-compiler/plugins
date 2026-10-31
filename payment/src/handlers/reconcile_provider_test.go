@@ -178,6 +178,7 @@ func TestReconcile_OrphanRefundOnTopup_TakesTheCreditOnce(t *testing.T) {
 // webhook event older than the run's read cannot put the older status back.
 func TestReconcile_OrphanSubscription(t *testing.T) {
 	r := newRig(t)
+	r.stripe.subStatus = "active" // its first payment made by the time the run reads it
 	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
 		t.Fatal(err)
 	}

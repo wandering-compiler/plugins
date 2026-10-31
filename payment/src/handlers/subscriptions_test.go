@@ -15,7 +15,7 @@ import (
 )
 
 func subHandler(q *fakeQuery, m *fakeMutation, be *fakeBackend) *PaymentServiceHandler {
-	return &PaymentServiceHandler{Query: q, Mutation: m, Backend: be}
+	return &PaymentServiceHandler{Query: q, Mutation: m, Backend: be, DistTx: &fakeDistTx{}}
 }
 
 func TestCreatePlan(t *testing.T) {
