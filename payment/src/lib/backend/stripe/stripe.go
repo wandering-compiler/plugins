@@ -240,8 +240,16 @@ func (b *Backend) StartSubscription(ctx context.Context, spec backend.Subscripti
 	// As for refunds: the key outlives the provider's idempotency window
 	// in the subscription's metadata, where FindSubscription matches it.
 	form.Set("metadata["+subscribeKeyMeta+"]", spec.IdempotencyKey)
+	// The first invoice waits for the client to pay it, the way a charge
+	// does, and the card it is paid with pays the renewals. Under the
+	// default (allow_incomplete) the provider charged the customer's default
+	// card at once — a customer this plugin created has none — and the
+	// subscription expired unpaid, with nothing to pay it with.
+	form.Set("payment_behavior", "default_incomplete")
+	form.Set("payment_settings[save_default_payment_method]", "on_subscription")
+	form.Set("expand[]", "latest_invoice.payment_intent")
 	var resp subscriptionResp
-	if err := b.post(ctx, "/v1/subscriptions", form, spec.IdempotencyKey, &resp); err != nil {
+	if err := b.postVersioned(ctx, "/v1/subscriptions", form, spec.IdempotencyKey, &resp); err != nil {
 		return backend.SubscriptionResult{}, err
 	}
 	if resp.ID == "" {
@@ -251,7 +259,67 @@ func (b *Backend) StartSubscription(ctx context.Context, spec backend.Subscripti
 		ProviderSubscriptionID: resp.ID,
 		Status:                 resp.Status,
 		CurrentPeriodEnd:       resp.CurrentPeriodEnd,
+		ProviderPriceID:        resp.priceID(),
+		ClientSecret:           resp.clientSecret(),
 	}, nil
+}
+
+// subscriptionAPIVersion is the API version the subscription calls that read
+// the first payment pin. It decides where that payment's client secret is
+// (latest_invoice.payment_intent here; an invoice confirmation_secret from
+// 2025-03-31 on) and that current_period_end is on the subscription itself;
+// unpinned, the account's default version would decide, and an account
+// moved to a newer one would answer no secret.
+const subscriptionAPIVersion = "2024-06-20"
+
+// GetSubscription reads one subscription by id, with its first payment
+// expanded. An id the provider does not know is an error.
+func (b *Backend) GetSubscription(ctx context.Context, providerSubscriptionID string) (backend.SubscriptionObject, error) {
+	if providerSubscriptionID == "" {
+		return backend.SubscriptionObject{}, &backend.InputError{Msg: "stripe: a subscription id is required"}
+	}
+	path := "/v1/subscriptions/" + url.PathEscape(providerSubscriptionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.baseURL+path+"?"+url.Values{"expand[]": {"latest_invoice.payment_intent"}}.Encode(), nil)
+	if err != nil {
+		return backend.SubscriptionObject{}, err
+	}
+	req.Header.Set("Stripe-Version", subscriptionAPIVersion)
+	var s subscriptionResp
+	hdr, err := b.doHeader(req, "/v1/subscriptions", "", &s)
+	if err != nil {
+		return backend.SubscriptionObject{}, err
+	}
+	if s.ID != providerSubscriptionID {
+		return backend.SubscriptionObject{}, fmt.Errorf("stripe: /v1/subscriptions: asked for %s, answered %q", providerSubscriptionID, s.ID)
+	}
+	var at int64
+	if t, perr := http.ParseTime(hdr.Get("Date")); perr == nil {
+		at = t.Unix()
+	}
+	return backend.SubscriptionObject{
+		SubscriptionResult: backend.SubscriptionResult{
+			ProviderSubscriptionID: s.ID,
+			Status:                 s.Status,
+			CurrentPeriodEnd:       s.CurrentPeriodEnd,
+			ProviderPriceID:        s.priceID(),
+			ClientSecret:           s.clientSecret(),
+		},
+		ProviderCustomerID: s.Customer,
+		Created:            s.Created,
+		ReadAt:             at,
+		Marks:              marks(s.Metadata),
+	}, nil
+}
+
+// postVersioned is post with the subscription calls' pinned API version.
+func (b *Backend) postVersioned(ctx context.Context, path string, form url.Values, idemKey string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.baseURL+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Stripe-Version", subscriptionAPIVersion)
+	return b.do(req, path, idemKey, out)
 }
 
 // subscribeKeyMeta is the subscription metadata key carrying the caller's

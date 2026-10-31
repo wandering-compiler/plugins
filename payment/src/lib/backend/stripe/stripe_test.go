@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -246,5 +247,68 @@ func TestGetPayment(t *testing.T) {
 	// The id is one path segment, whatever it holds.
 	if _, err := b.GetPayment(context.Background(), "pi_1/../../v1/refunds"); err == nil || !strings.HasPrefix(gotURI, "/v1/payment_intents/pi_1%2F..%2F..%2Fv1%2Frefunds") {
 		t.Errorf("an id with a path in it was sent as %s (err %v)", gotURI, err)
+	}
+}
+
+// StartSubscription asks the provider to leave the first payment to the
+// client, pinned to the API version the client secret is read under, and
+// answers that payment's client secret; GetSubscription reads it again.
+func TestSubscription_FirstPaymentSecret(t *testing.T) {
+	var form url.Values
+	var versions []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		versions = append(versions, r.Header.Get("Stripe-Version"))
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/subscriptions":
+			_ = r.ParseForm()
+			form = r.PostForm
+			_, _ = w.Write([]byte(`{"id":"sub_1","status":"incomplete","current_period_end":5,"items":{"data":[{"price":{"id":"price_1"}}]},
+				"latest_invoice":{"id":"in_1","payment_intent":{"id":"pi_1","client_secret":"pi_1_secret","status":"requires_payment_method"}}}`))
+		case r.URL.Path == "/v1/subscriptions/sub_paid":
+			_, _ = w.Write([]byte(`{"id":"sub_paid","status":"active","customer":"cus_1","metadata":{"w17_payment":"subscription"},
+				"latest_invoice":{"id":"in_2","payment_intent":{"id":"pi_2","client_secret":"pi_2_secret","status":"succeeded"}}}`))
+		case r.URL.Path == "/v1/subscriptions/sub_flat":
+			_, _ = w.Write([]byte(`{"id":"sub_flat","status":"incomplete","latest_invoice":"in_3"}`))
+		case r.URL.Path == "/v1/subscriptions/sub_other":
+			_, _ = w.Write([]byte(`{"id":"sub_1","status":"active"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"resource_missing","message":"No such subscription"}}`))
+		}
+	}))
+	defer srv.Close()
+	b := testBackend(srv)
+
+	res, err := b.StartSubscription(context.Background(), backend.SubscriptionSpec{ProviderCustomerID: "cus_1", ProviderPriceID: "price_1", IdempotencyKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ClientSecret != "pi_1_secret" || res.Status != "incomplete" || res.ProviderPriceID != "price_1" {
+		t.Errorf("start = %+v", res)
+	}
+	if form.Get("payment_behavior") != "default_incomplete" || form.Get("payment_settings[save_default_payment_method]") != "on_subscription" || form.Get("expand[]") != "latest_invoice.payment_intent" {
+		t.Errorf("form = %v", form)
+	}
+	paid, err := b.GetSubscription(context.Background(), "sub_paid")
+	if err != nil || paid.ClientSecret != "" || paid.Status != "active" || paid.ProviderCustomerID != "cus_1" || paid.Origin != "subscription" {
+		t.Errorf("a paid subscription = %+v, %v — want no secret (nothing is owed)", paid, err)
+	}
+	if flat, err := b.GetSubscription(context.Background(), "sub_flat"); err != nil || flat.ClientSecret != "" {
+		t.Errorf("an unexpanded invoice = %+v, %v — want no secret and no error", flat, err)
+	}
+	if _, err := b.GetSubscription(context.Background(), "sub_missing"); err == nil {
+		t.Error("an unknown subscription answered")
+	}
+	if _, err := b.GetSubscription(context.Background(), "sub_other"); err == nil {
+		t.Error("an answer for another subscription was accepted")
+	}
+	if _, err := b.GetSubscription(context.Background(), ""); !errors.Is(err, backend.ErrInvalidRequest) {
+		t.Errorf("an empty id: %v", err)
+	}
+	for i, v := range versions {
+		if v != subscriptionAPIVersion {
+			t.Errorf("call %d sent Stripe-Version %q, want %s", i, v, subscriptionAPIVersion)
+		}
 	}
 }

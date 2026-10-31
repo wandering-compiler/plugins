@@ -957,8 +957,11 @@ func TestFlow_Subscribe_RetryAfterLostResponse(t *testing.T) {
 	if n := r.stripe.count("/v1/subscriptions"); n != 1 {
 		t.Errorf("provider subscriptions = %d, want 1", n)
 	}
-	if sv.GetSubscription().GetStatus() != pb.Subscription_ACTIVE {
-		t.Errorf("status = %v", sv.GetSubscription().GetStatus())
+	// Still waiting for its first payment: the retry hands back that
+	// payment's client secret, read from the provider (it is not stored).
+	if sv.GetSubscription().GetStatus() != pb.Subscription_INCOMPLETE || sv.GetClientSecret() == "" {
+		t.Errorf("retry = %v with secret %q, want INCOMPLETE with its first payment's client secret",
+			sv.GetSubscription().GetStatus(), sv.GetClientSecret())
 	}
 }
 

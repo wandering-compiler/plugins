@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,6 +57,10 @@ type stripeFake struct {
 	// refundStatus is the status a created refund answers with ("" =
 	// succeeded); setRefundStatus moves one later.
 	refundStatus string
+	// subVersions is the Stripe-Version each subscription create was sent
+	// with, in order.
+	subVersions []string
+	subForms    []url.Values // each subscription create's form, in order
 	// erring makes the fake a gateway that errs: it refunds past what is
 	// left on the intent, so a test can show the plugin's own guard.
 	erring    bool
@@ -81,6 +86,17 @@ type fakeCustomer struct {
 type fakeSub struct {
 	id, customer, price, key string // key = metadata[w17_subscribe]
 	status                   string // "" = subStatus
+}
+
+// latestInvoice is a subscription's latest invoice, expanded with its
+// payment intent: one awaiting the client while the subscription is
+// incomplete, paid otherwise.
+func (f *stripeFake) latestInvoice(subID, status string) map[string]any {
+	pi := map[string]any{"id": "pi_" + subID, "client_secret": "pi_" + subID + "_secret", "status": "succeeded"}
+	if status == "incomplete" {
+		pi["status"] = "requires_payment_method"
+	}
+	return map[string]any{"id": "in_" + subID, "object": "invoice", "payment_intent": pi}
 }
 
 type fakeRefund struct {
@@ -188,6 +204,10 @@ func (f *stripeFake) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.listRefunds(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/subscriptions/") {
+		f.getSub(w, r, strings.TrimPrefix(r.URL.Path, "/v1/subscriptions/"))
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/subscriptions" {
@@ -364,14 +384,24 @@ func (f *stripeFake) route(w http.ResponseWriter, r *http.Request) (int, []byte)
 			return stripeErr(w, http.StatusBadRequest, "invalid_request_error", "Missing required param")
 		}
 		id := f.id("sub")
-		f.subs = append(f.subs, fakeSub{id: id, customer: r.PostForm.Get("customer"), price: r.PostForm.Get("items[0][price]"), key: r.PostForm.Get("metadata[w17_subscribe]")})
+		sub := fakeSub{id: id, customer: r.PostForm.Get("customer"), price: r.PostForm.Get("items[0][price]"), key: r.PostForm.Get("metadata[w17_subscribe]")}
+		f.subVersions = append(f.subVersions, r.Header.Get("Stripe-Version"))
+		f.subForms = append(f.subForms, r.PostForm)
+		// default_incomplete: the first invoice waits for the client, as
+		// the provider does it. subStatus, when a test sets it, still wins.
+		if r.PostForm.Get("payment_behavior") == "default_incomplete" && f.subStatus == "" {
+			sub.status = "incomplete"
+		}
+		f.subs = append(f.subs, sub)
 		f.origins[id] = r.PostForm.Get("metadata[w17_payment]")
 		f.installs[id] = r.PostForm.Get("metadata[w17_install]")
-		st := f.subStatus
-		if st == "" {
-			st = "active"
+		st := f.subStatusOf(sub)
+		obj := map[string]any{"id": id, "object": "subscription", "status": st, "current_period_end": 1893456000,
+			"items": map[string]any{"data": []map[string]any{{"price": map[string]any{"id": sub.price}}}}}
+		if r.PostForm.Get("expand[]") == "latest_invoice.payment_intent" {
+			obj["latest_invoice"] = f.latestInvoice(id, st)
 		}
-		return okJSON(map[string]any{"id": id, "object": "subscription", "status": st, "current_period_end": 1893456000})
+		return okJSON(obj)
 	}
 	return stripeErr(w, http.StatusNotFound, "invalid_request_error", "Unrecognized request URL")
 }
@@ -817,4 +847,28 @@ func (f *stripeFake) foreignSub(customer, price string) string {
 	id := f.id("sub")
 	f.subs = append(f.subs, fakeSub{id: id, customer: customer, price: price})
 	return id
+}
+
+// getSub answers GET /v1/subscriptions/{id}, expanding the latest invoice's
+// payment when asked, with the provider's Date.
+func (f *stripeFake) getSub(w http.ResponseWriter, r *http.Request, id string) {
+	f.mu.Lock()
+	f.requests["GET /v1/subscriptions/{id}"]++
+	f.subVersions = append(f.subVersions, r.Header.Get("Stripe-Version"))
+	obj, ok := f.subObjects()[id]
+	if ok && r.URL.Query().Get("expand[]") == "latest_invoice.payment_intent" {
+		obj["latest_invoice"] = f.latestInvoice(id, obj["status"].(string))
+	}
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	if !ok {
+		st, body := stripeErr(w, http.StatusNotFound, "invalid_request_error", "No such subscription: '"+id+"'")
+		w.WriteHeader(st)
+		_, _ = w.Write(body)
+		return
+	}
+	st, body := okJSON(obj)
+	w.WriteHeader(st)
+	_, _ = w.Write(body)
 }

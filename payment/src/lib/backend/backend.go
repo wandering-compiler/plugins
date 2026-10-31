@@ -214,6 +214,10 @@ type SubscriptionResult struct {
 	// must set it: the caller compares it with the plan a retry asks for,
 	// and a key that names a subscription to another plan is refused.
 	ProviderPriceID string
+	// ClientSecret confirms the subscription's first payment on the client
+	// (the provider's token, as for a charge), while the subscription awaits
+	// it; empty otherwise, and from FindSubscription. Never stored.
+	ClientSecret string
 }
 
 // ListQuery selects one page of a provider list, newest object first.
@@ -344,6 +348,13 @@ type Backend interface {
 	// idemKey, if the provider holds one, whatever its status, with its
 	// ProviderPriceID set (see FindRefund).
 	FindSubscription(ctx context.Context, providerCustomerID, idemKey string) (SubscriptionResult, bool, error)
+
+	// GetSubscription reads one subscription as the provider holds it now,
+	// with the client secret of its first payment while it awaits one.
+	// Subscribe asks it for a subscription of the same plan still waiting to
+	// be paid, to hand the caller that payment instead of a second
+	// subscription.
+	GetSubscription(ctx context.Context, providerSubscriptionID string) (SubscriptionObject, error)
 
 	// The account-wide lists the provider reconciliation walks
 	// (ReconcileProvider): one page each, newest first, of the objects
