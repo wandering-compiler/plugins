@@ -1,13 +1,11 @@
 package handlers
 
 import (
-	"bytes"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
 
-	"filippo.io/age"
+	"github.com/wandering-compiler/plugins/auth/lib/sealing"
 )
 
 // The deployment environment, as the SDK reads it (fieldcrypt, ratelimit).
@@ -40,35 +38,11 @@ func (h *AuthServiceHandler) deliver(credential string) (clear, sealed string, e
 	if strings.TrimSpace(h.DeliveryRecipient) == "" {
 		return credential, "", nil
 	}
-	sealed, err = sealTo(h.DeliveryRecipient, credential)
+	sealed, err = sealing.Seal(h.DeliveryRecipient, credential)
 	if err != nil {
 		return "", "", fmt.Errorf("auth plugin: sealing a credential for delivery: %w", err)
 	}
 	return "", sealed, nil
-}
-
-// sealTo encrypts credential to one age X25519 recipient and answers it as
-// standard base64 of the age binary format — what the SDK's
-// secret.OpenSealed reads, and `base64 -d | age -d -i key` too. Plain age
-// rather than the SDK's helper: a plugin release must not require an SDK newer
-// than the project it is installed in.
-func sealTo(recipient, credential string) (string, error) {
-	rec, err := age.ParseX25519Recipient(strings.TrimSpace(recipient))
-	if err != nil {
-		return "", err
-	}
-	var buf bytes.Buffer
-	w, err := age.Encrypt(&buf, rec)
-	if err != nil {
-		return "", err
-	}
-	if _, err := w.Write([]byte(credential)); err != nil {
-		return "", err
-	}
-	if err := w.Close(); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
 // checkDeliveryRecipient refuses the boot when a staged feature would put a
@@ -77,7 +51,7 @@ func sealTo(recipient, credential string) (string, error) {
 func checkDeliveryRecipient(h *AuthServiceHandler) error {
 	r := strings.TrimSpace(h.DeliveryRecipient)
 	if r != "" {
-		if _, err := age.ParseX25519Recipient(r); err != nil {
+		if err := sealing.CheckRecipient(r); err != nil {
 			return fmt.Errorf("auth plugin: delivery_recipient %q is not an age recipient (age1…): %w", r, err)
 		}
 		return nil

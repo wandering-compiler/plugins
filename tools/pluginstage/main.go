@@ -174,6 +174,9 @@ func check(dir string) error {
 	}
 
 	dqlErr := checkDQLColumns(dir, requires)
+	if iErr := checkStagedImports(dir); iErr != nil {
+		dqlErr = errors.Join(dqlErr, iErr)
+	}
 	if gErr := checkGatedGetters(dir, gates, inReach); gErr != nil {
 		dqlErr = errors.Join(dqlErr, gErr)
 	}
