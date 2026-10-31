@@ -1,6 +1,6 @@
 name: cluster
 version: 0.1.0-rc.16
-requires_w17: ">=1.8"
+requires_w17: ">=1.17"
 
 # v3 — explicit Go module anchor. Staging text-rewrites every
 # occurrence of this prefix in handlers/ + lib/ source to the
@@ -55,12 +55,18 @@ env:
 # production, which is right here: in production a relay lives OUTSIDE the
 # project's network, because it is what the workers reach.
 #
-# Build the image from the plugin directory (it shares the plugin's Go module,
-# so the relay and the handlers carry one copy of the contract). The generated
-# pb is not in a clone (src/gen is never committed), so generate it first:
+# The image is built from the plugin directory (it shares the plugin's Go
+# module, so the relay and the handlers carry one copy of the contract), and
+# no registry publishes it. In a project, `build:` below makes compose.w17.yaml
+# build it from the vendored plugin — `w17ctl stack build`, `stack up --build`,
+# or the first `stack up` that finds no image. The build needs the plugin's
+# generated pb (src/gen/pb), which `w17ctl codegen` writes into the vendored
+# plugin, so codegen comes first, as it does for everything the stack runs.
+# From a clone of github.com/wandering-compiler/plugins, where src/gen is never
+# committed, generate it first:
 #   w17ctl plugin gen-pb cluster
 #   docker build -f cluster/sandboxes/relay/Dockerfile \
-#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev cluster   (from a clone of github.com/wandering-compiler/plugins)
+#     -t ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev cluster
 #
 # ⚠️ IT MINTS ITS OWN IDENTITY AND PRINTS THE FINGERPRINT AT STARTUP. Read it
 # out of the container log and paste it into the relay's row — the same
@@ -83,6 +89,11 @@ sandboxes:
   - name: clusterrelay
     description: "Dev-only relay for the cluster pool — mints its own identity and prints the fingerprint to paste into its registry row."
     image: ${W17_WORKSPACE:-w17}-w17-cluster-relay:dev
+    # Plugin-relative: the context is the plugin root (the relay builds from
+    # src/), the Dockerfile sits beside the sandbox's other files.
+    build:
+      context: .
+      dockerfile: sandboxes/relay/Dockerfile
     # FOUR listeners, and the split is not arbitrary — each has a different
     # audience and therefore a different rule about who may complete a
     # handshake:
