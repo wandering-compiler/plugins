@@ -89,8 +89,10 @@ before it writes to anyone.
 A person who unsubscribes from a campaign in Brevo has withdrawn their
 consent. With the `brevo_webhook` feature, Brevo's marketing webhook tells
 the plugin, the plugin keeps it on the contact, and the project records it in
-auth as the user's own withdrawal. auth then announces it
-(`MarketingConsentChanged`), like any withdrawal.
+auth as the user's withdrawal. auth then announces it as
+`MarketingConsentWithdrawn` (the user's own decisions are
+`MarketingConsentChanged`); this plugin, which reported it, does not
+subscribe to it.
 
 Plugins do not call each other, so the project connects the two with a
 business method of the domain, bound to the plugin's `consent_withdrawn` hook

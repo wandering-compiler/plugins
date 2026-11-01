@@ -944,7 +944,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 			t.Errorf("event %s names a user and no device_id", name)
 		}
 	}
-	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled", "ApiTokenCreated", "MarketingConsentChanged", "BotAllowlistChanged", "StepUpCodeRequested"} {
+	for _, ev := range []string{"TokenIssued", "TokenRevoked", "UserTokenRevoked", "MfaChallengeRequested", "MfaVerified", "RecoveryCodeUsed", "TotpEnrolled", "TotpConfirmed", "TotpDisabled", "ApiTokenCreated", "MarketingConsentChanged", "MarketingConsentWithdrawn", "BotAllowlistChanged", "StepUpCodeRequested"} {
 		if !withDevice[ev] {
 			t.Errorf("%s carries no device_id", ev)
 		}
@@ -971,7 +971,7 @@ func TestEveryEventWithAUserCarriesTheDevice(t *testing.T) {
 		}
 	}
 	if emits != 19 {
-		t.Errorf("%d emits of a device-carrying event, want 19 (one per event, two for MarketingConsentChanged)", emits)
+		t.Errorf("%d emits of a device-carrying event, want 19 (one per event)", emits)
 	}
 }
 

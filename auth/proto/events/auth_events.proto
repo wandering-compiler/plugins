@@ -134,6 +134,28 @@ message MarketingConsentChanged {
   string                    device_id  = 4;
 }
 
+// MarketingConsentWithdrawn — emitted on AuthMutation.WithdrawUserMarketingConsent,
+// when a withdrawal the user made in the marketing tool (an unsubscribe there)
+// is recorded — only when it wrote. Not MarketingConsentChanged: that is the
+// user's own decision, made in the project, and an event has one emit site.
+// The tool that reported it needs no copy back; another subscriber keeping
+// one updates it here. Gated marketing_consent.
+message MarketingConsentWithdrawn {
+  option (w17.event) = {
+    channel: "events"
+    topic:   "auth.user.marketing_consent_withdrawn"
+  };
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+
+  string                    user_id    = 1;
+  // consent — always false; carried so a subscriber of both events reads
+  // them alike.
+  bool                      consent    = 2;
+  // decided_at — when the user withdrew it in the tool (withdrawn_at).
+  google.protobuf.Timestamp decided_at = 3;
+  string                    device_id  = 4;
+}
+
 // BotAllowlistChanged — emitted on AuthMutation.SetBotAllowedCidrs, when an
 // operator sets or clears where a machine account's bearer tokens are
 // accepted from: widening or clearing it is a security change, so who made it

@@ -507,7 +507,7 @@ features:
     go_files:
       - handlers/teams.go
   - name: marketing_consent
-    description: "The user's own consent to marketing messages: User.marketing_consent and when it was decided (marketing_consent_at, NULL = never asked), read and set by the user on the REST preset (GET / PUT /auth/marketing-consent), announced as MarketingConsentChanged, and answered by Authenticate (AuthResp.marketing_consent), so the gateway's request stream carries it to the tool that sends the messages. AuthService.WithdrawMarketingConsent (internal: never on a surface) records a withdrawal the user made in that tool — an unsubscribe — through the same statement and event, for the domain's own code (a marketing plugin's consent_withdrawn hook); it can only withdraw. It changes nothing about what is recorded. Off by default; a migration adds the two columns."
+    description: "The user's own consent to marketing messages: User.marketing_consent and when it was decided (marketing_consent_at, NULL = never asked), read and set by the user on the REST preset (GET / PUT /auth/marketing-consent), announced as MarketingConsentChanged, and answered by Authenticate (AuthResp.marketing_consent), so the gateway's request stream carries it to the tool that sends the messages. AuthService.WithdrawMarketingConsent (internal: never on a surface) records a withdrawal the user made in that tool — an unsubscribe — in one conditional statement, announced as MarketingConsentWithdrawn, for the domain's own code (a marketing plugin's consent_withdrawn hook); it can only withdraw. It changes nothing about what is recorded. Off by default; a migration adds the two columns."
     default: false
     requires:
       # AuthResp, which carries the consent, is authenticate_turnkey's.

@@ -61,7 +61,8 @@ func (h *AuthServiceHandler) SetMarketingConsent(ctx context.Context, req *pb.Se
 
 // WithdrawMarketingConsent records that the user withdrew their consent in
 // the marketing tool — they unsubscribed there — at withdrawn_at, announced
-// as MarketingConsentChanged like their own SetMarketingConsent. It is one
+// as MarketingConsentWithdrawn (their own SetMarketingConsent is
+// MarketingConsentChanged: two facts, two events, one emit site each). It is one
 // conditional statement (WithdrawUserMarketingConsent): it writes only over a
 // yes decided before withdrawn_at, or no decision, so a consent the user
 // gives meanwhile, a newer one, or a withdrawal already on record stands and

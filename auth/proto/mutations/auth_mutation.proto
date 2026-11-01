@@ -4368,7 +4368,7 @@ service AuthMutation {
       }
     };
     option (w17.event_emit) = {
-      event: "MarketingConsentChanged"
+      event: "MarketingConsentWithdrawn"
       payload: {
         fields: [
           { key: "user_id",    value: "$response.user_id" },

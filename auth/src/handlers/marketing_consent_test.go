@@ -227,7 +227,7 @@ func TestWithdrawUserMarketingConsent_IsOneConditionalStatement(t *testing.T) {
 		"marketing_consent_at = :withdrawn_at",
 		"WHERE id = :user_id",
 		"AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at))",
-		`event: "MarketingConsentChanged"`,
+		`event: "MarketingConsentWithdrawn"`,
 		`{ key: "consent",    value: "$response.consent" }`,
 	} {
 		if !strings.Contains(body, want) {
