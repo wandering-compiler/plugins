@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	"github.com/wandering-compiler/sdk/go/lib/principal"
@@ -33,8 +35,9 @@ func errorDetailOf(t *testing.T, err error) *w17pb.ErrorDetail {
 // A request scoped into an organization the caller is not in used to read
 // "You are not signed in." — to a caller whose token had just been accepted,
 // and whose mistake (an org ID where W17-Org wants the slug) that sentence
-// hides. Same code as every authentication refusal, so no contract moves; the
-// detail is what a person reads, and it survives the decorator loop.
+// hides. The credential was accepted, so it is PERMISSION_DENIED (403 on
+// every transport, never the 401 that signs a client out); the detail is what
+// a person reads, and it survives the decorator loop.
 func TestOrgNotMember_SaysWhatIsWrong(t *testing.T) {
 	h := &AuthServiceHandler{Query: &orgMock{bySlug: map[string]*pb.GetUserOrgBySlugResp{}}}
 
@@ -47,8 +50,8 @@ func TestOrgNotMember_SaysWhatIsWrong(t *testing.T) {
 	if !errors.Is(err, errOrgNotMember) {
 		t.Fatalf("want errOrgNotMember underneath, got %v", err)
 	}
-	if status.Code(err) != codes.Unauthenticated {
-		t.Errorf("code = %v, want Unauthenticated (the contract)", status.Code(err))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("code = %v, want PermissionDenied: the credential was accepted", status.Code(err))
 	}
 	d := errorDetailOf(t, err)
 	if d == nil || d.GetCode() != CodeOrgNotMember || d.GetMessage() != MsgOrgNotMember {
@@ -105,5 +108,32 @@ func TestRefuseOtherOrgDefersWhenNoOrgWasResolved(t *testing.T) {
 	_, err := h.ListOrgMembers(orgAuthedCtx("u1"), &pb.ListOrgMembersReq{Org: "acme"})
 	if !errors.Is(err, errNoActiveOrg) && !strings.Contains(fmt.Sprint(err), "W17-Org") {
 		t.Fatalf("ListOrgMembers{org} with no resolved org = %v, want the no-active-org answer naming W17-Org", err)
+	}
+}
+
+// An organization that exists and one that does not answer byte for byte the
+// same: ORG_NOT_MEMBER must not tell a caller which slugs are taken.
+func TestOrgNotMember_AnUnknownOrganizationAnswersTheSame(t *testing.T) {
+	h := &AuthServiceHandler{Query: &orgMock{bySlug: map[string]*pb.GetUserOrgBySlugResp{
+		"u-member|acme": {OrgId: "org-acme", Slug: "acme"},
+	}}}
+	prev := scopeDecorators
+	scopeDecorators = []scopeDecorator{resolveOrgScope}
+	t.Cleanup(func() { scopeDecorators = prev })
+
+	wire := func(slug string) []byte {
+		t.Helper()
+		err := runScopeDecorators(ctxWithOrg(slug), h, "u1", nil, map[string]string{}, map[string]string{})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("%s: code = %v, want PermissionDenied", slug, status.Code(err))
+		}
+		b, merr := proto.Marshal(status.Convert(err).Proto())
+		if merr != nil {
+			t.Fatal(merr)
+		}
+		return b
+	}
+	if a, b := wire("acme"), wire("no-such-org"); !bytes.Equal(a, b) {
+		t.Fatal("an existing organization and an unknown one answer differently")
 	}
 }
