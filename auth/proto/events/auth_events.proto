@@ -114,8 +114,9 @@ message UserUpdated {
   string email   = 2;
 }
 
-// MarketingConsentChanged — emitted on AuthMutation.SetUserMarketingConsent,
-// when the user gives or withdraws their consent to marketing messages. A
+// MarketingConsentChanged — emitted on AuthMutation.SetUserMarketingConsent
+// (its one emit site), when the user gives or withdraws their consent to
+// marketing messages, here or in the marketing tool. A
 // subscriber holding a copy of it (a marketing tool's contact attribute)
 // updates that copy here, rather than on the user's next request, which may
 // never come after a withdrawal. Gated marketing_consent.

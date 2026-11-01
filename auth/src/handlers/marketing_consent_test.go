@@ -23,14 +23,15 @@ type consentMock struct {
 	set     *pb.SetUserMarketingConsentReq
 	at      time.Time
 	err     error // GetUserMarketingConsent's
-	// withdrew: what WithdrawUserMarketingConsent wrote; beforeWithdraw runs
-	// first inside it — the user deciding at that instant.
-	withdrew       *pb.WithdrawUserMarketingConsentReq
+	// withdrew: what SetUserMarketingConsent wrote for a withdrawal (a
+	// request carrying withdrawn_at); beforeWithdraw runs first inside it —
+	// the user deciding at that instant.
+	withdrew       *pb.SetUserMarketingConsentReq
 	beforeWithdraw func()
 }
 
-// WithdrawUserMarketingConsent applies its statement's condition to stored.
-func (m *consentMock) WithdrawUserMarketingConsent(_ context.Context, in *pb.WithdrawUserMarketingConsentReq, _ ...grpc.CallOption) (*pb.SetUserMarketingConsentResp, error) {
+// withdrawal applies the statement's withdrawn_at condition to stored.
+func (m *consentMock) withdrawal(in *pb.SetUserMarketingConsentReq) (*pb.SetUserMarketingConsentResp, error) {
 	if f := m.beforeWithdraw; f != nil {
 		m.beforeWithdraw = nil
 		f()
@@ -43,8 +44,8 @@ func (m *consentMock) WithdrawUserMarketingConsent(_ context.Context, in *pb.Wit
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
 	m.withdrew = in
-	m.stored = &pb.GetUserMarketingConsentResp{Consent: false, DecidedAt: in.GetWithdrawnAt()}
-	return &pb.SetUserMarketingConsentResp{UserId: in.GetUserId(), Consent: false, DecidedAt: in.GetWithdrawnAt()}, nil
+	m.stored = &pb.GetUserMarketingConsentResp{Consent: in.GetConsent(), DecidedAt: in.GetWithdrawnAt()}
+	return &pb.SetUserMarketingConsentResp{UserId: in.GetUserId(), Consent: in.GetConsent(), DecidedAt: in.GetWithdrawnAt()}, nil
 }
 
 func (m *consentMock) GetUserMarketingConsent(_ context.Context, in *pb.GetUserMarketingConsentReq, _ ...grpc.CallOption) (*pb.GetUserMarketingConsentResp, error) {
@@ -55,7 +56,12 @@ func (m *consentMock) GetUserMarketingConsent(_ context.Context, in *pb.GetUserM
 	return m.stored, nil
 }
 
+// SetUserMarketingConsent is the one statement: with withdrawn_at it is the
+// conditional withdrawal, without it the user's own decision.
 func (m *consentMock) SetUserMarketingConsent(_ context.Context, in *pb.SetUserMarketingConsentReq, _ ...grpc.CallOption) (*pb.SetUserMarketingConsentResp, error) {
+	if in.GetWithdrawnAt() != nil {
+		return m.withdrawal(in)
+	}
 	m.set = in
 	return &pb.SetUserMarketingConsentResp{UserId: in.GetUserId(), Consent: in.GetConsent(), DecidedAt: timestamppb.New(m.at)}, nil
 }
@@ -71,7 +77,7 @@ func TestSetMarketingConsent_RecordsTheCallersDecision(t *testing.T) {
 		if err != nil {
 			t.Fatalf("consent %v: %v", consent, err)
 		}
-		if m.set.GetUserId() != "u1" || m.set.GetConsent() != consent {
+		if m.set.GetUserId() != "u1" || m.set.GetConsent() != consent || m.set.GetWithdrawnAt() != nil {
 			t.Errorf("consent %v: wrote %+v, want the caller's own decision", consent, m.set)
 		}
 		if resp.GetConsent() != consent || !resp.GetDecidedAt().AsTime().Equal(at) {
@@ -133,7 +139,8 @@ func TestSetUserMarketingConsent_StampsAndAnnouncesInOneStatement(t *testing.T) 
 	body := mutationRPCBody(t, "SetUserMarketingConsent")
 	for _, want := range []string{
 		"marketing_consent = :consent",
-		"marketing_consent_at = NOW()",
+		// The user's own decision carries no withdrawn_at: written at NOW().
+		"marketing_consent_at = COALESCE(:withdrawn_at, NOW())",
 		"WHERE id = :user_id",
 		`event: "MarketingConsentChanged"`,
 		`{ key: "consent",    value: "$response.consent" }`,
@@ -176,7 +183,7 @@ func TestWithdrawMarketingConsent_OnlyWithdraws(t *testing.T) {
 	for _, stored := range []*pb.GetUserMarketingConsentResp{{Consent: true, DecidedAt: timestamppb.New(day1)}, {}} {
 		m := &consentMock{stored: stored}
 		resp := withdraw(t, m, "u1", day2)
-		if m.withdrew == nil || m.withdrew.GetUserId() != "u1" || resp.GetConsent() || !resp.GetDecidedAt().AsTime().Equal(day2) {
+		if m.withdrew == nil || m.withdrew.GetUserId() != "u1" || m.withdrew.GetConsent() || resp.GetConsent() || !resp.GetDecidedAt().AsTime().Equal(day2) {
 			t.Errorf("stored %+v: wrote %+v, answered %+v", stored, m.withdrew, resp)
 		}
 	}
@@ -218,20 +225,26 @@ func TestWithdrawMarketingConsent_ANewerConsentStands(t *testing.T) {
 	}
 }
 
-// marketing_consent/withdraw-only: the statement carries the condition and
-// the event, so the guard and the announcement cannot come apart.
+// marketing_consent/withdraw-only: the withdrawal is the user's own statement
+// made conditional by withdrawn_at, so the guard, the write and the
+// announcement cannot come apart — and the event keeps its one emit site.
 func TestWithdrawUserMarketingConsent_IsOneConditionalStatement(t *testing.T) {
-	body := mutationRPCBody(t, "WithdrawUserMarketingConsent")
+	body := mutationRPCBody(t, "SetUserMarketingConsent")
 	for _, want := range []string{
-		"marketing_consent = FALSE",
-		"marketing_consent_at = :withdrawn_at",
+		"marketing_consent_at = COALESCE(:withdrawn_at, NOW())",
 		"WHERE id = :user_id",
-		"AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at))",
+		// One `?` conjunct: dropped exactly when withdrawn_at is absent.
+		"AND ? CASE WHEN marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at) ",
+		"THEN :withdrawn_at END = :withdrawn_at ",
 		`event: "MarketingConsentChanged"`,
 		`{ key: "consent",    value: "$response.consent" }`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("WithdrawUserMarketingConsent lacks %q", want)
+			t.Errorf("SetUserMarketingConsent lacks %q", want)
 		}
+	}
+	mut := readProto(t, "../../proto/mutations/auth_mutation.proto")
+	if n := strings.Count(mut, `event: "MarketingConsentChanged"`); n != 1 {
+		t.Errorf("MarketingConsentChanged has %d emit sites, want 1 — codegen refuses an event emitted from two", n)
 	}
 }
