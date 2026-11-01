@@ -31,6 +31,7 @@ them the plugin still sends events and creates contacts.
 | `INCLUDE` / `EXCLUDE` | comma-separated methods (`/<package>.<Service>/<Method>`) added to / removed from `SEND`; `EXCLUDE` wins; a name the stream does not record is refused at boot |
 | `BREVO_CONSENT_ATTRIBUTE` | the contact attribute the consent goes to (default `W17_MARKETING_CONSENT`) |
 | `BREVO_RPS` | requests per second to Brevo (default 8 of the account's 10) |
+| `BREVO_WEBHOOK_TOKEN` | the token Brevo's webhook carries (`brevo_webhook`, secret) |
 | `PLUGINS_DURABLE_PREFIX` (`<DOMAIN>_`) | the bundle's prefix for the plugins' delivery progress; set it when two deployments share a broker |
 
 **The calls leave from the storage bundle**, where the plugin runs. A Brevo
@@ -57,9 +58,23 @@ letters, to be replayed once the account allows them.
   anything marked `sensitive`.
 - **Contacts** (`POST /v3/contacts`, upsert by `ext_id`): created on
   `UserCreated` with the email, updated on `UserUpdated`, the consent
-  attribute set on `MarketingConsentChanged`.
+  attribute set on `MarketingConsentChanged`. Whether campaigns may reach the
+  contact (`emailBlacklisted`, Brevo's "Email campaigns: Subscribed"): a new
+  account is blacklisted, a no blacklists, and only the user's newest yes
+  subscribes — after reading the contact from Brevo, so a person who
+  unsubscribed there stays unsubscribed (recorded, not undone). A consent the
+  plugin was never told is no consent. The plugin keeps each user's last
+  consent, address and what it last wrote (`Contact`), and an address change
+  never subscribes anyone.
 - **Erasure** (`DELETE /v3/contacts/{id}?identifierType=ext_id`) on
   `UserDeleted`: the contact and its history.
+
+**Contacts from before `emailBlacklisted`.** Once per deployment, in the
+background, the plugin blacklists every contact of its own (an `EXT_ID` that
+is a user id) that is subscribed and whose user has not consented. It never
+subscribes anyone, and leaves contacts it did not create alone. A
+`Reconciliation` row records that it ran, so a restart or a second replica
+does not run it again.
 
 The plugin creates the contact attribute it writes (`W17_MARKETING_CONSENT`,
 or `BREVO_CONSENT_ATTRIBUTE`) when it starts: Brevo drops an attribute the
@@ -69,11 +84,48 @@ the events' properties.
 Consent does not change what is recorded or sent: it is the tool's to read
 before it writes to anyone.
 
+## An unsubscribe in Brevo (`brevo_webhook`)
+
+A person who unsubscribes from a campaign in Brevo has withdrawn their
+consent. With the `brevo_webhook` feature, Brevo's marketing webhook tells
+the plugin, the plugin keeps it on the contact, and the project records it in
+auth as the user's own withdrawal. auth then announces it
+(`MarketingConsentChanged`), like any withdrawal.
+
+Plugins do not call each other, so the project connects the two with a
+business method of the domain, bound to the plugin's `consent_withdrawn` hook
+(auth's `marketing_consent` feature on):
+
+```proto
+plugins: [{ name: "marketing" registered_as: "marketing" features: { names: ["brevo", "brevo_webhook"] }
+            hooks: [ { slot: "consent_withdrawn", methods: [ "consent.ConsentHooks.Withdrawn" ] } ] }]
+```
+
+```go
+func (s *ConsentHooks) Withdrawn(ctx context.Context, req *marketingpb.ConsentWithdrawnReq) (*marketingpb.ConsentWithdrawnResp, error) {
+	_, err := s.auth.WithdrawMarketingConsent(ctx, &authpb.WithdrawMarketingConsentReq{UserId: req.GetUserId(), WithdrawnAt: req.GetWithdrawnAt()})
+	return &marketingpb.ConsentWithdrawnResp{}, err
+}
+```
+
+Set `<DOMAIN>_MARKETING_BREVO_WEBHOOK_TOKEN` to a long random string and
+create the webhook with it (the endpoint refuses every call without it, and
+every call while it is unset):
+
+```sh
+curl -X POST https://api.brevo.com/v3/webhooks -H "api-key: $BREVO_API_KEY" -H 'content-type: application/json' -d '{
+  "type": "marketing", "events": ["unsubscribed"],
+  "url": "https://api.example.com/marketing/webhooks/brevo",
+  "headers": [{"key": "X-Brevo-Webhook-Token", "value": "<the token>"}]}'
+```
+
+A delivery whose write-back fails is answered 503, and Brevo sends it again.
+
 ## In development: the stub
 
 `sandboxes/brevostub` is a dev-only stand-in for the Brevo API (the plugin's
-`brevostub` sandbox): it answers the plugin's three calls and keeps what they
-said, readable at `GET /_stub/contacts/{ext_id}` and `GET /_stub/events`, so a
+`brevostub` sandbox): it answers the plugin's calls and keeps what they
+said — `emailBlacklisted` included — readable at `GET /_stub/contacts/{ext_id}` and `GET /_stub/events`, so a
 project's suite can assert on what would have reached Brevo. Point the
 activation at it with `<DOMAIN>_MARKETING_BREVO_BASE_URL=http://brevostub:8080/v3`
 and `_BREVO_API_KEY=stub-key`.

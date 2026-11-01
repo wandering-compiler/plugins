@@ -20,6 +20,10 @@ env:
     type: string
     secret: true
     description: "Brevo API key (the `api-key` header). Required with the brevo feature."
+  - name: brevo_webhook_token
+    type: string
+    secret: true
+    description: "The token Brevo's marketing webhook is created with, in its X-Brevo-Webhook-Token header (the webhook's `headers`). The webhook (feature brevo_webhook) refuses every call without it, and every call while it is unset. A long random string."
   - name: brevo_base_url
     type: string
     default: "https://api.brevo.com/v3"
@@ -46,11 +50,18 @@ env:
 features:
   - name: brevo
     default: false
-    description: "The Brevo integration: the gateway's marketing records become Brevo events on the user's contact (POST /v3/events/batch), contacts are created and updated from auth's UserCreated / UserUpdated (POST /v3/contacts) with the consent attribute from MarketingConsentChanged, and deleted on UserDeleted (DELETE /v3/contacts/{id}?identifierType=ext_id). Adds the SentEvent table, which keeps a redelivered record from becoming a second event."
+    description: "The Brevo integration: the gateway's marketing records become Brevo events on the user's contact (POST /v3/events/batch), contacts are created and updated from auth's UserCreated / UserUpdated (POST /v3/contacts) with the consent attribute from MarketingConsentChanged, and deleted on UserDeleted (DELETE /v3/contacts/{id}?identifierType=ext_id). Campaigns reach a contact (emailBlacklisted false) only once the user's newest consent is a yes, and never again after the person unsubscribed in Brevo (read from Brevo before subscribing) until a later consent; every other write blacklists or leaves the field alone. Adds the SentEvent table, which keeps a redelivered record from becoming a second event, the Contact table, which keeps each user's last known consent, address and what the plugin last wrote, and the Reconciliation table, which runs the one-time pass that blacklists the contacts created before the plugin wrote emailBlacklisted."
     go_files:
       - handlers/brevo.go
       - handlers/brevo_events.go
       - handlers/brevo_contacts.go
+      - handlers/brevo_reconcile.go
+  - name: brevo_webhook
+    default: false
+    requires: [brevo]
+    description: "Brevo's marketing webhook back into the project: an unsubscribe in Brevo (the `unsubscribed` event) is recorded on the plugin's Contact and handed to the project's consent_withdrawn hook, whose method records it as the user's withdrawal in auth (AuthService.WithdrawMarketingConsent). Adds MarketingService.IngestBrevo, served on the REST surface at POST /marketing/webhooks/brevo without a bearer and refused without brevo_webhook_token."
+    go_files:
+      - handlers/brevo_webhook.go
 
 # The gateway's marketing records, in Brevo as events.
 request_consumers:
@@ -83,9 +94,32 @@ subscriptions:
     feature: brevo
     optional: true
 
+# The project's side of an unsubscribe in Brevo (feature brevo_webhook).
+hooks:
+  - name: consent_withdrawn
+    request: ConsentWithdrawnReq
+    response: ConsentWithdrawnResp
+    required: true
+    feature: brevo_webhook
+    description: "Records that the user withdrew their marketing consent in Brevo (they unsubscribed there): a business method of the domain taking ConsentWithdrawnReq that calls auth's AuthService.WithdrawMarketingConsent for user_id. Plugins do not call each other, so the project binds the two. Its error fails the webhook delivery, which Brevo sends again."
+
+presets:
+  rest:
+    # The webhook's token rides this header into gRPC metadata.
+    forward_headers:
+      - { name: X-Brevo-Webhook-Token, feature: brevo_webhook }
+    groups:
+      # Brevo's webhook has no bearer: its authenticity is the token it was
+      # created with. failed_only: a delivery answered 2xx spends no
+      # per-address budget, so a burst from Brevo is not answered 429.
+      - prefix: /marketing/webhooks
+        description: "Inbound marketing-tool webhooks (token-verified, unauthenticated)."
+        endpoints:
+          - { ref: MarketingService.IngestBrevo, method: POST, path: /brevo, exclude_auth: true, public_limit: failed_only, raw_body_field: raw_payload, feature: brevo_webhook }
+
 sandboxes:
-  # A dev-only stand-in for the Brevo API: it answers the plugin's three calls
-  # and keeps what they said (GET /_stub/contacts/{ext_id}, /_stub/events), so
+  # A dev-only stand-in for the Brevo API: it answers the plugin's calls
+  # and keeps what they said (emailBlacklisted included) (GET /_stub/contacts/{ext_id}, /_stub/events), so
   # a project's suite reads back what would have reached Brevo. Point the
   # activation at it: <DOMAIN>_MARKETING_BREVO_BASE_URL=http://brevostub:8080/v3
   # and _BREVO_API_KEY=stub-key. No registry publishes the image: the release

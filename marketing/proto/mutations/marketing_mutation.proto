@@ -29,6 +29,66 @@ message ForgetSentEventsBeforeResp {
   option (w17.contrib.plugin_feature) = "brevo";
 }
 
+message SetContactEmailReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  string email   = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+message SetContactConsentReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string                    user_id    = 1 [(w17.field) = { type: UUID }];
+  bool                      consent    = 2;
+  google.protobuf.Timestamp consent_at = 3 [(w17.field) = { type: DATETIME }];
+}
+message SetContactUnsubscribedReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string                    user_id         = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp unsubscribed_at = 2 [(w17.field) = { type: DATETIME }];
+}
+message EraseContactReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message ContactWriteResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+}
+message EnsureContactReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message SetContactSentBlacklistedReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id          = 1 [(w17.field) = { type: UUID }];
+  bool   sent_blacklisted = 2;
+}
+// ContactUpdatedResp — a conditional write that moved the row; NotFound when
+// the condition held it back.
+message ContactUpdatedResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id = 1;
+}
+
+message ClaimReconciliationReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string name  = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string owner = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message TakeOverReconciliationReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string                    name         = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string                    owner        = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  google.protobuf.Timestamp stale_before = 3 [(w17.field) = { type: DATETIME }];
+}
+message ReconciliationOwnerReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string name  = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string owner = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message ReconciliationResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string name = 1;
+}
+
 service MarketingMutation {
   // RecordSentEvent — remember a record as sent, AFTER the tool accepted
   // it: recorded first, a failed send would lose the event for good. A
@@ -55,6 +115,157 @@ service MarketingMutation {
       ops: {
         name: "main"
         dql: "DELETE FROM @module.SentEvent WHERE sent_at < :before"
+      }
+    };
+  }
+
+  // SetContactEmail — the user's last address, lower-cased by the caller.
+  // Gated brevo.
+  rpc SetContactEmail(SetContactEmailReq) returns (ContactWriteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Contact SET user_id = :user_id, email = :email "
+          "ON CONFLICT (user_id) DO UPDATE SET email = :email"
+      }
+    };
+  }
+
+  // EnsureContact — the user's row, created empty when there is none, so
+  // the conditional writes below have a row to hold back. Gated brevo.
+  rpc EnsureContact(EnsureContactReq) returns (ContactWriteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Contact SET user_id = :user_id "
+          "ON CONFLICT (user_id) DO NOTHING"
+      }
+    };
+  }
+
+  // SetContactConsent — the last consent auth announced and when it was
+  // decided, only when it is newer than the one kept: two deliveries at once
+  // (or two replicas) cannot let an older decision overwrite a newer one.
+  // NotFound = the kept one is as new or newer. Gated brevo.
+  rpc SetContactConsent(SetContactConsentReq) returns (ContactUpdatedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Contact SET consent = :consent, consent_at = :consent_at "
+          "WHERE user_id = :user_id AND (consent_at IS NULL OR consent_at < :consent_at) "
+          "RETURNING user_id"
+      }
+    };
+  }
+
+  // SetContactUnsubscribed — the person unsubscribed in the tool, kept when
+  // it is later than the unsubscribe kept. NotFound = an older one. Gated
+  // brevo.
+  rpc SetContactUnsubscribed(SetContactUnsubscribedReq) returns (ContactUpdatedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Contact SET unsubscribed_at = :unsubscribed_at "
+          "WHERE user_id = :user_id AND (unsubscribed_at IS NULL OR unsubscribed_at < :unsubscribed_at) "
+          "RETURNING user_id"
+      }
+    };
+  }
+
+  // SetContactSentBlacklisted — the emailBlacklisted the plugin last wrote
+  // to (or found in) the tool, which tells a Brevo-side unsubscribe from the
+  // plugin's own blacklisting. Gated brevo.
+  rpc SetContactSentBlacklisted(SetContactSentBlacklistedReq) returns (ContactWriteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Contact SET user_id = :user_id, sent_blacklisted = :sent_blacklisted "
+          "ON CONFLICT (user_id) DO UPDATE SET sent_blacklisted = :sent_blacklisted"
+      }
+    };
+  }
+
+  // EraseContact — the account was erased: the address goes, and the row
+  // stays as the record that it did. Gated brevo.
+  rpc EraseContact(EraseContactReq) returns (ContactWriteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Contact SET user_id = :user_id, erased_at = NOW() "
+          "ON CONFLICT (user_id) DO UPDATE SET email = NULL, erased_at = NOW()"
+      }
+    };
+  }
+
+  // ClaimReconciliation — start a one-time job. A UNIQUE_VIOLATION is a
+  // job some replica started already. Gated brevo.
+  rpc ClaimReconciliation(ClaimReconciliationReq) returns (ReconciliationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.Reconciliation SET name = :name, claimed_by = :owner, claimed_at = NOW() "
+          "RETURNING name"
+      }
+    };
+  }
+
+  // TakeOverReconciliation — claim an unfinished job that this owner holds
+  // already (its run failed and is retried), or whose claim was not renewed
+  // since stale_before (its replica is gone). NotFound = finished, or another
+  // replica holds it. Gated brevo.
+  rpc TakeOverReconciliation(TakeOverReconciliationReq) returns (ReconciliationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Reconciliation SET claimed_by = :owner, claimed_at = NOW() "
+          "WHERE name = :name AND finished_at IS NULL AND (claimed_by = :owner OR claimed_at < :stale_before) "
+          "RETURNING name"
+      }
+    };
+  }
+
+  // RenewReconciliation — the owner is still at it. NotFound = it lost the
+  // claim. Gated brevo.
+  rpc RenewReconciliation(ReconciliationOwnerReq) returns (ReconciliationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Reconciliation SET claimed_at = NOW() "
+          "WHERE name = :name AND claimed_by = :owner AND finished_at IS NULL "
+          "RETURNING name"
+      }
+    };
+  }
+
+  // FinishReconciliation — the job is done; it does not run again. Gated
+  // brevo.
+  rpc FinishReconciliation(ReconciliationOwnerReq) returns (ReconciliationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Reconciliation SET finished_at = NOW() "
+          "WHERE name = :name AND claimed_by = :owner AND finished_at IS NULL "
+          "RETURNING name"
       }
     };
   }

@@ -1,6 +1,6 @@
-// Package brevo is the plugin's client of the Brevo API: the three calls it
-// makes (a batch of events, a contact upsert, a contact deletion), paced to
-// the account's rate limit.
+// Package brevo is the plugin's client of the Brevo API: the calls it makes
+// (a batch of events, a contact upsert, update, listing and deletion, an
+// attribute), paced to the account's rate limit.
 package brevo
 
 import (
@@ -172,11 +172,20 @@ func (c *Client) SendEvents(ctx context.Context, events []Event) (BatchResult, e
 }
 
 // UpdateContact sets attributes of the contact keyed by extID (EMAIL among
-// them changes its address). A contact that does not exist answers 404: an
-// upsert by POST cannot change an address — Brevo resolves it by the new
-// email, finds none, and refuses the ext_id as taken (duplicate_parameter).
-func (c *Client) UpdateContact(ctx context.Context, extID string, attributes map[string]any) error {
-	body, err := json.Marshal(map[string]any{"attributes": attributes})
+// them changes its address) and, when emailBlacklisted is not nil, whether
+// campaigns may reach it (Brevo's "Email campaigns: Subscribed" is false).
+// A contact that does not exist answers 404: an upsert by POST cannot change
+// an address — Brevo resolves it by the new email, finds none, and refuses
+// the ext_id as taken (duplicate_parameter).
+func (c *Client) UpdateContact(ctx context.Context, extID string, attributes map[string]any, emailBlacklisted *bool) error {
+	payload := map[string]any{}
+	if len(attributes) > 0 {
+		payload["attributes"] = attributes
+	}
+	if emailBlacklisted != nil {
+		payload["emailBlacklisted"] = *emailBlacklisted
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -207,8 +216,10 @@ func IsNotFound(err error) bool {
 }
 
 // UpsertContact creates the contact keyed by extID, or updates it: its email
-// (when given) and attributes.
-func (c *Client) UpsertContact(ctx context.Context, extID, email string, attributes map[string]any) error {
+// (when given), attributes, and whether campaigns may reach it (when
+// emailBlacklisted is not nil). A contact Brevo creates without
+// emailBlacklisted is subscribed to campaigns.
+func (c *Client) UpsertContact(ctx context.Context, extID, email string, attributes map[string]any, emailBlacklisted *bool) error {
 	payload := map[string]any{"ext_id": extID, "updateEnabled": true}
 	if email != "" {
 		payload["email"] = email
@@ -216,12 +227,103 @@ func (c *Client) UpsertContact(ctx context.Context, extID, email string, attribu
 	if len(attributes) > 0 {
 		payload["attributes"] = attributes
 	}
+	if emailBlacklisted != nil {
+		payload["emailBlacklisted"] = *emailBlacklisted
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	_, _, err = c.do(ctx, http.MethodPost, "/contacts", body)
 	return err
+}
+
+// CreateContact creates the contact keyed by extID only when Brevo has none:
+// one that exists already — another write created it first — is refused
+// (IsDuplicate) and left exactly as it is, its emailBlacklisted included.
+func (c *Client) CreateContact(ctx context.Context, extID, email string, attributes map[string]any, emailBlacklisted *bool) error {
+	payload := map[string]any{"ext_id": extID, "updateEnabled": false}
+	if email != "" {
+		payload["email"] = email
+	}
+	if len(attributes) > 0 {
+		payload["attributes"] = attributes
+	}
+	if emailBlacklisted != nil {
+		payload["emailBlacklisted"] = *emailBlacklisted
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.do(ctx, http.MethodPost, "/contacts", body)
+	return err
+}
+
+// IsDuplicate reports whether Brevo refused a creation because the contact
+// exists (duplicate_parameter).
+func IsDuplicate(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == http.StatusBadRequest && e.Code == "duplicate_parameter"
+}
+
+// MaxListContacts is the most contacts one GET /contacts answers.
+const MaxListContacts = 1000
+
+// Contact is one contact of the account, as a listing answers it. ExtID is
+// the EXT_ID attribute — the id a contact is keyed by when the plugin wrote
+// it (ext_id), empty for a contact something else created.
+type Contact struct {
+	ID               int64          `json:"id"`
+	Email            string         `json:"email,omitempty"`
+	EmailBlacklisted bool           `json:"emailBlacklisted"`
+	Attributes       map[string]any `json:"attributes,omitempty"`
+	ExtID            string         `json:"-"`
+}
+
+// ListContacts answers one page of the account's contacts, oldest first (so
+// a contact created meanwhile lands on a later page instead of shifting this
+// one), and how many there are in all.
+func (c *Client) ListContacts(ctx context.Context, offset, limit int) ([]Contact, int, error) {
+	if limit <= 0 || limit > MaxListContacts {
+		return nil, 0, fmt.Errorf("brevo: a page of %d contacts, 1 to %d", limit, MaxListContacts)
+	}
+	q := url.Values{"limit": {strconv.Itoa(limit)}, "offset": {strconv.Itoa(offset)}, "sort": {"asc"}}
+	_, raw, err := c.do(ctx, http.MethodGet, "/contacts?"+q.Encode(), nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	var page struct {
+		Contacts []Contact `json:"contacts"`
+		Count    int       `json:"count"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return nil, 0, fmt.Errorf("brevo: a contact listing that does not parse: %w", err)
+	}
+	for i := range page.Contacts {
+		if v, ok := page.Contacts[i].Attributes["EXT_ID"].(string); ok {
+			page.Contacts[i].ExtID = v
+		}
+	}
+	return page.Contacts, page.Count, nil
+}
+
+// GetContact reads the contact keyed by extID — whether campaigns may reach
+// it as Brevo holds it now (a person who unsubscribed in Brevo is
+// blacklisted there). A contact that does not exist answers 404 (IsNotFound).
+func (c *Client) GetContact(ctx context.Context, extID string) (Contact, error) {
+	_, raw, err := c.do(ctx, http.MethodGet, "/contacts/"+url.PathEscape(extID)+"?identifierType=ext_id", nil)
+	if err != nil {
+		return Contact{}, err
+	}
+	var got Contact
+	if err := json.Unmarshal(raw, &got); err != nil {
+		return Contact{}, fmt.Errorf("brevo: a contact that does not parse: %w", err)
+	}
+	if v, ok := got.Attributes["EXT_ID"].(string); ok {
+		got.ExtID = v
+	}
+	return got, nil
 }
 
 // DeleteContact deletes the contact keyed by extID with its history. A

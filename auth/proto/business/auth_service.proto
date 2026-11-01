@@ -1343,6 +1343,21 @@ message MarketingConsentResp {
   google.protobuf.Timestamp decided_at = 2;
 }
 
+// WithdrawMarketingConsent — the user withdrew their consent outside the
+// project: they unsubscribed in the marketing tool (a link in a campaign),
+// and the tool told the project. It names the user, so it is for the
+// domain's own code (the method a marketing plugin's hook is bound to),
+// never a surface: marked internal. It can only withdraw — a consent given
+// by somebody else is not the user's. Gated marketing_consent.
+message WithdrawMarketingConsentReq {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  // withdrawn_at — when the user withdrew it in the tool. A decision the
+  // user made here after it stands: a late or repeated report of an older
+  // unsubscribe does not cancel a newer consent.
+  google.protobuf.Timestamp withdrawn_at = 2;
+}
+
 // ── oauth_server business messages ─────────────────────────────
 //
 // The adapter-facing calls (registration, authorization, token, revocation)
@@ -2542,6 +2557,14 @@ service AuthService {
   }
   rpc SetMarketingConsent(SetMarketingConsentReq) returns (MarketingConsentResp) {
     option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+  }
+  // WithdrawMarketingConsent — record a withdrawal the user made in the
+  // marketing tool, through the same statement and event as their own
+  // SetMarketingConsent. Names the user, so it is internal: codegen refuses
+  // it on every surface (see WithdrawMarketingConsentReq).
+  rpc WithdrawMarketingConsent(WithdrawMarketingConsentReq) returns (MarketingConsentResp) {
+    option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+    option (w17.contrib.plugin_internal_rpc) = true;
   }
 
   // The roles users hold in the project's products (handlers/product_roles.go).

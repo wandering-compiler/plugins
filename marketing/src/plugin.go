@@ -2,10 +2,11 @@
 // RegisterPlugin(*gen.EnvConfig, gen.HandlerRegistry, gen.ClientSet) the
 // bundle invokes once per activation.
 //
-// The plugin serves nothing: it consumes. The gateway's marketing records
-// and the auth plugin's account events reach it through its registry
-// (plugin.yaml request_consumers / subscriptions), and it hands them to the
-// marketing tool its features enable.
+// The plugin mostly consumes: the gateway's marketing records and the auth
+// plugin's account events reach it through its registry (plugin.yaml
+// request_consumers / subscriptions), and it hands them to the marketing tool
+// its features enable. It serves one thing, with brevo_webhook: the tool's
+// webhook back into the project (MarketingService).
 package marketing
 
 import (

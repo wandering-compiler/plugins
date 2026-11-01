@@ -70,3 +70,98 @@ func TestStub_RefusesAWrongKey(t *testing.T) {
 		t.Errorf("wrong key = %d, want 401", w.Code)
 	}
 }
+
+// The stub keeps and answers emailBlacklisted as Brevo does: a contact
+// created by POST without it is subscribed, one an event creates is
+// blacklisted, and a write that names it sets it.
+func TestStub_KeepsEmailBlacklisted(t *testing.T) {
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	get := func(ext string) contact {
+		t.Helper()
+		var c contact
+		if err := json.Unmarshal(call(t, s, http.MethodGet, "/_stub/contacts/"+ext, "", "").Body.Bytes(), &c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":true}`)
+	if get("u1").EmailBlacklisted {
+		t.Error("a contact created without emailBlacklisted is blacklisted; Brevo subscribes it")
+	}
+	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u2","email":"b@x.example","updateEnabled":true,"emailBlacklisted":true}`)
+	if !get("u2").EmailBlacklisted {
+		t.Error("emailBlacklisted on create was not kept")
+	}
+	call(t, s, http.MethodPut, "/v3/contacts/u2?identifierType=ext_id", "k", `{"emailBlacklisted":false}`)
+	if get("u2").EmailBlacklisted {
+		t.Error("emailBlacklisted on update was not kept")
+	}
+	call(t, s, http.MethodPut, "/v3/contacts/u2?identifierType=ext_id", "k", `{"attributes":{"EMAIL":"c@x.example"}}`)
+	if c := get("u2"); c.EmailBlacklisted || c.Email != "c@x.example" {
+		t.Errorf("an update not naming emailBlacklisted changed it: %+v", c)
+	}
+	call(t, s, http.MethodPost, "/v3/events/batch", "k", `{"events":[{"event_name":"T_Create","identifiers":{"ext_id":"u3"}}]}`)
+	if !get("u3").EmailBlacklisted {
+		t.Error("a contact an event creates is not blacklisted")
+	}
+	w := call(t, s, http.MethodGet, "/v3/contacts?limit=2&offset=1&sort=asc", "k", "")
+	var page struct {
+		Contacts []struct {
+			ID               int            `json:"id"`
+			EmailBlacklisted bool           `json:"emailBlacklisted"`
+			Attributes       map[string]any `json:"attributes"`
+		} `json:"contacts"`
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Count != 3 || len(page.Contacts) != 2 || page.Contacts[0].Attributes["EXT_ID"] != "u2" || page.Contacts[0].EmailBlacklisted ||
+		page.Contacts[1].Attributes["EXT_ID"] != "u3" || !page.Contacts[1].EmailBlacklisted {
+		t.Errorf("listing = %s", w.Body.String())
+	}
+	if w := call(t, s, http.MethodGet, "/v3/contacts?limit=1001", "k", ""); w.Code != http.StatusBadRequest {
+		t.Errorf("a page past Brevo's limit = %d, want 400", w.Code)
+	}
+}
+
+// The plugin reads a contact before it subscribes it; a suite unsubscribes a
+// person the way they would in Brevo.
+func TestStub_AnswersOneContactAndAnUnsubscribe(t *testing.T) {
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":true,"emailBlacklisted":false}`)
+	read := func() map[string]any {
+		t.Helper()
+		w := call(t, s, http.MethodGet, "/v3/contacts/u1?identifierType=ext_id", "k", "")
+		var got map[string]any
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatalf("GET contact = %d %s", w.Code, w.Body.String())
+		}
+		return got
+	}
+	if read()["emailBlacklisted"] != false {
+		t.Error("a subscribed contact reads blacklisted")
+	}
+	if w := call(t, s, http.MethodPost, "/_stub/contacts/u1/unsubscribe", "", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("unsubscribe = %d", w.Code)
+	}
+	if got := read(); got["emailBlacklisted"] != true || got["attributes"].(map[string]any)["EXT_ID"] != "u1" {
+		t.Errorf("after the unsubscribe: %v", got)
+	}
+	if w := call(t, s, http.MethodGet, "/v3/contacts/u9?identifierType=ext_id", "k", ""); w.Code != http.StatusNotFound {
+		t.Errorf("unknown contact = %d, want 404", w.Code)
+	}
+}
+
+// A create that must not update (updateEnabled false) is refused for a
+// contact that exists, which keeps its emailBlacklisted.
+func TestStub_ACreateOnlyLeavesAnExistingContact(t *testing.T) {
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","updateEnabled":true,"emailBlacklisted":false}`)
+	if w := call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":false,"emailBlacklisted":true}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "duplicate_parameter") {
+		t.Fatalf("create-only of an existing contact = %d %s", w.Code, w.Body.String())
+	}
+	if s.contacts["u1"].EmailBlacklisted {
+		t.Error("a refused create changed the contact")
+	}
+}

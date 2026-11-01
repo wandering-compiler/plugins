@@ -774,6 +774,20 @@ message SetUserMarketingConsentResp {
   google.protobuf.Timestamp decided_at = 3;
 }
 
+// A withdrawal the user made in the marketing tool at withdrawn_at, written
+// only over a consent decided before it (or none): one statement, so a
+// decision the user makes meanwhile cannot be overwritten. Gated
+// marketing_consent.
+message WithdrawUserMarketingConsentReq {
+  option (w17.contrib.plugin_feature) = "marketing_consent";
+  string                    user_id      = 1 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp withdrawn_at = 2 [(w17.field) = { type: DATETIME }];
+  // event-only (no w17.field): the key thumbprint of the device the call
+  // came from, MarketingConsentChanged's device_id — none for the tool's
+  // webhook, which no device signs.
+  string thumbprint = 3;
+}
+
 // RevokeOtherSessionTokens ends every SESSION of a user but the one named:
 // a password change signs the person out everywhere else, because whoever
 // held the old password may hold a session too. API tokens are kept — they
@@ -4330,6 +4344,38 @@ service AuthMutation {
           "device_trust_revoked_at = NOW() "
           "WHERE id = :user_id AND password_hash = :current_hash "
           "RETURNING id AS user_id"
+      }
+    };
+  }
+
+  // WithdrawUserMarketingConsent records a withdrawal the user made in the
+  // marketing tool, at the time they made it, only when the consent on record
+  // is a yes decided before it, or no decision at all: a newer decision, or a
+  // withdrawal already on record, stands (zero rows, NotFound). Announced as
+  // the user's own change is, MarketingConsentChanged, only when it wrote.
+  rpc WithdrawUserMarketingConsent(WithdrawUserMarketingConsentReq) returns (SetUserMarketingConsentResp) {
+    option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.User SET "
+          "marketing_consent = FALSE, "
+          "marketing_consent_at = :withdrawn_at "
+          "WHERE id = :user_id "
+          "AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at)) "
+          "RETURNING id AS user_id, marketing_consent AS consent, marketing_consent_at AS decided_at"
+      }
+    };
+    option (w17.event_emit) = {
+      event: "MarketingConsentChanged"
+      payload: {
+        fields: [
+          { key: "user_id",    value: "$response.user_id" },
+          { key: "consent",    value: "$response.consent" },
+          { key: "decided_at", value: "$response.decided_at" },
+          { key: "device_id",  value: "$request.thumbprint" }
+        ]
       }
     };
   }
