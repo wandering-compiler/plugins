@@ -26,6 +26,28 @@ defaults:
     shell: bash
 
 jobs:
+  # A pull request that changes only Markdown skips the plugin builds and the
+  # adoption test (tools/docs-only.sh); repo and changelog still run, and they
+  # read the prose. A push to main always runs everything: the release follows
+  # that run.
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        run: |
+          docs_only=false
+          if [ "$EVENT" = pull_request ]; then docs_only="$(tools/docs-only.sh "origin/$BASE_REF")"; fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "docs only: $docs_only"
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+
   # Every directory with a plugin.yaml is a plugin; nothing to keep in sync.
   plugins:
     runs-on: ubuntu-latest
@@ -47,7 +69,8 @@ jobs:
   # the branch in. W17_DEVICE_KEY is the key W17_TOKEN is bound to, once the
   # console binds devices (see the device key step).
   plugin:
-    needs: plugins
+    needs: [scope, plugins]
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     env:
       W17_TOKEN: ${{ secrets.W17_TOKEN }}
@@ -178,6 +201,8 @@ jobs:
   # W17_TOKEN secret, which a fork's pull request does not receive; there it
   # fails like check-names does, and a maintainer brings the branch in.
   adoption:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     uses: wandering-compiler/examples/.github/workflows/adoption.yml@main
     with:
       plugins_ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -196,15 +221,20 @@ jobs:
   # is, whatever the plugin list grows to.
   ci-ok:
     if: always()
-    needs: [plugin, repo, changelog, adoption]
+    needs: [scope, plugin, repo, changelog, adoption]
     runs-on: ubuntu-latest
     steps:
       - run: |
           # changelog runs on pull requests only; skipped on a push to main.
+          # plugin and adoption may be skipped only when scope said the change
+          # is Markdown alone — a skip for any other reason (a failed scope,
+          # a failed plugin list) is no pass.
+          scope="${{ needs.scope.result }}" docs_only="${{ needs.scope.outputs.docs_only }}"
           plugin="${{ needs.plugin.result }}" repo="${{ needs.repo.result }}" changelog="${{ needs.changelog.result }}" adoption="${{ needs.adoption.result }}"
-          if [ "$plugin" = success ] && [ "$repo" = success ] && [ "$adoption" = success ] \
+          built() { [ "$1" = success ] || { [ "$1" = skipped ] && [ "$docs_only" = true ]; }; }
+          if [ "$scope" = success ] && built "$plugin" && built "$adoption" && [ "$repo" = success ] \
             && { [ "$changelog" = success ] || [ "$changelog" = skipped ]; }; then
             exit 0
           fi
-          echo "plugin=$plugin repo=$repo changelog=$changelog adoption=$adoption"
+          echo "scope=$scope docs_only=$docs_only plugin=$plugin repo=$repo changelog=$changelog adoption=$adoption"
           exit 1
