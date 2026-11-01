@@ -142,13 +142,14 @@ check-published-tests: plugins-exist
 		rm -rf "$$work"; \
 	done
 
-# Paths that only mean something inside the w17 platform's private docs point a
-# public reader at nothing. Say the reason in place instead. (`git grep` exits 1
-# for no match and 2+ for a real failure, which must not read as "clean".)
+# Paths that only mean something inside the w17 platform's private repository
+# (its docs, its source tree) point a public reader at nothing. Say the reason
+# in place instead. (`git grep` exits 1 for no match and 2+ for a real failure,
+# which must not read as "clean".)
 check-refs:
-	@hits="$$(git grep -nE 'docs/(todos|decisions|specs|runbooks|audit|archive)/' -- ':!Makefile')"; rc=$$?; \
+	@hits="$$(git grep -nE 'docs/(todos|decisions|specs|runbooks|audit|archive)/|\bsrcgo/(domains|tests)/' -- ':!Makefile' ':!**/go.sum')"; rc=$$?; \
 	[ $$rc -le 1 ] || { echo "!! git grep failed ($$rc)"; exit 1; }; \
-	if [ -n "$$hits" ]; then echo "!! these cite the platform's private docs:"; echo "$$hits"; exit 1; fi
+	if [ -n "$$hits" ]; then echo "!! these cite the platform's private repository:"; echo "$$hits"; exit 1; fi
 
 # Names this public repository must not carry. The list is a CI secret; a
 # local run without it says so and passes.
