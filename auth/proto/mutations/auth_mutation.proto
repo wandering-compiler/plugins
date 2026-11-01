@@ -4358,6 +4358,10 @@ service AuthMutation {
   //     decision at all: a newer decision, or a withdrawal already on record,
   //     stands (zero rows, NotFound, and no event).
   //
+  // withdrawn_at only ever records a withdrawal: with :consent true the
+  // conjunct is false too, so the statement — not just the handler — refuses
+  // to backdate a yes (zero rows, NotFound, no event).
+  //
   // The guard is one `?` conjunct, so it is dropped exactly when withdrawn_at
   // is absent: the CASE yields withdrawn_at when the condition holds and NULL
   // otherwise, and NULL = withdrawn_at is never true. The check and the write
@@ -4372,7 +4376,7 @@ service AuthMutation {
           "marketing_consent = :consent, "
           "marketing_consent_at = COALESCE(:withdrawn_at, NOW()) "
           "WHERE id = :user_id "
-          "AND ? CASE WHEN marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at) "
+          "AND ? CASE WHEN :consent = FALSE AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at)) "
           "THEN :withdrawn_at END = :withdrawn_at "
           "RETURNING id AS user_id, marketing_consent AS consent, marketing_consent_at AS decided_at"
       }

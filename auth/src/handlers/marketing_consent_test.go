@@ -44,8 +44,12 @@ func (m *consentMock) withdrawal(in *pb.SetUserMarketingConsentReq) (*pb.SetUser
 		return nil, status.Error(codes.NotFound, "no rows")
 	}
 	m.withdrew = in
-	m.stored = &pb.GetUserMarketingConsentResp{Consent: in.GetConsent(), DecidedAt: in.GetWithdrawnAt()}
-	return &pb.SetUserMarketingConsentResp{UserId: in.GetUserId(), Consent: in.GetConsent(), DecidedAt: in.GetWithdrawnAt()}, nil
+	// The statement matches no row for withdrawn_at with consent true.
+	if in.GetConsent() {
+		return nil, status.Error(codes.NotFound, "no row")
+	}
+	m.stored = &pb.GetUserMarketingConsentResp{Consent: false, DecidedAt: in.GetWithdrawnAt()}
+	return &pb.SetUserMarketingConsentResp{UserId: in.GetUserId(), Consent: false, DecidedAt: in.GetWithdrawnAt()}, nil
 }
 
 func (m *consentMock) GetUserMarketingConsent(_ context.Context, in *pb.GetUserMarketingConsentReq, _ ...grpc.CallOption) (*pb.GetUserMarketingConsentResp, error) {
@@ -138,7 +142,7 @@ func TestAuthenticate_AnswersTheMarketingConsent(t *testing.T) {
 func TestSetUserMarketingConsent_StampsAndAnnouncesInOneStatement(t *testing.T) {
 	body := mutationRPCBody(t, "SetUserMarketingConsent")
 	for _, want := range []string{
-		"marketing_consent = :consent",
+		"marketing_consent = :consent,",
 		// The user's own decision carries no withdrawn_at: written at NOW().
 		"marketing_consent_at = COALESCE(:withdrawn_at, NOW())",
 		"WHERE id = :user_id",
@@ -234,7 +238,9 @@ func TestWithdrawUserMarketingConsent_IsOneConditionalStatement(t *testing.T) {
 		"marketing_consent_at = COALESCE(:withdrawn_at, NOW())",
 		"WHERE id = :user_id",
 		// One `?` conjunct: dropped exactly when withdrawn_at is absent.
-		"AND ? CASE WHEN marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at) ",
+		// withdrawn_at with consent true matches no row: the statement itself
+		// refuses to backdate a yes.
+		"AND ? CASE WHEN :consent = FALSE AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at)) ",
 		"THEN :withdrawn_at END = :withdrawn_at ",
 		`event: "MarketingConsentChanged"`,
 		`{ key: "consent",    value: "$response.consent" }`,
