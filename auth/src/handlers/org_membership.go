@@ -217,7 +217,10 @@ var callerOnlyMethods = []string{"ListMyOrgs"}
 func keepCallerOnly(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, aside []*pb.RoleGrant) {
 	var keep []int32
 	for _, m := range callerOnlyMethods {
-		id, ok := lockIDOfSibling(ctx, h.Lock, pb.AuthService_ServiceDesc.ServiceName, m)
+		// The auth service's own method, whatever service is being served:
+		// a principal is also resolved for another service's call
+		// (ResolveUser), where grpc.Method names that one.
+		id, ok := lockIDOfServiceMethod(h.Lock, pb.AuthService_ServiceDesc.ServiceName, m)
 		if !ok {
 			continue
 		}
