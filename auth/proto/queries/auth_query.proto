@@ -3465,9 +3465,10 @@ service AuthQuery {
   // User) + the org's NAME (LEFT JOIN Organization, linked to the
   // Organizations page by the page's AdminColumnRef) instead of the two
   // raw UUIDs the link table stores. LEFT JOINs + COALESCE so a membership
-  // whose user or org was hard-deleted (no DB-level FK) still lists with an
-  // empty handle instead of erroring the whole page (a NULL join scanned
-  // into a Go string is a scan error). Gated org_membership.
+  // whose user or org row is missing still lists with an empty handle
+  // instead of erroring the whole page (a NULL join scanned into a Go string
+  // is a scan error). The foreign keys make that impossible for new rows; the
+  // COALESCE stays as the page's own guarantee. Gated org_membership.
   rpc ListOrgMemberships(ListOrgMembershipsReq) returns (ListOrgMembershipsResp) {
     option (w17.contrib.plugin_feature_rpc) = "org_membership";
     option (w17.db.method) = {
@@ -3513,10 +3514,10 @@ service AuthQuery {
   // column — only base-tier id / user_id / created_at / expires_at and the
   // revocation (so it stays valid whether or not api_token / devices add
   // their columns). Revoked tokens are listed, shown as revoked.
-  // LEFT JOIN + COALESCE so an orphan token (its user row missing — there
-  // is no DB-level FK, and rows from before erasure replaced deletion may
-  // exist) still lists with an empty owner instead of erroring the whole
-  // page (converting a NULL join into a Go string is a scan error). Gated
+  // LEFT JOIN + COALESCE so a token whose user row is missing still lists
+  // with an empty owner instead of erroring the whole page (converting a NULL
+  // join into a Go string is a scan error). The foreign key on user_id rules
+  // that out; the COALESCE stays as the page's own guarantee. Gated
   // user_admin.
   rpc ListUserTokens(ListUserTokensReq) returns (ListUserTokensResp) {
     option (w17.contrib.plugin_feature_rpc) = "user_admin";

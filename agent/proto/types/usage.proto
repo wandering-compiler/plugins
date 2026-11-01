@@ -37,8 +37,15 @@ option go_package = "@project;@pkg";
 // know of. The plugin never resolves it: the caller supplies an opaque
 // identifier and the plugin interns it. A foreign key into the auth plugin's
 // Tenant table is not merely undesirable here, it is unexpressible — `fk:`
-// names a table whose real name depends on the ACTIVATION, so no plugin can
-// reference another's. The opacity is therefore the design, not a compromise.
+// can name only the plugin's own tables (`@module.<Model>`, expanded per
+// activation), never another plugin's. The opacity is therefore the design,
+// not a compromise.
+//
+// The references BETWEEN the tables here are foreign keys (Usage.scope_id and
+// model_id, ModelPrice.model_id, ScopeLimit.scope_id, UsageLabel.usage_id and
+// label_id), `deletion_rule: BLOCK`: nothing here deletes a row, so a delete
+// that would strand one is refused, and a price or a limit recorded for an id
+// that was never interned is refused instead of stored.
 
 // Scope — the billing subject, opaque to this plugin.
 message Scope {
@@ -79,11 +86,11 @@ message Usage {
 
   int64 scope_id = 2 [
     (w17.field)     = { type: NUMBER, gte: 0 },
-    (w17.db.column) = { index: true }
+    (w17.db.column) = { fk: "@module.Scope", deletion_rule: BLOCK, index: true }
   ];
   int64 model_id = 3 [
     (w17.field)     = { type: NUMBER, gte: 0 },
-    (w17.db.column) = { index: true }
+    (w17.db.column) = { fk: "@module.Model", deletion_rule: BLOCK, index: true }
   ];
 
   // measured=false means the PROVIDER did not report this call's usage — a
@@ -160,7 +167,7 @@ message ModelPrice {
 
   int64 model_id = 2 [
     (w17.field)     = { type: NUMBER, gte: 0 },
-    (w17.db.column) = { index: true }
+    (w17.db.column) = { fk: "@module.Model", deletion_rule: BLOCK, index: true }
   ];
 
   // The instant this price starts applying. Unique with model_id: one price
@@ -201,7 +208,7 @@ message ScopeLimit {
 
   int64 scope_id = 2 [
     (w17.field)     = { type: NUMBER, gte: 0 },
-    (w17.db.column) = { index: true }
+    (w17.db.column) = { fk: "@module.Scope", deletion_rule: BLOCK, index: true }
   ];
 
   LimitWindow window = 3 [(w17.field) = { type: ENUM, default_int: 1 }];
@@ -269,10 +276,10 @@ message UsageLabel {
 
   int64 usage_id = 2 [
     (w17.field)     = { type: NUMBER, gte: 0 },
-    (w17.db.column) = { index: true }
+    (w17.db.column) = { fk: "@module.Usage", deletion_rule: BLOCK, index: true }
   ];
   int64 label_id = 3 [
     (w17.field)     = { type: NUMBER, gte: 0 },
-    (w17.db.column) = { index: true }
+    (w17.db.column) = { fk: "@module.Label", deletion_rule: BLOCK, index: true }
   ];
 }
