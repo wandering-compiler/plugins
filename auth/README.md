@@ -141,3 +141,4 @@ server-side, the way every other compile is. A consumer's staging generates
 the same package for each activation, so nothing here is published.
 `EnvConfig` takes its fields from the `env:` block of `plugin.yaml` — each
 entry's `description:` there is its documentation.
+
