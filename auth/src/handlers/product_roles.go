@@ -177,7 +177,7 @@ func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPr
 	// THIS domain's ids, which mean nothing against the product's lock; the
 	// product is told its own codes instead, and its gateway translates them
 	// as it does the set above (acllock.OrgPermissionsOfProductRoles).
-	delete(resp.Scopes, orgPermissionsScope)
+	delete(resp.GetScopes(), orgPermissionsScope)
 	if mark, ok := orgUnnamed(ctx); orgID == "" && ok {
 		aside, err := productCodesHeldInOrgs(ctx, h, c, prin, product, mark)
 		if err != nil {
