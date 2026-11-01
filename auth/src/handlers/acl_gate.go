@@ -43,19 +43,6 @@ func lockIDOfCall(ctx context.Context, l *acllock.Lock, ownService, method strin
 	return lockIDOfServiceMethod(l, svc, m)
 }
 
-// lockIDOfSibling is the permission the deployed lock allocates for ANOTHER
-// method of the service being served (method), keyed as lockIDOfCall keys
-// the call itself.
-func lockIDOfSibling(ctx context.Context, l *acllock.Lock, ownService, method string) (int, bool) {
-	svc := ownService
-	if full, ok := grpc.Method(ctx); ok {
-		if i := strings.LastIndex(full, "/"); i > 0 {
-			svc = strings.TrimPrefix(full[:i], "/")
-		}
-	}
-	return lockIDOfServiceMethod(l, svc, method)
-}
-
 func lockIDOfServiceMethod(l *acllock.Lock, svc, m string) (int, bool) {
 	dot := strings.LastIndex(svc, ".")
 	if dot < 0 {

@@ -271,3 +271,20 @@ func TestNarrowGrants_ListingOnesOrganizationsNeedsNone(t *testing.T) {
 		t.Errorf("named organization: holds %v, want [9]", got)
 	}
 }
+
+// The carve-out keys on the auth service's own ListMyOrgs, not on the service
+// being served: Authenticate's principal is also resolved for another
+// service's call (ResolveUser), and there grpc.Method names that service.
+func TestNarrowGrants_ListingOnesOrganizationsWhateverServiceIsServed(t *testing.T) {
+	lock := &acllock.Lock{Permissions: map[string]int{"auth.AuthService.ListMyOrgs": 6, "billing.Invoices.ListMyOrgs": 70}}
+	ctx := grpc.NewContextWithServerTransportStream(memoCtx(context.Background()), &methodStream{method: "/app.billing.Invoices/Charge"})
+	requestMemoOf(ctx)[orgUnnamedMemo] = orgUnnamedMark{anyOrg: true}
+	prin := sessionPrincipal(grant("member", 6, 70))
+	h := &AuthServiceHandler{Query: &permMock{}, Lock: lock}
+	if err := narrowGrantsToActiveOrg(ctx, h, prin, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prin.effectivePermissions(lock); !slices.Equal(got, []int32{6}) {
+		t.Errorf("holds %v, want the auth service's ListMyOrgs (6) only", got)
+	}
+}
