@@ -178,8 +178,8 @@ func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPr
 	// product is told its own codes instead, and its gateway translates them
 	// as it does the set above (acllock.OrgPermissionsOfProductRoles).
 	delete(resp.Scopes, orgPermissionsScope)
-	if orgID == "" && orgUnnamed(ctx) {
-		aside, err := productCodesHeldInOrgs(ctx, h, c, prin, product)
+	if mark, ok := orgUnnamed(ctx); orgID == "" && ok {
+		aside, err := productCodesHeldInOrgs(ctx, h, c, prin, product, mark)
 		if err != nil {
 			return err
 		}
@@ -196,16 +196,20 @@ func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPr
 // (ORGANIZATION_REQUIRED) rather than "no access" for a code among them. Every
 // organization the caller holds such a role in, with no plan applied: a hint
 // that over-reaches only means the request, once it names one, is refused as
-// MISSING_PERMISSION after all. An API token's own share narrows it as it
-// narrows the set (productRoleNarrowers).
-func productCodesHeldInOrgs(ctx context.Context, h *AuthServiceHandler, c *productRoleCatalogue, prin *authPrincipal, product string) ([]string, error) {
+// MISSING_PERMISSION after all. Only organizations the request could have
+// named count (mark): on an audience admitting some membership kinds, those.
+// An API token's own share narrows it as it narrows the set
+// (productRoleNarrowers).
+func productCodesHeldInOrgs(ctx context.Context, h *AuthServiceHandler, c *productRoleCatalogue, prin *authPrincipal, product string, mark orgUnnamedMark) ([]string, error) {
 	resp, err := h.Query.ListUserProductRoleGrantRows(ctx, &pb.ListUserProductRoleGrantRowsReq{UserId: prin.userID})
 	if err != nil && status.Code(err) != codes.NotFound {
 		return nil, err
 	}
 	held := map[string]bool{}
 	for _, g := range resp.GetGrants() {
-		if g.GetOrgId() == "" {
+		// Realm-wide grants already count; one in an organization the
+		// audience does not admit is no "name it" (orgUnnamedMark).
+		if g.GetOrgId() == "" || !mark.covers(g.GetOrgId()) {
 			continue
 		}
 		role, err := h.lookupRole(ctx, c, g.GetOrgId(), g.GetProduct(), g.GetRoleKey())

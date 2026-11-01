@@ -187,7 +187,7 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 	// Several admitted organizations and none named: ambiguous, as in
 	// resolveOrgScope — no scope, which a scoped model refuses, and the mark
 	// that lets the gateway answer "name one" (markOrgUnnamed).
-	markOrgUnnamed(ctx, headers)
+	markOrgUnnamed(ctx, headers, admitted)
 	return nil
 }
 
