@@ -185,7 +185,7 @@ func TestRetryable(t *testing.T) {
 func TestUpsertContact_ByTheUsersID(t *testing.T) {
 	s := newStub(t, status(http.StatusCreated, `{"id":7}`))
 	c, _ := client(t, s)
-	if err := c.UpsertContact(context.Background(), "u-1", "a@example.com", map[string]any{"W17_MARKETING_CONSENT": true}); err != nil {
+	if err := c.UpsertContact(context.Background(), "u-1", "a@example.com", map[string]any{"W17_MARKETING_CONSENT": true}, nil); err != nil {
 		t.Fatal(err)
 	}
 	b := s.calls[0].body
@@ -194,7 +194,7 @@ func TestUpsertContact_ByTheUsersID(t *testing.T) {
 		t.Errorf("call = %+v", s.calls[0])
 	}
 	// No email, no attributes: neither key is sent, so Brevo keeps what it has.
-	if err := c.UpsertContact(context.Background(), "u-1", "", nil); err != nil {
+	if err := c.UpsertContact(context.Background(), "u-1", "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.calls[1].body["email"]; ok {
@@ -202,6 +202,59 @@ func TestUpsertContact_ByTheUsersID(t *testing.T) {
 	}
 	if _, ok := s.calls[1].body["attributes"]; ok {
 		t.Error("empty attributes were sent")
+	}
+	if _, ok := s.calls[1].body["emailBlacklisted"]; ok {
+		t.Error("emailBlacklisted was sent though nobody said it")
+	}
+}
+
+// brevo/blacklisted-without-consent: both contact writes carry
+// emailBlacklisted when told it, true and false alike — without it, a
+// contact Brevo creates is subscribed to every campaign.
+func TestContactWrites_CarryEmailBlacklisted(t *testing.T) {
+	s := newStub(t, status(http.StatusNoContent, ""))
+	c, _ := client(t, s)
+	yes, no := true, false
+	if err := c.UpsertContact(context.Background(), "u-1", "a@example.com", nil, &yes); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UpdateContact(context.Background(), "u-1", nil, &no); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UpdateContact(context.Background(), "u-1", map[string]any{"EMAIL": "b@example.com"}, &yes); err != nil {
+		t.Fatal(err)
+	}
+	if s.calls[0].body["emailBlacklisted"] != true {
+		t.Errorf("upsert = %+v, want emailBlacklisted true", s.calls[0].body)
+	}
+	if s.calls[1].body["emailBlacklisted"] != false {
+		t.Errorf("update = %+v, want emailBlacklisted false", s.calls[1].body)
+	}
+	if _, ok := s.calls[1].body["attributes"]; ok {
+		t.Error("an update with no attributes sent an attributes key")
+	}
+	if b := s.calls[2].body; b["emailBlacklisted"] != true || b["attributes"].(map[string]any)["EMAIL"] != "b@example.com" {
+		t.Errorf("update = %+v, want the address and emailBlacklisted together", b)
+	}
+}
+
+func TestListContacts_OldestFirstWithTheirExtID(t *testing.T) {
+	s := newStub(t, status(http.StatusOK, `{"count":3,"contacts":[`+
+		`{"id":1,"email":"a@example.com","emailBlacklisted":false,"attributes":{"EXT_ID":"u-1","W17_MARKETING_CONSENT":true}},`+
+		`{"id":2,"email":"form@example.com","emailBlacklisted":false,"attributes":{}}]}`))
+	c, _ := client(t, s)
+	got, total, err := c.ListContacts(context.Background(), 1000, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.calls[0].method != http.MethodGet || s.calls[0].path != "/contacts" || s.calls[0].query != "limit=2&offset=1000&sort=asc" {
+		t.Errorf("call = %+v", s.calls[0])
+	}
+	if total != 3 || len(got) != 2 || got[0].ExtID != "u-1" || got[0].ID != 1 || got[0].EmailBlacklisted || got[1].ExtID != "" {
+		t.Errorf("contacts = %+v, total %d", got, total)
+	}
+	if _, _, err := c.ListContacts(context.Background(), 0, MaxListContacts+1); err == nil {
+		t.Error("a page larger than Brevo answers was asked for")
 	}
 }
 
@@ -273,14 +326,14 @@ func TestRefused_OnlyWhatTheContentCauses(t *testing.T) {
 func TestUpdateContact_ByTheUsersID(t *testing.T) {
 	s := newStub(t, status(http.StatusNoContent, ""), status(http.StatusNotFound, `{"code":"document_not_found","message":"Contact does not exist"}`))
 	c, _ := client(t, s)
-	if err := c.UpdateContact(context.Background(), "u1", map[string]any{"EMAIL": "b@x.example"}); err != nil {
+	if err := c.UpdateContact(context.Background(), "u1", map[string]any{"EMAIL": "b@x.example"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if s.calls[0].method != http.MethodPut || s.calls[0].path != "/contacts/u1" || s.calls[0].query != "identifierType=ext_id" ||
 		s.calls[0].body["attributes"].(map[string]any)["EMAIL"] != "b@x.example" {
 		t.Errorf("call = %+v", s.calls[0])
 	}
-	if err := c.UpdateContact(context.Background(), "u2", nil); !IsNotFound(err) {
+	if err := c.UpdateContact(context.Background(), "u2", nil, nil); !IsNotFound(err) {
 		t.Errorf("unknown contact = %v, want not found", err)
 	}
 }

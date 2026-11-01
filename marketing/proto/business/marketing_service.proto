@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+// Marketing plugin — MarketingService: what the marketing tool calls back.
+//
+// IngestBrevo is the sink of Brevo's marketing webhook (feature
+// brevo_webhook): an unsubscribe in Brevo is the person withdrawing their
+// consent, and it is carried back to the project through the consent_withdrawn
+// hook. The webhook carries no bearer; it is authenticated by the token the
+// webhook was created with (the X-Brevo-Webhook-Token header, which the REST
+// preset forwards).
+
+package w17.contrib.marketing;
+
+import "google/protobuf/timestamp.proto";
+import "w17/contrib.proto";
+
+option go_package = "@project;@pkg";
+
+// IngestBrevoReq — raw_payload is the webhook's verbatim body (one event, or
+// an array of them when the webhook is batched); the token rides gRPC
+// metadata.
+message IngestBrevoReq {
+  option (w17.contrib.plugin_feature) = "brevo_webhook";
+  bytes raw_payload = 1;
+}
+message IngestBrevoResp {
+  option (w17.contrib.plugin_feature) = "brevo_webhook";
+  // unsubscribed — the users whose withdrawal this delivery recorded.
+  int32 unsubscribed = 1;
+}
+
+// ConsentWithdrawnReq — the consent_withdrawn hook's request: the user
+// unsubscribed in the marketing tool at withdrawn_at. The method the project
+// binds records it as the user's withdrawal (auth's
+// AuthService.WithdrawMarketingConsent). Not feature-gated: a hook's
+// messages exist in every build.
+message ConsentWithdrawnReq {
+  string                    user_id      = 1;
+  google.protobuf.Timestamp withdrawn_at = 2;
+}
+message ConsentWithdrawnResp {}
+
+service MarketingService {
+  option (w17.contrib.plugin_feature_svc) = "brevo_webhook";
+
+  // IngestBrevo — Brevo's marketing webhook (the `unsubscribed` event).
+  // Unauthenticated on the surface; refused without the webhook token.
+  rpc IngestBrevo(IngestBrevoReq) returns (IngestBrevoResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo_webhook";
+  }
+}

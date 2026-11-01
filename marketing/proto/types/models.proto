@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-// Marketing plugin — its one table.
+// Marketing plugin — its tables.
 //
 // SentEvent remembers the request records already sent to the marketing
 // tool. The request stream delivers at least once (a failed batch comes back
@@ -25,4 +25,54 @@ message SentEvent {
   // id — the request record's id (RequestEventMeta.id, a UUIDv7), hex.
   string id = 1 [(w17.field) = { type: CHAR, max_len: 32, pk: true }];
   google.protobuf.Timestamp sent_at = 2 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+}
+
+// Contact is what the plugin knows about a user's contact in the marketing
+// tool, kept so that every write of the contact can say whether campaigns may
+// reach it (Brevo's emailBlacklisted) without asking anyone: the last consent
+// auth announced (MarketingConsentChanged) and when it was decided, and when
+// the person unsubscribed in the tool itself. Without it an address change
+// (UserUpdated) could only guess, and Brevo subscribes an address it is told
+// nothing about. A row exists for every user an auth event named since the
+// plugin kept them; a user without one has an unknown consent, which is no
+// consent.
+message Contact {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "brevo";
+
+  // user_id — auth's user id: the contact's ext_id in the tool.
+  string user_id = 1 [(w17.field) = { type: UUID, pk: true }];
+  // email — the last address auth announced, lower-cased: how a webhook of
+  // the tool, which names only the address, finds the user. Cleared when the
+  // account is erased.
+  string email = 2 [(w17.field) = { type: EMAIL, max_len: 320, null: true }, (w17.db.column) = { index: true }];
+  // consent — the last marketing consent auth announced; meaningful only
+  // with consent_at.
+  bool consent = 3 [(w17.field) = { default_auto: FALSE }];
+  // consent_at — when the user decided it (the event's decided_at). NULL =
+  // the plugin was never told: unknown, which is no consent.
+  google.protobuf.Timestamp consent_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  // unsubscribed_at — when the person unsubscribed in the tool (its
+  // unsubscribe webhook). A consent decided before it does not subscribe
+  // the contact again; one decided after it does.
+  google.protobuf.Timestamp unsubscribed_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  // erased_at — the account was erased (UserDeleted): the address is gone,
+  // and a late event of the user writes nothing to the tool.
+  google.protobuf.Timestamp erased_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+// Reconciliation records a one-time job over the contacts already in the
+// tool, so it runs once per deployment, whichever replica starts first. A
+// replica claims it (claimed_by, claimed_at) and renews the claim as it
+// goes; a claim not renewed for a while is taken over, since its replica is
+// gone; finished_at says it is done.
+message Reconciliation {
+  option (w17.db.table) = {};
+  option (w17.contrib.plugin_feature) = "brevo";
+
+  string name = 1 [(w17.field) = { type: CHAR, max_len: 64, pk: true }];
+  // claimed_by — the replica running it, a random id of its process.
+  string claimed_by = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  google.protobuf.Timestamp claimed_at = 3 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp finished_at = 4 [(w17.field) = { type: DATETIME, null: true }];
 }

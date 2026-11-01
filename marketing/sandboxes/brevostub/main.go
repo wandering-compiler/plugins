@@ -1,11 +1,12 @@
 // Command brevostub is a dev-only stand-in for the Brevo API, for the
-// marketing plugin's brevo feature: it answers the three calls the plugin
-// makes and keeps what they said, so a project's suite can read back what
-// would have reached Brevo.
+// marketing plugin's brevo feature: it answers the calls the plugin makes and
+// keeps what they said, so a project's suite can read back what would have
+// reached Brevo — emailBlacklisted included.
 //
 //	POST   /v3/events/batch                         → 204 (207 for an event named *Refused*)
 //	POST   /v3/contacts                             → 201 / 204, upsert by ext_id
 //	PUT    /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
+//	GET    /v3/contacts?limit=&offset=              → the contacts, oldest first, EXT_ID among the attributes
 //	DELETE /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
 //	POST   /v3/contacts/attributes/normal/{name}    → 201, 400 when it exists
 //	GET    /_stub/contacts/{ext_id}                 → the contact and its events, 404 when none
@@ -15,7 +16,8 @@
 // stub-key). Never shipped to production.
 //
 // It behaves as Brevo was measured to: an event for an unknown
-// ext_id creates the contact; an attribute the account has not created is
+// ext_id creates the contact, blacklisted (emailBlacklisted: true); a contact
+// created by POST without emailBlacklisted is subscribed (false); an attribute the account has not created is
 // dropped silently; an upsert by POST that names a known ext_id with another
 // email is refused (duplicate_parameter) — an address changes by PUT.
 package main
@@ -25,6 +27,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,15 +43,18 @@ type event struct {
 }
 
 type contact struct {
-	ExtID      string         `json:"ext_id"`
-	Email      string         `json:"email,omitempty"`
-	Attributes map[string]any `json:"attributes"`
-	Events     []event        `json:"events"`
+	ID               int            `json:"id"`
+	ExtID            string         `json:"ext_id"`
+	Email            string         `json:"email,omitempty"`
+	EmailBlacklisted bool           `json:"emailBlacklisted"`
+	Attributes       map[string]any `json:"attributes"`
+	Events           []event        `json:"events"`
 }
 
 type stub struct {
 	key        string
 	mu         sync.Mutex
+	nextID     int
 	contacts   map[string]*contact
 	events     []event
 	attributes map[string]bool
@@ -69,15 +76,26 @@ func (s *stub) set(c *contact, attrs map[string]any) {
 	}
 }
 
+// contact is the contact keyed by ext, created when unknown — subscribed, as
+// Brevo creates a contact it is told nothing about.
 func (s *stub) contact(ext string) *contact {
 	c := s.contacts[ext]
 	if c == nil {
-		// The stub creates the contact an event names when it does not know
-		// it; whether Brevo does is an open point of the plugin's SPEC.md.
-		c = &contact{ExtID: ext, Attributes: map[string]any{}}
+		s.nextID++
+		c = &contact{ID: s.nextID, ExtID: ext, Attributes: map[string]any{}}
 		s.contacts[ext] = c
 	}
 	return c
+}
+
+// listing is a contact as GET /v3/contacts answers it: the ext_id is the
+// EXT_ID attribute.
+func listing(c *contact) map[string]any {
+	attrs := map[string]any{"EXT_ID": c.ExtID}
+	for k, v := range c.Attributes {
+		attrs[k] = v
+	}
+	return map[string]any{"id": c.ID, "email": c.Email, "emailBlacklisted": c.EmailBlacklisted, "attributes": attrs}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -121,7 +139,11 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				failed = append(failed, i)
 				continue
 			}
+			_, known := s.contacts[ext]
 			c := s.contact(ext)
+			if !known {
+				c.EmailBlacklisted = true // as measured: no email, blacklisted
+			}
 			s.set(c, ev.ContactProperties)
 			c.Events = append(c.Events, ev)
 			s.events = append(s.events, ev)
@@ -135,9 +157,10 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && r.URL.Path == "/v3/contacts":
 		var body struct {
-			ExtID      string         `json:"ext_id"`
-			Email      string         `json:"email"`
-			Attributes map[string]any `json:"attributes"`
+			ExtID            string         `json:"ext_id"`
+			Email            string         `json:"email"`
+			Attributes       map[string]any `json:"attributes"`
+			EmailBlacklisted *bool          `json:"emailBlacklisted"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ExtID == "" {
 			refuse(w, http.StatusBadRequest, "missing_parameter", "ext_id is required")
@@ -153,12 +176,15 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if body.Email != "" {
 			c.Email = body.Email
 		}
+		if body.EmailBlacklisted != nil {
+			c.EmailBlacklisted = *body.EmailBlacklisted
+		}
 		s.set(c, body.Attributes)
 		if existed {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]int{"id": len(s.contacts)})
+		writeJSON(w, http.StatusCreated, map[string]int{"id": c.ID})
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v3/contacts/attributes/normal/"):
 		name := strings.TrimPrefix(r.URL.Path, "/v3/contacts/attributes/normal/")
 		if s.attributes[name] {
@@ -175,14 +201,40 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
-			Attributes map[string]any `json:"attributes"`
+			Attributes       map[string]any `json:"attributes"`
+			EmailBlacklisted *bool          `json:"emailBlacklisted"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			refuse(w, http.StatusBadRequest, "invalid_parameter", "body")
 			return
 		}
+		if body.EmailBlacklisted != nil {
+			c.EmailBlacklisted = *body.EmailBlacklisted
+		}
 		s.set(c, body.Attributes)
 		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodGet && r.URL.Path == "/v3/contacts":
+		limit, offset := 50, 0
+		if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
+			limit = v
+		}
+		if v, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil {
+			offset = v
+		}
+		if limit < 1 || limit > 1000 || offset < 0 {
+			refuse(w, http.StatusBadRequest, "invalid_parameter", "limit 1 to 1000, offset at least 0")
+			return
+		}
+		all := make([]*contact, 0, len(s.contacts))
+		for _, c := range s.contacts {
+			all = append(all, c)
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+		page := []map[string]any{}
+		for i := offset; i < len(all) && i < offset+limit; i++ {
+			page = append(page, listing(all[i]))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"contacts": page, "count": len(all)})
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v3/contacts/"):
 		ext := strings.TrimPrefix(r.URL.Path, "/v3/contacts/")
 		if r.URL.Query().Get("identifierType") != "ext_id" {

@@ -2,15 +2,16 @@
 
 What the `marketing` plugin does and what it must never do. It covers plugin
 version 0.1.0-rc.1. Ids are `<feature>/<name>`; a property without a proof is a
-gap, not a promise. The handler tests run against a fake Brevo and an
-in-memory `SentEvent` ledger; the client tests (`lib/brevo`) against an HTTP
-stub of the Brevo API.
+gap, not a promise. The handler tests run against a fake Brevo and in-memory
+`SentEvent`, `Contact` and `Reconciliation` tables; the client tests
+(`lib/brevo`) against an HTTP stub of the Brevo API.
 
 ## Features
 
 | feature | default | requires | conflicts with |
 |---|---|---|---|
 | `brevo` | off | — (plugin requires `auth`) | — |
+| `brevo_webhook` | off | `brevo` | — |
 
 ## Per feature
 
@@ -18,9 +19,14 @@ stub of the Brevo API.
 
 - **Purpose.** The gateway's marketing records as Brevo events on the user's
   contact; the contacts following auth's accounts, consent and erasure.
-- **Adds.** Table `SentEvent`; `MarketingQuery.ListSentEvents`;
-  `MarketingMutation.RecordSentEvent`, `ForgetSentEventsBefore`; the
-  request consumer `brevo` (marketing); subscriptions to auth's
+- **Adds.** Tables `SentEvent`, `Contact` (each user's last known consent,
+  address and Brevo-side unsubscribe) and `Reconciliation` (one-time passes);
+  `MarketingQuery.ListSentEvents`, `ListContacts`, `ListContactsByEmail`,
+  `GetReconciliation`; `MarketingMutation.RecordSentEvent`,
+  `ForgetSentEventsBefore`, `SetContactEmail`, `SetContactConsent`,
+  `SetContactUnsubscribed`, `EraseContact`, `ClaimReconciliation`,
+  `TakeOverReconciliation`, `RenewReconciliation`, `FinishReconciliation`;
+  the request consumer `brevo` (marketing); subscriptions to auth's
   `UserCreated`, `UserUpdated`, `UserDeleted`, `MarketingConsentChanged` (the
   last three optional).
 
@@ -30,18 +36,45 @@ stub of the Brevo API.
 | `brevo/transient-is-redelivered` | A network failure, 429 past its waits, 5xx, or a key or server address the account does not accept (401, 403) MUST fail the call so the stream redelivers it and, past the retries, dead-letters it for a replay; only a call Brevo refuses for its content (400, 422) MUST be dropped. | Failure & configuration | `TestConsumeMarketing_ATransientFailureRecordsNothing`, `TestConsumeMarketing_ARefusedEventIsNotRetried`, `TestContacts_RetryOnlyWhatMaySucceed`, `TestRetryable`, `TestRefused_OnlyWhatTheContentCauses`, `TestDo_GivesUpOnARateLimitThatDoesNotLift` |
 | `brevo/selection` | `send` MUST choose by kind (a method reads when served as GET or a Query service's), `include` add, `exclude` remove and win. A configured method the stream does not record MUST fail the boot. | Failure & configuration | `TestConsumeMarketing_SendsWhatTheSelectionSays`, `TestNewSelection_RefusesWhatTheStreamDoesNotRecord` |
 | `brevo/no-personal-extras` | An event MUST NOT carry the IP address, the user agent or the request's fields; an unknown consent MUST NOT be written as false. | Security | `TestEventFor` |
-| `brevo/erasure` | `UserDeleted` MUST delete the contact and its history; a transient failure MUST be retried, a missing contact counts as deleted. | Security | `TestContacts_FollowTheAccounts`, `TestContacts_RetryOnlyWhatMaySucceed`, `TestDeleteContact_AMissingContactIsDeleted` |
+| `brevo/erasure` | `UserDeleted` MUST delete the contact and its history; a transient failure MUST be retried, a missing contact counts as deleted. The plugin's `Contact` row MUST lose the address, and a later event of the erased user MUST write nothing to Brevo. | Security | `TestContacts_FollowTheAccounts`, `TestContacts_RetryOnlyWhatMaySucceed`, `TestDeleteContact_AMissingContactIsDeleted`, `TestContacts_AnErasedUserIsNotWrittenAgain` |
+| `brevo/blacklisted-without-consent` | Every contact write MUST carry `emailBlacklisted`: `false` only when the user's last known consent is a yes decided after any unsubscribe in Brevo, `true` otherwise. `UserCreated` MUST create the contact blacklisted; `MarketingConsentChanged` MUST set `emailBlacklisted = !consent` in the same write as the consent attribute. An unknown consent MUST blacklist and MUST NOT be written as a false attribute. | Security | `TestContacts_ANewAccountIsBlacklisted`, `TestConsent_SetsEmailBlacklistedWithTheAttribute`, `TestContacts_FollowTheAccounts`, `TestContacts_ConsentBeforeTheContactCreatesIt`, `TestContactWrites_CarryEmailBlacklisted` |
+| `brevo/address-change-keeps-subscription` | The last known consent, its time and a Brevo-side unsubscribe MUST be kept in `Contact`, written before Brevo, so that `UserUpdated` writes the blacklist status they give and an address change never subscribes a contact. A consent older than the one kept MUST NOT overwrite it. A failure of the table MUST be retried, with nothing written to Brevo. | Consistency & concurrency | `TestContacts_AnAddressChangeNeverSubscribes`, `TestConsent_AnOlderDecisionDoesNotOverwriteANewerOne`, `TestContacts_AStateFailureIsRetried` |
+| `brevo/reconcile-once` | The contacts created before the plugin wrote `emailBlacklisted` MUST be blacklisted once per deployment when their user has not consented (the `Contact` row when the plugin knows the user, else the consent attribute). The pass MUST only blacklist, never subscribe; MUST touch only the plugin's contacts (an `EXT_ID` that is a user id); MUST run in the background without holding up the boot, retried until done; MUST be recorded so neither a restart nor a second replica runs it again; and a claim not renewed within its lease MUST be taken over. | Consistency & concurrency | `TestReconcile_BlacklistsThePluginsContactsWithoutConsent`, `TestReconcile_RunsOncePerDeployment`, `TestReconcile_SafeUnderSeveralReplicas`, `TestReconcile_InTheBackgroundUntilDone`, `TestListContacts_OldestFirstWithTheirExtID`. **Unit (mock) only:** the listing's `EXT_ID` attribute is what Brevo's reference documents as the ext_id identifier, not measured against an account. |
+| `brevo/stub-keeps-blacklisted` | The `brevostub` sandbox MUST keep and answer `emailBlacklisted` as Brevo does: subscribed on a create that does not name it, blacklisted for a contact an event creates, set by a write that names it, and listed by `GET /v3/contacts`. | Failure & configuration | `TestStub_KeepsEmailBlacklisted` |
 | `brevo/rate` | Requests MUST leave at most `brevo_rps` per second; a 429 MUST be waited out as `x-sib-ratelimit-reset` says. | Performance | `TestPace_SpacesTheRequests`, `TestDo_WaitsOutARateLimit` |
 | `brevo/contact-write` | A contact MUST be written by its `ext_id` (PUT), and created only when Brevo has none; an address change MUST reach Brevo. | Consistency & concurrency | `TestContacts_FollowTheAccounts`, `TestContacts_ConsentBeforeTheContactCreatesIt`, `TestUpdateContact_ByTheUsersID` |
 | `brevo/attributes` | The consent attribute MUST exist in the account before it is written, created without holding up the bundle's boot. | Failure & configuration | `TestEnsureAttributes`, `TestEnsureAttribute_AnExistingOneIsFine` |
 | `brevo/request-context-on-the-event` | The organization a request acted in and the caller's account type there MUST go on that request's event (`w17_org_id`, `w17_account_type`), each only when the record carries it, and MUST NOT be written to the contact, which is the person and not the request. | Consistency & concurrency | `TestEventFor` |
 | `brevo/batch-limits` | A batch MUST hold at most 200 events and 512 KB. | Failure & configuration | `TestConsumeMarketing_SplitsAtTheBatchLimit`, `TestSendEvents_RefusesWhatBrevoWould` |
 
+### brevo_webhook
+
+- **Purpose.** An unsubscribe in Brevo carried back into the project as the
+  user's withdrawal of their marketing consent.
+- **Adds.** `MarketingService.IngestBrevo` on the REST surface (`POST
+  /marketing/webhooks/brevo`, no bearer, `X-Brevo-Webhook-Token` forwarded);
+  env `brevo_webhook_token`; the required hook `consent_withdrawn`, bound to a
+  business method of the domain that calls auth's
+  `AuthService.WithdrawMarketingConsent` (plugins do not call each other).
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| `brevo_webhook/authenticated` | A call MUST be refused (`Unauthenticated`) without the configured token, with another one, and every call while none is configured; nothing MUST be recorded then. The token MUST be compared in constant time. | Security | `TestIngestBrevo_RefusesWithoutTheToken` |
+| `brevo_webhook/unsubscribe-writes-back` | An `unsubscribe` event MUST record `unsubscribed_at` (Brevo's time) on the `Contact` of every user with that address and call the `consent_withdrawn` hook for each; other events, unknown addresses and erased users MUST be acknowledged without effect. A failed hook MUST fail the delivery (`Unavailable`) with the unsubscribe kept, so Brevo's redelivery writes it back; a batched delivery MUST be read whole. | Consistency & concurrency | `TestIngestBrevo_AnUnsubscribeIsWrittenBack`, `TestIngestBrevo_ABatchAndWhatItIgnores`, `TestIngestBrevo_AFailedWriteBackIsRedelivered`; auth's side: `marketing_consent/withdraw-only` |
+
 **Gaps / suspected defects**
 
 1. **The request's fields are not sent.** The consumer runs in the storage
    bundle, which does not link the project's business services, so their
    requests arrive undecoded; linking them there is platform work.
+2. **The write-back needs the project's method.** Plugins talk through events
+   and hooks only, so the `consent_withdrawn` hook is bound to a business
+   method the project writes (a few lines calling auth's
+   `WithdrawMarketingConsent`); no live test covers that hop yet.
+3. **An unsubscribe for an address the plugin never kept** (a user whose last
+   auth event predates the `Contact` table) is acknowledged and not written
+   back: Brevo's webhook names only the address. Brevo still blacklists the
+   contact itself, and the reconciliation blacklists it too without a consent.
 
 ## Measured against a Brevo account
 

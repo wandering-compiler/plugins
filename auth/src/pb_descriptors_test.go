@@ -49,14 +49,25 @@ func TestDescriptorsLoad(t *testing.T) {
 // it on. Read as the raw option field, since the SDK this module builds
 // against may predate the option.
 func TestResolveUser_IsMarkedInternal(t *testing.T) {
+	assertInternalRPC(t, "ResolveUser")
+}
+
+// WithdrawMarketingConsent names the user whose consent it withdraws, so it
+// is internal too: only the domain's own code may call it.
+func TestWithdrawMarketingConsent_IsMarkedInternal(t *testing.T) {
+	assertInternalRPC(t, "WithdrawMarketingConsent")
+}
+
+func assertInternalRPC(t *testing.T, rpc string) {
+	t.Helper()
 	const pluginInternalRPC = 51028
-	m := pb.File_business_auth_service_proto.Services().ByName("AuthService").Methods().ByName("ResolveUser")
+	m := pb.File_business_auth_service_proto.Services().ByName("AuthService").Methods().ByName(protoreflect.Name(rpc))
 	if m == nil {
-		t.Fatal("AuthService.ResolveUser is not in the descriptor")
+		t.Fatalf("AuthService.%s is not in the descriptor", rpc)
 	}
 	opts, ok := m.Options().(*descriptorpb.MethodOptions)
 	if !ok {
-		t.Fatalf("ResolveUser's options are %T", m.Options())
+		t.Fatalf("%s's options are %T", rpc, m.Options())
 	}
 	raw, err := proto.Marshal(opts)
 	if err != nil {
@@ -81,7 +92,7 @@ func TestResolveUser_IsMarkedInternal(t *testing.T) {
 		}
 		raw = raw[n:]
 	}
-	t.Fatal("ResolveUser does not carry (w17.contrib.plugin_internal_rpc) = true: a project's own refs could put it on a surface")
+	t.Fatalf("%s does not carry (w17.contrib.plugin_internal_rpc) = true: a project's own refs could put it on a surface", rpc)
 }
 
 // Every event that carries a credential for a person maps its sealed_* field

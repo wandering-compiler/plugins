@@ -34,11 +34,16 @@ type brevoTool struct {
 // brevoAPI is what the tool calls; *brevo.Client in production.
 type brevoAPI interface {
 	SendEvents(ctx context.Context, events []brevo.Event) (brevo.BatchResult, error)
-	UpsertContact(ctx context.Context, extID, email string, attributes map[string]any) error
-	UpdateContact(ctx context.Context, extID string, attributes map[string]any) error
+	UpsertContact(ctx context.Context, extID, email string, attributes map[string]any, emailBlacklisted *bool) error
+	UpdateContact(ctx context.Context, extID string, attributes map[string]any, emailBlacklisted *bool) error
 	EnsureAttribute(ctx context.Context, name, typ string) error
 	DeleteContact(ctx context.Context, extID string) error
+	ListContacts(ctx context.Context, offset, limit int) ([]brevo.Contact, int, error)
 }
+
+// registerBrevoWebhook is the brevo_webhook feature's registration, set by
+// its init; nil in a build without it.
+var registerBrevoWebhook func(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.ClientSet, t *brevoTool) error
 
 func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.ClientSet) error {
 	if !gen.FeatureBrevo {
@@ -76,9 +81,15 @@ func setupBrevo(cfg *gen.EnvConfig, registry gen.HandlerRegistry, clients gen.Cl
 			return err
 		}
 	}
+	if registerBrevoWebhook != nil {
+		if err := registerBrevoWebhook(cfg, registry, clients, t); err != nil {
+			return err
+		}
+	}
 	stopForget := t.forgetPeriodically(time.Hour)
 	stopAttrs := t.ensureAttributes(time.Minute)
-	registry.RegisterShutdown(func(context.Context) error { stopForget(); stopAttrs(); return nil })
+	stopReconcile := t.reconcileInBackground(time.Minute)
+	registry.RegisterShutdown(func(context.Context) error { stopForget(); stopAttrs(); stopReconcile(); return nil })
 	return nil
 }
 

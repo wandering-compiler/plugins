@@ -4,9 +4,11 @@ syntax = "proto3";
 
 package w17.contrib.marketing;
 
+import "google/protobuf/timestamp.proto";
 import "@self/types/models.proto";
 import "w17/contrib.proto";
 import "w17/db.proto";
+import "w17/field.proto";
 
 option go_package = "@project;@pkg";
 
@@ -19,6 +21,42 @@ message ListSentEventsResp {
   repeated string ids = 1;
 }
 
+// ContactRow is one Contact, as the reads answer it.
+message ContactRow {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string                    user_id         = 1;
+  string                    email           = 2;
+  bool                      consent         = 3;
+  google.protobuf.Timestamp consent_at      = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp unsubscribed_at = 5 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp erased_at       = 6 [(w17.field) = { type: DATETIME, null: true }];
+}
+
+message ListContactsReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  repeated string user_ids = 1;
+}
+message ListContactsResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+  repeated ContactRow contacts = 1;
+}
+
+message ListContactsByEmailReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
+}
+
+message GetReconciliationReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string name = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
+}
+message GetReconciliationResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string                    name        = 1;
+  google.protobuf.Timestamp claimed_at  = 2;
+  google.protobuf.Timestamp finished_at = 3 [(w17.field) = { type: DATETIME, null: true }];
+}
+
 service MarketingQuery {
   // ListSentEvents — which of these record ids were sent already: the
   // consumer skips them on a redelivered batch. Gated brevo.
@@ -28,6 +66,50 @@ service MarketingQuery {
       ops: {
         name: "main"
         dql: "SELECT ROWS_TO_ARRAY(s.id) AS ids FROM @module.SentEvent s WHERE s.id IN (:ids)"
+      }
+    };
+  }
+
+  // ListContacts — what the plugin knows of these users' contacts; a user
+  // it has no row for is absent. Gated brevo.
+  rpc ListContacts(ListContactsReq) returns (ListContactsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.user_id AS user_id, c.email AS email, c.consent AS consent, "
+          "       c.consent_at AS consent_at, c.unsubscribed_at AS unsubscribed_at, c.erased_at AS erased_at "
+          "FROM @module.Contact c WHERE c.user_id IN (:user_ids)"
+      }
+    };
+  }
+
+  // ListContactsByEmail — the users whose last address is this one (the
+  // tool's webhooks name only the address). Gated brevo.
+  rpc ListContactsByEmail(ListContactsByEmailReq) returns (ListContactsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT c.user_id AS user_id, c.email AS email, c.consent AS consent, "
+          "       c.consent_at AS consent_at, c.unsubscribed_at AS unsubscribed_at, c.erased_at AS erased_at "
+          "FROM @module.Contact c WHERE c.email = :email"
+      }
+    };
+  }
+
+  // GetReconciliation — a one-time job's record; NotFound when it never
+  // started. Gated brevo.
+  rpc GetReconciliation(GetReconciliationReq) returns (GetReconciliationResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT r.name AS name, r.claimed_at AS claimed_at, r.finished_at AS finished_at "
+          "FROM @module.Reconciliation r WHERE r.name = :name"
       }
     };
   }
