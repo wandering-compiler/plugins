@@ -115,7 +115,7 @@ func TestRefuseOtherOrgDefersWhenNoOrgWasResolved(t *testing.T) {
 // same: ORG_NOT_MEMBER must not tell a caller which slugs are taken.
 func TestOrgNotMember_AnUnknownOrganizationAnswersTheSame(t *testing.T) {
 	h := &AuthServiceHandler{Query: &orgMock{bySlug: map[string]*pb.GetUserOrgBySlugResp{
-		"u-member|acme": {OrgId: "org-acme", Slug: "acme"},
+		"u-member|acme": {OrgId: "org-acme"},
 	}}}
 	prev := scopeDecorators
 	scopeDecorators = []scopeDecorator{resolveOrgScope}
