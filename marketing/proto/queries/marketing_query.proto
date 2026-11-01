@@ -30,6 +30,7 @@ message ContactRow {
   google.protobuf.Timestamp consent_at      = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp unsubscribed_at = 5 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp erased_at       = 6 [(w17.field) = { type: DATETIME, null: true }];
+  bool                      sent_blacklisted = 7;
 }
 
 message ListContactsReq {
@@ -79,7 +80,8 @@ service MarketingQuery {
         name: "main"
         dql:
           "SELECT c.user_id AS user_id, c.email AS email, c.consent AS consent, "
-          "       c.consent_at AS consent_at, c.unsubscribed_at AS unsubscribed_at, c.erased_at AS erased_at "
+          "       c.consent_at AS consent_at, c.unsubscribed_at AS unsubscribed_at, c.erased_at AS erased_at, "
+          "       c.sent_blacklisted AS sent_blacklisted "
           "FROM @module.Contact c WHERE c.user_id IN (:user_ids)"
       }
     };
@@ -94,7 +96,8 @@ service MarketingQuery {
         name: "main"
         dql:
           "SELECT c.user_id AS user_id, c.email AS email, c.consent AS consent, "
-          "       c.consent_at AS consent_at, c.unsubscribed_at AS unsubscribed_at, c.erased_at AS erased_at "
+          "       c.consent_at AS consent_at, c.unsubscribed_at AS unsubscribed_at, c.erased_at AS erased_at, "
+          "       c.sent_blacklisted AS sent_blacklisted "
           "FROM @module.Contact c WHERE c.email = :email"
       }
     };

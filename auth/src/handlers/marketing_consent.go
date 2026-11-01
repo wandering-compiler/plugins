@@ -65,19 +65,24 @@ func (h *AuthServiceHandler) SetMarketingConsent(ctx context.Context, req *pb.Se
 // same way. It only ever withdraws: a consent is the user's to give, and
 // nobody else's. A withdrawal already on record is answered as it stands, not
 // written again, so the time the user decided stays the time they decided
-// (the tool may tell the project twice). Internal: the request names the user,
-// so only the domain's own code calls it.
+// (the tool may tell the project twice); so is any decision the user made
+// after withdrawn_at — a late report of an older unsubscribe does not cancel
+// a newer consent. Internal: the request names the user, so only the domain's
+// own code calls it.
 func (h *AuthServiceHandler) WithdrawMarketingConsent(ctx context.Context, req *pb.WithdrawMarketingConsentReq) (*pb.MarketingConsentResp, error) {
 	userID := req.GetUserId()
 	if userID == "" {
 		return nil, status.Error(codes.InvalidArgument, "WithdrawMarketingConsent needs a user id")
 	}
+	if req.GetWithdrawnAt() == nil {
+		return nil, status.Error(codes.InvalidArgument, "WithdrawMarketingConsent needs withdrawn_at, when the user withdrew it")
+	}
 	got, err := h.Query.GetUserMarketingConsent(ctx, &pb.GetUserMarketingConsentReq{UserId: userID})
 	if err != nil {
 		return nil, err
 	}
-	if !got.GetConsent() && got.GetDecidedAt() != nil {
-		return &pb.MarketingConsentResp{Consent: false, DecidedAt: got.GetDecidedAt()}, nil
+	if d := got.GetDecidedAt(); d != nil && (!got.GetConsent() || d.AsTime().After(req.GetWithdrawnAt().AsTime())) {
+		return &pb.MarketingConsentResp{Consent: got.GetConsent(), DecidedAt: d}, nil
 	}
 	set, err := h.Mutation.SetUserMarketingConsent(ctx, &pb.SetUserMarketingConsentReq{UserId: userID, Consent: false})
 	if err != nil {

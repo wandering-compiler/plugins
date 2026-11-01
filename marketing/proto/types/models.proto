@@ -59,6 +59,12 @@ message Contact {
   // erased_at — the account was erased (UserDeleted): the address is gone,
   // and a late event of the user writes nothing to the tool.
   google.protobuf.Timestamp erased_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  // sent_blacklisted — the emailBlacklisted the plugin last wrote to the
+  // tool, or found there. FALSE until it writes one: before this column the
+  // plugin left every contact subscribed. A contact the tool blacklists while
+  // this says FALSE is one the person unsubscribed in the tool, and the
+  // plugin never subscribes it again on that decision.
+  bool sent_blacklisted = 7 [(w17.field) = { default_auto: FALSE }];
 }
 
 // Reconciliation records a one-time job over the contacts already in the

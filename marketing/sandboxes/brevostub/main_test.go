@@ -124,3 +124,31 @@ func TestStub_KeepsEmailBlacklisted(t *testing.T) {
 		t.Errorf("a page past Brevo's limit = %d, want 400", w.Code)
 	}
 }
+
+// The plugin reads a contact before it subscribes it; a suite unsubscribes a
+// person the way they would in Brevo.
+func TestStub_AnswersOneContactAndAnUnsubscribe(t *testing.T) {
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":true,"emailBlacklisted":false}`)
+	read := func() map[string]any {
+		t.Helper()
+		w := call(t, s, http.MethodGet, "/v3/contacts/u1?identifierType=ext_id", "k", "")
+		var got map[string]any
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatalf("GET contact = %d %s", w.Code, w.Body.String())
+		}
+		return got
+	}
+	if read()["emailBlacklisted"] != false {
+		t.Error("a subscribed contact reads blacklisted")
+	}
+	if w := call(t, s, http.MethodPost, "/_stub/contacts/u1/unsubscribe", "", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("unsubscribe = %d", w.Code)
+	}
+	if got := read(); got["emailBlacklisted"] != true || got["attributes"].(map[string]any)["EXT_ID"] != "u1" {
+		t.Errorf("after the unsubscribe: %v", got)
+	}
+	if w := call(t, s, http.MethodGet, "/v3/contacts/u9?identifierType=ext_id", "k", ""); w.Code != http.StatusNotFound {
+		t.Errorf("unknown contact = %d, want 404", w.Code)
+	}
+}

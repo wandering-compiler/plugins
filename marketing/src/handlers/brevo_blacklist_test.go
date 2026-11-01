@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -69,10 +70,11 @@ func TestConsent_SetsEmailBlacklistedWithTheAttribute(t *testing.T) {
 	}
 }
 
-// brevo/address-change-keeps-subscription: an address change carries the
-// blacklist status the user's known consent gives — never subscribed without
-// a consent, subscribed with one, and not again after an unsubscribe in
-// Brevo the consent predates.
+// brevo/address-change-keeps-subscription: an address change never
+// subscribes. Without a consent (or after an unsubscribe in Brevo the consent
+// predates) it writes the contact blacklisted; with one it leaves
+// emailBlacklisted out, so whatever Brevo holds — an unsubscribe made there
+// included — stands.
 func TestContacts_AnAddressChangeNeverSubscribes(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -82,9 +84,9 @@ func TestContacts_AnAddressChangeNeverSubscribes(t *testing.T) {
 		{"no state (an account from before the plugin kept any)", nil, "bl=true"},
 		{"consent unknown", &pb.ContactRow{UserId: "u1", Email: "a@x.example"}, "bl=true"},
 		{"consent refused", &pb.ContactRow{UserId: "u1", Consent: false, ConsentAt: timestamppb.New(day1)}, "bl=true"},
-		{"consent given", &pb.ContactRow{UserId: "u1", Consent: true, ConsentAt: timestamppb.New(day1)}, "bl=false"},
+		{"consent given", &pb.ContactRow{UserId: "u1", Consent: true, ConsentAt: timestamppb.New(day1)}, "bl=unset"},
 		{"unsubscribed in Brevo after consenting", &pb.ContactRow{UserId: "u1", Consent: true, ConsentAt: timestamppb.New(day1), UnsubscribedAt: timestamppb.New(day2)}, "bl=true"},
-		{"consented again after unsubscribing", &pb.ContactRow{UserId: "u1", Consent: true, ConsentAt: timestamppb.New(day3), UnsubscribedAt: timestamppb.New(day2)}, "bl=false"},
+		{"consented again after unsubscribing", &pb.ContactRow{UserId: "u1", Consent: true, ConsentAt: timestamppb.New(day3), UnsubscribedAt: timestamppb.New(day2)}, "bl=unset"},
 	} {
 		f, l := &fakeBrevo{known: map[string]bool{"u1": true}}, &ledger{}
 		if c.state != nil {
@@ -407,6 +409,137 @@ func TestReconcile_InTheBackgroundUntilDone(t *testing.T) {
 			}
 		case <-timeout:
 			t.Fatal("the pass was not retried after Brevo failed")
+		}
+	}
+}
+
+// ── review round 1: the races and the Brevo-side unsubscribe ───────────
+
+func countBl(writes []string, v string) int {
+	n := 0
+	for _, w := range writes {
+		if strings.HasSuffix(w, v) {
+			n++
+		}
+	}
+	return n
+}
+
+// brevo/address-change-keeps-subscription: an older yes and a newer no
+// delivered at once — the no lands between the yes's read and its write — end
+// as the no, and the yes never sends emailBlacklisted=false.
+func TestConsent_AnOlderYesRacingANewerNoNeverSubscribes(t *testing.T) {
+	f, l := &fakeBrevo{known: map[string]bool{"u1": true}}, &ledger{}
+	tl := tool(t, f, l, "all", "", "")
+	ctx := context.Background()
+	l.beforeConsentWrite = func() {
+		if err := tl.onConsentChanged(ctx, consentEvent("u1", false, day2)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day1)); err != nil {
+		t.Fatal(err)
+	}
+	if c := l.contacts["u1"]; c.GetConsent() || !c.GetConsentAt().AsTime().Equal(day2) {
+		t.Errorf("state = %+v, want the newer no", c)
+	}
+	if countBl(f.updates, "bl=false")+countBl(f.upserts, "bl=false") != 0 || f.blacklisted["u1"] != true {
+		t.Errorf("the older yes subscribed the contact: %v %v", f.upserts, f.updates)
+	}
+}
+
+// The newest yes is overtaken by a no between reading Brevo and writing it:
+// the check after the write blacklists the contact again.
+func TestConsent_ANoLandingDuringTheSubscribeWins(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{"u1": true}, blacklisted: map[string]bool{"u1": true}}
+	l := &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", SentBlacklisted: true}}}
+	tl := tool(t, f, l, "all", "", "")
+	ctx := context.Background()
+	f.onGet = func() {
+		if err := tl.onConsentChanged(ctx, consentEvent("u1", false, day3)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day2)); err != nil {
+		t.Fatal(err)
+	}
+	if !f.blacklisted["u1"] || last(f.updates) != "u1|map[W17_MARKETING_CONSENT:false]|bl=true" {
+		t.Errorf("Brevo holds blacklisted=%v after %v, want the no to win", f.blacklisted["u1"], f.updates)
+	}
+}
+
+// brevo/brevo-side-unsubscribe-stands: without the webhook, a person who
+// unsubscribed in Brevo stays unsubscribed — an address change leaves the
+// field alone, and a replayed consent finds Brevo blacklisting a contact the
+// plugin had left subscribed: recorded, not undone. A consent decided after
+// it subscribes again.
+func TestContacts_ABrevoSideUnsubscribeStandsWithoutTheWebhook(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{"u1": true}, blacklisted: map[string]bool{"u1": true}} // unsubscribed in Brevo
+	l := &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Email: "a@x.example", Consent: true, ConsentAt: timestamppb.New(day1), SentBlacklisted: false}}}
+	tl := tool(t, f, l, "all", "", "")
+	ctx := context.Background()
+	if err := tl.onUserUpdated(ctx, &pb.AuthUserUpdated{UserId: "u1", Email: "b@x.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day1)); err != nil { // a replay
+		t.Fatal(err)
+	}
+	if countBl(f.updates, "bl=false")+countBl(f.upserts, "bl=false") != 0 || !f.blacklisted["u1"] {
+		t.Fatalf("the Brevo-side unsubscribe was undone: %v %v", f.upserts, f.updates)
+	}
+	c := l.contacts["u1"]
+	if c.GetUnsubscribedAt() == nil || !c.GetSentBlacklisted() {
+		t.Errorf("state = %+v, want the unsubscribe recorded and Brevo's value kept", c)
+	}
+	later := time.Now().Add(time.Hour)
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, later)); err != nil {
+		t.Fatal(err)
+	}
+	if f.blacklisted["u1"] {
+		t.Errorf("a consent decided after the unsubscribe did not subscribe: %v", f.updates)
+	}
+}
+
+// brevo_webhook/unsubscribe-writes-back: a redelivered day-2 unsubscribe
+// after a day-3 consent does not cancel the consent: no write-back.
+func TestIngestBrevo_ALateUnsubscribeDoesNotCancelANewerConsent(t *testing.T) {
+	l := &ledger{contacts: map[string]*pb.ContactRow{"u1": {UserId: "u1", Email: "a@x.example", Consent: true, ConsentAt: timestamppb.New(day3)}}}
+	h := &hookCalls{}
+	day2Unsubscribe := fmt.Sprintf(`{"event":"unsubscribe","email":"a@x.example","ts_event":%d}`, day2.Unix())
+	resp, err := webhook(t, l, "s3cret", h).IngestBrevo(withToken("s3cret"), &pb.IngestBrevoReq{RawPayload: []byte(day2Unsubscribe)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.got) != 0 || resp.GetUnsubscribed() != 0 {
+		t.Errorf("hook calls %v: a late unsubscribe cancelled a newer consent", h.got)
+	}
+	if stateOf(l.contacts["u1"]).blacklisted() {
+		t.Error("the newer consent no longer counts")
+	}
+}
+
+// brevo/reconcile-once: 1001 contacts, one deleted after the first page —
+// offset paging skips one; the pass repeats until nothing is left to do.
+func TestReconcile_ADeletionMidPassSkipsNobody(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{}}
+	for i := 0; i < 1001; i++ {
+		id := fmt.Sprintf("0199a000-0000-7000-8000-%012x", i)
+		f.known[id] = true
+		f.contacts = append(f.contacts, brevo.Contact{ID: int64(i + 1), ExtID: id})
+	}
+	f.onList = func(n int) {
+		if n == 2 {
+			f.contacts = f.contacts[1:] // the first contact deleted after page 1
+		}
+	}
+	l := &ledger{}
+	done, err := tool(t, f, l, "all", "", "").reconcileBlacklist(context.Background(), "replica-1")
+	if err != nil || !done {
+		t.Fatalf("done %v, err %v", done, err)
+	}
+	for _, c := range f.contacts {
+		if !f.blacklisted[c.ExtID] {
+			t.Fatalf("contact %s was skipped", c.ExtID)
 		}
 	}
 }

@@ -355,3 +355,22 @@ func TestEnsureAttribute_AnExistingOneIsFine(t *testing.T) {
 		t.Error("another refusal was swallowed")
 	}
 }
+
+func TestGetContact_ByTheUsersID(t *testing.T) {
+	s := newStub(t, status(http.StatusOK, `{"id":3,"email":"a@example.com","emailBlacklisted":true,"attributes":{"EXT_ID":"u-1"}}`),
+		status(http.StatusNotFound, `{"code":"document_not_found","message":"Contact does not exist"}`))
+	c, _ := client(t, s)
+	got, err := c.GetContact(context.Background(), "u-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.calls[0].method != http.MethodGet || s.calls[0].path != "/contacts/u-1" || s.calls[0].query != "identifierType=ext_id" {
+		t.Errorf("call = %+v", s.calls[0])
+	}
+	if !got.EmailBlacklisted || got.ExtID != "u-1" || got.ID != 3 {
+		t.Errorf("contact = %+v", got)
+	}
+	if _, err := c.GetContact(context.Background(), "u-2"); !IsNotFound(err) {
+		t.Errorf("unknown contact = %v, want not found", err)
+	}
+}

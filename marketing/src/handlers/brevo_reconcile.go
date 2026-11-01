@@ -39,6 +39,7 @@ const (
 	reconcileBlacklistName = "brevo_email_blacklisted_v1"
 	reconcileLease         = 10 * time.Minute
 	reconcilePage          = 500
+	maxReconcilePasses     = 10
 )
 
 // errReconcileElsewhere: another replica holds the job (or took it over).
@@ -88,26 +89,26 @@ func (t *brevoTool) reconcileBlacklist(ctx context.Context, owner string) (done 
 	if !claimed {
 		return false, errReconcileElsewhere
 	}
+	// Brevo pages by offset, and a contact deleted while the pass runs shifts
+	// every later one a place back, past the page boundary: one is skipped.
+	// So the pass repeats until one blacklists nothing while the account's
+	// count held still — every contact was seen, subscribed-and-consented or
+	// blacklisted — and only then is done.
 	reviewed, blacklisted := 0, 0
-	for offset := 0; ; {
-		page, total, err := t.client.ListContacts(ctx, offset, reconcilePage)
-		if err != nil {
-			return false, fmt.Errorf("listing the Brevo contacts at %d: %w", offset, err)
-		}
-		n, err := t.blacklistWithoutConsent(ctx, page)
+	for pass := 1; ; pass++ {
+		r, n, steady, err := t.reconcilePass(ctx, owner)
 		if err != nil {
 			return false, err
 		}
-		reviewed, blacklisted = reviewed+len(page), blacklisted+n
-		offset += len(page)
-		if len(page) == 0 || offset >= total {
+		reviewed, blacklisted = reviewed+r, blacklisted+n
+		if n == 0 && steady {
 			break
 		}
-		if _, err := t.mutation.RenewReconciliation(ctx, &pb.ReconciliationOwnerReq{Name: reconcileBlacklistName, Owner: owner}); err != nil {
-			if status.Code(err) == codes.NotFound {
-				return false, errReconcileElsewhere
-			}
-			return false, fmt.Errorf("renewing the claim: %w", err)
+		if pass == maxReconcilePasses {
+			return false, fmt.Errorf("%d passes and the contacts are still changing under it; the next run goes on", pass)
+		}
+		if err := t.renewReconciliation(ctx, owner); err != nil {
+			return false, err
 		}
 	}
 	if _, err := t.mutation.FinishReconciliation(ctx, &pb.ReconciliationOwnerReq{Name: reconcileBlacklistName, Owner: owner}); err != nil {
@@ -118,6 +119,44 @@ func (t *brevoTool) reconcileBlacklist(ctx context.Context, owner string) (done 
 	}
 	log.Printf("marketing plugin: Brevo contacts reconciled: %d reviewed, %d blacklisted for want of consent", reviewed, blacklisted)
 	return true, nil
+}
+
+// reconcilePass reviews every page once; it answers how many contacts it
+// reviewed and blacklisted, and whether the account's count held still
+// through it (a deletion mid-pass can make offset paging skip a contact).
+func (t *brevoTool) reconcilePass(ctx context.Context, owner string) (reviewed, blacklisted int, steady bool, err error) {
+	first := -1
+	for offset := 0; ; {
+		page, total, err := t.client.ListContacts(ctx, offset, reconcilePage)
+		if err != nil {
+			return reviewed, blacklisted, false, fmt.Errorf("listing the Brevo contacts at %d: %w", offset, err)
+		}
+		if first < 0 {
+			first = total
+		}
+		n, err := t.blacklistWithoutConsent(ctx, page)
+		if err != nil {
+			return reviewed, blacklisted, false, err
+		}
+		reviewed, blacklisted = reviewed+len(page), blacklisted+n
+		offset += len(page)
+		if len(page) == 0 || offset >= total {
+			return reviewed, blacklisted, total == first, nil
+		}
+		if err := t.renewReconciliation(ctx, owner); err != nil {
+			return reviewed, blacklisted, false, err
+		}
+	}
+}
+
+func (t *brevoTool) renewReconciliation(ctx context.Context, owner string) error {
+	if _, err := t.mutation.RenewReconciliation(ctx, &pb.ReconciliationOwnerReq{Name: reconcileBlacklistName, Owner: owner}); err != nil {
+		if status.Code(err) == codes.NotFound {
+			return errReconcileElsewhere
+		}
+		return fmt.Errorf("renewing the claim: %w", err)
+	}
+	return nil
 }
 
 // claimReconciliation claims the pass: new, held by this owner already, or
@@ -185,6 +224,9 @@ func (t *brevoTool) blacklistWithoutConsent(ctx context.Context, page []brevo.Co
 		}
 		if err != nil {
 			return n, fmt.Errorf("blacklisting the contact of user %s: %w", c.ExtID, err)
+		}
+		if err := t.recordSentBlacklisted(ctx, c.ExtID, true); err != nil {
+			return n, err
 		}
 		n++
 	}

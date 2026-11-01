@@ -39,6 +39,35 @@ type fakeBrevo struct {
 	listErr  error
 	listed   []int // the offsets asked for
 	onList   func(calls int)
+	// blacklisted is each contact's emailBlacklisted as Brevo holds it.
+	blacklisted map[string]bool
+	// onGet runs once, inside the next GetContact: another delivery landing
+	// between the plugin's read of Brevo and its write.
+	onGet func()
+}
+
+func (f *fakeBrevo) keep(ext string, blacklisted *bool) {
+	if blacklisted == nil {
+		return
+	}
+	if f.blacklisted == nil {
+		f.blacklisted = map[string]bool{}
+	}
+	f.blacklisted[ext] = *blacklisted
+}
+
+func (f *fakeBrevo) GetContact(_ context.Context, ext string) (brevo.Contact, error) {
+	if g := f.onGet; g != nil {
+		f.onGet = nil
+		g()
+	}
+	if f.callErr != nil {
+		return brevo.Contact{}, f.callErr
+	}
+	if !f.known[ext] {
+		return brevo.Contact{}, &brevo.Error{Status: 404, Message: "Contact does not exist"}
+	}
+	return brevo.Contact{ExtID: ext, EmailBlacklisted: f.blacklisted[ext]}, nil
 }
 
 func bl(b *bool) string {
@@ -62,7 +91,11 @@ func (f *fakeBrevo) UpsertContact(_ context.Context, ext, email string, attrs ma
 		if f.known == nil {
 			f.known = map[string]bool{}
 		}
+		if !f.known[ext] && blacklisted == nil {
+			f.keep(ext, new(bool)) // Brevo creates a contact subscribed
+		}
 		f.known[ext] = true
+		f.keep(ext, blacklisted)
 	}
 	return f.callErr
 }
@@ -75,6 +108,7 @@ func (f *fakeBrevo) UpdateContact(_ context.Context, ext string, attrs map[strin
 		return &brevo.Error{Status: 404, Message: "Contact does not exist"}
 	}
 	f.updates = append(f.updates, fmt.Sprintf("%s|%v|%s", ext, attrs, bl(blacklisted)))
+	f.keep(ext, blacklisted)
 	return nil
 }
 
@@ -111,7 +145,13 @@ func (f *fakeBrevo) ListContacts(_ context.Context, offset, limit int) ([]brevo.
 	if end > len(f.contacts) {
 		end = len(f.contacts)
 	}
-	return append([]brevo.Contact(nil), f.contacts[offset:end]...), len(f.contacts), nil
+	page := append([]brevo.Contact(nil), f.contacts[offset:end]...)
+	for i := range page {
+		if b, ok := f.blacklisted[page[i].ExtID]; ok && page[i].ExtID != "" {
+			page[i].EmailBlacklisted = b
+		}
+	}
+	return page, len(f.contacts), nil
 }
 
 // ledger fakes the plugin's tables: SentEvent, Contact, Reconciliation.
@@ -124,6 +164,9 @@ type ledger struct {
 	badEmail string // an address ListContactsByEmail refuses as invalid
 	recon    map[string]*reconRow
 	now      time.Time // the database's NOW() for Reconciliation
+	// beforeConsentWrite runs once, inside the next SetContactConsent, before
+	// it writes: another delivery landing in between.
+	beforeConsentWrite func()
 }
 
 type reconRow struct {
@@ -194,20 +237,48 @@ func (l *ledger) SetContactEmail(_ context.Context, in *pb.SetContactEmailReq, _
 	return &pb.ContactWriteResp{}, nil
 }
 
-func (l *ledger) SetContactConsent(_ context.Context, in *pb.SetContactConsentReq, _ ...grpc.CallOption) (*pb.ContactWriteResp, error) {
+func (l *ledger) EnsureContact(_ context.Context, in *pb.EnsureContactReq, _ ...grpc.CallOption) (*pb.ContactWriteResp, error) {
 	if l.writeErr != nil {
 		return nil, l.writeErr
 	}
-	c := l.contact(in.GetUserId())
-	c.Consent, c.ConsentAt = in.GetConsent(), in.GetConsentAt()
+	l.contact(in.GetUserId())
 	return &pb.ContactWriteResp{}, nil
 }
 
-func (l *ledger) SetContactUnsubscribed(_ context.Context, in *pb.SetContactUnsubscribedReq, _ ...grpc.CallOption) (*pb.ContactWriteResp, error) {
+// SetContactConsent is conditional, as its statement: only a newer decision.
+func (l *ledger) SetContactConsent(_ context.Context, in *pb.SetContactConsentReq, _ ...grpc.CallOption) (*pb.ContactUpdatedResp, error) {
 	if l.writeErr != nil {
 		return nil, l.writeErr
 	}
-	l.contact(in.GetUserId()).UnsubscribedAt = in.GetUnsubscribedAt()
+	if f := l.beforeConsentWrite; f != nil {
+		l.beforeConsentWrite = nil
+		f()
+	}
+	c := l.contacts[in.GetUserId()]
+	if c == nil || (c.GetConsentAt() != nil && !c.GetConsentAt().AsTime().Before(in.GetConsentAt().AsTime())) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	c.Consent, c.ConsentAt = in.GetConsent(), in.GetConsentAt()
+	return &pb.ContactUpdatedResp{UserId: in.GetUserId()}, nil
+}
+
+func (l *ledger) SetContactUnsubscribed(_ context.Context, in *pb.SetContactUnsubscribedReq, _ ...grpc.CallOption) (*pb.ContactUpdatedResp, error) {
+	if l.writeErr != nil {
+		return nil, l.writeErr
+	}
+	c := l.contacts[in.GetUserId()]
+	if c == nil || (c.GetUnsubscribedAt() != nil && !c.GetUnsubscribedAt().AsTime().Before(in.GetUnsubscribedAt().AsTime())) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	c.UnsubscribedAt = in.GetUnsubscribedAt()
+	return &pb.ContactUpdatedResp{UserId: in.GetUserId()}, nil
+}
+
+func (l *ledger) SetContactSentBlacklisted(_ context.Context, in *pb.SetContactSentBlacklistedReq, _ ...grpc.CallOption) (*pb.ContactWriteResp, error) {
+	if l.writeErr != nil {
+		return nil, l.writeErr
+	}
+	l.contact(in.GetUserId()).SentBlacklisted = in.GetSentBlacklisted()
 	return &pb.ContactWriteResp{}, nil
 }
 

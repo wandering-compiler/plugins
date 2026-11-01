@@ -1352,6 +1352,10 @@ message MarketingConsentResp {
 message WithdrawMarketingConsentReq {
   option (w17.contrib.plugin_feature) = "marketing_consent";
   string user_id = 1 [(w17.field) = { type: UUID }];
+  // withdrawn_at — when the user withdrew it in the tool. A decision the
+  // user made here after it stands: a late or repeated report of an older
+  // unsubscribe does not cancel a newer consent.
+  google.protobuf.Timestamp withdrawn_at = 2;
 }
 
 // ── oauth_server business messages ─────────────────────────────

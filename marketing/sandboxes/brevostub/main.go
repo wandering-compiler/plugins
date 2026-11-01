@@ -7,6 +7,8 @@
 //	POST   /v3/contacts                             → 201 / 204, upsert by ext_id
 //	PUT    /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
 //	GET    /v3/contacts?limit=&offset=              → the contacts, oldest first, EXT_ID among the attributes
+//	GET    /v3/contacts/{id}?identifierType=ext_id  → the contact (emailBlacklisted), 404 when unknown
+//	POST   /_stub/contacts/{ext_id}/unsubscribe     → 204: the person unsubscribes in Brevo (blacklisted)
 //	DELETE /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
 //	POST   /v3/contacts/attributes/normal/{name}    → 201, 400 when it exists
 //	GET    /_stub/contacts/{ext_id}                 → the contact and its events, 404 when none
@@ -213,6 +215,13 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.set(c, body.Attributes)
 		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v3/contacts/"):
+		c, ok := s.contacts[strings.TrimPrefix(r.URL.Path, "/v3/contacts/")]
+		if r.URL.Query().Get("identifierType") != "ext_id" || !ok {
+			refuse(w, http.StatusNotFound, "document_not_found", "Contact does not exist")
+			return
+		}
+		writeJSON(w, http.StatusOK, listing(c))
 	case r.Method == http.MethodGet && r.URL.Path == "/v3/contacts":
 		limit, offset := 50, 0
 		if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
@@ -256,6 +265,14 @@ func (s *stub) inspect(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/_stub/contacts/") && strings.HasSuffix(r.URL.Path, "/unsubscribe"):
+		c, ok := s.contacts[strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/_stub/contacts/"), "/unsubscribe")]
+		if !ok {
+			refuse(w, http.StatusNotFound, "document_not_found", "no such contact")
+			return
+		}
+		c.EmailBlacklisted = true
+		w.WriteHeader(http.StatusNoContent)
 	case r.URL.Path == "/_stub/events":
 		writeJSON(w, http.StatusOK, s.events)
 	case strings.HasPrefix(r.URL.Path, "/_stub/contacts/"):

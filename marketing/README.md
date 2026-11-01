@@ -58,13 +58,14 @@ letters, to be replayed once the account allows them.
   anything marked `sensitive`.
 - **Contacts** (`POST /v3/contacts`, upsert by `ext_id`): created on
   `UserCreated` with the email, updated on `UserUpdated`, the consent
-  attribute set on `MarketingConsentChanged`. Every write says whether
-  campaigns may reach the contact (`emailBlacklisted`, Brevo's "Email
-  campaigns: Subscribed"): only when the user's last known consent is a yes,
-  given after any unsubscribe in Brevo. A new account is blacklisted until
-  the user consents; a consent the plugin was never told is no consent. The
-  plugin keeps each user's last consent and address (`Contact`), so an
-  address change never subscribes anyone.
+  attribute set on `MarketingConsentChanged`. Whether campaigns may reach the
+  contact (`emailBlacklisted`, Brevo's "Email campaigns: Subscribed"): a new
+  account is blacklisted, a no blacklists, and only the user's newest yes
+  subscribes — after reading the contact from Brevo, so a person who
+  unsubscribed there stays unsubscribed (recorded, not undone). A consent the
+  plugin was never told is no consent. The plugin keeps each user's last
+  consent, address and what it last wrote (`Contact`), and an address change
+  never subscribes anyone.
 - **Erasure** (`DELETE /v3/contacts/{id}?identifierType=ext_id`) on
   `UserDeleted`: the contact and its history.
 
@@ -102,7 +103,7 @@ plugins: [{ name: "marketing" registered_as: "marketing" features: { names: ["br
 
 ```go
 func (s *ConsentHooks) Withdrawn(ctx context.Context, req *marketingpb.ConsentWithdrawnReq) (*marketingpb.ConsentWithdrawnResp, error) {
-	_, err := s.auth.WithdrawMarketingConsent(ctx, &authpb.WithdrawMarketingConsentReq{UserId: req.GetUserId()})
+	_, err := s.auth.WithdrawMarketingConsent(ctx, &authpb.WithdrawMarketingConsentReq{UserId: req.GetUserId(), WithdrawnAt: req.GetWithdrawnAt()})
 	return &marketingpb.ConsentWithdrawnResp{}, err
 }
 ```

@@ -142,16 +142,25 @@ func (w *brevoWebhook) IngestBrevo(ctx context.Context, req *pb.IngestBrevoReq) 
 	return &pb.IngestBrevoResp{Unsubscribed: int32(n)}, nil
 }
 
-// withdraw records one user's unsubscribe and hands it to the project.
+// withdraw records one user's unsubscribe and hands it to the project — unless
+// the user decided their consent after it: a late or redelivered unsubscribe
+// does not cancel a newer consent (auth refuses it the same way, from its own
+// record).
 func (w *brevoWebhook) withdraw(ctx context.Context, r *pb.ContactRow, at time.Time) (bool, error) {
 	user, st := r.GetUserId(), stateOf(r)
 	if st.erasedAt != nil {
 		return false, nil
 	}
-	if st.unsubscribedAt == nil || at.After(*st.unsubscribedAt) {
-		if _, err := w.tool.mutation.SetContactUnsubscribed(ctx, &pb.SetContactUnsubscribedReq{UserId: user, UnsubscribedAt: timestamppb.New(at)}); err != nil {
-			return false, fmt.Errorf("marketing plugin: recording the unsubscribe of user %s: %w", user, err)
-		}
+	if _, err := w.tool.mutation.SetContactUnsubscribed(ctx, &pb.SetContactUnsubscribedReq{UserId: user, UnsubscribedAt: timestamppb.New(at)}); err != nil && !heldBack(err) {
+		return false, fmt.Errorf("marketing plugin: recording the unsubscribe of user %s: %w", user, err)
+	}
+	if st.consentAt != nil && st.consentAt.After(at) {
+		log.Printf("marketing plugin: user %s decided their consent after this unsubscribe; it is not written back", user)
+		return false, nil
+	}
+	// Brevo blacklisted the contact itself, after anything the plugin wrote.
+	if err := w.tool.recordSentBlacklisted(ctx, user, true); err != nil {
+		return false, fmt.Errorf("marketing plugin: user %s: %w", user, err)
 	}
 	for _, h := range w.hooks {
 		if _, err := h(ctx, &pb.ConsentWithdrawnReq{UserId: user, WithdrawnAt: timestamppb.New(at)}); err != nil {

@@ -52,6 +52,21 @@ message EraseContactReq {
 message ContactWriteResp {
   option (w17.contrib.plugin_feature) = "brevo";
 }
+message EnsureContactReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+}
+message SetContactSentBlacklistedReq {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id          = 1 [(w17.field) = { type: UUID }];
+  bool   sent_blacklisted = 2;
+}
+// ContactUpdatedResp — a conditional write that moved the row; NotFound when
+// the condition held it back.
+message ContactUpdatedResp {
+  option (w17.contrib.plugin_feature) = "brevo";
+  string user_id = 1;
+}
 
 message ClaimReconciliationReq {
   option (w17.contrib.plugin_feature) = "brevo";
@@ -118,31 +133,64 @@ service MarketingMutation {
     };
   }
 
-  // SetContactConsent — the last consent auth announced and when it was
-  // decided. The caller keeps an older event from overwriting a newer one.
-  // Gated brevo.
-  rpc SetContactConsent(SetContactConsentReq) returns (ContactWriteResp) {
+  // EnsureContact — the user's row, created empty when there is none, so
+  // the conditional writes below have a row to hold back. Gated brevo.
+  rpc EnsureContact(EnsureContactReq) returns (ContactWriteResp) {
     option (w17.contrib.plugin_feature_rpc) = "brevo";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "UPSERT INTO @module.Contact SET user_id = :user_id, consent = :consent, consent_at = :consent_at "
-          "ON CONFLICT (user_id) DO UPDATE SET consent = :consent, consent_at = :consent_at"
+          "UPSERT INTO @module.Contact SET user_id = :user_id "
+          "ON CONFLICT (user_id) DO NOTHING"
       }
     };
   }
 
-  // SetContactUnsubscribed — the person unsubscribed in the tool. Gated
-  // brevo.
-  rpc SetContactUnsubscribed(SetContactUnsubscribedReq) returns (ContactWriteResp) {
+  // SetContactConsent — the last consent auth announced and when it was
+  // decided, only when it is newer than the one kept: two deliveries at once
+  // (or two replicas) cannot let an older decision overwrite a newer one.
+  // NotFound = the kept one is as new or newer. Gated brevo.
+  rpc SetContactConsent(SetContactConsentReq) returns (ContactUpdatedResp) {
     option (w17.contrib.plugin_feature_rpc) = "brevo";
     option (w17.db.method) = {
       ops: {
         name: "main"
         dql:
-          "UPSERT INTO @module.Contact SET user_id = :user_id, unsubscribed_at = :unsubscribed_at "
-          "ON CONFLICT (user_id) DO UPDATE SET unsubscribed_at = :unsubscribed_at"
+          "UPDATE @module.Contact SET consent = :consent, consent_at = :consent_at "
+          "WHERE user_id = :user_id AND (consent_at IS NULL OR consent_at < :consent_at) "
+          "RETURNING user_id"
+      }
+    };
+  }
+
+  // SetContactUnsubscribed — the person unsubscribed in the tool, kept when
+  // it is later than the unsubscribe kept. NotFound = an older one. Gated
+  // brevo.
+  rpc SetContactUnsubscribed(SetContactUnsubscribedReq) returns (ContactUpdatedResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.Contact SET unsubscribed_at = :unsubscribed_at "
+          "WHERE user_id = :user_id AND (unsubscribed_at IS NULL OR unsubscribed_at < :unsubscribed_at) "
+          "RETURNING user_id"
+      }
+    };
+  }
+
+  // SetContactSentBlacklisted — the emailBlacklisted the plugin last wrote
+  // to (or found in) the tool, which tells a Brevo-side unsubscribe from the
+  // plugin's own blacklisting. Gated brevo.
+  rpc SetContactSentBlacklisted(SetContactSentBlacklistedReq) returns (ContactWriteResp) {
+    option (w17.contrib.plugin_feature_rpc) = "brevo";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPSERT INTO @module.Contact SET user_id = :user_id, sent_blacklisted = :sent_blacklisted "
+          "ON CONFLICT (user_id) DO UPDATE SET sent_blacklisted = :sent_blacklisted"
       }
     };
   }

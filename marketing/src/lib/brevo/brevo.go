@@ -279,6 +279,24 @@ func (c *Client) ListContacts(ctx context.Context, offset, limit int) ([]Contact
 	return page.Contacts, page.Count, nil
 }
 
+// GetContact reads the contact keyed by extID — whether campaigns may reach
+// it as Brevo holds it now (a person who unsubscribed in Brevo is
+// blacklisted there). A contact that does not exist answers 404 (IsNotFound).
+func (c *Client) GetContact(ctx context.Context, extID string) (Contact, error) {
+	_, raw, err := c.do(ctx, http.MethodGet, "/contacts/"+url.PathEscape(extID)+"?identifierType=ext_id", nil)
+	if err != nil {
+		return Contact{}, err
+	}
+	var got Contact
+	if err := json.Unmarshal(raw, &got); err != nil {
+		return Contact{}, fmt.Errorf("brevo: a contact that does not parse: %w", err)
+	}
+	if v, ok := got.Attributes["EXT_ID"].(string); ok {
+		got.ExtID = v
+	}
+	return got, nil
+}
+
 // DeleteContact deletes the contact keyed by extID with its history. A
 // contact that does not exist is already deleted.
 func (c *Client) DeleteContact(ctx context.Context, extID string) error {

@@ -39,6 +39,7 @@ type brevoAPI interface {
 	EnsureAttribute(ctx context.Context, name, typ string) error
 	DeleteContact(ctx context.Context, extID string) error
 	ListContacts(ctx context.Context, offset, limit int) ([]brevo.Contact, int, error)
+	GetContact(ctx context.Context, extID string) (brevo.Contact, error)
 }
 
 // registerBrevoWebhook is the brevo_webhook feature's registration, set by
