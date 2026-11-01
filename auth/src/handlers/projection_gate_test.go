@@ -98,6 +98,37 @@ func TestTheTwoLookupsThatGateOnVerifiedEmailProjectIt(t *testing.T) {
 	}
 }
 
+// The middle email-proof floor reads `email_proof` off GetUserById, and its
+// zero is a real value: UNPROVEN. Not projected, every account arrived
+// UNPROVEN, so `email_proof_required = derived` refused an address an earlier
+// bound invitation had derived — the one case that floor exists to accept.
+// Found by the platform's unprojected-response-field measurement, which
+// listed this field as never filled while the gate reads it.
+func TestTheInviteGateLookupProjectsEmailProof(t *testing.T) {
+	proto := readProto(t, filepath.Join("..", "..", "proto", "queries", "auth_query.proto"))
+	dql := methodDQL(t, proto, "rpc GetUserById(")
+	if !strings.Contains(dql, "?feature(email_verification) u.email_proof AS user.email_proof") {
+		t.Errorf("GetUserById does not project `email_proof` (gated on email_verification), and "+
+			"inviteVerifiedEmailGate (emailverify.go) reads it — every account reads UNPROVEN:\n%s", dql)
+	}
+}
+
+// InviteToOrg answers with the invitation's metadata "echoed from the WRITTEN
+// row", which is CreateOrgInvite's RETURNING. A RETURNING without it leaves the
+// field empty, and the caller is told nothing was stored.
+func TestCreateOrgInviteReturnsTheMetadataInviteToOrgEchoes(t *testing.T) {
+	proto := readProto(t, filepath.Join("..", "..", "proto", "mutations", "auth_mutation.proto"))
+	dql := methodDQL(t, proto, "rpc CreateOrgInvite(")
+	_, returning, ok := strings.Cut(dql, "RETURNING")
+	if !ok {
+		t.Fatalf("CreateOrgInvite has no RETURNING:\n%s", dql)
+	}
+	if !strings.Contains(returning, "metadata AS invite.metadata") {
+		t.Errorf("CreateOrgInvite does not return `metadata`, and InviteToOrg (org_invite.go) echoes it "+
+			"from the returned row — the echo is always empty:\n%s", returning)
+	}
+}
+
 // userReturningRPCs finds the queries that fill a `pb.User`, by their DECLARED
 // return type rather than by what their SQL looks like. The SQL is the wrong
 // discriminator: ListOrgMembersByOrg also selects u.email from @module.User,
