@@ -25,6 +25,20 @@ func init() {
 	productRoleBounds = append(productRoleBounds, boundByProductPlan)
 }
 
+// productPlanLine is one line an organization holds: a role of a product, or
+// (an empty role) the whole product.
+type productPlanLine struct{ product, roleKey string }
+
+// productPlanLineSources add the lines an organization holds besides its own
+// (named_product_plans: the lines of the plan it is on). The bound is their
+// union with its own: a source only ever adds.
+var productPlanLineSources []func(ctx context.Context, h *AuthServiceHandler, orgID string) ([]productPlanLine, error)
+
+// productPlanRespDecorators fill what a feature adds to an organization's plan
+// as the backoffice and the organization read it (named_product_plans: the
+// plan it is on and its lines).
+var productPlanRespDecorators []func(ctx context.Context, h *AuthServiceHandler, orgID string, resp *pb.OrgProductPlanResp) error
+
 // boundByProductPlan is product_plans' productRoleBound: the organization's
 // lines, read once per request (the memo). A whole-product line carries every
 // role's permissions there; a role's line carries that role (a preset, or the
@@ -34,13 +48,24 @@ func boundByProductPlan(ctx context.Context, h *AuthServiceHandler, orgID string
 	if err != nil {
 		return nil, err
 	}
-	whole, roles := map[string]bool{}, map[string]bool{}
+	held := make([]productPlanLine, 0, len(lines))
 	for _, l := range lines {
-		if l.GetRoleKey() == "" {
-			whole[l.GetProduct()] = true
+		held = append(held, productPlanLine{product: l.GetProduct(), roleKey: l.GetRoleKey()})
+	}
+	for _, source := range productPlanLineSources {
+		more, err := source(ctx, h, orgID)
+		if err != nil {
+			return nil, err
+		}
+		held = append(held, more...)
+	}
+	whole, roles := map[string]bool{}, map[string]bool{}
+	for _, l := range held {
+		if l.roleKey == "" {
+			whole[l.product] = true
 			continue
 		}
-		roles[l.GetProduct()+":"+l.GetRoleKey()] = true
+		roles[l.product+":"+l.roleKey] = true
 	}
 	return func(product, roleProduct, roleKey string) bool {
 		return whole[product] || roles[roleProduct+":"+roleKey]
@@ -192,6 +217,11 @@ func orgProductPlanResp(ctx context.Context, h *AuthServiceHandler, orgID string
 	out := &pb.OrgProductPlanResp{}
 	for _, l := range lines {
 		out.Lines = append(out.Lines, &pb.OrgProductPlanLine{Product: l.GetProduct(), RoleKey: l.GetRoleKey(), AllowedAt: l.GetAllowedAt()})
+	}
+	for _, decorate := range productPlanRespDecorators {
+		if err := decorate(ctx, h, orgID, out); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

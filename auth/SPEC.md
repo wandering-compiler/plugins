@@ -1015,6 +1015,26 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | product_plans/no-grant-outside | Nobody MUST be able to hand out a role the plan does not carry. | Security | `TestAssignOrgProductRole`, `TestBackofficeProductRoles` |
 | product_plans/realm-only | Lines MUST be given and taken realm-wide only, where the endpoint ACL gates the method. | Security | `TestProductPlanLines` |
 
+### named_product_plans
+
+**Purpose.** A plan defined once and given to many organizations — a tariff ("basic", "pro") — instead of the same lines written to each organization that buys it, and rewritten in each when the tariff changes.
+
+**Adds**
+- Tables `ProductPlan` (name, created_by/at, ended_by/at, ended_key), `ProductPlanLine` (plan_id, product, role_key — `''` = the whole product, added_by/at, ended_by/at, ended_key), `OrgProductPlanAssignment` (org_id, plan_id, assigned_by/at, ended_by/at, ended_key — at most one live per organization).
+- Business, realm-wide only: `ListProductPlans`, `CreateProductPlan`, `DeleteProductPlan`, `AddProductPlanLine`, `RemoveProductPlanLine` (`GET` / `POST /auth/admin/product-plans`, `DELETE …/{plan_id}`, `PUT …/{plan_id}/lines`, `POST …/{plan_id}/lines/remove`); `SetOrgProductPlan` (`PUT /auth/admin/orgs/{org_id}/product-plan-assignment`, an empty `plan_id` takes the organization off). `ListOrgProductPlan` and `ListMyOrgProductPlan` answer the plan (`plan_id`, `plan_name`, `plan_lines`) beside the organization's own lines.
+- Errors `PRODUCT_PLAN_UNKNOWN` (404), `PRODUCT_PLAN_NAME_TAKEN` (409), `PRODUCT_PLAN_IN_USE` (412).
+
+**Requires / conflicts / combined files.** Requires `product_plans`. Go file: `handlers/named_product_plans.go` (a `productPlanLineSources` entry and a `productPlanRespDecorators` entry of `product_plans`).
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| named_product_plans/union | A product role held in an organization on a plan MUST count while the plan's lines OR the organization's own lines carry it, on every request; the plan MUST only add to the organization's own lines, never take from them. | Security | `TestNamedProductPlans`; live: `examples/product-roles-proof` step 23 |
+| named_product_plans/edit-once | Adding or taking a plan's line MUST change what every organization on the plan holds on its next request, and nothing of their own lines. | Correctness | `TestNamedProductPlans`; live: `examples/product-roles-proof` step 23 |
+| named_product_plans/one-plan | An organization MUST be on at most one plan; putting it on another MUST end the one it was on. | Correctness | `TestSetOrgProductPlan_MovesBetweenPlans` |
+| named_product_plans/in-use | A plan organizations are on MUST NOT be deleted (`PRODUCT_PLAN_IN_USE`): nobody loses roles as a side effect of a delete. | Correctness | `TestNamedProductPlans`; live: `examples/product-roles-proof` step 23 |
+| named_product_plans/realm-only | Plans MUST be defined, edited and given realm-wide only, where the endpoint ACL gates the method (`PRODUCT_PLANS_REALM_ONLY` from inside an organization). | Security | `TestNamedProductPlans` |
+| named_product_plans/catalogue | A plan's line MUST name a product or role the catalogue declares, and an identity role only one no single organization owns. | Correctness | `TestNamedProductPlans` (`checkPlanLine` with no organization) |
+
 ### teams
 
 - **Purpose.** An organization groups its members into teams, and a team holds roles every member holds while they are in it — so roles are given to a group once instead of to each person, and a resource of the project (the console's project access) can be given to a whole team.

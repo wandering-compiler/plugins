@@ -495,6 +495,13 @@ features:
       - product_roles
     go_files:
       - handlers/product_plans.go
+  - name: named_product_plans
+    description: "Named plans across the products (product_plans): a plan is defined once in the backoffice — its lines, a role of a product or a whole product, as an organization's plan lines are — and given to organizations (ListProductPlans / CreateProductPlan / DeleteProductPlan / AddProductPlanLine / RemoveProductPlanLine — GET / POST /auth/admin/product-plans, DELETE /auth/admin/product-plans/{plan_id}, PUT /auth/admin/product-plans/{plan_id}/lines, POST /auth/admin/product-plans/{plan_id}/lines/remove; SetOrgProductPlan — PUT /auth/admin/orgs/{org_id}/product-plan-assignment, an empty plan_id takes the organization off its plan). An organization on a plan holds what the plan's lines carry AND its own lines: its own add to the plan, never take from it. Editing a plan changes every organization on it on its next request. At most one plan per organization; a plan organizations are on cannot be deleted (PRODUCT_PLAN_IN_USE). Realm-wide only, under the endpoint ACL (PRODUCT_PLANS_REALM_ONLY from inside an organization). ListOrgProductPlan and ListMyOrgProductPlan answer the plan and its lines beside the organization's own. Nothing is deleted. Off by default; a migration adds the three tables."
+    default: false
+    requires:
+      - product_plans
+    go_files:
+      - handlers/named_product_plans.go
   - name: teams
     description: "An organization groups its members into teams, and a team holds org-scoped roles that every member holds while they are in it: ListOrgTeams / CreateOrgTeam / UpdateOrgTeam / DeleteOrgTeam / AddOrgTeamMember / RemoveOrgTeamMember / SetOrgTeamRoles (GET / POST /auth/orgs/{org}/teams, PUT / DELETE /auth/orgs/{org}/teams/{team_id}, POST /auth/orgs/{org}/teams/{team_id}/members, DELETE /auth/orgs/{org}/teams/{team_id}/members/{user_id}, PUT /auth/orgs/{org}/teams/{team_id}/roles). A team's roles count for a session acting in the team's organization, never realm-wide, in another organization or for an API token. Only a person who is a member of the organization joins a team (a machine account holds its roles directly), and only an org-scoped session-realm role of the organization's catalogue is a team's. The role ceiling holds wherever someone gains or loses a role through a team: giving or taking a team's role, adding or removing a member, deleting the team — and removing someone from the organization asks the caller to cover their team roles and ends their team memberships. A role a team holds is in use (DeleteOrgRole). Nothing is deleted. Off by default; a migration adds the three tables."
     default: false
@@ -882,9 +889,21 @@ presets:
           - { ref: AuthService.ListOrgProductPlan, method: GET,  path: "/{org_id}/product-plan",        feature: product_plans }
           - { ref: AuthService.AllowOrgProduct,    method: PUT,  path: "/{org_id}/product-plan",        feature: product_plans }
           - { ref: AuthService.DisallowOrgProduct, method: POST, path: "/{org_id}/product-plan/remove", feature: product_plans }
+          - { ref: AuthService.SetOrgProductPlan,  method: PUT,  path: "/{org_id}/product-plan-assignment", feature: named_product_plans }
           - { ref: AuthService.ListPackagesOfOrg, method: GET,    path: "/{org_id}/packages",           feature: org_packages }
           - { ref: AuthService.AddOrgPackage,     method: POST,   path: "/{org_id}/packages/{package}", feature: org_packages }
           - { ref: AuthService.RemoveOrgPackage,  method: DELETE, path: "/{org_id}/packages/{package}", feature: org_packages }
+      # The backoffice's named plans (named_product_plans): defined once,
+      # realm-wide; an organization goes on one through
+      # /auth/admin/orgs/{org_id}/product-plan-assignment.
+      - prefix: /auth/admin/product-plans
+        description: "The plans organizations are put on — each a set of the products' roles, defined once."
+        endpoints:
+          - { ref: AuthService.ListProductPlans,      method: GET,    path: "",                       feature: named_product_plans }
+          - { ref: AuthService.CreateProductPlan,     method: POST,   path: "",                       feature: named_product_plans }
+          - { ref: AuthService.DeleteProductPlan,     method: DELETE, path: "/{plan_id}",             feature: named_product_plans }
+          - { ref: AuthService.AddProductPlanLine,    method: PUT,    path: "/{plan_id}/lines",        feature: named_product_plans }
+          - { ref: AuthService.RemoveProductPlanLine, method: POST,   path: "/{plan_id}/lines/remove", feature: named_product_plans }
       # The backoffice's grants of the products' roles (product_roles):
       # realm-wide, any organization's and realm-wide ones; a call acting
       # inside an organization uses /auth/orgs/{org}/product-role-grants.
@@ -1439,6 +1458,7 @@ sandboxes:
 # marked `//w17:msgid`; `make check-plugin-msgids` fails when the two drift.
 msgids:
   - "A machine account is not a team member. Give it its roles directly."
+  - "A plan with this name already exists. Choose another name."
   - "A token can last at most {days} days. Choose an earlier date."
   - "A token cannot expire in the past. Choose a later date."
   - "A token without a key must expire within a year. Choose an earlier date."
@@ -1463,6 +1483,7 @@ msgids:
   - "Name the kind of membership this applies to."
   - "No product has this permission."
   - "Only a member of this organization can join one of its teams."
+  - "Organizations are on this plan. Move them to another plan first."
   - "Permission {permission} is not part of this deployment."
   - "Registration here is not set up correctly. Contact the organization."
   - "Registration is by invitation only. Ask the organization you are joining to invite you."
@@ -1487,6 +1508,7 @@ msgids:
   - "The product has no such role."
   - "There is no organization role named {role}."
   - "There is no such package."
+  - "There is no such plan."
   - "There is no such product."
   - "There is no such team in this organization."
   - "This API token expired on {date}. Create a new token."
