@@ -526,7 +526,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	// the consent page (oauth_server); its client names none.
 	if orgID := oauthTokenOrg(ctx); orgID != "" {
 		if oauthOrgScope == nil {
-			return UnauthenticatedOrgNotMember(errOrgNotMember)
+			return DeniedOrgNotMember(errOrgNotMember)
 		}
 		return oauthOrgScope(ctx, h, userID, orgID, headers, scopes, labels)
 	}
@@ -558,7 +558,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	}
 	orgID := resp.GetOrgId()
 	if orgID == "" {
-		return UnauthenticatedOrgNotMember(errOrgNotMember)
+		return DeniedOrgNotMember(errOrgNotMember)
 	}
 	stampOrg(scopes, labels, orgID, slug)
 	return nil

@@ -1857,7 +1857,7 @@ func intersectInt32(a, b []int32) []int32 {
 
 // runScopeDecorators runs the feature-staged scope decorators in order and
 // turns the first failure into an authentication refusal. A decorator that
-// already said what kind of refusal it is (UnauthenticatedOrgNotMember) keeps
+// already said what kind of refusal it is (DeniedOrgNotMember) keeps
 // its words; wrapping it again would drop them back to the generic answer.
 func runScopeDecorators(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
 	for _, dec := range scopeDecorators {
