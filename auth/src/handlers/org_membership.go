@@ -175,8 +175,8 @@ type orgUnnamedMark struct {
 	orgs   map[string]bool
 }
 
-// covers reports whether naming orgID could reach a role held there.
-func (m orgUnnamedMark) covers(orgID string) bool { return m.anyOrg || m.orgs[orgID] }
+// reaches reports whether naming orgID could reach a role held there.
+func (m orgUnnamedMark) reaches(orgID string) bool { return m.anyOrg || m.orgs[orgID] }
 
 // markOrgUnnamed records, for this Authenticate, that the request could have
 // named an organization and did not: any of the caller's (admitted nil), or

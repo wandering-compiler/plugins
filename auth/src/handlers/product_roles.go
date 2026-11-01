@@ -209,7 +209,7 @@ func productCodesHeldInOrgs(ctx context.Context, h *AuthServiceHandler, c *produ
 	for _, g := range resp.GetGrants() {
 		// Realm-wide grants already count; one in an organization the
 		// audience does not admit is no "name it" (orgUnnamedMark).
-		if g.GetOrgId() == "" || !mark.covers(g.GetOrgId()) {
+		if g.GetOrgId() == "" || !mark.reaches(g.GetOrgId()) {
 			continue
 		}
 		role, err := h.lookupRole(ctx, c, g.GetOrgId(), g.GetProduct(), g.GetRoleKey())
