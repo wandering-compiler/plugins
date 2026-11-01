@@ -356,6 +356,23 @@ func TestEnsureAttribute_AnExistingOneIsFine(t *testing.T) {
 	}
 }
 
+func TestCreateContact_OnlyWhenThereIsNone(t *testing.T) {
+	s := newStub(t, status(http.StatusCreated, `{"id":7}`), status(http.StatusBadRequest, `{"code":"duplicate_parameter","message":"Contact already exist"}`))
+	c, _ := client(t, s)
+	if err := c.CreateContact(context.Background(), "u-1", "a@example.com", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b := s.calls[0].body; b["updateEnabled"] != false || b["ext_id"] != "u-1" {
+		t.Errorf("call = %+v, want a create that never updates", s.calls[0])
+	}
+	if _, ok := s.calls[0].body["emailBlacklisted"]; ok {
+		t.Error("emailBlacklisted sent though nobody said it")
+	}
+	if err := c.CreateContact(context.Background(), "u-1", "", nil, nil); !IsDuplicate(err) {
+		t.Errorf("an existing contact = %v, want IsDuplicate", err)
+	}
+}
+
 func TestGetContact_ByTheUsersID(t *testing.T) {
 	s := newStub(t, status(http.StatusOK, `{"id":3,"email":"a@example.com","emailBlacklisted":true,"attributes":{"EXT_ID":"u-1"}}`),
 		status(http.StatusNotFound, `{"code":"document_not_found","message":"Contact does not exist"}`))

@@ -570,6 +570,41 @@ func TestConsent_ASignUpLandingDuringTheSubscribeIsNotAnUnsubscribe(t *testing.T
 	}
 }
 
+// A sign-up with the consent ticked: the yes creates the contact
+// subscribed, and UserCreated lands after it, or while it is under way —
+// between UserCreated's update and its creation, or while UserCreated writes
+// the blacklist it read from a row without the yes yet. The contact ends
+// subscribed every time, with no unsubscribe recorded.
+func TestContacts_UserCreatedAroundTheYesKeepsItSubscribed(t *testing.T) {
+	for _, order := range []string{"yes first", "yes during the create", "yes during the blacklist"} {
+		f, l := &fakeBrevo{known: map[string]bool{}}, &ledger{}
+		tl := tool(t, f, l, "all", "", "")
+		ctx := context.Background()
+		yes := func() {
+			if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day1)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		switch order {
+		case "yes first":
+			yes()
+		case "yes during the create":
+			// The yes's state is written; its Brevo write lands between
+			// UserCreated's 404 and its creation.
+			l.contacts = map[string]*pb.ContactRow{"u1": {UserId: "u1", Consent: true, ConsentAt: timestamppb.New(day1)}}
+			f.onCreate = yes
+		case "yes during the blacklist":
+			f.onUpsert = yes
+		}
+		if err := tl.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "a@x.example"}); err != nil {
+			t.Fatal(err)
+		}
+		if f.blacklisted["u1"] || l.contacts["u1"].GetUnsubscribedAt() != nil {
+			t.Errorf("%s: the consented contact ends blacklisted: upserts %v, updates %v", order, f.upserts, f.updates)
+		}
+	}
+}
+
 // brevo/reconcile-once: sign-ups during the pass only add contacts (one per
 // page listed here, created blacklisted as the plugin now creates them); they
 // shift nothing, and the pass finishes.

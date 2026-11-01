@@ -4,7 +4,7 @@
 // reached Brevo — emailBlacklisted included.
 //
 //	POST   /v3/events/batch                         → 204 (207 for an event named *Refused*)
-//	POST   /v3/contacts                             → 201 / 204, upsert by ext_id
+//	POST   /v3/contacts                             → 201 / 204, upsert by ext_id (updateEnabled false: 400 duplicate_parameter when it exists)
 //	PUT    /v3/contacts/{id}?identifierType=ext_id  → 204, 404 when unknown
 //	GET    /v3/contacts?limit=&offset=              → the contacts, oldest first, EXT_ID among the attributes
 //	GET    /v3/contacts/{id}?identifierType=ext_id  → the contact (emailBlacklisted), 404 when unknown
@@ -163,12 +163,17 @@ func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Email            string         `json:"email"`
 			Attributes       map[string]any `json:"attributes"`
 			EmailBlacklisted *bool          `json:"emailBlacklisted"`
+			UpdateEnabled    *bool          `json:"updateEnabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ExtID == "" {
 			refuse(w, http.StatusBadRequest, "missing_parameter", "ext_id is required")
 			return
 		}
 		prev, existed := s.contacts[body.ExtID]
+		if existed && body.UpdateEnabled != nil && !*body.UpdateEnabled {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "duplicate_parameter", "message": "Contact already exist"})
+			return
+		}
 		if existed && body.Email != "" && prev.Email != "" && prev.Email != body.Email {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "duplicate_parameter",
 				"message": "Unable to update contact, ext_id is already associated with another Contact"})

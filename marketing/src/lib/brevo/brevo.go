@@ -238,6 +238,35 @@ func (c *Client) UpsertContact(ctx context.Context, extID, email string, attribu
 	return err
 }
 
+// CreateContact creates the contact keyed by extID only when Brevo has none:
+// one that exists already — another write created it first — is refused
+// (IsDuplicate) and left exactly as it is, its emailBlacklisted included.
+func (c *Client) CreateContact(ctx context.Context, extID, email string, attributes map[string]any, emailBlacklisted *bool) error {
+	payload := map[string]any{"ext_id": extID, "updateEnabled": false}
+	if email != "" {
+		payload["email"] = email
+	}
+	if len(attributes) > 0 {
+		payload["attributes"] = attributes
+	}
+	if emailBlacklisted != nil {
+		payload["emailBlacklisted"] = *emailBlacklisted
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.do(ctx, http.MethodPost, "/contacts", body)
+	return err
+}
+
+// IsDuplicate reports whether Brevo refused a creation because the contact
+// exists (duplicate_parameter).
+func IsDuplicate(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == http.StatusBadRequest && e.Code == "duplicate_parameter"
+}
+
 // MaxListContacts is the most contacts one GET /contacts answers.
 const MaxListContacts = 1000
 

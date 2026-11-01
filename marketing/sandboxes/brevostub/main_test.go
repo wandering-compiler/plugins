@@ -152,3 +152,16 @@ func TestStub_AnswersOneContactAndAnUnsubscribe(t *testing.T) {
 		t.Errorf("unknown contact = %d, want 404", w.Code)
 	}
 }
+
+// A create that must not update (updateEnabled false) is refused for a
+// contact that exists, which keeps its emailBlacklisted.
+func TestStub_ACreateOnlyLeavesAnExistingContact(t *testing.T) {
+	s := &stub{key: "k", contacts: map[string]*contact{}, attributes: map[string]bool{}}
+	call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","updateEnabled":true,"emailBlacklisted":false}`)
+	if w := call(t, s, http.MethodPost, "/v3/contacts", "k", `{"ext_id":"u1","email":"a@x.example","updateEnabled":false,"emailBlacklisted":true}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "duplicate_parameter") {
+		t.Fatalf("create-only of an existing contact = %d %s", w.Code, w.Body.String())
+	}
+	if s.contacts["u1"].EmailBlacklisted {
+		t.Error("a refused create changed the contact")
+	}
+}

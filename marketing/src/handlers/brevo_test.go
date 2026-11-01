@@ -44,6 +44,10 @@ type fakeBrevo struct {
 	// onGet runs once, inside the next GetContact: another delivery landing
 	// between the plugin's read of Brevo and its write.
 	onGet func()
+	// onCreate / onUpsert run once, inside the next CreateContact /
+	// UpsertContact, before it writes.
+	onCreate func()
+	onUpsert func()
 }
 
 func (f *fakeBrevo) keep(ext string, blacklisted *bool) {
@@ -54,6 +58,20 @@ func (f *fakeBrevo) keep(ext string, blacklisted *bool) {
 		f.blacklisted = map[string]bool{}
 	}
 	f.blacklisted[ext] = *blacklisted
+}
+
+func (f *fakeBrevo) CreateContact(ctx context.Context, ext, email string, attrs map[string]any, blacklisted *bool) error {
+	if g := f.onCreate; g != nil {
+		f.onCreate = nil
+		g()
+	}
+	if f.callErr == nil && f.known[ext] {
+		return &brevo.Error{Status: 400, Code: "duplicate_parameter", Message: "Contact already exist"}
+	}
+	hook := f.onUpsert
+	f.onUpsert = nil
+	defer func() { f.onUpsert = hook }()
+	return f.UpsertContact(ctx, ext, email, attrs, blacklisted)
 }
 
 func (f *fakeBrevo) GetContact(_ context.Context, ext string) (brevo.Contact, error) {
@@ -86,6 +104,10 @@ func (f *fakeBrevo) SendEvents(_ context.Context, events []brevo.Event) (brevo.B
 }
 
 func (f *fakeBrevo) UpsertContact(_ context.Context, ext, email string, attrs map[string]any, blacklisted *bool) error {
+	if g := f.onUpsert; g != nil {
+		f.onUpsert = nil
+		g()
+	}
 	f.upserts = append(f.upserts, fmt.Sprintf("%s|%s|%v|%s", ext, email, attrs, bl(blacklisted)))
 	if f.callErr == nil {
 		if f.known == nil {

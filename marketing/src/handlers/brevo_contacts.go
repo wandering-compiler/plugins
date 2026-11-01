@@ -132,10 +132,25 @@ func (t *brevoTool) followAddress(ctx context.Context, what, user, email string)
 		log.Printf("marketing plugin: user %s was erased; a late event to %s them writes nothing to Brevo", user, what)
 		return nil
 	}
-	if st.blacklisted() {
-		return t.contactCall(what, user, t.writeBlacklisted(ctx, user, email, nil))
+	if !st.blacklisted() {
+		return t.contactCall(what, user, t.writeLeavingBlacklisted(ctx, user, email, nil))
 	}
-	return t.contactCall(what, user, t.writeLeavingBlacklisted(ctx, user, email, nil))
+	if err := t.writeBlacklisted(ctx, user, email, nil); err != nil {
+		return t.contactCall(what, user, err)
+	}
+	// A yes may have landed while this wrote: blacklisting over it would
+	// leave a consented contact blacklisted. The row as stored now decides;
+	// holding the newest yes, the contact is subscribed on that yes — the
+	// blacklist Brevo holds is this write's own, not the person's.
+	now, err := t.loadContact(ctx, user)
+	if err != nil {
+		return err
+	}
+	if now.erasedAt != nil || now.blacklisted() {
+		return nil
+	}
+	attrs := map[string]any{t.consentAttr: now.consent}
+	return t.contactCall(what, user, t.subscribe(ctx, user, attrs, now, *now.consentAt, true))
 }
 
 // writeBlacklisted writes the contact blacklisted (created when Brevo has
@@ -152,15 +167,32 @@ func (t *brevoTool) writeBlacklisted(ctx context.Context, user, email string, at
 
 // writeLeavingBlacklisted writes the address and attributes and leaves
 // emailBlacklisted as Brevo holds it. A contact Brevo does not have yet is
-// created blacklisted: only a consent decision subscribes.
+// created — only created, never overwritten: one the consent handler created
+// meanwhile keeps its blacklist — blacklisted, unless the row as stored holds
+// the newest yes the plugin has not blacklisted since (sent_blacklisted
+// false, no later unsubscribe), when the field is left out as that yes left
+// it.
 func (t *brevoTool) writeLeavingBlacklisted(ctx context.Context, user, email string, attrs map[string]any) error {
-	err := t.client.UpdateContact(ctx, user, withEmail(attrs, email), nil)
-	if brevo.IsNotFound(err) {
+	update := withEmail(attrs, email)
+	err := t.client.UpdateContact(ctx, user, update, nil)
+	if !brevo.IsNotFound(err) {
+		return err
+	}
+	st, err := t.loadContact(ctx, user)
+	if err != nil {
+		return err
+	}
+	var blacklisted *bool
+	if st.blacklisted() || st.sentBlacklisted {
 		if err := t.recordSentBlacklisted(ctx, user, true); err != nil { // state first
 			return err
 		}
 		yes := true
-		return t.client.UpsertContact(ctx, user, email, attrs, &yes)
+		blacklisted = &yes
+	}
+	err = t.client.CreateContact(ctx, user, email, attrs, blacklisted)
+	if brevo.IsDuplicate(err) {
+		return t.client.UpdateContact(ctx, user, update, nil)
 	}
 	return err
 }
@@ -250,7 +282,7 @@ func (t *brevoTool) onConsentChanged(ctx context.Context, ev *pb.AuthMarketingCo
 		// A yes is kept, but this delivery is not it: it decides nothing.
 		return t.contactCall("set the consent of", user, t.writeLeavingBlacklisted(ctx, user, "", attrs))
 	}
-	return t.contactCall("set the consent of", user, t.subscribe(ctx, user, attrs, st, at))
+	return t.contactCall("set the consent of", user, t.subscribe(ctx, user, attrs, st, at, false))
 }
 
 // subscribe acts on the newest decision, a yes. Brevo is read first: a
@@ -258,7 +290,10 @@ func (t *brevoTool) onConsentChanged(ctx context.Context, ev *pb.AuthMarketingCo
 // person unsubscribed in Brevo since — recorded, and not undone. After the
 // write the row is read again, and a no (or an unsubscribe) that overtook
 // this one meanwhile blacklists the contact again.
-func (t *brevoTool) subscribe(ctx context.Context, user string, attrs map[string]any, st contactState, at time.Time) error {
+//
+// ownBlacklist: the caller blacklisted the contact itself just now, so a
+// blacklist Brevo answers is that write, never a person's unsubscribe.
+func (t *brevoTool) subscribe(ctx context.Context, user string, attrs map[string]any, st contactState, at time.Time, ownBlacklist bool) error {
 	no := false
 	got, err := t.client.GetContact(ctx, user)
 	switch {
@@ -269,7 +304,7 @@ func (t *brevoTool) subscribe(ctx context.Context, user string, attrs map[string
 	case err != nil:
 		return err
 	}
-	if err == nil && got.EmailBlacklisted {
+	if err == nil && got.EmailBlacklisted && !ownBlacklist {
 		// Re-read after Brevo answered: the plugin records its own
 		// blacklisting before writing it, so a write that landed during the
 		// read (a sign-up's UserCreated) shows here, and is not taken for the
@@ -279,7 +314,7 @@ func (t *brevoTool) subscribe(ctx context.Context, user string, attrs map[string
 		}
 	}
 	switch {
-	case err == nil && got.EmailBlacklisted && !st.sentBlacklisted:
+	case err == nil && got.EmailBlacklisted && !st.sentBlacklisted && !ownBlacklist:
 		log.Printf("marketing plugin: user %s unsubscribed in Brevo; their consent does not subscribe them again", user)
 		if _, err := t.mutation.SetContactUnsubscribed(ctx, &pb.SetContactUnsubscribedReq{UserId: user, UnsubscribedAt: timestampOf(time.Now().UTC())}); err != nil && !heldBack(err) {
 			return fmt.Errorf("recording the unsubscribe: %w", err)
