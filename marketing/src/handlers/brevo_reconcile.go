@@ -92,8 +92,8 @@ func (t *brevoTool) reconcileBlacklist(ctx context.Context, owner string) (done 
 	// Brevo pages by offset, and a contact deleted while the pass runs shifts
 	// every later one a place back, past the page boundary: one is skipped.
 	// So the pass repeats until one blacklists nothing while the account's
-	// count held still — every contact was seen, subscribed-and-consented or
-	// blacklisted — and only then is done.
+	// count did not shrink — every contact was seen, subscribed-and-consented
+	// or blacklisted — and only then is done. Sign-ups meanwhile only add.
 	reviewed, blacklisted := 0, 0
 	for pass := 1; ; pass++ {
 		r, n, steady, err := t.reconcilePass(ctx, owner)
@@ -122,8 +122,9 @@ func (t *brevoTool) reconcileBlacklist(ctx context.Context, owner string) (done 
 }
 
 // reconcilePass reviews every page once; it answers how many contacts it
-// reviewed and blacklisted, and whether the account's count held still
-// through it (a deletion mid-pass can make offset paging skip a contact).
+// reviewed and blacklisted, and whether the account's count did not shrink
+// through it: oldest-first offset paging skips a contact only when one is
+// deleted mid-pass; contacts added meanwhile land on the last pages.
 func (t *brevoTool) reconcilePass(ctx context.Context, owner string) (reviewed, blacklisted int, steady bool, err error) {
 	first := -1
 	for offset := 0; ; {
@@ -141,7 +142,7 @@ func (t *brevoTool) reconcilePass(ctx context.Context, owner string) (reviewed, 
 		reviewed, blacklisted = reviewed+len(page), blacklisted+n
 		offset += len(page)
 		if len(page) == 0 || offset >= total {
-			return reviewed, blacklisted, total == first, nil
+			return reviewed, blacklisted, total >= first, nil
 		}
 		if err := t.renewReconciliation(ctx, owner); err != nil {
 			return reviewed, blacklisted, false, err

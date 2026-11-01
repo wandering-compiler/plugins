@@ -543,3 +543,50 @@ func TestReconcile_ADeletionMidPassSkipsNobody(t *testing.T) {
 		}
 	}
 }
+
+// ── review round 2 ──────────────────────────────────────────────────────
+
+// A sign-up with the consent ticked: the yes is being written when the
+// sign-up's UserCreated lands inside its read of Brevo and creates the contact
+// blacklisted. That is the plugin's own blacklisting, not the person
+// unsubscribing: the contact ends subscribed, with no unsubscribe recorded.
+func TestConsent_ASignUpLandingDuringTheSubscribeIsNotAnUnsubscribe(t *testing.T) {
+	f, l := &fakeBrevo{known: map[string]bool{}}, &ledger{}
+	tl := tool(t, f, l, "all", "", "")
+	ctx := context.Background()
+	f.onGet = func() {
+		if err := tl.onUserCreated(ctx, &pb.AuthUserCreated{UserId: "u1", Email: "a@x.example"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tl.onConsentChanged(ctx, consentEvent("u1", true, day1)); err != nil {
+		t.Fatal(err)
+	}
+	if f.blacklisted["u1"] {
+		t.Errorf("the consented sign-up ends blacklisted: upserts %v, updates %v", f.upserts, f.updates)
+	}
+	if c := l.contacts["u1"]; c.GetUnsubscribedAt() != nil || c.GetSentBlacklisted() {
+		t.Errorf("state = %+v, want no unsubscribe and the subscribe recorded", c)
+	}
+}
+
+// brevo/reconcile-once: sign-ups during the pass only add contacts (one per
+// page listed here, created blacklisted as the plugin now creates them); they
+// shift nothing, and the pass finishes.
+func TestReconcile_SignUpsDuringThePassDoNotStopIt(t *testing.T) {
+	f := &fakeBrevo{known: map[string]bool{}}
+	add := func(i int, blacklisted bool) {
+		id := fmt.Sprintf("0199a000-0000-7000-8000-%012x", i)
+		f.known[id] = true
+		f.contacts = append(f.contacts, brevo.Contact{ID: int64(i + 1), ExtID: id, EmailBlacklisted: blacklisted})
+	}
+	for i := 0; i < 1001; i++ {
+		add(i, false)
+	}
+	next := 1001
+	f.onList = func(int) { add(next, true); next++ }
+	done, err := tool(t, f, &ledger{}, "all", "", "").reconcileBlacklist(context.Background(), "replica-1")
+	if err != nil || !done {
+		t.Fatalf("done %v, err %v — growth kept the pass from finishing", done, err)
+	}
+}
