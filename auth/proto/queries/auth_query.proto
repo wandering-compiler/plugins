@@ -3101,6 +3101,12 @@ service AuthQuery {
           // including verified accounts. Third instance of the
           // shape GetUserByEmail's comment already names.
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
+          // email_proof (`email_verification`): inviteVerifiedEmailGate's
+          // middle floor (`derived`) accepts an address an earlier BOUND
+          // invitation derived. Left out, it arrived as UNPROVEN — the enum's
+          // zero, a real value here — so that floor refused every account
+          // whose proof was derived and not self-confirmed.
+          "       ?feature(email_verification) u.email_proof AS user.email_proof, "
           // disabled_at (`user_admin`): every path that issues a session for
           // an EXISTING account re-checks it through this read
           // (refuseUnsignableAccount). Left out, the second sign-in step,

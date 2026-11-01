@@ -5293,6 +5293,10 @@ service AuthMutation {
           "          expires_at AS invite.expires_at, "
           "          accepted_at AS invite.accepted_at, "
           "          created_at AS invite.created_at, "
+          // metadata: InviteToOrg echoes it "from the WRITTEN row" so the
+          // caller sees what was stored. Not returned, the echo was always
+          // empty.
+          "          metadata AS invite.metadata, "
           "          ?feature(product_roles) product_roles AS invite.product_roles"
       }
     };
