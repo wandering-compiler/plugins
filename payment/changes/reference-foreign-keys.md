@@ -1,0 +1,5 @@
+### The references between the plugin's own tables are foreign keys
+
+`Payment.customer_id`, `Refund.payment_id`, `Dispute.payment_id`, `Subscription.customer_id` and `Subscription.plan_id` now carry a foreign key to the row they name (`fk: "@module.<Model>"`, expanded to the activation's own table), `ON DELETE RESTRICT` (`deletion_rule: BLOCK`): the plugin deletes nothing, so a delete that would strand one is refused, and a write naming a missing row answers `InvalidArgument` ("referenced record does not exist") instead of being stored. The `user_id` columns stay without one: the account lives in the auth activation's table, which a plugin cannot name.
+
+Before you deploy it, check for rows the keys refuse: apply with `migrate apply --checks` (or `W17_MIGRATE_CHECKS=1`), and a database holding such a row refuses the migration by the check's name before any of it runs. Each check is `SELECT count(*) FROM <child> WHERE <col> NOT IN (SELECT id FROM <parent>)`. Give a missing parent a row back rather than deleting the child.

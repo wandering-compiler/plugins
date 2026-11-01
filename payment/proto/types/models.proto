@@ -36,9 +36,13 @@ option go_package = "@project;@pkg";
 // Customer — the project principal ↔ provider customer link. One row
 // per user; `provider_customer_id` is the opaque id the backend
 // returns (e.g. Stripe `cus_…`). user_id is unique so a principal has
-// exactly one provider customer. No DB-level FK to the project's
-// principal table (the activation-rename caveat the auth plugin
-// documents applies here too); the link is app-enforced.
+// exactly one provider customer. No foreign key to the principal: the
+// user lives in another plugin's table (the auth activation's), which this
+// plugin cannot name, so the link is app-enforced. The references between
+// this plugin's own tables (Payment.customer_id, Refund.payment_id,
+// Dispute.payment_id, Subscription.customer_id and plan_id) are foreign keys,
+// `fk: "@module.<Model>"`, `deletion_rule: BLOCK`: nothing here deletes a
+// row, so a delete that would strand one is refused.
 message Customer {
   option (w17.db.table) = {};
 
@@ -76,7 +80,7 @@ message Payment {
   }
 
   string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  string customer_id         = 2 [(w17.field) = { type: UUID }];
+  string customer_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Customer", deletion_rule: BLOCK }];
   string provider_payment_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
   string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   string currency            = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
@@ -115,7 +119,7 @@ message Refund {
 
   string id                 = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   // Indexed: SumRefundsForPayment totals a payment's refunds on every refund.
-  string payment_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string payment_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Payment", deletion_rule: BLOCK, index: true }];
   string provider_refund_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
   string amount             = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   string currency           = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
@@ -152,7 +156,7 @@ message Dispute {
   }
 
   string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  string payment_id          = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string payment_id          = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Payment", deletion_rule: BLOCK, index: true }];
   string provider_dispute_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
   string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
   string currency            = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
@@ -370,8 +374,8 @@ message Subscription {
   }
 
   string id                      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  string customer_id             = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  string plan_id                 = 3 [(w17.field) = { type: UUID }];
+  string customer_id             = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Customer", deletion_rule: BLOCK, index: true }];
+  string plan_id                 = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Plan", deletion_rule: BLOCK }];
   string provider_subscription_id = 4 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
   Status status                  = 5 [(w17.field) = { type: ENUM }];
   google.protobuf.Timestamp current_period_end = 6 [(w17.field) = { type: DATETIME, null: true }];
