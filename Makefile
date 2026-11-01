@@ -5,6 +5,7 @@
 #   make check PLUGIN=auth     everything, one plugin
 #   make test  PLUGIN=auth     just the Go tests
 #   make gen   PLUGIN=auth     generate a plugin's src/gen (never committed)
+#   make check-dev PLUGIN=auth generate a throwaway project with EVERY feature on
 #   make release-pr PLUGIN=auth               open a plugin's release pull request (RELEASING.md)
 #   make release RELEASE=auth@v0.1.0-rc.17   cut a signed release (RELEASING.md)
 
@@ -21,9 +22,9 @@ W17CTL = $$(tools/w17ctl.sh)
 GOLANGCI = $(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(shell tr -d ' \n' < $(CURDIR)/tools/golangci-version) run --config $(CURDIR)/tools/golangci.yml
 
 # gen is a prerequisite of every target that compiles a plugin's Go.
-.PHONY: check plugins-exist gen test vet fmt check-committed-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release release-pr
+.PHONY: check plugins-exist gen test vet fmt check-dev check-committed-pb check-render check-published-tests check-modules check-stage check-plugin-msgids plugin-msgids-sync lint check-refs check-names check-tools buf-image release release-pr
 
-check: fmt vet lint test check-modules check-stage check-plugin-msgids check-committed-pb check-render check-published-tests check-refs check-names check-tools check-versions check-layout
+check: fmt vet lint test check-modules check-stage check-plugin-msgids check-committed-pb check-render check-published-tests check-dev check-refs check-names check-tools check-versions check-layout
 
 # A typo in PLUGIN must not make every check pass over nothing.
 plugins-exist:
@@ -75,9 +76,22 @@ check-modules: $(GEN_FIRST)
 # A plugin's features stage INDEPENDENTLY: an activation that leaves a feature
 # off gets a tree without that feature's go_files. `go build` here sees every
 # file at once, so a reference across a feature boundary compiles here and
-# breaks the consumer that enabled one feature without the other.
+# breaks the consumer that enabled one feature without the other. It also
+# reports an event two rpcs emit in one activation, which codegen refuses.
 check-stage: plugins-exist
 	@cd tools/pluginstage && $(GO) run . $(addprefix $(CURDIR)/,$(PLUGINS))
+
+# The plugin AS ITSELF, with every feature on: a throwaway project activates it
+# the way a consumer's would and generates — the storage tier from the proto,
+# the events, the surfaces, the staged handlers. `gen` above generates only the
+# pb, and the adoption examples only the features they activate, so a feature
+# nothing activates has never been generated: auth's MarketingConsentChanged
+# reached main emitted from two statements, which the compiler refuses, and
+# every check here passed. check-stage now catches that one shape without a
+# console; this catches the rest. It asks the console (a w17ctl login, or
+# W17_TOKEN), and registers a project there for the run.
+check-dev: plugins-exist
+	@for p in $(PLUGINS); do echo ">> plugin dev $$p --all-features"; $(W17CTL) plugin dev "$$p" --all-features || exit 1; done
 
 # The `//w17:msgid` sentences in a plugin's Go and the `msgids:` block of its
 # plugin.yaml are one list written twice; this compares them. The Go is the
