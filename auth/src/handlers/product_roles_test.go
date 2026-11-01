@@ -27,6 +27,8 @@ type prodMock struct {
 	written []string
 	ended   []string
 	seq     int
+	// named_product_plans' tables (named_product_plans_test.go).
+	named namedPlanTables
 }
 
 // GetUserRealmWidePermissions: nobody here holds a role realm-wide.

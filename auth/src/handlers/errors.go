@@ -271,6 +271,11 @@ const (
 	// call from inside an organization.
 	CodeProductRoleNotInPlan  = "PRODUCT_ROLE_NOT_IN_PLAN"
 	CodeProductPlansRealmOnly = "PRODUCT_PLANS_REALM_ONLY"
+	// named_product_plans: no live plan of the id; a live plan of the name
+	// exists; a plan organizations are on cannot be deleted.
+	CodeProductPlanUnknown   = "PRODUCT_PLAN_UNKNOWN"
+	CodeProductPlanNameTaken = "PRODUCT_PLAN_NAME_TAKEN"
+	CodeProductPlanInUse     = "PRODUCT_PLAN_IN_USE"
 
 	// CodeSignUpNotInvited: under invite_only, a registration with no
 	// pending invitation for its address and no valid invitation link.
@@ -506,6 +511,9 @@ const (
 	MsgProductPermissionUnknown   = "No product has this permission."
 	MsgProductRoleNotInPlan       = "Your organization's plan does not include this role."
 	MsgProductPlansRealmOnly      = "An organization's plan is changed by the platform, not from inside the organization."
+	MsgProductPlanUnknown         = "There is no such plan."
+	MsgProductPlanNameTaken       = "A plan with this name already exists. Choose another name."
+	MsgProductPlanInUse           = "Organizations are on this plan. Move them to another plan first."
 )
 
 // isUniqueConflict is a write refused by a unique index: storage reports it as

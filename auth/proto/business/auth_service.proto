@@ -1799,7 +1799,13 @@ message OrgProductPlanLine {
 }
 message OrgProductPlanResp {
   option (w17.contrib.plugin_feature) = "product_plans";
+  // lines — the organization's own lines.
   repeated OrgProductPlanLine lines = 1;
+  // The named plan it is on (named_product_plans), whose lines it holds
+  // besides its own; empty when it is on none.
+  string plan_id   = 2 [(w17.contrib.plugin_feature_field) = "named_product_plans"];
+  string plan_name = 3 [(w17.contrib.plugin_feature_field) = "named_product_plans"];
+  repeated OrgProductPlanLine plan_lines = 4 [(w17.contrib.plugin_feature_field) = "named_product_plans"];
 }
 message ListOrgProductPlanReq {
   option (w17.contrib.plugin_feature) = "product_plans";
@@ -1818,6 +1824,48 @@ message OrgProductPlanLineReq {
 }
 message OrgProductPlanChangeResp {
   option (w17.contrib.plugin_feature) = "product_plans";
+}
+
+// Named plans (named_product_plans): defined once, given to organizations.
+message ProductPlanView {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id   = 1;
+  string name = 2;
+  repeated OrgProductPlanLine lines = 3;
+  // org_ids — the organizations on it.
+  repeated string org_ids = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+message ListProductPlansReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+}
+message ProductPlansResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  repeated ProductPlanView plans = 1;
+}
+message CreateProductPlanReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string name = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+}
+message DeleteProductPlanReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string plan_id = 1 [(w17.field) = { type: UUID }];
+}
+message ProductPlanLineReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string plan_id  = 1 [(w17.field) = { type: UUID }];
+  string product  = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // role_key — '' = the whole product.
+  string role_key = 3 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+}
+message SetOrgProductPlanReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string org_id  = 1 [(w17.field) = { type: UUID }];
+  // plan_id — the plan to put the organization on; '' takes it off its plan.
+  string plan_id = 2 [(w17.field) = { type: UUID, blank: true }];
+}
+message ProductPlanChangeResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
 }
 
 // An organization's second-factor policies (org_two_factor_policy): per kind
@@ -2619,6 +2667,27 @@ service AuthService {
   }
   rpc DisallowOrgProduct(OrgProductPlanLineReq) returns (OrgProductPlanChangeResp) {
     option (w17.contrib.plugin_feature_rpc) = "product_plans";
+  }
+
+  // Named plans (handlers/named_product_plans.go): realm-wide, under the
+  // endpoint ACL.
+  rpc ListProductPlans(ListProductPlansReq) returns (ProductPlansResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+  }
+  rpc CreateProductPlan(CreateProductPlanReq) returns (ProductPlanView) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+  }
+  rpc DeleteProductPlan(DeleteProductPlanReq) returns (ProductPlanChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+  }
+  rpc AddProductPlanLine(ProductPlanLineReq) returns (ProductPlanChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+  }
+  rpc RemoveProductPlanLine(ProductPlanLineReq) returns (ProductPlanChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+  }
+  rpc SetOrgProductPlan(SetOrgProductPlanReq) returns (ProductPlanChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
   }
 
   // An organization's packages (handlers/org_packages.go).

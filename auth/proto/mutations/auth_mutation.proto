@@ -2224,6 +2224,64 @@ message EndOrgProductAllowanceRowResp {
   string id = 1;
 }
 
+message InsertProductPlanRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string name       = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string created_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message InsertProductPlanRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message EndProductPlanRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndProductPlanRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message AddProductPlanLineRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string plan_id  = 1 [(w17.field) = { type: UUID }];
+  string product  = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string role_key = 3 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string added_by = 4 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message AddProductPlanLineRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message EndProductPlanLineRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndProductPlanLineRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message AssignOrgProductPlanRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string org_id      = 1 [(w17.field) = { type: UUID }];
+  string plan_id     = 2 [(w17.field) = { type: UUID }];
+  string assigned_by = 3 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message AssignOrgProductPlanRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message EndOrgProductPlanAssignmentRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndOrgProductPlanAssignmentRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+
 message SetOrgTwoFactorPolicyRowReq {
   option (w17.contrib.plugin_feature) = "org_two_factor_policy";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -5866,6 +5924,82 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.OrgProductAllowance SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // InsertProductPlanRow — a new live plan; a live one of the name is refused by the unique index.
+  rpc InsertProductPlanRow(InsertProductPlanRowReq) returns (InsertProductPlanRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ProductPlan SET name = :name, created_by = :created_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // EndProductPlanRow — the plan is deleted (its lines stay, ended with it by the caller).
+  rpc EndProductPlanRow(EndProductPlanRowReq) returns (EndProductPlanRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductPlan SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // AddProductPlanLineRow — a new live line of a plan.
+  rpc AddProductPlanLineRow(AddProductPlanLineRowReq) returns (AddProductPlanLineRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ProductPlanLine SET plan_id = :plan_id, product = :product, role_key = :role_key, added_by = :added_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // EndProductPlanLineRow — a line is taken from its plan.
+  rpc EndProductPlanLineRow(EndProductPlanLineRowReq) returns (EndProductPlanLineRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductPlanLine SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // AssignOrgProductPlanRow — an organization goes on a plan; a second live one is refused by the unique index (the caller ends the old first).
+  rpc AssignOrgProductPlanRow(AssignOrgProductPlanRowReq) returns (AssignOrgProductPlanRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgProductPlanAssignment SET org_id = :org_id, plan_id = :plan_id, assigned_by = :assigned_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // EndOrgProductPlanAssignmentRow — an organization leaves its plan.
+  rpc EndOrgProductPlanAssignmentRow(EndOrgProductPlanAssignmentRowReq) returns (EndOrgProductPlanAssignmentRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgProductPlanAssignment SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
           "WHERE id = :id AND ended_at IS NULL "
           "RETURNING id AS id"
       }

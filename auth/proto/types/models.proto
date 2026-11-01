@@ -2463,3 +2463,73 @@ message OrgProductAllowance {
   // ended_key — '' while live, the row's own id once taken (Role.ended_key).
   string ended_key  = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
+
+// ProductPlan — a named plan (named_product_plans): a set of lines across the
+// products, defined once in the backoffice and given to organizations. An
+// organization on a plan holds what the plan's lines carry AND its own lines
+// (OrgProductAllowance) — its own add to the plan, they never take from it.
+// Editing a plan changes every organization on it on its next request.
+// Deleting one ends the row; nothing is deleted.
+message ProductPlan {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "name" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  // name — what the backoffice calls it ("basic", "pro"), unique among the
+  // live plans.
+  string name       = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string created_by = 3 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at   = 5 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by   = 6 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once deleted (Role.ended_key).
+  string ended_key  = 7 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
+// ProductPlanLine — one line of a named plan: a role of a product, or
+// (role_key '') the whole product, as an OrgProductAllowance is for one
+// organization. Taking a line ends the row.
+message ProductPlanLine {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "plan_id" }, { name: "product" }, { name: "role_key" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+
+  string id         = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string plan_id    = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string product    = 3 [(w17.field) = { type: CHAR, max_len: 64 }];
+  // role_key — the product's role; '' = every role of the product.
+  string role_key   = 4 [(w17.field) = { type: CHAR, max_len: 64, blank: true, default_string: "" }];
+  string added_by   = 5 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp added_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by   = 8 [(w17.field) = { type: UUID, null: true }];
+  string ended_key  = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
+// OrgProductPlanAssignment — the named plan an organization is on: at most
+// one live row per organization. Changing the plan ends the row and adds
+// another; taking it ends the row.
+message OrgProductPlanAssignment {
+  option (w17.db.table) = {
+    indexes: [
+      { unique: true, fields: [{ name: "org_id" }, { name: "ended_key" }] }
+    ]
+  };
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+
+  string id          = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id      = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string plan_id     = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  string assigned_by = 4 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp assigned_at = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at    = 6 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by    = 7 [(w17.field) = { type: UUID, null: true }];
+  string ended_key   = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}

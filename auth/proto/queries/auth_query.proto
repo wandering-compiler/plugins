@@ -1916,6 +1916,66 @@ message OrgProductAllowanceRow {
   google.protobuf.Timestamp allowed_at = 4;
 }
 
+message ListProductPlanRowsReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+}
+message ListProductPlanRowsResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  repeated ProductPlanRow plans = 1;
+}
+message ProductPlanRow {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id   = 1;
+  string name = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+message ListProductPlanLineRowsReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string plan_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListProductPlanLineRowsResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  repeated ProductPlanLineRow lines = 1;
+}
+message ProductPlanLineRow {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id       = 1;
+  string product  = 2;
+  string role_key = 3;
+  google.protobuf.Timestamp added_at = 4;
+}
+message ListOrgProductPlanAssignmentRowsReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgProductPlanAssignmentRowsResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  repeated OrgProductPlanAssignmentRow assignments = 1;
+}
+message OrgProductPlanAssignmentRow {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id      = 1;
+  string org_id  = 2;
+  string plan_id = 3;
+  google.protobuf.Timestamp assigned_at = 4;
+}
+message ListProductPlanAssignmentRowsReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string plan_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListProductPlanAssignmentRowsResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  repeated OrgProductPlanAssignmentRow assignments = 1;
+}
+message ListOrgNamedPlanLineRowsReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string org_id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgNamedPlanLineRowsResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  repeated ProductPlanLineRow lines = 1;
+}
+
 message ListTeamsByOrgReq {
   option (w17.contrib.plugin_feature) = "teams";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -4227,6 +4287,77 @@ service AuthQuery {
           "FROM @module.OrgProductAllowance a "
           "WHERE a.org_id = :org_id AND a.ended_at IS NULL "
           "ORDER BY a.product ASC, a.role_key ASC"
+      }
+    };
+  }
+
+  // ListProductPlanRows — the live named plans.
+  rpc ListProductPlanRows(ListProductPlanRowsReq) returns (ListProductPlanRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT p.id AS id, p.name AS name, p.created_at AS created_at "
+          "FROM @module.ProductPlan p "
+          "WHERE p.ended_at IS NULL "
+          "ORDER BY p.name ASC"
+      }
+    };
+  }
+  // ListProductPlanLineRows — a plan's live lines.
+  rpc ListProductPlanLineRows(ListProductPlanLineRowsReq) returns (ListProductPlanLineRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT l.id AS id, l.product AS product, l.role_key AS role_key, l.added_at AS added_at "
+          "FROM @module.ProductPlanLine l "
+          "WHERE l.plan_id = :plan_id AND l.ended_at IS NULL "
+          "ORDER BY l.product ASC, l.role_key ASC"
+      }
+    };
+  }
+  // ListOrgProductPlanAssignmentRows — the plan an organization is on (none or one).
+  rpc ListOrgProductPlanAssignmentRows(ListOrgProductPlanAssignmentRowsReq) returns (ListOrgProductPlanAssignmentRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT a.id AS id, a.org_id AS org_id, a.plan_id AS plan_id, a.assigned_at AS assigned_at "
+          "FROM @module.OrgProductPlanAssignment a "
+          "WHERE a.org_id = :org_id AND a.ended_at IS NULL"
+      }
+    };
+  }
+  // ListProductPlanAssignmentRows — the organizations on a plan.
+  rpc ListProductPlanAssignmentRows(ListProductPlanAssignmentRowsReq) returns (ListProductPlanAssignmentRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT a.id AS id, a.org_id AS org_id, a.plan_id AS plan_id, a.assigned_at AS assigned_at "
+          "FROM @module.OrgProductPlanAssignment a "
+          "WHERE a.plan_id = :plan_id AND a.ended_at IS NULL "
+          "ORDER BY a.assigned_at ASC"
+      }
+    };
+  }
+  // ListOrgNamedPlanLineRows — the lines of the plan an organization is on: read with its own lines on every Authenticate a product's gateway asks in it.
+  rpc ListOrgNamedPlanLineRows(ListOrgNamedPlanLineRowsReq) returns (ListOrgNamedPlanLineRowsResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT l.id AS id, l.product AS product, l.role_key AS role_key, l.added_at AS added_at "
+          "FROM @module.ProductPlanLine l "
+          "JOIN @module.OrgProductPlanAssignment a ON a.plan_id = l.plan_id "
+          "WHERE a.org_id = :org_id AND a.ended_at IS NULL AND l.ended_at IS NULL "
+          "ORDER BY l.product ASC, l.role_key ASC"
       }
     };
   }
