@@ -30,7 +30,7 @@ console):
 | `make check-plugin-msgids` | the `//w17:msgid` sentences in the Go and the `msgids:` block of `plugin.yaml` agree (`make plugin-msgids-sync` rewrites the block from the Go) |
 | `make check-render` | the installable form renders with the pinned w17ctl: inert Go, tests carried, no `src/gen` |
 | `make check-published-tests` | the tests pass from the rendered form too, rehydrated as a reader would (`src/gen` generated from the rendered `plugin.yaml` and `proto/`) |
-| `make check-refs` | nothing cites the w17 platform's private docs — state the reason in place |
+| `make check-refs` | nothing cites the w17 platform's private repository (its docs, its source tree) — state the reason in place |
 | `make check-names` | no file, and no file path, names a real project (see below) |
 | `make check-tools` | the repository's tool modules and any plugin sandbox module are gofmt-, vet- and lint-clean, and pass |
 
@@ -42,6 +42,11 @@ plugins of the pull request in place of the ones it vendors, so a change that
 breaks a project using a plugin fails here, not after a release. It needs the
 `W17_TOKEN` secret, so it fails for a fork's pull request the same way
 `check-names` does.
+
+A pull request that changes only Markdown (`tools/docs-only.sh`: no other
+file, and no Markdown file deleted or moved) skips the per-plugin checks and
+adoption. `check-refs`, `check-names` and the changelog check still run, and
+`ci-ok` passes. A push to `main` always runs everything.
 
 **`src/gen` is generated, never written.** `make gen` (`w17ctl plugin gen
 <plugin>` at the pinned version) writes all of it from `plugin.yaml` and
