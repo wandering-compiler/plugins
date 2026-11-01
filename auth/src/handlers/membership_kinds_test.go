@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -61,7 +62,7 @@ func TestResolveOrgScopeByKind(t *testing.T) {
 		hd := admits("client")
 		hd[orgScopeMetadataKey] = "delta"
 		err := resolveOrgScope(context.Background(), h, "u1", hd, map[string]string{}, map[string]string{})
-		if err == nil || status.Code(err) == codes.PermissionDenied {
+		if !errors.Is(err, errOrgNotMember) || errorDetailOf(t, err).GetCode() != CodeOrgNotMember {
 			t.Fatalf("err = %v, want the not-a-member refusal", err)
 		}
 	})

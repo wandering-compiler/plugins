@@ -143,13 +143,13 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 	// (oauthOrgScope), so its checks are the one copy.
 	if orgID := oauthTokenOrg(ctx); orgID != "" {
 		if oauthOrgScope == nil {
-			return UnauthenticatedOrgNotMember(errOrgNotMember)
+			return DeniedOrgNotMember(errOrgNotMember)
 		}
 		if orgByID(admitted, orgID) == nil {
 			if orgByID(all, orgID) != nil {
 				return membershipNotAdmitted(ctx)
 			}
-			return UnauthenticatedOrgNotMember(errOrgNotMember)
+			return DeniedOrgNotMember(errOrgNotMember)
 		}
 		return oauthOrgScope(ctx, h, userID, orgID, headers, scopes, labels)
 	}
@@ -177,7 +177,7 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 		if orgBySlug(all, slug) != nil {
 			return membershipNotAdmitted(ctx)
 		}
-		return UnauthenticatedOrgNotMember(errOrgNotMember)
+		return DeniedOrgNotMember(errOrgNotMember)
 	}
 	if len(admitted) == 0 {
 		// The audience is for members of an admitted kind, and this caller
@@ -185,7 +185,9 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 		return membershipNotAdmitted(ctx)
 	}
 	// Several admitted organizations and none named: ambiguous, as in
-	// resolveOrgScope — no scope, which a scoped model refuses.
+	// resolveOrgScope — no scope, which a scoped model refuses, and the mark
+	// that lets the gateway answer "name one" (markOrgUnnamed).
+	markOrgUnnamed(ctx, headers, admitted)
 	return nil
 }
 

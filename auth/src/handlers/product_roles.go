@@ -173,7 +173,70 @@ func answerProductRoles(ctx context.Context, h *AuthServiceHandler, prin *authPr
 	sort.Strings(codes)
 	resp.ProductRoles = codes
 	resp.PermissionIds = nil
+	// What the identity set aside for a request naming no organization is in
+	// THIS domain's ids, which mean nothing against the product's lock; the
+	// product is told its own codes instead, and its gateway translates them
+	// as it does the set above (acllock.OrgPermissionsOfProductRoles).
+	delete(resp.GetScopes(), orgPermissionsScope)
+	if mark, ok := orgUnnamed(ctx); orgID == "" && ok {
+		aside, err := productCodesHeldInOrgs(ctx, h, c, prin, product, mark)
+		if err != nil {
+			return err
+		}
+		if len(aside) > 0 && resp.Scopes != nil {
+			resp.Scopes[orgProductRolesScope] = strings.Join(aside, ",")
+		}
+	}
 	return nil
+}
+
+// productCodesHeldInOrgs is the product's permission codes the caller holds
+// only through roles granted inside an organization — what a request naming
+// none does not count, and what lets the product's gateway answer "name one"
+// (ORGANIZATION_REQUIRED) rather than "no access" for a code among them. Every
+// organization the caller holds such a role in, with no plan applied: a hint
+// that over-reaches only means the request, once it names one, is refused as
+// MISSING_PERMISSION after all. Only organizations the request could have
+// named count (mark): on an audience admitting some membership kinds, those.
+// An API token's own share narrows it as it narrows the set
+// (productRoleNarrowers).
+func productCodesHeldInOrgs(ctx context.Context, h *AuthServiceHandler, c *productRoleCatalogue, prin *authPrincipal, product string, mark orgUnnamedMark) ([]string, error) {
+	resp, err := h.Query.ListUserProductRoleGrantRows(ctx, &pb.ListUserProductRoleGrantRowsReq{UserId: prin.userID})
+	if err != nil && status.Code(err) != codes.NotFound {
+		return nil, err
+	}
+	held := map[string]bool{}
+	for _, g := range resp.GetGrants() {
+		// Realm-wide grants already count; one in an organization the
+		// audience does not admit is no "name it" (orgUnnamedMark).
+		if g.GetOrgId() == "" || !mark.reaches(g.GetOrgId()) {
+			continue
+		}
+		role, err := h.lookupRole(ctx, c, g.GetOrgId(), g.GetProduct(), g.GetRoleKey())
+		if err != nil {
+			if roleGone(err) {
+				continue
+			}
+			return nil, err
+		}
+		if !role.orgScoped {
+			continue
+		}
+		for _, code := range role.perms[product] {
+			held[code] = true
+		}
+	}
+	out := make([]string, 0, len(held))
+	for code := range held {
+		out = append(out, code)
+	}
+	for _, narrow := range productRoleNarrowers {
+		if out, err = narrow(ctx, h, prin, "", product, out); err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // endProductRolesOfMember is product_roles' membershipRemovalCascade.

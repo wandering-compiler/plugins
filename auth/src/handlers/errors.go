@@ -37,7 +37,18 @@ type authnError struct {
 	// would be wrong for most of them.
 	userCode string
 	userMsg  string
+
+	// denied marks a refusal reached AFTER the credential was accepted: the
+	// caller is signed in and may not act where the request asked to
+	// (DeniedOrgNotMember). It answers PERMISSION_DENIED, never
+	// UNAUTHENTICATED — a client that signs out on 401 must not sign out a
+	// valid session over an organization it named.
+	denied bool
 }
+
+// orgNotMemberMessage is the status message of DeniedOrgNotMember: the same
+// for an organization that does not exist and one the caller is not in.
+const orgNotMemberMessage = "the caller is not a member of the organization this request names"
 
 const authnErrorMessage = "invalid credentials"
 
@@ -46,6 +57,9 @@ const authnErrorMessage = "invalid credentials"
 // errors.Unwrap or use slog's structured fields with both the
 // returned error AND the unwrapped cause.
 func (e *authnError) Error() string {
+	if e.denied {
+		return orgNotMemberMessage
+	}
 	return authnErrorMessage
 }
 
@@ -75,6 +89,9 @@ func (e *authnError) GRPCStatus() *status.Status {
 	if c := operationalCode(e.cause); c != codes.OK {
 		return withUserDetail(status.New(c, "the authentication service is temporarily unavailable"),
 			CodeAuthUnavailable, MsgAuthUnavailable)
+	}
+	if e.denied {
+		return withUserDetail(status.New(codes.PermissionDenied, orgNotMemberMessage), e.userCode, e.userMsg)
 	}
 	st := status.New(codes.Unauthenticated, authnErrorMessage)
 	if e.userCode == "" {
@@ -112,8 +129,9 @@ const (
 	CodeEmailNotVerified = "EMAIL_NOT_VERIFIED"
 
 	// CodeOrgNotMember: the credential was ACCEPTED, and the organization the
-	// request named (W17-Org) is not one the caller belongs to or owns. Not
-	// folded into the opaque answer, because it is not a credential refusal:
+	// request named (W17-Org) is not one the caller belongs to or owns. It is
+	// PERMISSION_DENIED (DeniedOrgNotMember), not folded into the opaque
+	// UNAUTHENTICATED answer, because it is not a credential refusal:
 	// it used to render "You are not signed in." to a caller who was, and
 	// whose real mistake — usually an org ID where the slug goes — that
 	// sentence hides. It reveals nothing: an org that does not
@@ -771,13 +789,16 @@ func UnauthenticatedMfaCode(cause error) error {
 	return &authnError{cause: cause, userCode: CodeMfaCodeRefused, userMsg: MsgMfaCodeRefused}
 }
 
-// UnauthenticatedOrgNotMember is the refusal of a request scoped into an
-// organization the caller does not belong to. Same code and status message as
-// every other authentication refusal — the contract — plus the pair a gateway
-// renders, so the person reads what is actually wrong. Here rather than beside
-// its caller because this file is staged with every feature.
-func UnauthenticatedOrgNotMember(cause error) error {
-	return &authnError{cause: cause, userCode: CodeOrgNotMember, userMsg: MsgOrgNotMember}
+// DeniedOrgNotMember is the refusal of a request scoped into an organization
+// the caller does not belong to (or that does not exist — the two answer the
+// same, so it is no oracle of which organizations exist). The credential was
+// accepted, so it is an authorization refusal: PERMISSION_DENIED with
+// ORG_NOT_MEMBER, which every transport renders as 403 — never the 401 that
+// tells a client its session is gone. Still an authnError, so the decorator
+// loop keeps it and an outage under it stays an outage. Here rather than
+// beside its caller because this file is staged with every feature.
+func DeniedOrgNotMember(cause error) error {
+	return &authnError{cause: cause, userCode: CodeOrgNotMember, userMsg: MsgOrgNotMember, denied: true}
 }
 
 // refusal is a status whose message is the operator's copy and whose
