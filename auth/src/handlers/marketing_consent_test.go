@@ -23,6 +23,28 @@ type consentMock struct {
 	set     *pb.SetUserMarketingConsentReq
 	at      time.Time
 	err     error // GetUserMarketingConsent's
+	// withdrew: what WithdrawUserMarketingConsent wrote; beforeWithdraw runs
+	// first inside it — the user deciding at that instant.
+	withdrew       *pb.WithdrawUserMarketingConsentReq
+	beforeWithdraw func()
+}
+
+// WithdrawUserMarketingConsent applies its statement's condition to stored.
+func (m *consentMock) WithdrawUserMarketingConsent(_ context.Context, in *pb.WithdrawUserMarketingConsentReq, _ ...grpc.CallOption) (*pb.SetUserMarketingConsentResp, error) {
+	if f := m.beforeWithdraw; f != nil {
+		m.beforeWithdraw = nil
+		f()
+	}
+	if m.err != nil {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	d := m.stored.GetDecidedAt()
+	if d != nil && !(m.stored.GetConsent() && d.AsTime().Before(in.GetWithdrawnAt().AsTime())) {
+		return nil, status.Error(codes.NotFound, "no rows")
+	}
+	m.withdrew = in
+	m.stored = &pb.GetUserMarketingConsentResp{Consent: false, DecidedAt: in.GetWithdrawnAt()}
+	return &pb.SetUserMarketingConsentResp{UserId: in.GetUserId(), Consent: false, DecidedAt: in.GetWithdrawnAt()}, nil
 }
 
 func (m *consentMock) GetUserMarketingConsent(_ context.Context, in *pb.GetUserMarketingConsentReq, _ ...grpc.CallOption) (*pb.GetUserMarketingConsentResp, error) {
@@ -134,41 +156,36 @@ func TestTokenLookupsProjectTheMarketingConsent(t *testing.T) {
 	}
 }
 
-// marketing_consent/withdraw-only: a withdrawal the user made in the
-// marketing tool is written through the same statement as their own, as
-// false and nothing else; one already on record keeps its time; a request
-// naming nobody, or an unknown user, is refused.
-func TestWithdrawMarketingConsent_OnlyWithdraws(t *testing.T) {
-	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
-	for _, stored := range []*pb.GetUserMarketingConsentResp{
-		{Consent: true, DecidedAt: timestamppb.New(at.Add(-time.Hour))},
-		{}, // never asked: unsubscribing is a decision too
-	} {
-		m := &consentMock{at: at, stored: stored}
-		h := &AuthServiceHandler{Query: m, Mutation: m}
-		resp, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{UserId: "u1", WithdrawnAt: timestamppb.New(at.Add(-time.Minute))})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if m.set == nil || m.set.GetUserId() != "u1" || m.set.GetConsent() {
-			t.Errorf("stored %+v: wrote %+v, want a withdrawal of u1", stored, m.set)
-		}
-		if resp.GetConsent() || !resp.GetDecidedAt().AsTime().Equal(at) {
-			t.Errorf("stored %+v: answered %+v", stored, resp)
-		}
-	}
-	// Already withdrawn: answered as it stands, not written again.
-	before := timestamppb.New(at.Add(-24 * time.Hour))
-	m := &consentMock{at: at, stored: &pb.GetUserMarketingConsentResp{Consent: false, DecidedAt: before}}
+func withdraw(t *testing.T, m *consentMock, user string, at time.Time) *pb.MarketingConsentResp {
+	t.Helper()
 	h := &AuthServiceHandler{Query: m, Mutation: m}
-	resp, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{UserId: "u1", WithdrawnAt: timestamppb.New(at.Add(-time.Minute))})
+	resp, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{UserId: user, WithdrawnAt: timestamppb.New(at)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.set != nil || !resp.GetDecidedAt().AsTime().Equal(before.AsTime()) {
-		t.Errorf("a withdrawal on record was written again (%+v) or answered %+v", m.set, resp)
+	return resp
+}
+
+// marketing_consent/withdraw-only: a withdrawal made in the marketing tool is
+// written as false at the time it was made, over a yes decided before it or
+// no decision; a withdrawal already on record keeps its time; a request
+// naming nobody or no time, or an unknown user, is refused.
+func TestWithdrawMarketingConsent_OnlyWithdraws(t *testing.T) {
+	day1 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	day2 := day1.Add(24 * time.Hour)
+	for _, stored := range []*pb.GetUserMarketingConsentResp{{Consent: true, DecidedAt: timestamppb.New(day1)}, {}} {
+		m := &consentMock{stored: stored}
+		resp := withdraw(t, m, "u1", day2)
+		if m.withdrew == nil || m.withdrew.GetUserId() != "u1" || resp.GetConsent() || !resp.GetDecidedAt().AsTime().Equal(day2) {
+			t.Errorf("stored %+v: wrote %+v, answered %+v", stored, m.withdrew, resp)
+		}
 	}
-	if _, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{WithdrawnAt: timestamppb.New(at)}); status.Code(err) != codes.InvalidArgument {
+	m := &consentMock{stored: &pb.GetUserMarketingConsentResp{Consent: false, DecidedAt: timestamppb.New(day1)}}
+	if resp := withdraw(t, m, "u1", day2); m.withdrew != nil || !resp.GetDecidedAt().AsTime().Equal(day1) {
+		t.Errorf("a withdrawal on record was written again (%+v) or answered %+v", m.withdrew, resp)
+	}
+	h := &AuthServiceHandler{Query: m, Mutation: m}
+	if _, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{WithdrawnAt: timestamppb.New(day2)}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("no user: %v, want InvalidArgument", err)
 	}
 	if _, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{UserId: "u1"}); status.Code(err) != codes.InvalidArgument {
@@ -176,24 +193,45 @@ func TestWithdrawMarketingConsent_OnlyWithdraws(t *testing.T) {
 	}
 	gone := &consentMock{err: status.Error(codes.NotFound, "no such user")}
 	h = &AuthServiceHandler{Query: gone, Mutation: gone}
-	if _, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{UserId: "u9", WithdrawnAt: timestamppb.New(at)}); status.Code(err) != codes.NotFound || gone.set != nil {
-		t.Errorf("unknown user: %v (wrote %+v), want NotFound and nothing written", err, gone.set)
+	if _, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{UserId: "u9", WithdrawnAt: timestamppb.New(day2)}); status.Code(err) != codes.NotFound || gone.withdrew != nil {
+		t.Errorf("unknown user: %v (wrote %+v), want NotFound and nothing written", err, gone.withdrew)
 	}
 }
 
-// marketing_consent/withdraw-only: a report of an unsubscribe older than the
-// user's own latest decision — a late or redelivered webhook — does not
-// cancel it: a day-2 unsubscribe after a day-3 consent writes nothing.
-func TestWithdrawMarketingConsent_AnOlderWithdrawalDoesNotCancelANewerConsent(t *testing.T) {
+// marketing_consent/withdraw-only: a late day-2 unsubscribe after a day-3
+// consent writes nothing; and a consent the user gives at the very instant
+// the withdrawal is written — between any read and the write — is not
+// overwritten: the withdrawal is one conditional statement.
+func TestWithdrawMarketingConsent_ANewerConsentStands(t *testing.T) {
 	day2 := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 	day3 := day2.Add(24 * time.Hour)
-	m := &consentMock{at: day3.Add(time.Hour), stored: &pb.GetUserMarketingConsentResp{Consent: true, DecidedAt: timestamppb.New(day3)}}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-	resp, err := h.WithdrawMarketingConsent(context.Background(), &pb.WithdrawMarketingConsentReq{UserId: "u1", WithdrawnAt: timestamppb.New(day2)})
-	if err != nil {
-		t.Fatal(err)
+	m := &consentMock{stored: &pb.GetUserMarketingConsentResp{Consent: true, DecidedAt: timestamppb.New(day3)}}
+	if resp := withdraw(t, m, "u1", day2); m.withdrew != nil || !resp.GetConsent() || !resp.GetDecidedAt().AsTime().Equal(day3) {
+		t.Errorf("late unsubscribe: wrote %+v, answered %+v; want the day-3 consent standing", m.withdrew, resp)
 	}
-	if m.set != nil || !resp.GetConsent() || !resp.GetDecidedAt().AsTime().Equal(day3) {
-		t.Errorf("wrote %+v, answered %+v; want the day-3 consent standing", m.set, resp)
+	m = &consentMock{stored: &pb.GetUserMarketingConsentResp{Consent: true, DecidedAt: timestamppb.New(day2.Add(-time.Hour))}}
+	m.beforeWithdraw = func() {
+		m.stored = &pb.GetUserMarketingConsentResp{Consent: true, DecidedAt: timestamppb.New(day3)} // the user, now
+	}
+	if resp := withdraw(t, m, "u1", day2); m.withdrew != nil || !resp.GetConsent() || !m.stored.GetConsent() {
+		t.Errorf("a consent given meanwhile was overwritten: wrote %+v, answered %+v", m.withdrew, resp)
+	}
+}
+
+// marketing_consent/withdraw-only: the statement carries the condition and
+// the event, so the guard and the announcement cannot come apart.
+func TestWithdrawUserMarketingConsent_IsOneConditionalStatement(t *testing.T) {
+	body := mutationRPCBody(t, "WithdrawUserMarketingConsent")
+	for _, want := range []string{
+		"marketing_consent = FALSE",
+		"marketing_consent_at = :withdrawn_at",
+		"WHERE id = :user_id",
+		"AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at))",
+		`event: "MarketingConsentChanged"`,
+		`{ key: "consent",    value: "$response.consent" }`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("WithdrawUserMarketingConsent lacks %q", want)
+		}
 	}
 }

@@ -60,15 +60,15 @@ func (h *AuthServiceHandler) SetMarketingConsent(ctx context.Context, req *pb.Se
 }
 
 // WithdrawMarketingConsent records that the user withdrew their consent in
-// the marketing tool — they unsubscribed there — through the statement their
-// own SetMarketingConsent writes, so MarketingConsentChanged announces it the
-// same way. It only ever withdraws: a consent is the user's to give, and
-// nobody else's. A withdrawal already on record is answered as it stands, not
-// written again, so the time the user decided stays the time they decided
-// (the tool may tell the project twice); so is any decision the user made
-// after withdrawn_at — a late report of an older unsubscribe does not cancel
-// a newer consent. Internal: the request names the user, so only the domain's
-// own code calls it.
+// the marketing tool — they unsubscribed there — at withdrawn_at, announced
+// as MarketingConsentChanged like their own SetMarketingConsent. It is one
+// conditional statement (WithdrawUserMarketingConsent): it writes only over a
+// yes decided before withdrawn_at, or no decision, so a consent the user
+// gives meanwhile, a newer one, or a withdrawal already on record stands and
+// is answered as it is (a late or repeated report of an unsubscribe cancels
+// nothing). It only ever withdraws: a consent is the user's to give.
+// Internal: the request names the user, so only the domain's own code calls
+// it.
 func (h *AuthServiceHandler) WithdrawMarketingConsent(ctx context.Context, req *pb.WithdrawMarketingConsentReq) (*pb.MarketingConsentResp, error) {
 	userID := req.GetUserId()
 	if userID == "" {
@@ -77,16 +77,20 @@ func (h *AuthServiceHandler) WithdrawMarketingConsent(ctx context.Context, req *
 	if req.GetWithdrawnAt() == nil {
 		return nil, status.Error(codes.InvalidArgument, "WithdrawMarketingConsent needs withdrawn_at, when the user withdrew it")
 	}
+	set, err := h.Mutation.WithdrawUserMarketingConsent(ctx, &pb.WithdrawUserMarketingConsentReq{
+		UserId: userID, WithdrawnAt: req.GetWithdrawnAt(), Thumbprint: requestThumbprint(ctx),
+	})
+	if err == nil {
+		return &pb.MarketingConsentResp{Consent: set.GetConsent(), DecidedAt: set.GetDecidedAt()}, nil
+	}
+	if status.Code(err) != codes.NotFound {
+		return nil, err
+	}
+	// Nothing written: the decision on record stands (or there is no such
+	// user, which this read answers NotFound).
 	got, err := h.Query.GetUserMarketingConsent(ctx, &pb.GetUserMarketingConsentReq{UserId: userID})
 	if err != nil {
 		return nil, err
 	}
-	if d := got.GetDecidedAt(); d != nil && (!got.GetConsent() || d.AsTime().After(req.GetWithdrawnAt().AsTime())) {
-		return &pb.MarketingConsentResp{Consent: got.GetConsent(), DecidedAt: d}, nil
-	}
-	set, err := h.Mutation.SetUserMarketingConsent(ctx, &pb.SetUserMarketingConsentReq{UserId: userID, Consent: false})
-	if err != nil {
-		return nil, err
-	}
-	return &pb.MarketingConsentResp{Consent: set.GetConsent(), DecidedAt: set.GetDecidedAt()}, nil
+	return &pb.MarketingConsentResp{Consent: got.GetConsent(), DecidedAt: got.GetDecidedAt()}, nil
 }
