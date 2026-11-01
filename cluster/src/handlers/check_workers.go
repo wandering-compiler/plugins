@@ -229,8 +229,8 @@ func (h *ClusterServiceHandler) exchangeOne(ctx context.Context, r Relay) ([]rej
 			rejected = append(rejected, rejectedWorker{worker: w, err: err})
 		case refusedRelay:
 			// The registry refused the RELAY this worker would be filed
-			// under — its row is gone (deleted since the relay list was
-			// read), its id is not one the registry takes, or the fingerprint
+			// under — it has ended (DeleteRelay since the relay list was
+			// read, RELAY_ENDED), its id is not one the registry takes, or the fingerprint
 			// it computed is not in a shape the registry takes. Every other
 			// worker of this relay would be refused the same way, so it is
 			// this relay that failed, not each of its workers; skipping them
@@ -321,11 +321,11 @@ var relayLevelFields = []string{"relay_id", "cert_fingerprint"}
 // Only InvalidArgument and OutOfRange are about the request — a failed field
 // validation, a mapped constraint, a value the column cannot hold. Of those,
 // one whose detail names a field the RELAY supplies (relayLevelFields) is
-// about the relay, not the worker's claims: a relay_id foreign key or a
-// malformed id (today's schema has no foreign key on Worker.relay_id, so that
-// is defensive, but an operator would otherwise read every worker of a
-// vanished relay as individually refused), or a fingerprint the relay
-// computed in a shape the registry does not take — every worker of that relay
+// about the relay, not the worker's claims: RecordWorker's own refusal of a
+// relay that has ended since the relay list was read (RELAY_ENDED, on
+// relay_id), the relay_id foreign key, or a malformed id — an operator would
+// otherwise read every worker of an ended relay as individually refused — or
+// a fingerprint the relay computed in a shape the registry does not take — every worker of that relay
 // would be refused the same way. Everything else aborts.
 func classifyRecordError(err error) recordOutcome {
 	if err == nil {

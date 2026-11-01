@@ -87,8 +87,8 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 	// The relays get the set on a context of their own, each bounded by the
 	// dial timeout below: the read deadline is not theirs.
 	ctx = withBanSetFrom(base, readCtx)
-	// The complete registry is in hand: connections to relays deleted since,
-	// or re-registered under another url or pin, are closed here.
+	// The complete registry is in hand: connections to relays ended
+	// (DeleteRelay) since, or re-registered under another url or pin, are closed here.
 	h.pruneConns(relays)
 	// In parallel, so the operator waits at most one dial timeout however
 	// many relays there are, not one per unreachable relay.
