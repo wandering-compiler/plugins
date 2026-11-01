@@ -64,6 +64,8 @@ message UpdateRelayReq {
 // up as state.
 message UpdateRelayResp {}
 
+// DeleteRelay ENDS the relay; the name is kept so callers and the admin
+// page's delete stay as they were. See RelayMutation.DeleteRelay.
 message DeleteRelayReq {
   string id = 1 [(w17.field) = { type: UUID }];
 }
@@ -89,6 +91,9 @@ message RecordRelayFailedReq {
 message RecordRelayFailedResp {}
 
 service RelayMutation {
+  // A plain INSERT whose `name` must be free among LIVE relays (the unique
+  // index over name and ended_key): registering a relay that was ended is a
+  // new row with a new id, and the ended row stays as it was (see Relay).
   rpc CreateRelay(CreateRelayReq) returns (CreateRelayResp) {
     option (w17.db.method) = {
       ops: {
@@ -101,6 +106,8 @@ service RelayMutation {
     };
   }
 
+  // Edits a LIVE relay only. An ended relay is history and is not rewritten:
+  // the write matches no row, as it matched none for a deleted one before.
   rpc UpdateRelay(UpdateRelayReq) returns (UpdateRelayResp) {
     option (w17.db.method) = {
       ops: {
@@ -109,23 +116,43 @@ service RelayMutation {
           "UPDATE @module.Relay "
           "SET name = :name, url = :url, "
           "    cert_fingerprint = :cert_fingerprint, enabled = :enabled "
-          "WHERE id = :id"
+          "WHERE id = :id AND removed_at IS NULL"
       }
     };
   }
 
-  // Deletes rather than soft-deletes. `enabled = false` is how a relay is
-  // taken out of service and kept; delete means the operator is done with it,
-  // and a registry that accumulates tombstones stops being readable.
+  // ENDS the relay; it deletes nothing. Rows are never deleted from this
+  // plugin's tables: an ended relay stays as the record of what was
+  // registered, and the Worker rows that name it keep resolving (their
+  // relay_id is a foreign key). It stamps removed_at and moves ended_key to
+  // the row's own id, which frees the name for a new registration (see Relay).
+  //
+  // From then on the relay is gone for every reader — ListRelays, GetRelay,
+  // and through them placement, reservations (a handle naming it polls as
+  // expired), registration codes, drain, the ban delivery and the worker
+  // sweep — and RecordWorker refuses to file a worker under it. `enabled =
+  // false` is still how a relay is taken out of service and KEPT; ending it
+  // means the operator is done with it.
+  //
+  // Idempotent: ending an ended (or unknown) relay changes nothing and is not
+  // an error, as deleting a missing row was not. The name is DeleteRelay, not
+  // EndRelay, so every caller and the admin page's delete keep working.
   rpc DeleteRelay(DeleteRelayReq) returns (DeleteRelayResp) {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "DELETE FROM @module.Relay WHERE id = :id"
+        dql:
+          "UPDATE @module.Relay "
+          "SET removed_at = NOW(), ended_key = id "
+          "WHERE id = :id AND removed_at IS NULL"
       }
     };
   }
 
+  // Both observations below write a LIVE relay only: an ended relay keeps the
+  // observed state it ended with, and a write queued before the end lands on
+  // nothing.
+  //
   // Success also CLEARS last_error: a relay that answers is not still failing,
   // and a stale error beside a fresh last_seen_at sends an operator hunting a
   // problem that fixed itself.
@@ -136,7 +163,7 @@ service RelayMutation {
         dql:
           "UPDATE @module.Relay "
           "SET last_seen_at = :at, last_error = '' "
-          "WHERE id = :id"
+          "WHERE id = :id AND removed_at IS NULL"
       }
     };
   }
@@ -148,7 +175,7 @@ service RelayMutation {
         dql:
           "UPDATE @module.Relay "
           "SET last_error = :error "
-          "WHERE id = :id"
+          "WHERE id = :id AND removed_at IS NULL"
       }
     };
   }

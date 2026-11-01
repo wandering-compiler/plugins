@@ -190,18 +190,22 @@ deploy:
       image_of: relay
       reads: [relay]
       args: [issue-worker, --ca-cert, "{dir:relay}/ca.crt", --ca-key, "{dir:relay}/ca.key", --out, "{dir}", --name, "{env}-worker-1"]
-  # The relay of this machine is the row `local`, addressed by its internal
-  # name and pinned to the certificate minted above; a re-mint follows it.
+  # The relay of this machine is the LIVE row `local`, addressed by its
+  # internal name and pinned to the certificate minted above; a re-mint
+  # follows it. The conflict target is the unique index over (name,
+  # ended_key): ended_key is '' on every live row, so the upsert finds the live
+  # `local` and never an ended one.
   register:
     sql: >-
-      INSERT INTO {activation}_relay (name, url, cert_fingerprint, enabled)
-      VALUES ('local', '{address:relay.management}', '{fingerprint:relay}', true)
-      ON CONFLICT (name) DO UPDATE SET url = EXCLUDED.url, cert_fingerprint = EXCLUDED.cert_fingerprint
-    # When an environment stops deploying the relay, its row goes too: left
-    # behind, enabled, every placement would pay a dial timeout on it first.
-    # Nothing references a relay by key (a worker's relay_id is a location it
-    # refreshes), and deploying it again inserts the row anew.
-    unregister_sql: "DELETE FROM {activation}_relay WHERE name = 'local'"
+      INSERT INTO {activation}_relay (name, url, cert_fingerprint, enabled, ended_key)
+      VALUES ('local', '{address:relay.management}', '{fingerprint:relay}', true, '')
+      ON CONFLICT (name, ended_key) DO UPDATE SET url = EXCLUDED.url, cert_fingerprint = EXCLUDED.cert_fingerprint
+    # When an environment stops deploying the relay, its row is ENDED, as
+    # DeleteRelay ends one: left live and enabled, every placement would pay a
+    # dial timeout on it first. Never deleted — the plugin deletes no row, and
+    # the workers recorded under it reference it (Worker.relay_id, ON DELETE
+    # RESTRICT). Deploying it again inserts a new live `local`.
+    unregister_sql: "UPDATE {activation}_relay SET removed_at = CURRENT_TIMESTAMP, ended_key = CAST(id AS TEXT) WHERE name = 'local' AND removed_at IS NULL"
 
 presets:
   admin:

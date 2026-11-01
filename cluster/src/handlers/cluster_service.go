@@ -31,15 +31,20 @@ var ErrRelayNotFound = errors.New("cluster: no relay with that id")
 // because scheduling is worth testing against a store that cannot fail in
 // ways a real database would never produce.
 type RelayStore interface {
+	// Every method reads LIVE relays only: a relay DeleteRelay ended is not
+	// registered any more, for placement, reservations, operator actions, the
+	// ban delivery and the sweep alike (RelayQuery filters removed_at).
+
 	// ListEnabled returns the relays scheduling may consider, in any order.
 	ListEnabled(ctx context.Context) ([]Relay, error)
-	// ListAll returns every registered relay, enabled or not. A ban is sent
-	// to all of them: a disabled relay takes no placements, but its workers
-	// still renew their certificates there.
+	// ListAll returns every live relay, enabled or not. A ban is sent to all
+	// of them: a disabled relay takes no placements, but its workers still
+	// renew their certificates there.
 	ListAll(ctx context.Context) ([]Relay, error)
-	// Get returns one relay by registry id, enabled or not, or
-	// ErrRelayNotFound. Used where an id arrives from outside — an operator's
-	// selection, a reservation handle — rather than from a listing.
+	// Get returns one live relay by registry id, enabled or not, or
+	// ErrRelayNotFound — for an ended relay too. Used where an id arrives
+	// from outside — an operator's selection, a reservation handle — rather
+	// than from a listing.
 	Get(ctx context.Context, id string) (Relay, error)
 	// RecordReached and RecordFailed maintain the observed-state CACHE on the
 	// row. Both are best-effort: a scheduling decision that succeeded must not
