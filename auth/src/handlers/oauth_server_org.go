@@ -87,10 +87,10 @@ func resolveOAuthOrgScope(ctx context.Context, h *AuthServiceHandler, userID, or
 		return err
 	}
 	if slug == "" {
-		return UnauthenticatedOrgNotMember(errOrgNotMember)
+		return DeniedOrgNotMember(errOrgNotMember)
 	}
 	if named := orgSlugFromHeaders(headers); named != "" && named != slug {
-		return UnauthenticatedOrgNotMember(errOrgNotMember)
+		return DeniedOrgNotMember(errOrgNotMember)
 	}
 	stampOrg(scopes, labels, orgID, slug)
 	return nil

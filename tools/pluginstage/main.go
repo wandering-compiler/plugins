@@ -36,7 +36,9 @@
 // Proto FIELDS a feature adds vanish from a consumer's generated pb the same
 // way: a call of such a field's getter from a file staged without the
 // feature is reported too (fieldgate.go), and so is a DQL statement naming a
-// table, column or request field another feature adds (dqlgate.go).
+// table, column or request field another feature adds (dqlgate.go). An event
+// with two emit sites some activation stages together is reported as well
+// (emitgate.go): the compiler allows one, and refuses that activation.
 //
 // # What it does NOT catch
 //
@@ -179,6 +181,9 @@ func check(dir string) error {
 	}
 	if gErr := checkGatedGetters(dir, gates, inReach); gErr != nil {
 		dqlErr = errors.Join(dqlErr, gErr)
+	}
+	if eErr := checkEmitSites(dir, requires, conflicts); eErr != nil {
+		dqlErr = errors.Join(dqlErr, eErr)
 	}
 
 	declIn, refs, err := scan(filepath.Join(dir, "src"))

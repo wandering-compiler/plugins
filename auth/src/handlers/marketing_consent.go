@@ -61,8 +61,9 @@ func (h *AuthServiceHandler) SetMarketingConsent(ctx context.Context, req *pb.Se
 
 // WithdrawMarketingConsent records that the user withdrew their consent in
 // the marketing tool — they unsubscribed there — at withdrawn_at, announced
-// as MarketingConsentChanged like their own SetMarketingConsent. It is one
-// conditional statement (WithdrawUserMarketingConsent): it writes only over a
+// as MarketingConsentChanged like their own SetMarketingConsent. It is the
+// same statement as theirs (SetUserMarketingConsent, the event's one emit
+// site), made conditional by withdrawn_at: it writes only over a
 // yes decided before withdrawn_at, or no decision, so a consent the user
 // gives meanwhile, a newer one, or a withdrawal already on record stands and
 // is answered as it is (a late or repeated report of an unsubscribe cancels
@@ -77,8 +78,8 @@ func (h *AuthServiceHandler) WithdrawMarketingConsent(ctx context.Context, req *
 	if req.GetWithdrawnAt() == nil {
 		return nil, status.Error(codes.InvalidArgument, "WithdrawMarketingConsent needs withdrawn_at, when the user withdrew it")
 	}
-	set, err := h.Mutation.WithdrawUserMarketingConsent(ctx, &pb.WithdrawUserMarketingConsentReq{
-		UserId: userID, WithdrawnAt: req.GetWithdrawnAt(), Thumbprint: requestThumbprint(ctx),
+	set, err := h.Mutation.SetUserMarketingConsent(ctx, &pb.SetUserMarketingConsentReq{
+		UserId: userID, Consent: false, WithdrawnAt: req.GetWithdrawnAt(), Thumbprint: requestThumbprint(ctx),
 	})
 	if err == nil {
 		return &pb.MarketingConsentResp{Consent: set.GetConsent(), DecidedAt: set.GetDecidedAt()}, nil

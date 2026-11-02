@@ -139,6 +139,134 @@ var orgGrantSources []func(ctx context.Context, h *AuthServiceHandler, userID, o
 // at the edge).
 const realmPermissionsScope = "realm_permissions"
 
+// orgPermissionsScope / orgProductRolesScope are what a request that names no
+// organization was narrowed away from: the permissions (this domain's ids, or
+// `*`) and the products' permission codes the caller holds only through roles
+// inside organizations. The SDK spells them acllock.OrgPermissionsScope /
+// acllock.OrgProductRolesScope; the plugin keeps its own copy, as it does for
+// the gateway headers, so it builds against an SDK from before them.
+//
+// A gateway's gate reads them when a permission is missing, and answers
+// ORGANIZATION_REQUIRED ("name the organization", W17-Org) instead of
+// MISSING_PERMISSION ("no access") — the two were indistinguishable, so a
+// product could not ask a member of several organizations which one to act
+// in. They say only what the CALLER holds, never which organizations, and are
+// written only when the request could have named one and did not
+// (markOrgUnnamed). Gateway-written (x-w17-scope-*, cleared from client input
+// at the edge), like realm_permissions.
+const (
+	orgPermissionsScope  = "org_permissions"
+	orgProductRolesScope = "org_product_roles"
+)
+
+// orgUnnamedMemo is the request memo's mark that the request named no
+// organization where it could have (the W17-Org selector is accepted there)
+// and none was inferred — set by the org-scope resolution, read by the
+// narrower and product_roles' answer. Its value is an orgUnnamedMark.
+const orgUnnamedMemo = "org_membership.unnamed"
+
+// orgUnnamedMark says which organizations the request could have named: every
+// one the caller belongs to (anyOrg), or — on an audience that admits only
+// some membership kinds — those it admits. A role held in an organization the
+// audience would refuse is not "name it and you have it", so the hint leaves
+// it out.
+type orgUnnamedMark struct {
+	anyOrg bool
+	orgs   map[string]bool
+}
+
+// reaches reports whether naming orgID could reach a role held there.
+func (m orgUnnamedMark) reaches(orgID string) bool { return m.anyOrg || m.orgs[orgID] }
+
+// markOrgUnnamed records, for this Authenticate, that the request could have
+// named an organization and did not: any of the caller's (admitted nil), or
+// one of admitted. An audience whose tenant sources omit DEFAULT takes no
+// selector, so naming one would be refused there: nothing to tell the caller
+// to do, and nothing is marked.
+func markOrgUnnamed(ctx context.Context, headers map[string]string, admitted []*pb.UserOrg) {
+	if sources := tenantFromHeaders(headers); len(sources) > 0 && !slices.Contains(sources, tenantFromDefault) {
+		return
+	}
+	memo := requestMemoOf(ctx)
+	if memo == nil {
+		return
+	}
+	mark := orgUnnamedMark{anyOrg: admitted == nil, orgs: map[string]bool{}}
+	for _, o := range admitted {
+		mark.orgs[o.GetOrgId()] = true
+	}
+	memo[orgUnnamedMemo] = mark
+}
+
+// orgUnnamed returns the mark markOrgUnnamed set, and whether it did.
+func orgUnnamed(ctx context.Context) (orgUnnamedMark, bool) {
+	v, ok := requestMemoOf(ctx)[orgUnnamedMemo].(orgUnnamedMark)
+	return v, ok
+}
+
+// callerOnlyMethods act on the caller alone and never inside an organization,
+// so naming one is no condition of calling them: ListMyOrgs is how a client
+// learns which organization it could name. A request naming none keeps them
+// from a role held inside an organization — never more than that role grants
+// — instead of being refused, or told to name the organization it is asking
+// for (ORGANIZATION_REQUIRED). w17ctl calls ListMyOrgs naming none.
+var callerOnlyMethods = []string{"ListMyOrgs"}
+
+// keepCallerOnly grants the request, of what aside (the roles a request
+// naming no organization set aside) carries, the callerOnlyMethods.
+func keepCallerOnly(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, aside []*pb.RoleGrant) {
+	var keep []int32
+	for _, m := range callerOnlyMethods {
+		// The auth service's own method, whatever service is being served:
+		// a principal is also resolved for another service's call
+		// (ResolveUser), where grpc.Method names that one.
+		id, ok := lockIDOfServiceMethod(h.Lock, pb.AuthService_ServiceDesc.ServiceName, m)
+		if !ok {
+			continue
+		}
+		for _, g := range aside {
+			if g.GetAllPermissions() || slices.Contains(g.GetPermissionIds(), int32(id)) {
+				keep = append(keep, int32(id))
+				break
+			}
+		}
+	}
+	if len(keep) > 0 {
+		p.grants = append(p.grants, &pb.RoleGrant{PermissionIds: keep})
+	}
+}
+
+// setAsideOrgPermissions stamps orgPermissionsScope: what `aside` — the grants
+// of roles held inside organizations, which a request naming none does not
+// count — would grant. A wildcard role makes it `*`.
+//
+// The hint can over-reach: an organization's packages or plan may still take
+// a permission away once one is named, and then the caller reads
+// MISSING_PERMISSION on the next request. It does not include a team's roles
+// (orgGrantSources): those are read per organization, and a request naming
+// none has no organization to read them for — a permission held only through
+// a team stays MISSING_PERMISSION without the header.
+func setAsideOrgPermissions(aside []*pb.RoleGrant, scopes map[string]string) {
+	var ids []int32
+	for _, g := range aside {
+		if g.GetAllPermissions() {
+			scopes[orgPermissionsScope] = "*"
+			return
+		}
+		ids = append(ids, g.GetPermissionIds()...)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.Itoa(int(id))
+	}
+	scopes[orgPermissionsScope] = strings.Join(parts, ",")
+}
+
 func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *authPrincipal, scopes map[string]string) error {
 	orgID := scopes["org_id"]
 
@@ -165,12 +293,39 @@ func narrowGrantsToActiveOrg(ctx context.Context, h *AuthServiceHandler, p *auth
 		keep[g.GetRoleId()] = struct{}{}
 	}
 	survivors := make([]*pb.RoleGrant, 0, len(p.grants))
+	var aside []*pb.RoleGrant
 	for _, g := range p.grants {
 		if _, ok := keep[g.GetRoleId()]; ok {
 			survivors = append(survivors, g)
+		} else {
+			aside = append(aside, g)
 		}
 	}
 	p.grants = survivors
+	if orgID == "" {
+		keepCallerOnly(ctx, h, p, aside)
+	}
+	// A request that could have named an organization and did not keeps its
+	// realm-wide roles only — and says what it set aside, so the gateway can
+	// answer "name one" for a permission among them rather than "no access".
+	if mark, ok := orgUnnamed(ctx); orgID == "" && ok {
+		if !mark.anyOrg {
+			// Only the roles held in an organization the audience admits:
+			// naming another would be refused, so it is no fix to suggest.
+			admittedRoles := map[string]bool{}
+			for oid := range mark.orgs {
+				resp, err := h.Query.GetUserOrgPermissions(ctx, &pb.GetUserOrgPermissionsReq{UserId: p.userID, OrgId: oid})
+				if err != nil {
+					return err
+				}
+				for _, g := range resp.GetGrants() {
+					admittedRoles[g.GetRoleId()] = true
+				}
+			}
+			aside = slices.DeleteFunc(aside, func(g *pb.RoleGrant) bool { return !admittedRoles[g.GetRoleId()] })
+		}
+		setAsideOrgPermissions(aside, scopes)
+	}
 
 	// A request acting inside an organization tells the backend what its
 	// credential holds realm-wide there (realmPermissionsScope): another
@@ -441,7 +596,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	// the consent page (oauth_server); its client names none.
 	if orgID := oauthTokenOrg(ctx); orgID != "" {
 		if oauthOrgScope == nil {
-			return UnauthenticatedOrgNotMember(errOrgNotMember)
+			return DeniedOrgNotMember(errOrgNotMember)
 		}
 		return oauthOrgScope(ctx, h, userID, orgID, headers, scopes, labels)
 	}
@@ -455,6 +610,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	}
 	slug := pick.slug
 	if slug == "" {
+		markOrgUnnamed(ctx, headers, nil)
 		return nil
 	}
 	// NotFound is "not a member", not a failure: a generated single-row read
@@ -472,7 +628,7 @@ func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, 
 	}
 	orgID := resp.GetOrgId()
 	if orgID == "" {
-		return UnauthenticatedOrgNotMember(errOrgNotMember)
+		return DeniedOrgNotMember(errOrgNotMember)
 	}
 	stampOrg(scopes, labels, orgID, slug)
 	return nil

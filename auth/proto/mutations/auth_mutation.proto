@@ -756,36 +756,28 @@ message UpdateUserPasswordIfUnchangedResp {
   string user_id = 1;
 }
 
-// The user's own marketing consent: set, stamped and announced in one
-// statement. Gated marketing_consent.
+// A marketing consent decision: set, stamped and announced in one statement
+// (SetUserMarketingConsent). Gated marketing_consent.
 message SetUserMarketingConsentReq {
   option (w17.contrib.plugin_feature) = "marketing_consent";
   string user_id = 1 [(w17.field) = { type: UUID }];
   bool   consent = 2;
   // event-only (no w17.field: not persisted, not validated): the key
   // thumbprint of the device the decision was made from,
-  // MarketingConsentChanged's device_id.
+  // MarketingConsentChanged's device_id — none for the marketing tool's
+  // webhook, which no device signs.
   string thumbprint = 3;
+  // withdrawn_at — set only for a withdrawal the user made in the marketing
+  // tool (consent false), when they made it: the decision is then written at
+  // that time, and only over a yes decided before it or no decision. Absent
+  // for the user's own decision, written at NOW() whatever is on record.
+  google.protobuf.Timestamp withdrawn_at = 4 [(w17.field) = { type: DATETIME, null: true }];
 }
 message SetUserMarketingConsentResp {
   option (w17.contrib.plugin_feature) = "marketing_consent";
   string                    user_id    = 1;
   bool                      consent    = 2;
   google.protobuf.Timestamp decided_at = 3;
-}
-
-// A withdrawal the user made in the marketing tool at withdrawn_at, written
-// only over a consent decided before it (or none): one statement, so a
-// decision the user makes meanwhile cannot be overwritten. Gated
-// marketing_consent.
-message WithdrawUserMarketingConsentReq {
-  option (w17.contrib.plugin_feature) = "marketing_consent";
-  string                    user_id      = 1 [(w17.field) = { type: UUID }];
-  google.protobuf.Timestamp withdrawn_at = 2 [(w17.field) = { type: DATETIME }];
-  // event-only (no w17.field): the key thumbprint of the device the call
-  // came from, MarketingConsentChanged's device_id — none for the tool's
-  // webhook, which no device signs.
-  string thumbprint = 3;
 }
 
 // RevokeOtherSessionTokens ends every SESSION of a user but the one named:
@@ -2229,6 +2221,64 @@ message EndOrgProductAllowanceRowReq {
 }
 message EndOrgProductAllowanceRowResp {
   option (w17.contrib.plugin_feature) = "product_plans";
+  string id = 1;
+}
+
+message InsertProductPlanRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string name       = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string created_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message InsertProductPlanRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message EndProductPlanRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndProductPlanRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message AddProductPlanLineRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string plan_id  = 1 [(w17.field) = { type: UUID }];
+  string product  = 2 [(w17.field) = { type: CHAR, max_len: 64 }];
+  string role_key = 3 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string added_by = 4 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message AddProductPlanLineRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message EndProductPlanLineRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndProductPlanLineRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message AssignOrgProductPlanRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string org_id      = 1 [(w17.field) = { type: UUID }];
+  string plan_id     = 2 [(w17.field) = { type: UUID }];
+  string assigned_by = 3 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message AssignOrgProductPlanRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id = 1;
+}
+message EndOrgProductPlanAssignmentRowReq {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
+  string id       = 1 [(w17.field) = { type: UUID }];
+  string ended_by = 2 [(w17.field) = { type: UUID, null: true, blank: true }];
+}
+message EndOrgProductPlanAssignmentRowResp {
+  option (w17.contrib.plugin_feature) = "named_product_plans";
   string id = 1;
 }
 
@@ -4348,42 +4398,32 @@ service AuthMutation {
     };
   }
 
-  // WithdrawUserMarketingConsent records a withdrawal the user made in the
-  // marketing tool, at the time they made it, only when the consent on record
-  // is a yes decided before it, or no decision at all: a newer decision, or a
-  // withdrawal already on record, stands (zero rows, NotFound). Announced as
-  // the user's own change is, MarketingConsentChanged, only when it wrote.
-  rpc WithdrawUserMarketingConsent(WithdrawUserMarketingConsentReq) returns (SetUserMarketingConsentResp) {
-    option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql:
-          "UPDATE @module.User SET "
-          "marketing_consent = FALSE, "
-          "marketing_consent_at = :withdrawn_at "
-          "WHERE id = :user_id "
-          "AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at)) "
-          "RETURNING id AS user_id, marketing_consent AS consent, marketing_consent_at AS decided_at"
-      }
-    };
-    option (w17.event_emit) = {
-      event: "MarketingConsentChanged"
-      payload: {
-        fields: [
-          { key: "user_id",    value: "$response.user_id" },
-          { key: "consent",    value: "$response.consent" },
-          { key: "decided_at", value: "$response.decided_at" },
-          { key: "device_id",  value: "$request.thumbprint" }
-        ]
-      }
-    };
-  }
-
-  // SetUserMarketingConsent records the user's decision and when it was made
-  // — a withdrawal as much as a consent, because the time a consent ended is
-  // part of the record too. MarketingConsentChanged tells whoever keeps a copy
-  // (a marketing tool's contact) without waiting for the user's next request.
+  // SetUserMarketingConsent records a decision about the user's consent and
+  // when it was made — a withdrawal as much as a consent, because the time a
+  // consent ended is part of the record too. MarketingConsentChanged tells
+  // whoever keeps a copy (a marketing tool's contact) without waiting for the
+  // user's next request.
+  //
+  // It is the ONE statement that writes the consent and the one emit site of
+  // MarketingConsentChanged (an event has exactly one emit site), so both
+  // decisions go through it:
+  //
+  //   - the user's own (SetMarketingConsent): no withdrawn_at. Written as
+  //     given, at NOW(), whatever is on record — the guard below drops out.
+  //   - a withdrawal the user made in the marketing tool
+  //     (WithdrawMarketingConsent): consent false, withdrawn_at when they made
+  //     it. Written at withdrawn_at only over a yes decided before it, or no
+  //     decision at all: a newer decision, or a withdrawal already on record,
+  //     stands (zero rows, NotFound, and no event).
+  //
+  // withdrawn_at only ever records a withdrawal: with :consent true the
+  // conjunct is false too, so the statement — not just the handler — refuses
+  // to backdate a yes (zero rows, NotFound, no event).
+  //
+  // The guard is one `?` conjunct, so it is dropped exactly when withdrawn_at
+  // is absent: the CASE yields withdrawn_at when the condition holds and NULL
+  // otherwise, and NULL = withdrawn_at is never true. The check and the write
+  // stay one statement, so a decision made meanwhile cannot be overwritten.
   rpc SetUserMarketingConsent(SetUserMarketingConsentReq) returns (SetUserMarketingConsentResp) {
     option (w17.contrib.plugin_feature_rpc) = "marketing_consent";
     option (w17.db.method) = {
@@ -4392,8 +4432,10 @@ service AuthMutation {
         dql:
           "UPDATE @module.User SET "
           "marketing_consent = :consent, "
-          "marketing_consent_at = NOW() "
+          "marketing_consent_at = COALESCE(:withdrawn_at, NOW()) "
           "WHERE id = :user_id "
+          "AND ? CASE WHEN :consent = FALSE AND (marketing_consent_at IS NULL OR (marketing_consent = TRUE AND marketing_consent_at < :withdrawn_at)) "
+          "THEN :withdrawn_at END = :withdrawn_at "
           "RETURNING id AS user_id, marketing_consent AS consent, marketing_consent_at AS decided_at"
       }
     };
@@ -5882,6 +5924,82 @@ service AuthMutation {
         name: "main"
         dql:
           "UPDATE @module.OrgProductAllowance SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+
+  // InsertProductPlanRow — a new live plan; a live one of the name is refused by the unique index.
+  rpc InsertProductPlanRow(InsertProductPlanRowReq) returns (InsertProductPlanRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ProductPlan SET name = :name, created_by = :created_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // EndProductPlanRow — the plan is deleted (its lines stay, ended with it by the caller).
+  rpc EndProductPlanRow(EndProductPlanRowReq) returns (EndProductPlanRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductPlan SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // AddProductPlanLineRow — a new live line of a plan.
+  rpc AddProductPlanLineRow(AddProductPlanLineRowReq) returns (AddProductPlanLineRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.ProductPlanLine SET plan_id = :plan_id, product = :product, role_key = :role_key, added_by = :added_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // EndProductPlanLineRow — a line is taken from its plan.
+  rpc EndProductPlanLineRow(EndProductPlanLineRowReq) returns (EndProductPlanLineRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.ProductPlanLine SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
+          "WHERE id = :id AND ended_at IS NULL "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // AssignOrgProductPlanRow — an organization goes on a plan; a second live one is refused by the unique index (the caller ends the old first).
+  rpc AssignOrgProductPlanRow(AssignOrgProductPlanRowReq) returns (AssignOrgProductPlanRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.OrgProductPlanAssignment SET org_id = :org_id, plan_id = :plan_id, assigned_by = :assigned_by "
+          "RETURNING id AS id"
+      }
+    };
+  }
+  // EndOrgProductPlanAssignmentRow — an organization leaves its plan.
+  rpc EndOrgProductPlanAssignmentRow(EndOrgProductPlanAssignmentRowReq) returns (EndOrgProductPlanAssignmentRowResp) {
+    option (w17.contrib.plugin_feature_rpc) = "named_product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "UPDATE @module.OrgProductPlanAssignment SET ended_at = NOW(), ended_by = :ended_by, ended_key = id "
           "WHERE id = :id AND ended_at IS NULL "
           "RETURNING id AS id"
       }

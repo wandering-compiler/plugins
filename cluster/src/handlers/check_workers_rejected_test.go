@@ -274,9 +274,9 @@ func TestCheckWorkers_AnAbortStillLogsTheWorkersAlreadyRefused(t *testing.T) {
 	}
 }
 
-// A relay the registry will not file workers under — deleted between the
-// relay list and the write (a relay_id foreign key), or an id it does not
-// take — is THAT relay failing. It used to read as every one of its workers
+// A relay the registry will not file workers under — ended between the
+// relay list and the write (RELAY_ENDED, or the relay_id foreign key), or an
+// id it does not take — is THAT relay failing. It used to read as every one of its workers
 // being refused for its own data, and the relay was then noted reached.
 func TestCheckWorkers_ARelayTheRegistryRefusesIsTheRelaysFailure(t *testing.T) {
 	logs := captureLog(t)
@@ -331,6 +331,7 @@ func TestClassifyRecordError(t *testing.T) {
 		{"value out of range", wrapped(codes.InvalidArgument, "VALUE_OUT_OF_RANGE", ""), refusedWorker},
 		{"out of range", status.Error(codes.OutOfRange, "x"), refusedWorker},
 		{"relay_id foreign key", wrapped(codes.InvalidArgument, "INVALID_VALUE", "relay_id"), refusedRelay},
+		{"relay ended since the list (RecordWorker's guard)", wrapped(codes.InvalidArgument, "RELAY_ENDED", "relay_id"), refusedRelay},
 		{"relay_id malformed", wrapped(codes.InvalidArgument, "UUID_VIOLATION", "relay_id"), refusedRelay},
 		{"fingerprint the relay computed", wrapped(codes.InvalidArgument, "PATTERN_VIOLATION", "cert_fingerprint"), refusedRelay},
 		{"fingerprint too long", wrapped(codes.InvalidArgument, "MAX_LEN_VIOLATION", "cert_fingerprint"), refusedRelay},

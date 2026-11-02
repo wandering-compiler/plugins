@@ -13,8 +13,10 @@ option go_package = "@project;@pkg";
 
 message ListRelaysReq {
   // Narrow to the relays scheduling would actually consider. The backoffice
-  // list leaves it false and shows everything, including the disabled ones —
-  // a registry that hides rows is a registry an operator cannot audit.
+  // list leaves it false and shows every LIVE relay, including the disabled
+  // ones — a registry that hides rows is a registry an operator cannot audit.
+  // An ended relay (DeleteRelay) is listed by neither: it is no longer
+  // registered.
   bool enabled_only = 1;
 }
 
@@ -26,6 +28,10 @@ message GetRelayReq {
   string id = 1 [(w17.field) = { type: UUID }];
 }
 
+// Both reads return LIVE relays only (removed_at IS NULL). Every path that
+// resolves a relay goes through one of them — placement, reservations,
+// registration codes, drain, the ban delivery, the worker sweep, the admin
+// pages — so an ended relay is invisible to all of them by construction.
 service RelayQuery {
   // Ordered by name rather than by creation, because the operator reading this
   // list knows the relays by name and is looking one up, not browsing history.
@@ -43,7 +49,8 @@ service RelayQuery {
           "       r.last_seen_at AS last_seen_at, "
           "       r.last_error AS last_error "
           "FROM @module.Relay r "
-          "WHERE (:enabled_only = false OR r.enabled = true) "
+          "WHERE r.removed_at IS NULL "
+          "  AND (:enabled_only = false OR r.enabled = true) "
           "ORDER BY r.name"
       }
     };
@@ -63,7 +70,7 @@ service RelayQuery {
           "       r.last_seen_at AS last_seen_at, "
           "       r.last_error AS last_error "
           "FROM @module.Relay r "
-          "WHERE r.id = :id"
+          "WHERE r.id = :id AND r.removed_at IS NULL"
       }
     };
   }

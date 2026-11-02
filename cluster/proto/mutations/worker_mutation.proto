@@ -28,6 +28,11 @@ option go_package = "@project;@pkg";
 // Nothing else is refreshed: `state`, `decided_at` and `decided_by` are the
 // decision, and `name` / `device_id` are claims a banned machine must not be
 // able to keep re-labelling.
+//
+// Filed only under a LIVE relay. A relay ended (DeleteRelay) between the
+// sweep's relay list and this write is refused — InvalidArgument,
+// RELAY_ENDED, on `relay_id` — so the sweep counts it as that relay failing,
+// not as each of its workers being bad (see WorkerMutation.RecordWorker).
 message RecordWorkerReq {
   string cert_fingerprint = 1 [(w17.field) = { type: CHAR, max_len: 64 }];
   string name = 2 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
@@ -52,15 +57,36 @@ message DecideWorkersReq {
 message DecideWorkersResp {}
 
 service WorkerMutation {
+  // Two ops. The first locks the LIVE relay row for the rest of the
+  // transaction — a no-op write rather than a read, so a DeleteRelay of the
+  // same relay (which writes that row) runs either wholly before it, and this
+  // finds no live relay and refuses, or wholly after it, and ends a relay
+  // whose worker was recorded while it was live. A read would let the end
+  // land between the check and the upsert and file a worker under an ended
+  // relay. The foreign key on Worker.relay_id cannot say this: the ended
+  // row still exists.
   rpc RecordWorker(RecordWorkerReq) returns (RecordWorkerResp) {
     option (w17.db.method) = {
+      ops: {
+        name: "relay"
+        dql:
+          "UPDATE @module.Relay SET id = id "
+          "WHERE id = :relay_id AND removed_at IS NULL "
+          "RETURNING id AS id"
+        on_empty: {
+          code:       ON_EMPTY_INVALID_ARGUMENT
+          error_code: "RELAY_ENDED"
+          field:      "relay_id"
+          message:    "No live relay {relay_id} is registered: it was never registered, or it was deleted. Its workers are not recorded."
+        }
+      }
       ops: {
         name: "main"
         dql:
           "UPSERT INTO @module.Worker "
           "SET cert_fingerprint = :cert_fingerprint, name = :name, "
-          "    device_id = :device_id, relay_id = :relay_id, state = 1 "
-          "ON CONFLICT (cert_fingerprint) DO UPDATE SET relay_id = :relay_id"
+          "    device_id = :device_id, relay_id = :relay.id, state = 1 "
+          "ON CONFLICT (cert_fingerprint) DO UPDATE SET relay_id = :relay.id"
       }
     };
   }

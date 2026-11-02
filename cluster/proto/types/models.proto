@@ -20,18 +20,39 @@ option go_package = "@project;@pkg";
 // This row is the WHITELIST. The control plane dials out, and it dials only to
 // a url that appears here with `enabled` set; a relay that is not in this table
 // cannot be reached by accident, and one that is disabled stops receiving work
-// without being deleted (its row, pin and observed state stay for when it is
+// without being ended (its row, pin and observed state stay for when it is
 // enabled again).
+//
+// A relay is never deleted. DeleteRelay ENDS it: it stamps removed_at and
+// moves ended_key from '' to the row's own id, and every reader — the lists,
+// GetRelay, placement, reservations, the ban delivery, the worker sweep, the
+// admin pages — reads live relays only, so an ended relay is never dialled
+// again. The row keeps its name, url, pin and observed state as the record of
+// what was registered, and every Worker row that named it keeps naming it
+// (Worker.relay_id is a foreign key, ON DELETE RESTRICT).
+//
+// Registering the same relay again — the same name, url and pin — is a NEW
+// row, by the same plain INSERT, never a revival of the ended one: `name` is
+// unique together with ended_key, so the ended row frees its name and two live
+// relays still cannot share one. The mechanism the auth plugin's re-addable
+// tables use (see its Role.ended_key). Not a revival because the ended row is
+// history — reviving it would rewrite the end out of it — and because the id
+// is the relay's identity for everything that names it: a reservation handle
+// or a worker row naming the ended relay keeps resolving to the ended one, and
+// the next sweep files the relay's workers under the new id.
 message Relay {
-  option (w17.db.table) = {};
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "name" }, { name: "ended_key" }] } ]
+  };
 
   string id = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
 
   // Operator-facing label. This is what the backoffice list shows and what an
   // incident refers to, so it is a name and not a hostname: "eu-west-1",
-  // "spare-box". Unique, because two relays called the same thing make every
-  // later conversation about them ambiguous.
-  string name = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }];
+  // "spare-box". Unique among LIVE relays (the index over name and
+  // ended_key, above), because two relays called the same thing make every
+  // later conversation about them ambiguous; an ended relay frees its name.
+  string name = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
 
   // `host:port` of the relay's MANAGEMENT endpoint — the half this control
   // plane calls. Not the proxy endpoint the caller is handed; that one the
@@ -108,6 +129,18 @@ message Relay {
   // What went wrong on the last failed attempt, for the operator who is trying
   // to work out why a relay is not taking work. Cleared on success.
   string last_error = 8 [(w17.field) = { type: TEXT, blank: true }];
+
+  // removed_at — when DeleteRelay ended the relay. NULL = live. Every reader
+  // skips a row that has it; nothing writes it back to NULL.
+  google.protobuf.Timestamp removed_at = 9 [(w17.field) = { type: DATETIME, null: true }];
+
+  // ended_key — '' while the relay is live, the row's own id once it has
+  // ended. Part of the unique index over `name`: every live row shares '', so
+  // two live relays still collide on a name, and every ended row carries a
+  // value of its own, so it frees the name for a new registration. A full
+  // index rather than a partial `WHERE removed_at IS NULL` one, which not
+  // every dialect builds.
+  string ended_key = 10 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
 // WorkerState is where one worker stands with the operator.
@@ -180,7 +213,14 @@ message Worker {
   // Which relay reported it. A worker's certificate is valid at exactly one
   // relay (that relay's CA issued it), and an operator chasing "why is this
   // machine idle" needs to know which.
-  string relay_id = 6 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
+  //
+  // A foreign key to Relay (`fk: "@module.Relay"`, which staging expands to
+  // the activation's own table), ON DELETE RESTRICT (`deletion_rule: BLOCK`):
+  // a relay is ended, never deleted (see Relay), so the reference always
+  // resolves — to the ended row when the relay has ended — and a delete that
+  // would strand it is refused. RecordWorker files a worker only under a LIVE
+  // relay (see WorkerMutation.RecordWorker).
+  string relay_id = 6 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Relay", deletion_rule: BLOCK, index: true }];
 
   google.protobuf.Timestamp first_seen_at = 7
       [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];

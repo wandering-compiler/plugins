@@ -40,6 +40,10 @@ func lockIDOfCall(ctx context.Context, l *acllock.Lock, ownService, method strin
 			svc, m = strings.TrimPrefix(full[:i], "/"), full[i+1:]
 		}
 	}
+	return lockIDOfServiceMethod(l, svc, m)
+}
+
+func lockIDOfServiceMethod(l *acllock.Lock, svc, m string) (int, bool) {
 	dot := strings.LastIndex(svc, ".")
 	if dot < 0 {
 		return 0, false
