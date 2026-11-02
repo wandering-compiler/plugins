@@ -90,6 +90,12 @@ message ReconciliationResp {
 }
 
 service MarketingMutation {
+  // Every rpc here is brevo's, and so is every table it reads or writes
+  // (types/models.proto): without the feature the whole file drops. Left
+  // untagged, the emptied service kept the file — and its import of the
+  // models file the feature filter had dropped, which no activation without
+  // brevo could compile.
+  option (w17.contrib.plugin_feature_svc) = "brevo";
   // RecordSentEvent — remember a record as sent, AFTER the tool accepted
   // it: recorded first, a failed send would lose the event for good. A
   // UNIQUE_VIOLATION is a record a concurrent replica recorded too, which is
