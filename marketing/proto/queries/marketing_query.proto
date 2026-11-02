@@ -25,7 +25,7 @@ message ListSentEventsResp {
 message ContactRow {
   option (w17.contrib.plugin_feature) = "brevo";
   string                    user_id         = 1;
-  string                    email           = 2;
+  string                    email           = 2 [(w17.field) = { null: true }];
   bool                      consent         = 3;
   google.protobuf.Timestamp consent_at      = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp unsubscribed_at = 5 [(w17.field) = { type: DATETIME, null: true }];
@@ -59,6 +59,12 @@ message GetReconciliationResp {
 }
 
 service MarketingQuery {
+  // Every rpc here is brevo's, and so is every table it reads or writes
+  // (types/models.proto): without the feature the whole file drops. Left
+  // untagged, the emptied service kept the file — and its import of the
+  // models file the feature filter had dropped, which no activation without
+  // brevo could compile.
+  option (w17.contrib.plugin_feature_svc) = "brevo";
   // ListSentEvents — which of these record ids were sent already: the
   // consumer skips them on a redelivered batch. Gated brevo.
   rpc ListSentEvents(ListSentEventsReq) returns (ListSentEventsResp) {

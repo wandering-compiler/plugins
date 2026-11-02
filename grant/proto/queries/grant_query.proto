@@ -29,7 +29,7 @@ message EnvelopeRow {
   string default_language = 13;
   string operated_by      = 14;
   google.protobuf.Timestamp proposed_at = 15;
-  google.protobuf.Timestamp decided_at = 16;
+  google.protobuf.Timestamp decided_at = 16 [(w17.field) = { null: true }];
   string decision_note    = 17;
 }
 

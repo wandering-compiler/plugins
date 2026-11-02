@@ -650,8 +650,8 @@ message ClaimPendingSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string email         = 1;
   string password_hash = 2 [(w17.field) = { blank: true, sensitive: true }];
-  string tenant_id     = 3 [(w17.contrib.plugin_feature_field) = "tenant_scope"];
-  string join_org_id   = 4 [(w17.contrib.plugin_feature_field) = "org_signup"];
+  string tenant_id     = 3 [(w17.field) = { null: true }, (w17.contrib.plugin_feature_field) = "tenant_scope"];
+  string join_org_id   = 4 [(w17.field) = { null: true }, (w17.contrib.plugin_feature_field) = "org_signup"];
   string join_kind     = 5 [(w17.contrib.plugin_feature_field) = "org_signup"];
   string join_role     = 6 [(w17.contrib.plugin_feature_field) = "org_signup"];
 }
@@ -1809,7 +1809,7 @@ message ConsumeOrgInviteByTokenResp {
   string role   = 2;
   // NULL/empty = the invitation was OPEN. This is the fact the acceptance cannot
   // ask for afterwards, and the only one that licenses a derived email proof.
-  string email  = 3;
+  string email  = 3 [(w17.field) = { null: true }];
   // Handed back out of the SAME statement that spends the invitation, which is the
   // half a side table joined on the e-mail cannot give: the consumer's pairing and
   // the acceptance either both happen or neither does.

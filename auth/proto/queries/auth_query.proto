@@ -627,8 +627,8 @@ message ApiTokenInfo {
   option (w17.contrib.plugin_feature) = "api_token";
   string                    id           = 1 [(w17.field) = { type: UUID }];
   string                    name         = 2;
-  google.protobuf.Timestamp last_used_at = 3;
-  google.protobuf.Timestamp expires_at   = 4;
+  google.protobuf.Timestamp last_used_at = 3 [(w17.field) = { null: true }];
+  google.protobuf.Timestamp expires_at   = 4 [(w17.field) = { null: true }];
   google.protobuf.Timestamp created_at   = 5;
   // NULL = live.
   google.protobuf.Timestamp revoked_at   = 6 [(w17.field) = { type: DATETIME, null: true }];
@@ -870,7 +870,12 @@ message GetProviderByNameResp {
   OAuthProviderRow provider = 1;
   // The decrypted client secret (OAuthProvider.secret) — top-level because an
   // encrypted column decrypts only into a single-segment target.
-  string secret = 2 [(w17.field) = { blank: true, sensitive: true }];
+  // NULL for a provider still on the legacy plaintext `client_secret`
+  // (rc.19 and earlier): declared so the absence is not mistaken for a
+  // secret. loadEnabledProvider moves the legacy value here, and refuses a
+  // provider that has neither — an empty HMAC key would make the state
+  // token forgeable.
+  string secret = 2 [(w17.field) = { null: true, blank: true, sensitive: true }];
 }
 
 message GetOAuthIdentityReq {
@@ -910,7 +915,7 @@ message GetUserMarketingConsentReq {
 message GetUserMarketingConsentResp {
   option (w17.contrib.plugin_feature) = "marketing_consent";
   bool                      consent    = 1;
-  google.protobuf.Timestamp decided_at = 2;
+  google.protobuf.Timestamp decided_at = 2 [(w17.field) = { null: true }];
 }
 
 message GetTotpSecretReq {
@@ -941,7 +946,11 @@ message GetTotpSecretResp {
   TotpSecretRow secret = 1;
   // The decrypted seed — top-level because an encrypted column decrypts only
   // into a single-segment target (`secret.seed` would carry ciphertext).
-  string seed = 2 [(w17.field) = { blank: true, sensitive: true }];
+  // NULL for an authenticator enrolled by rc.19 or earlier, which holds only
+  // the legacy secretbox `secret`: seedOf opens and moves that one, and
+  // refuses an enrolment holding neither — an absent seed is never verified
+  // against as an empty one.
+  string seed = 2 [(w17.field) = { null: true, blank: true, sensitive: true }];
 }
 
 message CountRecoveryCodesReq {
@@ -1011,7 +1020,7 @@ message GetDeviceTrustRevokedAtReq {
   string user_id = 1;
 }
 message GetDeviceTrustRevokedAtResp {
-  google.protobuf.Timestamp device_trust_revoked_at = 1;
+  google.protobuf.Timestamp device_trust_revoked_at = 1 [(w17.field) = { null: true }];
 }
 
 message ListUserDevicesReq {
@@ -1616,7 +1625,7 @@ message GetPendingOrgInviteByTokenResp {
   string role   = 2;
   // Empty = the invitation is OPEN — it names no address, and accepting it
   // therefore derives nothing about the one the registrant holds.
-  string email  = 3;
+  string email  = 3 [(w17.field) = { null: true }];
   // So a caller can look at what is pinned BEFORE spending the invitation. Opaque
   // here as everywhere — see OrgInvite.metadata.
   string metadata = 4;
@@ -1935,7 +1944,7 @@ message ProductRoleDefRow {
   option (w17.contrib.plugin_feature) = "product_roles";
   string id          = 1;
   // org_id — '' for the backoffice's.
-  string org_id      = 2;
+  string org_id      = 2 [(w17.field) = { null: true }];
   string key         = 3;
   string name        = 4;
   bool   org_scoped  = 5;
@@ -1972,10 +1981,10 @@ message ProductRoleGrantRow {
   string id         = 1;
   string user_id    = 2;
   // org_id — '' for a realm-wide grant.
-  string org_id     = 3;
+  string org_id     = 3 [(w17.field) = { null: true }];
   string product    = 4;
   string role_key   = 5;
-  string granted_by = 6;
+  string granted_by = 6 [(w17.field) = { null: true }];
   google.protobuf.Timestamp granted_at = 7;
 }
 message ListOrgProductRoleGrantRowsReq {

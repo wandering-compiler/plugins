@@ -634,6 +634,12 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 	case pb.Payment_SUCCEEDED, pb.Payment_REFUNDED:
 	case pb.Payment_AMOUNT_MISMATCH:
 		took, currency = locked.GetReceivedAmount(), locked.GetReceivedCurrency()
+		// Both columns are NULL-able (they describe only a mismatch), so a
+		// row held at AMOUNT_MISMATCH without them is a corrupt record, and
+		// judging a refund against an empty amount would be a guess.
+		if took == "" || currency == "" {
+			return status.Errorf(codes.FailedPrecondition, "payment %s is held at AMOUNT_MISMATCH but records no received amount; it cannot be refunded until it is reconciled", payment.GetId())
+		}
 	case pb.Payment_FAILED, pb.Payment_CANCELED:
 		return status.Errorf(codes.FailedPrecondition, "payment %s did not succeed (%s); there is nothing to refund", payment.GetId(), st)
 	default:
