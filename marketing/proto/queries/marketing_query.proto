@@ -25,7 +25,7 @@ message ListSentEventsResp {
 message ContactRow {
   option (w17.contrib.plugin_feature) = "brevo";
   string                    user_id         = 1;
-  string                    email           = 2;
+  string                    email           = 2 [(w17.field) = { null: true }];
   bool                      consent         = 3;
   google.protobuf.Timestamp consent_at      = 4 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp unsubscribed_at = 5 [(w17.field) = { type: DATETIME, null: true }];

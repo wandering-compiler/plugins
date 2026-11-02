@@ -100,6 +100,11 @@ check-stage: plugins-exist
 # every one (`kind=unfilled-response`), the plugin's included, so this reads
 # the map of the project it just generated — with every feature on, and with
 # the defaults a consumer gets by doing nothing.
+#
+# The same map lists a response field a query can fill with SQL NULL although
+# the field is not declared nullable (`kind=nullable-projection` — platform
+# docs/decisions/a-projection-says-when-it-can-be-null.md): warned now,
+# refused in the next release, and refused here already.
 check-dev: plugins-exist
 	@for p in $(PLUGINS); do \
 		for f in --all-features --features=; do \
@@ -107,10 +112,15 @@ check-dev: plugins-exist
 			out="$$(mktemp -d)"; \
 			$(W17CTL) plugin dev "$$p" "$$f" --out "$$out" || { rm -rf "$$out"; exit 1; }; \
 			unfilled="$$(grep -h 'kind=unfilled-response' "$$out"/w17/map/*.map 2>/dev/null)"; \
+			nullable="$$(grep -h 'kind=nullable-projection' "$$out"/w17/map/*.map 2>/dev/null)"; \
 			rm -rf "$$out"; \
 			if [ -n "$$unfilled" ]; then \
 				echo "!! $$p ($$f): queries leave fields of their response unfilled — fill them in the statement, or answer with a message holding only what it fills:"; \
 				echo "$$unfilled"; exit 1; \
+			fi; \
+			if [ -n "$$nullable" ]; then \
+				echo "!! $$p ($$f): queries can fill response fields with SQL NULL that are not declared nullable — declare them (w17.field).null, or make the value non-NULL in the statement:"; \
+				echo "$$nullable"; exit 1; \
 			fi; \
 		done; \
 	done

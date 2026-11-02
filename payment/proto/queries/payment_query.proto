@@ -54,8 +54,11 @@ message LockPaymentForRefundResp {
   string id                = 1;
   string amount            = 2;
   int32  status            = 3;
-  string received_amount   = 4;
-  string received_currency = 5;
+  // What the provider took, recorded only for a payment held at
+  // AMOUNT_MISMATCH — NULL otherwise. refundAllowed refuses a mismatched
+  // payment that records none rather than judge a refund against "".
+  string received_amount   = 4 [(w17.field) = { null: true }];
+  string received_currency = 5 [(w17.field) = { null: true }];
 }
 
 // LockCustomerForSubscribe — the customer row, locked (see the rpc).
