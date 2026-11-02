@@ -149,7 +149,7 @@ func (m *cliMock) session(tokenID, userID string, expiresAt *time.Time) {
 
 func (m *cliMock) GetRegisteredRedirect(ctx context.Context, in *pb.GetRegisteredRedirectReq, _ ...grpc.CallOption) (*pb.GetRegisteredRedirectResp, error) {
 	if m.registered[[2]string{in.GetClientId(), in.GetRedirectUri()}] {
-		return &pb.GetRegisteredRedirectResp{Client: &pb.AuthClient{
+		return &pb.GetRegisteredRedirectResp{Client: &pb.AuthClientRow{
 			ClientId: in.GetClientId(), RedirectUri: in.GetRedirectUri(), Enabled: true,
 		}}, nil
 	}
@@ -165,7 +165,7 @@ func (m *cliMock) register(clientID, redirect string) {
 
 func (m *cliMock) RegisterAuthClient(ctx context.Context, in *pb.RegisterAuthClientReq, _ ...grpc.CallOption) (*pb.RegisterAuthClientResp, error) {
 	m.register(in.GetClientId(), in.GetRedirectUri())
-	return &pb.RegisterAuthClientResp{Client: &pb.AuthClient{
+	return &pb.RegisterAuthClientResp{Client: &pb.AuthClientRow{
 		Id: "cl-1", ClientId: in.GetClientId(), Name: in.GetName(),
 		RedirectUri: in.GetRedirectUri(), Enabled: true,
 	}}, nil
@@ -625,7 +625,7 @@ type looseRegistryMock struct{ *cliMock }
 func (looseRegistryMock) GetRegisteredRedirect(_ context.Context, in *pb.GetRegisteredRedirectReq, _ ...grpc.CallOption) (*pb.GetRegisteredRedirectResp, error) {
 	// A query edited to match by prefix would answer like this: a row comes
 	// back, and it is not the row that was asked for.
-	return &pb.GetRegisteredRedirectResp{Client: &pb.AuthClient{
+	return &pb.GetRegisteredRedirectResp{Client: &pb.AuthClientRow{
 		ClientId: in.GetClientId(), RedirectUri: "https://app.acme.example/auth/callback", Enabled: true,
 	}}, nil
 }

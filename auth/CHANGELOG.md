@@ -1,5 +1,91 @@
 # auth — changelog
 
+## 0.1.0-rc.54
+
+### Two invitation reads now get the column they check
+
+- `email_proof_required = derived` accepts an account whose address an earlier bound invitation derived. The gate reads `User.email_proof` off `AuthQuery.GetUserById`, which never selected it, so every account read as UNPROVEN (the enum's zero, a real value here) and that floor refused exactly the accounts it exists to accept. `GetUserById` now projects it (`email_verification`).
+- `AuthService.InviteToOrg` answers with the invitation's `metadata` echoed from the written row, and `AuthMutation.CreateOrgInvite` did not return the column, so the echo was always empty. It is returned now.
+
+### Every query fills the message it answers with (read first)
+
+A generated query now fills every field of its response. In this compiler
+release, one that does not is a codegen warning, and in the next it is an
+error. Each of auth's queries now satisfies that.
+
+- The User lookups and creates (`GetUserByEmail`, `GetUserById`,
+  `GetUserByToken*`, `GetTokenWithType`, `GetOrgMemberAccount`,
+  `ListOrgMemberAccounts`, `ListRealmMachineAccounts`, `CreateUser`,
+  `CreateBotUser`) select every User column, each under its feature. A gate
+  handed one of these Users can no longer read a column that was never
+  selected.
+- The other writes return their whole row, and the reads select their whole
+  row. This covers tokens, roles, memberships, organizations, invitations,
+  devices, clients, challenges and pending sign-ups.
+- Where a column exists only with a feature and the field always does, the
+  statement says what it holds without that feature (`?unless`). That is
+  `NULL` for a superadmin row's `disabled_at` and `erased_at`, `FALSE` for a
+  token's `bearer`, and empty for its OAuth fields. `ListOrgSuperadmins`
+  answers `team_id = ''` for a grant held directly, and `ListUserOrgs`
+  answers the deprecated `owner` as `FALSE`.
+- **Response types narrowed:**
+  - `AuthQuery.ListUsers`, `GetUser` and `ListBotAccounts` answer
+    **`UserAccount`**, which is every User column but `password_hash`. They
+    feed the admin pages, and a hash never leaves storage into an admin view.
+  - `AuthQuery.ListAuthClients` and `AuthService.ListClients` answer
+    **`AuthClientRow`**, which has no `client_secret`.
+  - `AuthQuery.GetTotpSecret` answers a **`TotpSecretRow`** beside the
+    decrypted seed.
+  - `AuthMutation.CreateTotpSecret` answers a **`TotpSecretCreated`**.
+
+  On the wire these carry the same field names, minus the secret.
+
+## 0.1.0-rc.53
+
+### Named product plans (named_product_plans, off by default)
+
+A plan across your products can now be defined once in the backoffice and
+given to organizations: a tariff such as "basic" or "pro". Its lines are a
+product's role or a whole product, the same as an organization's own plan
+lines. An organization on a plan holds its plan's lines and its own lines
+together: its own add to the plan and are never replaced by it. Editing a
+plan changes every organization on it on its next request.
+
+- `GET` / `POST /auth/admin/product-plans`, `DELETE /auth/admin/product-plans/{plan_id}`,
+  `PUT /auth/admin/product-plans/{plan_id}/lines`, `POST …/lines/remove`
+- `PUT /auth/admin/orgs/{org_id}/product-plan-assignment` with `{"plan_id": "…"}`
+  (an empty `plan_id` takes the organization off its plan)
+- `GET /auth/admin/orgs/{org_id}/product-plan` and `GET /auth/orgs/{org}/product-plan`
+  now also return `plan_id`, `plan_name` and `plan_lines`.
+
+Enable `named_product_plans` (it requires `product_plans`) and regenerate. The
+three new tables need a migration. A plan that organizations are on cannot be
+deleted (`PRODUCT_PLAN_IN_USE`); move the organizations to another plan first.
+
+### A request that names no organization says what it set aside
+
+A request that could have named an organization (the `W17-Org` selector is accepted there) and named none — a member of several, or of one where `org_from_sole_membership` is off — still holds only the realm-wide roles. `Authenticate` now also answers, as the scope `org_permissions`, the permission ids of the roles it set aside (the roles held inside organizations; `*` for a wildcard one), and to a product's gateway the product's permission codes held there, as `org_product_roles` (the identity's own ids are dropped from a product's answer). The gateway reads them when a permission is missing and answers `FAILED_PRECONDITION` / `ORGANIZATION_REQUIRED` — "name the organization (W17-Org)" — instead of `PERMISSION_DENIED` / `MISSING_PERMISSION`, which read the same as having no access at all. Nothing is ever selected for the caller, and nothing about any organization is said: only what the caller holds. A gateway built from an SDK before the change ignores the scopes. On an audience admitting only some membership kinds, only the roles held in an admitted organization count. Listing one's own organizations (`ListMyOrgs`) needs none: a request naming no organization keeps it from a role held inside one, so a client asking which organization to name is never told to name one. An organization's packages or plan are not applied to the hint, so a request that names an organization may still be refused as `MISSING_PERMISSION`; a permission held only through a team's roles is not in it.
+
+### An organization the caller cannot act in is a 403, not a 401
+
+A request naming an organization the caller is not a member of — or one that does not exist; the two answer byte for byte the same — used to be refused `UNAUTHENTICATED` / `ORG_NOT_MEMBER`, a 401, which a client reads as "the session is gone" and signs the person out. The credential was accepted, so it now answers `PERMISSION_DENIED` / `ORG_NOT_MEMBER` with the same message: 403 on REST, SSE and WebSocket, `PERMISSION_DENIED` over gRPC, and the matching refusal over MCP. `UNAUTHENTICATED` stays for credential problems only. The same holds for an OAuth access token whose organization the user has since left. A client that branched on 401 + `ORG_NOT_MEMBER` branches on 403 + `ORG_NOT_MEMBER`; the code is unchanged.
+
+### A role states what it grants (README)
+
+The README now says what the compiler requires of the roles this plugin seeds
+and hands out. A `(w17.acl_roles)` role with no `include`, no
+`all_permissions` and no `no_permissions` is refused. It used to be read as
+every permission in the catalogue, so a customer invited onto it held all of
+them. Declare an invitation's customer role `no_permissions: true`, and a
+role meant to grant everything `include: ["*"]`. A sign-up role (`first_user` / `default`) that
+grants through a wildcard or `all_permissions` needs
+`all_permissions_at_signup: true`; one listing its methods does not. The plugin itself does not change, but the
+fields need a w17 platform whose compiler has them.
+
+### A withdrawal made in the marketing tool reaches the user's consent
+
+`AuthService.WithdrawMarketingConsent` (`marketing_consent`) records that the user withdrew their marketing consent outside the project — they unsubscribed in the marketing tool at `withdrawn_at` — and announces it as `MarketingConsentChanged`, the event of their own `SetMarketingConsent`. It is one conditional statement — `AuthMutation.SetUserMarketingConsent`, the statement of the user's own decision, made conditional by `withdrawn_at`, so the event keeps its one emit site and auth generates with every feature on: it writes false at `withdrawn_at` only over a yes decided before it, or no decision, so a consent the user gives meanwhile, a newer one, or a withdrawal already on record stands — a late or redelivered unsubscribe cancels nothing. It can only withdraw (a consent is the user's to give). It names the user, so it is marked `(w17.contrib.plugin_internal_rpc)`: codegen refuses it on every surface, and only the domain's own code calls it — the business method a project binds to the marketing plugin's `consent_withdrawn` hook.
+
 ## 0.1.0-rc.52
 
 ### The fakeidp sandbox builds in the project

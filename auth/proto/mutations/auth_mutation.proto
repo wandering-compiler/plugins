@@ -311,9 +311,20 @@ message CreateTotpSecretReq {
   // thumbprint of the device that caused it, the event's device_id.
   string thumbprint = 4;
 }
+// TotpSecretCreated — what enrolment reports: the new authenticator's
+// identity and creation time (TotpEnrolled carries them). Its own message,
+// because a generated query fills every field of its response, and the seed
+// just written is not one this method hands back.
+message TotpSecretCreated {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id      = 1 [(w17.field) = { type: UUID }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+  google.protobuf.Timestamp confirmed_at = 3 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at   = 4 [(w17.field) = { type: DATETIME }];
+}
 message CreateTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
-  UserTotpSecret secret = 1;
+  TotpSecretCreated secret = 1;
 }
 
 message ConfirmTotpSecretReq {
@@ -1433,7 +1444,9 @@ message RegisterAuthClientReq {
 }
 message RegisterAuthClientResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  AuthClient client = 1;
+  // AuthClientRow, not AuthClient: the stored secret hash has one reader
+  // (GetAuthClientSecret), and RegisterClient hands this row to its caller.
+  AuthClientRow client = 1;
 }
 
 message RotateAuthClientSecretReq {
@@ -2461,7 +2474,20 @@ service AuthMutation {
           "?feature(tenant_scope) tenant_id = :tenant_id "
           "RETURNING id AS user.id, "
           "          email AS user.email, "
-          "          created_at AS user.created_at"
+          "          created_at AS user.created_at, "
+          "          password_hash AS user.password_hash, "
+          "          ?feature(email_verification) email_verified_at AS user.email_verified_at, "
+          "          ?feature(email_verification) email_proof AS user.email_proof, "
+          "          ?feature(tenant_scope) tenant_id AS user.tenant_id, "
+          "          ?feature(user_admin) disabled_at AS user.disabled_at, "
+          "          ?feature(service_account) kind AS user.kind, "
+          "          device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "          ?feature(user_admin) erased_at AS user.erased_at, "
+          "          ?feature(marketing_consent) marketing_consent AS user.marketing_consent, "
+          "          ?feature(marketing_consent) marketing_consent_at AS user.marketing_consent_at, "
+          "          ?feature(bot_token_guard) allowed_cidrs AS user.allowed_cidrs, "
+          "          sign_in_failures AS user.sign_in_failures, "
+          "          sign_in_window_at AS user.sign_in_window_at"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "service_account";
@@ -2490,7 +2516,19 @@ service AuthMutation {
           "RETURNING id AS user.id, "
           "          email AS user.email, "
           "          password_hash AS user.password_hash, "
-          "          created_at AS user.created_at"
+          "          created_at AS user.created_at, "
+          "          ?feature(email_verification) email_verified_at AS user.email_verified_at, "
+          "          ?feature(email_verification) email_proof AS user.email_proof, "
+          "          ?feature(tenant_scope) tenant_id AS user.tenant_id, "
+          "          ?feature(user_admin) disabled_at AS user.disabled_at, "
+          "          ?feature(service_account) kind AS user.kind, "
+          "          device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "          ?feature(user_admin) erased_at AS user.erased_at, "
+          "          ?feature(marketing_consent) marketing_consent AS user.marketing_consent, "
+          "          ?feature(marketing_consent) marketing_consent_at AS user.marketing_consent_at, "
+          "          ?feature(bot_token_guard) allowed_cidrs AS user.allowed_cidrs, "
+          "          sign_in_failures AS user.sign_in_failures, "
+          "          sign_in_window_at AS user.sign_in_window_at"
       }
     };
     option (w17.event_emit) = {
@@ -2531,7 +2569,26 @@ service AuthMutation {
           "          device_id AS token.device_id, "
           "          public_computer AS token.public_computer, "
           "          approved_by_device_id AS token.approved_by_device_id, "
-          "          created_at AS token.created_at"
+          "          created_at AS token.created_at, "
+          "          token AS token.token, "
+          "          expires_at AS token.expires_at, "
+          "          ?feature(api_token) token_type AS token.token_type, "
+          "          ?feature(api_token) name AS token.name, "
+          "          ?feature(api_token) last_used_at AS token.last_used_at, "
+          "          mcp_only AS token.mcp_only, "
+          "          token_hash AS token.token_hash, "
+          "          revoked_at AS token.revoked_at, "
+          "          revoked_by AS token.revoked_by, "
+          "          revoke_reason AS token.revoke_reason, "
+          "          ?feature(service_account) bearer AS token.bearer, "
+          "          ?feature(step_up) stepped_up_at AS token.stepped_up_at, "
+          "          ?feature(step_up) step_up_attempts AS token.step_up_attempts, "
+          "          ?feature(step_up) step_up_locked_until AS token.step_up_locked_until, "
+          "          ?feature(oauth_server) oauth_grant_id AS token.oauth_grant_id, "
+          "          ?feature(oauth_server) resource AS token.resource, "
+          "          ?feature(oauth_server) oauth_org_id AS token.oauth_org_id, "
+          "          ?feature(step_up_code) step_up_code_hash AS token.step_up_code_hash, "
+          "          ?feature(step_up_code) step_up_code_sent_at AS token.step_up_code_sent_at"
       }
     };
     option (w17.event_emit) = {
@@ -2737,7 +2794,24 @@ service AuthMutation {
           "          created_at AS token.created_at, "
           "          expires_at AS token.expires_at, "
           "          device_id AS token.device_id, "
-          "          approved_by_device_id AS token.approved_by_device_id"
+          "          approved_by_device_id AS token.approved_by_device_id, "
+          "          token AS token.token, "
+          "          ?feature(api_token) last_used_at AS token.last_used_at, "
+          "          mcp_only AS token.mcp_only, "
+          "          token_hash AS token.token_hash, "
+          "          revoked_at AS token.revoked_at, "
+          "          revoked_by AS token.revoked_by, "
+          "          revoke_reason AS token.revoke_reason, "
+          "          public_computer AS token.public_computer, "
+          "          ?feature(service_account) bearer AS token.bearer, "
+          "          ?feature(step_up) stepped_up_at AS token.stepped_up_at, "
+          "          ?feature(step_up) step_up_attempts AS token.step_up_attempts, "
+          "          ?feature(step_up) step_up_locked_until AS token.step_up_locked_until, "
+          "          ?feature(oauth_server) oauth_grant_id AS token.oauth_grant_id, "
+          "          ?feature(oauth_server) resource AS token.resource, "
+          "          ?feature(oauth_server) oauth_org_id AS token.oauth_org_id, "
+          "          ?feature(step_up_code) step_up_code_hash AS token.step_up_code_hash, "
+          "          ?feature(step_up_code) step_up_code_sent_at AS token.step_up_code_sent_at"
       }
     };
     option (w17.event_emit) = {
@@ -3192,7 +3266,10 @@ service AuthMutation {
           "          user_id AS challenge.user_id, "
           "          code_hash AS challenge.code_hash, "
           "          consumed_at AS challenge.consumed_at, "
-          "          created_at AS challenge.created_at"
+          "          created_at AS challenge.created_at, "
+          "          attempts AS challenge.attempts, "
+          "          thumbprint AS challenge.thumbprint, "
+          "          public_computer AS challenge.public_computer"
       }
     };
     option (w17.event_emit) = {
@@ -3233,7 +3310,16 @@ service AuthMutation {
           "RETURNING id AS pending.id, "
           "          email AS pending.email, "
           "          expires_at AS pending.expires_at, "
-          "          created_at AS pending.created_at"
+          "          created_at AS pending.created_at, "
+          "          password_hash AS pending.password_hash, "
+          "          code_hash AS pending.code_hash, "
+          "          attempts AS pending.attempts, "
+          "          ?feature(tenant_scope) tenant_id AS pending.tenant_id, "
+          "          claimed_at AS pending.claimed_at, "
+          "          superseded_at AS pending.superseded_at, "
+          "          ?feature(org_signup) join_org_id AS pending.join_org_id, "
+          "          ?feature(org_signup) join_kind AS pending.join_kind, "
+          "          ?feature(org_signup) join_role AS pending.join_role"
       }
     };
     option (w17.event_emit) = {
@@ -3500,7 +3586,9 @@ service AuthMutation {
           "          last_seen_at AS device.last_seen_at, "
           "          created_at AS device.created_at, "
           "          revoked_at AS device.revoked_at, "
-          "          api_key AS device.api_key"
+          "          api_key AS device.api_key, "
+          "          sign_in_failures AS device.sign_in_failures, "
+          "          sign_in_window_at AS device.sign_in_window_at"
       }
     };
   }
@@ -3694,7 +3782,17 @@ service AuthMutation {
           "RETURNING id AS role.id, "
           "          name AS role.name, "
           "          description AS role.description, "
-          "          created_at AS role.created_at"
+          "          created_at AS role.created_at, "
+          "          ?feature(api_token) token_type AS role.token_type, "
+          "          all_permissions AS role.all_permissions, "
+          "          assign_first_user AS role.assign_first_user, "
+          "          assign_default AS role.assign_default, "
+          "          preset_key AS role.preset_key, "
+          "          display_name AS role.display_name, "
+          "          ?feature(org_membership) org_scoped AS role.org_scoped, "
+          "          deleted_at AS role.deleted_at, "
+          "          ended_key AS role.ended_key, "
+          "          ?feature(org_roles) org_id AS role.org_id"
       }
     };
     option (w17.event_emit) = {
@@ -4104,7 +4202,10 @@ service AuthMutation {
           "          user_id AS user_role.user_id, "
           "          role_id AS user_role.role_id, "
           "          ?feature(org_membership) org_id AS user_role.org_id, "
-          "          created_at AS user_role.created_at"
+          "          created_at AS user_role.created_at, "
+          "          revoked_at AS user_role.revoked_at, "
+          "          revoked_by AS user_role.revoked_by, "
+          "          ended_key AS user_role.ended_key"
       }
     };
     option (w17.event_emit) = {
@@ -4210,7 +4311,9 @@ service AuthMutation {
           "RETURNING id AS role_permission.id, "
           "          role_id AS role_permission.role_id, "
           "          permission_id AS role_permission.permission_id, "
-          "          created_at AS role_permission.created_at"
+          "          created_at AS role_permission.created_at, "
+          "          removed_at AS role_permission.removed_at, "
+          "          removed_by AS role_permission.removed_by"
       }
     };
     option (w17.event_emit) = {
@@ -4700,7 +4803,8 @@ service AuthMutation {
           "          name AS client.name, "
           "          redirect_uri AS client.redirect_uri, "
           "          enabled AS client.enabled, "
-          "          created_at AS client.created_at"
+          "          created_at AS client.created_at, "
+          "          revoked_at AS client.revoked_at"
       }
     };
   }
@@ -4833,7 +4937,11 @@ service AuthMutation {
           "          code_challenge AS code.code_challenge, "
           "          expires_at AS code.expires_at, "
           "          consumed_at AS code.consumed_at, "
-          "          created_at AS code.created_at"
+          "          created_at AS code.created_at, "
+          "          redirect_uri AS code.redirect_uri, "
+          "          client_id AS code.client_id, "
+          "          session_expires_at AS code.session_expires_at, "
+          "          approved_by_device_id AS code.approved_by_device_id"
       }
     };
   }
@@ -4887,7 +4995,9 @@ service AuthMutation {
           "          slug AS organization.slug, "
           "          name AS organization.name, "
           "          kind AS organization.kind, "
-          "          created_at AS organization.created_at"
+          "          created_at AS organization.created_at, "
+          "          deleted_at AS organization.deleted_at, "
+          "          ended_key AS organization.ended_key"
       }
     };
     option (w17.event_emit) = {
@@ -4926,7 +5036,10 @@ service AuthMutation {
           "          org_id AS membership.org_id, "
           "          role AS membership.role, "
           "          ?feature(membership_kinds) kind AS membership.kind, "
-          "          created_at AS membership.created_at"
+          "          created_at AS membership.created_at, "
+          "          removed_at AS membership.removed_at, "
+          "          removed_by AS membership.removed_by, "
+          "          ended_key AS membership.ended_key"
       }
     };
     option (w17.event_emit) = {
@@ -5351,7 +5464,16 @@ service AuthMutation {
           "          expires_at AS invite.expires_at, "
           "          accepted_at AS invite.accepted_at, "
           "          created_at AS invite.created_at, "
-          "          ?feature(product_roles) product_roles AS invite.product_roles"
+          // metadata: InviteToOrg echoes it "from the WRITTEN row" so the
+          // caller sees what was stored. Not returned, the echo was always
+          // empty.
+          "          metadata AS invite.metadata, "
+          "          ?feature(product_roles) product_roles AS invite.product_roles, "
+          "          token_hash AS invite.token_hash, "
+          "          role_snapshot AS invite.role_snapshot, "
+          "          closed_at AS invite.closed_at, "
+          "          closed_by AS invite.closed_by, "
+          "          ?feature(membership_kinds) kind AS invite.kind"
       }
     };
     option (w17.event_emit) = {

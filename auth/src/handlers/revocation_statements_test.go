@@ -404,7 +404,7 @@ type clientRegistry struct {
 func (c *clientRegistry) GetRegisteredRedirect(_ context.Context, in *pb.GetRegisteredRedirectReq, _ ...grpc.CallOption) (*pb.GetRegisteredRedirectResp, error) {
 	for _, r := range c.rows {
 		if r.clientID == in.GetClientId() && r.redirect == in.GetRedirectUri() && r.enabled && r.revokedAt == nil {
-			return &pb.GetRegisteredRedirectResp{Client: &pb.AuthClient{Id: r.id, ClientId: r.clientID, RedirectUri: r.redirect, Enabled: true}}, nil
+			return &pb.GetRegisteredRedirectResp{Client: &pb.AuthClientRow{Id: r.id, ClientId: r.clientID, RedirectUri: r.redirect, Enabled: true}}, nil
 		}
 	}
 	return nil, status.Error(codes.NotFound, "no rows")

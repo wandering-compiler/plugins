@@ -1634,6 +1634,22 @@ message AuthClient {
   google.protobuf.Timestamp revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
 }
 
+// AuthClientRow — a registered client as the registry answers it: every
+// AuthClient column but `client_secret`, the hash that has one reader
+// (GetAuthClientSecret) and that neither ListClients nor RegisterClient may
+// hand to its caller. A generated query fills every field of its
+// response, so the list answers with a message that has no secret.
+message AuthClientRow {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id           = 1 [(w17.field) = { type: UUID }];
+  string client_id    = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string name         = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string redirect_uri = 4 [(w17.field) = { type: URL, max_len: 2048 }];
+  bool   enabled      = 5;
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+}
+
 // BootstrapClaim — the one row that says the bootstrap administrator has
 // been handed out (rbac).
 //

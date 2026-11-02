@@ -230,9 +230,10 @@ func TestRegisterClient_IssuesASecretAndStoresOnlyItsHash(t *testing.T) {
 	if !strings.HasPrefix(m.storedSecret, "$") {
 		t.Errorf("stored secret %q is not a PHC hash", m.storedSecret)
 	}
-	// And the stored row never carries it back out.
-	if resp.GetClient().GetClientSecret() != "" {
-		t.Error("the returned AuthClient carries the secret hash — the registry queries must not project it")
+	// And the stored row never carries it back out: the row the registration
+	// answers with has no field to carry it in.
+	if resp.GetClient().ProtoReflect().Descriptor().Fields().ByName("client_secret") != nil {
+		t.Error("the returned client row has a client_secret field — the stored hash could ride out on it")
 	}
 }
 
@@ -244,7 +245,7 @@ type registerMock struct {
 
 func (m *registerMock) RegisterAuthClient(ctx context.Context, in *pb.RegisterAuthClientReq, _ ...grpc.CallOption) (*pb.RegisterAuthClientResp, error) {
 	m.storedSecret = in.GetClientSecret()
-	return &pb.RegisterAuthClientResp{Client: &pb.AuthClient{
+	return &pb.RegisterAuthClientResp{Client: &pb.AuthClientRow{
 		ClientId:    in.GetClientId(),
 		RedirectUri: in.GetRedirectUri(),
 	}}, nil

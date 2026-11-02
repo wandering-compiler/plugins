@@ -90,8 +90,29 @@ check-stage: plugins-exist
 # every check here passed. check-stage now catches that one shape without a
 # console; this catches the rest. It asks the console (a w17ctl login, or
 # W17_TOKEN), and registers a project there for the run.
+#
+# It also refuses a query that leaves a field of its response unfilled. The
+# compiler warns on one now and refuses it in its next release (a generated
+# query fills every field of its response — platform
+# docs/decisions/a-query-fills-its-response.md), and its warning skips a
+# plugin's own files, since a consumer cannot edit them. The project map lists
+# every one (`kind=unfilled-response`), the plugin's included, so this reads
+# the map of the project it just generated — with every feature on, and with
+# the defaults a consumer gets by doing nothing.
 check-dev: plugins-exist
-	@for p in $(PLUGINS); do echo ">> plugin dev $$p --all-features"; $(W17CTL) plugin dev "$$p" --all-features || exit 1; done
+	@for p in $(PLUGINS); do \
+		for f in --all-features --features=; do \
+			echo ">> plugin dev $$p $$f"; \
+			out="$$(mktemp -d)"; \
+			$(W17CTL) plugin dev "$$p" "$$f" --out "$$out" || { rm -rf "$$out"; exit 1; }; \
+			unfilled="$$(grep -h 'kind=unfilled-response' "$$out"/w17/map/*.map 2>/dev/null)"; \
+			rm -rf "$$out"; \
+			if [ -n "$$unfilled" ]; then \
+				echo "!! $$p ($$f): queries leave fields of their response unfilled — fill them in the statement, or answer with a message holding only what it fills:"; \
+				echo "$$unfilled"; exit 1; \
+			fi; \
+		done; \
+	done
 
 # The `//w17:msgid` sentences in a plugin's Go and the `msgids:` block of its
 # plugin.yaml are one list written twice; this compares them. The Go is the

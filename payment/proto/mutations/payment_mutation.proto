@@ -305,7 +305,9 @@ service PaymentMutation {
           "          idempotency_key AS payment.idempotency_key, "
           "          description AS payment.description, "
           "          created_at AS payment.created_at, "
-          "          updated_at AS payment.updated_at"
+          "          updated_at AS payment.updated_at, "
+          "          received_amount AS payment.received_amount, "
+          "          received_currency AS payment.received_currency"
       }
     };
     option (w17.event_emit) = {
@@ -365,7 +367,12 @@ service PaymentMutation {
           "          amount AS payment.amount, "
           "          currency AS payment.currency, "
           "          status AS payment.status, "
-          "          updated_at AS payment.updated_at"
+          "          updated_at AS payment.updated_at, "
+          "          idempotency_key AS payment.idempotency_key, "
+          "          description AS payment.description, "
+          "          created_at AS payment.created_at, "
+          "          received_amount AS payment.received_amount, "
+          "          received_currency AS payment.received_currency"
       }
     };
     option (w17.event_emit) = {
@@ -404,7 +411,13 @@ service PaymentMutation {
           "          provider_payment_id AS payment.provider_payment_id, "
           "          amount AS payment.amount, "
           "          currency AS payment.currency, "
-          "          updated_at AS payment.updated_at"
+          "          updated_at AS payment.updated_at, "
+          "          status AS payment.status, "
+          "          idempotency_key AS payment.idempotency_key, "
+          "          description AS payment.description, "
+          "          created_at AS payment.created_at, "
+          "          received_amount AS payment.received_amount, "
+          "          received_currency AS payment.received_currency"
       }
     };
     option (w17.event_emit) = {
@@ -441,7 +454,13 @@ service PaymentMutation {
           "          provider_payment_id AS payment.provider_payment_id, "
           "          amount AS payment.amount, "
           "          currency AS payment.currency, "
-          "          updated_at AS payment.updated_at"
+          "          updated_at AS payment.updated_at, "
+          "          status AS payment.status, "
+          "          idempotency_key AS payment.idempotency_key, "
+          "          description AS payment.description, "
+          "          created_at AS payment.created_at, "
+          "          received_amount AS payment.received_amount, "
+          "          received_currency AS payment.received_currency"
       }
     };
     option (w17.event_emit) = {
@@ -476,7 +495,15 @@ service PaymentMutation {
           "RETURNING id AS payment.id, "
           "          customer_id AS payment.customer_id, "
           "          provider_payment_id AS payment.provider_payment_id, "
-          "          updated_at AS payment.updated_at"
+          "          updated_at AS payment.updated_at, "
+          "          amount AS payment.amount, "
+          "          currency AS payment.currency, "
+          "          status AS payment.status, "
+          "          idempotency_key AS payment.idempotency_key, "
+          "          description AS payment.description, "
+          "          created_at AS payment.created_at, "
+          "          received_amount AS payment.received_amount, "
+          "          received_currency AS payment.received_currency"
       }
     };
     option (w17.event_emit) = {
@@ -523,7 +550,15 @@ service PaymentMutation {
           "RETURNING id AS payment.id, "
           "          customer_id AS payment.customer_id, "
           "          provider_payment_id AS payment.provider_payment_id, "
-          "          updated_at AS payment.updated_at"
+          "          updated_at AS payment.updated_at, "
+          "          amount AS payment.amount, "
+          "          currency AS payment.currency, "
+          "          status AS payment.status, "
+          "          idempotency_key AS payment.idempotency_key, "
+          "          description AS payment.description, "
+          "          created_at AS payment.created_at, "
+          "          received_amount AS payment.received_amount, "
+          "          received_currency AS payment.received_currency"
       }
     };
     option (w17.event_emit) = {
@@ -563,7 +598,10 @@ service PaymentMutation {
           "          status AS payment.status, "
           "          received_amount AS payment.received_amount, "
           "          received_currency AS payment.received_currency, "
-          "          updated_at AS payment.updated_at"
+          "          updated_at AS payment.updated_at, "
+          "          idempotency_key AS payment.idempotency_key, "
+          "          description AS payment.description, "
+          "          created_at AS payment.created_at"
       }
     };
     option (w17.event_emit) = {
@@ -650,7 +688,8 @@ service PaymentMutation {
           "          amount AS refund.amount, "
           "          currency AS refund.currency, "
           "          created_at AS refund.created_at, "
-          "          status AS refund.status"
+          "          status AS refund.status, "
+          "          idempotency_key AS refund.idempotency_key"
       }
     };
     option (w17.event_emit) = {
@@ -693,7 +732,9 @@ service PaymentMutation {
           "          provider_refund_id AS refund.provider_refund_id, "
           "          amount AS refund.amount, "
           "          currency AS refund.currency, "
-          "          status AS refund.status"
+          "          status AS refund.status, "
+          "          created_at AS refund.created_at, "
+          "          idempotency_key AS refund.idempotency_key"
       }
     };
     option (w17.event_emit) = {
@@ -756,7 +797,10 @@ service PaymentMutation {
           "          amount AS dispute.amount, "
           "          currency AS dispute.currency, "
           "          status AS dispute.status, "
-          "          created_at AS dispute.created_at"
+          "          created_at AS dispute.created_at, "
+          "          provider_event_at AS dispute.provider_event_at, "
+          "          updated_at AS dispute.updated_at, "
+          "          closed_at AS dispute.closed_at"
       }
     };
     option (w17.event_emit) = {
@@ -799,7 +843,11 @@ service PaymentMutation {
           "          provider_dispute_id AS dispute.provider_dispute_id, "
           "          amount AS dispute.amount, "
           "          currency AS dispute.currency, "
-          "          status AS dispute.status"
+          "          status AS dispute.status, "
+          "          provider_event_at AS dispute.provider_event_at, "
+          "          created_at AS dispute.created_at, "
+          "          updated_at AS dispute.updated_at, "
+          "          closed_at AS dispute.closed_at"
       }
     };
   }
@@ -826,7 +874,10 @@ service PaymentMutation {
           "          amount AS dispute.amount, "
           "          currency AS dispute.currency, "
           "          status AS dispute.status, "
-          "          closed_at AS dispute.closed_at"
+          "          closed_at AS dispute.closed_at, "
+          "          provider_event_at AS dispute.provider_event_at, "
+          "          created_at AS dispute.created_at, "
+          "          updated_at AS dispute.updated_at"
       }
     };
     option (w17.event_emit) = {
@@ -959,7 +1010,9 @@ service PaymentMutation {
           "          user_id AS topup.user_id, "
           "          amount AS topup.amount, "
           "          granted_at AS topup.granted_at, "
-          "          created_at AS topup.created_at"
+          "          created_at AS topup.created_at, "
+          "          credit_owed AS topup.credit_owed, "
+          "          reconciled_step AS topup.reconciled_step"
       }
     };
   }
@@ -1097,7 +1150,8 @@ service PaymentMutation {
           "          status AS subscription.status, "
           "          current_period_end AS subscription.current_period_end, "
           "          created_at AS subscription.created_at, "
-          "          updated_at AS subscription.updated_at"
+          "          updated_at AS subscription.updated_at, "
+          "          provider_event_at AS subscription.provider_event_at"
       }
     };
     option (w17.event_emit) = {
@@ -1150,7 +1204,11 @@ service PaymentMutation {
           "          provider_subscription_id AS subscription.provider_subscription_id, "
           "          status AS subscription.status, "
           "          current_period_end AS subscription.current_period_end, "
-          "          updated_at AS subscription.updated_at"
+          "          updated_at AS subscription.updated_at, "
+          "          customer_id AS subscription.customer_id, "
+          "          plan_id AS subscription.plan_id, "
+          "          created_at AS subscription.created_at, "
+          "          provider_event_at AS subscription.provider_event_at"
       }
     };
     option (w17.event_emit) = {

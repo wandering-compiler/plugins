@@ -227,9 +227,9 @@ func (s *countingStore) GetUserTenant(context.Context, *pb.GetUserTenantReq, ...
 	return &pb.GetUserTenantResp{TenantId: "tenant-acme"}, nil
 }
 
-func (s *countingStore) GetUser(context.Context, *pb.GetUserReq, ...grpc.CallOption) (*pb.User, error) {
+func (s *countingStore) GetUser(context.Context, *pb.GetUserReq, ...grpc.CallOption) (*pb.UserAccount, error) {
 	s.calls = append(s.calls, "GetUser")
-	return &pb.User{Id: "u1"}, nil
+	return &pb.UserAccount{Id: "u1"}, nil
 }
 
 // One token lookup and one role-grant query, whatever the number of roles; an
