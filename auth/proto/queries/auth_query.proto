@@ -851,9 +851,37 @@ message GetProviderByNameReq {
   option (w17.contrib.plugin_feature) = "oauth";
   string name = 1;
 }
+// OAuthProviderRow — the provider row as GetProviderByName reads it: every
+// OAuthProvider column but `secret`, which is CRYPTED_SECRET and decrypts only
+// into a top-level target (GetProviderByNameResp.secret). A generated query
+// fills every field of its response, so the row carries no field the read
+// cannot fill; providerOf (handlers) puts the two back together.
+message OAuthProviderRow {
+  option (w17.contrib.plugin_feature) = "oauth";
+  string id            = 1 [(w17.field) = { type: UUID }];
+  string name          = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string display_name  = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string client_id     = 4 [(w17.field) = { type: CHAR, max_len: 255 }];
+  string client_secret = 5 [(w17.field) = { type: SECRET, null: true }];
+  string authorize_url = 6 [(w17.field) = { type: URL }];
+  string token_url     = 7 [(w17.field) = { type: URL }];
+  string userinfo_url  = 8 [(w17.field) = { type: URL, blank: true }];
+  string scopes        = 9 [(w17.field) = { type: CHAR, max_len: 512, blank: true }];
+  string subject_path  = 10 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string email_path    = 11 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  bool   enabled       = 12;
+  google.protobuf.Timestamp created_at = 13 [(w17.field) = { type: DATETIME }];
+  // 14 = OAuthProvider.tenant_id, a tenant_scope column — and tenant_scope
+  // refuses to activate beside oauth, so no activation has both.
+  reserved 14;
+  string response_mode = 16 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
+  string team_id = 17 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+  string key_id  = 18 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
+}
+
 message GetProviderByNameResp {
   option (w17.contrib.plugin_feature) = "oauth";
-  OAuthProvider provider = 1;
+  OAuthProviderRow provider = 1;
   // The decrypted client secret (OAuthProvider.secret) — top-level because an
   // encrypted column decrypts only into a single-segment target.
   string secret = 2 [(w17.field) = { blank: true, sensitive: true }];
