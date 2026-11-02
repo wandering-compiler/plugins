@@ -660,7 +660,10 @@ func TestAuthenticateAdmin_MarksTheAdminPlaneAndAuthenticateDoesNot(t *testing.T
 // root authority nobody wrote; with the field reserved a query naming it would
 // fail at generation, and this says so where a reader of the tests looks —
 // along with the two business answers that still carry an `owner` flag for
-// old clients, which no statement may fill.
+// old clients. The one statement answering with such a row (ListUserOrgs →
+// UserOrg) fills the flag with the constant it is documented to be, `FALSE`:
+// a generated query fills every field of its response, and a constant reads
+// no ownership.
 func TestOrganizationHasNoOwner(t *testing.T) {
 	if fd := (&pb.Organization{}).ProtoReflect().Descriptor().Fields().ByName("owner_id"); fd != nil {
 		t.Fatalf("Organization still declares %s", fd.FullName())
@@ -670,7 +673,8 @@ func TestOrganizationHasNoOwner(t *testing.T) {
 			// owner_id anywhere, or an `owner` column computed beside an
 			// Organization (the old `(o.owner_id = m.user_id) AS owner`); the
 			// device and session lists' `owner` is an account's address.
-			if strings.Contains(body, "owner_id") || (strings.Contains(body, "@module.Organization") && strings.Contains(body, " AS owner")) {
+			computed := strings.ReplaceAll(body, "FALSE AS owner", "")
+			if strings.Contains(body, "owner_id") || (strings.Contains(body, "@module.Organization") && strings.Contains(computed, " AS owner")) {
 				t.Errorf("%s: %s reads organization ownership:\n%s", rel, name, body)
 			}
 		}

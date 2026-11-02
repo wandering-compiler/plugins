@@ -2902,7 +2902,7 @@ message RegisterClientResp {
 message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
 message ListClientsResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  repeated AuthClient clients = 1;
+  repeated AuthClientRow clients = 1;
 }
 message SetClientEnabledReq {
   option (w17.contrib.plugin_feature) = "cli_login";

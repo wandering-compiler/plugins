@@ -197,9 +197,51 @@ message CountUsersResp {
 message ListUsersReq {
   option (w17.contrib.plugin_feature) = "user_admin";
 }
+
+// UserAccount — an account as the admin pages read it: every User column
+// except password_hash, which never leaves storage into an admin view. A
+// generated query fills every field of its response, so the admin lists and
+// detail read answer with this message rather than with User and an empty
+// hash. The fields, their types and their feature gates are User's.
+message UserAccount {
+  option (w17.contrib.plugin_feature) = "user_admin";
+  string id = 1 [(w17.field) = { type: UUID }];
+  string email = 2 [(w17.field) = { type: EMAIL, max_len: 320 }];
+  google.protobuf.Timestamp created_at = 4 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp email_verified_at = 6 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "email_verification"
+  ];
+  EmailProof email_proof = 9 [
+    (w17.field) = { type: ENUM, zero_is_value: true },
+    (w17.contrib.plugin_feature_field) = "email_verification"
+  ];
+  string tenant_id = 5 [
+    (w17.field) = { type: UUID },
+    (w17.contrib.plugin_feature_field) = "tenant_scope"
+  ];
+  google.protobuf.Timestamp disabled_at = 7 [(w17.field) = { type: DATETIME, null: true }];
+  AccountKind kind = 8 [
+    (w17.field) = { zero_is_value: true },
+    (w17.contrib.plugin_feature_field) = "service_account"
+  ];
+  google.protobuf.Timestamp device_trust_revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp erased_at = 11 [(w17.field) = { type: DATETIME, null: true }];
+  bool marketing_consent = 12 [(w17.contrib.plugin_feature_field) = "marketing_consent"];
+  google.protobuf.Timestamp marketing_consent_at = 13 [
+    (w17.field) = { type: DATETIME, null: true },
+    (w17.contrib.plugin_feature_field) = "marketing_consent"
+  ];
+  string allowed_cidrs = 14 [
+    (w17.field) = { type: CHAR, max_len: 2048, blank: true },
+    (w17.contrib.plugin_feature_field) = "bot_token_guard"
+  ];
+  int64 sign_in_failures = 15;
+  google.protobuf.Timestamp sign_in_window_at = 16 [(w17.field) = { type: DATETIME, null: true }];
+}
 message ListUsersResp {
   option (w17.contrib.plugin_feature) = "user_admin";
-  repeated User users = 1;
+  repeated UserAccount users = 1;
 
   // Cursor-paged (admin-only): the `w17.Paging` field on the response IS
   // the declaration — this list has no public REST endpoint to hang a
@@ -248,7 +290,7 @@ message ListBotAccountsReq {
 }
 message ListBotAccountsResp {
   option (w17.contrib.plugin_feature) = "service_account";
-  repeated User bots = 1;
+  repeated UserAccount bots = 1;
 
   // Cursor-paged admin-only, like ListUsersResp — see there.
   w17.Paging paging = 2;
@@ -786,9 +828,23 @@ message GetLiveSessionExpiryResp {
 message ListAuthClientsReq {
   option (w17.contrib.plugin_feature) = "cli_login";
 }
+// AuthClientRow — a registered client as the registry lists it: every
+// AuthClient column but `client_secret`, the hash ListClients must not hand
+// to whoever lists the registry. A generated query fills every field of its
+// response, so the list answers with a message that has no secret.
+message AuthClientRow {
+  option (w17.contrib.plugin_feature) = "cli_login";
+  string id           = 1 [(w17.field) = { type: UUID }];
+  string client_id    = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
+  string name         = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
+  string redirect_uri = 4 [(w17.field) = { type: URL, max_len: 2048 }];
+  bool   enabled      = 5;
+  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME }];
+  google.protobuf.Timestamp revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
+}
 message ListAuthClientsResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  repeated AuthClient clients = 1;
+  repeated AuthClientRow clients = 1;
 }
 
 message GetProviderByNameReq {
@@ -847,9 +903,28 @@ message GetTotpSecretReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string user_id = 1;
 }
+// TotpSecretRow — the authenticator row as GetTotpSecret reads it: every
+// UserTotpSecret column but `seed`. The seed is CRYPTED_SECRET, which is
+// decrypted only as a top-level column (GetTotpSecretResp.seed), so a row
+// carrying a `seed` field would leave it unfilled; totpSecretOf (handlers)
+// puts the two back together.
+message TotpSecretRow {
+  option (w17.contrib.plugin_feature) = "two_factor";
+  string id      = 1 [(w17.field) = { type: UUID }];
+  string user_id = 2 [(w17.field) = { type: UUID }];
+  string secret  = 3 [(w17.field) = { type: CHAR, max_len: 512, null: true }];
+  google.protobuf.Timestamp confirmed_at = 4 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp created_at   = 5 [(w17.field) = { type: DATETIME }];
+  int64  last_step = 7;
+  int64  stepup_attempts = 8;
+  google.protobuf.Timestamp stepup_locked_until = 9 [(w17.field) = { type: DATETIME, null: true }];
+  google.protobuf.Timestamp revoked_at = 10 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_key = 11 [(w17.field) = { type: CHAR, max_len: 36, blank: true }];
+}
+
 message GetTotpSecretResp {
   option (w17.contrib.plugin_feature) = "two_factor";
-  UserTotpSecret secret = 1;
+  TotpSecretRow secret = 1;
   // The decrypted seed — top-level because an encrypted column decrypts only
   // into a single-segment target (`secret.seed` would carry ciphertext).
   string seed = 2 [(w17.field) = { blank: true, sensitive: true }];
@@ -2124,7 +2199,15 @@ service AuthQuery {
           // Missing from the projection it inverted the gate — the field was
           // never valid, so EVERY local account was refused, and unlike the
           // invite gate this one is not behind an opt-in knob.
-          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at "
+          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS user.email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
+          "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS user.allowed_cidrs, "
+          "       u.sign_in_failures AS user.sign_in_failures, "
+          "       u.sign_in_window_at AS user.sign_in_window_at "
           "FROM @module.User u WHERE u.email = :email"
       }
     };
@@ -2140,7 +2223,18 @@ service AuthQuery {
           "       u.password_hash AS user.password_hash, "
           "       ?feature(service_account) u.kind AS user.kind, "
           "       u.created_at AS user.created_at, "
-          "       COALESCE(t.token_hash, '') AS stored_token_hash "
+          "       COALESCE(t.token_hash, '') AS stored_token_hash, "
+          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS user.email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
+          "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "       ?feature(user_admin) u.erased_at AS user.erased_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS user.allowed_cidrs, "
+          "       u.sign_in_failures AS user.sign_in_failures, "
+          "       u.sign_in_window_at AS user.sign_in_window_at "
           "FROM @module.User u JOIN @module.UserToken t ON t.user_id = u.id WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
       }
     };
@@ -2216,7 +2310,16 @@ service AuthQuery {
           "       COALESCE(t.token_hash, '') AS stored_token_hash, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       d.revoked_at AS device_revoked_at, "
-          "       t.mcp_only AS mcp_only "
+          "       t.mcp_only AS mcp_only, "
+          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS user.email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
+          "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "       ?feature(user_admin) u.erased_at AS user.erased_at, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS user.allowed_cidrs, "
+          "       u.sign_in_failures AS user.sign_in_failures, "
+          "       u.sign_in_window_at AS user.sign_in_window_at "
           "FROM @module.User u "
           "JOIN @module.UserToken t ON t.user_id = u.id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
@@ -2294,7 +2397,16 @@ service AuthQuery {
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
           "       u.disabled_at AS disabled_at, u.erased_at AS erased_at, "
-          "       u.created_at AS created_at "
+          "       u.created_at AS created_at, "
+          "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
+          "       u.device_trust_revoked_at AS device_trust_revoked_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS allowed_cidrs, "
+          "       u.sign_in_failures AS sign_in_failures, "
+          "       u.sign_in_window_at AS sign_in_window_at "
           "FROM @module.User u ORDER BY u.created_at DESC, u.id DESC"
       }
     };
@@ -2322,7 +2434,17 @@ service AuthQuery {
           "       ?feature(service_account) u.kind AS kind, "
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
           "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
-          "       u.created_at AS created_at "
+          "       u.created_at AS created_at, "
+          "       u.password_hash AS password_hash, "
+          "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS email_proof, "
+          "       u.device_trust_revoked_at AS device_trust_revoked_at, "
+          "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS allowed_cidrs, "
+          "       u.sign_in_failures AS sign_in_failures, "
+          "       u.sign_in_window_at AS sign_in_window_at "
           "FROM @module.User u "
           "JOIN @module.OrgMembership m ON m.user_id = u.id AND m.org_id = :org_id AND m.removed_at IS NULL "
           "ORDER BY u.created_at DESC, u.id DESC"
@@ -2352,7 +2474,16 @@ service AuthQuery {
           "SELECT u.id AS id, u.email AS email, "
           "       u.kind AS kind, "
           "       u.disabled_at AS disabled_at, u.erased_at AS erased_at, "
-          "       u.created_at AS created_at "
+          "       u.created_at AS created_at, "
+          "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
+          "       u.device_trust_revoked_at AS device_trust_revoked_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS allowed_cidrs, "
+          "       u.sign_in_failures AS sign_in_failures, "
+          "       u.sign_in_window_at AS sign_in_window_at "
           "FROM @module.User u "
           "WHERE u.kind = 1 "
           "ORDER BY u.created_at DESC, u.id DESC"
@@ -2377,7 +2508,17 @@ service AuthQuery {
           "       u.kind AS kind, "
           "       u.disabled_at AS disabled_at, "
           "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
-          "       u.created_at AS created_at "
+          "       u.created_at AS created_at, "
+          "       u.password_hash AS password_hash, "
+          "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS email_proof, "
+          "       u.device_trust_revoked_at AS device_trust_revoked_at, "
+          "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS allowed_cidrs, "
+          "       u.sign_in_failures AS sign_in_failures, "
+          "       u.sign_in_window_at AS sign_in_window_at "
           "FROM @module.User u "
           "WHERE u.kind = 1 "
           "ORDER BY u.created_at DESC, u.id DESC"
@@ -2432,7 +2573,7 @@ service AuthQuery {
   // GetUser — one user for the admin detail view. Returns the User
   // model DIRECTLY (readonly_fields resolve against its top-level
   // fields). NO password_hash in the projection. Gated user_admin.
-  rpc GetUser(GetUserReq) returns (User) {
+  rpc GetUser(GetUserReq) returns (UserAccount) {
     option (w17.db.method) = {
       ops: {
         name: "main"
@@ -2446,7 +2587,16 @@ service AuthQuery {
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
           "       u.disabled_at AS disabled_at, u.erased_at AS erased_at, "
-          "       u.created_at AS created_at "
+          "       u.created_at AS created_at, "
+          "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
+          "       u.device_trust_revoked_at AS device_trust_revoked_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS allowed_cidrs, "
+          "       u.sign_in_failures AS sign_in_failures, "
+          "       u.sign_in_window_at AS sign_in_window_at "
           "FROM @module.User u WHERE u.id = :user_id"
       }
     };
@@ -2599,9 +2749,14 @@ service AuthQuery {
       ops: {
         name: "main"
         dql:
-          "SELECT ur.user_id AS user_id, r.id AS role_id, "
+          // A direct org grant comes through no team: team_id is '' by
+          // definition here (ListOrgTeamSuperadmins fills it for a team's), and
+          // the stamps are NULL where user_admin, which owns them, is off.
+          "SELECT ur.user_id AS user_id, r.id AS role_id, '' AS team_id, "
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
+          "       ?unless(user_admin) NULL AS disabled_at, "
           "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?unless(user_admin) NULL AS erased_at, "
           "       ?feature(api_token) r.token_type AS token_type "
           "FROM @module.UserRole ur "
           "JOIN @module.Role r ON r.id = ur.role_id "
@@ -2622,8 +2777,13 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT ur.user_id AS user_id, r.id AS role_id, "
+          // Without user_admin there are no disabled or erased accounts, and
+          // the columns do not exist: the statement says NULL (`?unless`)
+          // instead of leaving the fields unselected.
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
+          "       ?unless(user_admin) NULL AS disabled_at, "
           "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?unless(user_admin) NULL AS erased_at, "
           "       ?feature(api_token) r.token_type AS token_type "
           "FROM @module.User u "
           "JOIN @module.UserRole ur ON ur.user_id = u.id "
@@ -2666,7 +2826,12 @@ service AuthQuery {
           "       r.assign_first_user AS assign_first_user, "
           "       r.assign_default AS assign_default, "
           "       r.preset_key AS preset_key, "
-          "       r.created_at AS created_at "
+          "       r.created_at AS created_at, "
+          "       ?feature(api_token) r.token_type AS token_type, "
+          "       ?feature(org_membership) r.org_scoped AS org_scoped, "
+          "       r.deleted_at AS deleted_at, "
+          "       r.ended_key AS ended_key, "
+          "       ?feature(org_roles) r.org_id AS org_id "
           "FROM @module.Role r WHERE r.deleted_at IS NULL ORDER BY r.name ASC, r.id ASC"
       }
     };
@@ -2690,7 +2855,12 @@ service AuthQuery {
           "       r.assign_first_user AS assign_first_user, "
           "       r.assign_default AS assign_default, "
           "       r.preset_key AS preset_key, "
-          "       r.created_at AS created_at "
+          "       r.created_at AS created_at, "
+          "       ?feature(api_token) r.token_type AS token_type, "
+          "       ?feature(org_membership) r.org_scoped AS org_scoped, "
+          "       r.deleted_at AS deleted_at, "
+          "       r.ended_key AS ended_key, "
+          "       ?feature(org_roles) r.org_id AS org_id "
           "FROM @module.Role r WHERE r.id = :id AND r.deleted_at IS NULL"
       }
     };
@@ -2717,11 +2887,31 @@ service AuthQuery {
           "       t.last_used_at AS last_used_at, "
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       d.revoked_at AS device_revoked_at, "
+          // bearer / oauth_* are columns of their features. Without the feature
+          // the column does not exist and the value is known: no token is a
+          // bearer token, none carries an OAuth grant — so the statement says
+          // so (`?unless`) rather than leaving the field unselected. A generated
+          // query fills every field of its response.
           "       ?feature(service_account) t.bearer AS bearer, "
+          "       ?unless(service_account) FALSE AS bearer, "
           "       ?feature(oauth_server) COALESCE(t.resource, '') AS oauth_resource, "
+          "       ?unless(oauth_server) '' AS oauth_resource, "
           "       ?feature(oauth_server) t.oauth_org_id AS oauth_org_id, "
+          "       ?unless(oauth_server) NULL AS oauth_org_id, "
           "       ?feature(oauth_server) t.oauth_grant_id AS oauth_grant_id, "
-          "       t.mcp_only AS mcp_only "
+          "       ?unless(oauth_server) NULL AS oauth_grant_id, "
+          "       t.mcp_only AS mcp_only, "
+          "       u.email AS user.email, "
+          "       u.password_hash AS user.password_hash, "
+          "       u.created_at AS user.created_at, "
+          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS user.email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
+          "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "       ?feature(user_admin) u.erased_at AS user.erased_at, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
+          "       u.sign_in_failures AS user.sign_in_failures, "
+          "       u.sign_in_window_at AS user.sign_in_window_at "
           "FROM @module.UserToken t JOIN @module.User u ON u.id = t.user_id "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
           "WHERE (t.token_hash = :token_hash OR t.token = :legacy_token) AND (t.expires_at IS NULL OR t.expires_at > NOW()) AND t.revoked_at IS NULL"
@@ -2744,6 +2934,7 @@ service AuthQuery {
           "       COALESCE(d.thumbprint, '') AS device_thumbprint, "
           "       t.revoked_at AS revoked_at, "
           "       ?feature(service_account) t.bearer AS bearer, "
+          "       ?unless(service_account) FALSE AS bearer, "
           "       d.revoked_at AS device_revoked_at "
           "FROM @module.UserToken t "
           "LEFT JOIN @module.Device d ON d.id = t.device_id "
@@ -2991,7 +3182,9 @@ service AuthQuery {
           "       c.name AS client.name, "
           "       c.redirect_uri AS client.redirect_uri, "
           "       c.enabled AS client.enabled, "
-          "       c.created_at AS client.created_at "
+          "       c.created_at AS client.created_at, "
+          "       c.client_secret AS client.client_secret, "
+          "       c.revoked_at AS client.revoked_at "
           "FROM @module.AuthClient c "
           "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri AND c.enabled = TRUE AND c.revoked_at IS NULL"
       }
@@ -3182,7 +3375,12 @@ service AuthQuery {
           // marketing_consent (`marketing_consent`): ResolveUser answers it in
           // AuthResp as Authenticate does from GetUserByTokenWithPermissions.
           "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
-          "       u.created_at AS user.created_at "
+          "       u.created_at AS user.created_at, "
+          "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS user.allowed_cidrs, "
+          "       u.sign_in_failures AS user.sign_in_failures, "
+          "       u.sign_in_window_at AS user.sign_in_window_at "
           "FROM @module.User u WHERE u.id = :user_id"
       }
     };
@@ -3220,7 +3418,11 @@ service AuthQuery {
           "       s.seed AS seed, "
           "       s.last_step AS secret.last_step, "
           "       s.confirmed_at AS secret.confirmed_at, "
-          "       s.created_at AS secret.created_at "
+          "       s.created_at AS secret.created_at, "
+          "       s.stepup_attempts AS secret.stepup_attempts, "
+          "       s.stepup_locked_until AS secret.stepup_locked_until, "
+          "       s.revoked_at AS secret.revoked_at, "
+          "       s.ended_key AS secret.ended_key "
           "FROM @module.UserTotpSecret s WHERE s.user_id = :user_id AND s.revoked_at IS NULL"
       }
     };
@@ -3334,7 +3536,11 @@ service AuthQuery {
           "       d.ip AS ip, "
           "       d.trusted_at AS trusted_at, "
           "       d.last_seen_at AS last_seen_at, "
-          "       d.created_at AS created_at "
+          "       d.created_at AS created_at, "
+          "       d.revoked_at AS revoked_at, "
+          "       d.api_key AS api_key, "
+          "       d.sign_in_failures AS sign_in_failures, "
+          "       d.sign_in_window_at AS sign_in_window_at "
           "FROM @module.Device d WHERE d.user_id = :user_id AND d.revoked_at IS NULL "
           "AND d.thumbprint IS NOT NULL AND d.api_key = FALSE "
           "ORDER BY d.last_seen_at DESC"
@@ -3358,6 +3564,8 @@ service AuthQuery {
           "       o.name AS name, "
           "       o.kind AS kind, "
           "       m.role AS role, "
+          // owner is deprecated and always false (see UserOrg.owner).
+          "       FALSE AS owner, "
           "       ?feature(membership_kinds) m.kind AS membership_kind "
           "FROM @module.OrgMembership m "
           "JOIN @module.Organization o ON o.id = m.org_id "
@@ -3503,7 +3711,9 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
-          "       o.kind AS kind, o.created_at AS created_at "
+          "       o.kind AS kind, o.created_at AS created_at, "
+          "       o.deleted_at AS deleted_at, "
+          "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.deleted_at IS NULL ORDER BY o.name ASC, o.id ASC"
       }
     };
@@ -3519,7 +3729,9 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
-          "       o.kind AS kind, o.created_at AS created_at "
+          "       o.kind AS kind, o.created_at AS created_at, "
+          "       o.deleted_at AS deleted_at, "
+          "       o.ended_key AS ended_key "
           "FROM @module.Organization o WHERE o.id = :id AND o.deleted_at IS NULL"
       }
     };
@@ -3561,7 +3773,11 @@ service AuthQuery {
         name: "main"
         dql:
           "SELECT m.id AS id, m.user_id AS user_id, m.org_id AS org_id, "
-          "       m.role AS role, m.created_at AS created_at "
+          "       m.role AS role, m.created_at AS created_at, "
+          "       m.removed_at AS removed_at, "
+          "       m.removed_by AS removed_by, "
+          "       m.ended_key AS ended_key, "
+          "       ?feature(membership_kinds) m.kind AS kind "
           "FROM @module.OrgMembership m WHERE m.id = :id AND m.removed_at IS NULL"
       }
     };
@@ -3910,7 +4126,12 @@ service AuthQuery {
           "       i.accepted_at AS accepted_at, "
           "       i.created_at AS created_at, "
           "       i.metadata AS metadata, "
-          "       ?feature(product_roles) i.product_roles AS product_roles "
+          "       ?feature(product_roles) i.product_roles AS product_roles, "
+          "       i.token_hash AS token_hash, "
+          "       i.role_snapshot AS role_snapshot, "
+          "       i.closed_at AS closed_at, "
+          "       i.closed_by AS closed_by, "
+          "       ?feature(membership_kinds) i.kind AS kind "
           "FROM @module.OrgInvite i "
           "WHERE i.org_id = :org_id AND i.accepted_at IS NULL AND i.closed_at IS NULL "
           "ORDER BY i.created_at DESC"
@@ -3976,7 +4197,8 @@ service AuthQuery {
           "SELECT c.id AS client.id, c.client_id AS client.client_id, c.kind AS client.kind, "
           "       c.client_name AS client.client_name, c.client_uri AS client.client_uri, "
           "       c.logo_uri AS client.logo_uri, c.redirect_uris AS client.redirect_uris, "
-          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at "
+          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at, "
+          "       c.software_id AS client.software_id "
           "FROM @module.OAuthClient c WHERE c.id = :id"
       }
     };
@@ -3993,7 +4215,8 @@ service AuthQuery {
           "       c.id AS client.id, c.client_id AS client.client_id, c.kind AS client.kind, "
           "       c.client_name AS client.client_name, c.client_uri AS client.client_uri, "
           "       c.logo_uri AS client.logo_uri, c.redirect_uris AS client.redirect_uris, "
-          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at "
+          "       c.metadata_fetched_at AS client.metadata_fetched_at, c.disabled_at AS client.disabled_at, "
+          "       c.software_id AS client.software_id "
           "FROM @module.OAuthAuthorization a JOIN @module.OAuthClient c ON c.id = a.client_row_id "
           "WHERE a.request_hash = :request_hash AND a.decided_at IS NULL AND a.expires_at > NOW() AND c.disabled_at IS NULL"
       }
@@ -4483,7 +4706,19 @@ service AuthQuery {
           "SELECT u.id AS user.id, "
           "       u.email AS user.email, "
           "       ?feature(service_account) u.kind AS user.kind, "
-          "       u.created_at AS user.created_at "
+          "       u.created_at AS user.created_at, "
+          "       u.password_hash AS user.password_hash, "
+          "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
+          "       ?feature(email_verification) u.email_proof AS user.email_proof, "
+          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
+          "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
+          "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
+          "       ?feature(user_admin) u.erased_at AS user.erased_at, "
+          "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
+          "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
+          "       ?feature(bot_token_guard) u.allowed_cidrs AS user.allowed_cidrs, "
+          "       u.sign_in_failures AS user.sign_in_failures, "
+          "       u.sign_in_window_at AS user.sign_in_window_at "
           "FROM @module.OrgMembership m "
           "JOIN @module.User u ON u.id = m.user_id "
           "WHERE m.user_id = :user_id AND m.org_id = :org_id AND m.removed_at IS NULL"
@@ -4501,7 +4736,10 @@ service AuthQuery {
         dql:
           "SELECT tm.user_id AS user_id, r.id AS role_id, t.id AS team_id, "
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
-          "       ?feature(user_admin) u.erased_at AS erased_at "
+          "       ?unless(user_admin) NULL AS disabled_at, "
+          "       ?feature(user_admin) u.erased_at AS erased_at, "
+          "       ?unless(user_admin) NULL AS erased_at, "
+          "       ?feature(api_token) r.token_type AS token_type "
           "FROM @module.TeamMember tm "
           "JOIN @module.Team t ON t.id = tm.team_id AND t.deleted_at IS NULL "
           "JOIN @module.OrgMembership m ON m.user_id = tm.user_id AND m.org_id = t.org_id "
