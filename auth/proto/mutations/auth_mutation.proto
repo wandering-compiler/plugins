@@ -1444,7 +1444,9 @@ message RegisterAuthClientReq {
 }
 message RegisterAuthClientResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  AuthClient client = 1;
+  // AuthClientRow, not AuthClient: the stored secret hash has one reader
+  // (GetAuthClientSecret), and RegisterClient hands this row to its caller.
+  AuthClientRow client = 1;
 }
 
 message RotateAuthClientSecretReq {
@@ -4802,7 +4804,6 @@ service AuthMutation {
           "          redirect_uri AS client.redirect_uri, "
           "          enabled AS client.enabled, "
           "          created_at AS client.created_at, "
-          "          client_secret AS client.client_secret, "
           "          revoked_at AS client.revoked_at"
       }
     };

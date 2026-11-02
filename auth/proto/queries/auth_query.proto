@@ -755,7 +755,7 @@ message GetRegisteredRedirectReq {
 }
 message GetRegisteredRedirectResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  AuthClient client = 1;
+  AuthClientRow client = 1;
 }
 
 // GetAuthClientSecret is the ONLY reader of the stored secret hash, and it
@@ -827,20 +827,6 @@ message GetLiveSessionExpiryResp {
 
 message ListAuthClientsReq {
   option (w17.contrib.plugin_feature) = "cli_login";
-}
-// AuthClientRow — a registered client as the registry lists it: every
-// AuthClient column but `client_secret`, the hash ListClients must not hand
-// to whoever lists the registry. A generated query fills every field of its
-// response, so the list answers with a message that has no secret.
-message AuthClientRow {
-  option (w17.contrib.plugin_feature) = "cli_login";
-  string id           = 1 [(w17.field) = { type: UUID }];
-  string client_id    = 2 [(w17.field) = { type: SLUG, max_len: 64 }];
-  string name         = 3 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
-  string redirect_uri = 4 [(w17.field) = { type: URL, max_len: 2048 }];
-  bool   enabled      = 5;
-  google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME }];
-  google.protobuf.Timestamp revoked_at = 8 [(w17.field) = { type: DATETIME, null: true }];
 }
 message ListAuthClientsResp {
   option (w17.contrib.plugin_feature) = "cli_login";
@@ -3211,7 +3197,6 @@ service AuthQuery {
           "       c.redirect_uri AS client.redirect_uri, "
           "       c.enabled AS client.enabled, "
           "       c.created_at AS client.created_at, "
-          "       c.client_secret AS client.client_secret, "
           "       c.revoked_at AS client.revoked_at "
           "FROM @module.AuthClient c "
           "WHERE c.client_id = :client_id AND c.redirect_uri = :redirect_uri AND c.enabled = TRUE AND c.revoked_at IS NULL"

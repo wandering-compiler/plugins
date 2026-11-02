@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/reflect/protoreflect"
+
+	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 )
 
 // A gate cannot read a column its query never selected.
@@ -126,6 +130,32 @@ func TestCreateOrgInviteReturnsTheMetadataInviteToOrgEchoes(t *testing.T) {
 	if !strings.Contains(returning, "metadata AS invite.metadata") {
 		t.Errorf("CreateOrgInvite does not return `metadata`, and InviteToOrg (org_invite.go) echoes it "+
 			"from the returned row — the echo is always empty:\n%s", returning)
+	}
+}
+
+// The registry's secret hash has one reader, GetAuthClientSecret. Filling
+// every field of RegisterAuthClient's AuthClient returned the hash too, and
+// RegisterClient hands that row to its caller over the REST preset — beside
+// the plaintext. The registration and the callback lookup answer with
+// AuthClientRow, which has no such field, and select no secret.
+func TestTheClientRegistryNeverAnswersItsSecretHash(t *testing.T) {
+	mut := readProto(t, filepath.Join("..", "..", "proto", "mutations", "auth_mutation.proto"))
+	qry := readProto(t, filepath.Join("..", "..", "proto", "queries", "auth_query.proto"))
+	for rpc, src := range map[string]string{"RegisterAuthClient": mut, "GetRegisteredRedirect": qry} {
+		if dql := methodDQL(t, src, "rpc "+rpc+"("); strings.Contains(dql, "client_secret AS") {
+			t.Errorf("%s answers the stored secret hash:\n%s", rpc, dql)
+		}
+	}
+	if fd := (&pb.RegisterClientResp{}).ProtoReflect().Descriptor().Fields().ByName("client"); fd == nil || fd.Message().Name() != "AuthClientRow" {
+		t.Errorf("RegisterClientResp.client must be an AuthClientRow (no client_secret field), got %v", fd)
+	}
+	for _, m := range []interface{ ProtoReflect() protoreflect.Message }{&pb.RegisterAuthClientResp{}, &pb.GetRegisteredRedirectResp{}, &pb.ListAuthClientsResp{}} {
+		md := m.ProtoReflect().Descriptor()
+		for i := 0; i < md.Fields().Len(); i++ {
+			if f := md.Fields().Get(i); f.Message() != nil && f.Message().Fields().ByName("client_secret") != nil {
+				t.Errorf("%s.%s carries a client_secret field", md.Name(), f.Name())
+			}
+		}
 	}
 }
 
