@@ -93,8 +93,9 @@ check-stage: plugins-exist
 #
 # It also refuses a query that leaves a field of its response unfilled. The
 # compiler warns on one now and refuses it in its next release (a generated
-# query fills every field of its response — platform
-# docs/decisions/a-query-fills-its-response.md), and its warning skips a
+# query fills every field of its response: an unselected column and a NULL
+# one would read the same, and an unselected enum reads as its zero value),
+# and its warning skips a
 # plugin's own files, since a consumer cannot edit them. The project map lists
 # every one (`kind=unfilled-response`), the plugin's included, so this reads
 # the map of the project it just generated — with every feature on, and with
