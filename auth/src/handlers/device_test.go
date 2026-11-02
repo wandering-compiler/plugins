@@ -816,7 +816,7 @@ func TestRegisterDevice_IsOneUpsertOnTheUserDevicePair(t *testing.T) {
 		`"ON CONFLICT (user_id, thumbprint) DO UPDATE SET "`,
 		`"          revoked_at AS device.revoked_at, "`,
 		`"          trusted_at AS device.trusted_at, "`,
-		`"          api_key AS device.api_key"`,
+		`"          api_key AS device.api_key`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("RegisterDevice lacks %s:\n%s", want, body)

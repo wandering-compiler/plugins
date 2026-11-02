@@ -2887,11 +2887,11 @@ message RegisterClientReq {
 }
 message RegisterClientResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  // The stored row. Its `client_secret` is ALWAYS EMPTY here: the registry
-  // queries project explicit column lists that do not name it, so the hash
-  // has exactly one reader (GetAuthClientSecret) and cannot ride out on a
-  // response that happens to carry the model.
-  AuthClient client = 1;
+  // The stored row, without its secret hash: AuthClientRow has no
+  // `client_secret` field, so the hash has exactly one reader
+  // (GetAuthClientSecret) and cannot ride out on this response — a surface
+  // response carrying a SECRET field is refused at codegen.
+  AuthClientRow client = 1;
   // client_secret — the PLAINTEXT, and the only time it exists outside the
   // client. Stored hashed, never recoverable: a client that loses it gets a
   // NEW one from RotateClientSecret (same client_id, same callback) rather
@@ -2902,7 +2902,7 @@ message RegisterClientResp {
 message ListClientsReq { option (w17.contrib.plugin_feature) = "cli_login"; }
 message ListClientsResp {
   option (w17.contrib.plugin_feature) = "cli_login";
-  repeated AuthClient clients = 1;
+  repeated AuthClientRow clients = 1;
 }
 message SetClientEnabledReq {
   option (w17.contrib.plugin_feature) = "cli_login";

@@ -134,7 +134,7 @@ func (m *oauthMock) MarkEmailVerified(_ context.Context, in *pb.MarkEmailVerifie
 
 func (m *oauthMock) GetProviderByName(ctx context.Context, in *pb.GetProviderByNameReq, _ ...grpc.CallOption) (*pb.GetProviderByNameResp, error) {
 	// The storage layer decrypts `secret` into the top-level field.
-	return &pb.GetProviderByNameResp{Provider: m.provider, Secret: m.provider.GetSecret()}, nil
+	return &pb.GetProviderByNameResp{Provider: providerRowOf(m.provider), Secret: m.provider.GetSecret()}, nil
 }
 func (m *oauthMock) GetOAuthIdentity(ctx context.Context, in *pb.GetOAuthIdentityReq, _ ...grpc.CallOption) (*pb.GetOAuthIdentityResp, error) {
 	return &pb.GetOAuthIdentityResp{Identity: m.identity}, nil
@@ -621,4 +621,19 @@ func (m *oauthMock) GetUserById(_ context.Context, in *pb.GetUserByIdReq, _ ...g
 		u.DisabledAt = timestamppb.Now()
 	}
 	return &pb.GetUserByIdResp{User: u}, nil
+}
+
+// providerRowOf is the row GetProviderByName answers for p: every column but
+// the encrypted secret, which travels beside it.
+func providerRowOf(p *pb.OAuthProvider) *pb.OAuthProviderRow {
+	if p == nil {
+		return nil
+	}
+	return &pb.OAuthProviderRow{
+		Id: p.GetId(), Name: p.GetName(), DisplayName: p.GetDisplayName(), ClientId: p.GetClientId(),
+		ClientSecret: p.GetClientSecret(), AuthorizeUrl: p.GetAuthorizeUrl(), TokenUrl: p.GetTokenUrl(),
+		UserinfoUrl: p.GetUserinfoUrl(), Scopes: p.GetScopes(), SubjectPath: p.GetSubjectPath(),
+		EmailPath: p.GetEmailPath(), Enabled: p.GetEnabled(), CreatedAt: p.GetCreatedAt(),
+		ResponseMode: p.GetResponseMode(), TeamId: p.GetTeamId(), KeyId: p.GetKeyId(),
+	}
 }

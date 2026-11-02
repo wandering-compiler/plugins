@@ -117,7 +117,7 @@ func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ 
 	if m.totpSecretEnc == "" && m.totpSeed == "" {
 		return &pb.GetTotpSecretResp{}, nil
 	}
-	s := &pb.UserTotpSecret{Id: "row-1", UserId: in.GetUserId(), Secret: m.totpSecretEnc, LastStep: m.lastStep}
+	s := &pb.TotpSecretRow{Id: "row-1", UserId: in.GetUserId(), Secret: m.totpSecretEnc, LastStep: m.lastStep}
 	if m.totpConfirmed {
 		s.ConfirmedAt = timestamppb.Now()
 	}
@@ -144,7 +144,7 @@ func (m *mfaMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _ ...g
 func (m *mfaMock) CreateTotpSecret(ctx context.Context, in *pb.CreateTotpSecretReq, _ ...grpc.CallOption) (*pb.CreateTotpSecretResp, error) {
 	m.totpSeed, m.totpSecretEnc = in.GetSeed(), ""
 	m.totpConfirmed = false
-	return &pb.CreateTotpSecretResp{Secret: &pb.UserTotpSecret{UserId: in.GetUserId()}}, nil
+	return &pb.CreateTotpSecretResp{Secret: &pb.TotpSecretCreated{UserId: in.GetUserId()}}, nil
 }
 func (m *mfaMock) ClaimTotpStep(ctx context.Context, in *pb.ClaimTotpStepReq, _ ...grpc.CallOption) (*pb.ClaimTotpStepResp, error) {
 	// Atomic, like the conditional UPDATE it stands for: without the lock,

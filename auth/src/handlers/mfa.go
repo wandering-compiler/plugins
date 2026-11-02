@@ -267,12 +267,35 @@ func (h *AuthServiceHandler) totpEnrolled(ctx context.Context, userID string) (b
 		}
 		return false, nil, err
 	}
-	if resp.GetSecret() == nil {
+	s := totpSecretOf(resp)
+	if s == nil {
 		return false, nil, nil
 	}
-	s := resp.GetSecret()
-	s.Seed = resp.GetSeed() // decrypted beside the row, not inside it
 	return s.GetConfirmedAt() != nil, s, nil
+}
+
+// totpSecretOf reassembles the stored authenticator from GetTotpSecret: the
+// row's columns and the seed, which is decrypted beside the row rather than
+// inside it (a CRYPTED_SECRET is read as a top-level column). nil when there
+// is no row.
+func totpSecretOf(resp *pb.GetTotpSecretResp) *pb.UserTotpSecret {
+	r := resp.GetSecret()
+	if r == nil {
+		return nil
+	}
+	return &pb.UserTotpSecret{
+		Id:                r.GetId(),
+		UserId:            r.GetUserId(),
+		Secret:            r.GetSecret(),
+		ConfirmedAt:       r.GetConfirmedAt(),
+		CreatedAt:         r.GetCreatedAt(),
+		Seed:              resp.GetSeed(),
+		LastStep:          r.GetLastStep(),
+		StepupAttempts:    r.GetStepupAttempts(),
+		StepupLockedUntil: r.GetStepupLockedUntil(),
+		RevokedAt:         r.GetRevokedAt(),
+		EndedKey:          r.GetEndedKey(),
+	}
 }
 
 // mfaChallengeWindow / maxMfaChallengesPerWindow read the ISSUANCE cap
@@ -552,7 +575,8 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 		return nil, err
 	}
 	resp, err := h.Query.GetTotpSecret(ctx, &pb.GetTotpSecretReq{UserId: userID})
-	if err != nil || resp.GetSecret() == nil {
+	secret := totpSecretOf(resp)
+	if err != nil || secret == nil {
 		// An outage is said as one; no pending authenticator answers as a
 		// refused code, the same as a wrong one.
 		if err != nil && operationalCode(err) != codes.OK {
@@ -564,16 +588,15 @@ func (h *AuthServiceHandler) ConfirmTotp(ctx context.Context, req *pb.ConfirmTot
 	// used to be a harmless no-op; now it would mint a new set of recovery
 	// codes for whoever holds the session, on any code that verifies, with no
 	// step-up budget — GenerateRecoveryCodes is that operation, behind one.
-	if resp.GetSecret().GetConfirmedAt() != nil {
+	if secret.GetConfirmedAt() != nil {
 		return nil, refusal(ctx, codes.FailedPrecondition, "two_factor: the authenticator is already confirmed",
 			CodeTotpAlreadyConfirmed, "", MsgTotpAlreadyConfirmed, nil)
 	}
-	resp.GetSecret().Seed = resp.GetSeed()
-	plain, err := h.seedOf(ctx, resp.GetSecret())
+	plain, err := h.seedOf(ctx, secret)
 	if err != nil {
 		return nil, err
 	}
-	ok, err := h.acceptTotp(ctx, resp.GetSecret(), plain, req.GetCode())
+	ok, err := h.acceptTotp(ctx, secret, plain, req.GetCode())
 	if err != nil {
 		return nil, err
 	}

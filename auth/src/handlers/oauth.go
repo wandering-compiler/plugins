@@ -334,17 +334,47 @@ func (h *AuthServiceHandler) OAuthExchange(ctx context.Context, req *pb.OAuthExc
 	return &pb.OAuthExchangeResp{UserId: userID, Token: token, PublicComputer: attempt.publicComputer}, nil
 }
 
+// providerOf reassembles the provider from GetProviderByName: the row's
+// columns and the secret, which is decrypted beside the row rather than inside
+// it (a CRYPTED_SECRET is read as a top-level column). nil when there is no
+// row.
+func providerOf(resp *pb.GetProviderByNameResp) *pb.OAuthProvider {
+	r := resp.GetProvider()
+	if r == nil {
+		return nil
+	}
+	p := &pb.OAuthProvider{
+		Id:           r.GetId(),
+		Name:         r.GetName(),
+		DisplayName:  r.GetDisplayName(),
+		ClientId:     r.GetClientId(),
+		ClientSecret: r.GetClientSecret(),
+		AuthorizeUrl: r.GetAuthorizeUrl(),
+		TokenUrl:     r.GetTokenUrl(),
+		UserinfoUrl:  r.GetUserinfoUrl(),
+		Scopes:       r.GetScopes(),
+		SubjectPath:  r.GetSubjectPath(),
+		EmailPath:    r.GetEmailPath(),
+		Enabled:      r.GetEnabled(),
+		CreatedAt:    r.GetCreatedAt(),
+		Secret:       resp.GetSecret(),
+		ResponseMode: r.GetResponseMode(),
+		TeamId:       r.GetTeamId(),
+		KeyId:        r.GetKeyId(),
+	}
+	return p
+}
+
 // loadEnabledProvider resolves a provider by slug and enforces `enabled`.
 func (h *AuthServiceHandler) loadEnabledProvider(ctx context.Context, name string) (*pb.OAuthProvider, error) {
 	resp, err := h.Query.GetProviderByName(ctx, &pb.GetProviderByNameReq{Name: name})
 	if err != nil {
 		return nil, err
 	}
-	p := resp.GetProvider()
+	p := providerOf(resp)
 	if p == nil || !p.GetEnabled() {
 		return nil, errOAuthProviderDisabled
 	}
-	p.Secret = resp.GetSecret() // decrypted beside the row, not inside it
 	// The legacy plaintext column (rc.19 and earlier, or a fixture) is read
 	// only while the encrypted `secret` is empty, and moved there; once
 	// `secret` is set it wins — it is where the admin writes — and a

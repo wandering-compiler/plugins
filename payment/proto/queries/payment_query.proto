@@ -495,7 +495,8 @@ service PaymentQuery {
           "       d.status AS dispute.status, "
           "       d.provider_event_at AS dispute.provider_event_at, "
           "       d.created_at AS dispute.created_at, "
-          "       d.updated_at AS dispute.updated_at "
+          "       d.updated_at AS dispute.updated_at, "
+          "       d.closed_at AS dispute.closed_at "
           "FROM @module.Dispute d WHERE d.provider_dispute_id = :provider_dispute_id"
       }
     };
@@ -605,7 +606,8 @@ service PaymentQuery {
           "       m.period AS meter.period, "
           "       m.total AS meter.total, "
           "       m.reported_total AS meter.reported_total, "
-          "       m.updated_at AS meter.updated_at "
+          "       m.updated_at AS meter.updated_at, "
+          "       m.id AS meter.id "
           "FROM @module.UsageMeter m "
           "WHERE m.user_id = :user_id AND m.meter = :meter AND m.period = :period"
       }
@@ -630,7 +632,8 @@ service PaymentQuery {
           "       r.quantity AS record.quantity, "
           "       r.item_ref AS record.item_ref, "
           "       r.idempotency_key AS record.idempotency_key, "
-          "       r.created_at AS record.created_at "
+          "       r.created_at AS record.created_at, "
+          "       r.metadata AS record.metadata "
           "FROM @module.UsageRecord r WHERE r.idempotency_key = :idempotency_key"
       }
     };
@@ -697,7 +700,8 @@ service PaymentQuery {
           "       s.status AS subscription.status, "
           "       s.current_period_end AS subscription.current_period_end, "
           "       s.created_at AS subscription.created_at, "
-          "       s.updated_at AS subscription.updated_at "
+          "       s.updated_at AS subscription.updated_at, "
+          "       s.provider_event_at AS subscription.provider_event_at "
           "FROM @module.Subscription s WHERE s.id = :id"
       }
     };
@@ -722,7 +726,8 @@ service PaymentQuery {
           "       s.status AS subscription.status, "
           "       s.current_period_end AS subscription.current_period_end, "
           "       s.created_at AS subscription.created_at, "
-          "       s.updated_at AS subscription.updated_at "
+          "       s.updated_at AS subscription.updated_at, "
+          "       s.provider_event_at AS subscription.provider_event_at "
           "FROM @module.Subscription s WHERE s.provider_subscription_id = :provider_subscription_id"
       }
     };

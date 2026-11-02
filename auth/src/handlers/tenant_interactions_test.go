@@ -254,11 +254,11 @@ type kindQuery struct {
 	err  error
 }
 
-func (q kindQuery) GetUser(context.Context, *pb.GetUserReq, ...grpc.CallOption) (*pb.User, error) {
+func (q kindQuery) GetUser(context.Context, *pb.GetUserReq, ...grpc.CallOption) (*pb.UserAccount, error) {
 	if q.err != nil {
 		return nil, q.err
 	}
-	return &pb.User{Id: "u1", Kind: q.kind}, nil
+	return &pb.UserAccount{Id: "u1", Kind: q.kind}, nil
 }
 
 // A machine principal carries labels[account_kind]=bot; a person carries no
