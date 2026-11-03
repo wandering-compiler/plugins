@@ -102,9 +102,10 @@ check-stage: plugins-exist
 # the defaults a consumer gets by doing nothing.
 #
 # The same map lists a response field a query can fill with SQL NULL although
-# the field is not declared nullable (`kind=nullable-projection` — platform
-# docs/decisions/a-projection-says-when-it-can-be-null.md): warned now,
-# refused in the next release, and refused here already.
+# the field is not declared nullable (`kind=nullable-projection`: a LEFT
+# JOIN column or an aggregate over no rows answers NULL, and the response
+# has no way to say so): warned now, refused in the next release, and
+# refused here already.
 check-dev: plugins-exist
 	@for p in $(PLUGINS); do \
 		for f in --all-features --features=; do \
