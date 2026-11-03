@@ -1,8 +1,11 @@
 package workeradmit
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,5 +280,72 @@ func TestCurrent_ConfirmsOnlyAHeldVersion(t *testing.T) {
 		if _, ok := HeldFrom(bad); ok {
 			t.Errorf("HeldFrom(%v) read a version", bad)
 		}
+	}
+}
+
+// The relay logs the first ban set it receives and every change, not the
+// unchanged set every management call carries: until a delivery is logged, the
+// startup line "no saved ban set" reads as the current state.
+func TestSetBannedAt_LogsTheFirstDeliveryAndChanges(t *testing.T) {
+	var buf bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
+
+	r := New()
+	r.SetBannedAt([]string{"w1"}, 2)
+	r.SetBannedAt([]string{"w1"}, 2)
+	r.SetBannedAt([]string{"w1", "w2"}, 3)
+	r.SetBannedAt([]string{"w1"}, 1)
+	got := buf.String()
+	if n := strings.Count(got, "received the first ban set since start (version 2, 1 banned)"); n != 1 {
+		t.Errorf("first delivery logged %d times, want once:\n%s", n, got)
+	}
+	if n := strings.Count(got, "received a changed ban set (version 3, 2 banned)"); n != 1 {
+		t.Errorf("the change logged %d times, want once:\n%s", n, got)
+	}
+	if n := strings.Count(got, "workeradmit:"); n != 2 {
+		t.Errorf("logged %d lines, want 2 (an unchanged or an older set is not news):\n%s", n, got)
+	}
+}
+
+// A relay that restarted with a saved set logs its first delivery too: when a
+// control plane first confirms the held version (Current), or first sends an
+// older set it ignores. Once, either way.
+func TestFirstDelivery_LoggedForASavedSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bans.json")
+	saved := New()
+	if err := saved.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	saved.SetBannedAt([]string{"w1"}, 5)
+
+	var buf bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
+
+	confirmed := New()
+	if err := confirmed.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	confirmed.Current(5)
+	confirmed.Current(5)
+	if n := strings.Count(buf.String(), "confirmed the held ban set (version 5): the first delivery since start"); n != 1 {
+		t.Errorf("the first confirmation logged %d times, want once:\n%s", n, buf.String())
+	}
+
+	buf.Reset()
+	older := New()
+	if err := older.KeepIn(path); err != nil {
+		t.Fatal(err)
+	}
+	older.SetBannedAt([]string{"w1"}, 4)
+	older.SetBannedAt([]string{"w1"}, 4)
+	if n := strings.Count(buf.String(), "received the first ban set since start (version 4, older than the held version 5: kept the held one)"); n != 1 {
+		t.Errorf("a first, older delivery logged %d times, want once:\n%s", n, buf.String())
+	}
+	if n := strings.Count(buf.String(), "workeradmit:"); n != 1 {
+		t.Errorf("logged %d lines, want 1:\n%s", n, buf.String())
 	}
 }

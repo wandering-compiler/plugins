@@ -72,17 +72,17 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 	defer cancel()
 	readCtx, err := h.withFreshBans(read)
 	if err != nil {
-		h.deliveryOutcome(registryKey, err, logFailures,
+		h.deliveryOutcome(registryKey, err, logFailures, "",
 			"cluster: cannot read the ban set, so no relay is handed one — a relay holding none refuses every worker")
 		return
 	}
 	relays, err := h.Relays.ListAll(readCtx)
 	if err != nil {
-		h.deliveryOutcome(registryKey, err, logFailures,
+		h.deliveryOutcome(registryKey, err, logFailures, "",
 			"cluster: cannot list the relays to hand them the ban set")
 		return
 	}
-	h.deliveryOutcome(registryKey, nil, logFailures, "cluster: the ban set and the relay list are read again")
+	h.deliveryOutcome(registryKey, nil, logFailures, "", "cluster: the ban set and the relay list are read again")
 	h.forgetDeliveries(relays)
 	// The relays get the set on a context of their own, each bounded by the
 	// dial timeout below: the read deadline is not theirs.
@@ -112,10 +112,12 @@ func (h *ClusterServiceHandler) pushBans(ctx context.Context, logFailures bool) 
 				}
 			}
 			if err != nil {
-				h.deliveryOutcome(r.ID, err, logFailures,
+				h.deliveryOutcome(r.ID, err, logFailures, "",
 					fmt.Sprintf("cluster: relay %q did not take the ban set (it gets it with the next delivery)", r.Name))
 			} else {
-				h.deliveryOutcome(r.ID, nil, logFailures, fmt.Sprintf("cluster: relay %q takes the ban set again", r.Name))
+				h.deliveryOutcome(r.ID, nil, logFailures,
+					fmt.Sprintf("cluster: relay %q took the ban set (the first delivery to it from this control plane)", r.Name),
+					fmt.Sprintf("cluster: relay %q takes the ban set again", r.Name))
 			}
 		}(r)
 	}
@@ -183,8 +185,10 @@ func errShape(err error) string {
 // deliveryOutcome records how a ban-set delivery to key went and logs line:
 // every failure when always is set, otherwise only a change — the first
 // failure (or a different error, by errShape) after a success or none, with
-// the error, and the recovery, with the error it recovered from.
-func (h *ClusterServiceHandler) deliveryOutcome(key string, err error, always bool, line string) {
+// the error, and the recovery, with the error it recovered from. A first
+// success logs first when it is set: silent, "delivery works" and "delivery
+// never ran" read the same in the log.
+func (h *ClusterServiceHandler) deliveryOutcome(key string, err error, always bool, first, line string) {
 	now := delivery{}
 	if err != nil {
 		now = delivery{shape: errShape(err), text: err.Error()}
@@ -201,6 +205,8 @@ func (h *ClusterServiceHandler) deliveryOutcome(key string, err error, always bo
 		log.Printf("%s: %v", line, err)
 	case err == nil && seen && before.shape != "":
 		log.Printf("%s (it failed with: %s)", line, before.text)
+	case err == nil && !seen && first != "":
+		log.Print(first)
 	}
 }
 

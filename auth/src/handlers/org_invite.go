@@ -298,12 +298,12 @@ func (h *AuthServiceHandler) ListAssignableRoles(ctx context.Context, req *pb.Li
 	if err := refuseOtherOrg(ctx, req.GetOrg()); err != nil {
 		return nil, err
 	}
-	// ListOrgScopedRoles, not ListRoles: the shared catalogue query cannot
-	// return `org_scoped` at all (the column only exists under the
-	// org_membership feature, so naming it there fails the typecheck for
-	// projects without it — the query's own comment says so). Filtering in Go
-	// on a field that is never populated silently returned an EMPTY list,
-	// which is how this was found.
+	// ListOrgScopedRoles, not ListRoles: the org-scoped read FILTERS on
+	// `org_scoped` in SQL (and, under org_roles, keeps only this
+	// organization's own roles beside the shared ones), where the shared
+	// catalogue is paged and only projects the column. Filtering in Go
+	// once ran on a field the query did not fill and silently returned an
+	// EMPTY list, which is how this was found.
 	// No active organization (a direct call): the shared catalogue, no
 	// organization's own roles.
 	orgID, _ := principal.Scope(ctx, "org_id")

@@ -185,7 +185,9 @@ check-published-tests: plugins-exist
 		find "$$work/$$p" -name '*.src' -exec sh -c 'mv "$$1" "$${1%.src}"' _ {} \; ; \
 		$(W17CTL) plugin gen "$$work/$$p" >/dev/null || { echo "!! $$p: src/gen does not generate from the released form"; exit 1; }; \
 		echo ">> $$p: tests from the released form"; \
-		(cd "$$work/$$p/src" && $(GO) test -count=1 ./... >/dev/null) || { echo "!! $$p's tests fail from the released form"; exit 1; }; \
+		(cd "$$work/$$p/src" && $(GO) test -count=1 ./... >"$$work/test.out" 2>&1) || { \
+			echo "!! $$p's tests fail from the released form:"; \
+			grep -vE '^(ok|\?) ' "$$work/test.out" | head -200; exit 1; }; \
 		rm -rf "$$work"; \
 	done
 
