@@ -1,8 +1,11 @@
 package workeradmit
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,5 +280,31 @@ func TestCurrent_ConfirmsOnlyAHeldVersion(t *testing.T) {
 		if _, ok := HeldFrom(bad); ok {
 			t.Errorf("HeldFrom(%v) read a version", bad)
 		}
+	}
+}
+
+// The relay logs the first ban set it receives and every change, not the
+// unchanged set every management call carries: until a delivery is logged, the
+// startup line "no saved ban set" reads as the current state.
+func TestSetBannedAt_LogsTheFirstDeliveryAndChanges(t *testing.T) {
+	var buf bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
+
+	r := New()
+	r.SetBannedAt([]string{"w1"}, 2)
+	r.SetBannedAt([]string{"w1"}, 2)
+	r.SetBannedAt([]string{"w1", "w2"}, 3)
+	r.SetBannedAt([]string{"w1"}, 1)
+	got := buf.String()
+	if n := strings.Count(got, "received the first ban set since start (version 2, 1 banned)"); n != 1 {
+		t.Errorf("first delivery logged %d times, want once:\n%s", n, got)
+	}
+	if n := strings.Count(got, "received a changed ban set (version 3, 2 banned)"); n != 1 {
+		t.Errorf("the change logged %d times, want once:\n%s", n, got)
+	}
+	if n := strings.Count(got, "workeradmit:"); n != 2 {
+		t.Errorf("logged %d lines, want 2 (an unchanged or an older set is not news):\n%s", n, got)
 	}
 }

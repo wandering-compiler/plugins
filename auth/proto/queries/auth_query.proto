@@ -342,6 +342,11 @@ message GetDefaultRolesResp {
 // columns carry the management view.
 message ListRolesReq {
   option (w17.contrib.plugin_feature) = "rbac";
+  // Narrow to the role a declared preset seeded. ABSENT lists the whole
+  // catalogue (the admin page's call). A caller that wants ONE preset role
+  // names it here instead of scanning the paged list for it, which would
+  // miss the preset once the catalogue grows past the first page.
+  optional string preset_key = 1 [(w17.field) = { type: SLUG, max_len: 100 }];
 }
 message ListOrgScopedRolesReq {
   option (w17.contrib.plugin_feature) = "org_membership";
@@ -2672,24 +2677,22 @@ service AuthQuery {
   // not a convenience list — it is the only way the field leaves the
   // database.
   //
-  // ⚠️ The two GATED columns stay out, and this is a known limit rather
-  // than an oversight: `token_type` is gated on `api_token` and
-  // `org_scoped` on `org_membership`, so naming either here makes the
-  // typecheck fail for every project without that feature ("column
-  // r.org_scoped not found on Role" — measured, not predicted). Reading
-  // them needs feature-variant DQL, which this vocabulary does not have.
-  // The consequence worth knowing: a caller cannot tell an org-scoped
-  // role from a global one through the API, only through the seed.
+  // The GATED columns (`token_type` on `api_token`, `org_scoped` on
+  // `org_membership`, `org_id` on `org_roles`) are projected with
+  // `?feature(<name>)`, so a project without the feature compiles the query
+  // without the column and a project with it reads it: a caller tells an
+  // org-scoped role from a global one through either read.
+  //
+  // `preset_key` is also an optional FILTER on ListRoles: a caller after one
+  // preset role names it instead of scanning the paged catalogue.
 
   // ListOrgScopedRoles — the role catalogue restricted to roles that mean
   // something INSIDE an organization.
   //
-  // Separate from ListRoles rather than a flag on it, and the comment above
-  // that RPC is the reason: `org_scoped` only exists as a column when the
-  // `org_membership` feature is on, so naming it in the shared query fails
-  // the typecheck for every project without that feature. This one is GATED
-  // on org_membership, so the column is guaranteed to be there — the same
-  // shape GetUserOrgPermissions already uses.
+  // Separate from ListRoles rather than a flag on it: `org_scoped` only
+  // exists as a column when the `org_membership` feature is on, and this
+  // read is GATED on org_membership, so it can FILTER on the column (not
+  // only project it) — the same shape GetUserOrgPermissions already uses.
   //
   // Exists so an invitation UI can offer choices instead of asking a person
   // to type a role name and find out afterwards whether it was one.
@@ -2855,7 +2858,8 @@ service AuthQuery {
           "       r.deleted_at AS deleted_at, "
           "       r.ended_key AS ended_key, "
           "       ?feature(org_roles) r.org_id AS org_id "
-          "FROM @module.Role r WHERE r.deleted_at IS NULL ORDER BY r.name ASC, r.id ASC"
+          "FROM @module.Role r WHERE r.deleted_at IS NULL AND ?r.preset_key = :preset_key "
+          "ORDER BY r.name ASC, r.id ASC"
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "rbac";

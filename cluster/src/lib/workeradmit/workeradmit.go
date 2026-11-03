@@ -180,12 +180,20 @@ func (r *Registry) SetBanned(ids []string) {
 // Version 0 (a control plane that sends none) is always applied, as before.
 func (r *Registry) SetBannedAt(ids []string, version int64) {
 	r.mu.Lock()
+	// The first delivery since start is LOGGED: until then the startup line
+	// "no saved ban set: workers are refused…" is the last word in the log,
+	// and it reads as the current state long after a set arrived.
+	first := r.delivered.IsZero()
 	// A delivery, even an ignored older one: the set held is at least as new
 	// as what a control plane just read.
 	r.delivered = time.Now()
 	r.holds = true
 	if version != 0 && version < r.version {
+		held := r.version
 		r.mu.Unlock()
+		if first {
+			log.Printf("workeradmit: received the first ban set since start (version %d, older than the held version %d: kept the held one)", version, held)
+		}
 		return
 	}
 	versionChanged := version > r.version
@@ -206,7 +214,16 @@ func (r *Registry) SetBannedAt(ids []string, version int64) {
 	// A new version is kept even when the set is unchanged: a restart that
 	// forgot it would accept a set older than the one already applied.
 	changed := added || len(old) != len(r.banned) || versionChanged
+	count := len(r.banned)
 	r.mu.Unlock()
+	// Logged on the first delivery and on a change, never on the unchanged
+	// set every management call carries.
+	switch {
+	case first:
+		log.Printf("workeradmit: received the first ban set since start (version %d, %d banned)", version, count)
+	case changed:
+		log.Printf("workeradmit: received a changed ban set (version %d, %d banned)", version, count)
+	}
 	if changed {
 		r.persist()
 	}
@@ -227,6 +244,10 @@ func (r *Registry) Current(version int64) bool {
 	defer r.mu.Unlock()
 	if !r.holds || version <= 0 || r.version < version {
 		return false
+	}
+	if r.delivered.IsZero() {
+		// Logged for the reason SetBannedAt logs its first delivery.
+		log.Printf("workeradmit: a control plane confirmed the held ban set (version %d): the first delivery since start", r.version)
 	}
 	r.delivered = time.Now()
 	return true

@@ -139,6 +139,32 @@ func TestPushBans_LogsAChangeOfState(t *testing.T) {
 	}
 }
 
+// The first successful delivery to a relay is logged once, and the rounds
+// after it are not: silent, "delivery works" and "delivery never ran" read
+// the same in the log.
+func TestPushBans_LogsTheFirstDelivery(t *testing.T) {
+	reg, dial := serveRelayWithWorkers(t)
+	h := &ClusterServiceHandler{
+		Relays:      &store{relays: []Relay{{ID: "1", Name: "edge", URL: "live"}}},
+		Workers:     &workerStore{banned: []string{"bb"}, banVersion: 3},
+		DialTimeout: 200 * time.Millisecond,
+		Dial:        dial,
+	}
+	buf := captureLog(t)
+	for range 3 {
+		h.pushBans(t.Context(), false)
+	}
+	if !reg.HoldsBanSet() {
+		t.Fatal("the relay did not get the set")
+	}
+	if got := strings.Count(buf.String(), `relay "edge" took the ban set (the first delivery`); got != 1 {
+		t.Errorf("the first delivery was logged %d times over three rounds, want once:\n%s", got, buf.String())
+	}
+	if strings.Contains(buf.String(), "again") {
+		t.Errorf("a relay that never failed was logged as recovering:\n%s", buf.String())
+	}
+}
+
 // A relay that stays down with an error naming an ephemeral port — a new one
 // every round — is one failure, not a new one each round. And a relay no
 // longer registered leaves no recorded outcome behind.
