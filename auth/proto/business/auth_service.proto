@@ -356,9 +356,10 @@ message WhoAmIResp {
   // `authenticate_turnkey`; organizations exist only under `org_membership`,
   // and most activations enable the first without the second. A field named
   // here unconditionally and left empty there is the shape that has bitten
-  // this plugin twice — ListRoles cannot return `org_scoped` for exactly this
-  // reason, and a handler that filtered on it in Go got an empty list from a
-  // column nothing populated. Gated, the fields are DROPPED from the message
+  // this plugin twice — ListRoles once could not return `org_scoped` for
+  // exactly this reason (it projects it with `?feature` now), and a handler
+  // that filtered on it in Go got an empty list from a column nothing
+  // populated. Gated, the fields are DROPPED from the message
   // when the feature is off, so nothing can read a zero value as an answer.
   repeated UserOrg orgs = 2 [(w17.contrib.plugin_feature_field) = "org_membership"];
   // Empty when the request resolved no organization — the caller belongs to
