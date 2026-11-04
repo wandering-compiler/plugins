@@ -1181,6 +1181,20 @@ message RevokeOrgInviteReq {
 }
 message RevokeOrgInviteResp { option (w17.contrib.plugin_feature) = "org_invite"; }
 
+// RevokeOrgInvitesReq — the backoffice withdrawing invitations it picked
+// from the realm-wide OrgInvites list, in any organization: each is closed
+// under its organization's lock and held to the role ceiling, as
+// RevokeOrgInvite holds a member's withdrawal. Realm-wide only.
+message RevokeOrgInvitesReq {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  repeated string ids = 1 [(w17.field) = { type: UUID }];
+}
+message RevokeOrgInvitesResp {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  // How many were withdrawn; an id already accepted or closed counts none.
+  int32 revoked = 1;
+}
+
 // MyInvite — an invitation addressed to the CALLER, named by the
 // organization rather than by its id, because this is the list a person
 // decides from.
@@ -1823,6 +1837,15 @@ message OrgProductPlanLineReq {
   // role_key — '' = the whole product.
   string role_key = 3 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
 }
+// DisallowOrgProductsReq — the backoffice ending plan lines it picked by
+// their row ids (OrgProductAllowance.id), in whatever organizations: what an
+// admin row action sends. DisallowOrgProduct takes one line by (org, product,
+// role) — a key an admin delete cannot stamp, so a page could not bind it.
+message DisallowOrgProductsReq {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  repeated string ids = 1 [(w17.field) = { type: UUID }];
+}
+
 message OrgProductPlanChangeResp {
   option (w17.contrib.plugin_feature) = "product_plans";
 }
@@ -2521,6 +2544,20 @@ service AuthService {
     option (w17.contrib.plugin_feature_rpc) = "org_invite";
   }
 
+  // InviteToOrgAdmin — the backoffice's invitation into the organization
+  // the request names by its slug (`org`), which its operator is usually no
+  // member of. Realm-wide, gated by the endpoint ACL; the role ceiling holds
+  // against what the caller holds.
+  rpc InviteToOrgAdmin(InviteToOrgReq) returns (InviteToOrgResp) {
+    option (w17.contrib.plugin_feature_rpc) = "backoffice_invites";
+  }
+
+  // RevokeOrgInvites — the backoffice's withdrawal of picked invitations,
+  // in any organization (realm-wide, gated by the endpoint ACL).
+  rpc RevokeOrgInvites(RevokeOrgInvitesReq) returns (RevokeOrgInvitesResp) {
+    option (w17.contrib.plugin_feature_rpc) = "backoffice_invites";
+  }
+
   // ListMyInvites — invitations addressed to the CALLER, in every org.
   // Not scoped to an active org, and could not be: the point is that the
   // caller is not a member of those organizations yet.
@@ -2667,6 +2704,11 @@ service AuthService {
     option (w17.contrib.plugin_feature_rpc) = "product_plans";
   }
   rpc DisallowOrgProduct(OrgProductPlanLineReq) returns (OrgProductPlanChangeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "product_plans";
+  }
+  // DisallowOrgProducts — the plan lines picked by their row ids, ended
+  // (realm-wide, the endpoint ACL gates it; bind it as a row action).
+  rpc DisallowOrgProducts(DisallowOrgProductsReq) returns (OrgProductPlanChangeResp) {
     option (w17.contrib.plugin_feature_rpc) = "product_plans";
   }
 

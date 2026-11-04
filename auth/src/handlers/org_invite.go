@@ -444,6 +444,13 @@ func (h *AuthServiceHandler) InviteToOrg(ctx context.Context, req *pb.InviteToOr
 	if err != nil {
 		return nil, err
 	}
+	return h.inviteInto(ctx, orgID, inviter, req)
+}
+
+// inviteInto is an invitation into orgID by inviter, under orgID's lock: the
+// role ceiling, the kind and the products' roles held to the inviter, then the
+// row and the link.
+func (h *AuthServiceHandler) inviteInto(ctx context.Context, orgID, inviter string, req *pb.InviteToOrgReq) (*pb.InviteToOrgResp, error) {
 	// Normalized here, once, and stored normalized: SignIn lower-cases the
 	// address it looks up, so an invitation stored as typed would never
 	// match the account that arrives to accept it.

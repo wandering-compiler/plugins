@@ -360,7 +360,7 @@ features:
       # lookup lives here, not in org_invite.go, because both features grant.
       - handlers/org_membership_role.go
   - name: org_invite
-    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / BindOpenOrgInvite / ConsumeOrgInviteByToken / CloseOrgInvite / CloseExpiredOrgInvite (a withdrawn or lapsed invitation is closed, never deleted), and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. An invitation is accepted through its link (AcceptOrgInvite); with `invite_accept_from_list` also from the caller's own list. Listing and withdrawing an organization's invitations shows and allows only those whose role the caller could give. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
+    description: "Invite-based org membership — an admin (or whoever holds the permission) invites an EMAIL into an organization with a named role. Adds the OrgInvite table + AuthQuery.ListOrgInvites / ListPendingInvitesForEmail / GetOrgInvite, AuthMutation.CreateOrgInvite / BindOpenOrgInvite / ConsumeOrgInviteByToken / CloseOrgInvite / CloseExpiredOrgInvite (a withdrawn or lapsed invitation is closed, never deleted), and the InviteToOrg / ListOrgInvites / RevokeOrgInvite / ListMyInvites / AcceptOrgInvite business RPCs. The backoffice's invitations in every organization are backoffice_invites. An invitation is accepted through its link (AcceptOrgInvite); with `invite_accept_from_list` also from the caller's own list. Listing and withdrawing an organization's invitations shows and allows only those whose role the caller could give. Accepting writes BOTH the OrgMembership row and the UserRole grant scoped to that org, so an invited member arrives with permissions rather than with a label and nothing behind it. Keyed on (org, email) rather than a user id — the invitee may not have an account yet — which is also what lets `invite_only` gate sign-up: with it on, SignUp refuses an address that holds no pending invitation. Off by default."
     default: false
     # Built ON org_membership, not merely alongside it: the invite writes an
     # OrgMembership row and an org-scoped UserRole, both of which are types
@@ -390,6 +390,13 @@ features:
       - org_invite
     go_files:
       - handlers/org_invite_from_list.go
+  - name: backoffice_invites
+    description: "The backoffice manages invitations in every organization — realm-wide, gated by the endpoint ACL. Publishes the OrgInvites admin page (every organization's pending invitations, the org's name beside its id; an \"Invite to an organization\" action with an organization picker that shows the link once; \"Withdraw\" over picked rows; AuthQuery.ListOrgInvitesAdmin) and POST /auth/admin/invites, POST /auth/admin/invites/withdraw (AuthService.InviteToOrgAdmin, AuthService.RevokeOrgInvites). InviteToOrgAdmin invites into the organization the request names by its slug (`org`); both act realm-wide — from inside an organization only for a caller holding the method realm-wide — and only when the endpoint ACL gates them (bound by the page or a route), under the role ceiling against what the caller holds. They are methods of their own, not a mode of InviteToOrg, because a project's default role commonly grants AuthService.* to every account: exclude them from such a role as you do the plan methods. Off by default: an upgrade adds no method, page or route to a project that did not ask for them."
+    default: false
+    requires:
+      - org_invite
+    go_files:
+      - handlers/org_invite_backoffice.go
   - name: membership_kinds
     description: "Memberships of several KINDS — the auth half of audience surfaces (a domain publishing one REST / MCP / gRPC surface per audience, each on its own gateway). OrgMembership and OrgInvite gain a kind (`staff`, `client`, … — the project names them, the plugin carries them); a membership has one kind, so a person is an organization's staff or its client, and may be staff of one and client of another. An audience gateway names the kinds it admits in every Authenticate (x-w17-membership-kinds, which only a gateway writes): the organization a request acts in is resolved among the caller's memberships of an admitted kind, a caller holding none is refused 403 (MEMBERSHIP_NOT_ADMITTED) before any handler. A gateway that names no kinds admits every membership. InviteToOrg takes the kind of membership accepting creates, held to the kinds the inviter may invite (INVITE_KIND_NOT_ALLOWED). Off by default; a migration adds the columns. A member's kind is changed in place (UpdateOrgMembershipKind, PUT /auth/orgs/{org}/members/{id}/kind) under the role ceiling and the kinds the caller may hand out."
     default: false
@@ -489,7 +496,7 @@ features:
       - handlers/product_roles.go
       - handlers/product_role_defs.go
   - name: product_plans
-    description: "An organization's plan across the products (product_roles): the roles of each product its members may hold, a line per role or a whole product. The backoffice gives and takes the lines realm-wide (ListOrgProductPlan / AllowOrgProduct / DisallowOrgProduct — GET / PUT /auth/admin/orgs/{org_id}/product-plan, POST /auth/admin/orgs/{org_id}/product-plan/remove; PRODUCT_PLANS_REALM_ONLY from inside an organization), and an organization reads its own (ListMyOrgProductPlan, GET /auth/orgs/{org}/product-plan). A product role held in an organization counts only when its plan carries it — on every request, so taking a line applies on the next one — and nobody hands out a role the plan does not carry (PRODUCT_ROLE_NOT_IN_PLAN). An organization without a line for a product holds nothing there. Realm-wide roles are not bounded. Nothing is deleted. Off by default; a migration adds the table."
+    description: "An organization's plan across the products (product_roles): the roles of each product its members may hold, a line per role or a whole product. The backoffice gives and takes the lines realm-wide (ListOrgProductPlan / AllowOrgProduct / DisallowOrgProduct — GET / PUT /auth/admin/orgs/{org_id}/product-plan, POST /auth/admin/orgs/{org_id}/product-plan/remove; PRODUCT_PLANS_REALM_ONLY from inside an organization; DisallowOrgProducts ends lines picked by their row ids, the shape an admin row action sends), and an organization reads its own (ListMyOrgProductPlan, GET /auth/orgs/{org}/product-plan). A product role held in an organization counts only when its plan carries it — on every request, so taking a line applies on the next one — and nobody hands out a role the plan does not carry (PRODUCT_ROLE_NOT_IN_PLAN). An organization without a line for a product holds nothing there. Realm-wide roles are not bounded. Nothing is deleted. Off by default; a migration adds the table."
     default: false
     requires:
       - product_roles
@@ -896,6 +903,16 @@ presets:
       # The backoffice's named plans (named_product_plans): defined once,
       # realm-wide; an organization goes on one through
       # /auth/admin/orgs/{org_id}/product-plan-assignment.
+      # The backoffice's invitations in every organization (backoffice_invites):
+      # realm-wide, gated by the endpoint ACL; InviteToOrgAdmin names the
+      # organization in its body (`org`, the slug). The list of every
+      # organization's invitations is the OrgInvites admin page's: it pages,
+      # and a preset route cannot declare paging.
+      - prefix: /auth/admin/invites
+        description: "The backoffice's invitations across every organization."
+        endpoints:
+          - { ref: AuthService.InviteToOrgAdmin, method: POST, path: "",          feature: backoffice_invites }
+          - { ref: AuthService.RevokeOrgInvites, method: POST, path: "/withdraw", feature: backoffice_invites }
       - prefix: /auth/admin/product-plans
         description: "The plans organizations are put on — each a set of the products' roles, defined once."
         endpoints:
@@ -1273,6 +1290,49 @@ presets:
           # so it can neither move a membership nor reach another org's.
           fields: [role, org]
           readonly_fields: [id, user_id, org_id, created_at]
+      # Turnkey OrgInvites — the backoffice's invitations, in every
+      # organization. Gated backoffice_invites (built on org_invite and so on
+      # org_membership, so the
+      # Organizations page it links to and picks from is always there).
+      # Realm-wide: its operator is a member of none, so the invite action
+      # names the organization (`org`, picked from Organizations by its slug)
+      # and InviteToOrgAdmin acts there; binding it here puts it in the
+      # endpoint ACL, which the method requires. The role ceiling
+      # still applies, against what the operator holds realm-wide. The link
+      # is shown ONCE (secret result): the row keeps only its hash.
+      # Withdrawing picks rows (RevokeOrgInvites). A hand-written page named
+      # "OrgInvites" overrides this.
+      - name: OrgInvites
+        model: OrgInvite
+        feature: backoffice_invites
+        list:
+          source: AuthQuery.ListOrgInvitesAdmin
+          columns:
+            - created_at
+            - email
+            - { name: organization, ref: { title: org_name, page: Organizations } }
+            - role
+            - expires_at
+          detail_link_column: created_at
+        detail:
+          read: AuthQuery.GetOrgInviteAdmin
+          readonly_fields: [id, email, organization, org_name, role, expires_at, created_at]
+        actions:
+          - name: invite
+            source: AuthService.InviteToOrgAdmin
+            label: "Invite to an organization"
+            target: page
+            # An empty address is an OPEN invitation: whoever holds the link
+            # picks their own.
+            fields: [org, email, role]
+            field_refs:
+              - { field: org, page: Organizations, value: slug, title: "{name}" }
+            result: { fields: [token], secret: true }
+          - name: withdraw
+            source: AuthService.RevokeOrgInvites
+            label: "Withdraw"
+            confirm: "Withdraw the selected invitations? Their links stop working."
+            target: list
       # Turnkey session/token review. Gated user_admin. Lists every
       # UserToken across users (NEVER the secret token value) so an
       # operator can review + revoke sessions. Revoked tokens stay listed,

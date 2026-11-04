@@ -1258,6 +1258,59 @@ message ListOrgMembershipsResp {
   w17.Paging paging = 2;
 }
 
+// GetOrganizationBySlugReq — an organization by its slug, with no caller
+// in it: the backoffice names the organization it invites into, and its
+// operator is a member of none (GetUserOrgBySlug answers only a member).
+message GetOrganizationBySlugReq {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  string slug = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
+}
+
+// GetPendingOrgInviteReq / PendingOrgInviteRef — the organization and the
+// role of one pending invitation, by its id: what withdrawing it from the
+// backoffice locks and holds to the ceiling, for an id an operator picked
+// from the realm-wide list.
+message GetPendingOrgInviteReq {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message PendingOrgInviteRef {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  string id     = 1 [(w17.field) = { type: UUID }];
+  string org_id = 2 [(w17.field) = { type: UUID }];
+  string role   = 3;
+}
+
+// ListOrgInvitesAdminReq / OrgInviteAdminRow — every organization's pending
+// invitations, for the backoffice's OrgInvites page: the org's NAME beside
+// its id (ADMIN-FK, as OrgMembershipAdminRow does for memberships), the
+// address (empty for an open invitation, which names nobody), the role and
+// when it lapses. Never the token: the row keeps only its hash.
+message ListOrgInvitesAdminReq {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+}
+message OrgInviteAdminRow {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  string id           = 1 [(w17.field) = { type: UUID }];
+  string email        = 2;
+  string organization = 3 [(w17.field) = { type: UUID }];
+  string org_name     = 4;
+  string role         = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+message GetOrgInviteAdminReq {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message ListOrgInvitesAdminResp {
+  option (w17.contrib.plugin_feature) = "backoffice_invites";
+  repeated OrgInviteAdminRow invites = 1;
+  // Cursor-paged (admin-only), as ListOrgMemberships: the page's list grows
+  // with every invitation the realm sends.
+  w17.Paging paging = 2;
+}
+
 message GetOrgMembershipReq {
   option (w17.contrib.plugin_feature) = "org_membership";
   string id = 1;
@@ -2003,6 +2056,19 @@ message ListUserProductRoleGrantRowsReq {
 message ListRealmProductRoleGrantRowsReq {
   option (w17.contrib.plugin_feature) = "product_roles";
 }
+// GetOrgProductAllowanceReq / OrgProductAllowanceRef — the organization of
+// one live plan line, by its id: what ending it from the backoffice locks,
+// for an id an operator picked from a list of lines.
+message GetOrgProductAllowanceReq {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string id = 1 [(w17.field) = { type: UUID }];
+}
+message OrgProductAllowanceRef {
+  option (w17.contrib.plugin_feature) = "product_plans";
+  string id     = 1 [(w17.field) = { type: UUID }];
+  string org_id = 2 [(w17.field) = { type: UUID }];
+}
+
 message ListOrgProductAllowanceRowsReq {
   option (w17.contrib.plugin_feature) = "product_plans";
   string org_id = 1 [(w17.field) = { type: UUID }];
@@ -3791,6 +3857,78 @@ service AuthQuery {
     };
   }
 
+  // GetOrganizationBySlug — one live organization by its slug, for the
+  // backoffice inviting into it. Gated org_invite.
+  rpc GetOrganizationBySlug(GetOrganizationBySlugReq) returns (Organization) {
+    option (w17.contrib.plugin_feature_rpc) = "backoffice_invites";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT o.id AS id, o.slug AS slug, o.name AS name, "
+          "       o.kind AS kind, o.created_at AS created_at, "
+          "       o.deleted_at AS deleted_at, "
+          "       o.ended_key AS ended_key "
+          "FROM @module.Organization o WHERE o.slug = :slug AND o.deleted_at IS NULL"
+      }
+    };
+  }
+
+  // GetPendingOrgInvite — the organization and role of one pending
+  // invitation, for withdrawing it from the backoffice. Gated org_invite.
+  rpc GetPendingOrgInvite(GetPendingOrgInviteReq) returns (PendingOrgInviteRef) {
+    option (w17.contrib.plugin_feature_rpc) = "backoffice_invites";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.id AS id, i.org_id AS org_id, i.role AS role "
+          "FROM @module.OrgInvite i "
+          "WHERE i.id = :id AND i.accepted_at IS NULL AND i.closed_at IS NULL"
+      }
+    };
+  }
+
+  // GetOrgInviteAdmin — one pending invitation for the OrgInvites page's
+  // detail, in the list's shape. Gated org_invite.
+  rpc GetOrgInviteAdmin(GetOrgInviteAdminReq) returns (OrgInviteAdminRow) {
+    option (w17.contrib.plugin_feature_rpc) = "backoffice_invites";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.id AS id, COALESCE(i.email, '') AS email, "
+          "       i.org_id AS organization, COALESCE(o.name, '') AS org_name, "
+          "       i.role AS role, i.expires_at AS expires_at, i.created_at AS created_at "
+          "FROM @module.OrgInvite i "
+          "JOIN @module.Organization o ON o.id = i.org_id "
+          "WHERE i.id = :id AND i.accepted_at IS NULL AND i.closed_at IS NULL AND o.deleted_at IS NULL"
+      }
+    };
+  }
+
+  // ListOrgInvitesAdmin — every live organization's pending invitations for
+  // the backoffice's OrgInvites page, newest first, with the org's name; the
+  // address empty for an open invitation. Pending = neither accepted nor
+  // closed, the same rows ListOrgInvitesByOrg lists per organization; a
+  // deleted organization's are not offered. Gated org_invite.
+  rpc ListOrgInvitesAdmin(ListOrgInvitesAdminReq) returns (ListOrgInvitesAdminResp) {
+    option (w17.contrib.plugin_feature_rpc) = "backoffice_invites";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT i.id AS id, COALESCE(i.email, '') AS email, "
+          "       i.org_id AS organization, COALESCE(o.name, '') AS org_name, "
+          "       i.role AS role, i.expires_at AS expires_at, i.created_at AS created_at "
+          "FROM @module.OrgInvite i "
+          "JOIN @module.Organization o ON o.id = i.org_id "
+          "WHERE i.accepted_at IS NULL AND i.closed_at IS NULL AND o.deleted_at IS NULL "
+          "ORDER BY i.created_at DESC, i.id DESC"
+      }
+    };
+  }
+
   // GetOrgMembership — one membership for the admin detail view. Returns
   // the OrgMembership model DIRECTLY. Gated org_membership.
   rpc GetOrgMembership(GetOrgMembershipReq) returns (OrgMembership) {
@@ -4533,6 +4671,20 @@ service AuthQuery {
   }
   // ListOrgProductAllowanceRows — an organization's plan: read on every
   // Authenticate a product's gateway asks in the organization.
+  // GetOrgProductAllowance — the organization of one live plan line.
+  rpc GetOrgProductAllowance(GetOrgProductAllowanceReq) returns (OrgProductAllowanceRef) {
+    option (w17.contrib.plugin_feature_rpc) = "product_plans";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "SELECT a.id AS id, a.org_id AS org_id "
+          "FROM @module.OrgProductAllowance a "
+          "WHERE a.id = :id AND a.ended_at IS NULL"
+      }
+    };
+  }
+
   rpc ListOrgProductAllowanceRows(ListOrgProductAllowanceRowsReq) returns (ListOrgProductAllowanceRowsResp) {
     option (w17.contrib.plugin_feature_rpc) = "product_plans";
     option (w17.db.method) = {
