@@ -29,7 +29,7 @@ func TestTopupReconciliation_Property_RandomInterleavings(t *testing.T) {
 func checkTopupInterleaving(t *testing.T, seed int64) {
 	rng := rand.New(rand.NewSource(seed))
 	r := newRig(t)
-	p := r.topUp("user-a", "10.00", "top-x")
+	p := r.topUp("user-a", 100000, "top-x")
 	pi := p.GetProviderPaymentId()
 	success := eventJSON("evt_top", "payment_intent.succeeded", pi, nil)
 	if rng.Intn(2) == 0 {
@@ -53,7 +53,7 @@ func checkTopupInterleaving(t *testing.T, seed int64) {
 		}
 		return left
 	}
-	spent, lost, evt := 0, int64(0), 0
+	spent, lost, evt := int64(0), int64(0), 0
 	next := func() string { evt++; return fmt.Sprintf("evt_%d", evt) }
 	deliver := func(body []byte) {
 		t.Helper()
@@ -109,8 +109,8 @@ func checkTopupInterleaving(t *testing.T, seed int64) {
 			deliver(disputeEvent(t, next(), "charge.dispute.closed", fmt.Sprintf("dp_%d", evt), pi, st, amt, time.Now().Unix()))
 		case 5: // the owner spends
 			amt := 1 + rng.Intn(4)
-			if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: strconv.Itoa(amt), IdempotencyKey: next()}); err == nil {
-				spent += amt
+			if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: int64(amt) * 10000, IdempotencyKey: next()}); err == nil {
+				spent += int64(amt) * 10000
 				log = append(log, "spend "+strconv.Itoa(amt))
 			}
 		case 6: // a redelivery of the last refund event
@@ -148,14 +148,14 @@ func checkTopupInterleaving(t *testing.T, seed int64) {
 		t.Fatal(err)
 	}
 	held, owed, bal := sum.GetTotal(), r.store.owed(t, pi), r.store.balance(t, "user-a")
-	want := decimalSum(strconv.FormatFloat(float64(target)/100, 'f', 2, 64), "0")
-	if got := decimalSub(held, owed); got != want {
-		t.Errorf("seed %d %v: held %s − owed %s = %s, want the target %s", seed, log, held, owed, got, want)
+	want := target * 100 // the provider's cents in ten-thousandths
+	if got := held - owed; got != want {
+		t.Errorf("seed %d %v: held %d − owed %d = %d, want the target %d", seed, log, held, owed, got, want)
 	}
-	if decimalSign(owed) < 0 || (decimalSign(owed) > 0 && decimalSign(bal) != 0) {
-		t.Errorf("seed %d %v: owed %s with balance %s", seed, log, owed, bal)
+	if owed < 0 || (owed > 0 && bal != 0) {
+		t.Errorf("seed %d %v: owed %d with balance %d", seed, log, owed, bal)
 	}
-	if got := decimalSub(held, strconv.Itoa(spent)); got != bal {
-		t.Errorf("seed %d %v: balance %s, want held %s − spent %d", seed, log, bal, held, spent)
+	if got := held - spent; got != bal {
+		t.Errorf("seed %d %v: balance %d, want held %d − spent %d", seed, log, bal, held, spent)
 	}
 }

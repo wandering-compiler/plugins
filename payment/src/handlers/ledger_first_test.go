@@ -24,8 +24,8 @@ func (s *memStore) totalCalls() int {
 // one read, no reconciliation, no provider call.
 func TestIngestStripe_ACopyOfAProcessedEventDoesNoWork(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
-	if _, err := refund(r, p.GetId(), "4", "r1"); err != nil {
+	p := r.paid("user-a", 100000, "k")
+	if _, err := refund(r, p.GetId(), 40000, "r1"); err != nil {
 		t.Fatal(err)
 	}
 	// A refund event: its processing reads the payment's refunds from the
@@ -54,7 +54,7 @@ func TestIngestStripe_ACopyOfAProcessedEventDoesNoWork(t *testing.T) {
 // not short-circuited, and runs in full.
 func TestIngestStripe_AFailedDeliveryIsNotShortCircuited(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
+	p := r.charge("user-a", 100000, "k")
 	body := eventJSON("evt_s", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)
 	r.store.injectBefore("MarkPaymentSucceeded", errTransient)
 	if _, err := r.deliver(body); err == nil {
@@ -73,7 +73,7 @@ func TestIngestStripe_AFailedDeliveryIsNotShortCircuited(t *testing.T) {
 // redelivered, and nothing runs or is recorded.
 func TestIngestStripe_ALedgerReadFailureRunsNothing(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k")
+	p := r.charge("user-a", 100000, "k")
 	body := eventJSON("evt_s", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)
 	r.store.injectBefore("GetProcessedWebhookEvent", errTransient)
 	_, err := r.deliver(body)

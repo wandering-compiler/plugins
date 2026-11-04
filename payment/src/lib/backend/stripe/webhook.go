@@ -61,9 +61,10 @@ type Event struct {
 	// charge: whether it is fully refunded.
 	ChargePaymentIntent string
 	ChargeRefunded      bool
-	// Amount is data.object.amount with data.object.currency, as a decimal
-	// of the currency (a dispute's disputed amount, a refund's amount);
-	// empty when the object carries no currency.
+	// Amount is data.object.amount with data.object.currency, in
+	// ten-thousandths of the major unit (a dispute's disputed amount, a
+	// refund's amount); empty (no Currency) when the object carries no
+	// currency.
 	Amount backend.Money
 	// Received is data.object.amount_received with data.object.currency on a
 	// payment intent: what the payment took. Empty (no Currency) when the
@@ -143,9 +144,14 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 	}
 	var amount, received backend.Money
 	if cur := strings.ToLower(raw.Data.Object.Currency); cur != "" {
-		amount = backend.Money{Amount: fromMinorUnits(raw.Data.Object.Amount, cur), Currency: cur}
+		var err error
+		if amount, err = moneyFrom(raw.Data.Object.Amount, cur); err != nil {
+			return Event{}, fmt.Errorf("stripe: webhook %s: %w", raw.ID, err)
+		}
 		if r := raw.Data.Object.AmountReceived; r != nil {
-			received = backend.Money{Amount: fromMinorUnits(*r, cur), Currency: cur}
+			if received, err = moneyFrom(*r, cur); err != nil {
+				return Event{}, fmt.Errorf("stripe: webhook %s: %w", raw.ID, err)
+			}
 		}
 	}
 	return Event{

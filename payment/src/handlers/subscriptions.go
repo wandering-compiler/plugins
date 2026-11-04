@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -192,16 +193,16 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 	if slug == "" {
 		return nil, invalidArg("slug is required")
 	}
-	amount := strings.TrimSpace(req.GetAmount())
+	amount := req.GetAmount()
 	currency := strings.ToLower(strings.TrimSpace(req.GetCurrency()))
-	if amount == "" || currency == "" {
+	if amount == 0 || currency == "" {
 		return nil, invalidArg("amount and currency are required")
 	}
 	// Reject a non-positive amount before the provider call — a
 	// negative unit price reaches the provider and every future subscription
 	// on the plan credits the customer instead of charging them.
-	if !isPositiveDecimal(amount) {
-		return nil, invalidArg("amount must be a positive decimal")
+	if !isPositiveAmount(amount) {
+		return nil, invalidArg("amount must be positive (ten-thousandths of the major unit: 19.99 is 199900)")
 	}
 	if !isCurrencyCode(currency) {
 		return nil, invalidArg("currency must be a 3-letter ISO-4217 code")
@@ -210,7 +211,7 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 		return nil, invalidArg(`interval must be "month" or "year"`)
 	}
 	sameTerms := func(p *pb.Plan) (*pb.PlanView, error) {
-		if sameDecimal(p.GetAmount(), amount) && p.GetCurrency() == currency && p.GetInterval() == req.GetInterval() {
+		if p.GetAmount() == amount && p.GetCurrency() == currency && p.GetInterval() == req.GetInterval() {
 			return &pb.PlanView{Plan: p}, nil
 		}
 		return nil, status.Error(codes.AlreadyExists, "a plan with this slug already exists with different terms")
@@ -232,7 +233,7 @@ func (h *PaymentServiceHandler) CreatePlan(ctx context.Context, req *pb.DefinePl
 		Name:           name,
 		Amount:         backend.Money{Amount: amount, Currency: currency},
 		Interval:       req.GetInterval(),
-		IdempotencyKey: scopedKey("plan", h.installID(), slug, name, amount, currency, req.GetInterval()),
+		IdempotencyKey: scopedKey("plan", h.installID(), slug, name, strconv.FormatInt(amount, 10), currency, req.GetInterval()),
 	})
 	if err != nil {
 		return nil, providerFailure(err)

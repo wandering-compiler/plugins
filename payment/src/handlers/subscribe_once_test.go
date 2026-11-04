@@ -18,7 +18,7 @@ func subRig(t *testing.T) *rig {
 	t.Helper()
 	r := newRig(t)
 	for _, slug := range []string{"pro", "team"} {
-		if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: slug, Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+		if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: slug, Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 			t.Fatal(err)
 		}
 	}

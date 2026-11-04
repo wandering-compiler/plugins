@@ -81,7 +81,7 @@ func TestListPaymentPage_TellsAFailedAttemptFromAnOpenIntent(t *testing.T) {
 	}
 	want := backend.PaymentObject{
 		ProviderPaymentID: "pi_1", ProviderCustomerID: "cus_1", Status: "requires_payment_method",
-		Amount: backend.Money{Amount: "19.99", Currency: "usd"}, Description: "credit top-up", Failed: true,
+		Amount: backend.Money{Amount: 199900, Currency: "usd"}, Description: "credit top-up", Failed: true,
 		Marks: backend.Marks{Origin: "topup", Install: "abc"},
 	}
 	if ps[0] != want {
@@ -104,7 +104,7 @@ func TestListRefundPage_NamesThePayment(t *testing.T) {
 		t.Errorf("the account-wide list was filtered: %v", got)
 	}
 	r := rs[0]
-	if r.ProviderPaymentID != "pi_1" || r.ProviderRefundID != "re_1" || r.Status != "pending" || r.Amount.Amount != "4.00" || r.Key != "k" {
+	if r.ProviderPaymentID != "pi_1" || r.ProviderRefundID != "re_1" || r.Status != "pending" || r.Amount.Amount != 40000 || r.Key != "k" {
 		t.Errorf("refund = %+v", r)
 	}
 }

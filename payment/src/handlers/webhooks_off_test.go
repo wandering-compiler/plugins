@@ -82,8 +82,8 @@ func TestFlow_WithoutWebhooks_OnlyARefundMovesAPayment(t *testing.T) {
 	t.Cleanup(func() { webhooksStaged = saved })
 	r := newRig(t)
 
-	pending := r.charge("user-a", "10.00", "k-pending")
-	paid := r.charge("user-a", "4.00", "k-paid")
+	pending := r.charge("user-a", 100000, "k-pending")
+	paid := r.charge("user-a", 40000, "k-paid")
 	// The provider answered succeeded at creation (a confirmed intent).
 	r.store.mu.Lock()
 	r.store.payments[paid.GetId()].Status = pb.Payment_SUCCEEDED
@@ -92,7 +92,7 @@ func TestFlow_WithoutWebhooks_OnlyARefundMovesAPayment(t *testing.T) {
 	if _, err := r.h.GetMyPayment(asCaller("user-a"), &pb.GetMyPaymentReq{Id: pending.GetId()}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if _, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "10.00", Currency: "usd", IdempotencyKey: "k-pending"}); err != nil {
+	if _, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 100000, Currency: "usd", IdempotencyKey: "k-pending"}); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: paid.GetId(), IdempotencyKey: "r-paid"}); err != nil {

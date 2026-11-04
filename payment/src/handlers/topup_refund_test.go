@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,10 +11,10 @@ import (
 )
 
 // grantedTopUp tops up and settles it, so the credit is on the balance.
-func grantedTopUp(t *testing.T, r *rig, amount string) *pb.Payment {
+func grantedTopUp(t *testing.T, r *rig, amount int64) *pb.Payment {
 	t.Helper()
-	p := r.topUp("user-a", amount, "top-"+amount)
-	if _, err := r.deliver(eventJSON("evt_top_"+amount, "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
+	p := r.topUp("user-a", amount, fmt.Sprint("top-", amount))
+	if _, err := r.deliver(eventJSON(fmt.Sprint("evt_top_", amount), "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatalf("settle top-up: %v", err)
 	}
 	return p
@@ -23,14 +24,14 @@ func grantedTopUp(t *testing.T, r *rig, amount string) *pb.Payment {
 // is retried.
 func TestFlow_RefundedTopUpTakesItsCreditBack(t *testing.T) {
 	r := newRig(t)
-	p := grantedTopUp(t, r, "10.00")
+	p := grantedTopUp(t, r, 100000)
 	for i := 0; i < 2; i++ {
-		if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"}); err != nil {
+		if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "rt"}); err != nil {
 			t.Fatalf("refund attempt %d: %v", i, err)
 		}
 	}
-	if got := r.store.balance(t, "user-a"); got != "6.0000" {
-		t.Errorf("balance = %s, want 6.0000 (10 granted, 4 refunded)", got)
+	if got := r.store.balance(t, "user-a"); got != 60000 {
+		t.Errorf("balance = %d, want 6.0000 (10 granted, 4 refunded)", got)
 	}
 }
 
@@ -38,18 +39,18 @@ func TestFlow_RefundedTopUpTakesItsCreditBack(t *testing.T) {
 // and the provider is never asked.
 func TestFlow_RefundOfSpentTopUpCreditIsRefused(t *testing.T) {
 	r := newRig(t)
-	p := grantedTopUp(t, r, "10.00")
-	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "8", IdempotencyKey: "s1"}); err != nil {
+	p := grantedTopUp(t, r, 100000)
+	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: 80000, IdempotencyKey: "s1"}); err != nil {
 		t.Fatal(err)
 	}
 	before := r.stripe.count("/v1/refunds")
-	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "10", IdempotencyKey: "rt"})
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 100000, IdempotencyKey: "rt"})
 	wantCode(t, err, codes.FailedPrecondition, "refund of spent credit")
 	if r.stripe.count("/v1/refunds") != before {
 		t.Error("the provider was asked to refund spent credit")
 	}
-	if got := r.store.balance(t, "user-a"); got != "2.0000" {
-		t.Errorf("balance = %s, want 2.0000 untouched", got)
+	if got := r.store.balance(t, "user-a"); got != 20000 {
+		t.Errorf("balance = %d, want 2.0000 untouched", got)
 	}
 }
 
@@ -57,20 +58,20 @@ func TestFlow_RefundOfSpentTopUpCreditIsRefused(t *testing.T) {
 // grant would land after the refund and keep the credit.
 func TestFlow_RefundOfAnUngrantedTopUpIsRefused(t *testing.T) {
 	r := newRig(t)
-	p := r.topUp("user-a", "10.00", "top-x")
-	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "10", IdempotencyKey: "rt"})
+	p := r.topUp("user-a", 100000, "top-x")
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 100000, IdempotencyKey: "rt"})
 	wantCode(t, err, codes.FailedPrecondition, "refund before the grant")
 }
 
 // A refusal the provider will repeat gives the credit back.
 func TestFlow_RefusedTopUpRefundGivesTheCreditBack(t *testing.T) {
 	r := newRig(t)
-	p := grantedTopUp(t, r, "10.00")
+	p := grantedTopUp(t, r, 100000)
 	r.stripe.failNext(400)
-	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"})
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "rt"})
 	wantCode(t, err, codes.InvalidArgument, "refund the provider refused")
-	if got := r.store.balance(t, "user-a"); got != "10.0000" {
-		t.Errorf("balance = %s, want 10.0000 after the refusal", got)
+	if got := r.store.balance(t, "user-a"); got != 100000 {
+		t.Errorf("balance = %d, want 10.0000 after the refusal", got)
 	}
 }
 
@@ -78,17 +79,17 @@ func TestFlow_RefusedTopUpRefundGivesTheCreditBack(t *testing.T) {
 // earlier take-back is undone, so finding it must not skip this one.
 func TestFlow_RetryAfterARefusedTopUpRefundTakesTheCreditAgain(t *testing.T) {
 	r := newRig(t)
-	p := grantedTopUp(t, r, "10.00")
+	p := grantedTopUp(t, r, 100000)
 	r.stripe.failNext(400)
-	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"})
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "rt"})
 	wantCode(t, err, codes.InvalidArgument, "refund the provider refused")
 	for i := 0; i < 2; i++ {
-		if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"}); err != nil {
+		if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "rt"}); err != nil {
 			t.Fatalf("retry %d: %v", i, err)
 		}
 	}
-	if got := r.store.balance(t, "user-a"); got != "6.0000" {
-		t.Errorf("balance = %s, want 6.0000 (the refund paid out, its credit taken once)", got)
+	if got := r.store.balance(t, "user-a"); got != 60000 {
+		t.Errorf("balance = %d, want 6.0000 (the refund paid out, its credit taken once)", got)
 	}
 }
 
@@ -96,13 +97,13 @@ func TestFlow_RetryAfterARefusedTopUpRefundTakesTheCreditAgain(t *testing.T) {
 // ledger key is derived from it, never longer than the limit.
 func TestFlow_TopUpRefundUnderALongKey(t *testing.T) {
 	r := newRig(t)
-	p := grantedTopUp(t, r, "10.00")
+	p := grantedTopUp(t, r, 100000)
 	key := strings.Repeat("k", maxIdempotencyKeyLen)
-	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: key}); err != nil {
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: key}); err != nil {
 		t.Fatalf("refund: %v", err)
 	}
-	if got := r.store.balance(t, "user-a"); got != "6.0000" {
-		t.Errorf("balance = %s, want 6.0000", got)
+	if got := r.store.balance(t, "user-a"); got != 60000 {
+		t.Errorf("balance = %d, want 6.0000", got)
 	}
 }
 
@@ -110,15 +111,15 @@ func TestFlow_TopUpRefundUnderALongKey(t *testing.T) {
 // for it: the refund still takes its credit.
 func TestFlow_CallerSpendKeyCannotNameTheTakeBack(t *testing.T) {
 	r := newRig(t)
-	p := grantedTopUp(t, r, "10.00")
-	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "topup-refund:rt"}); err != nil {
+	p := grantedTopUp(t, r, 100000)
+	if _, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "topup-refund:rt"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"}); err != nil {
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "rt"}); err != nil {
 		t.Fatalf("refund: %v", err)
 	}
-	if got := r.store.balance(t, "user-a"); got != "5.0000" {
-		t.Errorf("balance = %s, want 5.0000 (1 spent, 4 refunded)", got)
+	if got := r.store.balance(t, "user-a"); got != 50000 {
+		t.Errorf("balance = %d, want 5.0000 (1 spent, 4 refunded)", got)
 	}
 }
 
@@ -127,13 +128,13 @@ func TestFlow_CallerSpendKeyCannotNameTheTakeBack(t *testing.T) {
 // does not hand the caller the provider's text.
 func TestFlow_RefusedTopUpRefundWithAFailedUndo_KeepsTheProviderTextInside(t *testing.T) {
 	r := newRig(t)
-	p := grantedTopUp(t, r, "10.00")
+	p := grantedTopUp(t, r, 100000)
 	r.stripe.failNext(400)
 	// Let the take-back apply, then fail the undo that follows the refusal.
 	r.store.onceBefore("ApplyCredit", func() {
 		r.store.onceBefore("ApplyCredit", func() { r.store.injectBefore("ApplyCredit", errTransient) })
 	})
-	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "rt"})
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "rt"})
 	wantCode(t, err, codes.Unavailable, "refused refund with a failed undo")
 	for _, leak := range []string{"injected", "/v1/", "stripe", "connection reset"} {
 		if strings.Contains(err.Error(), leak) {

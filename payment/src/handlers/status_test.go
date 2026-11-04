@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -10,9 +11,9 @@ import (
 )
 
 // succeededPayment charges and confirms a payment through the webhook.
-func succeededPayment(t *testing.T, r *rig, amount string) *pb.Payment {
+func succeededPayment(t *testing.T, r *rig, amount int64) *pb.Payment {
 	t.Helper()
-	p := r.charge("user-a", amount, "k-"+amount)
+	p := r.charge("user-a", amount, fmt.Sprint("k-", amount))
 	if _, err := r.deliver(eventJSON("evt_s_"+p.GetId(), "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatalf("succeeded: %v", err)
 	}
@@ -23,14 +24,14 @@ func succeededPayment(t *testing.T, r *rig, amount string) *pb.Payment {
 // SUCCEEDED until the refunds reach the amount.
 func TestFlow_RefundsMoveThePaymentToRefundedWhenComplete(t *testing.T) {
 	r := newRig(t)
-	p := succeededPayment(t, r, "10")
-	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "4", IdempotencyKey: "r1"}); err != nil {
+	p := succeededPayment(t, r, 100000)
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 40000, IdempotencyKey: "r1"}); err != nil {
 		t.Fatal(err)
 	}
 	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_SUCCEEDED {
 		t.Errorf("after a partial refund: %v, want SUCCEEDED", st)
 	}
-	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "6", IdempotencyKey: "r2"}); err != nil {
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 60000, IdempotencyKey: "r2"}); err != nil {
 		t.Fatal(err)
 	}
 	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_REFUNDED {
@@ -45,7 +46,7 @@ func TestFlow_RefundsMoveThePaymentToRefundedWhenComplete(t *testing.T) {
 // refunded it; a charge only partly refunded changes nothing.
 func TestWebhook_ChargeRefundedSettlesTheStatus(t *testing.T) {
 	r := newRig(t)
-	p := succeededPayment(t, r, "10")
+	p := succeededPayment(t, r, 100000)
 	r.stripe.refundAtProvider(p.GetProviderPaymentId(), 400)
 	if _, err := r.deliver(eventJSON("evt_partial", "charge.refunded", "ch_1",
 		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": false})); err != nil {
@@ -78,14 +79,14 @@ func TestWebhook_ChargeRefundedSettlesTheStatus(t *testing.T) {
 // and never a succeeded one.
 func TestWebhook_PaymentIntentCanceled(t *testing.T) {
 	r := newRig(t)
-	open := r.charge("user-a", "5", "k-open")
+	open := r.charge("user-a", 50000, "k-open")
 	if _, err := r.deliver(eventJSON("evt_c", "payment_intent.canceled", open.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatal(err)
 	}
 	if st := r.store.paymentStatus(t, open.GetProviderPaymentId()); st != pb.Payment_CANCELED {
 		t.Errorf("canceled: %v, want CANCELED", st)
 	}
-	done := succeededPayment(t, r, "7")
+	done := succeededPayment(t, r, 70000)
 	if _, err := r.deliver(eventJSON("evt_c2", "payment_intent.canceled", done.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestWebhook_PaymentIntentCanceled(t *testing.T) {
 // that ends an abandoned payment moves FAILED to CANCELED.
 func TestWebhook_PaymentIntentCanceledAfterAFailure(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "5", "k-failed")
+	p := r.charge("user-a", 50000, "k-failed")
 	if _, err := r.deliver(eventJSON("evt_f", "payment_intent.payment_failed", p.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestWebhook_PaymentIntentCanceledAfterAFailure(t *testing.T) {
 // and its redelivery settles REFUNDED once the success has landed.
 func TestWebhook_ChargeRefundedBeforeTheSuccess(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k-early")
+	p := r.charge("user-a", 100000, "k-early")
 	r.stripe.refundAtProvider(p.GetProviderPaymentId(), 1000)
 	refunded := eventJSON("evt_early_refund", "charge.refunded", "ch_e",
 		map[string]any{"payment_intent": p.GetProviderPaymentId(), "refunded": true})
@@ -145,7 +146,7 @@ func TestWebhook_ChargeRefundedBeforeTheSuccess(t *testing.T) {
 // one made at the provider, arriving as charge.refunded.
 func TestFlow_RefundedTopUpIsNotGrantedOnRedelivery(t *testing.T) {
 	r := newRig(t)
-	p := r.topUp("user-a", "20.00", "top-refunded")
+	p := r.topUp("user-a", 200000, "top-refunded")
 	body := eventJSON("evt_top", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)
 	r.store.injectBefore("ApplyCredit", errTransient)
 	if _, err := r.deliver(body); err == nil {
@@ -166,7 +167,7 @@ func TestFlow_RefundedTopUpIsNotGrantedOnRedelivery(t *testing.T) {
 	if _, err := r.deliver(body); err != nil {
 		t.Fatalf("redelivery: %v", err)
 	}
-	if got := r.store.balance(t, "user-a"); got != "0.0000" {
-		t.Errorf("balance = %s for a refunded top-up, want 0.0000", got)
+	if got := r.store.balance(t, "user-a"); got != 0 {
+		t.Errorf("balance = %d for a refunded top-up, want 0.0000", got)
 	}
 }

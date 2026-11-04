@@ -316,7 +316,7 @@ func (h *PaymentServiceHandler) refundedInFull(ctx context.Context, payment *pb.
 	if err != nil {
 		return false, err
 	}
-	return decimalAtLeast(sum.GetTotal(), payment.GetAmount()), nil
+	return sum.GetTotal() >= payment.GetAmount(), nil
 }
 
 // reconcileRefund applies one provider refund to its local row.
@@ -450,7 +450,7 @@ func (h *PaymentServiceHandler) announceDisputeClosed(ctx context.Context, provi
 // writeDispute writes the dispute's status, creating its row the first time.
 func (h *PaymentServiceHandler) writeDispute(ctx context.Context, ev stripe.Event, payment *pb.Payment) error {
 	amount, currency := ev.Amount.Amount, ev.Amount.Currency
-	if amount == "" {
+	if currency == "" {
 		amount, currency = payment.GetAmount(), payment.GetCurrency()
 	}
 	outcome := mapDisputeStatus(ev.ObjectStatus)
@@ -572,7 +572,7 @@ func (h *PaymentServiceHandler) holdAmountMismatch(ctx context.Context, ev strip
 		return false, status.Errorf(codes.FailedPrecondition,
 			"payment %s: the provider reported no received amount to check the success against; redeliver", ev.PaymentIntentID)
 	}
-	if strings.EqualFold(received.Currency, local.GetCurrency()) && sameDecimal(received.Amount, local.GetAmount()) {
+	if strings.EqualFold(received.Currency, local.GetCurrency()) && received.Amount == local.GetAmount() {
 		return false, nil
 	}
 	slog.Warn("payment: a payment succeeded for another amount than was asked; held",
@@ -604,10 +604,10 @@ func metadataValue(ctx context.Context, key string) string {
 
 func init() {
 	webhooksStaged = true
-	lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (string, error) {
+	lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (int64, error) {
 		got, err := h.Query.SumLostDisputesForPayment(ctx, &pb.SumLostDisputesForPaymentReq{PaymentId: payment.GetId()})
 		if err != nil {
-			return "", err
+			return 0, err
 		}
 		return got.GetTotal(), nil
 	}

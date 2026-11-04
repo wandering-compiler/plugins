@@ -70,7 +70,7 @@ func TestCreatePayment(t *testing.T) {
 
 	res, err := testBackend(srv).CreatePayment(context.Background(), backend.PaymentSpec{
 		ProviderCustomerID: "cus_1",
-		Amount:             backend.Money{Amount: "19.99", Currency: "USD"},
+		Amount:             backend.Money{Amount: 199900, Currency: "USD"},
 		IdempotencyKey:     "idem-1",
 		Description:        "pro",
 		Origin:             backend.OriginTopup,
@@ -116,7 +116,7 @@ func TestRefundPayment(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := testBackend(srv).RefundPayment(context.Background(), "pi_7", backend.Money{Amount: "5.00", Currency: "usd"}, "refund:pay-7:5.00")
+	res, err := testBackend(srv).RefundPayment(context.Background(), "pi_7", backend.Money{Amount: 50000, Currency: "usd"}, "refund:pay-7:5.00")
 	if err != nil {
 		t.Fatalf("RefundPayment: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestUpsertPlan(t *testing.T) {
 	defer srv.Close()
 
 	id, err := testBackend(srv).UpsertPlan(context.Background(), backend.PlanSpec{
-		Slug: "pro", Name: "Pro", Amount: backend.Money{Amount: "29.00", Currency: "USD"}, Interval: "month",
+		Slug: "pro", Name: "Pro", Amount: backend.Money{Amount: 290000, Currency: "USD"}, Interval: "month",
 	})
 	if err != nil {
 		t.Fatalf("UpsertPlan: %v", err)
@@ -197,7 +197,7 @@ func TestCreatePayment_StripeError(t *testing.T) {
 	defer srv.Close()
 
 	_, err := testBackend(srv).CreatePayment(context.Background(), backend.PaymentSpec{
-		Amount: backend.Money{Amount: "5.00", Currency: "usd"},
+		Amount: backend.Money{Amount: 50000, Currency: "usd"},
 	})
 	if err == nil {
 		t.Fatal("want error on stripe 400")
@@ -232,8 +232,8 @@ func TestGetPayment(t *testing.T) {
 	if gotMethod != http.MethodGet || gotPath != "/v1/payment_intents/pi_1" {
 		t.Errorf("request %s %s", gotMethod, gotPath)
 	}
-	if p.ProviderPaymentID != "pi_1" || p.Status != "succeeded" || p.Amount.Amount != "19.99" || p.Amount.Currency != "usd" || p.ProviderCustomerID != "cus_1" ||
-		p.Received != (backend.Money{Amount: "9.99", Currency: "usd"}) {
+	if p.ProviderPaymentID != "pi_1" || p.Status != "succeeded" || p.Amount.Amount != 199900 || p.Amount.Currency != "usd" || p.ProviderCustomerID != "cus_1" ||
+		p.Received != (backend.Money{Amount: 99900, Currency: "usd"}) {
 		t.Errorf("payment = %+v", p)
 	}
 	if _, err := b.GetPayment(context.Background(), "pi_missing"); err == nil {

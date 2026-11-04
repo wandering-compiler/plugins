@@ -53,9 +53,9 @@ func wantCounts(t *testing.T, what string, c *pb.ReconcileCounts, want string) {
 // intent) gets that row, not AlreadyExists.
 func TestReconcile_OrphanPayment_RecordedWithItsStatus(t *testing.T) {
 	r := newRig(t)
-	r.charge("user-a", "1.00", "warm-up") // the customer's row
+	r.charge("user-a", 10000, "warm-up") // the customer's row
 	r.store.injectBefore("CreatePayment", errTransient)
-	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "19.99", Currency: "usd", IdempotencyKey: "order-1"})
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 199900, Currency: "usd", IdempotencyKey: "order-1"})
 	wantCode(t, err, codes.Unavailable, "the charge whose row failed")
 	orphan := r.stripe.order[len(r.stripe.order)-1]
 	r.stripe.setIntentStatus(orphan, "succeeded", false)
@@ -67,7 +67,7 @@ func TestReconcile_OrphanPayment_RecordedWithItsStatus(t *testing.T) {
 	if row == nil {
 		t.Fatal("no row recorded for the orphan intent")
 	}
-	if row.GetStatus() != pb.Payment_SUCCEEDED || row.GetAmount() != "19.9900" || row.GetCurrency() != "usd" {
+	if row.GetStatus() != pb.Payment_SUCCEEDED || row.GetAmount() != 199900 || row.GetCurrency() != "usd" {
 		t.Errorf("recorded row = %+v", row)
 	}
 	if row.GetIdempotencyKey() != reconciledChargeKey(orphan) {
@@ -77,7 +77,7 @@ func TestReconcile_OrphanPayment_RecordedWithItsStatus(t *testing.T) {
 		t.Errorf("PaymentSucceeded emitted %d times, want 1", n)
 	}
 
-	retry, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "19.99", Currency: "usd", IdempotencyKey: "order-1"})
+	retry, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 199900, Currency: "usd", IdempotencyKey: "order-1"})
 	if err != nil {
 		t.Fatalf("the caller's retry after the reconciliation: %v", err)
 	}
@@ -90,8 +90,8 @@ func TestReconcile_OrphanPayment_RecordedWithItsStatus(t *testing.T) {
 // FAILED, the webhook's payment_failed. One nobody tried to pay stays open.
 func TestReconcile_FailedAndOpenIntents(t *testing.T) {
 	r := newRig(t)
-	failed := r.charge("user-a", "5.00", "f-1")
-	open := r.charge("user-a", "6.00", "o-1")
+	failed := r.charge("user-a", 50000, "f-1")
+	open := r.charge("user-a", 60000, "o-1")
 	r.stripe.setIntentStatus(failed.GetProviderPaymentId(), "requires_payment_method", true)
 
 	resp := r.reconcileAll()
@@ -107,8 +107,8 @@ func TestReconcile_FailedAndOpenIntents(t *testing.T) {
 // brings the lagging status in, a second run changes nothing.
 func TestReconcile_LaggingStatus_UpdatedThenInSync(t *testing.T) {
 	r := newRig(t)
-	paid := r.charge("user-a", "5.00", "k-1")
-	canceled := r.charge("user-a", "7.00", "k-2")
+	paid := r.charge("user-a", 50000, "k-1")
+	canceled := r.charge("user-a", 70000, "k-2")
 	r.stripe.setIntentStatus(paid.GetProviderPaymentId(), "succeeded", false)
 	r.stripe.setIntentStatus(canceled.GetProviderPaymentId(), "canceled", false)
 
@@ -134,15 +134,15 @@ func TestReconcile_LaggingStatus_UpdatedThenInSync(t *testing.T) {
 func TestReconcile_TopupWithoutItsRecord_GrantedOnce(t *testing.T) {
 	r := newRig(t)
 	r.store.injectBefore("CreateCreditTopup", errTransient)
-	_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: "10.00", IdempotencyKey: "top-1"})
+	_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: 100000, IdempotencyKey: "top-1"})
 	wantCode(t, err, codes.Unavailable, "the top-up whose record failed")
 	pid := r.stripe.order[len(r.stripe.order)-1]
 	r.stripe.setIntentStatus(pid, "succeeded", false)
 
 	wantCounts(t, "first run", r.reconcileAll().GetPayments(), "c0 u1 s0 f0 x0 F0")
-	wantBalance(t, r, "10.0000")
+	wantBalance(t, r, 100000)
 	wantCounts(t, "second run", r.reconcileAll().GetPayments(), "c0 u0 s1 f0 x0 F0")
-	wantBalance(t, r, "10.0000")
+	wantBalance(t, r, 100000)
 	if n := r.store.events("CreditApplied"); n != 1 {
 		t.Errorf("CreditApplied emitted %d times, want 1", n)
 	}
@@ -153,24 +153,24 @@ func TestReconcile_TopupWithoutItsRecord_GrantedOnce(t *testing.T) {
 // webhook then finds nothing to do.
 func TestReconcile_OrphanRefundOnTopup_TakesTheCreditOnce(t *testing.T) {
 	r := newRig(t)
-	p := r.topUp("user-a", "10.00", "top-1")
+	p := r.topUp("user-a", 100000, "top-1")
 	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
 	deliverOK(t, r, r.stripe.objectEvent("evt_ok", "payment_intent.succeeded", p.GetProviderPaymentId(), nil))
-	wantBalance(t, r, "10.0000")
+	wantBalance(t, r, 100000)
 	re := r.stripe.refundAtProvider(p.GetProviderPaymentId(), 400)
 
 	wantCounts(t, "first run", r.reconcileAll().GetRefunds(), "c1 u0 s0 f0 x0 F0")
 	wantRefundStatus(t, r, re, pb.Refund_SUCCEEDED)
-	wantBalance(t, r, "6.0000")
+	wantBalance(t, r, 60000)
 	wantCounts(t, "second run", r.reconcileAll().GetRefunds(), "c0 u0 s1 f0 x0 F0")
 	deliverOK(t, r, refundEvent("evt_re", "refund.created", re, p.GetProviderPaymentId()))
-	wantBalance(t, r, "6.0000")
+	wantBalance(t, r, 60000)
 
 	// The refund then fails at the provider, and that webhook is lost too:
 	// the next run records the failure and gives the credit back.
 	r.stripe.setRefundStatus(re, "failed")
 	wantCounts(t, "after the failure", r.reconcileAll().GetRefunds(), "c0 u1 s0 f0 x0 F0")
-	wantBalance(t, r, "10.0000")
+	wantBalance(t, r, 100000)
 }
 
 // A subscription whose local row never landed: recorded in the provider's
@@ -179,7 +179,7 @@ func TestReconcile_OrphanRefundOnTopup_TakesTheCreditOnce(t *testing.T) {
 func TestReconcile_OrphanSubscription(t *testing.T) {
 	r := newRig(t)
 	r.stripe.subStatus = "active" // its first payment made by the time the run reads it
-	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 		t.Fatal(err)
 	}
 	r.store.injectBefore("CreateSubscription", errTransient)
@@ -285,7 +285,7 @@ func TestReconcile_Customers(t *testing.T) {
 // runs: the payment succeeds once and the top-up's credit is granted once.
 func TestReconcile_ConcurrentWithWebhooksAndItself_GrantsOnce(t *testing.T) {
 	r := newRig(t)
-	p := r.topUp("user-a", "20.00", "top-c")
+	p := r.topUp("user-a", 200000, "top-c")
 	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
 	body := r.stripe.objectEvent("evt_c", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)
 
@@ -316,7 +316,7 @@ func TestReconcile_ConcurrentWithWebhooksAndItself_GrantsOnce(t *testing.T) {
 	for err := range errs {
 		t.Error(err)
 	}
-	wantBalance(t, r, "20.0000")
+	wantBalance(t, r, 200000)
 	if r.store.events("PaymentSucceeded") != 1 || r.store.events("CreditApplied") != 1 {
 		t.Errorf("events: succeeded=%d credit=%d, want 1 each", r.store.events("PaymentSucceeded"), r.store.events("CreditApplied"))
 	}
@@ -327,10 +327,10 @@ func TestReconcile_ConcurrentWithWebhooksAndItself_GrantsOnce(t *testing.T) {
 // since leaves older objects out.
 func TestReconcile_PagingLimitAndCursor(t *testing.T) {
 	r := newRig(t)
-	r.charge("user-old", "1.00", "old") // before since
+	r.charge("user-old", 10000, "old") // before since
 	since := timestamppb.New(time.Unix(fakeEpoch+int64(r.stripe.seq)+1, 0))
 	for i := 0; i < 3; i++ {
-		r.charge(fmt.Sprintf("user-%d", i), "2.00", "k") // a customer and an intent each
+		r.charge(fmt.Sprintf("user-%d", i), 20000, "k") // a customer and an intent each
 	}
 	for _, id := range r.stripe.order {
 		if len(id) > 3 && id[:3] == "pi_" {
@@ -410,8 +410,8 @@ func TestReconcile_Refusals(t *testing.T) {
 // One object that cannot be recorded is counted failed and the walk goes on.
 func TestReconcile_OneFailureDoesNotStopTheWalk(t *testing.T) {
 	r := newRig(t)
-	a := r.charge("user-a", "1.00", "a")
-	b := r.charge("user-b", "2.00", "b")
+	a := r.charge("user-a", 10000, "a")
+	b := r.charge("user-b", 20000, "b")
 	r.stripe.setIntentStatus(a.GetProviderPaymentId(), "succeeded", false)
 	r.stripe.setIntentStatus(b.GetProviderPaymentId(), "succeeded", false)
 	r.store.injectBefore("MarkPaymentSucceeded", errTransient)
@@ -435,7 +435,7 @@ func TestReconcile_AFailedListKeepsTheProgressAndTheCursor(t *testing.T) {
 	r := newRig(t)
 	fastRetries(t)
 	for i := 0; i < 3; i++ {
-		p := r.charge(fmt.Sprintf("user-%d", i), "2.00", "k")
+		p := r.charge(fmt.Sprintf("user-%d", i), 20000, "k")
 		r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
 	}
 	r.stripe.failNextList("/v1/refunds", http.StatusBadRequest)
@@ -463,7 +463,7 @@ func TestReconcile_AFailedListKeepsTheProgressAndTheCursor(t *testing.T) {
 func TestReconcile_TransientListFailuresAreRetried(t *testing.T) {
 	r := newRig(t)
 	fastRetries(t)
-	p := r.charge("user-a", "2.00", "k")
+	p := r.charge("user-a", 20000, "k")
 	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
 
 	r.stripe.failNextList("/v1/payment_intents", http.StatusTooManyRequests, http.StatusServiceUnavailable)
@@ -537,7 +537,7 @@ func TestReconcile_ACursorAtADeletedObjectRecovers(t *testing.T) {
 func TestReconcile_SubscriptionOrderedByTheProvidersClock(t *testing.T) {
 	r := newRig(t)
 	r.stripe.dateOffset = -time.Hour // the provider's clock: an hour behind ours
-	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 		t.Fatal(err)
 	}
 	r.store.injectBefore("CreateSubscription", errTransient)
@@ -565,7 +565,7 @@ func TestReconcile_SubscriptionOrderedByTheProvidersClock(t *testing.T) {
 // previous_install_marks.
 func TestReconcile_ARotatedSecretKeepsItsObjectsThroughPreviousMarks(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "5.00", "k")
+	p := r.charge("user-a", 50000, "k")
 	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
 	r.h.WebhookSecret = "whsec_rotated"
 

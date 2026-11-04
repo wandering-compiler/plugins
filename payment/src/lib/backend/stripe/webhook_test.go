@@ -41,7 +41,7 @@ func TestVerifyAndParse_Valid(t *testing.T) {
 }
 
 // A dispute (or refund) event carries the payment it belongs to and its
-// amount, as a decimal of its currency.
+// amount, in ten-thousandths of its currency's major unit.
 func TestVerifyAndParse_DisputeAmountAndPayment(t *testing.T) {
 	pinClock(t, 123)
 	secret := "whsec_x"
@@ -51,7 +51,7 @@ func TestVerifyAndParse_DisputeAmountAndPayment(t *testing.T) {
 		t.Fatalf("VerifyAndParse: %v", err)
 	}
 	if ev.ObjectID != "dp_1" || ev.ObjectStatus != "lost" || ev.ChargePaymentIntent != "pi_7" || ev.Created != 120 ||
-		ev.Amount != (backend.Money{Amount: "19.99", Currency: "usd"}) {
+		ev.Amount != (backend.Money{Amount: 199900, Currency: "usd"}) {
 		t.Errorf("parsed = %+v", ev)
 	}
 }
@@ -114,7 +114,7 @@ func TestVerifyAndParse_PaymentReceived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyAndParse: %v", err)
 	}
-	if ev.Received != (backend.Money{Amount: "10.00", Currency: "czk"}) || ev.Amount != (backend.Money{Amount: "1000.00", Currency: "czk"}) {
+	if ev.Received != (backend.Money{Amount: 100000, Currency: "czk"}) || ev.Amount != (backend.Money{Amount: 10000000, Currency: "czk"}) {
 		t.Errorf("received %+v, amount %+v", ev.Received, ev.Amount)
 	}
 	body = []byte(`{"id":"evt_2","type":"payment_intent.succeeded","created":120,"data":{"object":{"id":"pi_1","amount":100,"currency":"usd"}}}`)
@@ -122,7 +122,7 @@ func TestVerifyAndParse_PaymentReceived(t *testing.T) {
 		t.Errorf("no amount_received: %+v, %v — want none", ev.Received, err)
 	}
 	body = []byte(`{"id":"evt_3","type":"payment_intent.succeeded","created":120,"data":{"object":{"id":"pi_1","amount":100,"amount_received":0,"currency":"usd"}}}`)
-	if ev, err = VerifyAndParse(body, sign(body, secret, "123"), secret); err != nil || ev.Received != (backend.Money{Amount: "0.00", Currency: "usd"}) {
+	if ev, err = VerifyAndParse(body, sign(body, secret, "123"), secret); err != nil || ev.Received != (backend.Money{Amount: 0, Currency: "usd"}) {
 		t.Errorf("amount_received 0: %+v, %v — want a received 0", ev.Received, err)
 	}
 }

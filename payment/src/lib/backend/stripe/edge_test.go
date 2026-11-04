@@ -3,6 +3,7 @@ package stripe
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -15,81 +16,7 @@ import (
 )
 
 // ── amounts ──────────────────────────────────────────────────────────
-
-// The minor-unit accumulation wrapped silently past int64: "184467440737
-// 095516.17" usd is 2^64+1 cents and went out as amount=1 — the provider
-// charged one cent while the caller and the local row held the request.
-func TestToMinorUnits_RefusesOverflowInsteadOfWrapping(t *testing.T) {
-	for _, c := range []struct{ amount, currency string }{
-		{"184467440737095516.17", "usd"}, // 2^64 + 1 cents → used to become 1
-		{"92233720368547758.08", "usd"},  // MaxInt64 + 1 cents
-		{"9223372036854775808", "jpy"},   // MaxInt64 + 1, zero-decimal
-		{"-92233720368547758.09", "usd"},
-		{strings.Repeat("9", 30), "usd"},
-	} {
-		got, err := toMinorUnits(c.amount, c.currency)
-		if err == nil {
-			t.Errorf("toMinorUnits(%q, %s) = %d, want an overflow refusal", c.amount, c.currency, got)
-			continue
-		}
-		if !errors.Is(err, backend.ErrInvalidRequest) {
-			t.Errorf("overflow must be classed ErrInvalidRequest, got %v", err)
-		}
-	}
-	// The boundary itself converts exactly.
-	if got, err := toMinorUnits("92233720368547758.07", "usd"); err != nil || got != 9223372036854775807 {
-		t.Errorf("MaxInt64 cents: %d, %v", got, err)
-	}
-	if got, err := toMinorUnits("9223372036854775807", "jpy"); err != nil || got != 9223372036854775807 {
-		t.Errorf("MaxInt64 yen: %d, %v", got, err)
-	}
-}
-
-// Storage hands amounts back as DECIMAL(20, 4) — "12.3400". Refusing the
-// two zero digits past the currency scale refused every stored amount:
-// every full refund (which sends the stored payment amount) failed.
-func TestToMinorUnits_AcceptsStoredScaleTrailingZeros(t *testing.T) {
-	for _, c := range []struct {
-		amount, currency string
-		want             int64
-	}{
-		{"12.3400", "usd", 1234},
-		{"20.0000", "usd", 2000},
-		{"1000.0000", "jpy", 1000},
-		{"0.5000", "eur", 50},
-		{"5.", "usd", 500},
-		{".5", "usd", 50},
-		{"+7", "usd", 700},
-		{" 3.10 ", "usd", 310},
-	} {
-		got, err := toMinorUnits(c.amount, c.currency)
-		if err != nil || got != c.want {
-			t.Errorf("toMinorUnits(%q, %s) = %d, %v; want %d", c.amount, c.currency, got, err, c.want)
-		}
-	}
-	// A NON-zero digit past the scale is still refused — no silent rounding.
-	for _, c := range []struct{ amount, currency string }{{"12.3401", "usd"}, {"1000.5000", "jpy"}, {"0.001", "usd"}} {
-		if _, err := toMinorUnits(c.amount, c.currency); !errors.Is(err, backend.ErrInvalidRequest) {
-			t.Errorf("toMinorUnits(%q, %s): want ErrInvalidRequest, got %v", c.amount, c.currency, err)
-		}
-	}
-	for _, bad := range []string{"-", "+", " ", "1-2", "1.-2", "--1", "1e2", "١"} {
-		if _, err := toMinorUnits(bad, "usd"); !errors.Is(err, backend.ErrInvalidRequest) {
-			t.Errorf("toMinorUnits(%q): want ErrInvalidRequest, got %v", bad, err)
-		}
-	}
-}
-
-func TestPositiveMinorUnits(t *testing.T) {
-	for _, bad := range []string{"0", "0.00", "-1", "-0.01", "0.0000"} {
-		if _, err := positiveMinorUnits(bad, "usd"); !errors.Is(err, backend.ErrInvalidRequest) {
-			t.Errorf("positiveMinorUnits(%q): want ErrInvalidRequest, got %v", bad, err)
-		}
-	}
-	if n, err := positiveMinorUnits("0.01", "usd"); err != nil || n != 1 {
-		t.Errorf("one cent: %d, %v", n, err)
-	}
-}
+// The conversion itself is money_test.go.
 
 // ── wire behaviour ───────────────────────────────────────────────────
 
@@ -117,16 +44,21 @@ func TestDriver_NonPositiveAmountsNeverLeave(t *testing.T) {
 	defer srv.Close()
 	b := testBackend(srv)
 	ctx := context.Background()
-	for _, amt := range []string{"0", "-5.00", "184467440737095516.17"} {
+	// 0 is a full refund for RefundPayment (no amount sent), so it is only
+	// refused for a charge and a price; a negative amount and a fraction of
+	// a cent are refused everywhere.
+	for _, amt := range []int64{0, -50000, 199901, math.MinInt64} {
 		m := backend.Money{Amount: amt, Currency: "usd"}
 		if _, err := b.CreatePayment(ctx, backend.PaymentSpec{Amount: m}); !errors.Is(err, backend.ErrInvalidRequest) {
-			t.Errorf("CreatePayment(%s): %v", amt, err)
+			t.Errorf("CreatePayment(%d): %v", amt, err)
 		}
-		if _, err := b.RefundPayment(ctx, "pi_1", m, "k"); !errors.Is(err, backend.ErrInvalidRequest) {
-			t.Errorf("RefundPayment(%s): %v", amt, err)
+		if amt != 0 {
+			if _, err := b.RefundPayment(ctx, "pi_1", m, "k"); !errors.Is(err, backend.ErrInvalidRequest) {
+				t.Errorf("RefundPayment(%d): %v", amt, err)
+			}
 		}
 		if _, err := b.UpsertPlan(ctx, backend.PlanSpec{Slug: "s", Amount: m, Interval: "month"}); !errors.Is(err, backend.ErrInvalidRequest) {
-			t.Errorf("UpsertPlan(%s): %v", amt, err)
+			t.Errorf("UpsertPlan(%d): %v", amt, err)
 		}
 	}
 	if hits != 0 {
@@ -175,10 +107,10 @@ func TestDriver_OmitsEmptyOptionalFields(t *testing.T) {
 	if _, err := b.EnsureCustomer(ctx, backend.CustomerSpec{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.CreatePayment(ctx, backend.PaymentSpec{Amount: backend.Money{Amount: "1", Currency: "USD"}}); err != nil {
+	if _, err := b.CreatePayment(ctx, backend.PaymentSpec{Amount: backend.Money{Amount: 10000, Currency: "USD"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.UpsertPlan(ctx, backend.PlanSpec{Slug: "basic", Amount: backend.Money{Amount: "1000", Currency: "jpy"}, Interval: "year"}); err != nil {
+	if _, err := b.UpsertPlan(ctx, backend.PlanSpec{Slug: "basic", Amount: backend.Money{Amount: 10000000, Currency: "jpy"}, Interval: "year"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -220,7 +152,7 @@ func TestPost_ClassifiesProviderErrors(t *testing.T) {
 			w.WriteHeader(c.status)
 			_, _ = w.Write([]byte(c.body))
 		}))
-		_, err := testBackend(srv).CreatePayment(context.Background(), backend.PaymentSpec{Amount: backend.Money{Amount: "5", Currency: "usd"}})
+		_, err := testBackend(srv).CreatePayment(context.Background(), backend.PaymentSpec{Amount: backend.Money{Amount: 50000, Currency: "usd"}})
 		srv.Close()
 		if err == nil {
 			t.Errorf("%d: want an error", c.status)
@@ -248,7 +180,7 @@ func TestPost_ClassifiesProviderErrors(t *testing.T) {
 
 func TestPost_TransportAndDecodeFailures(t *testing.T) {
 	ctx := context.Background()
-	m := backend.Money{Amount: "1", Currency: "usd"}
+	m := backend.Money{Amount: 10000, Currency: "usd"}
 
 	// Connection refused: transient, unclassified.
 	srv := httptest.NewServer(http.NotFoundHandler())
@@ -289,7 +221,7 @@ func TestDriver_RefusesResponsesWithoutAnID(t *testing.T) {
 	defer srv.Close()
 	b := testBackend(srv)
 	ctx := context.Background()
-	m := backend.Money{Amount: "1", Currency: "usd"}
+	m := backend.Money{Amount: 10000, Currency: "usd"}
 	if _, err := b.EnsureCustomer(ctx, backend.CustomerSpec{UserID: "u"}); err == nil {
 		t.Error("customer without id accepted")
 	}
@@ -312,7 +244,7 @@ func TestDriver_EveryCallSurfacesProviderErrors(t *testing.T) {
 	defer srv.Close()
 	b := testBackend(srv)
 	ctx := context.Background()
-	m := backend.Money{Amount: "1", Currency: "usd"}
+	m := backend.Money{Amount: 10000, Currency: "usd"}
 	errs := []error{}
 	_, err := b.EnsureCustomer(ctx, backend.CustomerSpec{UserID: "u"})
 	errs = append(errs, err)
@@ -453,7 +385,7 @@ func TestPost_CarriesTheReasonCode(t *testing.T) {
 			w.WriteHeader(c.status)
 			_, _ = w.Write([]byte(c.body))
 		}))
-		_, err := testBackend(srv).CreatePayment(context.Background(), backend.PaymentSpec{Amount: backend.Money{Amount: "5", Currency: "usd"}})
+		_, err := testBackend(srv).CreatePayment(context.Background(), backend.PaymentSpec{Amount: backend.Money{Amount: 50000, Currency: "usd"}})
 		srv.Close()
 		var coded *backend.CodedError
 		got := ""
@@ -491,7 +423,8 @@ func TestFindRefund_MatchesTheKeyInMetadataAcrossPages(t *testing.T) {
 	}
 }
 
-// FindRefund reports the found refund's amount as a decimal of its currency,
+// FindRefund reports the found refund's amount in ten-thousandths of its
+// currency's major unit,
 // for the caller to compare with the amount a retry asks for.
 func TestFindRefund_ReportsTheAmount(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -499,7 +432,7 @@ func TestFindRefund_ReportsTheAmount(t *testing.T) {
 	}))
 	defer srv.Close()
 	res, ok, err := testBackend(srv).FindRefund(context.Background(), "pi_9", "rk")
-	if err != nil || !ok || res.Amount != (backend.Money{Amount: "19.99", Currency: "usd"}) {
+	if err != nil || !ok || res.Amount != (backend.Money{Amount: 199900, Currency: "usd"}) {
 		t.Fatalf("FindRefund = %+v, %v, %v; want 19.99 usd", res, ok, err)
 	}
 }
@@ -524,8 +457,8 @@ func TestListRefunds_EveryRefundWithItsStateAcrossPages(t *testing.T) {
 	defer srv.Close()
 	got, err := testBackend(srv).ListRefunds(context.Background(), "pi_9")
 	want := []backend.RefundResult{
-		{ProviderRefundID: "re_1", Status: "failed", Amount: backend.Money{Amount: "4.00", Currency: "usd"}, Key: "rk"},
-		{ProviderRefundID: "re_2", Status: "pending", Amount: backend.Money{Amount: "2.50", Currency: "usd"}},
+		{ProviderRefundID: "re_1", Status: "failed", Amount: backend.Money{Amount: 40000, Currency: "usd"}, Key: "rk"},
+		{ProviderRefundID: "re_2", Status: "pending", Amount: backend.Money{Amount: 25000, Currency: "usd"}},
 	}
 	if err != nil || len(got) != len(want) {
 		t.Fatalf("ListRefunds = %+v, %v", got, err)
@@ -556,7 +489,7 @@ func TestRefundPayment_ReportsTheOutcome(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"re_1","status":"pending","amount":500,"currency":"usd"}`))
 	}))
 	defer srv.Close()
-	res, err := testBackend(srv).RefundPayment(context.Background(), "pi_9", backend.Money{Amount: "5", Currency: "usd"}, "rk")
+	res, err := testBackend(srv).RefundPayment(context.Background(), "pi_9", backend.Money{Amount: 50000, Currency: "usd"}, "rk")
 	if err != nil || res.ProviderRefundID != "re_1" || res.Status != "pending" || res.Key != "rk" {
 		t.Fatalf("RefundPayment = %+v, %v", res, err)
 	}
@@ -577,16 +510,5 @@ func TestFindSubscription_AllStatusesAndThePrice(t *testing.T) {
 	want := backend.SubscriptionResult{ProviderSubscriptionID: "sub_1", Status: "canceled", CurrentPeriodEnd: 5, ProviderPriceID: "price_1"}
 	if err != nil || !ok || res != want {
 		t.Fatalf("FindSubscription = %+v, %v, %v; want %+v", res, ok, err, want)
-	}
-}
-
-func TestFromMinorUnits(t *testing.T) {
-	for _, c := range []struct {
-		n        int64
-		cur, out string
-	}{{1999, "usd", "19.99"}, {5, "eur", "0.05"}, {500, "jpy", "500"}, {500, "ugx", "5.00"}, {500, "ISK", "5.00"}} {
-		if got := fromMinorUnits(c.n, c.cur); got != c.out {
-			t.Errorf("fromMinorUnits(%d, %s) = %q, want %q", c.n, c.cur, got, c.out)
-		}
 	}
 }
