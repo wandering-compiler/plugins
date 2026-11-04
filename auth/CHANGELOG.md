@@ -1,5 +1,70 @@
 # auth — changelog
 
+## 0.1.0-rc.55
+
+### The backoffice invites into an organization and ends plan lines by row
+
+- **Invitations from the backoffice (org_invite).** `InviteToOrg`, `ListOrgInvites` and
+  `RevokeOrgInvite` acted only in the caller's active organization, which a realm-wide
+  operator does not have — every call answered "no active organization". A caller who holds
+  the method realm-wide (the endpoint ACL gates it) now acts in the organization the
+  request names by its slug (`org`), from inside an organization of its own or from none,
+  as the backoffice's product-role and plan methods do. The role ceiling still
+  applies, against what the caller holds realm-wide; a member keeps inviting into their
+  active organization as before.
+- **New feature `backoffice_invites`** (requires `org_invite`, off by default) publishes the
+  admin page `OrgInvites` and `POST /auth/admin/invites`, `POST /auth/admin/invites/withdraw`. The page: every organization's pending
+  invitations (`AuthQuery.ListOrgInvitesAdmin`, the org's name beside its id), an
+  "Invite to an organization" action with an organization picker that shows the link
+  once, and "Withdraw" over picked rows (`AuthService.RevokeOrgInvites`, realm-wide).
+  A hand-written page named `OrgInvites` overrides it.
+- **`AuthService.DisallowOrgProducts`** (feature `product_plans`) ends plan lines picked by
+  their row ids — what an admin row action sends. `DisallowOrgProduct` takes one line by
+  (org, product, role), which an admin delete cannot stamp, so a page could not bind it
+  and the method never reached the endpoint ACL.
+- New queries: `GetOrganizationBySlug`, `GetPendingOrgInvite`, `GetOrgInviteAdmin`,
+  `ListOrgInvitesAdmin`, `GetOrgProductAllowance`.
+
+### ListRoles takes an optional `preset_key` filter
+
+`ListRolesReq.preset_key` (optional) narrows the role catalogue to the role a declared preset seeded. Absent, the call lists the whole catalogue as before, so the admin role page is unchanged. A caller after one preset role (`org-admin`) names it here instead of scanning the paged list, which would quietly miss the preset once the catalogue grows past the first page.
+
+`ListRoles` and `GetRole` already return `org_scoped` (and `token_type`, `org_id`) when their feature is on; the query's comment that said otherwise is corrected.
+
+### A response field a query can fill with NULL says so
+
+The compiler now warns (and in its next release refuses) when a generated query can fill a response field with SQL NULL that the field does not declare: such a NULL used to reach the handler as the field's zero value, indistinguishable from a real one. Each of auth's queries now satisfies it.
+
+- Declared `(w17.field).null`, because the value is legitimately absent: `ApiTokenInfo.last_used_at` (never used) and `expires_at` (no expiry); `GetDeviceTrustRevokedAtResp.device_trust_revoked_at` (never revoked); the invitation `email` of `GetPendingOrgInviteByToken` and `ConsumeOrgInviteByToken` (a link invitation names none); `ProductRoleDefRow.org_id` (a realm-wide role), `ProductRoleGrantRow.org_id` and `granted_by` (a realm grant, a system grant); `ClaimPendingSignUpResp.tenant_id` and `join_org_id`; `GetUserMarketingConsentResp.decided_at` (never decided).
+- The two secrets are declared too, and their handlers already refuse the absence rather than use it: `GetProviderByNameResp.secret` is NULL for a provider still on the legacy plaintext `client_secret`, which `loadEnabledProvider` moves and otherwise refuses (an empty HMAC key would make the state token forgeable); `GetTotpSecretResp.seed` is NULL for an authenticator enrolled by rc.19 or earlier, which `seedOf` opens from the legacy `secret` and otherwise refuses. Neither is defaulted with COALESCE: an empty secret is worse than an error.
+- Not changed, because the statement already guarantees the value and the compiler now proves it: `ListMachineKeys` filters `thumbprint IS NOT NULL`, and `MarkSessionSteppedUp`, `ConsumeStepUpCode`, `SetStepUpCode` and `SetUserMarketingConsent` return the timestamp they just wrote.
+
+No handler, wire or client change: a field declared `null: true` keeps its Go type and its encoding; what changes is that the compiler no longer warns that it is filled with NULL.
+
+### Every reference between the plugin's own tables is a foreign key
+
+A row naming another row of the same activation now carries a foreign key to it (`fk: "@module.<Model>"`, which staging expands to the activation's own table), so a reference to a row that does not exist is refused by the store instead of stored silently — `RolePermission.role_id` naming no role was the case that showed it. Every key is `ON DELETE RESTRICT` (`deletion_rule: BLOCK`): the plugin deletes nothing (an account is erased, a role, an organization or a grant is ended), so a delete that would strand a reference is refused, never cascaded. A write that names a missing row answers `InvalidArgument` (`INVALID_VALUE`, "referenced record does not exist") on that field.
+
+Keyed: `user_id` everywhere it names an account (UserToken, Device, SignInEvent, BotTokenUse, OAuthIdentity, UserTotpSecret, UserRecoveryCode, MfaChallenge, PasswordResetToken, EmailVerificationToken, UserRole, BootstrapClaim, OAuthLoginCode, CliAuthCode, OAuthAuthorization, OAuthGrant, OrgMembership, TeamMember, ProductRoleGrant); `role_id` (RolePermission, RolePermissionChange, UserRole, TeamRole); `org_id` where the table stages with Organization (Role, UserRole, OrgMembership, OrgInvite, Team, TeamMember, TeamRole, OrgPackage, OrgHost, OrgSignUpPolicy, OrgTwoFactorPolicy, ProductRoleDef, ProductRoleGrant, OrgProductAllowance, PendingSignUp.join_org_id); `tenant_id` (User, OAuthProvider, PendingSignUp); the device columns (UserToken.device_id, every `approved_by_device_id`, SignInEvent.device_id); `token_id` (BotTokenUse, TokenPermission, TokenProductRole); `provider_id` (OAuthIdentity, OAuthLoginCode); `client_row_id`, `authorization_id`, `grant_id` and `UserToken.oauth_grant_id` under `oauth_server`; `team_id`.
+
+Not keyed, on purpose: the actor columns (`revoked_by`, `removed_by`, `invited_by`, `granted_by`, `ended_by`, …), which may name an operator of another activation; and `UserToken.oauth_org_id`, `OAuthAuthorization.org_id`, `OAuthGrant.org_id`, because `oauth_server` stages without `org_membership` and then there is no Organization table.
+
+**Before you deploy it: a database may hold rows the keys refuse.** A user deleted before erasure replaced deletion left its tokens, devices and grants behind, and the platform's role seed wrote RolePermission rows for roles that did not exist until it resolved them by `preset_key`. Adding a key over such a row fails the migration. The migration carries one pre-apply check per key, so:
+
+1. Apply with the checks on — `migrate apply --checks`, or `W17_MIGRATE_CHECKS=1` in the deploy environment. A database with orphans then refuses the migration by the check's name and row count before any of it runs (a local `stack build` runs the checks anyway). Each check is the probe `SELECT count(*) FROM <child> WHERE <col> IS NOT NULL AND <col> NOT IN (SELECT id FROM <parent>)`, which you can also run by hand first.
+2. Repair without deleting: give each missing parent a row that is already ended, so the history keeps its reference. For orphan grants of missing roles (table names are `<registered_as>_<model>`; `auth` here):
+
+   ```sql
+   INSERT INTO auth_role (id, name, description, display_name, deleted_at, ended_key)
+   SELECT DISTINCT o.role_id, 'missing-' || o.role_id, '', '', NOW(), o.role_id
+   FROM (SELECT role_id FROM auth_rolepermission UNION SELECT role_id FROM auth_rolepermissionchange
+         UNION SELECT role_id FROM auth_userrole) o
+   WHERE NOT EXISTS (SELECT 1 FROM auth_role r WHERE r.id = o.role_id);
+   ```
+
+   A missing account is restored the way an erasure leaves one (`erased_at` and `disabled_at` set, the placeholder address); a missing organization as a deleted one (`deleted_at`).
+3. Apply again.
+
 ## 0.1.0-rc.54
 
 ### Two invitation reads now get the column they check
