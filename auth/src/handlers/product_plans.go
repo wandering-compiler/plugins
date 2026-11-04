@@ -183,6 +183,41 @@ func (h *AuthServiceHandler) DisallowOrgProduct(ctx context.Context, req *pb.Org
 	return &pb.OrgProductPlanChangeResp{}, nil
 }
 
+// DisallowOrgProducts ends the plan lines the backoffice picked by their row
+// ids — what an admin row action sends, where DisallowOrgProduct's
+// (org, product, role) key is one a page cannot stamp. Realm-wide only and
+// gated by the endpoint ACL, as DisallowOrgProduct is; each line is ended
+// under its organization's lock. An id no longer live is skipped.
+func (h *AuthServiceHandler) DisallowOrgProducts(ctx context.Context, req *pb.DisallowOrgProductsReq) (*pb.OrgProductPlanChangeResp, error) {
+	caller, err := callerUserID(ctx)
+	if err != nil {
+		return nil, Unauthenticated(err)
+	}
+	if err := h.refusePlansInsideOrg(ctx, "DisallowOrgProducts"); err != nil {
+		return nil, err
+	}
+	for _, id := range req.GetIds() {
+		ref, err := h.Query.GetOrgProductAllowance(ctx, &pb.GetOrgProductAllowanceReq{Id: id})
+		if status.Code(err) == codes.NotFound {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		err = h.withOrgLock(ctx, ref.GetOrgId(), func(txCtx context.Context) error {
+			_, err := h.Mutation.EndOrgProductAllowanceRow(txCtx, &pb.EndOrgProductAllowanceRowReq{Id: id, EndedBy: caller})
+			if status.Code(err) == codes.NotFound {
+				return nil // ended since it was read
+			}
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &pb.OrgProductPlanChangeResp{}, nil
+}
+
 // ListOrgProductPlan is the backoffice's view of one organization's plan.
 func (h *AuthServiceHandler) ListOrgProductPlan(ctx context.Context, req *pb.ListOrgProductPlanReq) (*pb.OrgProductPlanResp, error) {
 	if _, err := callerUserID(ctx); err != nil {

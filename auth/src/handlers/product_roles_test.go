@@ -116,6 +116,15 @@ func (m *prodMock) AllowOrgProductRow(_ context.Context, in *pb.AllowOrgProductR
 	return &pb.AllowOrgProductRowResp{Id: id}, nil
 }
 
+func (m *prodMock) GetOrgProductAllowance(_ context.Context, in *pb.GetOrgProductAllowanceReq, _ ...grpc.CallOption) (*pb.OrgProductAllowanceRef, error) {
+	for _, l := range m.plan {
+		if l.GetId() == in.GetId() {
+			return &pb.OrgProductAllowanceRef{Id: l.GetId(), OrgId: m.planOrg[l.GetId()]}, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "no live line")
+}
+
 func (m *prodMock) EndOrgProductAllowanceRow(_ context.Context, in *pb.EndOrgProductAllowanceRowReq, _ ...grpc.CallOption) (*pb.EndOrgProductAllowanceRowResp, error) {
 	m.plan = slices.DeleteFunc(m.plan, func(l *pb.OrgProductAllowanceRow) bool { return l.GetId() == in.GetId() })
 	m.ended = append(m.ended, in.GetId())
@@ -153,7 +162,8 @@ func prodHandler(t *testing.T) (*AuthServiceHandler, *prodMock) {
 		Lock: &acllock.Lock{Permissions: map[string]int{
 			"AUTH_AUTH_SERVICE_ASSIGN_PRODUCT_ROLE": 1, "AUTH_AUTH_SERVICE_REVOKE_PRODUCT_ROLE": 2, "AUTH_AUTH_SERVICE_LIST_PRODUCT_ROLE_GRANTS": 3,
 			"AUTH_AUTH_SERVICE_ALLOW_ORG_PRODUCT": 4, "AUTH_AUTH_SERVICE_DISALLOW_ORG_PRODUCT": 5, "AUTH_AUTH_SERVICE_LIST_ORG_PRODUCT_PLAN": 6,
-			"AUTH_AUTH_SERVICE_DEFINE_PRODUCT_ROLE": 7, "AUTH_AUTH_SERVICE_RETIRE_PRODUCT_ROLE": 8}}}
+			"AUTH_AUTH_SERVICE_DEFINE_PRODUCT_ROLE": 7, "AUTH_AUTH_SERVICE_RETIRE_PRODUCT_ROLE": 8,
+			"AUTH_AUTH_SERVICE_DISALLOW_ORG_PRODUCTS": 9}}}
 	if err := parseProductRoleCatalogue(h); err != nil {
 		t.Fatal(err)
 	}
@@ -349,6 +359,28 @@ func TestProductPlanLines(t *testing.T) {
 	}
 	if resp, _ := answer(t, h, "alice", "org-a", "alpha"); len(resp.GetProductRoles()) != 0 {
 		t.Errorf("alpha out of the plan: alice holds %v there, want nothing", resp.GetProductRoles())
+	}
+}
+
+// The backoffice ends plan lines it picked by their row ids — what an admin
+// row action sends; DisallowOrgProduct's (org, product, role) key is one a
+// page cannot stamp. Realm-wide only, gated by the endpoint ACL; an id no
+// longer live is skipped.
+func TestDisallowOrgProducts_EndsTheLinesPickedByID(t *testing.T) {
+	h, m := prodHandler(t)
+	req := &pb.DisallowOrgProductsReq{Ids: []string{"line-1", "no-such-line"}}
+	if _, err := h.DisallowOrgProducts(whoAmICtx("alice", "org-a"), req); status.Code(err) != codes.PermissionDenied || len(m.ended) != 0 {
+		t.Errorf("from inside an organization: err = %v, ended %v, want PermissionDenied and nothing", err, m.ended)
+	}
+	if _, err := h.DisallowOrgProducts(whoAmICtx("ops", ""), req); err != nil || !slices.Equal(m.ended, []string{"line-1"}) {
+		t.Errorf("the backoffice: err = %v, ended %v, want line-1 alone", err, m.ended)
+	}
+	if _, err := h.DisallowOrgProducts(whoAmICtx("ops", ""), req); err != nil || len(m.ended) != 1 {
+		t.Errorf("a line already ended: err = %v, ended %v, want it skipped", err, m.ended)
+	}
+	h.Lock = &acllock.Lock{Permissions: map[string]int{"AUTH_AUTH_SERVICE_SIGN_IN": 1}}
+	if _, err := h.DisallowOrgProducts(whoAmICtx("ops", ""), req); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("without the method in the lock: err = %v, want PermissionDenied", err)
 	}
 }
 
