@@ -9,3 +9,5 @@ An amount whose row carries its currency names it with `currency_field` (`Paymen
 ### Three-decimal currencies are charged, exactly
 
 The Stripe driver converts a scale-4 amount to the currency's own minor units exactly: ÷100 for a two-decimal currency, ÷10000 for a zero-decimal one (×100 again for ISK and UGX, which Stripe takes as two-decimal values), and ÷10 for BHD, JOD, KWD, OMR and TND, which it now charges instead of refusing them. An amount that does not convert exactly — a fraction of a cent or of a yen, a fraction of a whole ISK or UGX, or a three-decimal amount that is not a multiple of ten of its minor unit, which is how Stripe takes those — is refused as `InvalidArgument` before the provider is asked, never rounded.
+
+A webhook amount the driver cannot convert back to ten-thousandths exactly does not fail the event's parse: an authentic event is never answered as unsigned. A dispute or a payment success whose amount did not convert is refused (`FailedPrecondition`, so the provider redelivers it) and nothing is recorded; an event that reads no amount is acknowledged as before.

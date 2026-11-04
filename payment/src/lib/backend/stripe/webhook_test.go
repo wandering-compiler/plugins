@@ -127,6 +127,28 @@ func TestVerifyAndParse_PaymentReceived(t *testing.T) {
 	}
 }
 
+// An authentic event whose amount does not convert exactly (a UGX amount
+// Stripe would never send, which is not whole) still parses: refusing it
+// answered a signed event as unsigned, redelivered for days, whatever its
+// type. The amounts stay empty and the reason is on AmountErr, for the
+// reconciliations that read them to refuse.
+func TestVerifyAndParse_UnconvertibleAmountIsNotAParseFailure(t *testing.T) {
+	pinClock(t, 123)
+	secret := "whsec_x"
+	for _, body := range [][]byte{
+		[]byte(`{"id":"evt_1","type":"charge.dispute.closed","created":120,"data":{"object":{"id":"dp_1","amount":550,"currency":"ugx"}}}`),
+		[]byte(`{"id":"evt_2","type":"payment_intent.succeeded","created":120,"data":{"object":{"id":"pi_1","amount":500,"amount_received":550,"currency":"ugx"}}}`),
+	} {
+		ev, err := VerifyAndParse(body, sign(body, secret, "123"), secret)
+		if err != nil {
+			t.Fatalf("VerifyAndParse(%s): %v", body, err)
+		}
+		if ev.AmountErr == nil || ev.Amount != (backend.Money{}) || ev.Received != (backend.Money{}) {
+			t.Errorf("%s: amount %+v received %+v err %v — want both empty and AmountErr set", ev.ID, ev.Amount, ev.Received, ev.AmountErr)
+		}
+	}
+}
+
 // A customer.subscription.* event rendered in API 2025-03-31 or later carries
 // the period end on its item, not on the subscription; the webhook endpoint
 // keeps the version it was made with, so both are read. Its version is kept.

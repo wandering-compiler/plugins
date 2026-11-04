@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
@@ -518,6 +521,40 @@ func TestWebhook_LostDisputeTakesTheTopUpCreditBack(t *testing.T) {
 		t.Errorf("dispute: %v owed %d, want LOST 0.0000", d.GetStatus(), owed)
 	}
 	wantBalance(t, r, 0)
+}
+
+// A dispute or success whose amount did not convert is refused (redelivered),
+// never recorded with the payment's amount in its place nor marked succeeded;
+// an event that reads no amount is acknowledged whatever its amount holds.
+func TestWebhook_UnconvertibleAmount_RefusesOnlyWhereItIsRead(t *testing.T) {
+	r := newRig(t)
+	p := grantedTopUp(t, r, 100000)
+	pi := p.GetProviderPaymentId()
+	bad := withCreated(t, eventJSON("evt_dx", "charge.dispute.closed", "dp_x", map[string]any{
+		"payment_intent": pi, "status": "lost", "amount": 550, "currency": "ugx",
+	}), time.Now().Unix())
+	if _, err := r.deliver(bad); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("dispute with an unconvertible amount: %v, want FailedPrecondition", err)
+	}
+	if d := r.store.dispute(t, "dp_x"); d != nil {
+		t.Errorf("dispute recorded as %+v", d)
+	}
+	wantBalance(t, r, 100000)
+
+	q := r.charge("user-a", 50000, "k-ugx")
+	succ := eventJSON("evt_sx", "payment_intent.succeeded", q.GetProviderPaymentId(), map[string]any{
+		"status": "succeeded", "amount": 500, "amount_received": 550, "currency": "ugx",
+	})
+	if _, err := r.deliver(succ); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("success with an unconvertible amount_received: %v, want FailedPrecondition", err)
+	}
+	if st := r.store.paymentStatus(t, q.GetProviderPaymentId()); st == pb.Payment_SUCCEEDED || st == pb.Payment_AMOUNT_MISMATCH {
+		t.Errorf("payment moved to %v on an amount that did not convert", st)
+	}
+
+	if _, err := r.deliver(eventJSON("evt_px", "payout.paid", "po_1", map[string]any{"amount": 550, "currency": "ugx"})); err != nil {
+		t.Errorf("an event that reads no amount: %v, want acknowledged", err)
+	}
 }
 
 // A lost dispute over spent credit records what is owed on the dispute.

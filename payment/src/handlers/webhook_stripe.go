@@ -449,6 +449,11 @@ func (h *PaymentServiceHandler) announceDisputeClosed(ctx context.Context, provi
 
 // writeDispute writes the dispute's status, creating its row the first time.
 func (h *PaymentServiceHandler) writeDispute(ctx context.Context, ev stripe.Event, payment *pb.Payment) error {
+	if ev.AmountErr != nil {
+		// Never the payment's amount in its place: the dispute's own did
+		// not convert, and a LOST one lowers a top-up's credit by it.
+		return status.Errorf(codes.FailedPrecondition, "dispute %s: %v", ev.ObjectID, ev.AmountErr)
+	}
 	amount, currency := ev.Amount.Amount, ev.Amount.Currency
 	if currency == "" {
 		amount, currency = payment.GetAmount(), payment.GetCurrency()
@@ -559,6 +564,9 @@ func (h *PaymentServiceHandler) holdAmountMismatch(ctx context.Context, ev strip
 		return true, nil
 	case pb.Payment_SUCCEEDED, pb.Payment_CANCELED, pb.Payment_REFUNDED:
 		return false, nil
+	}
+	if ev.AmountErr != nil {
+		return false, status.Errorf(codes.FailedPrecondition, "payment %s: %v", ev.PaymentIntentID, ev.AmountErr)
 	}
 	received := ev.Received
 	if received.Currency == "" {

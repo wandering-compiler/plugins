@@ -70,7 +70,14 @@ type Event struct {
 	// payment intent: what the payment took. Empty (no Currency) when the
 	// object carries none.
 	Received backend.Money
-	Raw      []byte
+	// AmountErr is why data.object's amount or amount_received did not
+	// convert to ten-thousandths exactly (Amount and Received are then
+	// empty). It is not a parse failure: the event is authentic, and one
+	// whose amount the plugin never reads must still be acknowledged, not
+	// refused as unsigned and redelivered for days. A reconciliation that
+	// needs the amount refuses the event with it instead.
+	AmountErr error
+	Raw       []byte
 }
 
 // ErrBadSignature is returned when the Stripe-Signature HMAC does not
@@ -143,20 +150,23 @@ func VerifyAndParse(payload []byte, sigHeader, secret string) (Event, error) {
 		return Event{}, fmt.Errorf("stripe: malformed webhook body: missing event id or type")
 	}
 	var amount, received backend.Money
+	var amountErr error
 	if cur := strings.ToLower(raw.Data.Object.Currency); cur != "" {
-		var err error
-		if amount, err = moneyFrom(raw.Data.Object.Amount, cur); err != nil {
-			return Event{}, fmt.Errorf("stripe: webhook %s: %w", raw.ID, err)
+		a, err := moneyFrom(raw.Data.Object.Amount, cur)
+		r := backend.Money{}
+		if err == nil && raw.Data.Object.AmountReceived != nil {
+			r, err = moneyFrom(*raw.Data.Object.AmountReceived, cur)
 		}
-		if r := raw.Data.Object.AmountReceived; r != nil {
-			if received, err = moneyFrom(*r, cur); err != nil {
-				return Event{}, fmt.Errorf("stripe: webhook %s: %w", raw.ID, err)
-			}
+		if err != nil {
+			amountErr = fmt.Errorf("stripe: webhook %s: %w", raw.ID, err)
+		} else {
+			amount, received = a, r
 		}
 	}
 	return Event{
 		Amount:              amount,
 		Received:            received,
+		AmountErr:           amountErr,
 		ID:                  raw.ID,
 		Type:                raw.Type,
 		ObjectID:            raw.Data.Object.ID,
