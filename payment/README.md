@@ -83,10 +83,11 @@ call the caller cancelled → `Canceled`. The caller gets the class and a fixed
 sentence; the provider's own text (endpoint, diagnostics, a masked key) is
 logged, not returned. The provider's reason code (`INSUFFICIENT_FUNDS`,
 `CHARGE_ALREADY_REFUNDED`, …) reaches the caller as the `w17.ErrorDetail`
-code. Amounts are validated against the `NUMERIC(20,4)` columns (≤ 16 integer,
-≤ 4 fractional digits) and currencies must be 3-letter codes (ISK and UGX
-are whole units only; the three-decimal BHD/JOD/KWD/OMR/TND are refused) —
-before any provider call.
+code. Amounts must be positive and currencies 3-letter codes, checked before
+any provider call; an amount the currency cannot carry exactly (a fraction of
+a cent, of a yen, of a whole ISK / UGX, or a BHD / JOD / KWD / OMR / TND
+amount that is not a multiple of ten of its minor unit) is refused by the
+driver before it reaches the provider, never rounded.
 
 **Reads.** The REST reads (`GET /payments/{id}`, `/credit/balance`,
 `/usage/{meter}/{period}`, `/subscriptions/{id}`) are served by
@@ -116,7 +117,8 @@ takes any id and is for the project's own code only.
   `CreatePayment`, `RefundPayment`, `FindRefund` (and the subscription
   calls below), `ListRefunds` over the Stripe REST API (no vendored SDK), plus webhook
   signature verification. Exact money handling
-  (decimal string → integer minor units, no float64).
+  (scale-4 amounts → the currency's own integer minor units, integer
+  arithmetic only, refusing what does not convert).
 
 ## Upgrading from 0.1.0-rc.2 or earlier
 
@@ -138,10 +140,10 @@ takes any id and is for the project's own code only.
   `Subscription.Status`); a consumer decoding it with an older schema just
   ignores it, but one that grants entitlements on the event should start
   reading it (see the subscriptions section).
-- **Three-decimal currencies are refused** (BHD, JOD, KWD, OMR, TND —
-  earlier versions sent them as two-decimal amounts, ten times off). A
-  payment made in one of them before the upgrade cannot be refunded
-  through the plugin; refund it in the provider dashboard.
+- **Three-decimal currencies** (BHD, JOD, KWD, OMR, TND) were sent as
+  two-decimal amounts, ten times off, by rc.2 and earlier. A payment made
+  in one of them then cannot be refunded through the plugin; refund it in
+  the provider dashboard.
 - **UGX payments made by earlier versions were charged at 1/100** of the
   amount asked (UGX went out as a zero-decimal amount; the provider takes
   it in hundredths). Their local rows hold the amount asked, and a refund
@@ -188,9 +190,32 @@ ctx = metadata.NewIncomingContext(ctx, md)
 
 ## Money
 
-Every monetary column is `type: DECIMAL` (string carrier,
-`NUMERIC(20,4)`), never the double-carried `MONEY` preset — currency
-must be exact. Amounts cross the API as decimal strings (`"19.99"`).
+Every amount — every column, request, response and event field — is an
+`int64` with `type: MONEY, scale: 4`: an exact count of ten-thousandths of
+the major unit, stored as `BIGINT`. 19.99 is `199900`, 5 JPY is `50000`,
+5.120 KWD is `51200`. Scale 4 is finer than any currency's own minor unit,
+so every currency is held exactly; there is no float anywhere, and sums and
+differences are integer arithmetic that refuses to overflow.
+
+Amounts cross the API as int64 values (on the JSON wire, a string of the
+integer: `"199900"`). `RefundPaymentReq.amount` 0 is a full refund.
+
+The driver converts to the currency's own minor units at the provider
+boundary — ÷100 for a two-decimal currency, ÷10000 for a zero-decimal one
+(and ×100 again for ISK and UGX, which Stripe takes as two-decimal values),
+÷10 for the three-decimal BHD, JOD, KWD, OMR and TND, which Stripe takes in
+tens of their minor unit — and refuses an amount that does not convert
+exactly.
+
+Display: an amount whose row carries its currency names it with
+`currency_field` (`Payment.amount` → `currency`, `received_amount` →
+`received_currency`, `Refund`, `Dispute`, `Plan`), so the admin and the
+generated clients render it as money in that currency. The credit tables
+(`CreditLedger.delta`, `CreditBalance.balance`, `CreditTopup.amount` and
+`credit_owed`) have no currency column and render as a plain number: credit
+is charged in `default_currency`, but `MONEY` takes a currency only from a
+code written in the proto or a sibling column, not from plugin
+configuration.
 
 ## Configuration (`env`)
 

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -116,18 +117,18 @@ type fakeQuery struct {
 	plan         *pb.Plan          // subscriptions
 	subscription *pb.Subscription
 	creditTopup  *pb.CreditTopup  // prepaid top-up
-	topupHeld    string           // SumTopupCredit's answer ("" = 0)
+	topupHeld    int64            // SumTopupCredit's answer
 	ledgerEntry  *pb.CreditLedger // GetCreditLedgerByKey answer (prepaid)
 
 	paymentByProvider *pb.Payment // GetPaymentByProviderId answer
-	refundedTotal     string      // SumRefundsForPayment answer
+	refundedTotal     int64       // SumRefundsForPayment answer
 }
 
 func (q *fakeQuery) SumTopupCredit(context.Context, *pb.SumTopupCreditReq, ...grpc.CallOption) (*pb.SumTopupCreditResp, error) {
-	return &pb.SumTopupCreditResp{Total: orDefault(q.topupHeld, "0")}, nil
+	return &pb.SumTopupCreditResp{Total: q.topupHeld}, nil
 }
 func (q *fakeQuery) SumLostDisputesForPayment(context.Context, *pb.SumLostDisputesForPaymentReq, ...grpc.CallOption) (*pb.SumLostDisputesForPaymentResp, error) {
-	return &pb.SumLostDisputesForPaymentResp{Total: "0"}, nil
+	return &pb.SumLostDisputesForPaymentResp{Total: 0}, nil
 }
 func (q *fakeQuery) SumRefundsForPayment(context.Context, *pb.SumRefundsForPaymentReq, ...grpc.CallOption) (*pb.SumRefundsForPaymentResp, error) {
 	return &pb.SumRefundsForPaymentResp{Total: q.refundedTotal}, nil
@@ -308,7 +309,7 @@ func (m *fakeMutation) ApplyCredit(_ context.Context, in *pb.ApplyCreditReq, _ .
 		return nil, m.applyErr
 	}
 	if m.heldBy != nil && isTopupReason(in.GetReason()) {
-		m.heldBy.topupHeld = decimalSum(m.heldBy.topupHeld, in.GetDelta())
+		m.heldBy.topupHeld += in.GetDelta()
 	}
 	if m.applyResp != nil {
 		return m.applyResp, nil
@@ -394,7 +395,7 @@ func TestCreatePayment_CreatesCustomerOnFirstCharge(t *testing.T) {
 	h := newHandler(&fakeQuery{customer: nil}, m, be) // no existing customer
 
 	resp, err := h.CreatePayment(context.Background(), &pb.ChargeReq{
-		UserId: "u1", Amount: "19.99", Currency: "EUR", IdempotencyKey: "idem-1", Description: "pro plan",
+		UserId: "u1", Amount: 199900, Currency: "EUR", IdempotencyKey: "idem-1", Description: "pro plan",
 	})
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -424,7 +425,7 @@ func TestCreatePayment_UsesExistingCustomerAndDefaultCurrency(t *testing.T) {
 	existing := &pb.Customer{Id: "cust-9", UserId: "u1", ProviderCustomerId: "cus_existing"}
 	h := newHandler(&fakeQuery{customer: existing}, m, be)
 
-	_, err := h.CreatePayment(context.Background(), &pb.ChargeReq{UserId: "u1", Amount: "5.00"}) // no currency
+	_, err := h.CreatePayment(context.Background(), &pb.ChargeReq{UserId: "u1", Amount: 50000}) // no currency
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
 	}
@@ -443,15 +444,15 @@ func TestCreatePayment_UsesExistingCustomerAndDefaultCurrency(t *testing.T) {
 // called — a negative amount reaches Stripe as a credit/reversal (customer
 // credited instead of charged = merchant loss); zero is a meaningless charge.
 func TestCreatePayment_RejectsNonPositiveAmount(t *testing.T) {
-	for _, amt := range []string{"-100.00", "0", "0.00", "abc"} {
+	for _, amt := range []int64{-1000000, 0, -1, math.MinInt64} {
 		be := &fakeBackend{createRes: backend.PaymentResult{ProviderPaymentID: "pi_x"}}
 		h := newHandler(&fakeQuery{customer: &pb.Customer{Id: "c", ProviderCustomerId: "cus"}}, &fakeMutation{}, be)
 		_, err := h.CreatePayment(context.Background(), &pb.ChargeReq{UserId: "u1", Amount: amt, Currency: "usd", IdempotencyKey: "k"})
 		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("amount %q: want InvalidArgument, got %v", amt, err)
+			t.Errorf("amount %d: want InvalidArgument, got %v", amt, err)
 		}
-		if be.lastCharge.Amount.Amount != "" {
-			t.Errorf("amount %q: backend must NOT be charged (got %q)", amt, be.lastCharge.Amount.Amount)
+		if be.lastCharge.Amount.Amount != 0 {
+			t.Errorf("amount %d: backend must NOT be charged (got %d)", amt, be.lastCharge.Amount.Amount)
 		}
 	}
 }
@@ -459,7 +460,7 @@ func TestCreatePayment_RejectsNonPositiveAmount(t *testing.T) {
 func TestCreatePayment_ProviderFailureIsUnavailable(t *testing.T) {
 	be := &fakeBackend{ensureID: "c", createErr: errors.New("card declined")}
 	h := newHandler(&fakeQuery{customer: &pb.Customer{Id: "x", ProviderCustomerId: "c"}}, &fakeMutation{}, be)
-	_, err := h.CreatePayment(context.Background(), &pb.ChargeReq{UserId: "u1", Amount: "1.00", Currency: "usd"})
+	_, err := h.CreatePayment(context.Background(), &pb.ChargeReq{UserId: "u1", Amount: 10000, Currency: "usd"})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("want Unavailable, got %v", err)
 	}
@@ -468,20 +469,20 @@ func TestCreatePayment_ProviderFailureIsUnavailable(t *testing.T) {
 func TestRefundPayment_Full(t *testing.T) {
 	be := &fakeBackend{refundRes: backend.RefundResult{ProviderRefundID: "re_1", Status: "succeeded"}}
 	m := &fakeMutation{}
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-7", ProviderPaymentId: "pi_7", Amount: "20.00", Currency: "usd"}}
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-7", ProviderPaymentId: "pi_7", Amount: 200000, Currency: "usd"}}
 	h := newHandler(q, m, be)
 
 	resp, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-7", IdempotencyKey: "idem-full"}) // no amount → full
 	if err != nil {
 		t.Fatalf("RefundPayment: %v", err)
 	}
-	if be.lastRefundFor != "pi_7" || be.lastRefund.Amount != "20.00" || be.lastRefund.Currency != "usd" {
+	if be.lastRefundFor != "pi_7" || be.lastRefund.Amount != 200000 || be.lastRefund.Currency != "usd" {
 		t.Errorf("backend refund = %q %+v", be.lastRefundFor, be.lastRefund)
 	}
 	if be.lastRefundIdem != "idem-full" {
 		t.Errorf("provider idempotency key = %q, want the caller-supplied idem-full", be.lastRefundIdem)
 	}
-	if m.lastCreateRefund.GetProviderRefundId() != "re_1" || m.lastCreateRefund.GetAmount() != "20.00" {
+	if m.lastCreateRefund.GetProviderRefundId() != "re_1" || m.lastCreateRefund.GetAmount() != 200000 {
 		t.Errorf("persisted refund = %+v", m.lastCreateRefund)
 	}
 	if resp.GetRefund().GetId() != "ref-1" {
@@ -491,13 +492,13 @@ func TestRefundPayment_Full(t *testing.T) {
 
 func TestRefundPayment_Partial(t *testing.T) {
 	be := &fakeBackend{refundRes: backend.RefundResult{ProviderRefundID: "re_2"}}
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-8", ProviderPaymentId: "pi_8", Amount: "20.00", Currency: "usd"}}
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-8", ProviderPaymentId: "pi_8", Amount: 200000, Currency: "usd"}}
 	h := newHandler(q, &fakeMutation{}, be)
-	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-8", Amount: "5.00", IdempotencyKey: "idem-partial"}); err != nil {
+	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-8", Amount: 50000, IdempotencyKey: "idem-partial"}); err != nil {
 		t.Fatalf("RefundPayment: %v", err)
 	}
-	if be.lastRefund.Amount != "5.00" {
-		t.Errorf("partial refund amount = %q, want 5.00", be.lastRefund.Amount)
+	if be.lastRefund.Amount != 50000 {
+		t.Errorf("partial refund amount = %d, want 5.00", be.lastRefund.Amount)
 	}
 }
 
@@ -521,9 +522,9 @@ func TestRefundPayment_RequiresID(t *testing.T) {
 // collided two legitimate same-amount partial refunds into one provider
 // replay, silently shorting the customer).
 func TestRefundPayment_RequiresIdempotencyKey(t *testing.T) {
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-9", ProviderPaymentId: "pi_9", Amount: "20.00", Currency: "usd"}}
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-9", ProviderPaymentId: "pi_9", Amount: 200000, Currency: "usd"}}
 	h := newHandler(q, &fakeMutation{}, &fakeBackend{})
-	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-9", Amount: "5.00"}); status.Code(err) != codes.InvalidArgument {
+	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-9", Amount: 50000}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("want InvalidArgument for a missing idempotency_key, got %v", err)
 	}
 }
@@ -534,15 +535,15 @@ func TestRefundPayment_RequiresIdempotencyKey(t *testing.T) {
 // hit Stripe's idempotency replay and was silently swallowed. The handler
 // must forward the caller key verbatim.
 func TestRefundPayment_DistinctKeysNotCollapsed(t *testing.T) {
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-10", ProviderPaymentId: "pi_10", Amount: "20.00", Currency: "usd"}}
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-10", ProviderPaymentId: "pi_10", Amount: 200000, Currency: "usd"}}
 	be := &fakeBackend{refundRes: backend.RefundResult{ProviderRefundID: "re_a"}}
 	h := newHandler(q, &fakeMutation{}, be)
 
-	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-10", Amount: "5.00", IdempotencyKey: "refund-A"}); err != nil {
+	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-10", Amount: 50000, IdempotencyKey: "refund-A"}); err != nil {
 		t.Fatalf("first refund: %v", err)
 	}
 	firstKey := be.lastRefundIdem
-	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-10", Amount: "5.00", IdempotencyKey: "refund-B"}); err != nil {
+	if _, err := h.RefundPayment(context.Background(), &pb.RefundPaymentReq{PaymentId: "pay-10", Amount: 50000, IdempotencyKey: "refund-B"}); err != nil {
 		t.Fatalf("second refund: %v", err)
 	}
 	if firstKey == be.lastRefundIdem {

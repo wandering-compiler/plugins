@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -49,18 +51,18 @@ func (r *rig) deliver(body []byte) (*pb.IngestStripeResp, error) {
 	return r.deliverSigned(body, signedAt(body, testWebhookSecret, time.Now().Unix()))
 }
 
-func (r *rig) charge(user, amount, key string) *pb.Payment {
+func (r *rig) charge(user string, amount int64, key string) *pb.Payment {
 	r.t.Helper()
 	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: user, Amount: amount, Currency: "usd", IdempotencyKey: key})
 	if err != nil {
-		r.t.Fatalf("CreatePayment(%s, %s): %v", user, amount, err)
+		r.t.Fatalf("CreatePayment(%s, %d): %v", user, amount, err)
 	}
 	return resp.GetPayment()
 }
 
 // paid charges and settles the payment as succeeded, at the provider and
 // locally — the state a refund needs (RefundPayment refuses any other).
-func (r *rig) paid(user, amount, key string) *pb.Payment {
+func (r *rig) paid(user string, amount int64, key string) *pb.Payment {
 	r.t.Helper()
 	p := r.charge(user, amount, key)
 	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
@@ -71,11 +73,11 @@ func (r *rig) paid(user, amount, key string) *pb.Payment {
 	return p
 }
 
-func (r *rig) topUp(user, amount, key string) *pb.Payment {
+func (r *rig) topUp(user string, amount int64, key string) *pb.Payment {
 	r.t.Helper()
 	resp, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: user, Amount: amount, IdempotencyKey: key})
 	if err != nil {
-		r.t.Fatalf("TopUpCredit(%s, %s): %v", user, amount, err)
+		r.t.Fatalf("TopUpCredit(%s, %d): %v", user, amount, err)
 	}
 	return resp.GetPayment()
 }
@@ -100,10 +102,10 @@ func TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment(t *testing.T) {
 	r := newRig(t)
 	r.store.injectAfter("CreatePayment", errTransient)
 
-	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "19.99", Currency: "usd", IdempotencyKey: "order-1"})
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 199900, Currency: "usd", IdempotencyKey: "order-1"})
 	wantCode(t, err, codes.Unavailable, "first attempt (response lost)")
 
-	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "19.99", Currency: "usd", IdempotencyKey: "order-1"})
+	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 199900, Currency: "usd", IdempotencyKey: "order-1"})
 	if err != nil {
 		t.Fatalf("retry with the same idempotency key must succeed, got %v", err)
 	}
@@ -114,7 +116,7 @@ func TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment(t *testing.T) {
 		t.Errorf("provider intents created = %d, want 1 (the retry must replay, not charge twice)", n)
 	}
 	p := resp.GetPayment()
-	if p.GetAmount() != "19.9900" {
+	if p.GetAmount() != 199900 {
 		t.Errorf("returned payment = %+v", p)
 	}
 	if resp.GetClientSecret() != p.GetProviderPaymentId()+"_secret_fake" {
@@ -127,8 +129,8 @@ func TestFlow_ChargeRetryAfterLostResponse_ReturnsSamePayment(t *testing.T) {
 
 func TestFlow_ChargeRepeatedAfterSuccess_IsIdempotent(t *testing.T) {
 	r := newRig(t)
-	a := r.charge("user-a", "5.00", "order-2")
-	b := r.charge("user-a", "5.00", "order-2")
+	a := r.charge("user-a", 50000, "order-2")
+	b := r.charge("user-a", 50000, "order-2")
 	if a.GetId() != b.GetId() {
 		t.Fatalf("same key returned two payments: %s, %s", a.GetId(), b.GetId())
 	}
@@ -142,8 +144,8 @@ func TestFlow_ChargeRepeatedAfterSuccess_IsIdempotent(t *testing.T) {
 // ever created a provider intent and then failed the local INSERT.
 func TestFlow_KeylessCharges_DoNotCollide(t *testing.T) {
 	r := newRig(t)
-	a := r.charge("user-a", "5.00", "")
-	b := r.charge("user-a", "5.00", "")
+	a := r.charge("user-a", 50000, "")
+	b := r.charge("user-a", 50000, "")
 	if a.GetId() == b.GetId() || a.GetProviderPaymentId() == b.GetProviderPaymentId() {
 		t.Fatalf("two key-less charges collapsed into one: %+v / %+v", a, b)
 	}
@@ -156,8 +158,8 @@ func TestFlow_KeylessCharges_DoNotCollide(t *testing.T) {
 		t.Error("derived keys must differ per call")
 	}
 	// TopUpCredit shares the path.
-	r.topUp("user-a", "1.00", "")
-	r.topUp("user-a", "1.00", "")
+	r.topUp("user-a", 10000, "")
+	r.topUp("user-a", 10000, "")
 	if n := r.store.count("payments"); n != 4 {
 		t.Errorf("payments = %d, want 4", n)
 	}
@@ -170,15 +172,15 @@ func TestFlow_KeylessCharges_DoNotCollide(t *testing.T) {
 // the provider refused the second principal's charge.
 func TestFlow_IdempotencyKeyReusedByAnotherUser_IsTheirOwnCharge(t *testing.T) {
 	r := newRig(t)
-	a := r.charge("user-a", "5.00", "shared-key")
-	b := r.charge("user-b", "5.00", "shared-key")
+	a := r.charge("user-a", 50000, "shared-key")
+	b := r.charge("user-b", 50000, "shared-key")
 	if b.GetId() == a.GetId() || b.GetProviderPaymentId() == a.GetProviderPaymentId() || b.GetCustomerId() == a.GetCustomerId() {
 		t.Fatalf("user-b's charge is user-a's: a=%+v b=%+v", a, b)
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != 2 {
 		t.Errorf("provider intents = %d, want 2", n)
 	}
-	if again := r.charge("user-b", "5.00", "shared-key"); again.GetId() != b.GetId() {
+	if again := r.charge("user-b", 50000, "shared-key"); again.GetId() != b.GetId() {
 		t.Errorf("user-b's retry = %s, want its own payment %s", again.GetId(), b.GetId())
 	}
 
@@ -187,7 +189,7 @@ func TestFlow_IdempotencyKeyReusedByAnotherUser_IsTheirOwnCharge(t *testing.T) {
 	// the lookup finds no row for the new intent: AlreadyExists, not some
 	// other payment.
 	r.stripe.forgetKeys()
-	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "shared-key"})
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 50000, Currency: "usd", IdempotencyKey: "shared-key"})
 	wantCode(t, err, codes.AlreadyExists, "own key reused after the provider window")
 	if n := r.store.count("payments"); n != 2 {
 		t.Errorf("payments = %d, want 2", n)
@@ -197,8 +199,8 @@ func TestFlow_IdempotencyKeyReusedByAnotherUser_IsTheirOwnCharge(t *testing.T) {
 // A payment and a top-up are different charges even under one key.
 func TestFlow_PaymentAndTopUpUnderOneKey_AreTwoCharges(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "5.00", "k-1")
-	tu := r.topUp("user-a", "5.00", "k-1")
+	p := r.charge("user-a", 50000, "k-1")
+	tu := r.topUp("user-a", 50000, "k-1")
 	if p.GetId() == tu.GetId() || p.GetProviderPaymentId() == tu.GetProviderPaymentId() {
 		t.Fatalf("the top-up is the payment: %+v", tu)
 	}
@@ -210,7 +212,7 @@ func TestFlow_PaymentAndTopUpUnderOneKey_AreTwoCharges(t *testing.T) {
 // rawKeyCharge plants what an earlier version did for a charge: the caller's
 // raw key sent to the provider and stored on the Payment, and for a top-up
 // the CreditTopup row.
-func (r *rig) rawKeyCharge(user, amount, key, origin string) *pb.Payment {
+func (r *rig) rawKeyCharge(user string, amount int64, key, origin string) *pb.Payment {
 	r.t.Helper()
 	cust, err := r.h.CreateCustomer(bg, &pb.NewCustomerReq{UserId: user})
 	if err != nil {
@@ -251,9 +253,9 @@ func (r *rig) rawKeyCharge(user, amount, key, origin string) *pb.Payment {
 // provider a key it never saw, and a second intent would be created.
 func TestFlow_RetryOfAPaymentStoredUnderTheRawKey_IsThatPayment(t *testing.T) {
 	r := newRig(t)
-	old := r.rawKeyCharge("user-a", "5.00", "order-9", backend.OriginCharge)
+	old := r.rawKeyCharge("user-a", 50000, "order-9", backend.OriginCharge)
 
-	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "order-9"})
+	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 50000, Currency: "usd", IdempotencyKey: "order-9"})
 	if err != nil {
 		t.Fatalf("retry of the earlier payment: %v", err)
 	}
@@ -266,7 +268,7 @@ func TestFlow_RetryOfAPaymentStoredUnderTheRawKey_IsThatPayment(t *testing.T) {
 
 	// Another principal's raw key is not theirs to retry: user-b's
 	// "order-9" is a charge of its own.
-	b := r.charge("user-b", "5.00", "order-9")
+	b := r.charge("user-b", 50000, "order-9")
 	if b.GetId() == old.GetId() {
 		t.Fatal("user-b was handed user-a's earlier payment")
 	}
@@ -275,8 +277,8 @@ func TestFlow_RetryOfAPaymentStoredUnderTheRawKey_IsThatPayment(t *testing.T) {
 // The same for a top-up an earlier version stored under the raw key.
 func TestFlow_RetryOfATopUpStoredUnderTheRawKey_IsThatTopUp(t *testing.T) {
 	r := newRig(t)
-	old := r.rawKeyCharge("user-a", "5.00", "tu-9", backend.OriginTopup)
-	if again := r.topUp("user-a", "5.00", "tu-9"); again.GetId() != old.GetId() {
+	old := r.rawKeyCharge("user-a", 50000, "tu-9", backend.OriginTopup)
+	if again := r.topUp("user-a", 50000, "tu-9"); again.GetId() != old.GetId() {
 		t.Errorf("retry = %s, want the earlier top-up %s", again.GetId(), old.GetId())
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != 1 {
@@ -289,12 +291,12 @@ func TestFlow_RetryOfATopUpStoredUnderTheRawKey_IsThatTopUp(t *testing.T) {
 // would make the provider refuse it as a reuse with other parameters.
 func TestFlow_OtherKindUnderAnEarlierRawKey_IsANewCharge(t *testing.T) {
 	r := newRig(t)
-	pay := r.rawKeyCharge("user-a", "5.00", "k-raw-1", backend.OriginCharge)
-	if tu := r.topUp("user-a", "5.00", "k-raw-1"); tu.GetId() == pay.GetId() {
+	pay := r.rawKeyCharge("user-a", 50000, "k-raw-1", backend.OriginCharge)
+	if tu := r.topUp("user-a", 50000, "k-raw-1"); tu.GetId() == pay.GetId() {
 		t.Fatal("the top-up is the earlier payment")
 	}
-	topup := r.rawKeyCharge("user-a", "5.00", "k-raw-2", backend.OriginTopup)
-	if p := r.charge("user-a", "5.00", "k-raw-2"); p.GetId() == topup.GetId() {
+	topup := r.rawKeyCharge("user-a", 50000, "k-raw-2", backend.OriginTopup)
+	if p := r.charge("user-a", 50000, "k-raw-2"); p.GetId() == topup.GetId() {
 		t.Fatal("the payment is the earlier top-up")
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != 4 {
@@ -305,9 +307,9 @@ func TestFlow_OtherKindUnderAnEarlierRawKey_IsANewCharge(t *testing.T) {
 // Each principal is charged on its OWN provider customer.
 func TestFlow_ChargesUseThePrincipalsOwnProviderCustomer(t *testing.T) {
 	r := newRig(t)
-	a := r.charge("user-a", "1.00", "a-1")
-	b := r.charge("user-b", "1.00", "b-1")
-	a2 := r.charge("user-a", "2.00", "a-2")
+	a := r.charge("user-a", 10000, "a-1")
+	b := r.charge("user-b", 10000, "b-1")
+	a2 := r.charge("user-a", 20000, "a-2")
 	if a.GetCustomerId() == b.GetCustomerId() {
 		t.Fatal("two principals share one customer row")
 	}
@@ -333,7 +335,7 @@ func TestFlow_FirstChargeRace_AdoptsTheWinningCustomer(t *testing.T) {
 			t.Errorf("seed winner: %v", err)
 		}
 	})
-	p := r.charge("user-a", "3.00", "race-1")
+	p := r.charge("user-a", 30000, "race-1")
 	if n := r.store.count("customers"); n != 1 {
 		t.Fatalf("customers = %d, want 1", n)
 	}
@@ -365,23 +367,25 @@ func TestFlow_CreateCustomer_IsIdempotentPerPrincipal(t *testing.T) {
 
 func TestFlow_ChargeAmountAndCurrencyRefusals_NeverReachTheProvider(t *testing.T) {
 	cases := []struct {
-		name, amount, currency string
-		want                   codes.Code
+		name     string
+		amount   int64
+		currency string
+		want     codes.Code
 	}{
-		{"fifth fractional digit (DB would round)", "1.00001", "usd", codes.InvalidArgument},
-		{"17 integer digits (DB overflow)", "10000000000000000", "usd", codes.InvalidArgument},
-		{"cents on a 2-decimal currency past scale", "10.001", "usd", codes.InvalidArgument},
-		{"fraction on a zero-decimal currency", "1.5", "jpy", codes.InvalidArgument},
-		{"currency not 3 letters", "1.00", "dollars", codes.InvalidArgument},
-		{"currency with digits", "1.00", "us1", codes.InvalidArgument},
-		{"exponent", "1e3", "usd", codes.InvalidArgument},
-		{"negative", "-1.00", "usd", codes.InvalidArgument},
+		{"a fraction of a cent", 100001, "usd", codes.InvalidArgument},
+		{"cents on a 2-decimal currency past scale", 100010, "usd", codes.InvalidArgument},
+		{"fraction on a zero-decimal currency", 15000, "jpy", codes.InvalidArgument},
+		{"not a multiple of ten fils", 10010, "kwd", codes.InvalidArgument},
+		{"currency not 3 letters", 10000, "dollars", codes.InvalidArgument},
+		{"currency with digits", 10000, "us1", codes.InvalidArgument},
+		{"zero", 0, "usd", codes.InvalidArgument},
+		{"negative", -10000, "usd", codes.InvalidArgument},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRig(t)
 			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: c.amount, Currency: c.currency, IdempotencyKey: "k"})
-			wantCode(t, err, c.want, c.amount+" "+c.currency)
+			wantCode(t, err, c.want, fmt.Sprint(c.amount, " ", c.currency))
 			if n := r.stripe.count("/v1/payment_intents"); n != 0 {
 				t.Errorf("provider was charged %d time(s) for a refused amount", n)
 			}
@@ -394,23 +398,23 @@ func TestFlow_ChargeAmountAndCurrencyRefusals_NeverReachTheProvider(t *testing.T
 
 func TestFlow_ChargeAmountNormalisation(t *testing.T) {
 	r := newRig(t)
-	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: " 1000 ", Currency: " JPY ", IdempotencyKey: "jp"})
+	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000000, Currency: " JPY ", IdempotencyKey: "jp"})
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
 	}
 	p := resp.GetPayment()
-	if p.GetCurrency() != "jpy" || p.GetAmount() != "1000.0000" {
-		t.Errorf("stored = %s %s", p.GetAmount(), p.GetCurrency())
+	if p.GetCurrency() != "jpy" || p.GetAmount() != 10000000 {
+		t.Errorf("stored = %d %s", p.GetAmount(), p.GetCurrency())
 	}
 	if in := r.stripe.intent(p.GetProviderPaymentId()); in.amount != 1000 {
 		t.Errorf("zero-decimal currency sent as %d minor units, want 1000", in.amount)
 	}
-	// The largest amount the column holds converts exactly.
-	resp, err = r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "9999999999999999.99", Currency: "usd", IdempotencyKey: "max"})
+	// The largest whole-cent amount the column holds converts exactly.
+	resp, err = r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: math.MaxInt64 / 100 * 100, Currency: "usd", IdempotencyKey: "max"})
 	if err != nil {
 		t.Fatalf("max amount: %v", err)
 	}
-	if in := r.stripe.intent(resp.GetPayment().GetProviderPaymentId()); in.amount != 999999999999999999 {
+	if in := r.stripe.intent(resp.GetPayment().GetProviderPaymentId()); in.amount != math.MaxInt64/100 {
 		t.Errorf("max amount sent as %d", in.amount)
 	}
 }
@@ -447,7 +451,7 @@ func TestFlow_ProviderErrorMapping(t *testing.T) {
 				}
 				c.setup(r)
 			}
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "k"})
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 50000, Currency: "usd", IdempotencyKey: "k"})
 			wantCode(t, err, c.want, "charge")
 			if n := r.store.count("payments"); n != 0 {
 				t.Error("a failed provider call must not record a local payment")
@@ -460,13 +464,13 @@ func TestFlow_ProviderErrorMapping(t *testing.T) {
 // retry charges once.
 func TestFlow_TransientProviderFailure_RetrySucceedsOnce(t *testing.T) {
 	r := newRig(t)
-	r.charge("user-a", "1.00", "warmup") // customer exists
+	r.charge("user-a", 10000, "warmup") // customer exists
 	r.stripe.failNext(http.StatusServiceUnavailable)
-	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "7.00", Currency: "usd", IdempotencyKey: "retry-me"})
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 70000, Currency: "usd", IdempotencyKey: "retry-me"})
 	wantCode(t, err, codes.Unavailable, "transient")
-	p := r.charge("user-a", "7.00", "retry-me")
-	if p.GetAmount() != "7.0000" {
-		t.Errorf("amount = %s", p.GetAmount())
+	p := r.charge("user-a", 70000, "retry-me")
+	if p.GetAmount() != 70000 {
+		t.Errorf("amount = %d", p.GetAmount())
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != 2 { // warmup + one
 		t.Errorf("intents = %d, want 2", n)
@@ -477,7 +481,7 @@ func TestFlow_TransientProviderFailure_RetrySucceedsOnce(t *testing.T) {
 
 func TestFlow_LateFailureAfterSuccess_IsAcknowledgedAndChangesNothing(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "o-1")
+	p := r.charge("user-a", 100000, "o-1")
 	pid := p.GetProviderPaymentId()
 	if _, err := r.deliver(eventJSON("evt_ok", "payment_intent.succeeded", pid, nil)); err != nil {
 		t.Fatalf("succeeded: %v", err)
@@ -505,7 +509,7 @@ func TestFlow_LateFailureAfterSuccess_IsAcknowledgedAndChangesNothing(t *testing
 
 func TestFlow_FailureThenRetriedSuccess(t *testing.T) {
 	r := newRig(t)
-	pid := r.charge("user-a", "10.00", "o-2").GetProviderPaymentId()
+	pid := r.charge("user-a", 100000, "o-2").GetProviderPaymentId()
 	if _, err := r.deliver(eventJSON("evt_f", "payment_intent.payment_failed", pid, nil)); err != nil {
 		t.Fatalf("failed: %v", err)
 	}
@@ -545,7 +549,7 @@ func TestFlow_WebhookOutrunsLocalRow_FailsUntilTheRowLands(t *testing.T) {
 			t.Fatalf("delivery %d recorded the event although nothing was reconciled", i)
 		}
 	}
-	if _, err := r.store.CreatePayment(bg, &pb.CreatePaymentReq{CustomerId: "cust-x", ProviderPaymentId: "pi_not_yet", Amount: "1", Currency: "usd", Status: int32(pb.Payment_REQUIRES_ACTION), IdempotencyKey: "late"}); err != nil {
+	if _, err := r.store.CreatePayment(bg, &pb.CreatePaymentReq{CustomerId: "cust-x", ProviderPaymentId: "pi_not_yet", Amount: 10000, Currency: "usd", Status: int32(pb.Payment_REQUIRES_ACTION), IdempotencyKey: "late"}); err != nil {
 		t.Fatal(err)
 	}
 	resp, err := r.deliver(body)
@@ -566,7 +570,7 @@ func TestFlow_TransientStoreFailures_AreNotAcknowledged(t *testing.T) {
 	for _, method := range []string{"MarkPaymentSucceeded", "GetPaymentByProviderId", "MarkWebhookProcessed"} {
 		t.Run(method, func(t *testing.T) {
 			r := newRig(t)
-			pid := r.charge("user-a", "1.00", "k").GetProviderPaymentId()
+			pid := r.charge("user-a", 10000, "k").GetProviderPaymentId()
 			if method == "GetPaymentByProviderId" {
 				// reach the lookup: the guard must refuse first
 				if _, err := r.deliver(eventJSON("evt_0", "payment_intent.succeeded", pid, nil)); err != nil {
@@ -613,7 +617,7 @@ func TestFlow_TopUpGrant_SurvivesATransientFailure(t *testing.T) {
 	for _, method := range []string{"GetCreditTopupByProviderId", "ApplyCredit"} {
 		t.Run(method, func(t *testing.T) {
 			r := newRig(t)
-			pid := r.topUp("user-a", "20.00", "top-1").GetProviderPaymentId()
+			pid := r.topUp("user-a", 200000, "top-1").GetProviderPaymentId()
 			body := eventJSON("evt_top", "payment_intent.succeeded", pid, nil)
 
 			r.store.injectBefore(method, errTransient)
@@ -630,8 +634,8 @@ func TestFlow_TopUpGrant_SurvivesATransientFailure(t *testing.T) {
 			if err != nil || !resp.GetHandled() {
 				t.Fatalf("redelivery: handled=%v err=%v", resp.GetHandled(), err)
 			}
-			if got := r.store.balance(t, "user-a"); got != "20.0000" {
-				t.Fatalf("balance = %s after the redelivery — the charged credit was never granted", got)
+			if got := r.store.balance(t, "user-a"); got != 200000 {
+				t.Fatalf("balance = %d after the redelivery — the charged credit was never granted", got)
 			}
 			// …and exactly once, however often it is redelivered.
 			for i := 0; i < 3; i++ {
@@ -639,8 +643,8 @@ func TestFlow_TopUpGrant_SurvivesATransientFailure(t *testing.T) {
 					t.Fatalf("later redelivery: handled=%v err=%v", resp.GetHandled(), err)
 				}
 			}
-			if got := r.store.balance(t, "user-a"); got != "20.0000" {
-				t.Errorf("balance = %s, want 20.0000", got)
+			if got := r.store.balance(t, "user-a"); got != 200000 {
+				t.Errorf("balance = %d, want 20.0000", got)
 			}
 			if r.store.events("PaymentSucceeded") != 1 || r.store.events("CreditApplied") != 1 {
 				t.Errorf("events: succeeded=%d credit=%d, want 1/1", r.store.events("PaymentSucceeded"), r.store.events("CreditApplied"))
@@ -653,7 +657,7 @@ func TestFlow_TopUpGrant_SurvivesATransientFailure(t *testing.T) {
 // must not grant again and must complete the stamp.
 func TestFlow_TopUpStampFailure_DoesNotDoubleGrant(t *testing.T) {
 	r := newRig(t)
-	pid := r.topUp("user-a", "20.00", "top-2").GetProviderPaymentId()
+	pid := r.topUp("user-a", 200000, "top-2").GetProviderPaymentId()
 	body := eventJSON("evt_top2", "payment_intent.succeeded", pid, nil)
 	r.store.injectBefore("MarkTopupGranted", errTransient)
 	_, err := r.deliver(body)
@@ -661,8 +665,8 @@ func TestFlow_TopUpStampFailure_DoesNotDoubleGrant(t *testing.T) {
 	if _, err := r.deliver(body); err != nil {
 		t.Fatalf("redelivery: %v", err)
 	}
-	if got := r.store.balance(t, "user-a"); got != "20.0000" {
-		t.Errorf("balance = %s, want 20.0000 exactly once", got)
+	if got := r.store.balance(t, "user-a"); got != 200000 {
+		t.Errorf("balance = %d, want 20.0000 exactly once", got)
 	}
 	got, _ := r.store.GetCreditTopupByProviderId(bg, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: pid})
 	if got.GetTopup().GetGrantedAt() == nil {
@@ -675,7 +679,7 @@ func TestFlow_TopUpStampFailure_DoesNotDoubleGrant(t *testing.T) {
 // because another stamped first.
 func TestFlow_TopUp_ConcurrentDuplicateDeliveries(t *testing.T) {
 	r := newRig(t)
-	pid := r.topUp("user-a", "20.00", "top-3").GetProviderPaymentId()
+	pid := r.topUp("user-a", 200000, "top-3").GetProviderPaymentId()
 	body := eventJSON("evt_top3", "payment_intent.succeeded", pid, nil)
 
 	const n = 8
@@ -709,8 +713,8 @@ func TestFlow_TopUp_ConcurrentDuplicateDeliveries(t *testing.T) {
 	if firsts != 1 {
 		t.Errorf("handled=true answered %d times, want 1", firsts)
 	}
-	if got := r.store.balance(t, "user-a"); got != "20.0000" {
-		t.Errorf("balance = %s, want 20.0000", got)
+	if got := r.store.balance(t, "user-a"); got != 200000 {
+		t.Errorf("balance = %d, want 20.0000", got)
 	}
 	if r.store.events("PaymentSucceeded") != 1 || r.store.events("CreditApplied") != 1 {
 		t.Errorf("events: succeeded=%d credit=%d", r.store.events("PaymentSucceeded"), r.store.events("CreditApplied"))
@@ -721,25 +725,25 @@ func TestFlow_TopUp_ConcurrentDuplicateDeliveries(t *testing.T) {
 // top-up is untouched by this one's success.
 func TestFlow_TopUp_GrantsOnlyThePayer(t *testing.T) {
 	r := newRig(t)
-	pa := r.topUp("user-a", "20.00", "ta").GetProviderPaymentId()
-	pb2 := r.topUp("user-b", "50.00", "tb").GetProviderPaymentId()
+	pa := r.topUp("user-a", 200000, "ta").GetProviderPaymentId()
+	pb2 := r.topUp("user-b", 500000, "tb").GetProviderPaymentId()
 	if _, err := r.deliver(eventJSON("evt_a", "payment_intent.succeeded", pa, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if a, b := r.store.balance(t, "user-a"), r.store.balance(t, "user-b"); a != "20.0000" || b != "0.0000" {
-		t.Errorf("balances a=%s b=%s, want 20/0", a, b)
+	if a, b := r.store.balance(t, "user-a"), r.store.balance(t, "user-b"); a != 200000 || b != 0 {
+		t.Errorf("balances a=%d b=%d, want 20/0", a, b)
 	}
 	got, _ := r.store.GetCreditTopupByProviderId(bg, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: pb2})
 	if got.GetTopup().GetGrantedAt() != nil {
 		t.Error("user-b's top-up was stamped by user-a's success")
 	}
 	// A plain (non-top-up) charge succeeding grants nothing.
-	plain := r.charge("user-b", "9.00", "plain").GetProviderPaymentId()
+	plain := r.charge("user-b", 90000, "plain").GetProviderPaymentId()
 	if _, err := r.deliver(eventJSON("evt_plain", "payment_intent.succeeded", plain, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if b := r.store.balance(t, "user-b"); b != "0.0000" {
-		t.Errorf("a plain charge granted credit: %s", b)
+	if b := r.store.balance(t, "user-b"); b != 0 {
+		t.Errorf("a plain charge granted credit: %d", b)
 	}
 }
 
@@ -748,14 +752,14 @@ func TestFlow_TopUp_GrantsOnlyThePayer(t *testing.T) {
 func TestFlow_TopUp_RefusesAForeignCurrency(t *testing.T) {
 	r := newRig(t)
 	for _, cur := range []string{"jpy", "eur", "idr"} {
-		_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: "1000", Currency: cur, IdempotencyKey: "fx-" + cur})
+		_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: 10000000, Currency: cur, IdempotencyKey: "fx-" + cur})
 		wantCode(t, err, codes.InvalidArgument, "top-up in "+cur)
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != 0 {
 		t.Errorf("provider charged %d time(s) for a refused top-up", n)
 	}
 	// The default currency, in any case, is fine.
-	if _, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: "10", Currency: " USD ", IdempotencyKey: "fx-ok"}); err != nil {
+	if _, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: 100000, Currency: " USD ", IdempotencyKey: "fx-ok"}); err != nil {
 		t.Fatalf("default currency top-up: %v", err)
 	}
 }
@@ -765,17 +769,17 @@ func TestFlow_TopUp_RefusesAForeignCurrency(t *testing.T) {
 func TestFlow_TopUp_RetryAfterLostResponse(t *testing.T) {
 	r := newRig(t)
 	r.store.injectAfter("CreateCreditTopup", errTransient)
-	_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: "15", IdempotencyKey: "top-retry"})
+	_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: 150000, IdempotencyKey: "top-retry"})
 	wantCode(t, err, codes.Unavailable, "first attempt")
-	p := r.topUp("user-a", "15", "top-retry")
+	p := r.topUp("user-a", 150000, "top-retry")
 	if n := r.store.count("payments"); n != 1 {
 		t.Errorf("payments = %d, want 1", n)
 	}
 	if _, err := r.deliver(eventJSON("evt_tr", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.store.balance(t, "user-a"); got != "15.0000" {
-		t.Errorf("balance = %s, want 15.0000", got)
+	if got := r.store.balance(t, "user-a"); got != 150000 {
+		t.Errorf("balance = %d, want 15.0000", got)
 	}
 }
 
@@ -783,23 +787,23 @@ func TestFlow_TopUp_RetryAfterLostResponse(t *testing.T) {
 
 func TestFlow_Refunds(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "20.00", "o-ref")
-	refund := func(amount, key string) (*pb.RefundPaymentResp, error) {
+	p := r.paid("user-a", 200000, "o-ref")
+	refund := func(amount int64, key string) (*pb.RefundPaymentResp, error) {
 		return r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: amount, IdempotencyKey: key})
 	}
 
-	a, err := refund("5.00", "r-1")
+	a, err := refund(50000, "r-1")
 	if err != nil {
 		t.Fatalf("partial 1: %v", err)
 	}
-	if _, err := refund("5.00", "r-2"); err != nil {
+	if _, err := refund(50000, "r-2"); err != nil {
 		t.Fatalf("partial 2 (same amount, distinct key): %v", err)
 	}
 	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 1000 {
 		t.Fatalf("provider refunded %d, want 1000", got)
 	}
 	// Retrying r-1 replays at the provider and returns the same refund.
-	again, err := refund("5.00", "r-1")
+	again, err := refund(50000, "r-1")
 	if err != nil || again.GetRefund().GetId() != a.GetRefund().GetId() {
 		t.Fatalf("retry of r-1: %v / %v", again, err)
 	}
@@ -807,23 +811,23 @@ func TestFlow_Refunds(t *testing.T) {
 		t.Errorf("retry refunded again: %d", got)
 	}
 	// Over-refund: the provider refuses; it is the caller's error.
-	_, err = refund("15.00", "r-3")
+	_, err = refund(150000, "r-3")
 	wantCode(t, err, codes.InvalidArgument, "refund above the unrefunded amount")
 	// "Full" after partials asks for the whole original amount — refused
 	// the same way, never recorded.
-	_, err = refund("", "r-4")
+	_, err = refund(0, "r-4")
 	wantCode(t, err, codes.InvalidArgument, "full refund after partials")
 	if n := r.store.count("refunds"); n != 2 {
 		t.Errorf("refund rows = %d, want 2", n)
 	}
-	if rf := a.GetRefund(); rf.GetCurrency() != "usd" || rf.GetAmount() != "5.0000" || rf.GetPaymentId() != p.GetId() {
+	if rf := a.GetRefund(); rf.GetCurrency() != "usd" || rf.GetAmount() != 50000 || rf.GetPaymentId() != p.GetId() {
 		t.Errorf("refund row = %+v", rf)
 	}
 }
 
 func TestFlow_Refund_FullAndLostResponse(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "12.34", "o-full")
+	p := r.paid("user-a", 123400, "o-full")
 	r.store.injectAfter("CreateRefund", errTransient)
 	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), IdempotencyKey: "full-1"})
 	wantCode(t, err, codes.Unavailable, "lost response")
@@ -831,8 +835,8 @@ func TestFlow_Refund_FullAndLostResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry must return the recorded refund, got %v", err)
 	}
-	if resp.GetRefund().GetAmount() != "12.3400" {
-		t.Errorf("full refund amount = %s", resp.GetRefund().GetAmount())
+	if resp.GetRefund().GetAmount() != 123400 {
+		t.Errorf("full refund amount = %d", resp.GetRefund().GetAmount())
 	}
 	if got := r.stripe.intent(p.GetProviderPaymentId()).refunded; got != 1234 {
 		t.Errorf("provider refunded %d, want 1234 once", got)
@@ -844,12 +848,12 @@ func TestFlow_Refund_FullAndLostResponse(t *testing.T) {
 
 func TestFlow_Refund_RefusalsNeverReachTheProvider(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "20.00", "o-neg")
-	for _, amt := range []string{"-5.00", "0", "0.00", "5.00001", "abc", "1e2"} {
-		_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: amt, IdempotencyKey: "neg-" + amt})
-		wantCode(t, err, codes.InvalidArgument, "refund "+amt)
+	p := r.charge("user-a", 200000, "o-neg")
+	for _, amt := range []int64{-50000, -1, math.MinInt64} {
+		_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: amt, IdempotencyKey: fmt.Sprint("neg-", amt)})
+		wantCode(t, err, codes.InvalidArgument, fmt.Sprint("refund ", amt))
 	}
-	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: strings.Repeat("k", 256)})
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 10000, IdempotencyKey: strings.Repeat("k", 256)})
 	wantCode(t, err, codes.InvalidArgument, "256-byte key")
 	_, err = r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: "no-such-payment", IdempotencyKey: "x"})
 	wantCode(t, err, codes.NotFound, "unknown payment")
@@ -862,13 +866,13 @@ func TestFlow_Refund_RefusalsNeverReachTheProvider(t *testing.T) {
 // returned as this one's.
 func TestFlow_Refund_ReplayLookupChecksThePayment(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "20.00", "o-x")
+	p := r.paid("user-a", 200000, "o-x")
 	// The provider replays a refund id that is locally recorded against a
 	// different payment (corrupt state / a reused key across payments).
 	r.store.onceBefore("CreateRefund", func() {
-		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: "pay-other", ProviderRefundId: "re_fake0003", Amount: "1", Currency: "usd", Status: int32(pb.Refund_SUCCEEDED)})
+		_, _ = r.store.CreateRefund(bg, &pb.CreateRefundReq{PaymentId: "pay-other", ProviderRefundId: "re_fake0003", Amount: 10000, Currency: "usd", Status: int32(pb.Refund_SUCCEEDED)})
 	})
-	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: "rx"})
+	_, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 10000, IdempotencyKey: "rx"})
 	if err == nil {
 		t.Fatal("a refund recorded for another payment was returned as this one's")
 	}
@@ -881,7 +885,7 @@ func TestFlow_Refund_ReplayLookupChecksThePayment(t *testing.T) {
 
 func TestFlow_SubscriptionLifecycle_OutOfOrderAndUnknown(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Name: "Pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Name: "Pro", Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 		t.Fatal(err)
 	}
 	sv, err := r.h.Subscribe(bg, &pb.SubscribeReq{UserId: "user-a", PlanSlug: "pro", IdempotencyKey: "s-1"})
@@ -941,7 +945,7 @@ func TestFlow_SubscriptionLifecycle_OutOfOrderAndUnknown(t *testing.T) {
 
 func TestFlow_Subscribe_RetryAfterLostResponse(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 		t.Fatal(err)
 	}
 	r.store.injectAfter("CreateSubscription", errTransient)
@@ -969,7 +973,7 @@ func TestFlow_Subscribe_RetryAfterLostResponse(t *testing.T) {
 // never returned (the replay lookup checks the customer).
 func TestFlow_Subscribe_ReplayLookupChecksTheCustomer(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 		t.Fatal(err)
 	}
 	r.store.onceBefore("CreateSubscription", func() {
@@ -983,18 +987,18 @@ func TestFlow_Subscribe_ReplayLookupChecksTheCustomer(t *testing.T) {
 
 func TestFlow_CreatePlan_IdempotentOnTermsNotJustSlug(t *testing.T) {
 	r := newRig(t)
-	first, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "USD", Interval: "month"})
+	first, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "USD", Interval: "month"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	same, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29.00", Currency: "usd", Interval: "month"})
+	same, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "month"})
 	if err != nil || same.GetPlan().GetId() != first.GetPlan().GetId() {
 		t.Fatalf("same terms: %v / %v", same, err)
 	}
 	for _, c := range []*pb.DefinePlanReq{
-		{Slug: "pro", Amount: "99", Currency: "usd", Interval: "month"},
-		{Slug: "pro", Amount: "29", Currency: "eur", Interval: "month"},
-		{Slug: "pro", Amount: "29", Currency: "usd", Interval: "year"},
+		{Slug: "pro", Amount: 990000, Currency: "usd", Interval: "month"},
+		{Slug: "pro", Amount: 290000, Currency: "eur", Interval: "month"},
+		{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "year"},
 	} {
 		_, err := r.h.CreatePlan(bg, c)
 		wantCode(t, err, codes.AlreadyExists, "plan with different terms")
@@ -1005,35 +1009,35 @@ func TestFlow_CreatePlan_IdempotentOnTermsNotJustSlug(t *testing.T) {
 	// Losing the insert race to a same-terms plan adopts it; to a
 	// different-terms plan refuses.
 	r.store.onceBefore("CreatePlan", func() {
-		_, _ = r.store.CreatePlan(bg, &pb.CreatePlanReq{Slug: "team", Amount: "49", Currency: "usd", Interval: "month", ProviderPriceId: "price_winner"})
+		_, _ = r.store.CreatePlan(bg, &pb.CreatePlanReq{Slug: "team", Amount: 490000, Currency: "usd", Interval: "month", ProviderPriceId: "price_winner"})
 	})
-	won, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "team", Amount: "49.0", Currency: "usd", Interval: "month"})
+	won, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "team", Amount: 490000, Currency: "usd", Interval: "month"})
 	if err != nil || won.GetPlan().GetProviderPriceId() != "price_winner" {
 		t.Fatalf("race, same terms: %v / %v", won, err)
 	}
 	r.store.onceBefore("CreatePlan", func() {
-		_, _ = r.store.CreatePlan(bg, &pb.CreatePlanReq{Slug: "biz", Amount: "1", Currency: "usd", Interval: "month"})
+		_, _ = r.store.CreatePlan(bg, &pb.CreatePlanReq{Slug: "biz", Amount: 10000, Currency: "usd", Interval: "month"})
 	})
-	_, err = r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "biz", Amount: "2", Currency: "usd", Interval: "month"})
+	_, err = r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "biz", Amount: 20000, Currency: "usd", Interval: "month"})
 	wantCode(t, err, codes.AlreadyExists, "race, different terms")
 }
 
 func TestFlow_CreatePlan_Refusals(t *testing.T) {
 	r := newRig(t)
 	for _, c := range []*pb.DefinePlanReq{
-		{Slug: "", Amount: "1", Currency: "usd", Interval: "month"},
-		{Slug: "x", Amount: "", Currency: "usd", Interval: "month"},
-		{Slug: "x", Amount: "1", Currency: " ", Interval: "month"},
-		{Slug: "x", Amount: "1", Currency: "usdx", Interval: "month"},
-		{Slug: "x", Amount: "1.00001", Currency: "usd", Interval: "month"},
-		{Slug: "x", Amount: "1", Currency: "usd", Interval: "day"},
+		{Slug: "", Amount: 10000, Currency: "usd", Interval: "month"},
+		{Slug: "x", Amount: 0, Currency: "usd", Interval: "month"},
+		{Slug: "x", Amount: 10000, Currency: " ", Interval: "month"},
+		{Slug: "x", Amount: 10000, Currency: "usdx", Interval: "month"},
+		{Slug: "x", Amount: -10000, Currency: "usd", Interval: "month"},
+		{Slug: "x", Amount: 10000, Currency: "usd", Interval: "day"},
 	} {
 		_, err := r.h.CreatePlan(bg, c)
 		wantCode(t, err, codes.InvalidArgument, "plan "+c.String())
 	}
 	// A provider-side refusal of the price (fractional yen) is the
 	// caller's error, and nothing is recorded.
-	_, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "yen", Amount: "100.5", Currency: "jpy", Interval: "month"})
+	_, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "yen", Amount: 1005000, Currency: "jpy", Interval: "month"})
 	wantCode(t, err, codes.InvalidArgument, "fractional jpy price")
 	if r.store.count("plans") != 0 || r.stripe.count("/v1/prices") != 0 {
 		t.Error("a refused plan reached the provider or the store")
@@ -1044,44 +1048,44 @@ func TestFlow_CreatePlan_Refusals(t *testing.T) {
 
 func TestFlow_Credit_SpendGrantInvariants(t *testing.T) {
 	r := newRig(t)
-	grant := func(amount, key string) (*pb.CreditView, error) {
+	grant := func(amount int64, key string) (*pb.CreditView, error) {
 		return r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: amount, IdempotencyKey: key})
 	}
-	spend := func(amount, key string) (*pb.CreditView, error) {
+	spend := func(amount int64, key string) (*pb.CreditView, error) {
 		return r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: amount, IdempotencyKey: key})
 	}
-	if v, err := grant("10", "g1"); err != nil || v.GetBalance() != "10.0000" {
+	if v, err := grant(100000, "g1"); err != nil || v.GetBalance() != 100000 {
 		t.Fatalf("grant: %v %v", v, err)
 	}
-	// Whitespace around the amount used to become the delta "- 4.5".
-	if v, err := spend(" 4.5 ", "s1"); err != nil || v.GetBalance() != "5.5000" {
-		t.Fatalf("spend with whitespace: %v %v", v, err)
+	if v, err := spend(45000, "s1"); err != nil || v.GetBalance() != 55000 {
+		t.Fatalf("spend: %v %v", v, err)
 	}
 	// Retried spend: no second deduction.
-	if v, err := spend(" 4.5 ", "s1"); err != nil || v.GetBalance() != "5.5000" {
+	if v, err := spend(45000, "s1"); err != nil || v.GetBalance() != 55000 {
 		t.Fatalf("retried spend: %v %v", v, err)
 	}
 	// Overdraw: refused, nothing written.
 	ledger := r.store.count("ledger")
-	_, err := spend("5.5001", "s2")
+	_, err := spend(55001, "s2")
 	wantCode(t, err, codes.FailedPrecondition, "overdraw")
-	if r.store.count("ledger") != ledger || r.store.balance(t, "user-a") != "5.5000" {
+	if r.store.count("ledger") != ledger || r.store.balance(t, "user-a") != 55000 {
 		t.Error("a refused overdraw changed the ledger or balance")
 	}
 	// Spending to exactly zero is allowed.
-	if v, err := spend("5.5", "s3"); err != nil || v.GetBalance() != "0.0000" {
+	if v, err := spend(55000, "s3"); err != nil || v.GetBalance() != 0 {
 		t.Fatalf("spend to zero: %v %v", v, err)
 	}
-	// Sub-scale amounts were silently rounded by the column (a grant of
-	// 0.00004 stored a zero delta); they are refused now.
-	_, err = grant("0.00004", "g-tiny")
-	wantCode(t, err, codes.InvalidArgument, "sub-scale grant")
+	// A zero or negative amount is refused: the sign is the handler's.
+	_, err = grant(0, "g-zero")
+	wantCode(t, err, codes.InvalidArgument, "zero grant")
+	_, err = spend(-10000, "s-neg")
+	wantCode(t, err, codes.InvalidArgument, "negative spend")
 	// Another principal's balance is untouched throughout.
-	if b := r.store.balance(t, "user-b"); b != "0.0000" {
-		t.Errorf("user-b balance = %s", b)
+	if b := r.store.balance(t, "user-b"); b != 0 {
+		t.Errorf("user-b balance = %d", b)
 	}
 	// Balance read for a principal with no row is "0".
-	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-c", Amount: "1", IdempotencyKey: "g1"})
+	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-c", Amount: 10000, IdempotencyKey: "g1"})
 	_ = v
 	if err != nil {
 		t.Fatalf("grant user-c: %v", err)
@@ -1095,33 +1099,33 @@ func TestFlow_Credit_SpendGrantInvariants(t *testing.T) {
 // service was delivered for free). Keys are scoped per (kind, principal).
 func TestFlow_Credit_KeyReuseAcrossPrincipalsAndKinds_IsNotASilentNoOp(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "100", IdempotencyKey: "order-1"}); err != nil {
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 1000000, IdempotencyKey: "order-1"}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-b", Amount: "1", IdempotencyKey: "order-1"})
+	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-b", Amount: 10000, IdempotencyKey: "order-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.GetUserId() != "user-b" || v.GetBalance() != "1.0000" {
+	if v.GetUserId() != "user-b" || v.GetBalance() != 10000 {
 		t.Errorf("user-b's grant under a key user-a used = %+v, want balance 1.0000", v)
 	}
-	v, err = r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "30", IdempotencyKey: "order-1"})
+	v, err = r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: 300000, IdempotencyKey: "order-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.GetBalance() != "70.0000" {
-		t.Errorf("spend reusing the grant's key: balance %s, want 70.0000 — it was a free spend", v.GetBalance())
+	if v.GetBalance() != 700000 {
+		t.Errorf("spend reusing the grant's key: balance %d, want 70.0000 — it was a free spend", v.GetBalance())
 	}
 	// A caller grant cannot pre-empt the top-up grant keyed on a payment id.
-	pid := r.topUp("user-a", "5", "t").GetProviderPaymentId()
-	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: pid}); err != nil {
+	pid := r.topUp("user-a", 50000, "t").GetProviderPaymentId()
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: pid}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.deliver(eventJSON("evt_pre", "payment_intent.succeeded", pid, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if b := r.store.balance(t, "user-a"); b != "76.0000" {
-		t.Errorf("balance = %s, want 76.0000 (70 + 1 grant + 5 top-up)", b)
+	if b := r.store.balance(t, "user-a"); b != 760000 {
+		t.Errorf("balance = %d, want 76.0000 (70 + 1 grant + 5 top-up)", b)
 	}
 }
 
@@ -1150,7 +1154,7 @@ func TestFlow_Usage_KeyReuseAcrossPrincipalsAndMeters_IsNotASilentNoOp(t *testin
 
 func TestFlow_Credit_ConcurrentSpendsNeverOverdraw(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "10", IdempotencyKey: "g"}); err != nil {
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 100000, IdempotencyKey: "g"}); err != nil {
 		t.Fatal(err)
 	}
 	const n = 20
@@ -1161,7 +1165,7 @@ func TestFlow_Credit_ConcurrentSpendsNeverOverdraw(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "spend-" + string(rune('a'+i))})
+			_, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "spend-" + string(rune('a'+i))})
 			mu.Lock()
 			defer mu.Unlock()
 			switch status.Code(err) {
@@ -1178,8 +1182,8 @@ func TestFlow_Credit_ConcurrentSpendsNeverOverdraw(t *testing.T) {
 	if ok != 10 || refused != 10 {
 		t.Errorf("spends ok=%d refused=%d, want 10/10", ok, refused)
 	}
-	if b := r.store.balance(t, "user-a"); b != "0.0000" {
-		t.Errorf("balance = %s, want 0.0000", b)
+	if b := r.store.balance(t, "user-a"); b != 0 {
+		t.Errorf("balance = %d, want 0.0000", b)
 	}
 }
 
@@ -1237,7 +1241,7 @@ func TestFlow_StoreReadFailuresSurface(t *testing.T) {
 		call   func(r *rig) error
 	}{
 		{"GetCustomerByUserId", func(r *rig) error {
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"})
 			return err
 		}},
 		{"GetCustomerByUserId", func(r *rig) error {
@@ -1253,26 +1257,26 @@ func TestFlow_StoreReadFailuresSurface(t *testing.T) {
 			return err
 		}},
 		{"GetPlanBySlug", func(r *rig) error {
-			_, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "1", Currency: "usd", Interval: "month"})
+			_, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 10000, Currency: "usd", Interval: "month"})
 			return err
 		}},
 		{"CreatePayment", func(r *rig) error {
-			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
+			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"})
 			return err
 		}},
 		{"CreateCustomer", func(r *rig) error {
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"})
 			return err
 		}},
 		{"GetPaymentByIdempotencyKey", func(r *rig) error {
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"})
 			return err
 		}},
 		{"GetCreditBalance", func(r *rig) error {
-			if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"}); err != nil {
+			if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"}); err != nil {
 				return err
 			}
-			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"})
 			return err
 		}},
 	}
@@ -1292,9 +1296,9 @@ func TestFlow_StoreReadFailuresSurface(t *testing.T) {
 // key and the provider would refuse it.
 func TestFlow_RawKeyKindLookupFailureSurfaces(t *testing.T) {
 	r := newRig(t)
-	r.rawKeyCharge("user-a", "5.00", "k-raw", backend.OriginTopup)
+	r.rawKeyCharge("user-a", 50000, "k-raw", backend.OriginTopup)
 	r.store.injectBefore("GetCreditTopupByProviderId", errTransient)
-	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "5.00", Currency: "usd", IdempotencyKey: "k-raw"})
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 50000, Currency: "usd", IdempotencyKey: "k-raw"})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("want the store's Unavailable surfaced, got %v", err)
 	}
@@ -1307,17 +1311,17 @@ func TestFlow_RawKeyKindLookupFailureSurfaces(t *testing.T) {
 // surfaced, not turned into an AlreadyExists.
 func TestFlow_ReplayLookupFailureSurfaces(t *testing.T) {
 	r := newRig(t)
-	r.charge("user-a", "1.00", "k")
+	r.charge("user-a", 10000, "k")
 	r.store.injectBefore("GetPaymentByProviderId", errTransient)
-	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "1.00", IdempotencyKey: "k"})
+	_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"})
 	wantCode(t, err, codes.Unavailable, "lookup failure on the replay path")
 
-	p := r.paid("user-a", "5", "k2")
-	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: "rk"}); err != nil {
+	p := r.paid("user-a", 50000, "k2")
+	if _, err := r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 10000, IdempotencyKey: "rk"}); err != nil {
 		t.Fatal(err)
 	}
 	r.store.injectBefore("GetRefundByIdempotencyKey", errTransient)
-	_, err = r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: "1", IdempotencyKey: "rk"})
+	_, err = r.h.RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: p.GetId(), Amount: 10000, IdempotencyKey: "rk"})
 	wantCode(t, err, codes.Unavailable, "refund lookup failure")
 	if errors.Is(err, errNoLocalRecord) {
 		t.Error("unexpected sentinel")
@@ -1327,7 +1331,7 @@ func TestFlow_ReplayLookupFailureSurfaces(t *testing.T) {
 func TestFlow_SubscriptionFailurePaths(t *testing.T) {
 	setup := func(t *testing.T) *rig {
 		r := newRig(t)
-		if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+		if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 			t.Fatal(err)
 		}
 		return r
@@ -1372,7 +1376,7 @@ func TestFlow_SubscriptionFailurePaths(t *testing.T) {
 	t.Run("plan insert fails", func(t *testing.T) {
 		r := newRig(t)
 		r.store.injectBefore("CreatePlan", errTransient)
-		_, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: "29", Currency: "usd", Interval: "month"})
+		_, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Amount: 290000, Currency: "usd", Interval: "month"})
 		wantCode(t, err, codes.Unavailable, "plan insert")
 	})
 }
@@ -1380,7 +1384,7 @@ func TestFlow_SubscriptionFailurePaths(t *testing.T) {
 func TestFlow_TopUpFailurePaths(t *testing.T) {
 	r := newRig(t)
 	r.store.injectBefore("GetCustomerByUserId", errTransient)
-	_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "k"})
+	_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "k"})
 	wantCode(t, err, codes.Unavailable, "customer resolve")
 
 	// The hook ignores an event without a payment id and touches nothing.
@@ -1399,7 +1403,7 @@ func TestFlow_TopUpFailurePaths(t *testing.T) {
 // event (and alarm on the endpoint).
 func TestFlow_TopUpStampLostToAConcurrentDelivery_IsNotAFailure(t *testing.T) {
 	r := newRig(t)
-	pid := r.topUp("user-a", "20.00", "top-c").GetProviderPaymentId()
+	pid := r.topUp("user-a", 200000, "top-c").GetProviderPaymentId()
 	r.store.onceBefore("MarkTopupGranted", func() {
 		if _, err := r.store.MarkTopupGranted(bg, &pb.MarkTopupGrantedReq{ProviderPaymentId: pid}); err != nil {
 			t.Errorf("concurrent stamp: %v", err)
@@ -1409,8 +1413,8 @@ func TestFlow_TopUpStampLostToAConcurrentDelivery_IsNotAFailure(t *testing.T) {
 	if err != nil || !resp.GetHandled() {
 		t.Fatalf("handled=%v err=%v", resp.GetHandled(), err)
 	}
-	if b := r.store.balance(t, "user-a"); b != "20.0000" {
-		t.Errorf("balance = %s", b)
+	if b := r.store.balance(t, "user-a"); b != 200000 {
+		t.Errorf("balance = %d", b)
 	}
 }
 
@@ -1418,13 +1422,13 @@ func TestFlow_TopUpStampLostToAConcurrentDelivery_IsNotAFailure(t *testing.T) {
 // driver is configured: a non-positive or over-precise amount never
 // reaches Backend.RefundPayment.
 func TestRefundPayment_ValidatesAmountBeforeTheBackend(t *testing.T) {
-	q := &fakeQuery{payment: &pb.Payment{Id: "pay-1", ProviderPaymentId: "pi_1", Amount: "20.0000", Currency: "usd"}}
-	for _, amt := range []string{"-5.00", "0", "5.00001", "1e2", "abc"} {
+	q := &fakeQuery{payment: &pb.Payment{Id: "pay-1", ProviderPaymentId: "pi_1", Amount: 200000, Currency: "usd"}}
+	for _, amt := range []int64{-50000, -1, math.MinInt64} {
 		be := &fakeBackend{}
 		_, err := newHandler(q, &fakeMutation{}, be).RefundPayment(bg, &pb.RefundPaymentReq{PaymentId: "pay-1", Amount: amt, IdempotencyKey: "k"})
-		wantCode(t, err, codes.InvalidArgument, "refund "+amt)
+		wantCode(t, err, codes.InvalidArgument, fmt.Sprint("refund ", amt))
 		if be.lastRefundFor != "" {
-			t.Errorf("amount %q reached the backend", amt)
+			t.Errorf("amount %d reached the backend", amt)
 		}
 	}
 }
@@ -1433,5 +1437,25 @@ func TestMetadataValue_KeyAbsent(t *testing.T) {
 	ctx := metadata.NewIncomingContext(bg, metadata.Pairs("x-other", "v"))
 	if metadataValue(ctx, "stripe-signature") != "" {
 		t.Error("absent key must read empty")
+	}
+}
+
+// A balance is an int64 (BIGINT) of ten-thousandths: a grant that would carry
+// it past MaxInt64 is refused — the database refuses the write and the
+// transaction rolls back — never stored as a wrapped, negative balance.
+func TestFlow_Credit_GrantPastTheAmountRangeIsRefused(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: math.MaxInt64 - 10000, IdempotencyKey: "g-big"}); err != nil {
+		t.Fatalf("grant up to the range: %v", err)
+	}
+	ledger := r.store.count("ledger")
+	_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 20000, IdempotencyKey: "g-over"})
+	wantCode(t, err, codes.InvalidArgument, "grant past MaxInt64")
+	if got := r.store.balance(t, "user-a"); got != math.MaxInt64-10000 || r.store.count("ledger") != ledger {
+		t.Errorf("a refused grant changed the balance (%d) or the ledger", got)
+	}
+	// Up to the edge still lands.
+	if v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "g-edge"}); err != nil || v.GetBalance() != math.MaxInt64 {
+		t.Fatalf("grant to MaxInt64: %v %v", v, err)
 	}
 }

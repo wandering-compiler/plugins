@@ -9,9 +9,10 @@
 // non-Stripe driver is expected to pressure-test the shape — acceptable
 // precisely because nothing on the wire depends on it.
 //
-// Money is carried as a decimal string + ISO-4217 currency (matching
-// the DECIMAL columns), never float64; a driver converts to the
-// provider's unit (e.g. integer minor units) at its boundary.
+// Money is carried as an int64 count of ten-thousandths of the major unit
+// (scale 4, matching the MONEY columns: 19.99 is 199900) + ISO-4217
+// currency, never float64; a driver converts to the provider's unit (the
+// currency's own minor units) at its boundary, exactly or not at all.
 package backend
 
 import (
@@ -66,13 +67,18 @@ func (e *CodedError) Error() string { return e.Err.Error() }
 // Unwrap exposes the cause, so the failure class it wraps still matches.
 func (e *CodedError) Unwrap() error { return e.Err }
 
-// Money is a currency amount as a decimal string (e.g. "19.99") plus a
-// lowercase ISO-4217 currency code. String carrier = exact, lossless —
-// the same representation the DECIMAL columns use.
+// Money is a currency amount plus a lowercase ISO-4217 currency code.
+// Amount counts ten-thousandths of the major unit (19.99 is 199900) — the
+// same int64 scale-4 representation the MONEY columns use, exact for every
+// currency (none has more than three decimals).
 type Money struct {
-	Amount   string
+	Amount   int64
 	Currency string
 }
+
+// AmountScale is how many decimal places Money.Amount carries: one major
+// unit is 10^AmountScale of it.
+const AmountScale = 4
 
 // CustomerSpec is the input to EnsureCustomer.
 type CustomerSpec struct {

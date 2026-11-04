@@ -51,11 +51,12 @@ message NewCustomerResp { Customer customer = 1; }
 // CreatePayment — create a charge. The handler ensures the Customer
 // exists (creating the provider customer on first charge), calls the
 // backend to create the provider payment object with an idempotency
-// key, then persists the local Payment. amount is a decimal string
-// (e.g. "19.99"); currency is ISO-4217 (empty → default_currency).
+// key, then persists the local Payment. amount is MONEY at scale 4 —
+// ten-thousandths of the major unit, so 19.99 is 199900; currency is
+// ISO-4217 (empty → default_currency).
 message ChargeReq {
   string user_id         = 1;
-  string amount          = 2;
+  int64 amount          = 2 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string currency        = 3;
   string description      = 4;
   // idempotency_key — caller-supplied retry guard. Empty → the handler
@@ -71,12 +72,12 @@ message ChargeResp {
   string  client_secret = 2 [(w17.field) = { sensitive: true }];
 }
 
-// RefundPaymentReq reverses a Payment. amount is a decimal string; empty
+// RefundPaymentReq reverses a Payment. amount is MONEY at scale 4; 0
 // = full refund (the payment's amount). currency defaults to the
 // payment's currency.
 message RefundPaymentReq {
   string payment_id = 1;
-  string amount     = 2;
+  int64 amount     = 2 [(w17.field) = { type: MONEY, scale: 4 }];
   // idempotency_key — caller-supplied retry guard, REQUIRED. It is the
   // provider Idempotency-Key for the refund, so it must be UNIQUE per
   // distinct refund and STABLE across retries of the same one. One key
@@ -160,21 +161,21 @@ message ReconcileProviderResp {
 
 // ── prepaid feature: credit grant / spend / balance ─────────────────
 // CreditView is the shared response — the principal + their post-op
-// materialized balance (decimal string).
+// materialized balance (MONEY at scale 4).
 message CreditView {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id = 1;
-  string balance = 2;
+  int64 balance = 2 [(w17.field) = { type: MONEY, scale: 4 }];
 }
 
-// GrantCreditReq / SpendCreditReq — amount is an UNSIGNED decimal
-// string; the handler applies the sign (grant +, spend −). reason/ref
+// GrantCreditReq / SpendCreditReq — amount is an UNSIGNED MONEY amount
+// at scale 4; the handler applies the sign (grant +, spend −). reason/ref
 // annotate the ledger entry; idempotency_key (caller-supplied) makes
 // the apply idempotent.
 message GrantCreditReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id         = 1;
-  string amount          = 2;
+  int64 amount          = 2 [(w17.field) = { type: MONEY, scale: 4 }];
   string reason          = 3;
   string ref             = 4;
   string idempotency_key = 5;
@@ -182,7 +183,7 @@ message GrantCreditReq {
 message SpendCreditReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id         = 1;
-  string amount          = 2;
+  int64 amount          = 2 [(w17.field) = { type: MONEY, scale: 4 }];
   string reason          = 3;
   string ref             = 4;
   string idempotency_key = 5;
@@ -194,7 +195,7 @@ message SpendCreditReq {
 message TopUpCreditReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id         = 1;
-  string amount          = 2;
+  int64 amount          = 2 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string currency        = 3;
   string idempotency_key = 4;
 }
@@ -238,7 +239,7 @@ message DefinePlanReq {
   option (w17.contrib.plugin_feature) = "subscriptions";
   string slug     = 1;
   string name     = 2;
-  string amount   = 3;
+  int64 amount   = 3 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string currency = 4;
   string interval = 5; // month | year
 }

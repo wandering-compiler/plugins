@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -34,36 +35,36 @@ func prepaidHandler(q *fakeQuery, m *fakeMutation) *PaymentServiceHandler {
 func TestGrantCredit(t *testing.T) {
 	m := &fakeMutation{}
 	h := prepaidHandler(&fakeQuery{}, m)
-	view, err := h.GrantCredit(context.Background(), &pb.GrantCreditReq{UserId: "u1", Amount: "10.00", IdempotencyKey: "g1"})
+	view, err := h.GrantCredit(context.Background(), &pb.GrantCreditReq{UserId: "u1", Amount: 100000, IdempotencyKey: "g1"})
 	if err != nil {
 		t.Fatalf("GrantCredit: %v", err)
 	}
-	if m.lastApply.GetDelta() != "10.00" {
-		t.Errorf("grant delta = %q, want 10.00 (positive)", m.lastApply.GetDelta())
+	if m.lastApply.GetDelta() != 100000 {
+		t.Errorf("grant delta = %d, want 10.00 (positive)", m.lastApply.GetDelta())
 	}
 	if m.lastApply.GetReason() != "grant" {
 		t.Errorf("default reason = %q, want grant", m.lastApply.GetReason())
 	}
-	if view.GetBalance() != "10.00" {
-		t.Errorf("balance = %q", view.GetBalance())
+	if view.GetBalance() != 100000 {
+		t.Errorf("balance = %d", view.GetBalance())
 	}
 }
 
 func TestSpendCredit_NegatesDelta(t *testing.T) {
 	m := &fakeMutation{}
 	h := prepaidHandler(&fakeQuery{}, m)
-	if _, err := h.SpendCredit(context.Background(), &pb.SpendCreditReq{UserId: "u1", Amount: "5.00", IdempotencyKey: "s1"}); err != nil {
+	if _, err := h.SpendCredit(context.Background(), &pb.SpendCreditReq{UserId: "u1", Amount: 50000, IdempotencyKey: "s1"}); err != nil {
 		t.Fatalf("SpendCredit: %v", err)
 	}
-	if m.lastApply.GetDelta() != "-5.00" {
-		t.Errorf("spend delta = %q, want -5.00", m.lastApply.GetDelta())
+	if m.lastApply.GetDelta() != -50000 {
+		t.Errorf("spend delta = %d, want -5.00", m.lastApply.GetDelta())
 	}
 }
 
 func TestSpendCredit_Insufficient(t *testing.T) {
 	m := &fakeMutation{applyErr: constraintErr(t, "INVALID_VALUE")} // balance CHECK
 	h := prepaidHandler(&fakeQuery{}, m)
-	_, err := h.SpendCredit(context.Background(), &pb.SpendCreditReq{UserId: "u1", Amount: "999", IdempotencyKey: "s2"})
+	_, err := h.SpendCredit(context.Background(), &pb.SpendCreditReq{UserId: "u1", Amount: 9990000, IdempotencyKey: "s2"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("want FailedPrecondition (insufficient), got %v", err)
 	}
@@ -72,30 +73,30 @@ func TestSpendCredit_Insufficient(t *testing.T) {
 func TestApplyCredit_IdempotentOnDuplicate(t *testing.T) {
 	// UNIQUE on idempotency_key ⇒ already applied; return current balance.
 	m := &fakeMutation{applyErr: constraintErr(t, "UNIQUE_VIOLATION")}
-	q := &fakeQuery{balance: &pb.CreditBalance{UserId: "u1", Balance: "42.00"}}
+	q := &fakeQuery{balance: &pb.CreditBalance{UserId: "u1", Balance: 420000}}
 	h := prepaidHandler(q, m)
-	view, err := h.GrantCredit(context.Background(), &pb.GrantCreditReq{UserId: "u1", Amount: "10", IdempotencyKey: "dup"})
+	view, err := h.GrantCredit(context.Background(), &pb.GrantCreditReq{UserId: "u1", Amount: 100000, IdempotencyKey: "dup"})
 	if err != nil {
 		t.Fatalf("idempotent grant should not error: %v", err)
 	}
-	if view.GetBalance() != "42.00" {
-		t.Errorf("idempotent grant should return current balance, got %q", view.GetBalance())
+	if view.GetBalance() != 420000 {
+		t.Errorf("idempotent grant should return current balance, got %d", view.GetBalance())
 	}
 }
 
 func TestGrantCredit_ValidatesAmount(t *testing.T) {
 	h := prepaidHandler(&fakeQuery{}, &fakeMutation{})
-	for _, amt := range []string{"", "0", "0.00", "-5", "abc", "1.2.3"} {
+	for _, amt := range []int64{0, -50000, math.MinInt64} {
 		_, err := h.GrantCredit(context.Background(), &pb.GrantCreditReq{UserId: "u1", Amount: amt, IdempotencyKey: "k"})
 		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("amount %q: want InvalidArgument, got %v", amt, err)
+			t.Errorf("amount %d: want InvalidArgument, got %v", amt, err)
 		}
 	}
 }
 
 func TestApplyCredit_RequiresIdempotencyKey(t *testing.T) {
 	h := prepaidHandler(&fakeQuery{}, &fakeMutation{})
-	_, err := h.GrantCredit(context.Background(), &pb.GrantCreditReq{UserId: "u1", Amount: "1.00"})
+	_, err := h.GrantCredit(context.Background(), &pb.GrantCreditReq{UserId: "u1", Amount: 10000})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("want InvalidArgument for missing idempotency_key, got %v", err)
 	}
@@ -113,9 +114,9 @@ func TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce(t *testing.T) {
 	r := newRig(t)
 	// What rc.2 wrote: raw caller keys.
 	for _, row := range []*pb.ApplyCreditReq{
-		{UserId: "user-a", Delta: "10", Reason: "grant", IdempotencyKey: "order-1"},
-		{UserId: "user-a", Delta: "-2", Reason: "spend", IdempotencyKey: "use-1"},
-		{UserId: "user-a", Delta: "3", Reason: "topup", Ref: "pi_legacy", IdempotencyKey: "topup:pi_legacy"},
+		{UserId: "user-a", Delta: 100000, Reason: "grant", IdempotencyKey: "order-1"},
+		{UserId: "user-a", Delta: -20000, Reason: "spend", IdempotencyKey: "use-1"},
+		{UserId: "user-a", Delta: 30000, Reason: "topup", Ref: "pi_legacy", IdempotencyKey: "topup:pi_legacy"},
 	} {
 		if _, err := r.store.ApplyCredit(bg, row); err != nil {
 			t.Fatal(err)
@@ -124,10 +125,10 @@ func TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce(t *testing.T) {
 	applies := r.store.callCount("ApplyCredit")
 
 	// The retries: same principal, direction and amount (amount by value).
-	if v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "10.00", IdempotencyKey: "order-1"}); err != nil || v.GetBalance() != "11.0000" {
+	if v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 100000, IdempotencyKey: "order-1"}); err != nil || v.GetBalance() != 110000 {
 		t.Errorf("grant retried across the upgrade = %v / %v, want balance 11.0000 (applied once)", v, err)
 	}
-	if v, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "2", IdempotencyKey: "use-1"}); err != nil || v.GetBalance() != "11.0000" {
+	if v, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: 20000, IdempotencyKey: "use-1"}); err != nil || v.GetBalance() != 110000 {
 		t.Errorf("spend retried across the upgrade = %v / %v, want balance 11.0000 (applied once)", v, err)
 	}
 	if n := r.store.callCount("ApplyCredit"); n != applies {
@@ -142,19 +143,19 @@ func TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce(t *testing.T) {
 		call func() error
 	}{
 		{"user-b under user-a's key", func() error {
-			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-b", Amount: "10", IdempotencyKey: "order-1"})
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-b", Amount: 100000, IdempotencyKey: "order-1"})
 			return err
 		}},
 		{"a spend under a grant's key", func() error {
-			_, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "order-1"})
+			_, err := r.h.SpendCredit(bg, &pb.SpendCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "order-1"})
 			return err
 		}},
 		{"another amount under the key", func() error {
-			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "4", IdempotencyKey: "order-1"})
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 40000, IdempotencyKey: "order-1"})
 			return err
 		}},
 		{"a caller grant under a top-up's key", func() error {
-			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: "topup:pi_legacy"})
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 30000, IdempotencyKey: "topup:pi_legacy"})
 			return err
 		}},
 	} {
@@ -166,17 +167,17 @@ func TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce(t *testing.T) {
 			t.Errorf("%s: not applied — a silent no-op", c.what)
 		}
 	}
-	if b := r.store.balance(t, "user-a"); b != "17.0000" {
-		t.Errorf("user-a balance = %s, want 17.0000 (11 − 1 + 4 + 3)", b)
+	if b := r.store.balance(t, "user-a"); b != 170000 {
+		t.Errorf("user-a balance = %d, want 17.0000 (11 − 1 + 4 + 3)", b)
 	}
-	if b := r.store.balance(t, "user-b"); b != "10.0000" {
-		t.Errorf("user-b balance = %s, want 10.0000", b)
+	if b := r.store.balance(t, "user-b"); b != 100000 {
+		t.Errorf("user-b balance = %d, want 10.0000", b)
 	}
 
 	// A failing lookup surfaces; nothing is applied blind.
 	r.store.injectBefore("GetCreditLedgerByKey", errTransient)
 	before := r.store.count("ledger")
-	_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "1", IdempotencyKey: "fresh"})
+	_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 10000, IdempotencyKey: "fresh"})
 	wantCode(t, err, codes.Unavailable, "legacy lookup failure")
 	if r.store.count("ledger") != before {
 		t.Error("applied although the legacy lookup failed")
@@ -188,16 +189,16 @@ func TestFlow_Credit_ApplyRetriedAcrossTheUpgrade_AppliesOnce(t *testing.T) {
 // would answer a new grant as a retry and grant nothing.
 func TestFlow_Credit_CallerKeyShapedLikeAScopedKey_IsNotAMatch(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: "x"}); err != nil {
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 30000, IdempotencyKey: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	stored := ledgerKey(creditGrant, "user-a", "x")
-	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: stored})
+	v, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 30000, IdempotencyKey: stored})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.GetBalance() != "6.0000" {
-		t.Errorf("balance = %s, want 6.0000 — a grant under a key equal to another's stored scoped key was taken for a retry", v.GetBalance())
+	if v.GetBalance() != 60000 {
+		t.Errorf("balance = %d, want 6.0000 — a grant under a key equal to another's stored scoped key was taken for a retry", v.GetBalance())
 	}
 }
 
@@ -275,7 +276,7 @@ func TestApplyCredit_OnlyTheBalanceCheckIsAnOverdraw(t *testing.T) {
 	} {
 		m := &fakeMutation{applyErr: fieldErr(c.field)}
 		h := prepaidHandler(&fakeQuery{}, m)
-		_, err := h.SpendCredit(context.Background(), &pb.SpendCreditReq{UserId: "u1", Amount: "1", IdempotencyKey: "s"})
+		_, err := h.SpendCredit(context.Background(), &pb.SpendCreditReq{UserId: "u1", Amount: 10000, IdempotencyKey: "s"})
 		if status.Code(err) != c.want {
 			t.Errorf("INVALID_VALUE on %q = %v, want %v", c.field, err, c.want)
 		}

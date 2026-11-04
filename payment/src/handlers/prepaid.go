@@ -52,7 +52,7 @@ func topupFingerprint(ctx context.Context, h *PaymentServiceHandler, providerPay
 		return "", err
 	}
 	t := got.GetTopup()
-	return fmt.Sprintf("topup granted=%t owed=%s step=%d", t.GetGrantedAt() != nil, orDefault(t.GetCreditOwed(), "0"), t.GetReconciledStep()), nil
+	return fmt.Sprintf("topup granted=%t owed=%d step=%d", t.GetGrantedAt() != nil, t.GetCreditOwed(), t.GetReconciledStep()), nil
 }
 
 // recordedTopup reports whether a CreditTopup row records p as a top-up.
@@ -134,16 +134,12 @@ func (k creditKind) debit() bool { return k == creditSpend }
 // succeeded (the service delivered for free), and a grant for user-b
 // under a key user-a had used granted nothing and succeeded. Scoped, a
 // duplicate can only be a genuine retry of the same apply.
-func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount string, kind creditKind, reason, ref, idem string) (*pb.CreditView, error) {
+func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID string, amount int64, kind creditKind, reason, ref, idem string) (*pb.CreditView, error) {
 	if userID == "" {
 		return nil, invalidArg("user_id is required")
 	}
-	// Trimmed BEFORE the sign is applied: " 5" passed validation and
-	// became the delta "- 5", which the database refused as malformed
-	// input instead of spending 5.
-	amount = strings.TrimSpace(amount)
-	if !isPositiveDecimal(amount) {
-		return nil, invalidArg("amount must be a positive decimal")
+	if !isPositiveAmount(amount) {
+		return nil, invalidArg("amount must be positive (ten-thousandths of the major unit: 19.99 is 199900)")
 	}
 	if idem == "" {
 		return nil, invalidArg("idempotency_key is required (the apply must be idempotent)")
@@ -162,7 +158,7 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 	}
 	delta := amount
 	if kind.debit() {
-		delta = "-" + amount
+		delta = -amount // amount > 0, so the negation cannot overflow
 	}
 	resp, err := h.Mutation.ApplyCredit(ctx, &pb.ApplyCreditReq{
 		UserId:         userID,
@@ -177,6 +173,11 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 		}
 		if isOverdraw(err) {
 			return nil, status.Error(codes.FailedPrecondition, "insufficient credit balance")
+		}
+		if constraintCode(err) == codeValueOutOfRange {
+			// balance + delta past the BIGINT column: the database refused
+			// the write (the transaction rolled back), never wrapped it.
+			return nil, errAmountOverflow("the credit balance")
 		}
 		return nil, err
 	}
@@ -201,7 +202,7 @@ func (h *PaymentServiceHandler) applyCredit(ctx context.Context, userID, amount 
 // caller grant into a silent no-op. Keys in the "v2:" namespace are not
 // either, for the same reason: that is where scoped keys are stored, so a
 // caller key shaped "v2:<hex>" can equal another apply's stored scoped key.
-func (h *PaymentServiceHandler) appliedUnderRawKey(ctx context.Context, userID, amount string, kind creditKind, rawKey string) (bool, error) {
+func (h *PaymentServiceHandler) appliedUnderRawKey(ctx context.Context, userID string, amount int64, kind creditKind, rawKey string) (bool, error) {
 	if strings.HasPrefix(rawKey, "topup:") || strings.HasPrefix(rawKey, scopedKeyPrefix) {
 		return false, nil
 	}
@@ -216,12 +217,14 @@ func (h *PaymentServiceHandler) appliedUnderRawKey(ctx context.Context, userID, 
 	if e == nil || e.GetUserId() != userID {
 		return false, nil
 	}
-	delta := strings.TrimSpace(e.GetDelta())
-	debit := strings.HasPrefix(delta, "-")
-	if debit != (kind == creditSpend) {
+	delta := e.GetDelta()
+	if (delta < 0) != (kind == creditSpend) {
 		return false, nil
 	}
-	return sameDecimal(strings.TrimPrefix(delta, "-"), amount), nil
+	if delta < 0 {
+		return -delta == amount, nil // amount > 0; -MinInt64 never equals it
+	}
+	return delta == amount, nil
 }
 
 func (h *PaymentServiceHandler) currentBalance(ctx context.Context, userID string) (*pb.CreditView, error) {
@@ -229,8 +232,8 @@ func (h *PaymentServiceHandler) currentBalance(ctx context.Context, userID strin
 	if err != nil && !absent(err) { // no balance row yet: zero
 		return nil, err
 	}
-	balance := "0"
-	if b := got.GetBalance(); b != nil && b.GetBalance() != "" {
+	var balance int64
+	if b := got.GetBalance(); b != nil {
 		balance = b.GetBalance()
 	}
 	return &pb.CreditView{UserId: userID, Balance: balance}, nil
@@ -262,9 +265,9 @@ func (h *PaymentServiceHandler) TopUpCredit(ctx context.Context, req *pb.TopUpCr
 	if req.GetUserId() == "" {
 		return nil, invalidArg("user_id is required")
 	}
-	amount := strings.TrimSpace(req.GetAmount())
-	if !isPositiveDecimal(amount) {
-		return nil, invalidArg("amount must be a positive decimal")
+	amount := req.GetAmount()
+	if !isPositiveAmount(amount) {
+		return nil, invalidArg("amount must be positive (ten-thousandths of the major unit: 19.99 is 199900)")
 	}
 	currency, err := h.chargeCurrency(req.GetCurrency())
 	if err != nil {
@@ -326,7 +329,7 @@ func grantTopupOnPaymentSuccess(ctx context.Context, h *PaymentServiceHandler, e
 	if err != nil || pay == nil {
 		return err
 	}
-	return h.settleTopup(ctx, pay, "0", reasonTopupGrant, false)
+	return h.settleTopup(ctx, pay, 0, reasonTopupGrant, false)
 }
 
 // GetMyCreditBalance returns the signed-in caller's balance.
@@ -339,7 +342,7 @@ func (h *PaymentServiceHandler) GetMyCreditBalance(ctx context.Context, _ *pb.Ge
 	if absent(err) {
 		// No credit yet: the balance row appears with the first apply. A
 		// wallet that holds nothing is zero, not missing.
-		return &pb.GetCreditBalanceResp{Balance: &pb.CreditBalance{UserId: caller, Balance: "0"}}, nil
+		return &pb.GetCreditBalanceResp{Balance: &pb.CreditBalance{UserId: caller, Balance: 0}}, nil
 	}
 	return got, err
 }
@@ -347,7 +350,7 @@ func (h *PaymentServiceHandler) GetMyCreditBalance(ctx context.Context, _ *pb.Ge
 func init() {
 	takeBackRefundedCredit = takeBackTopupCredit
 	reconcileTopupCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) error {
-		return h.settleTopup(ctx, payment, "0", reasonTopupReconcile, false)
+		return h.settleTopup(ctx, payment, 0, reasonTopupReconcile, false)
 	}
 }
 
@@ -408,7 +411,7 @@ func topupStepKey(userID, providerPaymentID string, step int64) string {
 // ask the provider for, not recorded yet; strict refuses a decrease the
 // balance cannot cover whole (FailedPrecondition) instead of leaving it owed —
 // RefundPayment's "spent credit is not refunded as money".
-func (h *PaymentServiceHandler) settleTopup(ctx context.Context, payment *pb.Payment, pending, reason string, strict bool) error {
+func (h *PaymentServiceHandler) settleTopup(ctx context.Context, payment *pb.Payment, pending int64, reason string, strict bool) error {
 	pid := payment.GetProviderPaymentId()
 	for attempt := 0; attempt < 8; attempt++ {
 		got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: pid})
@@ -433,10 +436,13 @@ func (h *PaymentServiceHandler) settleTopup(ctx context.Context, payment *pb.Pay
 			return err
 		}
 		target, paid, err := h.topupTarget(ctx, pid, topup.GetAmount())
+		var ok bool
 		if err != nil {
 			return err
 		}
-		target = decimalShortfall(target, pending)
+		if target, ok = shortfall(target, pending); !ok {
+			return errAmountOverflow("a top-up's credit")
+		}
 		sum, err := h.Query.SumTopupCredit(ctx, &pb.SumTopupCreditReq{
 			UserId: userID, PaymentId: payment.GetId(), ProviderPaymentId: pid,
 			ReasonGrant: reasonTopupGrant, ReasonRefund: reasonTopupRefund, ReasonRefused: reasonTopupRefused, ReasonReconcile: reasonTopupReconcile,
@@ -445,21 +451,25 @@ func (h *PaymentServiceHandler) settleTopup(ctx context.Context, payment *pb.Pay
 			return err
 		}
 		held := sum.GetTotal()
-		apply, owed := decimalSub(target, held), "0"
-		if decimalSign(apply) < 0 && !strict {
-			need := decimalSub("0", apply)
+		apply, ok := subAmounts(target, held)
+		if !ok {
+			return errAmountOverflow("a top-up's credit")
+		}
+		var owed int64
+		if apply < 0 && !strict {
+			need := -apply // apply > MinInt64: target >= 0 and held fits int64
 			bal, err := h.currentBalance(ctx, userID)
 			if err != nil {
 				return err
 			}
-			take := decimalMin(need, bal.GetBalance())
-			apply, owed = decimalSub("0", take), decimalSub(need, take)
+			take := minAmount(need, max(bal.GetBalance(), 0))
+			apply, owed = -take, need-take
 		}
 		// Nothing to change: no row. (A step whose owed was never written —
 		// its writer stopped between the two writes — needs none either when
 		// the owed it would record is the one recorded; otherwise this
 		// reconciliation's own step records it.)
-		if decimalSign(apply) == 0 && sameDecimal(owed, orDefault(topup.GetCreditOwed(), "0")) {
+		if apply == 0 && owed == topup.GetCreditOwed() {
 			return h.stampTopupGranted(ctx, pid, paid)
 		}
 		_, err = h.Mutation.ApplyCredit(ctx, &pb.ApplyCreditReq{
@@ -506,23 +516,30 @@ func (h *PaymentServiceHandler) nextTopupStep(ctx context.Context, userID, provi
 
 // topupTarget is what the top-up should be worth now, and whether its payment
 // has been paid (SUCCEEDED, or REFUNDED after it).
-func (h *PaymentServiceHandler) topupTarget(ctx context.Context, providerPaymentID, amount string) (string, bool, error) {
+func (h *PaymentServiceHandler) topupTarget(ctx context.Context, providerPaymentID string, amount int64) (int64, bool, error) {
 	pay, err := h.paymentByProviderID(ctx, providerPaymentID)
 	if err != nil || pay == nil {
-		return "0", false, err
+		return 0, false, err
 	}
 	if st := pay.GetStatus(); st != pb.Payment_SUCCEEDED && st != pb.Payment_REFUNDED {
-		return "0", false, nil
+		return 0, false, nil
 	}
 	refunded, err := h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: pay.GetId()})
 	if err != nil {
-		return "", false, err
+		return 0, false, err
 	}
 	lost, err := lostDisputeTotal(ctx, h, pay)
 	if err != nil {
-		return "", false, err
+		return 0, false, err
 	}
-	return decimalShortfall(decimalShortfall(amount, refunded.GetTotal()), lost), true, nil
+	left, ok := shortfall(amount, refunded.GetTotal())
+	if ok {
+		left, ok = shortfall(left, lost)
+	}
+	if !ok {
+		return 0, false, errAmountOverflow("a top-up's target")
+	}
+	return left, true, nil
 }
 
 // stampTopupGranted stamps granted_at the first time a paid top-up is
@@ -544,7 +561,7 @@ func (h *PaymentServiceHandler) stampTopupGranted(ctx context.Context, providerP
 // refunded at all. A retry of the same refund finds the credit already taken
 // and takes nothing more. The undo, for a refusal the provider will repeat,
 // is a reconciliation without the pending refund: it gives the credit back.
-func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, _ string) (func() error, error) {
+func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount int64, _ string) (func() error, error) {
 	got, err := h.Query.GetCreditTopupByProviderId(ctx, &pb.GetCreditTopupByProviderIdReq{ProviderPaymentId: payment.GetProviderPaymentId()})
 	if err != nil {
 		if absent(err) {
@@ -569,6 +586,6 @@ func takeBackTopupCredit(ctx context.Context, h *PaymentServiceHandler, payment 
 		}
 		return nil, err
 	}
-	undo := func() error { return h.settleTopup(ctx, payment, "0", reasonTopupRefused, false) }
+	undo := func() error { return h.settleTopup(ctx, payment, 0, reasonTopupRefused, false) }
 	return undo, nil
 }

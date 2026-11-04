@@ -43,7 +43,7 @@ func TestTopUpCredit(t *testing.T) {
 	q := &fakeQuery{customer: &pb.Customer{Id: "cust-1", ProviderCustomerId: "cus_1"}}
 	h := newHandler(q, m, be)
 
-	resp, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: "20.00", Currency: "usd", IdempotencyKey: "top1"})
+	resp, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: 200000, Currency: "usd", IdempotencyKey: "top1"})
 	if err != nil {
 		t.Fatalf("TopUpCredit: %v", err)
 	}
@@ -54,17 +54,17 @@ func TestTopUpCredit(t *testing.T) {
 	if m.lastCreateTopup == nil || m.lastCreateTopup.GetProviderPaymentId() != "pi_top" {
 		t.Errorf("pending top-up not recorded: %+v", m.lastCreateTopup)
 	}
-	if m.lastCreateTopup.GetAmount() != "20.00" {
-		t.Errorf("top-up amount = %q", m.lastCreateTopup.GetAmount())
+	if m.lastCreateTopup.GetAmount() != 200000 {
+		t.Errorf("top-up amount = %d", m.lastCreateTopup.GetAmount())
 	}
 }
 
 // paidTopUpPayment is the SUCCEEDED payment of the fakes' top-up pi_42.
-var paidTopUpPayment = &pb.Payment{Id: "pay-42", ProviderPaymentId: "pi_42", Amount: "20.0000", Status: pb.Payment_SUCCEEDED}
+var paidTopUpPayment = &pb.Payment{Id: "pay-42", ProviderPaymentId: "pi_42", Amount: 200000, Status: pb.Payment_SUCCEEDED}
 
 func TestIngestStripe_TopUpSuccess_GrantsCredit(t *testing.T) {
 	m := &fakeMutation{}
-	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}, paymentByProvider: paidTopUpPayment}
+	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: 200000}, paymentByProvider: paidTopUpPayment}
 	m.heldBy = q
 	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
 	body := []byte(`{"id":"evt_p1","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42"}}}`)
@@ -75,7 +75,7 @@ func TestIngestStripe_TopUpSuccess_GrantsCredit(t *testing.T) {
 	if m.succeededFor != "pi_42" {
 		t.Errorf("payment not marked succeeded: %q", m.succeededFor)
 	}
-	if m.lastApply == nil || m.lastApply.GetUserId() != "u1" || m.lastApply.GetDelta() != "20.0000" || m.lastApply.GetRef() != "pay-42" {
+	if m.lastApply == nil || m.lastApply.GetUserId() != "u1" || m.lastApply.GetDelta() != 200000 || m.lastApply.GetRef() != "pay-42" {
 		t.Errorf("credit not granted: %+v", m.lastApply)
 	}
 	if m.lastApply.GetReason() != "topup" {
@@ -88,8 +88,8 @@ func TestIngestStripe_TopUpSuccess_GrantsCredit(t *testing.T) {
 
 func TestIngestStripe_TopUpAlreadyGranted_NoOp(t *testing.T) {
 	m := &fakeMutation{}
-	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00", GrantedAt: timestamppb.Now(), ReconciledStep: 1, CreditOwed: "0"},
-		paymentByProvider: paidTopUpPayment, topupHeld: "20.0000"}
+	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: 200000, GrantedAt: timestamppb.Now(), ReconciledStep: 1, CreditOwed: 0},
+		paymentByProvider: paidTopUpPayment, topupHeld: 200000}
 	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
 	body := []byte(`{"id":"evt_p2","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42"}}}`)
 

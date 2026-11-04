@@ -3,9 +3,10 @@
 // vendored SDK — keeping the plugin dependency-light and the surface
 // easy to fake in tests (mirrors the auth plugin's OAuth client).
 //
-// Money crosses the boundary here: backend.Money carries a decimal
-// string, Stripe wants integer minor units, so each amount goes through
-// toMinorUnits (exact, no float64).
+// Money crosses the boundary here: backend.Money carries ten-thousandths
+// of the major unit, Stripe wants the currency's own integer minor units, so
+// each amount goes through toMinorUnits / fromMinorUnits (exact, integer
+// only, refusing what does not convert).
 package stripe
 
 import (
@@ -133,7 +134,7 @@ func (b *Backend) CreatePayment(ctx context.Context, spec backend.PaymentSpec) (
 func (b *Backend) RefundPayment(ctx context.Context, providerPaymentID string, amount backend.Money, idemKey string) (backend.RefundResult, error) {
 	form := url.Values{}
 	form.Set("payment_intent", providerPaymentID)
-	if amount.Amount != "" {
+	if amount.Amount != 0 {
 		minor, err := positiveMinorUnits(amount.Amount, amount.Currency)
 		if err != nil {
 			return backend.RefundResult{}, err
@@ -185,10 +186,14 @@ func (b *Backend) ListRefunds(ctx context.Context, providerPaymentID string) ([]
 			if r.ID == "" {
 				return nil, fmt.Errorf("stripe: /v1/refunds: a refund on %s without an id", providerPaymentID)
 			}
+			amt, err := moneyFrom(r.Amount, r.Currency)
+			if err != nil {
+				return nil, fmt.Errorf("stripe: /v1/refunds: refund %s: %w", r.ID, err)
+			}
 			out = append(out, backend.RefundResult{
 				ProviderRefundID: r.ID,
 				Status:           r.Status,
-				Amount:           backend.Money{Amount: fromMinorUnits(r.Amount, r.Currency), Currency: r.Currency},
+				Amount:           amt,
 				Key:              r.Metadata[refundKeyMeta],
 			})
 		}
@@ -382,7 +387,11 @@ func (b *Backend) ListPaymentPage(ctx context.Context, q backend.ListQuery) ([]b
 		if p.ID == "" {
 			return nil, false, fmt.Errorf("stripe: /v1/payment_intents: an intent without an id")
 		}
-		out = append(out, paymentObject(p))
+		obj, err := paymentObject(p)
+		if err != nil {
+			return nil, false, err
+		}
+		out = append(out, obj)
 	}
 	return out, list.HasMore, nil
 }
@@ -401,33 +410,42 @@ func (b *Backend) GetPayment(ctx context.Context, providerPaymentID string) (bac
 	if p.ID != providerPaymentID {
 		return backend.PaymentObject{}, fmt.Errorf("stripe: /v1/payment_intents: asked for %s, answered %q", providerPaymentID, p.ID)
 	}
-	return paymentObject(p), nil
+	return paymentObject(p)
 }
 
 // paymentObject is the provider-neutral form of a payment intent.
-func paymentObject(p paymentIntentObject) backend.PaymentObject {
+func paymentObject(p paymentIntentObject) (backend.PaymentObject, error) {
 	cur := strings.ToLower(p.Currency)
+	amt, err := moneyFrom(p.Amount, cur)
+	if err != nil {
+		return backend.PaymentObject{}, fmt.Errorf("stripe: payment intent %s: %w", p.ID, err)
+	}
+	rec, err := received(p.AmountReceived, cur)
+	if err != nil {
+		return backend.PaymentObject{}, fmt.Errorf("stripe: payment intent %s: %w", p.ID, err)
+	}
 	return backend.PaymentObject{
 		ProviderPaymentID:  p.ID,
 		ProviderCustomerID: p.Customer,
 		Status:             p.Status,
-		Amount:             backend.Money{Amount: fromMinorUnits(p.Amount, cur), Currency: cur},
+		Amount:             amt,
 		Description:        p.Description,
 		// A failed attempt leaves the intent requires_payment_method
 		// with the attempt's error, which a fresh intent has none of.
 		Failed:   p.Status == "requires_payment_method" && len(p.LastPaymentError) > 0 && string(p.LastPaymentError) != "null",
 		Created:  p.Created,
 		Marks:    marks(p.Metadata),
-		Received: received(p.AmountReceived, cur),
-	}
+		Received: rec,
+	}, nil
 }
 
-// received is an intent's amount_received as Money, empty when absent.
-func received(minor *int64, cur string) backend.Money {
+// received is an intent's amount_received as Money, empty (no Currency)
+// when absent.
+func received(minor *int64, cur string) (backend.Money, error) {
 	if minor == nil || cur == "" {
-		return backend.Money{}
+		return backend.Money{}, nil
 	}
-	return backend.Money{Amount: fromMinorUnits(*minor, cur), Currency: cur}
+	return moneyFrom(*minor, cur)
 }
 
 // ListRefundPage lists one page of the account's refunds, of every payment.
@@ -441,11 +459,15 @@ func (b *Backend) ListRefundPage(ctx context.Context, q backend.ListQuery) ([]ba
 		if r.ID == "" {
 			return nil, false, fmt.Errorf("stripe: /v1/refunds: a refund without an id")
 		}
+		amt, err := moneyFrom(r.Amount, r.Currency)
+		if err != nil {
+			return nil, false, fmt.Errorf("stripe: /v1/refunds: refund %s: %w", r.ID, err)
+		}
 		out = append(out, backend.ListedRefund{
 			RefundResult: backend.RefundResult{
 				ProviderRefundID: r.ID,
 				Status:           r.Status,
-				Amount:           backend.Money{Amount: fromMinorUnits(r.Amount, r.Currency), Currency: r.Currency},
+				Amount:           amt,
 				Key:              r.Metadata[refundKeyMeta],
 			},
 			ProviderPaymentID: r.PaymentIntent,

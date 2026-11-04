@@ -3,8 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"math/big"
-	"strings"
 	"sync"
 	"testing"
 
@@ -33,9 +31,9 @@ import (
 //     the shape sql.ErrNoRows takes through grpcerr;
 //   - ApplyCredit / RecordUsage are one transaction: a refused ledger
 //     insert or the CreditBalance `balance >= 0` CHECK leaves nothing;
-//   - DECIMAL(20, 4) columns store the value the way the database hands
-//     it back ("20" reads back as "20.0000"), rounding a fifth fractional
-//     digit and refusing a 17th integer digit;
+//   - the int64 MONEY (BIGINT) columns hold any int64, and a sum or a
+//     balance past the range is a VALUE_OUT_OF_RANGE refusal, as the
+//     database answers it — never a wrapped value;
 //   - a mutation with a (w17.event_emit) records its event only when it
 //     returns successfully — the generated emit wrapper's contract.
 //
@@ -55,7 +53,7 @@ type memStore struct {
 	refunds   map[string]*pb.Refund   // by id
 	processed map[string]string       // provider_event_id → event_type
 	ledger    map[string]*pb.CreditLedger
-	balances  map[string]*big.Rat // user_id → balance
+	balances  map[string]int64 // user_id → balance
 	topups    map[string]*pb.CreditTopup
 	usage     map[string]*pb.UsageRecord // by idempotency_key
 	meters    map[string]*pb.UsageMeter  // by user|meter|period
@@ -82,7 +80,7 @@ func newMemStore() *memStore {
 		refunds:    map[string]*pb.Refund{},
 		processed:  map[string]string{},
 		ledger:     map[string]*pb.CreditLedger{},
-		balances:   map[string]*big.Rat{},
+		balances:   map[string]int64{},
 		topups:     map[string]*pb.CreditTopup{},
 		usage:      map[string]*pb.UsageRecord{},
 		meters:     map[string]*pb.UsageMeter{},
@@ -204,22 +202,18 @@ func noRows(method string) error {
 	return status.Error(codes.NotFound, "PaymentMutation."+method+": sql: no rows in result set")
 }
 
-// decimal4 parses s as a DECIMAL(20, 4) value the way the database
-// does: rounded to 4 fractional digits, at most 16 integer digits.
-func decimal4(s string) (*big.Rat, error) {
-	r, ok := new(big.Rat).SetString(strings.TrimSpace(s))
-	if !ok || strings.ContainsAny(s, "eE/") {
-		return nil, storeConstraintErr(codeInvalidValue, fmt.Sprintf("invalid input syntax for type numeric: %q", s))
-	}
-	rounded, _ := new(big.Rat).SetString(r.FloatString(4))
-	limit := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(16), nil))
-	if new(big.Rat).Abs(rounded).Cmp(limit) >= 0 {
-		return nil, storeConstraintErr(codeInvalidValue, "numeric field overflow")
-	}
-	return rounded, nil
-}
+// money4 is a value of an int64 MONEY (BIGINT) column: any int64 is one.
+func money4(n int64) (int64, error) { return n, nil }
 
-func fmt4(r *big.Rat) string { return r.FloatString(4) }
+// sum4 is a + b the way the database adds two BIGINTs: out of range is a
+// VALUE_OUT_OF_RANGE refusal, never a wrapped value.
+func sum4(a, b int64) (int64, error) {
+	c := a + b
+	if (b > 0 && c < a) || (b < 0 && c > a) {
+		return 0, storeConstraintErr(codeValueOutOfRange, "bigint out of range")
+	}
+	return c, nil
+}
 
 // subscriptionStatusCheck is the Subscription.status column's CHECK IN: the
 // enum's declared numbers WITHOUT the zero sentinel (the migrator excludes
@@ -358,7 +352,7 @@ func (s *memStore) GetCreditBalance(_ context.Context, in *pb.GetCreditBalanceRe
 	}
 	var out *pb.CreditBalance
 	if b, ok := s.balances[in.GetUserId()]; ok {
-		out = &pb.CreditBalance{UserId: in.GetUserId(), Balance: fmt4(b)}
+		out = &pb.CreditBalance{UserId: in.GetUserId(), Balance: b}
 	}
 	if out == nil {
 		return nil, s.leave("GetCreditBalance", noRow())
@@ -501,7 +495,7 @@ func (s *memStore) CreatePayment(_ context.Context, in *pb.CreatePaymentReq, _ .
 	if err := s.enter("CreatePayment"); err != nil {
 		return nil, s.leave("", err)
 	}
-	amt, err := decimal4(in.GetAmount())
+	amt, err := money4(in.GetAmount())
 	if err != nil {
 		return nil, s.leave("CreatePayment", err)
 	}
@@ -519,7 +513,7 @@ func (s *memStore) CreatePayment(_ context.Context, in *pb.CreatePaymentReq, _ .
 	now := timestamppb.Now()
 	p := &pb.Payment{
 		Id: s.nextID("pay"), CustomerId: in.GetCustomerId(), ProviderPaymentId: in.GetProviderPaymentId(),
-		Amount: fmt4(amt), Currency: in.GetCurrency(), Status: pb.Payment_Status(in.GetStatus()),
+		Amount: amt, Currency: in.GetCurrency(), Status: pb.Payment_Status(in.GetStatus()),
 		IdempotencyKey: in.GetIdempotencyKey(), Description: in.GetDescription(), CreatedAt: now, UpdatedAt: now,
 	}
 	s.payments[p.Id] = p
@@ -563,7 +557,7 @@ func (s *memStore) MarkPaymentAmountMismatch(_ context.Context, in *pb.MarkPayme
 	if err := s.enter("MarkPaymentAmountMismatch"); err != nil {
 		return nil, s.leave("", err)
 	}
-	amt, err := decimal4(in.GetReceivedAmount())
+	amt, err := money4(in.GetReceivedAmount())
 	if err != nil {
 		return nil, s.leave("MarkPaymentAmountMismatch", err)
 	}
@@ -574,7 +568,7 @@ func (s *memStore) MarkPaymentAmountMismatch(_ context.Context, in *pb.MarkPayme
 	}
 	for _, row := range s.payments {
 		if row.GetId() == p.GetId() {
-			row.ReceivedAmount, row.ReceivedCurrency = fmt4(amt), in.GetReceivedCurrency()
+			row.ReceivedAmount, row.ReceivedCurrency = amt, in.GetReceivedCurrency()
 			p = clone(row)
 		}
 	}
@@ -639,21 +633,23 @@ func (s *memStore) SumRefundsForPayment(_ context.Context, in *pb.SumRefundsForP
 	if err := s.enter("SumRefundsForPayment"); err != nil {
 		return nil, s.leave("", err)
 	}
-	total := new(big.Rat)
+	var total int64
 	for _, r := range s.refunds {
 		if r.GetPaymentId() == in.GetPaymentId() && r.GetStatus() != pb.Refund_FAILED && r.GetStatus() != pb.Refund_CANCELED {
-			a, _ := decimal4(r.GetAmount())
-			total.Add(total, a)
+			var err error
+			if total, err = sum4(total, r.GetAmount()); err != nil {
+				return nil, s.leave("SumRefundsForPayment", err)
+			}
 		}
 	}
-	return &pb.SumRefundsForPaymentResp{Total: fmt4(total)}, s.leave("SumRefundsForPayment", nil)
+	return &pb.SumRefundsForPaymentResp{Total: total}, s.leave("SumRefundsForPayment", nil)
 }
 
 func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...grpc.CallOption) (*pb.CreateRefundResp, error) {
 	if err := s.enter("CreateRefund"); err != nil {
 		return nil, s.leave("", err)
 	}
-	amt, err := decimal4(in.GetAmount())
+	amt, err := money4(in.GetAmount())
 	if err != nil {
 		return nil, s.leave("CreateRefund", err)
 	}
@@ -668,7 +664,7 @@ func (s *memStore) CreateRefund(_ context.Context, in *pb.CreateRefundReq, _ ...
 	if err := refundStatusCheck(in.GetStatus()); err != nil {
 		return nil, s.leave("CreateRefund", err)
 	}
-	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(), IdempotencyKey: in.GetIdempotencyKey(),
+	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: amt, Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(), IdempotencyKey: in.GetIdempotencyKey(),
 		Status: pb.Refund_Status(in.GetStatus())}
 	s.refunds[r.Id] = r
 	s.emitted = append(s.emitted, "RefundCreated")
@@ -681,7 +677,7 @@ func (s *memStore) RecordProviderRefund(_ context.Context, in *pb.RecordProvider
 	if err := s.enter("RecordProviderRefund"); err != nil {
 		return nil, s.leave("", err)
 	}
-	amt, err := decimal4(in.GetAmount())
+	amt, err := money4(in.GetAmount())
 	if err != nil {
 		return nil, s.leave("RecordProviderRefund", err)
 	}
@@ -693,7 +689,7 @@ func (s *memStore) RecordProviderRefund(_ context.Context, in *pb.RecordProvider
 			return nil, s.leave("RecordProviderRefund", uniqueErr("provider_refund_id"))
 		}
 	}
-	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: fmt4(amt), Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(),
+	r := &pb.Refund{Id: s.nextID("ref"), PaymentId: in.GetPaymentId(), ProviderRefundId: in.GetProviderRefundId(), Amount: amt, Currency: in.GetCurrency(), CreatedAt: timestamppb.Now(),
 		Status: pb.Refund_Status(in.GetStatus())}
 	s.refunds[r.Id] = r
 	s.emitted = append(s.emitted, "ProviderRefundRecorded")
@@ -770,7 +766,7 @@ func (s *memStore) CreateDispute(_ context.Context, in *pb.CreateDisputeReq, _ .
 	if err := s.enter("CreateDispute"); err != nil {
 		return nil, s.leave("", err)
 	}
-	amt, err := decimal4(in.GetAmount())
+	amt, err := money4(in.GetAmount())
 	if err != nil {
 		return nil, s.leave("CreateDispute", err)
 	}
@@ -782,7 +778,7 @@ func (s *memStore) CreateDispute(_ context.Context, in *pb.CreateDisputeReq, _ .
 			return nil, s.leave("CreateDispute", uniqueErr("provider_dispute_id"))
 		}
 	}
-	d := &pb.Dispute{Id: s.nextID("dp"), PaymentId: in.GetPaymentId(), ProviderDisputeId: in.GetProviderDisputeId(), Amount: fmt4(amt), Currency: in.GetCurrency(),
+	d := &pb.Dispute{Id: s.nextID("dp"), PaymentId: in.GetPaymentId(), ProviderDisputeId: in.GetProviderDisputeId(), Amount: amt, Currency: in.GetCurrency(),
 		Status: pb.Dispute_Status(in.GetStatus()), ProviderEventAt: in.GetProviderEventAt(), CreatedAt: timestamppb.Now()}
 	s.disputes[d.Id] = d
 	s.emitted = append(s.emitted, "DisputeOpened:"+d.Status.String())
@@ -838,14 +834,16 @@ func (s *memStore) SumLostDisputesForPayment(_ context.Context, in *pb.SumLostDi
 	if err := s.enter("SumLostDisputesForPayment"); err != nil {
 		return nil, s.leave("", err)
 	}
-	total := new(big.Rat)
+	var total int64
 	for _, d := range s.disputes {
 		if d.GetPaymentId() == in.GetPaymentId() && d.GetStatus() == pb.Dispute_LOST {
-			a, _ := decimal4(d.GetAmount())
-			total.Add(total, a)
+			var err error
+			if total, err = sum4(total, d.GetAmount()); err != nil {
+				return nil, s.leave("SumLostDisputesForPayment", err)
+			}
 		}
 	}
-	return &pb.SumLostDisputesForPaymentResp{Total: fmt4(total)}, s.leave("SumLostDisputesForPayment", nil)
+	return &pb.SumLostDisputesForPaymentResp{Total: total}, s.leave("SumLostDisputesForPayment", nil)
 }
 
 // SumTopupCredit: SUM(delta) WHERE user_id AND ref IN (payment_id,
@@ -854,18 +852,20 @@ func (s *memStore) SumTopupCredit(_ context.Context, in *pb.SumTopupCreditReq, _
 	if err := s.enter("SumTopupCredit"); err != nil {
 		return nil, s.leave("", err)
 	}
-	total := new(big.Rat)
+	var total int64
 	for _, e := range s.ledger {
 		if e.GetUserId() != in.GetUserId() || (e.GetRef() != in.GetPaymentId() && e.GetRef() != in.GetProviderPaymentId()) {
 			continue
 		}
 		switch e.GetReason() {
 		case in.GetReasonGrant(), in.GetReasonRefund(), in.GetReasonRefused(), in.GetReasonReconcile():
-			d, _ := decimal4(e.GetDelta())
-			total.Add(total, d)
+			var err error
+			if total, err = sum4(total, e.GetDelta()); err != nil {
+				return nil, s.leave("SumTopupCredit", err)
+			}
 		}
 	}
-	return &pb.SumTopupCreditResp{Total: fmt4(total)}, s.leave("SumTopupCredit", nil)
+	return &pb.SumTopupCreditResp{Total: total}, s.leave("SumTopupCredit", nil)
 }
 
 // SetTopupCreditOwed: `WHERE provider_payment_id = … AND reconciled_step <
@@ -874,7 +874,7 @@ func (s *memStore) SetTopupCreditOwed(_ context.Context, in *pb.SetTopupCreditOw
 	if err := s.enter("SetTopupCreditOwed"); err != nil {
 		return nil, s.leave("", err)
 	}
-	owed, err := decimal4(in.GetCreditOwed())
+	owed, err := money4(in.GetCreditOwed())
 	if err != nil {
 		return nil, s.leave("SetTopupCreditOwed", err)
 	}
@@ -882,22 +882,19 @@ func (s *memStore) SetTopupCreditOwed(_ context.Context, in *pb.SetTopupCreditOw
 	if !ok || t.GetReconciledStep() >= in.GetReconciledStep() {
 		return nil, s.leave("SetTopupCreditOwed", noRows("SetTopupCreditOwed"))
 	}
-	t.CreditOwed = fmt4(owed)
+	t.CreditOwed = owed
 	t.ReconciledStep = in.GetReconciledStep()
 	return &pb.SetTopupCreditOwedResp{ProviderPaymentId: t.ProviderPaymentId}, s.leave("SetTopupCreditOwed", nil)
 }
 
-// owed is the top-up's recorded credit_owed ("0.0000" when none).
-func (s *memStore) owed(t *testing.T, providerPaymentID string) string {
+// owed is the top-up's recorded credit_owed (0 when none).
+func (s *memStore) owed(t *testing.T, providerPaymentID string) int64 {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tp, ok := s.topups[providerPaymentID]
 	if !ok {
 		t.Fatalf("no top-up %s", providerPaymentID)
-	}
-	if tp.GetCreditOwed() == "" {
-		return "0.0000"
 	}
 	return tp.GetCreditOwed()
 }
@@ -972,7 +969,7 @@ func (s *memStore) ApplyCredit(_ context.Context, in *pb.ApplyCreditReq, _ ...gr
 	if err := s.enter("ApplyCredit"); err != nil {
 		return nil, s.leave("", err)
 	}
-	delta, err := decimal4(in.GetDelta())
+	delta, err := money4(in.GetDelta())
 	if err != nil {
 		return nil, s.leave("ApplyCredit", err)
 	}
@@ -987,32 +984,31 @@ func (s *memStore) ApplyCredit(_ context.Context, in *pb.ApplyCreditReq, _ ...gr
 		return nil, s.leave("ApplyCredit", uniqueErr("idempotency_key"))
 	}
 	// op "balance" — same transaction; the CHECK rolls both back.
-	cur := new(big.Rat)
-	if b, ok := s.balances[in.GetUserId()]; ok {
-		cur.Set(b)
+	next, err := sum4(s.balances[in.GetUserId()], delta)
+	if err != nil {
+		return nil, s.leave("ApplyCredit", err)
 	}
-	next := new(big.Rat).Add(cur, delta)
-	if next.Sign() < 0 {
+	if next < 0 {
 		return nil, s.leave("ApplyCredit", storeConstraintErr(codeInvalidValue, "credit_balance_nonneg"))
 	}
-	s.ledger[in.GetIdempotencyKey()] = &pb.CreditLedger{Id: s.nextID("led"), UserId: in.GetUserId(), Delta: fmt4(delta), Reason: in.GetReason(), Ref: in.GetRef(), IdempotencyKey: in.GetIdempotencyKey()}
+	s.ledger[in.GetIdempotencyKey()] = &pb.CreditLedger{Id: s.nextID("led"), UserId: in.GetUserId(), Delta: delta, Reason: in.GetReason(), Ref: in.GetRef(), IdempotencyKey: in.GetIdempotencyKey()}
 	s.balances[in.GetUserId()] = next
 	s.emitted = append(s.emitted, "CreditApplied")
-	return &pb.ApplyCreditResp{UserId: in.GetUserId(), Balance: fmt4(next)}, s.leave("ApplyCredit", nil)
+	return &pb.ApplyCreditResp{UserId: in.GetUserId(), Balance: next}, s.leave("ApplyCredit", nil)
 }
 
 func (s *memStore) CreateCreditTopup(_ context.Context, in *pb.CreateCreditTopupReq, _ ...grpc.CallOption) (*pb.CreateCreditTopupResp, error) {
 	if err := s.enter("CreateCreditTopup"); err != nil {
 		return nil, s.leave("", err)
 	}
-	amt, err := decimal4(in.GetAmount())
+	amt, err := money4(in.GetAmount())
 	if err != nil {
 		return nil, s.leave("CreateCreditTopup", err)
 	}
 	if _, dup := s.topups[in.GetProviderPaymentId()]; dup {
 		return nil, s.leave("CreateCreditTopup", uniqueErr("provider_payment_id"))
 	}
-	t := &pb.CreditTopup{Id: s.nextID("top"), ProviderPaymentId: in.GetProviderPaymentId(), UserId: in.GetUserId(), Amount: fmt4(amt), CreatedAt: timestamppb.Now()}
+	t := &pb.CreditTopup{Id: s.nextID("top"), ProviderPaymentId: in.GetProviderPaymentId(), UserId: in.GetUserId(), Amount: amt, CreatedAt: timestamppb.Now()}
 	s.topups[t.ProviderPaymentId] = t
 	return &pb.CreateCreditTopupResp{Topup: clone(t)}, s.leave("CreateCreditTopup", nil)
 }
@@ -1052,14 +1048,14 @@ func (s *memStore) CreatePlan(_ context.Context, in *pb.CreatePlanReq, _ ...grpc
 	if err := s.enter("CreatePlan"); err != nil {
 		return nil, s.leave("", err)
 	}
-	amt, err := decimal4(in.GetAmount())
+	amt, err := money4(in.GetAmount())
 	if err != nil {
 		return nil, s.leave("CreatePlan", err)
 	}
 	if _, dup := s.plans[in.GetSlug()]; dup {
 		return nil, s.leave("CreatePlan", uniqueErr("slug"))
 	}
-	p := &pb.Plan{Id: s.nextID("plan"), Slug: in.GetSlug(), Name: in.GetName(), Amount: fmt4(amt), Currency: in.GetCurrency(), Interval: in.GetInterval(), ProviderPriceId: in.GetProviderPriceId(), Enabled: true}
+	p := &pb.Plan{Id: s.nextID("plan"), Slug: in.GetSlug(), Name: in.GetName(), Amount: amt, Currency: in.GetCurrency(), Interval: in.GetInterval(), ProviderPriceId: in.GetProviderPriceId(), Enabled: true}
 	s.plans[p.Slug] = p
 	return &pb.CreatePlanResp{Plan: clone(p)}, s.leave("CreatePlan", nil)
 }
@@ -1111,14 +1107,11 @@ func (s *memStore) MarkSubscriptionStatus(_ context.Context, in *pb.MarkSubscrip
 
 // ── read-back helpers for assertions ──────────────────────────────────
 
-func (s *memStore) balance(t *testing.T, userID string) string {
+func (s *memStore) balance(t *testing.T, userID string) int64 {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if b, ok := s.balances[userID]; ok {
-		return fmt4(b)
-	}
-	return "0.0000"
+	return s.balances[userID]
 }
 
 func (s *memStore) paymentStatus(t *testing.T, pid string) pb.Payment_Status {

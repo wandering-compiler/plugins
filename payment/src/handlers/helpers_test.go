@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -17,35 +18,50 @@ import (
 	pb "github.com/wandering-compiler/plugins/payment/gen/pb"
 )
 
-func TestIsPositiveDecimal(t *testing.T) {
-	cases := map[string]bool{
-		"1": true, "0.0001": true, "19.99": true, " 5 ": true, "5.": true, ".5": true, "007.50": true,
-		"9999999999999999.9999":             true,  // the DECIMAL(20, 4) maximum
-		"00009999999999999999":              true,  // leading zeros are not digits of value
-		"10000000000000000":                 false, // 17 integer digits: column overflow
-		"0.00001":                           false, // 5th fractional digit: the column would round it
-		"1.00000":                           false, // refused even when the extra digit is 0 — 4 is the contract
-		"":                                  false,
-		" ":                                 false,
-		"0":                                 false,
-		"0.0000":                            false,
-		".":                                 false,
-		"-1":                                false,
-		"+1":                                false,
-		"1.2.3":                             false,
-		"1e3":                               false,
-		"1,5":                               false,
-		"١":                                 false, // a non-ASCII digit
-		"0x10":                              false,
-		"NaN":                               false,
-		"Infinity":                          false,
-		"1 000":                             false,
-		strings.Repeat("9", 40):             false,
-		"0." + strings.Repeat("0", 3) + "1": true,
+// The amount arithmetic is int64 and refuses to wrap.
+func TestAmountArithmetic(t *testing.T) {
+	for n, want := range map[int64]bool{1: true, 199900: true, math.MaxInt64: true, 0: false, -1: false, math.MinInt64: false} {
+		if got := isPositiveAmount(n); got != want {
+			t.Errorf("isPositiveAmount(%d) = %v, want %v", n, got, want)
+		}
 	}
-	for in, want := range cases {
-		if got := isPositiveDecimal(in); got != want {
-			t.Errorf("isPositiveDecimal(%q) = %v, want %v", in, got, want)
+	for _, c := range []struct {
+		a, b, sum int64
+		ok        bool
+	}{
+		{10000, 5000, 15000, true}, {-5, 5, 0, true}, {math.MaxInt64, 0, math.MaxInt64, true},
+		{math.MaxInt64, 1, 0, false}, {math.MinInt64, -1, 0, false}, {math.MaxInt64 - 1, 1, math.MaxInt64, true},
+	} {
+		if got, ok := addAmounts(c.a, c.b); ok != c.ok || (ok && got != c.sum) {
+			t.Errorf("addAmounts(%d, %d) = %d, %v; want %d, %v", c.a, c.b, got, ok, c.sum, c.ok)
+		}
+	}
+	for _, c := range []struct {
+		a, b, diff int64
+		ok         bool
+	}{
+		{10000, 5000, 5000, true}, {0, math.MaxInt64, -math.MaxInt64, true},
+		{math.MinInt64, 1, 0, false}, {0, math.MinInt64, 0, false}, {math.MaxInt64, -1, 0, false},
+	} {
+		if got, ok := subAmounts(c.a, c.b); ok != c.ok || (ok && got != c.diff) {
+			t.Errorf("subAmounts(%d, %d) = %d, %v; want %d, %v", c.a, c.b, got, ok, c.diff, c.ok)
+		}
+	}
+	if got, ok := shortfall(10000, 30000); !ok || got != 0 {
+		t.Errorf("shortfall below zero = %d, %v; want 0", got, ok)
+	}
+	if got, ok := shortfall(30000, 10000); !ok || got != 20000 {
+		t.Errorf("shortfall = %d, %v; want 20000", got, ok)
+	}
+	if _, ok := shortfall(math.MaxInt64, -1); ok {
+		t.Error("shortfall past MaxInt64 must refuse")
+	}
+	if minAmount(3, 2) != 2 || minAmount(-1, 4) != -1 {
+		t.Error("minAmount")
+	}
+	for n, want := range map[int64]string{199900: "19.9900", 1: "0.0001", -15000: "-1.5000", math.MinInt64: "-922337203685477.5808"} {
+		if got := fmtAmount(n); got != want {
+			t.Errorf("fmtAmount(%d) = %q, want %q", n, got, want)
 		}
 	}
 }
@@ -54,20 +70,6 @@ func TestIsCurrencyCode(t *testing.T) {
 	for in, want := range map[string]bool{"usd": true, "jpy": true, "": false, "us": false, "usdd": false, "US$": false, "u1d": false, "USD": false, "üsd": false} {
 		if got := isCurrencyCode(in); got != want {
 			t.Errorf("isCurrencyCode(%q) = %v, want %v", in, got, want)
-		}
-	}
-}
-
-func TestSameDecimal(t *testing.T) {
-	for _, c := range []struct {
-		a, b string
-		want bool
-	}{
-		{"29", "29.0000", true}, {"29.00", "29", true}, {"029.5", "29.50", true}, {"0.5", ".5", true},
-		{"29", "290", false}, {"29.01", "29.1", false}, {"2.9", "29", false}, {"0", "", true},
-	} {
-		if got := sameDecimal(c.a, c.b); got != c.want {
-			t.Errorf("sameDecimal(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
 	}
 }
@@ -228,43 +230,43 @@ func TestRequiredFieldRefusals(t *testing.T) {
 		call func() error
 	}{
 		{"charge: no user", func() error {
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{Amount: "1", Currency: "usd"})
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{Amount: 10000, Currency: "usd"})
 			return err
 		}},
-		{"charge: blank amount", func() error {
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "u", Amount: "  ", Currency: "usd"})
+		{"charge: no amount", func() error {
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "u", Amount: 0, Currency: "usd"})
 			return err
 		}},
 		{"charge: no currency and no default", func() error {
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "u", Amount: "1"})
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "u", Amount: 10000})
 			return err
 		}},
 		{"charge: 256-byte key", func() error {
-			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "u", Amount: "1", Currency: "usd", IdempotencyKey: strings.Repeat("k", 256)})
+			_, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "u", Amount: 10000, Currency: "usd", IdempotencyKey: strings.Repeat("k", 256)})
 			return err
 		}},
 		{"top-up: no user", func() error {
-			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{Amount: "1", Currency: "usd"})
+			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{Amount: 10000, Currency: "usd"})
 			return err
 		}},
 		{"top-up: bad amount", func() error {
-			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "u", Amount: "-1", Currency: "usd"})
+			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "u", Amount: -10000, Currency: "usd"})
 			return err
 		}},
 		{"top-up: no currency and no default", func() error {
-			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "u", Amount: "1"})
+			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "u", Amount: 10000})
 			return err
 		}},
 		{"top-up: 256-byte key", func() error {
-			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "u", Amount: "1", Currency: "usd", IdempotencyKey: strings.Repeat("k", 256)})
+			_, err := r.h.TopUpCredit(bg, &pb.TopUpCreditReq{UserId: "u", Amount: 10000, Currency: "usd", IdempotencyKey: strings.Repeat("k", 256)})
 			return err
 		}},
 		{"grant: no user", func() error {
-			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{Amount: "1", IdempotencyKey: "k"})
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{Amount: 10000, IdempotencyKey: "k"})
 			return err
 		}},
 		{"grant: 256-byte key", func() error {
-			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "u", Amount: "1", IdempotencyKey: strings.Repeat("k", 256)})
+			_, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "u", Amount: 10000, IdempotencyKey: strings.Repeat("k", 256)})
 			return err
 		}},
 		{"subscribe: no user", func() error {
@@ -330,7 +332,7 @@ func TestTopUpCredit_RefusesWithoutWebhooks(t *testing.T) {
 	webhooksStaged = false
 	t.Cleanup(func() { webhooksStaged = saved })
 	h := &PaymentServiceHandler{Query: &fakeQuery{}, Mutation: &fakeMutation{}, Backend: &fakeBackend{}, DistTx: &fakeDistTx{}}
-	_, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: "5.00", Currency: "usd"})
+	_, err := h.TopUpCredit(context.Background(), &pb.TopUpCreditReq{UserId: "u1", Amount: 50000, Currency: "usd"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("err = %v, want FailedPrecondition", err)
 	}

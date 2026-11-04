@@ -22,7 +22,7 @@ import (
 func TestIngestStripe_AuthenticationRefusals(t *testing.T) {
 	now := time.Now().Unix()
 	r := newRig(t)
-	pid := r.charge("user-a", "10.00", "o-sig").GetProviderPaymentId()
+	pid := r.charge("user-a", 100000, "o-sig").GetProviderPaymentId()
 	body := eventJSON("evt_sig", "payment_intent.succeeded", pid, nil)
 	good := signedAt(body, testWebhookSecret, now)
 	v1 := good[strings.Index(good, "v1="):]
@@ -82,7 +82,7 @@ func TestIngestStripe_AuthenticationRefusals(t *testing.T) {
 // v1 per secret; one match is enough. Extra unknown keys are ignored.
 func TestIngestStripe_RotatedSecretsAndExtraHeaderParts(t *testing.T) {
 	r := newRig(t)
-	pid := r.charge("user-a", "1.00", "rot").GetProviderPaymentId()
+	pid := r.charge("user-a", 10000, "rot").GetProviderPaymentId()
 	body := eventJSON("evt_rot", "payment_intent.succeeded", pid, nil)
 	now := time.Now().Unix()
 	old := signedAt(body, "whsec_old_retired", now)
@@ -100,7 +100,7 @@ func TestIngestStripe_RotatedSecretsAndExtraHeaderParts(t *testing.T) {
 func TestIngestStripe_UnconfiguredSecretFailsClosed(t *testing.T) {
 	r := newRig(t)
 	r.h.WebhookSecret = ""
-	pid := r.charge("user-a", "1.00", "nosecret").GetProviderPaymentId()
+	pid := r.charge("user-a", 10000, "nosecret").GetProviderPaymentId()
 	body := eventJSON("evt_ns", "payment_intent.succeeded", pid, nil)
 	_, err := r.deliverSigned(body, signedAt(body, "", time.Now().Unix()))
 	if status.Code(err) != codes.Unauthenticated {

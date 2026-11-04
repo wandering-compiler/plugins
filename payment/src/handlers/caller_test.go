@@ -82,7 +82,7 @@ func TestActingFor(t *testing.T) {
 // provider when it tries.
 func TestCreatePayment_ASignedInCallerCannotChargeAnotherUser(t *testing.T) {
 	r := newRig(t)
-	_, err := r.h.CreatePayment(asCaller("user-a"), &pb.ChargeReq{UserId: "user-b", Amount: "5.00", Currency: "usd"})
+	_, err := r.h.CreatePayment(asCaller("user-a"), &pb.ChargeReq{UserId: "user-b", Amount: 50000, Currency: "usd"})
 	wantCode(t, err, codes.PermissionDenied, "charge for another user")
 	if n := r.stripe.count("/v1/payment_intents"); n != 0 {
 		t.Errorf("provider intents = %d, want 0", n)
@@ -95,7 +95,7 @@ func TestCreateCustomerAndSubscribe_RefuseAnotherUser(t *testing.T) {
 	wantCode(t, err, codes.PermissionDenied, "customer for another user")
 	_, err = r.h.Subscribe(asCaller("user-a"), &pb.SubscribeReq{UserId: "user-b", PlanSlug: "pro"})
 	wantCode(t, err, codes.PermissionDenied, "subscription for another user")
-	_, err = r.h.TopUpCredit(asCaller("user-a"), &pb.TopUpCreditReq{UserId: "user-b", Amount: "5.00", Currency: "usd"})
+	_, err = r.h.TopUpCredit(asCaller("user-a"), &pb.TopUpCreditReq{UserId: "user-b", Amount: 50000, Currency: "usd"})
 	wantCode(t, err, codes.PermissionDenied, "top-up for another user")
 }
 
@@ -103,7 +103,7 @@ func TestCreateCustomerAndSubscribe_RefuseAnotherUser(t *testing.T) {
 // and the read requires a signed-in caller.
 func TestGetMyPayment_OnlyTheOwnersPayment(t *testing.T) {
 	r := newRig(t)
-	resp, err := r.h.CreatePayment(asCaller("user-a"), &pb.ChargeReq{Amount: "5.00", Currency: "usd"})
+	resp, err := r.h.CreatePayment(asCaller("user-a"), &pb.ChargeReq{Amount: 50000, Currency: "usd"})
 	if err != nil {
 		t.Fatalf("charge: %v", err)
 	}
@@ -141,11 +141,14 @@ func TestGetMyReads_RequireASignedInCaller(t *testing.T) {
 // Each caller reads their own balance and meter, never another person's.
 func TestGetMyBalanceAndMeter_TheCallersOwn(t *testing.T) {
 	r := newRig(t)
-	for _, g := range []struct{ user, amount string }{{"user-a", "10"}, {"user-b", "3"}} {
+	for _, g := range []struct {
+		user   string
+		amount int64
+	}{{"user-a", 100000}, {"user-b", 30000}} {
 		if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: g.user, Amount: g.amount, IdempotencyKey: "g-" + g.user}); err != nil {
 			t.Fatalf("grant %s: %v", g.user, err)
 		}
-		if _, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: g.user, Meter: "api", Period: "2026-10", Quantity: int64(len(g.amount)), IdempotencyKey: "u-" + g.user}); err != nil {
+		if _, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: g.user, Meter: "api", Period: "2026-10", Quantity: g.amount / 10000, IdempotencyKey: "u-" + g.user}); err != nil {
 			t.Fatalf("usage %s: %v", g.user, err)
 		}
 	}
@@ -154,7 +157,7 @@ func TestGetMyBalanceAndMeter_TheCallersOwn(t *testing.T) {
 		t.Fatalf("balance of user-a: %v, %+v", err, bal)
 	}
 	meter, err := r.h.GetMyUsageMeter(asCaller("user-b"), &pb.GetMyUsageMeterReq{Meter: "api", Period: "2026-10"})
-	if err != nil || meter.GetMeter().GetUserId() != "user-b" || meter.GetMeter().GetTotal() != 1 {
+	if err != nil || meter.GetMeter().GetUserId() != "user-b" || meter.GetMeter().GetTotal() != 3 {
 		t.Fatalf("meter of user-b: %v, %+v", err, meter)
 	}
 }
@@ -164,7 +167,7 @@ func TestGetMyBalanceAndMeter_TheCallersOwn(t *testing.T) {
 func TestGetMyBalanceAndMeter_ZeroBeforeTheFirstApply(t *testing.T) {
 	r := newRig(t)
 	bal, err := r.h.GetMyCreditBalance(asCaller("user-new"), &pb.GetMyCreditBalanceReq{})
-	if err != nil || bal.GetBalance().GetUserId() != "user-new" || bal.GetBalance().GetBalance() != "0" {
+	if err != nil || bal.GetBalance().GetUserId() != "user-new" || bal.GetBalance().GetBalance() != 0 {
 		t.Fatalf("balance before any credit: %v, %+v", err, bal)
 	}
 	meter, err := r.h.GetMyUsageMeter(asCaller("user-new"), &pb.GetMyUsageMeterReq{Meter: "api", Period: "2026-10"})
@@ -196,8 +199,8 @@ func TestGetMySubscription_OnlyTheOwnersSubscription(t *testing.T) {
 // read and write the handler made, so anything more shows up as a method here.
 func TestGetMyReads_AreOneOrTwoLookupsAndWriteNothing(t *testing.T) {
 	r := newRig(t)
-	pay := r.charge("user-a", "5.00", "")
-	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "3", IdempotencyKey: "g"}); err != nil {
+	pay := r.charge("user-a", 50000, "")
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 30000, IdempotencyKey: "g"}); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
 	if _, err := r.h.ReportUsage(bg, &pb.ReportUsageReq{UserId: "user-a", Meter: "api", Period: "2026-10", Quantity: 2, IdempotencyKey: "u"}); err != nil {

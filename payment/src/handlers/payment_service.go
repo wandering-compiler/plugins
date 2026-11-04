@@ -11,7 +11,6 @@ import (
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
 	"log/slog"
-	"math/big"
 	"strings"
 	"time"
 
@@ -158,15 +157,15 @@ func (h *PaymentServiceHandler) CreatePayment(ctx context.Context, req *pb.Charg
 	if req.GetUserId() == "" {
 		return nil, invalidArg("user_id is required")
 	}
-	amount := strings.TrimSpace(req.GetAmount())
-	if amount == "" {
+	amount := req.GetAmount()
+	if amount == 0 {
 		return nil, invalidArg("amount is required")
 	}
 	// Reject a non-positive amount before the provider call — a
 	// negative amount reaches Stripe as a credit/reversal (customer credited
 	// instead of charged), a zero is a meaningless charge.
-	if !isPositiveDecimal(amount) {
-		return nil, invalidArg("amount must be a positive decimal")
+	if !isPositiveAmount(amount) {
+		return nil, invalidArg("amount must be positive (ten-thousandths of the major unit: 19.99 is 199900)")
 	}
 	currency, err := h.chargeCurrency(req.GetCurrency())
 	if err != nil {
@@ -221,7 +220,7 @@ func (h *PaymentServiceHandler) chargeCurrency(reqCurrency string) (string, erro
 //
 // callerKey is the request's own key, empty when it sent none. See
 // chargeKey for what is stored and sent to the provider.
-func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, amount, currency, callerKey, description, origin string) (*pb.Payment, string, error) {
+func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, amount int64, currency, callerKey, description, origin string) (*pb.Payment, string, error) {
 	idemKey, err := h.chargeKey(ctx, cust, origin, callerKey)
 	if err != nil {
 		return nil, "", err
@@ -287,7 +286,7 @@ func (h *PaymentServiceHandler) charge(ctx context.Context, cust *pb.Customer, a
 // needs to confirm it, and nothing stores that secret here. A recorded payment
 // of another customer, or of another amount or currency under the same key,
 // is AlreadyExists — the key names a different payment.
-func (h *PaymentServiceHandler) recordedCharge(ctx context.Context, cust *pb.Customer, idemKey, amount, currency string) (*pb.Payment, error) {
+func (h *PaymentServiceHandler) recordedCharge(ctx context.Context, cust *pb.Customer, idemKey string, amount int64, currency string) (*pb.Payment, error) {
 	got, err := h.Query.GetPaymentByIdempotencyKey(ctx, &pb.GetPaymentByIdempotencyKeyReq{IdempotencyKey: idemKey})
 	if err != nil {
 		if absent(err) {
@@ -299,7 +298,7 @@ func (h *PaymentServiceHandler) recordedCharge(ctx context.Context, cust *pb.Cus
 	if p == nil {
 		return nil, nil
 	}
-	if p.GetCustomerId() != cust.GetId() || !sameAmount(p.GetAmount(), amount) || !strings.EqualFold(p.GetCurrency(), currency) {
+	if p.GetCustomerId() != cust.GetId() || p.GetAmount() != amount || !strings.EqualFold(p.GetCurrency(), currency) {
 		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different payment")
 	}
 	switch p.GetStatus() {
@@ -307,14 +306,6 @@ func (h *PaymentServiceHandler) recordedCharge(ctx context.Context, cust *pb.Cus
 		return p, nil
 	}
 	return nil, nil
-}
-
-// sameAmount compares two decimal amounts by value: the column renders its
-// scale ("12.5000") where the request may not ("12.5").
-func sameAmount(a, b string) bool {
-	x, okA := new(big.Rat).SetString(a)
-	y, okB := new(big.Rat).SetString(b)
-	return okA && okB && x.Cmp(y) == 0
 }
 
 // chargeKey is the key a charge is stored under and sent to the provider
@@ -421,11 +412,10 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 		return nil, err
 	}
 	// A partial amount is validated like every other amount: a negative
-	// one used to go to the provider as is, and one past the column scale
-	// was rounded on the local row.
-	amount := strings.TrimSpace(req.GetAmount())
-	if amount != "" && !isPositiveDecimal(amount) {
-		return nil, invalidArg("amount must be a positive decimal (or empty for a full refund)")
+	// one used to go to the provider as is.
+	amount := req.GetAmount()
+	if amount != 0 && !isPositiveAmount(amount) {
+		return nil, invalidArg("amount must be positive (or 0 for a full refund)")
 	}
 	got, err := h.Query.GetPayment(ctx, &pb.GetPaymentReq{Id: req.GetPaymentId()})
 	if err != nil {
@@ -435,7 +425,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	if payment == nil {
 		return nil, notFound("payment not found")
 	}
-	if amount == "" {
+	if amount == 0 {
 		amount, _ = refundBasis(payment) // full refund: what the payment took
 	}
 
@@ -484,7 +474,7 @@ func (h *PaymentServiceHandler) RefundPayment(ctx context.Context, req *pb.Refun
 	if err != nil {
 		return nil, providerFailure(err)
 	}
-	if found && !sameDecimal(res.Amount.Amount, amount) {
+	if found && res.Amount.Amount != amount {
 		// The key names a refund of another amount, which the provider's
 		// idempotency check would refuse too: answered like sameRefund.
 		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
@@ -628,16 +618,17 @@ func (h *PaymentServiceHandler) inLockedTx(ctx context.Context, lock, fn func(tx
 //
 // locked is the payment row read under the lock; the sum is read under it
 // too, so a refund recorded by the refund before this one is counted.
-func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, payment *pb.Payment, locked *pb.LockPaymentForRefundResp, amount string) error {
+func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, payment *pb.Payment, locked *pb.LockPaymentForRefundResp, amount int64) error {
 	took, currency := locked.GetAmount(), payment.GetCurrency()
 	switch st := pb.Payment_Status(locked.GetStatus()); st {
 	case pb.Payment_SUCCEEDED, pb.Payment_REFUNDED:
 	case pb.Payment_AMOUNT_MISMATCH:
 		took, currency = locked.GetReceivedAmount(), locked.GetReceivedCurrency()
-		// Both columns are NULL-able (they describe only a mismatch), so a
-		// row held at AMOUNT_MISMATCH without them is a corrupt record, and
-		// judging a refund against an empty amount would be a guess.
-		if took == "" || currency == "" {
+		// Both columns are NULL-able (they describe only a mismatch; a NULL
+		// amount reads as 0), so a row held at AMOUNT_MISMATCH without them
+		// is a corrupt record, and judging a refund against no amount would
+		// be a guess.
+		if took <= 0 || currency == "" {
 			return status.Errorf(codes.FailedPrecondition, "payment %s is held at AMOUNT_MISMATCH but records no received amount; it cannot be refunded until it is reconciled", payment.GetId())
 		}
 	case pb.Payment_FAILED, pb.Payment_CANCELED:
@@ -650,9 +641,9 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 		if obj.Status != "succeeded" {
 			return status.Errorf(codes.FailedPrecondition, "payment %s has not succeeded at the provider (%s); it cannot be refunded yet", payment.GetId(), obj.Status)
 		}
-		if r := obj.Received; r.Currency != "" && (!strings.EqualFold(r.Currency, currency) || !sameDecimal(r.Amount, took)) {
+		if r := obj.Received; r.Currency != "" && (!strings.EqualFold(r.Currency, currency) || r.Amount != took) {
 			return status.Errorf(codes.FailedPrecondition, "payment %s took %s %s at the provider, not the %s %s asked; it is being held — retry once its webhook has arrived",
-				payment.GetId(), r.Amount, r.Currency, took, currency)
+				payment.GetId(), fmtAmount(r.Amount), r.Currency, fmtAmount(took), currency)
 		}
 	}
 	// The refund is made in the currency of the payment as read before the
@@ -664,13 +655,16 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 	if err != nil {
 		return err
 	}
-	remaining := decimalSub(took, orDefault(sum.GetTotal(), "0"))
-	if !decimalAtLeast(remaining, amount) {
-		if decimalSign(remaining) < 0 {
-			remaining = "0"
+	remaining, ok := subAmounts(took, sum.GetTotal())
+	if !ok {
+		return errAmountOverflow("the refunded total of payment " + payment.GetId())
+	}
+	if remaining < amount {
+		if remaining < 0 {
+			remaining = 0
 		}
 		return status.Errorf(codes.InvalidArgument, "a refund of %s exceeds what remains of payment %s: %s of %s %s",
-			amount, payment.GetId(), remaining, took, currency)
+			fmtAmount(amount), payment.GetId(), fmtAmount(remaining), fmtAmount(took), currency)
 	}
 	return nil
 }
@@ -678,7 +672,7 @@ func (h *PaymentServiceHandler) refundAllowed(ctx, txCtx context.Context, paymen
 // refundBasis is what a refund of p can return at most, and in which
 // currency: what was asked, or for a payment held at AMOUNT_MISMATCH what it
 // actually took.
-func refundBasis(p *pb.Payment) (amount, currency string) {
+func refundBasis(p *pb.Payment) (amount int64, currency string) {
 	if p.GetStatus() == pb.Payment_AMOUNT_MISMATCH && p.GetReceivedCurrency() != "" {
 		return p.GetReceivedAmount(), p.GetReceivedCurrency()
 	}
@@ -694,7 +688,7 @@ func refundCurrency(p *pb.Payment) string {
 // recordOwnRefund records a refund this call made (or found at the provider
 // under its key). fresh is false when the answer is a row another writer
 // recorded first — its follow-ups are that writer's.
-func (h *PaymentServiceHandler) recordOwnRefund(ctx context.Context, payment *pb.Payment, res backend.RefundResult, amount, storedKey string) (resp *pb.RefundPaymentResp, fresh bool, err error) {
+func (h *PaymentServiceHandler) recordOwnRefund(ctx context.Context, payment *pb.Payment, res backend.RefundResult, amount int64, storedKey string) (resp *pb.RefundPaymentResp, fresh bool, err error) {
 	// The provider's answer is recorded, not assumed: a refund can be pending
 	// (and fail later), or fail at once. Only pending and succeeded refunds
 	// count toward REFUNDED (SumRefundsForPayment).
@@ -773,10 +767,10 @@ var reconcileTopupCredit = func(ctx context.Context, h *PaymentServiceHandler, p
 }
 
 // lostDisputeTotal is what payment lost to disputes, part of a top-up's
-// reconciliation target. Base "0": disputes are recorded only by
+// reconciliation target. Base 0: disputes are recorded only by
 // handlers/webhook_stripe.go, which installs the real one.
-var lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (string, error) {
-	return "0", nil
+var lostDisputeTotal = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment) (int64, error) {
+	return 0, nil
 }
 
 // markRefundedIfFull moves a payment to REFUNDED once its recorded refunds
@@ -788,7 +782,7 @@ func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment 
 		return // the mutation's own guard: only SUCCEEDED moves to REFUNDED
 	}
 	sum, err := h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
-	if err != nil || !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
+	if err != nil || sum.GetTotal() < payment.GetAmount() {
 		return
 	}
 	if _, err := h.Mutation.MarkPaymentRefunded(ctx, &pb.MarkPaymentRefundedReq{ProviderPaymentId: payment.GetProviderPaymentId()}); err != nil {
@@ -798,7 +792,7 @@ func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment 
 	// reverse; read the rows again now that REFUNDED has landed (see the
 	// webhook's settleRefundedStatus).
 	sum, err = h.Query.SumRefundsForPayment(ctx, &pb.SumRefundsForPaymentReq{PaymentId: payment.GetId()})
-	if err == nil && !decimalAtLeast(sum.GetTotal(), payment.GetAmount()) {
+	if err == nil && sum.GetTotal() < payment.GetAmount() {
 		_, _ = h.Mutation.MarkPaymentRefundReversed(ctx, &pb.MarkPaymentRefundReversedReq{ProviderPaymentId: payment.GetProviderPaymentId()})
 	}
 }
@@ -807,7 +801,7 @@ func (h *PaymentServiceHandler) markRefundedIfFull(ctx context.Context, payment 
 // before the money goes back. Base no-op; handlers/prepaid.go installs the
 // real one, since the top-up records exist only under `prepaid`. The undo it
 // returns gives the credit back; nil when nothing was taken.
-var takeBackRefundedCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount, idem string) (undo func() error, err error) {
+var takeBackRefundedCredit = func(ctx context.Context, h *PaymentServiceHandler, payment *pb.Payment, amount int64, idem string) (undo func() error, err error) {
 	return nil, nil
 }
 
@@ -845,11 +839,11 @@ func refundKey(callerKey string) string {
 // refusal. Returning it regardless (as the lookup used to) answered a retry
 // for 6 under the key of a refund of 4 with the refund of 4 and no error —
 // the caller believed 6 had gone back.
-func sameRefund(prior *pb.Refund, payment *pb.Payment, amount string) (*pb.RefundPaymentResp, error) {
+func sameRefund(prior *pb.Refund, payment *pb.Payment, amount int64) (*pb.RefundPaymentResp, error) {
 	if prior.GetPaymentId() != payment.GetId() {
 		return nil, invalidArg("idempotency_key already used for a refund of another payment (a refund key must be unique per refund, across all payments)")
 	}
-	if !sameDecimal(prior.GetAmount(), amount) {
+	if prior.GetAmount() != amount {
 		return nil, status.Error(codes.AlreadyExists, "idempotency_key already used for a different refund")
 	}
 	return &pb.RefundPaymentResp{Refund: prior}, nil

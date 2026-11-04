@@ -32,8 +32,8 @@ func TestFlow_AForeignPaymentIsAcknowledgedOnce(t *testing.T) {
 // event about the object.
 func TestFlow_CreatedObjectsCarryTheOriginMark(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k1")
-	tp := r.topUp("user-a", "5", "k2")
+	p := r.charge("user-a", 100000, "k1")
+	tp := r.topUp("user-a", 50000, "k2")
 	if got := r.stripe.origins[p.GetProviderPaymentId()]; got != "charge" {
 		t.Errorf("a charge's intent carries origin %q, want charge", got)
 	}
@@ -46,7 +46,7 @@ func TestFlow_CreatedObjectsCarryTheOriginMark(t *testing.T) {
 // top-up row that will never exist (every delivery used to fail).
 func TestFlow_PrepaidOn_AnOrdinaryPaymentSucceeds(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "k1")
+	p := r.charge("user-a", 100000, "k1")
 	if _, err := r.deliver(r.stripe.objectEvent("evt_ok", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatalf("an ordinary payment's success failed: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestFlow_PrepaidOn_AnOrdinaryPaymentSucceeds(t *testing.T) {
 // good; the origin mark says it IS one, so it fails until the row lands.
 func TestFlow_TopUpSuccessBeforeItsTopupRow_IsRetriedNotLost(t *testing.T) {
 	r := newRig(t)
-	tp := r.topUp("user-a", "5", "k1")
+	tp := r.topUp("user-a", 50000, "k1")
 	pid := tp.GetProviderPaymentId()
 	saved := r.store.topups[pid]
 	delete(r.store.topups, pid) // as if its INSERT had not landed yet
@@ -80,8 +80,8 @@ func TestFlow_TopUpSuccessBeforeItsTopupRow_IsRetriedNotLost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bal.GetBalance() != "5.0000" {
-		t.Errorf("balance = %q, want 5.0000", bal.GetBalance())
+	if bal.GetBalance() != 50000 {
+		t.Errorf("balance = %d, want 5.0000", bal.GetBalance())
 	}
 }
 
@@ -90,13 +90,13 @@ func TestFlow_TopUpSuccessBeforeItsTopupRow_IsRetriedNotLost(t *testing.T) {
 // any other key grants the credit a second time.
 func TestFlow_TopUpGrantKeepsTheKeyEarlierVersionsWrote(t *testing.T) {
 	r := newRig(t)
-	tp := r.topUp("user-a", "5", "k1")
+	tp := r.topUp("user-a", 50000, "k1")
 	pid := tp.GetProviderPaymentId()
 	if got := ledgerKey(creditTopup, "user-a", pid); got != "topup:"+pid {
 		t.Fatalf("top-up ledger key = %q, want topup:%s", got, pid)
 	}
 	// The earlier version's committed grant, unstamped.
-	if _, err := r.store.ApplyCredit(bg, &pb.ApplyCreditReq{UserId: "user-a", Delta: "5", Reason: "topup", Ref: pid, IdempotencyKey: "topup:" + pid}); err != nil {
+	if _, err := r.store.ApplyCredit(bg, &pb.ApplyCreditReq{UserId: "user-a", Delta: 50000, Reason: "topup", Ref: pid, IdempotencyKey: "topup:" + pid}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.deliver(r.stripe.objectEvent("evt_after_upgrade", "payment_intent.succeeded", pid, nil)); err != nil {
@@ -106,8 +106,8 @@ func TestFlow_TopUpGrantKeepsTheKeyEarlierVersionsWrote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bal.GetBalance() != "5.0000" {
-		t.Errorf("balance = %q — the redelivery granted the top-up twice", bal.GetBalance())
+	if bal.GetBalance() != 50000 {
+		t.Errorf("balance = %d — the redelivery granted the top-up twice", bal.GetBalance())
 	}
 }
 
@@ -165,7 +165,7 @@ func TestFlow_OwnInstallationsObjectWithoutRow_IsRetried(t *testing.T) {
 		}
 	}
 	// And what the plugin creates carries this installation's id.
-	p := r.charge("user-a", "10", "k-own")
+	p := r.charge("user-a", 100000, "k-own")
 	if got := r.stripe.installs[p.GetProviderPaymentId()]; got == "" || got != backend.InstallID(testWebhookSecret) {
 		t.Errorf("a charge's intent carries install %q, want %q", got, backend.InstallID(testWebhookSecret))
 	}

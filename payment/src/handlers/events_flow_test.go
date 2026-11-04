@@ -24,13 +24,13 @@ func wantEvents(t *testing.T, r *rig, want map[string]int) {
 // recorded payment, or replayed by the provider, emits nothing more.
 func TestEvents_PaymentCreatedOncePerPayment(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "order-1")
+	p := r.charge("user-a", 100000, "order-1")
 	if p.GetStatus() != pb.Payment_REQUIRES_ACTION {
 		t.Fatalf("a new charge is %v", p.GetStatus())
 	}
-	r.charge("user-a", "10", "order-1") // the provider replays it
+	r.charge("user-a", 100000, "order-1") // the provider replays it
 	wantEvents(t, r, map[string]int{"PaymentCreated": 1})
-	r.charge("user-a", "10", "order-2")
+	r.charge("user-a", 100000, "order-2")
 	wantEvents(t, r, map[string]int{"PaymentCreated": 2, "PaymentSucceeded": 0})
 }
 
@@ -38,14 +38,14 @@ func TestEvents_PaymentCreatedOncePerPayment(t *testing.T) {
 // whole amount — and a retry of it announces nothing more.
 func TestEvents_APartialRefundIsAnnounced(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
+	p := r.paid("user-a", 100000, "k")
 	for i := 0; i < 2; i++ {
-		if _, err := refund(r, p.GetId(), "3", "r1"); err != nil {
+		if _, err := refund(r, p.GetId(), 30000, "r1"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	wantEvents(t, r, map[string]int{"RefundCreated": 1, "ProviderRefundRecorded": 0, "PaymentRefunded": 0})
-	if _, err := refund(r, p.GetId(), "7", "r2"); err != nil {
+	if _, err := refund(r, p.GetId(), 70000, "r2"); err != nil {
 		t.Fatal(err)
 	}
 	wantEvents(t, r, map[string]int{"RefundCreated": 2, "PaymentRefunded": 1})
@@ -56,7 +56,7 @@ func TestEvents_APartialRefundIsAnnounced(t *testing.T) {
 // insert, is still the plugin's.
 func TestEvents_ARefundMadeAtTheProviderIsAnnouncedAsTheProviders(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
+	p := r.paid("user-a", 100000, "k")
 	re := r.stripe.refundAtProvider(p.GetProviderPaymentId(), 400)
 	deliverOK(t, r, refundEvent("evt_r1", "refund.created", re, p.GetProviderPaymentId()))
 	deliverOK(t, r, refundEvent("evt_r1b", "refund.updated", re, p.GetProviderPaymentId())) // nothing new
@@ -65,7 +65,7 @@ func TestEvents_ARefundMadeAtTheProviderIsAnnouncedAsTheProviders(t *testing.T) 
 	// The plugin's own refund, recorded by its webhook first (the insert
 	// failed after the provider refunded).
 	r.store.injectBefore("CreateRefund", errTransient)
-	if _, err := refund(r, p.GetId(), "2", "r-own"); err == nil {
+	if _, err := refund(r, p.GetId(), 20000, "r-own"); err == nil {
 		t.Fatal("want the record failure surfaced")
 	}
 	deliverOK(t, r, refundEvent("evt_r2", "charge.refunded", p.GetProviderPaymentId(), p.GetProviderPaymentId()))
@@ -76,13 +76,13 @@ func TestEvents_ARefundMadeAtTheProviderIsAnnouncedAsTheProviders(t *testing.T) 
 // that leaves the money where it was.
 func TestEvents_ARefundsOutcomeIsAnnouncedOnce(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
+	p := r.paid("user-a", 100000, "k")
 	r.stripe.refundStatus = "pending"
-	ok, err := refund(r, p.GetId(), "3", "r-ok")
+	ok, err := refund(r, p.GetId(), 30000, "r-ok")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad, err := refund(r, p.GetId(), "3", "r-bad")
+	bad, err := refund(r, p.GetId(), 30000, "r-bad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestEvents_ARefundsOutcomeIsAnnouncedOnce(t *testing.T) {
 // states in between, and redeliveries, announce nothing.
 func TestEvents_ADisputeOpensAndClosesOnce(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
+	p := r.paid("user-a", 100000, "k")
 	pi := p.GetProviderPaymentId()
 	now := time.Now().Unix()
 	deliverOK(t, r, disputeEvent(t, "evt_d1", "charge.dispute.created", "dp_1", pi, "needs_response", 1000, now))
@@ -117,7 +117,7 @@ func TestEvents_ADisputeOpensAndClosesOnce(t *testing.T) {
 // dispute is announced opened, then closed — both, once.
 func TestEvents_ADisputeFirstSeenClosed_IsOpenedThenClosed(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
+	p := r.paid("user-a", 100000, "k")
 	for _, evt := range []string{"evt_w", "evt_w2"} {
 		deliverOK(t, r, disputeEvent(t, evt, "charge.dispute.closed", "dp_w", p.GetProviderPaymentId(), "won", 1000, time.Now().Unix()))
 	}
@@ -140,7 +140,7 @@ func TestEvents_ADisputeFirstSeenClosed_IsOpenedThenClosed(t *testing.T) {
 // redelivers, the status write changes nothing and the announcement runs.
 func TestEvents_AFailedCloseAnnouncementIsRetriedByTheRedelivery(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
+	p := r.paid("user-a", 100000, "k")
 	body := disputeEvent(t, "evt_l", "charge.dispute.closed", "dp_l", p.GetProviderPaymentId(), "lost", 1000, time.Now().Unix())
 	r.store.injectBefore("MarkDisputeClosed", errTransient)
 	if _, err := r.deliver(body); err == nil {
@@ -155,7 +155,7 @@ func TestEvents_AFailedCloseAnnouncementIsRetriedByTheRedelivery(t *testing.T) {
 // not announced as a closed dispute.
 func TestEvents_AClosedInquiryIsNotADisputeClosed(t *testing.T) {
 	r := newRig(t)
-	p := r.paid("user-a", "10", "k")
+	p := r.paid("user-a", 100000, "k")
 	now := time.Now().Unix()
 	deliverOK(t, r, disputeEvent(t, "evt_i1", "charge.dispute.created", "dp_i", p.GetProviderPaymentId(), "warning_needs_response", 1000, now))
 	deliverOK(t, r, disputeEvent(t, "evt_i2", "charge.dispute.closed", "dp_i", p.GetProviderPaymentId(), "warning_closed", 1000, now+1))

@@ -23,7 +23,7 @@ func TestCreatePlan(t *testing.T) {
 	m := &fakeMutation{}
 	h := subHandler(&fakeQuery{plan: nil}, m, be) // not yet existing
 	view, err := h.CreatePlan(context.Background(), &pb.DefinePlanReq{
-		Slug: "pro", Name: "Pro", Amount: "29.00", Currency: "USD", Interval: "month",
+		Slug: "pro", Name: "Pro", Amount: 290000, Currency: "USD", Interval: "month",
 	})
 	if err != nil {
 		t.Fatalf("CreatePlan: %v", err)
@@ -41,11 +41,11 @@ func TestCreatePlan(t *testing.T) {
 
 func TestCreatePlan_IdempotentReturnsExisting(t *testing.T) {
 	be := &fakeBackend{priceID: "price_should_not_be_used"}
-	// Stored terms as the DECIMAL(20, 4) column reads them back; the
-	// request's "1" is the same price.
-	q := &fakeQuery{plan: &pb.Plan{Id: "plan-9", Slug: "pro", ProviderPriceId: "price_old", Amount: "1.0000", Currency: "usd", Interval: "month"}}
+	// Stored terms as the MONEY column reads them back (1.00 is 10000);
+	// the request's 10000 is the same price.
+	q := &fakeQuery{plan: &pb.Plan{Id: "plan-9", Slug: "pro", ProviderPriceId: "price_old", Amount: 10000, Currency: "usd", Interval: "month"}}
 	h := subHandler(q, &fakeMutation{}, be)
-	view, err := h.CreatePlan(context.Background(), &pb.DefinePlanReq{Slug: "pro", Amount: "1", Currency: "usd", Interval: "month"})
+	view, err := h.CreatePlan(context.Background(), &pb.DefinePlanReq{Slug: "pro", Amount: 10000, Currency: "usd", Interval: "month"})
 	if err != nil {
 		t.Fatalf("CreatePlan: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestCreatePlan_IdempotentReturnsExisting(t *testing.T) {
 
 func TestCreatePlan_ValidatesInterval(t *testing.T) {
 	h := subHandler(&fakeQuery{}, &fakeMutation{}, &fakeBackend{})
-	_, err := h.CreatePlan(context.Background(), &pb.DefinePlanReq{Slug: "x", Amount: "1", Currency: "usd", Interval: "week"})
+	_, err := h.CreatePlan(context.Background(), &pb.DefinePlanReq{Slug: "x", Amount: 10000, Currency: "usd", Interval: "week"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("want InvalidArgument for bad interval, got %v", err)
 	}
@@ -69,15 +69,15 @@ func TestCreatePlan_ValidatesInterval(t *testing.T) {
 // is called — a negative unit price reaches the provider and every future
 // subscription on the plan credits the customer instead of charging them.
 func TestCreatePlan_RejectsNonPositiveAmount(t *testing.T) {
-	for _, amt := range []string{"-29.00", "0", "0.00", "abc"} {
+	for _, amt := range []int64{-290000, 0, -1} {
 		be := &fakeBackend{priceID: "price_x"}
 		h := subHandler(&fakeQuery{plan: nil}, &fakeMutation{}, be)
 		_, err := h.CreatePlan(context.Background(), &pb.DefinePlanReq{Slug: "pro", Amount: amt, Currency: "usd", Interval: "month"})
 		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("amount %q: want InvalidArgument, got %v", amt, err)
+			t.Errorf("amount %d: want InvalidArgument, got %v", amt, err)
 		}
 		if be.lastPlan.Slug != "" {
-			t.Errorf("amount %q: backend must NOT be pushed (got %+v)", amt, be.lastPlan)
+			t.Errorf("amount %d: backend must NOT be pushed (got %+v)", amt, be.lastPlan)
 		}
 	}
 }
@@ -180,7 +180,7 @@ func TestSubscribe_DistinctKeysNotCollapsed(t *testing.T) {
 // away.
 func TestFlow_SubscriptionStatus_NeverRoundedUpToActive(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Name: "Pro", Amount: "29", Currency: "usd", Interval: "month"}); err != nil {
+	if _, err := r.h.CreatePlan(bg, &pb.DefinePlanReq{Slug: "pro", Name: "Pro", Amount: 290000, Currency: "usd", Interval: "month"}); err != nil {
 		t.Fatal(err)
 	}
 	r.stripe.subStatus = "incomplete" // the first invoice still needs payment
