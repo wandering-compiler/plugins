@@ -114,6 +114,7 @@ func TestTwoFactorPolicy_TheDefaultDecidesWhoIsChallenged(t *testing.T) {
 	}{
 		{"", true, true}, // unset = required, the behaviour before the knob
 		{policyRequired, true, true},
+		{policyEnrol, true, true},
 		{policyOptional, false, true},
 		{policyDisabled, false, false},
 	} {
@@ -220,8 +221,8 @@ func TestTwoFactorPolicy_DisabledRefusesEnrolment(t *testing.T) {
 }
 
 func TestTwoFactorPolicy_TheBootRefusesAnUnknownValue(t *testing.T) {
-	for _, p := range []string{"", policyRequired, policyOptional, policyDisabled} {
-		if err := checkTwoFactorPolicy(&AuthServiceHandler{TwoFactorPolicy: p}); err != nil {
+	for _, p := range []string{"", policyRequired, policyEnrol, policyOptional, policyDisabled} {
+		if err := checkTwoFactorPolicy(&AuthServiceHandler{TwoFactorPolicy: p, TwoFactorTOTP: true}); err != nil {
 			t.Errorf("%q: %v", p, err)
 		}
 	}

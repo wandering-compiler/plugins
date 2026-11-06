@@ -561,6 +561,10 @@ func TestEveryMintPath_RefusesWithoutAProofBeforeTouchingStorage(t *testing.T) {
 			_, err := h.VerifyMfa(ctx, &pb.VerifyMfaReq{ChallengeId: "c1", Code: "123456"})
 			return err
 		},
+		"EnrollTotpAtSignIn": func() error {
+			_, err := h.EnrollTotpAtSignIn(ctx, &pb.EnrollTotpAtSignInReq{ChallengeId: "c1"})
+			return err
+		},
 		"OAuthExchange": func() error {
 			_, err := h.OAuthExchange(ctx, &pb.OAuthExchangeReq{Code: "code", CodeVerifier: strings.Repeat("v", 43)})
 			return err
