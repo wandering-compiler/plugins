@@ -23,7 +23,7 @@ option go_package = "@project;@pkg";
 //
 // One row per model call is the highest-volume thing this plugin writes, and
 // the same handful of strings would repeat in every one of them: the model
-// name, the tenant. They are interned into dimension tables instead, so a
+// name, the organization. They are interned into dimension tables instead, so a
 // distinct value is stored once and the fact row carries an integer.
 //
 // That is not only about bytes. `ModelPrice` keys on `model_id`, so a
@@ -33,10 +33,10 @@ option go_package = "@project;@pkg";
 //
 // ── Why a scope, and why the plugin does not know what one is ─────────────
 //
-// `Scope` is whoever the spend is charged to — a tenant, in every case we
+// `Scope` is whoever the spend is charged to — an organization, in every case we
 // know of. The plugin never resolves it: the caller supplies an opaque
 // identifier and the plugin interns it. A foreign key into the auth plugin's
-// Tenant table is not merely undesirable here, it is unexpressible — `fk:`
+// Organization table is not merely undesirable here, it is unexpressible — `fk:`
 // can name only the plugin's own tables (`@module.<Model>`, expanded per
 // activation), never another plugin's. The opacity is therefore the design,
 // not a compromise.
@@ -236,7 +236,7 @@ enum LimitWindow {
 // Label — one interned attribution key/value pair.
 //
 // The decisive requirement: without a way to pin a caller's own attribution to
-// a call, the plugin answers "what did this tenant spend" while the caller's
+// a call, the plugin answers "what did this organization spend" while the caller's
 // question is "what did THIS RUN cost and who is it charged to" — and the
 // caller keeps a second set of books. Two sets of books drift, and
 // nobody notices for months.

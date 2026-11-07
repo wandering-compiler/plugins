@@ -61,7 +61,7 @@ func (s *keyStore) GetSessionApprover(_ context.Context, in *pb.GetSessionApprov
 }
 
 func newKeyStore() *keyStore {
-	return &keyStore{deviceStore: newDeviceStore(), bot: &pb.User{Id: "bot-1", Email: "ci@machines.example", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"}}
+	return &keyStore{deviceStore: newDeviceStore(), bot: &pb.User{Id: "bot-1", Email: "ci@machines.example", Kind: pb.AccountKind_BOT}}
 }
 
 func (s *keyStore) RegisterDevice(ctx context.Context, in *pb.RegisterDeviceReq, o ...grpc.CallOption) (*pb.RegisterDeviceResp, error) {
@@ -137,7 +137,7 @@ func operatorCtx(uid, jkt string) context.Context {
 		panic(err)
 	}
 	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		scopeUserIDKey, uid, "x-w17-scope-tenant_id", "tenant-1",
+		scopeUserIDKey, uid, "x-w17-scope-org_id", "org-1",
 		userMetadataKey, base64.StdEncoding.EncodeToString(raw),
 		forwardedUserAgentMetadataKey, historyUA, clientIPMetadataKey, historyIP))
 }
@@ -704,7 +704,7 @@ func TestIssueBotToken_AnAPITokenCallerIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		scopeUserIDKey, "op-1", "x-w17-scope-tenant_id", "tenant-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
+		scopeUserIDKey, "op-1", "x-w17-scope-org_id", "org-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
 	// With a key and without (a bearer token, device/bot-bearer) alike.
 	for _, key := range []string{p256JWK, ""} {
 		_, err = h.IssueBotToken(ctx, &pb.IssueBotTokenReq{UserId: "bot-1", PublicKey: key})
@@ -742,7 +742,7 @@ func cliSessionCtx(uid, sid, jkt string) context.Context {
 		panic(err)
 	}
 	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		scopeUserIDKey, uid, "x-w17-scope-tenant_id", "tenant-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
+		scopeUserIDKey, uid, "x-w17-scope-org_id", "org-1", userMetadataKey, base64.StdEncoding.EncodeToString(raw)))
 }
 
 // The chain: a stolen browser session D approves the thief's CLI key C, and

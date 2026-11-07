@@ -15,10 +15,10 @@ import (
 )
 
 // With the feature's clients present, NewUsageSink wires the database — and
-// what a call recorded arrives as rows: each tenant's spend against ITS OWN
+// what a call recorded arrives as rows: each organization's spend against ITS OWN
 // scope id, every token kind, the outcome, the timing and the labels, after
 // Close drains the queue.
-func TestUsageSink_RecordsEachTenantsCallsAgainstItsOwnScope(t *testing.T) {
+func TestUsageSink_RecordsEachOrgsCallsAgainstItsOwnScope(t *testing.T) {
 	store, clients := serveUsageStore(t)
 	sink := NewUsageSink(clients)
 	if _, ok := sink.(*dbUsageSink); !ok {
@@ -29,12 +29,12 @@ func TestUsageSink_RecordsEachTenantsCallsAgainstItsOwnScope(t *testing.T) {
 	}
 
 	started := time.Date(2026, 3, 14, 9, 26, 53, 0, time.UTC)
-	sink.Record(UsageEvent{Scope: "tenant-a", Model: "gpt-4o-2024-08-06", Labels: map[string]string{"run": "r1", "feature": "search"},
+	sink.Record(UsageEvent{Scope: "org-a", Model: "gpt-4o-2024-08-06", Labels: map[string]string{"run": "r1", "feature": "search"},
 		Measured: true, InputTokens: 100, OutputTokens: 20, CachedInputTokens: 60, ReasoningTokens: 5,
 		Status: OutcomeOK, StartedAt: started, Duration: 1500 * time.Millisecond})
-	sink.Record(UsageEvent{Scope: "tenant-b", Model: "gpt-4o-2024-08-06",
+	sink.Record(UsageEvent{Scope: "org-b", Model: "gpt-4o-2024-08-06",
 		Status: OutcomeFailed, StartedAt: started, Duration: 30 * time.Millisecond})
-	sink.Record(UsageEvent{Scope: "tenant-a", Model: "o3-mini", Labels: map[string]string{"run": "r1"},
+	sink.Record(UsageEvent{Scope: "org-a", Model: "o3-mini", Labels: map[string]string{"run": "r1"},
 		Measured: true, InputTokens: 1, OutputTokens: 1, Status: OutcomeUnknown, StartedAt: started})
 	sink.Close(context.Background())
 
@@ -42,9 +42,9 @@ func TestUsageSink_RecordsEachTenantsCallsAgainstItsOwnScope(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("store holds %d rows, want 3", len(rows))
 	}
-	a, b := store.scopeIDOf("tenant-a"), store.scopeIDOf("tenant-b")
+	a, b := store.scopeIDOf("org-a"), store.scopeIDOf("org-b")
 	if a == 0 || b == 0 || a == b {
-		t.Fatalf("scope ids a=%d b=%d — two tenants must not share a scope", a, b)
+		t.Fatalf("scope ids a=%d b=%d — two organizations must not share a scope", a, b)
 	}
 	first := rows[0].row
 	if first.GetScopeId() != a || rows[1].row.GetScopeId() != b || rows[2].row.GetScopeId() != a {
@@ -69,7 +69,7 @@ func TestUsageSink_RecordsEachTenantsCallsAgainstItsOwnScope(t *testing.T) {
 		t.Errorf("first row's labels = %v", got)
 	}
 	if len(rows[1].labels) != 0 {
-		t.Errorf("tenant-b's row carries labels it never had: %v", rows[1].labels)
+		t.Errorf("org-b's row carries labels it never had: %v", rows[1].labels)
 	}
 	if rows[0].row.GetModelId() == rows[2].row.GetModelId() {
 		t.Error("two models were interned under one id — the price list keys on it")
@@ -99,9 +99,9 @@ func TestUsageSink_WithoutTheClientStaysTheNoop(t *testing.T) {
 	}
 }
 
-// One tenant's malformed row must not sink everybody else's.
+// One organization's malformed row must not sink everybody else's.
 //
-// A batch is up to 64 calls from every tenant the process served. Flush used
+// A batch is up to 64 calls from every organization the process served. Flush used
 // to return at the first failure, so a scope longer than its column — one
 // caller's mistake — dropped every event queued behind it, and the writer then
 // counted the rows that HAD landed as lost too.
@@ -110,9 +110,9 @@ func TestFlush_OneBadEventDoesNotSinkTheBatch(t *testing.T) {
 	f := &dbFlusher{mut: clients.UsageMutation()}
 
 	err := f.Flush(context.Background(), []usage.Event{
-		{Scope: "tenant-a", Model: "gpt-4o", Status: int32(OutcomeOK)},
+		{Scope: "org-a", Model: "gpt-4o", Status: int32(OutcomeOK)},
 		{Scope: strings.Repeat("x", 200), Model: "gpt-4o", Status: int32(OutcomeOK)},
-		{Scope: "tenant-b", Model: "gpt-4o", Status: int32(OutcomeOK)},
+		{Scope: "org-b", Model: "gpt-4o", Status: int32(OutcomeOK)},
 	})
 	var partial *usage.PartialFlushError
 	if !errors.As(err, &partial) || partial.Failed != 1 {
@@ -123,10 +123,10 @@ func TestFlush_OneBadEventDoesNotSinkTheBatch(t *testing.T) {
 	}
 	rows := store.usageRows()
 	if len(rows) != 2 {
-		t.Fatalf("store holds %d rows, want tenant-a's and tenant-b's", len(rows))
+		t.Fatalf("store holds %d rows, want org-a's and org-b's", len(rows))
 	}
-	if rows[1].row.GetScopeId() != store.scopeIDOf("tenant-b") {
-		t.Error("tenant-b's call, queued after the bad one, was not recorded")
+	if rows[1].row.GetScopeId() != store.scopeIDOf("org-b") {
+		t.Error("org-b's call, queued after the bad one, was not recorded")
 	}
 }
 
@@ -134,9 +134,9 @@ func TestFlush_OneBadEventDoesNotSinkTheBatch(t *testing.T) {
 func TestFlush_TheWriterCountsAPartialBatchExactly(t *testing.T) {
 	_, clients := serveUsageStore(t)
 	w := usage.New(usage.Config{BatchSize: 3, FlushInterval: time.Hour}, &dbFlusher{mut: clients.UsageMutation()})
-	w.Record(usage.Event{Scope: "tenant-a", Model: "gpt-4o"})
-	w.Record(usage.Event{Scope: "tenant-a", Model: strings.Repeat("m", 300)})
-	w.Record(usage.Event{Scope: "tenant-b", Model: "gpt-4o"})
+	w.Record(usage.Event{Scope: "org-a", Model: "gpt-4o"})
+	w.Record(usage.Event{Scope: "org-a", Model: strings.Repeat("m", 300)})
+	w.Record(usage.Event{Scope: "org-b", Model: "gpt-4o"})
 	w.Close(context.Background())
 	if st := w.Stats(); st.Written != 2 || st.FailedEvents != 1 {
 		t.Errorf("stats = %+v, want 2 written and 1 failed", st)
@@ -151,7 +151,7 @@ func TestFlush_ABadLabelKeepsTheRowAndTheOtherLabels(t *testing.T) {
 	store, clients := serveUsageStore(t)
 	f := &dbFlusher{mut: clients.UsageMutation()}
 	err := f.Flush(context.Background(), []usage.Event{{
-		Scope: "tenant-a", Model: "gpt-4o",
+		Scope: "org-a", Model: "gpt-4o",
 		Labels: map[string]string{"run": "r1", "note": strings.Repeat("v", 300)},
 	}})
 	var partial *usage.PartialFlushError
@@ -172,9 +172,9 @@ func TestFlush_ABadLabelKeepsTheRowAndTheOtherLabels(t *testing.T) {
 func TestFlush_TheWriterCountsABadLabelAsWrittenNotLost(t *testing.T) {
 	store, clients := serveUsageStore(t)
 	w := usage.New(usage.Config{BatchSize: 2, FlushInterval: time.Hour}, &dbFlusher{mut: clients.UsageMutation()})
-	w.Record(usage.Event{Scope: "tenant-a", Model: "gpt-4o",
+	w.Record(usage.Event{Scope: "org-a", Model: "gpt-4o",
 		Labels: map[string]string{"note": strings.Repeat("v", 300)}})
-	w.Record(usage.Event{Scope: "tenant-b", Model: "gpt-4o"})
+	w.Record(usage.Event{Scope: "org-b", Model: "gpt-4o"})
 	w.Close(context.Background())
 	st := w.Stats()
 	if st.Written != 2 || st.FailedEvents != 0 || st.FailedBatches != 0 || st.Unlabelled != 1 {
@@ -193,7 +193,7 @@ func TestFlush_TheWriterCountsABadLabelAsWrittenNotLost(t *testing.T) {
 func TestFlush_ATransientInternFailureIsNotCached(t *testing.T) {
 	store, clients := serveUsageStore(t)
 	f := &dbFlusher{mut: clients.UsageMutation()}
-	ev := usage.Event{Scope: "tenant-a", Model: "gpt-4o", Labels: map[string]string{"run": "r1"}}
+	ev := usage.Event{Scope: "org-a", Model: "gpt-4o", Labels: map[string]string{"run": "r1"}}
 
 	for _, method := range []string{"InternScope", "InternModel", "RecordUsage", "InternLabel", "AttachUsageLabel"} {
 		store.failWith(method, status.Error(codes.Unavailable, "db restarting"), 1)
@@ -206,7 +206,7 @@ func TestFlush_ATransientInternFailureIsNotCached(t *testing.T) {
 	}
 	rows := store.usageRows()
 	last := rows[len(rows)-1]
-	if last.row.GetScopeId() != store.scopeIDOf("tenant-a") || last.labels["run"] != "r1" {
+	if last.row.GetScopeId() != store.scopeIDOf("org-a") || last.labels["run"] != "r1" {
 		t.Errorf("the recovered flush wrote %+v / %v", last.row, last.labels)
 	}
 }
@@ -221,7 +221,7 @@ func TestFlush_TheInternCachesAreBounded(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		run := "r" + string(rune('a'+i))
 		if err := f.Flush(context.Background(), []usage.Event{{
-			Scope: "tenant-" + run, Model: "gpt-4o", Labels: map[string]string{"run": run},
+			Scope: "org-" + run, Model: "gpt-4o", Labels: map[string]string{"run": run},
 		}}); err != nil {
 			t.Fatalf("Flush: %v", err)
 		}

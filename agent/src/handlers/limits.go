@@ -18,7 +18,7 @@ type LimitDecision struct {
 	// Allowed is false when the scope is over its cap.
 	Allowed bool
 	// Reason is surfaced to the caller when Allowed is false. Deliberately
-	// free of amounts: how much a tenant has spent is not something to leak
+	// free of amounts: how much an organization has spent is not something to leak
 	// through an error on somebody else's request.
 	Reason string
 }
@@ -218,7 +218,7 @@ func capOf(max int) int {
 // It replaced a reset-at-cap map, which dropped EVERY entry the moment the
 // cap was reached. Past ten thousand active keys that was a reset every ten
 // thousand new keys — and because the keys are the callers', anyone sending
-// random scopes could keep emptying the cache under every legitimate tenant,
+// random scopes could keep emptying the cache under every legitimate organization,
 // turning each of their calls into a database round trip. Here a key in use
 // survives any flood of new ones as long as it is read once per generation,
 // and the size is still bounded: at most 2×max.

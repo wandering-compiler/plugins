@@ -21,11 +21,11 @@ import (
 func TestRecordAfterCloseIsCountedNotLost(t *testing.T) {
 	f := newRecordingFlusher()
 	w := New(Config{BatchSize: 100, FlushInterval: time.Hour}, f)
-	w.Record(Event{Scope: "tenant-a"})
+	w.Record(Event{Scope: "org-a"})
 	w.Close(context.Background())
 
-	w.Record(Event{Scope: "tenant-a"})
-	w.Record(Event{Scope: "tenant-b"})
+	w.Record(Event{Scope: "org-a"})
+	w.Record(Event{Scope: "org-b"})
 
 	st := w.Stats()
 	if st.Written != 1 || st.Dropped != 2 {
@@ -50,7 +50,7 @@ func TestRecordRacingCloseLosesNothingUncounted(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for j := 0; j < each; j++ {
-					w.Record(Event{Scope: "tenant-a"})
+					w.Record(Event{Scope: "org-a"})
 				}
 			}()
 		}
@@ -87,7 +87,7 @@ func TestAnUnlabelledEventCountsAsWritten(t *testing.T) {
 	p := &partialFlusher{unlabelled: 1, calls: make(chan struct{}, 4)}
 	w := New(Config{BatchSize: 3, FlushInterval: time.Hour}, p)
 	for i := 0; i < 3; i++ {
-		w.Record(Event{Scope: "tenant-a"})
+		w.Record(Event{Scope: "org-a"})
 	}
 	<-p.calls
 	w.Close(context.Background())
@@ -103,7 +103,7 @@ func TestAPartialFlushCountsOnlyWhatFailed(t *testing.T) {
 	p := &partialFlusher{fail: 1, calls: make(chan struct{}, 4)}
 	w := New(Config{BatchSize: 3, FlushInterval: time.Hour}, p)
 	for i := 0; i < 3; i++ {
-		w.Record(Event{Scope: "tenant-a"})
+		w.Record(Event{Scope: "org-a"})
 	}
 	<-p.calls
 	w.Close(context.Background())

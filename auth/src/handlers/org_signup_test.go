@@ -73,7 +73,7 @@ func signupFixture() *hostMock {
 func registrationVia(from, kinds, host string) context.Context {
 	md := metadata.MD{}
 	if from != "" {
-		md.Set(tenantFromHeader, from)
+		md.Set(orgFromHeader, from)
 	}
 	if kinds != "" {
 		md.Set(membershipKindsHeader, kinds)

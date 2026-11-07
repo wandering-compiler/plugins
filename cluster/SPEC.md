@@ -33,7 +33,7 @@ narrower contract the plugin actually offers: **slots, not tasks**.
 
 The plugin is activated once per pool under the pool's name
 (`registered_as: codegen`, `registered_as: browser`), which prefixes its
-tables. There is no tenant or organization dimension anywhere in it.
+tables. There is no organization or organization dimension anywhere in it.
 
 ## How to read it
 
@@ -470,7 +470,7 @@ other plugins it meets.
 
 | id | MUST hold | proof |
 |---|---|---|
-| `cluster/no-tenant-dimension` | A pool is shared by every caller its RPCs admit. The plugin MUST NOT be assumed to isolate tenants or organizations: there is no per-tenant queue, capacity, worker set or ban. A project that needs isolation activates one pool per isolation boundary, or gates the RPCs. | — (statement of scope) |
+| `cluster/no-org-dimension` | A pool is shared by every caller its RPCs admit. The plugin MUST NOT be assumed to isolate organizations or orgs: there is no per-organization queue, capacity, worker set or ban. A project that needs isolation activates one pool per isolation boundary, or gates the RPCs. | — (statement of scope) |
 | `cluster/fairness` | No single caller MUST be able to occupy a relay's whole queue or keep others waiting without bound. | `TestReserve_OneOwnerHoldsAtMostItsShare`, `TestWaitFor_CountsAgainstTheOwnersShare`, `TestServer_ACallerPastItsShareIsCallerQueueFull`, `TestPlacement_CallerQueueFull` (one caller holds at most `--max-queue-per-caller`, default half the queue) |
 | `cluster/backpressure` | Overload MUST surface as queueing with a visible position, and refusal as a reasoned status (`NO_RELAY`, `NO_WORKER`, `RELAY_DRAINING`, `QUEUE_FULL`, `CALLER_QUEUE_FULL`). Memory on the relay MUST stay bounded under any request rate. | Queueing and reasons: `TestWait_PositionUpdatesAsTheQueueShortens`, `TestScheduleTask_EmptyPoolSaysWhatToDo`, `TestTicketPicker_NoWorkerReturnsTheSlot`. Bounded queue: `TestReserve_TheQueueIsBounded`, `TestServer_AFullQueueIsQueueFull`. Bounded per caller: `TestReserve_OneOwnerHoldsAtMostItsShare`, `TestServer_ACallerPastItsShareIsCallerQueueFull`. |
 

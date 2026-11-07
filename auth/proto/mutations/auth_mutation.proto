@@ -42,19 +42,7 @@ message CreateBotUserReq {
   // so they carry the same identity column and the same uniqueness — which is
   // what lets one answer for what a machine did.
   string email = 1 [(w17.field) = { type: EMAIL, max_len: 320 }];
-  // tenant_id — the tenant the machine account belongs to, required by
-  // `tenant_scope` (the column is NOT NULL). It is the tenant the minting
-  // operator is acting in, read off their authenticated scope by
-  // handlers/service_account_tenant.go — never taken from the wire, or an
-  // operator could provision a bot into a tenant they are not in.
-  //
-  // Gated the way CreateUserReq.tenant_id is, and staged by a file that
-  // exists only when BOTH features are on (`go_files_combined`): the field
-  // is tenant_scope's and the rpc is service_account's.
-  string tenant_id = 2 [
-    (w17.field) = { type: UUID },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 2;
   // event-only (no w17.field: not persisted, not validated): the operator
   // who created the machine account and the key thumbprint of their device,
   // BotCreated's created_by and device_id.
@@ -75,19 +63,7 @@ message CreateUserReq {
   // kept for migrator semantics (TEXT column emit, refuses
   // PK + unique).
   string password_hash = 2 [(w17.field) = { type: PASSWORD }];
-  // tenant_id — the owning tenant, required by `tenant_scope` (the
-  // column it writes is NOT NULL). handlers/tenant.go resolves it from
-  // the request's slug or forwarded Host; it is never client-set.
-  //
-  // Field-gated in step with the column and with the SET assignment
-  // that writes it, so an activation without the feature has none of
-  // the three. This is what retired CreateUserWithTenant: the twin
-  // rpcs existed only because the feature filter could not splice a
-  // column into a fixed INSERT.
-  string tenant_id     = 3 [
-    (w17.field) = { type: UUID },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 3;
 }
 message CreateUserResp { User user = 1; }
 
@@ -242,9 +218,9 @@ message IssueApiTokenReq {
   string    created_by     = 10;
   // bearer — a machine account's bearer token (UserToken.bearer,
   // device/bot-bearer), bound to no device. Field-gated in step with the
-  // column and with the SET assignment that writes it, as
-  // CreateUserReq.tenant_id is: only service_account.go sets it, and one
-  // INSERT keeps ApiTokenCreated's one emit site.
+  // column and with the SET assignment that writes it: only
+  // service_account.go sets it, and one INSERT keeps ApiTokenCreated's one
+  // emit site.
   bool      bearer         = 11 [(w17.contrib.plugin_feature_field) = "service_account"];
 }
 message IssueApiTokenResp {
@@ -351,10 +327,9 @@ message ConfirmTotpSecretResp {
 // `enabled` left unset writes false, which turns the provider off. A change
 // made on the admin page is overwritten by the next call. A new secret takes
 // effect on the next sign-in; one already at the provider fails its callback
-// and starts again. The row keeps the tenant it was created with, and names
-// are unique across tenants, so a call naming another tenant's provider
+// and starts again. Names are unique, so a call naming another provider
 // rewrites that provider: the name is the caller's to own, and this is a
-// storage method for the project's own trusted code, not for a tenant's
+// storage method for the project's own trusted code, not for a caller's
 // input.
 message UpsertOAuthProviderReq {
   option (w17.contrib.plugin_feature) = "oauth";
@@ -369,12 +344,7 @@ message UpsertOAuthProviderReq {
   string subject_path  = 9 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   string email_path    = 10 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   bool   enabled       = 11;
-  // The owning tenant under `tenant_scope`, written when the provider is
-  // created. A provider's name is unique across tenants.
-  string tenant_id     = 12 [
-    (w17.field) = { type: UUID },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 12;
   // How the provider returns and how its client secret is made — see
   // OAuthProvider.response_mode / team_id / key_id (Sign in with Apple:
   // form_post, and `secret` is the .p8 key the secret is signed with).
@@ -612,10 +582,7 @@ message CreatePendingSignUpReq {
   google.protobuf.Timestamp expires_at = 4 [(w17.field) = { type: DATETIME }];
   // event-only (no w17.field → not persisted, not validated):
   string code = 5 [(w17.field) = { blank: true, sensitive: true }];
-  string tenant_id = 6 [
-    (w17.field) = { type: UUID, null: true },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 6;
   string join_org_id = 7 [
     (w17.field) = { type: UUID, null: true },
     (w17.contrib.plugin_feature_field) = "org_signup"
@@ -662,7 +629,7 @@ message ClaimPendingSignUpResp {
   option (w17.contrib.plugin_feature) = "sign_up_confirmation";
   string email         = 1;
   string password_hash = 2 [(w17.field) = { blank: true, sensitive: true }];
-  string tenant_id     = 3 [(w17.field) = { null: true }, (w17.contrib.plugin_feature_field) = "tenant_scope"];
+  reserved 3;
   string join_org_id   = 4 [(w17.field) = { null: true }, (w17.contrib.plugin_feature_field) = "org_signup"];
   string join_kind     = 5 [(w17.contrib.plugin_feature_field) = "org_signup"];
   string join_role     = 6 [(w17.contrib.plugin_feature_field) = "org_signup"];
@@ -2454,25 +2421,6 @@ message EndTeamsOfOrgResp {
 }
 
 service AuthMutation {
-  // CreateUser — INSERT User. The `password_hash` request
-  // field carries the already-encoded hash — the plugin's
-  // AuthService.SignUp handler computes it via
-  // passwordhash.Settings.Hash() before calling. Refuses on
-  // duplicate email (unique violation surfaces as
-  // AlreadyExists via the storage DB-error classification).
-  //
-  // ONE create for every activation. `tenant_scope` adds a NOT NULL
-  // `User.tenant_id`, and the gated SET assignment below writes it, so
-  // the feature no longer has to REPLACE this method.
-  //
-  // It used to. The feature filter could not splice a column into a
-  // fixed INSERT, so `tenant_scope` gated this rpc OUT
-  // (`plugin_feature_rpc_unless`) and a twin — CreateUserWithTenant —
-  // took over. That duplication cost an event: an event has exactly one
-  // emit site, the baseline owned it, and the baseline was the one being
-  // filtered away, so with `tenant_scope` on `UserCreated` had NO
-  // emitter and every subscriber to auth.user.created silently never
-  // fired.
   // CreateBot — insert a machine account. kind = BOT (1), no password.
   rpc CreateBotUser(CreateBotUserReq) returns (CreateBotUserResp) {
     option (w17.db.method) = {
@@ -2482,15 +2430,13 @@ service AuthMutation {
           "INSERT INTO @module.User SET "
           "email = :email, "
           "password_hash = \'!\', "
-          "kind = 1, "
-          "?feature(tenant_scope) tenant_id = :tenant_id "
+          "kind = 1 "
           "RETURNING id AS user.id, "
           "          email AS user.email, "
           "          created_at AS user.created_at, "
           "          password_hash AS user.password_hash, "
           "          ?feature(email_verification) email_verified_at AS user.email_verified_at, "
           "          ?feature(email_verification) email_proof AS user.email_proof, "
-          "          ?feature(tenant_scope) tenant_id AS user.tenant_id, "
           "          ?feature(user_admin) disabled_at AS user.disabled_at, "
           "          ?feature(service_account) kind AS user.kind, "
           "          device_trust_revoked_at AS user.device_trust_revoked_at, "
@@ -2516,6 +2462,12 @@ service AuthMutation {
     };
   }
 
+  // CreateUser — INSERT User. The `password_hash` request
+  // field carries the already-encoded hash — the plugin's
+  // AuthService.SignUp handler computes it via
+  // passwordhash.Settings.Hash() before calling. Refuses on
+  // duplicate email (unique violation surfaces as
+  // AlreadyExists via the storage DB-error classification).
   rpc CreateUser(CreateUserReq) returns (CreateUserResp) {
     option (w17.db.method) = {
       ops: {
@@ -2523,15 +2475,13 @@ service AuthMutation {
         dql:
           "INSERT INTO @module.User SET "
           "email = :email, "
-          "password_hash = :password_hash, "
-          "?feature(tenant_scope) tenant_id = :tenant_id "
+          "password_hash = :password_hash "
           "RETURNING id AS user.id, "
           "          email AS user.email, "
           "          password_hash AS user.password_hash, "
           "          created_at AS user.created_at, "
           "          ?feature(email_verification) email_verified_at AS user.email_verified_at, "
           "          ?feature(email_verification) email_proof AS user.email_proof, "
-          "          ?feature(tenant_scope) tenant_id AS user.tenant_id, "
           "          ?feature(user_admin) disabled_at AS user.disabled_at, "
           "          ?feature(service_account) kind AS user.kind, "
           "          device_trust_revoked_at AS user.device_trust_revoked_at, "
@@ -3038,8 +2988,7 @@ service AuthMutation {
           "enabled = :enabled, "
           "response_mode = :response_mode, "
           "team_id = :team_id, "
-          "key_id = :key_id, "
-          "?feature(tenant_scope) tenant_id = :tenant_id "
+          "key_id = :key_id "
           "ON CONFLICT (name) DO UPDATE SET "
           "display_name = :display_name, "
           "client_id = :client_id, "
@@ -3345,7 +3294,6 @@ service AuthMutation {
           "password_hash = :password_hash, "
           "code_hash = :code_hash, "
           "expires_at = :expires_at, "
-          "?feature(tenant_scope) tenant_id = :tenant_id, "
           "?feature(org_signup) join_org_id = :join_org_id, "
           "?feature(org_signup) join_kind = :join_kind, "
           "?feature(org_signup) join_role = :join_role "
@@ -3356,7 +3304,6 @@ service AuthMutation {
           "          password_hash AS pending.password_hash, "
           "          code_hash AS pending.code_hash, "
           "          attempts AS pending.attempts, "
-          "          ?feature(tenant_scope) tenant_id AS pending.tenant_id, "
           "          claimed_at AS pending.claimed_at, "
           "          superseded_at AS pending.superseded_at, "
           "          ?feature(org_signup) join_org_id AS pending.join_org_id, "
@@ -3408,7 +3355,6 @@ service AuthMutation {
           "UPDATE @module.PendingSignUp SET claimed_at = NOW() "
           "WHERE id = :pending_id AND claimed_at IS NULL AND superseded_at IS NULL AND expires_at > NOW() "
           "RETURNING email AS email, password_hash AS password_hash, "
-          "?feature(tenant_scope) tenant_id AS tenant_id, "
           "?feature(org_signup) join_org_id AS join_org_id, "
           "?feature(org_signup) join_kind AS join_kind, "
           "?feature(org_signup) join_role AS join_role"

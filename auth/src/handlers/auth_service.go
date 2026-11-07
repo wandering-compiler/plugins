@@ -415,7 +415,7 @@ var configChecks []func(h *AuthServiceHandler) error
 // authenticated principal. Feature-gated handler files register
 // decorators via init(); Authenticate runs them after stamping the
 // canonical user_id scope, so each opt-in feature can publish its
-// own scope (e.g. tenant_scope → scopes["tenant_id"]) without the
+// own scope (e.g. org_membership → scopes["org_id"]) without the
 // base handler knowing about it. Declared here (always-present) so
 // Authenticate compiles with zero feature files staged — an empty
 // slice is a no-op. A decorator returning an error fails
@@ -500,7 +500,7 @@ func kindsFromHeaders(headers map[string]string) []string {
 // context can restrict the grants to it. `org_membership` registers one:
 // the unfiltered set is the union of every role the user holds in every
 // organization, and serving that inside one org is exactly the
-// cross-tenant leak the feature exists to close.
+// cross-organization leak the feature exists to close.
 //
 // APPENDED, never assigned — that is the whole point of it being a
 // separate seam. `resolvePrincipal` is a single var that the realm axis
@@ -1199,8 +1199,7 @@ func (h *AuthServiceHandler) Authenticate(ctx context.Context, req *pb.AuthReq) 
 //     a model scoped by name: "org_id" is refused ("missing required scope:
 //     org_id") for every caller. Before, it served the one organization the
 //     sole-org inference happened to pick, which was never the whole console.
-//   - the other decorators still run. Under tenant_scope the caller's tenant_id
-//     is still stamped, so the admin stays inside the caller's tenant.
+//   - the other decorators still run.
 //
 // The mark is a context value of an unexported type, set only here: nothing a
 // caller sends can put a request on the admin plane, and the mark only ever
@@ -1329,7 +1328,7 @@ func (h *AuthServiceHandler) principalResp(ctx context.Context, prin *authPrinci
 	// written facade.
 	scopes := map[string]string{"user_id": userID}
 
-	// Feature-gated scope decorators (e.g. tenant_scope) append
+	// Feature-gated scope decorators (e.g. org_membership) append
 	// their own scopes here. Empty when no feature file is staged.
 	labels := map[string]string{}
 	// The request's headers ride the context too, for the narrowers below:

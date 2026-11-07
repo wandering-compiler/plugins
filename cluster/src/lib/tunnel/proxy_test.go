@@ -233,7 +233,7 @@ func rig(t *testing.T) (*worker, *grpc.ClientConn, *releases) {
 func TestHandler_AUnaryCallRoundTripsWithItsMetadata(t *testing.T) {
 	w, cc, rel := rig(t)
 	ctx := metadata.AppendToOutgoingContext(bounded(t),
-		"w17-cluster-ticket", "t-acme", "x-tenant", "tenant-a", "x-blob-bin", string([]byte{0, 1, 2}))
+		"w17-cluster-ticket", "t-acme", "x-org", "org-a", "x-blob-bin", string([]byte{0, 1, 2}))
 	var header, trailer metadata.MD
 	resp, err := pb.NewClusterServiceClient(cc).ReserveTask(ctx, &pb.ReserveTaskReq{Label: "build acme"},
 		grpc.Header(&header), grpc.Trailer(&trailer))
@@ -245,7 +245,7 @@ func TestHandler_AUnaryCallRoundTripsWithItsMetadata(t *testing.T) {
 	}
 	md := w.metadata()
 	for k, want := range map[string]string{
-		"w17-cluster-ticket": "t-acme", "x-tenant": "tenant-a", "x-blob-bin": string([]byte{0, 1, 2}),
+		"w17-cluster-ticket": "t-acme", "x-org": "org-a", "x-blob-bin": string([]byte{0, 1, 2}),
 	} {
 		if got := md.Get(k); len(got) != 1 || got[0] != want {
 			t.Errorf("the worker saw %s = %q, want %q", k, got, want)
@@ -477,7 +477,7 @@ func TestHandler_TheKeysThePickerConsumedStopAtTheRelay(t *testing.T) {
 	cc := proxy(t, func(context.Context, string) (Backend, error) {
 		return Backend{Conn: backend, Release: rel.release, Consumed: []string{"w17-cluster-ticket"}}, nil
 	})
-	ctx := metadata.AppendToOutgoingContext(bounded(t), "w17-cluster-ticket", "t-acme", "x-tenant", "tenant-a")
+	ctx := metadata.AppendToOutgoingContext(bounded(t), "w17-cluster-ticket", "t-acme", "x-org", "org-a")
 	if _, err := pb.NewClusterServiceClient(cc).ReserveTask(ctx, &pb.ReserveTaskReq{Label: "build acme"}); err != nil {
 		t.Fatalf("a call through the proxy failed: %v", err)
 	}
@@ -485,8 +485,8 @@ func TestHandler_TheKeysThePickerConsumedStopAtTheRelay(t *testing.T) {
 	if got := md.Get("w17-cluster-ticket"); len(got) != 0 {
 		t.Errorf("the worker saw the consumed ticket %q", got)
 	}
-	if got := md.Get("x-tenant"); len(got) != 1 || got[0] != "tenant-a" {
-		t.Errorf("the worker saw x-tenant = %q, want the caller's header untouched", got)
+	if got := md.Get("x-org"); len(got) != 1 || got[0] != "org-a" {
+		t.Errorf("the worker saw x-organization = %q, want the caller's header untouched", got)
 	}
 	rel.await(t)
 }

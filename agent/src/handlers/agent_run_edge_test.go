@@ -81,7 +81,7 @@ func TestRunAgent_RecordsTheSpendOfEveryTurn(t *testing.T) {
 		return []*pb.RunAgentReq{toolResult(tc.GetCallId(), "r", false)}
 	})
 	start := startMsg(&pb.ToolSpec{Name: "search"})
-	start.GetStart().UsageScope = "tenant-a"
+	start.GetStart().UsageScope = "org-a"
 	start.GetStart().UsageLabels = map[string]string{"conversation": "c-1"}
 	b.incoming <- start
 
@@ -97,7 +97,7 @@ func TestRunAgent_RecordsTheSpendOfEveryTurn(t *testing.T) {
 		if ev.InputTokens != in || ev.OutputTokens != in/10 || !ev.Measured || ev.Status != OutcomeOK {
 			t.Errorf("row %d = %+v, want %d in / %d out", i, ev, in, in/10)
 		}
-		if ev.Scope != "tenant-a" || ev.Labels["conversation"] != "c-1" || ev.Model != "gpt-4o-2024-08-06" {
+		if ev.Scope != "org-a" || ev.Labels["conversation"] != "c-1" || ev.Model != "gpt-4o-2024-08-06" {
 			t.Errorf("row %d attribution = %q %v %q", i, ev.Scope, ev.Labels, ev.Model)
 		}
 	}
@@ -145,7 +145,7 @@ func TestRunAgent_FailuresAreCodedAndStillBilled(t *testing.T) {
 			})
 			start := startMsg(&pb.ToolSpec{Name: "search"})
 			start.GetStart().Limits = tc.limits
-			start.GetStart().UsageScope = "tenant-a"
+			start.GetStart().UsageScope = "org-a"
 			b.incoming <- start
 
 			err := runWithin(t, h, b)
@@ -320,7 +320,7 @@ func TestRunAgent_AFailedToolsActivityDoesNotQuoteIt(t *testing.T) {
 	}}}
 	b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 4)}
 	answerEvery(b, func(tc *pb.ToolCall) []*pb.RunAgentReq {
-		return []*pb.RunAgentReq{toolResult(tc.GetCallId(), "row 42 of tenant-b: secret", true)}
+		return []*pb.RunAgentReq{toolResult(tc.GetCallId(), "row 42 of org-b: secret", true)}
 	})
 	b.incoming <- startMsg(&pb.ToolSpec{Name: "lookup"})
 	if err := runWithin(t, h, b); err != nil {

@@ -49,7 +49,7 @@ func TestAFailedCallIsStillRecorded(t *testing.T) {
 	h := &AgentServiceHandler{Client: failingCompleter{}, Usage: sink, DefaultModel: "gpt-x", DefaultMaxTokens: 100}
 
 	_, err := h.Complete(context.Background(), &pb.CompleteReq{
-		UsageScope:  "tenant-7",
+		UsageScope:  "org-7",
 		UsageLabels: map[string]string{"run": "r1"},
 	})
 	if err == nil {
@@ -67,7 +67,7 @@ func TestAFailedCallIsStillRecorded(t *testing.T) {
 	if ev.Measured {
 		t.Error("a failed call with no provider report must not claim to be measured")
 	}
-	if ev.Scope != "tenant-7" || ev.Labels["run"] != "r1" {
+	if ev.Scope != "org-7" || ev.Labels["run"] != "r1" {
 		t.Errorf("attribution was dropped: %+v", ev)
 	}
 }
@@ -233,8 +233,8 @@ func TestRecordUsage_AnEmptyScopeIsStillRecorded(t *testing.T) {
 
 	// The decoy: a scope the caller DID name must reach the sink untouched,
 	// or the sentinel would be swallowing real attribution.
-	h.recordUsageFor("tenant-42", nil, "gpt-x", nil, OutcomeOK, time.Now())
-	if got := sink.events[1].Scope; got != "tenant-42" {
+	h.recordUsageFor("org-42", nil, "gpt-x", nil, OutcomeOK, time.Now())
+	if got := sink.events[1].Scope; got != "org-42" {
 		t.Errorf("named scope = %q, want it unchanged", got)
 	}
 }
@@ -319,7 +319,7 @@ func TestAPreflightRefusalIsNotRecordedAsACall(t *testing.T) {
 	// only come from the call that did not happen.
 	h := &AgentServiceHandler{Client: failingCompleter{}, Usage: sink, DefaultModel: "gpt-x"}
 
-	_, err := h.Complete(context.Background(), &pb.CompleteReq{UsageScope: "tenant-7"})
+	_, err := h.Complete(context.Background(), &pb.CompleteReq{UsageScope: "org-7"})
 	if err == nil {
 		t.Fatal("a model with no token budget must be refused")
 	}
