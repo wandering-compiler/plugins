@@ -32,7 +32,7 @@ func TestRunAgent_APreflightRefusalIsNotRecordedAsACall(t *testing.T) {
 
 	b := &bidi{ctx: context.Background(), incoming: make(chan *pb.RunAgentReq, 2)}
 	b.incoming <- &pb.RunAgentReq{Msg: &pb.RunAgentReq_Start_{Start: &pb.RunAgentReq_Start{
-		UsageScope: "tenant-7",
+		UsageScope: "org-7",
 		Messages:   []*pb.Message{{Role: pb.Role_ROLE_USER, Text: "hi"}},
 	}}}
 

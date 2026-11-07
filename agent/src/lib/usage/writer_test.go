@@ -62,7 +62,7 @@ func TestFlushesOnBatchSize(t *testing.T) {
 
 // The other trigger, and the one a quiet service depends on: without it a
 // handful of calls would sit in the queue until the batch filled, which on a
-// low-traffic tenant could be never.
+// low-traffic organization could be never.
 func TestFlushesOnInterval(t *testing.T) {
 	f := newRecordingFlusher()
 	w := New(Config{BatchSize: 1000, FlushInterval: 50 * time.Millisecond}, f)

@@ -112,19 +112,7 @@ message User {
     (w17.contrib.plugin_feature_field) = "email_verification"
   ];
 
-  // tenant_id — the owning tenant, behind `tenant_scope`. Sourced
-  // from auth (AuthQuery.GetUserTenant) into the `tenant_id` data
-  // scope; never client-set. NOT NULL so every user resolves a
-  // tenant, and a foreign key to Tenant (see "References" above
-  // UserToken).
-  // Field-gated: dropped entirely when `tenant_scope` is off, and
-  // it shares the tag with the Tenant message so the FK target +
-  // the column drop atomically (no dangling reference).
-  string tenant_id = 5 [
-    (w17.field) = { type: UUID },
-    (w17.db.column) = { fk: "@module.Tenant", deletion_rule: BLOCK, index: true },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 5;
 
   // disabled_at — when an admin soft-disabled this account (the
   // Django `is_active` analogue, inverted: NULL = active, non-NULL =
@@ -347,32 +335,6 @@ enum AccountKind {
   // A machine: CI, a deploy runner. Cannot sign in with a password; acts
   // only through an API token an admin minted for it.
   BOT = 1;
-}
-
-// Tenant — an isolation boundary (organization / workspace) that
-// owns users. Behind `tenant_scope`: present only when the
-// activation enables tenant scoping. `User.tenant_id` references a
-// row here (a foreign key, see "References" above UserToken). The authenticated principal's tenant becomes the
-// `tenant_id` data scope, so a project that scopes its owned rows
-// by `name: "tenant_id"` gets per-tenant isolation with no hand-
-// written facade — sourced from auth as the data-scope rule
-// requires.
-message Tenant {
-  option (w17.db.table) = {};
-  option (w17.contrib.plugin_feature) = "tenant_scope";
-
-  string id   = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
-  // name doubles as the URL slug — SignUp resolves a tenant by it
-  // when the REST path carries `{tenant_slug}` (AuthQuery.GetTenantBySlug).
-  string name = 2 [(w17.field) = { type: SLUG, max_len: 100, unique: true }];
-  // domain — the host that maps to this tenant (e.g. `acme.example.com`),
-  // for host-based resolution at SignUp (AuthQuery.GetTenantByDomain reads
-  // the forwarded Host header). Nullable: a tenant may be slug-only.
-  string domain = 4 [
-    (w17.field) = { type: CHAR, max_len: 253, unique: true, null: true },
-    (w17.db.column) = { index: true }
-  ];
-  google.protobuf.Timestamp created_at = 3 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 }
 
 // UserToken — bearer-token record. Project clients trade an
@@ -779,8 +741,7 @@ enum SignInOutcome {
   // A registration named an address that has an account (EMAIL_TAKEN).
   SIGN_IN_OUTCOME_EMAIL_TAKEN = 13;
   // A registration refused by a sign-up gate: the reserved domain, the
-  // allowlist, invite-only, an invitation for another address, an unknown
-  // tenant.
+  // allowlist, invite-only, an invitation for another address.
   SIGN_IN_OUTCOME_SIGN_UP_REFUSED = 14;
   // OAuth refused to link an identity: the account or the provider has not
   // verified the address.
@@ -909,14 +870,7 @@ message OAuthProvider {
   bool   enabled       = 12 [(w17.field) = { default_auto: TRUE }];
   google.protobuf.Timestamp created_at = 13 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
 
-  // tenant_id — same shape as User.tenant_id, so a multi-tenant project
-  // can scope providers per tenant. Field-gated `tenant_scope` (drops with
-  // the feature).
-  string tenant_id = 14 [
-    (w17.field) = { type: UUID },
-    (w17.db.column) = { fk: "@module.Tenant", deletion_rule: BLOCK, index: true },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 14;
   string secret = 15 [(w17.field) = { type: CRYPTED_SECRET, null: true }]; // the client secret, or the key it is signed with (team_id)
 
   // response_mode — how the provider comes back to the callback: empty, by
@@ -1115,15 +1069,7 @@ message PendingSignUp {
   int64  attempts      = 5 [(w17.field) = { type: COUNTER, default_int: 0 }];
   google.protobuf.Timestamp expires_at = 6 [(w17.field) = { type: DATETIME }];
   google.protobuf.Timestamp created_at = 7 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
-  // tenant_id — the tenant SignUp resolved, so the account is created where
-  // the person registered, not wherever the confirmation request arrives.
-  // Nullable here: the row is not the account, and the User insert is what
-  // enforces a tenant.
-  string tenant_id     = 8 [
-    (w17.field) = { type: UUID, null: true },
-    (w17.contrib.plugin_feature_field) = "tenant_scope",
-    (w17.db.column) = { fk: "@module.Tenant", deletion_rule: BLOCK }
-  ];
+  reserved 8;
   // claimed_at — the registration became the account (ClaimPendingSignUp:
   // one guarded UPDATE, so two confirmations racing on one row get one
   // account).
@@ -1512,9 +1458,8 @@ message UserRole {
   // the ROLE-COMPOSITION shape — "accountant + worker" for someone who
   // does both. It falls out of the M2M rather than needing a feature.
   //
-  // Field-gated: dropped entirely when `org_membership` is off, exactly
-  // like `User.tenant_id` under `tenant_scope` — which is why the index
-  // entries above are gated in step with it.
+  // Field-gated: dropped entirely when `org_membership` is off — which is
+  // why the index entries above are gated in step with it.
   //
   // The gate is why NO permission-resolving query mentions this column.
   // Putting `(ur.org_id IS NULL OR ur.org_id = :org_id)` into their DQL
@@ -1526,10 +1471,6 @@ message UserRole {
   // `GetUserOrgRoleIds` reports as applicable (see handlers/
   // org_membership.go). One gated query, no matrix, and the realm axis
   // keeps its own queries untouched.
-  //
-  // `tenant_scope` deliberately gets nothing here: it is 1:1
-  // user↔tenant, so a per-user role is ALREADY a per-tenant role there
-  // and an org axis would be a second name for the same thing.
   string org_id = 5 [
     (w17.field) = { type: UUID, null: true },
     (w17.db.column) = { fk: "@module.Organization", deletion_rule: BLOCK, index: true },
@@ -1926,9 +1867,8 @@ message OAuthRefreshToken {
 }
 
 // Organization is a GitHub-style org — a membership boundary an identity
-// can belong to MANY of (a private personal org + a company org + …). The
-// `org_membership` feature's generalization of single-tenant tenant_scope:
-// where Tenant is 1:1 with a User, an Organization is M2M via OrgMembership.
+// can belong to MANY of (a private personal org + a company org + …),
+// through OrgMembership (the `org_membership` feature).
 //
 // An organization is never deleted. DeleteOrganization stamps deleted_at,
 // removes every membership and revokes every grant scoped to it, and releases
@@ -2109,7 +2049,7 @@ message OrgInvite {
   // meaning the same thing is two names for one state, and they drift.
   string token_hash = 9 [(w17.field) = { type: CHAR, max_len: 128, unique: true }];
   // Consumer-owned, OPAQUE. Whatever the caller needs paired with this invitation —
-  // for example a tenant and one object in the caller's own system, so that
+  // for example an organization and one object in the caller's own system, so that
   // accepting an invitation pairs both at once instead of joining a side table on
   // the e-mail address, which is the weak key this whole change is about.
   //
@@ -2284,8 +2224,8 @@ message OrgPackage {
 }
 
 // OrgHost — a host (white-label or co-brand) bound to the organization it
-// serves (org_hosts). An audience that takes the tenant from the host
-// (w17/audience.proto TENANT_SOURCE_HOST) acts in this organization on a
+// serves (org_hosts). An audience that takes the organization from the host
+// (w17/audience.proto ORG_SOURCE_HOST) acts in this organization on a
 // request arriving on it. One live binding per host; unbinding ends the row
 // (ended_at, ended_key = id), and nothing is deleted.
 message OrgHost {

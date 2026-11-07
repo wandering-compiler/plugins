@@ -344,7 +344,7 @@ func TestRunAgent_AsksTheLimitLikeTheOtherTwoEntryPoints(t *testing.T) {
 	b.incoming <- &pb.RunAgentReq{Msg: &pb.RunAgentReq_Start_{Start: &pb.RunAgentReq_Start{
 		Model:      &pb.ModelSpec{Id: "gpt-4o", MaxTokens: 100},
 		Messages:   []*pb.Message{{Role: pb.Role_ROLE_USER, Text: "q"}},
-		UsageScope: "tenant-42",
+		UsageScope: "org-42",
 	}}}
 	close(b.incoming)
 
@@ -358,7 +358,7 @@ func TestRunAgent_AsksTheLimitLikeTheOtherTwoEntryPoints(t *testing.T) {
 	if !denied.asked {
 		t.Error("the limiter was never consulted")
 	}
-	if denied.scope != "tenant-42" {
+	if denied.scope != "org-42" {
 		t.Errorf("asked about scope %q, want the one the Start message named", denied.scope)
 	}
 }

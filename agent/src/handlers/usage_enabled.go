@@ -77,7 +77,7 @@ type dbFlusher struct {
 	mut pb.UsageMutationClient
 
 	// Ids are stable for the life of a row, so a resolved one is cached. The
-	// cache is what keeps a steady stream of calls from the same tenant on the
+	// cache is what keeps a steady stream of calls from the same organization on the
 	// same model down to ONE insert per call rather than three.
 	//
 	// Bounded (idCache): every key here is the caller's, and a label carrying
@@ -91,7 +91,7 @@ type dbFlusher struct {
 // Flush records every event it CAN, and reports the ones it could not.
 //
 // It used to return at the first failure, which dropped the rest of the batch
-// unwritten — and a batch is up to 64 calls from every tenant the process
+// unwritten — and a batch is up to 64 calls from every organization the process
 // served. One caller's scope longer than the column allows, one model id the
 // table refuses, sank the spend of everybody queued behind it, and the writer
 // then counted the whole batch as lost, including the rows that HAD landed.

@@ -319,13 +319,6 @@ func (h *AuthServiceHandler) machineKeyDevice(txCtx context.Context, a *signInAt
 	return h.registerKeyDevice(txCtx, a, botID, key, machineKeyLabel)
 }
 
-// botUserFillers complete a CreateBotUser request with what another feature's
-// columns need. Appended, never assigned: each feature pair that adds a column
-// to a machine account brings its own filler, and an assignment would let the
-// last one staged erase the others. Empty unless such a pair is active —
-// handlers/service_account_tenant.go is the one today.
-var botUserFillers []func(ctx context.Context, req *pb.CreateBotUserReq) error
-
 // botOrgs is what a realm WITH organizations adds to machine accounts: each
 // belongs to one, is listed and served only there, and holds its role inside
 // it. Installed by service_account_org.go, which is staged only when both
@@ -351,21 +344,6 @@ func botOrgScopeOrNil() (*botOrgScope, error) {
 		return nil, errBotOrgScopeMissing
 	}
 	return botOrgs, nil
-}
-
-// botVisible are the checks another feature adds to "may this caller see and
-// mint for this machine account" — tenant_scope's tenant, today
-// (service_account_tenant.go). Appended, never assigned, like botUserFillers.
-// A machine account fails if ANY check says no.
-var botVisible []func(ctx context.Context, bot *pb.User) bool
-
-func visibleBot(ctx context.Context, bot *pb.User) bool {
-	for _, ok := range botVisible {
-		if !ok(ctx, bot) {
-			return false
-		}
-	}
-	return true
 }
 
 type botOrgScope struct {
@@ -416,11 +394,6 @@ func (h *AuthServiceHandler) createBotUserTx(txCtx context.Context, email, orgID
 	// The operator and their device, for BotCreated.
 	operator, _ := callerUserID(txCtx)
 	req := &pb.CreateBotUserReq{Email: email, CreatedBy: operator, Thumbprint: requestThumbprint(txCtx)}
-	for _, fill := range botUserFillers {
-		if err := fill(txCtx, req); err != nil {
-			return "", err
-		}
-	}
 	created, err := h.Mutation.CreateBotUser(txCtx, req)
 	if err != nil {
 		return "", err
@@ -628,7 +601,7 @@ func (h *AuthServiceHandler) ListBots(ctx context.Context, _ *pb.ListBotsReq) (*
 	for _, u := range accounts {
 		// The kind is checked HERE for both sources: a membership is held by
 		// people and machines alike.
-		if u.GetKind() != pb.AccountKind_BOT || !visibleBot(ctx, u) {
+		if u.GetKind() != pb.AccountKind_BOT {
 			continue
 		}
 		bot := &pb.BotSummary{
@@ -714,7 +687,7 @@ func (h *AuthServiceHandler) operableBot(ctx context.Context, target string) (*p
 		}
 		return nil, err
 	}
-	if userResp.GetUser().GetKind() != pb.AccountKind_BOT || !visibleBot(ctx, userResp.GetUser()) {
+	if userResp.GetUser().GetKind() != pb.AccountKind_BOT {
 		// The message names the RULE, not the account: a caller must not
 		// learn from the refusal whether the id belongs to a person, a bot it
 		// may not touch, or nothing at all.

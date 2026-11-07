@@ -122,7 +122,7 @@ message AuthResp {
   // backend handler. Empty when the auth backend can't resolve an id.
   string              session_token_id = 4 [(w17.field) = { type: UUID }];
 
-  // `labels` is the BROADCAST tenancy key, and it is deliberately NOT
+  // `labels` is the BROADCAST organization isolation key, and it is deliberately NOT
   // `scopes` under another name.
   //
   // A scope filters ROWS. A label decides who an EVENT reaches: the
@@ -140,7 +140,7 @@ message AuthResp {
   //
   // Empty (the default, and every project that publishes no label) means
   // events go out unlabelled and every authenticated client receives them
-  // — the single-tenant posture, unchanged.
+  // — the single-organization posture, unchanged.
   map<string, string> labels = 5;
 
   // device_id — the RFC 7638 key thumbprint the resolved token is BOUND to,
@@ -260,16 +260,7 @@ message SignUpReq {
   // link. Empty is normal — a bound invitation still matches by address, and a
   // deployment with `invite_only` off asks nothing at all.
   string invite_token = 4 [(w17.field) = { type: CHAR, max_len: 128, null: true, sensitive: true }];
-  // tenant_slug — the URL-based tenant identifier, bound at the
-  // gateway from a `{tenant_slug}` path placeholder (PATH_VAR). Field-
-  // gated by `tenant_scope`: present only when BOTH sign_up_turnkey
-  // (the message) and tenant_scope are on. The handler resolves it to
-  // a tenant id; host-based tenancy reads the forwarded Host header
-  // instead, so this stays empty there.
-  string tenant_slug = 3 [
-    (w17.field) = { type: SLUG, max_len: 100, null: true },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 3;
   // public_computer — "this is a public computer" (an internet café, a
   // shared PC). The session gets the public lifetime
   // (public_session_ttl_seconds, shorter than the normal one) and the device
@@ -281,7 +272,7 @@ message SignUpReq {
   // signup_host — the host this registration comes from, named by a
   // registration page on the identity's own host (one that serves several
   // organizations' sign-ups and is bound to none of them). Without a gateway
-  // host (an audience taking the tenant from the host), org_signup decides on
+  // host (an audience taking the organization from the host), org_signup decides on
   // it exactly as for a registration arriving on that host: the organization
   // bound to it (org_hosts) and its policies. A gateway host bound to an
   // organization is the request's own and wins; a body host naming another
@@ -676,7 +667,7 @@ message OAuthExchangeReq {
   // signup_host — the host this registration comes from, named by a
   // registration page on the identity's own host (one that serves several
   // organizations' sign-ups and is bound to none of them). Without a gateway
-  // host (an audience taking the tenant from the host), org_signup decides on
+  // host (an audience taking the organization from the host), org_signup decides on
   // it exactly as for a registration arriving on that host: the organization
   // bound to it (org_hosts) and its policies. A gateway host bound to an
   // organization is the request's own and wins; a body host naming another
@@ -1114,7 +1105,7 @@ message InviteToOrgReq {
   string role  = 2 [(w17.field) = { type: SLUG, max_len: 100 }];
   // Opaque, consumer-owned, and the reason this field exists: the caller pins
   // whatever their own system needs paired with this invitation — for example a
-  // tenant plus one object in their engine — and gets it back at acceptance out
+  // organization plus one object in their engine — and gets it back at acceptance out
   // of the same statement that spends the invitation. See OrgInvite.metadata.
   string metadata = 3 [(w17.field) = { type: JSON, blank: true }];
   // org — the organization's slug, as the REST path names it

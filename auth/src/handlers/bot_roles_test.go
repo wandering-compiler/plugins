@@ -97,7 +97,7 @@ func TestSetBotRoles_Refusals(t *testing.T) {
 // The directory says which roles each bot holds.
 func TestListBots_CarriesTheRolesEachBotHolds(t *testing.T) {
 	h, m := newBotRoles("ci-push", "deploy-fetch")
-	m.members = []*pb.User{{Id: "bot-1", Email: "ci@example.com", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"}}
+	m.members = []*pb.User{{Id: "bot-1", Email: "ci@example.com", Kind: pb.AccountKind_BOT}}
 	resp, err := h.ListBots(ctxWithCallerInOrg("admin-1", "org-1"), &pb.ListBotsReq{})
 	if err != nil {
 		t.Fatal(err)

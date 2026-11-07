@@ -276,7 +276,6 @@ var outcomeByCode = map[string]pb.SignInOutcome{
 	CodeSignUpNotInvited:       pb.SignInOutcome_SIGN_IN_OUTCOME_SIGN_UP_REFUSED,
 	CodeInviteOtherAddress:     pb.SignInOutcome_SIGN_IN_OUTCOME_SIGN_UP_REFUSED,
 	CodeSignUpClosed:           pb.SignInOutcome_SIGN_IN_OUTCOME_SIGN_UP_REFUSED,
-	CodeTenantUnknown:          pb.SignInOutcome_SIGN_IN_OUTCOME_SIGN_UP_REFUSED,
 	CodeOAuthAccountUnverified: pb.SignInOutcome_SIGN_IN_OUTCOME_UNVERIFIED_EMAIL,
 	CodeOAuthEmailUnverified:   pb.SignInOutcome_SIGN_IN_OUTCOME_UNVERIFIED_EMAIL,
 	CodeAccountDisabled:        pb.SignInOutcome_SIGN_IN_OUTCOME_ACCOUNT_DISABLED,

@@ -221,7 +221,7 @@ func (l *dbLimiter) allowIn(ctx context.Context, scope string, scopeID int64, w 
 	// currency and the limit carries its own, and nothing compared the two: a
 	// cap of 100.00 EUR against spend priced in a currency with a hundred
 	// times more minor units per euro let the scope run a hundredfold past
-	// it — and the reverse refused a tenant who had spent almost nothing.
+	// it — and the reverse refused an organization who had spent almost nothing.
 	// Minor units are only comparable within a currency.
 	if spent.currency != "" && limit.currency != "" && !strings.EqualFold(spent.currency, limit.currency) {
 		return LimitDecision{Allowed: false, Reason: reasonLimitCurrency}

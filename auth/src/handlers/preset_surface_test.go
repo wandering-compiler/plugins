@@ -117,6 +117,17 @@ var requiredAdditions = map[string]bool{
 	"rest POST /auth/oauth/exchange AuthService.OAuthExchange": true,
 }
 
+// retiredFeatures are features a release removed on purpose, each with why.
+// An activation that still names one fails code generation, which is the
+// point: its changelog section says what replaces it (read first).
+var retiredFeatures = map[string]string{
+	// A user in exactly one organization, with its own table and data scope
+	// beside org_membership's: two models of one thing. org_membership covers
+	// it (one membership, org_from_sole_membership), and no deployed
+	// activation enabled it.
+	"tenant_scope": "org_membership",
+}
+
 // presetSurface reads plugin.yaml's presets the way rc23PresetSurface is
 // written, each entry mapped to the feature that gates it ("" for none); a
 // page's slots and actions are gated by the page's feature.
@@ -237,6 +248,12 @@ func TestPresetSurface_AnUpgradeRemovesNothingAndAddsOnlyOptIn(t *testing.T) {
 		}
 	}
 	for name := range releasedFeatures {
+		if _, retired := retiredFeatures[name]; retired {
+			if _, ok := features[name]; ok {
+				t.Errorf("feature %s is listed as retired and is still in plugin.yaml", name)
+			}
+			continue
+		}
 		if _, ok := features[name]; !ok {
 			t.Errorf("feature %s was in rc.23 and is gone: an activation that names it fails code generation", name)
 		}

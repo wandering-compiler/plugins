@@ -59,7 +59,7 @@ message CompleteReq {
   // answer and the one that lets a project turn the layer on later without
   // touching a single caller.
 
-  // Who the spend is charged to, in the CALLER's own vocabulary — a tenant
+  // Who the spend is charged to, in the CALLER's own vocabulary — an organization
   // id, in every case we know of. The plugin never parses it. At most 128
   // characters and no NUL; a longer scope, or one with a NUL, is refused with
   // InvalidArgument before the model is called, in every activation.

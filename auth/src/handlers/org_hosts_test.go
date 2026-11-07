@@ -78,11 +78,11 @@ func hostFixture() *hostMock {
 }
 
 // resolveVia runs resolveOrgScope as an audience gateway calls it: its
-// tenant sources, the host and the selector in the header map.
+// organization sources, the host and the selector in the header map.
 func resolveVia(h *AuthServiceHandler, user, from, host, selector, kinds string) (string, error) {
 	headers := map[string]string{}
 	if from != "" {
-		headers[tenantFromHeader] = from
+		headers[orgFromHeader] = from
 	}
 	if host != "" {
 		headers[hostHeader] = host
@@ -98,10 +98,10 @@ func resolveVia(h *AuthServiceHandler, user, from, host, selector, kinds string)
 	return scopes["org_id"], err
 }
 
-// The audience's tenant sources decide which organization a request names,
+// The audience's organization sources decide which organization a request names,
 // in order, with or without membership kinds; the caller still needs a
 // membership there.
-func TestResolveOrgScope_TenantFromHost(t *testing.T) {
+func TestResolveOrgScope_OrgFromHost(t *testing.T) {
 	for _, kinds := range []string{"", "client"} {
 		for _, c := range []struct {
 			name, user, from, host, selector string

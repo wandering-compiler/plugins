@@ -330,10 +330,10 @@ func TestNarrowGrants_MarksTheRealmPermissions(t *testing.T) {
 		inOrg []*pb.RoleGrant
 		want  string
 	}{
-		{"the backoffice's wildcard, a member of the organization", "org-a", sessionPrincipal(wild("platform-admin"), wild("tenant-admin")), []*pb.RoleGrant{wild("platform-admin")}, []*pb.RoleGrant{wild("platform-admin"), wild("tenant-admin")}, "*"},
+		{"the backoffice's wildcard, a member of the org", "org-a", sessionPrincipal(wild("platform-admin"), wild("org-admin")), []*pb.RoleGrant{wild("platform-admin")}, []*pb.RoleGrant{wild("platform-admin"), wild("org-admin")}, "*"},
 		{"the backoffice's listed role", "org-a", sessionPrincipal(grant("backoffice", 12, 7, 12), grant("member", 3)), []*pb.RoleGrant{grant("backoffice", 7, 12)}, []*pb.RoleGrant{grant("backoffice", 7, 12), grant("member", 3)}, "7,12"},
-		{"the organization's own wildcard", "org-a", sessionPrincipal(wild("tenant-admin")), nil, []*pb.RoleGrant{wild("tenant-admin")}, ""},
-		{"a realm-wide role this credential does not carry", "org-a", sessionPrincipal(wild("tenant-admin")), []*pb.RoleGrant{wild("api-admin")}, []*pb.RoleGrant{wild("tenant-admin")}, ""},
+		{"the organization's own wildcard", "org-a", sessionPrincipal(wild("org-admin")), nil, []*pb.RoleGrant{wild("org-admin")}, ""},
+		{"a realm-wide role this credential does not carry", "org-a", sessionPrincipal(wild("org-admin")), []*pb.RoleGrant{wild("api-admin")}, []*pb.RoleGrant{wild("org-admin")}, ""},
 		{"no organization", "", sessionPrincipal(wild("platform-admin")), []*pb.RoleGrant{wild("platform-admin")}, nil, ""},
 	} {
 		m := &permMock{orgGrants: c.inOrg, realmGrants: c.realm}
@@ -366,7 +366,7 @@ func TestNarrowGrants_APermissionTwoDifferentRolesGrantDoesNotSurvive(t *testing
 
 func TestNarrowGrants_NoActiveOrg(t *testing.T) {
 	// Member of several orgs, no W17-Org header. Only realm-wide grants may
-	// count; falling back to the incoming set is exactly the cross-tenant leak.
+	// count; falling back to the incoming set is exactly the cross-organization leak.
 	m := &permMock{realmGrants: []*pb.RoleGrant{grant("role-w", 1)}}
 	h := &AuthServiceHandler{Query: m}
 	p := sessionPrincipal(grant("role-w", 1), grant("role-scoped", 5, 9))

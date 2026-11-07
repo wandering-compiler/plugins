@@ -216,10 +216,7 @@ message UserAccount {
     (w17.field) = { type: ENUM, zero_is_value: true },
     (w17.contrib.plugin_feature_field) = "email_verification"
   ];
-  string tenant_id = 5 [
-    (w17.field) = { type: UUID },
-    (w17.contrib.plugin_feature_field) = "tenant_scope"
-  ];
+  reserved 5;
   google.protobuf.Timestamp disabled_at = 7 [(w17.field) = { type: DATETIME, null: true }];
   AccountKind kind = 8 [
     (w17.field) = { zero_is_value: true },
@@ -862,8 +859,7 @@ message OAuthProviderRow {
   string email_path    = 11 [(w17.field) = { type: CHAR, max_len: 128, blank: true }];
   bool   enabled       = 12;
   google.protobuf.Timestamp created_at = 13 [(w17.field) = { type: DATETIME }];
-  // 14 = OAuthProvider.tenant_id, a tenant_scope column — and tenant_scope
-  // refuses to activate beside oauth, so no activation has both.
+  // 14 held a column of a retired feature.
   reserved 14;
   string response_mode = 16 [(w17.field) = { type: CHAR, max_len: 16, blank: true }];
   string team_id = 17 [(w17.field) = { type: CHAR, max_len: 64, blank: true }];
@@ -1035,43 +1031,6 @@ message ListUserDevicesReq {
 message ListUserDevicesResp {
   option (w17.contrib.plugin_feature) = "devices";
   repeated Device devices = 1;
-}
-
-// GetUserTenant resolves the authenticated principal's tenant —
-// the `tenant_id` data scope, sourced from auth (never client-
-// sent, per the data-scope rule). Behind `tenant_scope`: present
-// only when the activation enables the tenant feature; the
-// `User.tenant_id` column it reads is gated by the same tag, so
-// the query and its column appear / disappear together.
-message GetUserTenantReq {
-  option (w17.contrib.plugin_feature) = "tenant_scope";
-  string user_id = 1;
-}
-message GetUserTenantResp {
-  option (w17.contrib.plugin_feature) = "tenant_scope";
-  string tenant_id = 1;
-}
-
-// GetTenantBySlug / GetTenantByDomain resolve a Tenant id from the
-// request context at SignUp (slug from the URL `{tenant_slug}` path
-// param, domain from the forwarded Host header). The SignUp handler
-// stamps the result onto the new user's tenant_id. Both gated by
-// `tenant_scope` — they read the Tenant table the same feature adds.
-message GetTenantBySlugReq {
-  option (w17.contrib.plugin_feature) = "tenant_scope";
-  string slug = 1;
-}
-message GetTenantBySlugResp {
-  option (w17.contrib.plugin_feature) = "tenant_scope";
-  string tenant_id = 1;
-}
-message GetTenantByDomainReq {
-  option (w17.contrib.plugin_feature) = "tenant_scope";
-  string domain = 1;
-}
-message GetTenantByDomainResp {
-  option (w17.contrib.plugin_feature) = "tenant_scope";
-  string tenant_id = 1;
 }
 
 // ── org_membership query request/response messages ──────────
@@ -2295,7 +2254,6 @@ service AuthQuery {
           // invite gate this one is not behind an opt-in knob.
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS user.email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
           "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
           "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
@@ -2320,7 +2278,6 @@ service AuthQuery {
           "       COALESCE(t.token_hash, '') AS stored_token_hash, "
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS user.email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
           "       ?feature(user_admin) u.erased_at AS user.erased_at, "
@@ -2407,7 +2364,6 @@ service AuthQuery {
           "       t.mcp_only AS mcp_only, "
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS user.email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
           "       ?feature(user_admin) u.erased_at AS user.erased_at, "
           "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
@@ -2494,7 +2450,6 @@ service AuthQuery {
           "       u.created_at AS created_at, "
           "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.device_trust_revoked_at AS device_trust_revoked_at, "
           "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
           "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
@@ -2527,7 +2482,6 @@ service AuthQuery {
           "SELECT u.id AS id, u.email AS email, "
           "       ?feature(service_account) u.kind AS kind, "
           "       ?feature(user_admin) u.disabled_at AS disabled_at, "
-          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.created_at AS created_at, "
           "       u.password_hash AS password_hash, "
           "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
@@ -2571,7 +2525,6 @@ service AuthQuery {
           "       u.created_at AS created_at, "
           "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.device_trust_revoked_at AS device_trust_revoked_at, "
           "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
           "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
@@ -2601,7 +2554,6 @@ service AuthQuery {
           "SELECT u.id AS id, u.email AS email, "
           "       u.kind AS kind, "
           "       u.disabled_at AS disabled_at, "
-          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.created_at AS created_at, "
           "       u.password_hash AS password_hash, "
           "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
@@ -2684,7 +2636,6 @@ service AuthQuery {
           "       u.created_at AS created_at, "
           "       ?feature(email_verification) u.email_verified_at AS email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS tenant_id, "
           "       u.device_trust_revoked_at AS device_trust_revoked_at, "
           "       ?feature(marketing_consent) u.marketing_consent AS marketing_consent, "
           "       ?feature(marketing_consent) u.marketing_consent_at AS marketing_consent_at, "
@@ -2999,7 +2950,6 @@ service AuthQuery {
           "       u.created_at AS user.created_at, "
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS user.email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
           "       ?feature(user_admin) u.erased_at AS user.erased_at, "
           "       ?feature(marketing_consent) u.marketing_consent_at AS user.marketing_consent_at, "
@@ -3207,47 +3157,6 @@ service AuthQuery {
       }
     };
     option (w17.contrib.plugin_feature_rpc) = "bot_token_guard";
-  }
-
-  // GetUserTenant — resolves the principal's tenant_id (the
-  // tenant data scope) by user id. The gated tenant.go handler
-  // calls this from Authenticate's scope decorator to stamp
-  // scopes["tenant_id"]. Tagged `tenant_scope`: the User.tenant_id
-  // column it reads is gated by the same feature, so the query
-  // and its column appear / disappear together. tenant_id is
-  // NOT NULL on User, so a resolved principal always yields one.
-  rpc GetUserTenant(GetUserTenantReq) returns (GetUserTenantResp) {
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql: "SELECT u.tenant_id AS tenant_id FROM @module.User u WHERE u.id = :user_id"
-      }
-    };
-    option (w17.contrib.plugin_feature_rpc) = "tenant_scope";
-  }
-
-  // GetTenantBySlug — resolve a tenant id from its slug (Tenant.name).
-  // Used by SignUp for URL-based tenancy (`/t/{tenant_slug}/...`).
-  rpc GetTenantBySlug(GetTenantBySlugReq) returns (GetTenantBySlugResp) {
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql: "SELECT t.id AS tenant_id FROM @module.Tenant t WHERE t.name = :slug"
-      }
-    };
-    option (w17.contrib.plugin_feature_rpc) = "tenant_scope";
-  }
-
-  // GetTenantByDomain — resolve a tenant id from its host domain.
-  // Used by SignUp for host-based tenancy (the forwarded Host header).
-  rpc GetTenantByDomain(GetTenantByDomainReq) returns (GetTenantByDomainResp) {
-    option (w17.db.method) = {
-      ops: {
-        name: "main"
-        dql: "SELECT t.id AS tenant_id FROM @module.Tenant t WHERE t.domain = :domain"
-      }
-    };
-    option (w17.contrib.plugin_feature_rpc) = "tenant_scope";
   }
 
   // GetProviderByName — the OAuth provider keyed by URL slug. Returns all
@@ -3461,9 +3370,6 @@ service AuthQuery {
           // erased_at (`user_admin`): EraseUsers reads it to make a second
           // erase a no-op.
           "       ?feature(user_admin) u.erased_at AS user.erased_at, "
-          // tenant_id (`tenant_scope`): IssueBotToken holds the target to the
-          // operator's tenant (service_account_tenant.go) through this read.
-          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           // marketing_consent (`marketing_consent`): ResolveUser answers it in
           // AuthResp as Authenticate does from GetUserByTokenWithPermissions.
           "       ?feature(marketing_consent) u.marketing_consent AS user.marketing_consent, "
@@ -3691,7 +3597,7 @@ service AuthQuery {
   // decorator has validated membership and resolved the active org, and
   // its answer REPLACES the unfiltered set — the unfiltered set is the
   // union across every org the user belongs to, which is precisely what
-  // must not leak between tenants.
+  // must not leak between organizations.
   //
   // This is the ONLY query that names `UserRole.org_id`, which is why it
   // is the only one that had to be gated: the column is dropped when
@@ -4522,7 +4428,7 @@ service AuthQuery {
 
   // GetOrgOfHost — the live organization a host is bound to (org_hosts);
   // NotFound when the host is unbound or its organization deleted. Read on
-  // every Authenticate through an audience that takes the tenant from the
+  // every Authenticate through an audience that takes the organization from the
   // host.
   rpc GetOrgOfHost(GetOrgOfHostReq) returns (OrgHostRow) {
     option (w17.contrib.plugin_feature_rpc) = "org_hosts";
@@ -4890,7 +4796,6 @@ service AuthQuery {
           "       u.password_hash AS user.password_hash, "
           "       ?feature(email_verification) u.email_verified_at AS user.email_verified_at, "
           "       ?feature(email_verification) u.email_proof AS user.email_proof, "
-          "       ?feature(tenant_scope) u.tenant_id AS user.tenant_id, "
           "       ?feature(user_admin) u.disabled_at AS user.disabled_at, "
           "       u.device_trust_revoked_at AS user.device_trust_revoked_at, "
           "       ?feature(user_admin) u.erased_at AS user.erased_at, "

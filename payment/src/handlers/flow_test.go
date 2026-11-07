@@ -717,7 +717,7 @@ func TestFlow_TopUp_ConcurrentDuplicateDeliveries(t *testing.T) {
 	}
 }
 
-// A top-up grants the PAYER, nobody else; another tenant's pending
+// A top-up grants the PAYER, nobody else; another organization's pending
 // top-up is untouched by this one's success.
 func TestFlow_TopUp_GrantsOnlyThePayer(t *testing.T) {
 	r := newRig(t)

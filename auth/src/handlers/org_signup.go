@@ -21,7 +21,7 @@ import (
 // and with which role (OrgSignUpPolicy).
 //
 // A registration without an invitation that arrives through an audience
-// gateway taking the tenant from the host (its context reaches every call as
+// gateway taking the organization from the host (its context reaches every call as
 // metadata: restgw.AudienceContextMiddleware), on a host bound to an
 // organization (org_hosts):
 //
@@ -90,7 +90,7 @@ func splitGatewayList(v string) []string {
 func decideSignUpJoin(ctx context.Context, h *AuthServiceHandler, bodyHost string) (*orgJoin, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	host := ""
-	if slices.Contains(splitGatewayList(gatewayValue(md, tenantFromHeader)), tenantFromHost) {
+	if slices.Contains(splitGatewayList(gatewayValue(md, orgFromHeader)), orgFromHost) {
 		host = gatewayValue(md, hostHeader)
 	}
 	if bodyHost != "" {

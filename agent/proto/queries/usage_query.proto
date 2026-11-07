@@ -259,7 +259,7 @@ service UsageQuery {
 
   // Spend for one scope over a period, per LABEL VALUE of one key.
   //
-  // The question GetScopeSpend cannot answer. "What did this tenant spend,
+  // The question GetScopeSpend cannot answer. "What did this organization spend,
   // per model" is a bill; "what did THIS RUN cost, and who is it charged to"
   // is attribution, and a consumer who cannot ask it keeps a second set of
   // books beside this one. Two sets of books drift, and nobody notices for

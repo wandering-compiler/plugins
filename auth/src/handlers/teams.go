@@ -20,7 +20,7 @@ import (
 // product defines what one means (the seed, org_roles), the organization
 // decides who holds it — directly, or through a team. That is why a team is
 // its own table rather than a role made of roles: the catalogue belongs to the
-// product and teams to the tenant, and the resolver stays a union instead of a
+// product and teams to the organization, and the resolver stays a union instead of a
 // walk over a role graph.
 //
 // Where the roles count. Authenticate adds a member's team roles for a SESSION
