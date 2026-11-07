@@ -54,8 +54,8 @@ func TestResolveOrgScope_MarksTheUnnamedOrganization(t *testing.T) {
 		{"a member of none", "nobody", "", nil, false, true},
 		// An audience that takes no selector: naming one would be refused,
 		// so there is nothing to tell the caller to do.
-		{"an audience without DEFAULT", "multi", "", map[string]string{tenantFromHeader: tenantFromHost}, false, false},
-		{"an audience with DEFAULT", "multi", "", map[string]string{tenantFromHeader: tenantFromHost + "," + tenantFromDefault}, false, true},
+		{"an audience without DEFAULT", "multi", "", map[string]string{orgFromHeader: orgFromHost}, false, false},
+		{"an audience with DEFAULT", "multi", "", map[string]string{orgFromHeader: orgFromHost + "," + orgFromDefault}, false, true},
 	} {
 		h := twoOrgHandler()
 		h.NoOrgFromSoleMembership = c.noSole

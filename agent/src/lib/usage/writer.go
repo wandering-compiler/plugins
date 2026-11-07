@@ -49,7 +49,7 @@ type Flusher interface {
 // PartialFlushError is what a Flusher returns when it wrote PART of a batch.
 //
 // A Flusher that stops at the first bad event loses every event after it — and
-// a batch holds many tenants' calls, so one tenant's malformed row (a scope
+// a batch holds many organizations' calls, so one organization's malformed row (a scope
 // longer than its column) took everybody else's spend down with it. A Flusher
 // that carries on past a bad event needs a way to say how many it lost, or the
 // writer counts the whole batch as failed and the written rows vanish from

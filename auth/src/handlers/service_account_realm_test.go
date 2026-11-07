@@ -26,11 +26,10 @@ func withoutOrgs(t *testing.T) {
 }
 
 // realmCaller is an operator of a realm without organizations: signed in, no
-// org in scope, the permissions Authenticate resolved on the envelope. The
-// tenant rides along only because the tests compile tenant_scope's filler too.
+// org in scope, the permissions Authenticate resolved on the envelope.
 func realmCaller(uid string, held ...int32) context.Context {
 	return withHeldPermissions(metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs(scopeUserIDKey, uid, "x-w17-scope-tenant_id", "tenant-1")), uid, held...)
+		metadata.Pairs(scopeUserIDKey, uid)), uid, held...)
 }
 
 // CreateBot needs no organization, writes no membership, and grants the role
@@ -78,8 +77,8 @@ func TestCreateBot_WithoutOrgs_TheRoleCeilingHolds(t *testing.T) {
 func TestListBots_WithoutOrgs_ListsTheRealmsMachines(t *testing.T) {
 	withoutOrgs(t)
 	m := &botAdminMock{realmBots: []*pb.User{
-		{Id: "bot-1", Email: "ci@example.com", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"},
-		{Id: "human-1", Email: "person@example.com", Kind: pb.AccountKind_HUMAN, TenantId: "tenant-1"},
+		{Id: "bot-1", Email: "ci@example.com", Kind: pb.AccountKind_BOT},
+		{Id: "human-1", Email: "person@example.com", Kind: pb.AccountKind_HUMAN},
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	resp, err := h.ListBots(realmCaller("operator-1"), &pb.ListBotsReq{})
@@ -99,8 +98,8 @@ func TestListBots_WithoutOrgs_ListsTheRealmsMachines(t *testing.T) {
 // service_account's) — the handler keeps the machines.
 func TestListBots_InAnOrg_KeepsOnlyTheMachines(t *testing.T) {
 	m := &botAdminMock{members: []*pb.User{
-		{Id: "bot-1", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"},
-		{Id: "human-1", Kind: pb.AccountKind_HUMAN, TenantId: "tenant-1"},
+		{Id: "bot-1", Kind: pb.AccountKind_BOT},
+		{Id: "human-1", Kind: pb.AccountKind_HUMAN},
 	}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	resp, err := h.ListBots(ctxWithCallerInOrg("admin-1", "org-1"), &pb.ListBotsReq{})
@@ -171,7 +170,7 @@ func TestMachineAccounts_OrgsWithoutTheirScopingRefuse(t *testing.T) {
 	botOrgs, orgMembershipStaged = nil, true
 	t.Cleanup(func() { botOrgs, orgMembershipStaged = prev, prevMark })
 
-	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}, realmBots: []*pb.User{{Id: "bot-1", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"}}}
+	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}, realmBots: []*pb.User{{Id: "bot-1", Kind: pb.AccountKind_BOT}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	ctx := ctxWithCallerInOrg("admin-1", "org-1")
 	_, errList := h.ListBots(ctx, &pb.ListBotsReq{})
@@ -184,46 +183,6 @@ func TestMachineAccounts_OrgsWithoutTheirScopingRefuse(t *testing.T) {
 	}
 	if m.realmListed || m.issued || m.created {
 		t.Errorf("something ran anyway: listed=%v issued=%v created=%v", m.realmListed, m.issued, m.created)
-	}
-}
-
-// Under tenant_scope an operator sees, and mints for, only their own tenant's
-// machine accounts — without organizations the realm-wide list was every
-// tenant's.
-func TestMachineAccounts_WithoutOrgs_StayInTheOperatorsTenant(t *testing.T) {
-	withoutOrgs(t)
-	m := &botAdminMock{realmBots: []*pb.User{
-		{Id: "bot-mine", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"},
-		{Id: "bot-other", Kind: pb.AccountKind_BOT, TenantId: "tenant-2"},
-	}}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-	resp, err := h.ListBots(realmCaller("operator-1"), &pb.ListBotsReq{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.GetBots()) != 1 || resp.GetBots()[0].GetId() != "bot-mine" {
-		t.Errorf("bots = %v — another tenant's machine account was listed", resp.GetBots())
-	}
-
-	m2 := &botAdminMock{botTenant2: "tenant-2"}
-	h2 := &AuthServiceHandler{Query: m2, Mutation: m2}
-	_, err = h2.IssueBotToken(realmCaller("operator-1"), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-other"})
-	if status.Code(err) != codes.PermissionDenied || m2.issued {
-		t.Fatalf("minting for another tenant's bot: err=%v issued=%v", err, m2.issued)
-	}
-	if !strings.Contains(err.Error(), errNotABotAccount.Error()) {
-		t.Errorf("another tenant's bot is told apart from a non-bot: %v", err)
-	}
-}
-
-// A caller with no tenant in scope sees no machine account (fail closed).
-func TestMachineAccounts_NoTenantInScopeSeesNone(t *testing.T) {
-	withoutOrgs(t)
-	m := &botAdminMock{realmBots: []*pb.User{{Id: "bot-1", Kind: pb.AccountKind_BOT, TenantId: "tenant-1"}}}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-	resp, err := h.ListBots(withHeldPermissions(ctxWithCaller("operator-1"), "operator-1"), &pb.ListBotsReq{})
-	if err != nil || len(resp.GetBots()) != 0 {
-		t.Fatalf("a caller with no tenant: bots=%v err=%v", resp.GetBots(), err)
 	}
 }
 
@@ -245,7 +204,7 @@ func TestIssueBotToken_RefusesABotAboveTheOperator(t *testing.T) {
 			h := &AuthServiceHandler{Query: m, Mutation: m}
 			md := func() context.Context {
 				return metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-					scopeUserIDKey, "op-1", "x-w17-scope-org_id", "org-1", "x-w17-scope-tenant_id", "tenant-1"))
+					scopeUserIDKey, "op-1", "x-w17-scope-org_id", "org-1"))
 			}
 			_, err := h.IssueBotToken(withHeldPermissions(md(), "op-1", 7), &pb.IssueBotTokenReq{PublicKey: p256JWK, UserId: "bot-1"})
 			if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "machine account holds a role") {

@@ -92,7 +92,7 @@ pull request's checks page.
 ## Keep it anonymous
 
 This repository is public. Fixtures, examples, comments and test data use
-obviously invented names (`acme`, `example.com`, `tenant-a`), never a real
+obviously invented names (`acme`, `example.com`, `org-a`), never a real
 company, customer or project, not even one that uses w17. `make check-names`
 enforces it against a list held as a CI secret. A finding prints the file and
 line, never the name.

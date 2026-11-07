@@ -82,14 +82,14 @@ func (m *policyMock) enrol() {
 }
 
 // signInFor is a sign-in's context: the W17-Org selector, or the host an
-// audience that takes the tenant from it reports.
+// audience that takes the organization from it reports.
 func signInFor(selector, host string) context.Context {
 	md := metadata.MD{}
 	if selector != "" {
 		md.Set(orgScopeMetadataKey, selector)
 	}
 	if host != "" {
-		md.Set(tenantFromHeader, tenantFromHost)
+		md.Set(orgFromHeader, orgFromHost)
 		md.Set(hostHeader, host)
 	}
 	return metadata.NewIncomingContext(context.Background(), md)

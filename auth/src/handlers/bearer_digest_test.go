@@ -222,11 +222,6 @@ func (s *countingStore) GetTokenPermissionSubset(context.Context, *pb.GetTokenPe
 	return &pb.GetTokenPermissionSubsetResp{PermissionIds: []int32{1, 2, 3}}, nil
 }
 
-func (s *countingStore) GetUserTenant(context.Context, *pb.GetUserTenantReq, ...grpc.CallOption) (*pb.GetUserTenantResp, error) {
-	s.calls = append(s.calls, "GetUserTenant")
-	return &pb.GetUserTenantResp{TenantId: "tenant-acme"}, nil
-}
-
 func (s *countingStore) GetUser(context.Context, *pb.GetUserReq, ...grpc.CallOption) (*pb.UserAccount, error) {
 	s.calls = append(s.calls, "GetUser")
 	return &pb.UserAccount{Id: "u1"}, nil
@@ -260,17 +255,17 @@ func TestAuthenticate_QueryCountIsFixedWhateverTheRoleCount(t *testing.T) {
 		}
 	}
 
-	// Two decorators staged (tenant scope, machine label): one query each.
+	// A decorator staged (the machine label): one query more.
 	pinResolver(t, resolvePrincipalSession)
 	prevDec, prevNarrow := scopeDecorators, grantNarrowers
 	t.Cleanup(func() { scopeDecorators, grantNarrowers = prevDec, prevNarrow })
 	s := &countingStore{kind: pb.TokenType_TOKEN_TYPE_SESSION, roles: 40}
 	h := &AuthServiceHandler{Query: s, Mutation: &touchRecorder{}, HeaderName: "Authorization", Scheme: "Bearer"}
-	scopeDecorators, grantNarrowers = []scopeDecorator{resolveTenantScope, labelMachineAccount}, nil
+	scopeDecorators, grantNarrowers = []scopeDecorator{labelMachineAccount}, nil
 	if _, err := h.Authenticate(context.Background(), boundAuthReq("plain", testJKT)); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.calls) != 4 {
-		t.Errorf("with two decorators: %d queries %v, want 4", len(s.calls), s.calls)
+	if len(s.calls) != 3 {
+		t.Errorf("with a decorator: %d queries %v, want 3", len(s.calls), s.calls)
 	}
 }

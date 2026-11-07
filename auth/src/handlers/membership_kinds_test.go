@@ -211,7 +211,7 @@ func TestCheckInviteKind(t *testing.T) {
 }
 
 // Audiences that name no kind gate nothing on it (a surface taking the
-// tenant from the host, the identity's own): any kind is handed out, as
+// organization from the host, the identity's own): any kind is handed out, as
 // without audiences — the kinds are the project's account types, not a gate.
 func TestCheckInviteKind_NoAudienceNamesAKind(t *testing.T) {
 	h := &AuthServiceHandler{Query: &kindsQueryMock{}, audiences: []audienceEntry{{name: "members"}}, audiencesRead: true}

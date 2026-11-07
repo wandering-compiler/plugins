@@ -67,7 +67,7 @@ type botTokenQuery struct {
 }
 
 func (q botTokenQuery) GetUserById(context.Context, *pb.GetUserByIdReq, ...grpc.CallOption) (*pb.GetUserByIdResp, error) {
-	u := &pb.User{Id: "u1", Kind: q.kind, TenantId: "tenant-1"}
+	u := &pb.User{Id: "u1", Kind: q.kind}
 	if q.disabled {
 		u.DisabledAt = timestamppb.Now()
 	}
@@ -196,13 +196,11 @@ type botAdminMock struct {
 	botsOrg     string
 	issued      bool
 	assignErr   error
-	botTenant   string
 	rolePerms   map[string][]int32 // ListRoleGrants; a role absent here carries nothing
 	members     []*pb.User         // ListOrgMemberAccounts
 	realmBots   []*pb.User         // ListRealmMachineAccounts
 	realmListed bool
 	missing     bool     // GetUserById answers NotFound
-	botTenant2  string   // GetUserById's tenant; "" = tenant-1
 	botRoles    []string // GetUserRoleGrants of the target bot
 }
 
@@ -235,7 +233,6 @@ func (m *botAdminMock) ListApiRealmRoles(ctx context.Context, _ *pb.ListApiRealm
 func (m *botAdminMock) CreateBotUser(ctx context.Context, in *pb.CreateBotUserReq, _ ...grpc.CallOption) (*pb.CreateBotUserResp, error) {
 	m.created = true
 	m.botEmail = in.GetEmail()
-	m.botTenant = in.GetTenantId()
 	m.createdReq = in
 	return &pb.CreateBotUserResp{User: &pb.User{Id: "bot-1", Email: in.GetEmail()}}, nil
 }
@@ -372,55 +369,13 @@ func TestCreateBot_RefusesWithNoActiveOrg(t *testing.T) {
 }
 
 // ctxWithCallerInOrg is ctxWithCaller plus an ACTIVE organization — the scope the
-// gateway stamps once the caller has selected one — and a tenant.
-//
-// The tenant is there because this package compiles every feature at once, so
-// service_account_tenant.go is staged here and a machine account needs one. In a
-// bundle without tenant_scope that file is not staged and the scope is unread.
+// gateway stamps once the caller has selected one.
 func ctxWithCallerInOrg(uid, orgID string) context.Context {
 	return withHeldPermissions(metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs(scopeUserIDKey, uid, "x-w17-scope-org_id", orgID, "x-w17-scope-tenant_id", "tenant-1")), uid)
+		metadata.Pairs(scopeUserIDKey, uid, "x-w17-scope-org_id", orgID)), uid)
 }
 
-// --- tenant_scope: the operator's tenant ------------------------------
-
-// Under tenant_scope User.tenant_id is NOT NULL, so a machine account has to be
-// written with one — and it is the tenant the operator is acting in, taken from
-// their authenticated scope. Before this, the pair was declared incompatible: a
-// bot created without a tenant was refused by the database on every call.
-func TestCreateBot_PutsTheBotIntoTheOperatorsTenant(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-
-	ctx := withHeldPermissions(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		scopeUserIDKey, "admin-1", "x-w17-scope-org_id", "org-1", "x-w17-scope-tenant_id", "tenant-acme")), "admin-1")
-	if _, err := h.CreateBot(ctx, &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if m.botTenant != "tenant-acme" {
-		t.Errorf("the bot was written into tenant %q, want tenant-acme — the operator's", m.botTenant)
-	}
-}
-
-// With no tenant in scope there is nothing to write into the NOT NULL column, so
-// the refusal must come before the INSERT — the database's answer is a
-// constraint error the operator cannot act on.
-func TestCreateBot_RefusesWithNoTenantInScope(t *testing.T) {
-	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
-	h := &AuthServiceHandler{Query: m, Mutation: m}
-
-	ctx := withHeldPermissions(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		scopeUserIDKey, "admin-1", "x-w17-scope-org_id", "org-1")), "admin-1")
-	_, err := h.CreateBot(ctx, &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
-	}
-	if m.created {
-		t.Error("the account was written with no tenant — the NOT NULL column refuses it at runtime")
-	}
-}
-
-// --- cross-tenant: the leak that shipped ------------------------------
+// --- cross-org: the leak that shipped ------------------------------
 
 func (m *botAdminMock) ListOrgMemberAccounts(ctx context.Context, in *pb.ListOrgMemberAccountsReq, _ ...grpc.CallOption) (*pb.ListOrgMemberAccountsResp, error) {
 	m.listedOrg = in.GetOrgId()
@@ -454,11 +409,7 @@ func (m *botAdminMock) GetUserById(ctx context.Context, in *pb.GetUserByIdReq, _
 	if m.missing {
 		return nil, status.Error(codes.NotFound, "no such user")
 	}
-	tenant := m.botTenant2
-	if tenant == "" {
-		tenant = "tenant-1"
-	}
-	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Kind: pb.AccountKind_BOT, TenantId: tenant}}, nil
+	return &pb.GetUserByIdResp{User: &pb.User{Id: in.GetUserId(), Kind: pb.AccountKind_BOT}}, nil
 }
 
 func (m *botAdminMock) GetOrgMember(ctx context.Context, in *pb.GetOrgMemberReq, _ ...grpc.CallOption) (*pb.GetOrgMemberResp, error) {
@@ -481,7 +432,7 @@ func TestListBots_AsksOnlyForTheActiveOrganization(t *testing.T) {
 		t.Fatalf("list: %v", err)
 	}
 	if m.listedOrg != "org-1" {
-		t.Errorf("the query was asked for org %q — an unfiltered list returns every tenant's bots", m.listedOrg)
+		t.Errorf("the query was asked for org %q — an unfiltered list returns every organization's bots", m.listedOrg)
 	}
 }
 
@@ -499,7 +450,7 @@ func TestListBots_RefusesWithNoActiveOrg(t *testing.T) {
 	}
 }
 
-// The id arrives on the WIRE. Listing leaked other tenants' bot ids, and
+// The id arrives on the WIRE. Listing leaked other organizations' bot ids, and
 // nothing between the two steps checked that the target belonged to the
 // caller's company — so an operator in one could mint a working credential
 // for a machine account in another.
@@ -785,7 +736,7 @@ func TestCreateBot_TheCreationNamesTheOperatorAndTheirDevice(t *testing.T) {
 	m := &botAdminMock{apiRoles: []*pb.ApiRealmRole{{Id: "role-api"}}}
 	h := &AuthServiceHandler{Query: m, Mutation: m}
 	ctx := withHeldPermissions(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		scopeUserIDKey, "admin-1", "x-w17-scope-org_id", "org-1", "x-w17-scope-tenant_id", "tenant-acme", dpopJKTKey, testJKT)), "admin-1")
+		scopeUserIDKey, "admin-1", "x-w17-scope-org_id", "org-1", dpopJKTKey, testJKT)), "admin-1")
 	if _, err := h.CreateBot(ctx, &pb.CreateBotReq{Email: "ci@example.com", RoleId: "role-api"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}

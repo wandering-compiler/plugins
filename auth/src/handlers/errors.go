@@ -179,12 +179,6 @@ const (
 	// this." about an endpoint they DO have access to.
 	CodeRoleAboveCaller = "ROLE_ABOVE_CALLER"
 
-	// CodeTenantUnknown: under tenant_scope, a registration whose host (or
-	// {tenant_slug}) names no tenant. Not a credential refusal and not the
-	// server's fault — the request came in on an address this deployment
-	// does not serve.
-	CodeTenantUnknown = "TENANT_UNKNOWN"
-
 	// CodeTotpUnavailable: this deployment offers no authenticator app
 	// (two_factor_totp=false, or no seed key configured).
 	CodeTotpUnavailable = "TOTP_UNAVAILABLE"
@@ -255,9 +249,9 @@ const (
 	CodeHostsRealmOnly = "HOSTS_REALM_ONLY"
 	CodeHostTaken      = "HOST_TAKEN"
 	CodeHostInvalid    = "HOST_INVALID"
-	// An audience taking the tenant from the host: a W17-Org selector naming
+	// An audience taking the organization from the host: a W17-Org selector naming
 	// another organization than the host's, or a selector on an audience
-	// that does not take the tenant from it (its tenant_from omits DEFAULT).
+	// that does not take the organization from it (its org_from omits DEFAULT).
 	CodeOrgHostConflict        = "ORG_HOST_CONFLICT"
 	CodeOrgSelectorNotAccepted = "ORG_SELECTOR_NOT_ACCEPTED"
 	// org_signup: a policy call from inside an organization; a policy that
@@ -450,8 +444,6 @@ const (
 	// the token would act beyond the operator's own permissions.
 	MsgBotAboveCaller = "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
 
-	MsgTenantUnknown = "This address does not belong to any organization here. Check the address you registered on."
-
 	MsgTotpUnavailable = "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
 
 	MsgTotpNotEnrolled = "Set up an authenticator app first. Recovery codes belong to it."
@@ -565,8 +557,8 @@ func isUniqueConflict(err error) bool {
 // reads "The request could not be accepted as sent.". AlreadyExists is still
 // accepted, for a store that answers that way.
 //
-// The field is the address — or, under tenant_scope, the composite that
-// includes it; a unique violation on some other column is not this refusal.
+// The field is the address; a unique violation on some other column is not
+// this refusal.
 func isEmailTaken(err error) bool {
 	st, ok := status.FromError(err)
 	if !ok {

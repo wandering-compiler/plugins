@@ -19,8 +19,7 @@ import (
 // This file implements `sign_up_confirmation`: SignUp proves the address
 // before the account exists. Staged only with that feature (plugin.yaml
 // go_files), which requires `sign_up_turnkey`, so pb.SignUpReq is always here
-// when this file is. handlers/signup_confirm_tenant.go adds the tenant half
-// when `tenant_scope` is staged too.
+// when this file is.
 //
 // Why a pending row and not an unverified User: a User row HOLDS its address
 // — the email is unique — so an account created before the address is proved
@@ -122,13 +121,6 @@ func erasePendingSignUps(ctx context.Context, h *AuthServiceHandler, _, email, p
 	return err
 }
 
-// pendingSignUpTenant stamps the tenant SignUp resolved on the pending row.
-// A no-op without `tenant_scope`; handlers/signup_confirm_tenant.go replaces
-// it, because the field it sets exists only with both features.
-var pendingSignUpTenant = func(_ context.Context, _ *AuthServiceHandler, _ *pb.SignUpReq, _ *pb.CreatePendingSignUpReq) error {
-	return nil
-}
-
 // pendingSignUpJoin carries the organization an open registration on its
 // host joins (org_signup) on the pending row; claimedSignUpJoin reads it
 // back at confirmation. No-ops without org_signup; handlers/
@@ -138,9 +130,8 @@ var pendingSignUpJoin = func(_ *pb.CreatePendingSignUpReq, _ *orgJoin) {}
 
 var claimedSignUpJoin = func(_ *pb.ClaimPendingSignUpResp) *orgJoin { return nil }
 
-// confirmCreateUser creates the account from a claimed registration. The
-// tenant-less create here; handlers/signup_confirm_tenant.go replaces it with
-// one that writes the tenant the registration carried.
+// confirmCreateUser creates the account from a claimed registration. A var
+// so a test can stand in for the storage write.
 var confirmCreateUser = func(ctx context.Context, h *AuthServiceHandler, claimed *pb.ClaimPendingSignUpResp) (string, error) {
 	resp, err := h.Mutation.CreateUser(ctx, &pb.CreateUserReq{
 		Email:        claimed.GetEmail(),
@@ -228,9 +219,6 @@ func startSignUpConfirmation(ctx context.Context, h *AuthServiceHandler, req *pb
 		SealedCode:   sealed,
 	}
 	pendingSignUpJoin(create, join)
-	if err := pendingSignUpTenant(txCtx, h, req, create); err != nil {
-		return fail(err)
-	}
 	created, err := h.Mutation.CreatePendingSignUp(txCtx, create)
 	if err != nil {
 		return fail(err)

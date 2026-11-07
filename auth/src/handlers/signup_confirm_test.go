@@ -110,7 +110,7 @@ func pinConfirmationActivation(t *testing.T, s *confirmStore) {
 	t.Helper()
 	pinConsoleActivation(t)
 	signUpConfirmation = startSignUpConfirmation
-	origConfirmCreate, origStamp, origMark := confirmCreateUser, pendingSignUpTenant, markEmailConfirmed
+	origConfirmCreate, origMark := confirmCreateUser, markEmailConfirmed
 	confirmCreateUser = func(ctx context.Context, h *AuthServiceHandler, claimed *pb.ClaimPendingSignUpResp) (string, error) {
 		resp, err := h.Mutation.CreateUser(ctx, &pb.CreateUserReq{Email: claimed.GetEmail(), PasswordHash: claimed.GetPasswordHash()})
 		if err != nil {
@@ -118,15 +118,12 @@ func pinConfirmationActivation(t *testing.T, s *confirmStore) {
 		}
 		return resp.GetUser().GetId(), nil
 	}
-	pendingSignUpTenant = func(context.Context, *AuthServiceHandler, *pb.SignUpReq, *pb.CreatePendingSignUpReq) error {
-		return nil
-	}
 	markEmailConfirmed = func(_ context.Context, _ *AuthServiceHandler, userID string) error {
 		s.confirmed = append(s.confirmed, userID)
 		return nil
 	}
 	t.Cleanup(func() {
-		confirmCreateUser, pendingSignUpTenant, markEmailConfirmed = origConfirmCreate, origStamp, origMark
+		confirmCreateUser, markEmailConfirmed = origConfirmCreate, origMark
 	})
 }
 

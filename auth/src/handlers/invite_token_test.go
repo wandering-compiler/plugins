@@ -332,7 +332,7 @@ func TestInviteToOrg_AbsentMetadataBecomesTheEmptyObject(t *testing.T) {
 	for _, tc := range []struct{ name, sent, want string }{
 		{"omitted", "", "{}"},
 		{"whitespace only", "   \n", "{}"},
-		{"a document is stored byte for byte", `{"tenant":"t1","object":"o2"}`, `{"tenant":"t1","object":"o2"}`},
+		{"a document is stored byte for byte", `{"org":"t1","object":"o2"}`, `{"org":"t1","object":"o2"}`},
 		// Not this plugin's business to judge: the column is the consumer's, and
 		// nothing here reads it. A value the DATABASE rejects is the database's
 		// refusal to make, not a silent rewrite here.

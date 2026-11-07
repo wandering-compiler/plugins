@@ -87,7 +87,7 @@ func (s *roundTripStore) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq
 // rather than the test binary's accidental union of every feature.
 //
 // Every feature's file compiles into this binary, so every init() seam is
-// installed — tenant_scope's create path, two_factor's gate. A real
+// installed — two_factor's gate among them. A real
 // activation stages only the files its features name. Without pinning, a
 // sign-in here walks through `two_factor` (which the console does not enable)
 // and panics on a store that has no reason to implement it, and the test says
@@ -96,7 +96,7 @@ func (s *roundTripStore) GetDefaultRoles(context.Context, *pb.GetDefaultRolesReq
 // Console features, for the record: rbac, authenticate_turnkey,
 // sign_in_turnkey, sign_up_turnkey, cli_login, org_membership, org_invite,
 // password_change, api_token, user_admin, service_account. No devices, no
-// two_factor, no tenant_scope, no sign_up_confirmation.
+// two_factor, no sign_up_confirmation.
 func pinConsoleActivation(t *testing.T) {
 	t.Helper()
 	origMfa := signInMfaGate
@@ -109,28 +109,6 @@ func pinConsoleActivation(t *testing.T) {
 	origConfirm := signUpConfirmation
 	signUpConfirmation = nil
 	t.Cleanup(func() { signUpConfirmation = origConfirm })
-
-	pinTenantlessSignup(t)
-}
-
-// pinTenantlessSignup fixes the create seam to the plain variant.
-//
-// Every feature's file is compiled into the test binary, so tenant_scope's
-// init() has replaced the seam — an activation that does not enable it would
-// never have that. Pinning is what makes these tests describe the console's
-// activation (no tenant_scope) rather than the test binary's accidental union
-// of all of them.
-func pinTenantlessSignup(t *testing.T) {
-	t.Helper()
-	orig := signupCreateUser
-	signupCreateUser = func(ctx context.Context, h *AuthServiceHandler, _ *pb.SignUpReq, email, passwordHash string) (string, error) {
-		resp, err := h.Mutation.CreateUser(ctx, &pb.CreateUserReq{Email: email, PasswordHash: passwordHash})
-		if err != nil {
-			return "", err
-		}
-		return resp.GetUser().GetId(), nil
-	}
-	t.Cleanup(func() { signupCreateUser = orig })
 }
 
 func TestSignUpThenSignIn_TheSamePasswordWorks(t *testing.T) {

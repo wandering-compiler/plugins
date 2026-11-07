@@ -39,9 +39,9 @@ func TestDBLimiter_TheCapItself(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, l := newTestLimiter(t)
-			store.setLimit("tenant-a", tc.limit, "USD")
-			store.setSpend("tenant-a", tc.spent...)
-			d := l.Allow(context.Background(), "tenant-a")
+			store.setLimit("org-a", tc.limit, "USD")
+			store.setSpend("org-a", tc.spent...)
+			d := l.Allow(context.Background(), "org-a")
 			if d.Allowed != tc.allowed {
 				t.Fatalf("allowed = %v, want %v (%s)", d.Allowed, tc.allowed, d.Reason)
 			}
@@ -53,13 +53,13 @@ func TestDBLimiter_TheCapItself(t *testing.T) {
 }
 
 // The refusal travels back on somebody's request, so it says THAT the cap was
-// reached and never by how much: what a tenant spent is not another caller's
+// reached and never by how much: what an organization spent is not another caller's
 // business.
 func TestDBLimiter_TheRefusalCarriesNoAmounts(t *testing.T) {
 	store, l := newTestLimiter(t)
-	store.setLimit("tenant-a", 12345, "USD")
-	store.setSpend("tenant-a", usd(67890))
-	d := l.Allow(context.Background(), "tenant-a")
+	store.setLimit("org-a", 12345, "USD")
+	store.setSpend("org-a", usd(67890))
+	d := l.Allow(context.Background(), "org-a")
 	if d.Allowed {
 		t.Fatal("allowed over the cap")
 	}
@@ -70,24 +70,24 @@ func TestDBLimiter_TheRefusalCarriesNoAmounts(t *testing.T) {
 	}
 }
 
-// Caps are per scope. One tenant over its cap must not refuse another, and the
+// Caps are per scope. One organization over its cap must not refuse another, and the
 // caches that make the limiter cheap are keyed so they cannot cross either.
-func TestDBLimiter_TenantsAreIsolated(t *testing.T) {
+func TestDBLimiter_OrgsAreIsolated(t *testing.T) {
 	store, l := newTestLimiter(t)
-	store.setLimit("tenant-a", 100, "USD")
-	store.setSpend("tenant-a", usd(100))
-	store.setLimit("tenant-b", 100, "USD")
-	store.setSpend("tenant-b", usd(1))
+	store.setLimit("org-a", 100, "USD")
+	store.setSpend("org-a", usd(100))
+	store.setLimit("org-b", 100, "USD")
+	store.setSpend("org-b", usd(1))
 
 	for i := 0; i < 3; i++ {
-		if l.Allow(context.Background(), "tenant-a").Allowed {
-			t.Fatal("tenant-a is over its cap and was allowed")
+		if l.Allow(context.Background(), "org-a").Allowed {
+			t.Fatal("org-a is over its cap and was allowed")
 		}
-		if !l.Allow(context.Background(), "tenant-b").Allowed {
-			t.Fatal("tenant-b was refused for tenant-a's spend")
+		if !l.Allow(context.Background(), "org-b").Allowed {
+			t.Fatal("org-b was refused for org-a's spend")
 		}
-		if !l.Allow(context.Background(), "tenant-c").Allowed {
-			t.Fatal("tenant-c, with no cap at all, was refused")
+		if !l.Allow(context.Background(), "org-c").Allowed {
+			t.Fatal("org-c, with no cap at all, was refused")
 		}
 	}
 }
@@ -100,13 +100,13 @@ func TestDBLimiter_TenantsAreIsolated(t *testing.T) {
 // a write — before the provider was reached.
 func TestDBLimiter_TheSteadyStateAsksTheDatabaseNothing(t *testing.T) {
 	store, l := newTestLimiter(t)
-	store.setLimit("tenant-a", 1000, "USD")
-	store.setSpend("tenant-a", usd(1))
+	store.setLimit("org-a", 1000, "USD")
+	store.setSpend("org-a", usd(1))
 	for i := 0; i < 20; i++ {
-		if !l.Allow(context.Background(), "tenant-a").Allowed {
+		if !l.Allow(context.Background(), "org-a").Allowed {
 			t.Fatal("refused under the cap")
 		}
-		l.Allow(context.Background(), "tenant-uncapped")
+		l.Allow(context.Background(), "org-uncapped")
 	}
 	if n := store.count("InternScope"); n != 2 {
 		t.Errorf("InternScope ran %d times for 2 scopes over 40 calls — a write in front of every completion", n)
@@ -125,14 +125,14 @@ func TestDBLimiter_TheSteadyStateAsksTheDatabaseNothing(t *testing.T) {
 // means "no cap".
 func TestDBLimiter_ATransientLimitErrorDoesNotSwitchTheCapOff(t *testing.T) {
 	store, l := newTestLimiter(t)
-	store.setLimit("tenant-a", 100, "USD")
-	store.setSpend("tenant-a", usd(500))
+	store.setLimit("org-a", 100, "USD")
+	store.setSpend("org-a", usd(500))
 
 	store.failWith("GetScopeLimit", status.Error(codes.Unavailable, "db restarting"), len(limitWindows)) // every window, once
-	if !l.Allow(context.Background(), "tenant-a").Allowed {
+	if !l.Allow(context.Background(), "org-a").Allowed {
 		t.Error("an unreachable limit table refused the call — the guard rail became an outage")
 	}
-	if d := l.Allow(context.Background(), "tenant-a"); d.Allowed {
+	if d := l.Allow(context.Background(), "org-a"); d.Allowed {
 		t.Error("the call after a transient error was allowed past the cap — the error was cached as \"no limit\"")
 	}
 }
@@ -141,7 +141,7 @@ func TestDBLimiter_ATransientLimitErrorDoesNotSwitchTheCapOff(t *testing.T) {
 func TestDBLimiter_NoLimitIsCachedAsAnAnswer(t *testing.T) {
 	store, l := newTestLimiter(t)
 	for i := 0; i < 5; i++ {
-		if !l.Allow(context.Background(), "tenant-a").Allowed {
+		if !l.Allow(context.Background(), "org-a").Allowed {
 			t.Fatal("a scope with no cap was refused")
 		}
 	}
@@ -158,13 +158,13 @@ func TestDBLimiter_FailsOpenWhenTheDatabaseIsDown(t *testing.T) {
 	for _, method := range []string{"InternScope", "GetScopeSpend"} {
 		t.Run(method, func(t *testing.T) {
 			store, l := newTestLimiter(t)
-			store.setLimit("tenant-a", 100, "USD")
-			store.setSpend("tenant-a", usd(500))
+			store.setLimit("org-a", 100, "USD")
+			store.setSpend("org-a", usd(500))
 			store.failWith(method, status.Error(codes.Unavailable, "down"), 1)
-			if !l.Allow(context.Background(), "tenant-a").Allowed {
+			if !l.Allow(context.Background(), "org-a").Allowed {
 				t.Errorf("%s failing refused the call", method)
 			}
-			if l.Allow(context.Background(), "tenant-a").Allowed {
+			if l.Allow(context.Background(), "org-a").Allowed {
 				t.Errorf("after %s recovered the cap was not enforced", method)
 			}
 		})
@@ -175,9 +175,9 @@ func TestDBLimiter_FailsOpenWhenTheDatabaseIsDown(t *testing.T) {
 // an operator can act on.
 func TestDBLimiter_MixedCurrencySpendFailsClosed(t *testing.T) {
 	store, l := newTestLimiter(t)
-	store.setLimit("tenant-a", 1_000_000, "USD")
-	store.setSpend("tenant-a", usd(1), line(minor(1), "EUR", 1))
-	d := l.Allow(context.Background(), "tenant-a")
+	store.setLimit("org-a", 1_000_000, "USD")
+	store.setSpend("org-a", usd(1), line(minor(1), "EUR", 1))
+	d := l.Allow(context.Background(), "org-a")
 	if d.Allowed || d.Reason != reasonMixedCurrency {
 		t.Errorf("decision = %+v, want a refusal naming the currencies", d)
 	}
@@ -189,7 +189,7 @@ func TestDBLimiter_MixedCurrencySpendFailsClosed(t *testing.T) {
 // Nothing compared them: GetScopeLimit returns the limit's currency and the
 // limiter dropped it, so a cap of 100.00 EUR (10000 minor) against spend priced
 // in a currency with 100× more minor units per euro was crossed a hundredfold
-// before refusing — and the other way round, a tenant who had spent nearly
+// before refusing — and the other way round, an organization who had spent nearly
 // nothing was refused.
 func TestDBLimiter_ALimitInAnotherCurrencyIsNotComparedBlindly(t *testing.T) {
 	for _, tc := range []struct {
@@ -206,9 +206,9 @@ func TestDBLimiter_ALimitInAnotherCurrencyIsNotComparedBlindly(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, l := newTestLimiter(t)
-			store.setLimit("tenant-a", 10_000, tc.limitCurrency)
-			store.setSpend("tenant-a", tc.spend)
-			d := l.Allow(context.Background(), "tenant-a")
+			store.setLimit("org-a", 10_000, tc.limitCurrency)
+			store.setSpend("org-a", tc.spend)
+			d := l.Allow(context.Background(), "org-a")
 			if d.Allowed != tc.allowed || d.Reason != tc.reason {
 				t.Errorf("decision = %+v, want allowed=%v reason=%q", d, tc.allowed, tc.reason)
 			}
@@ -220,9 +220,9 @@ func TestDBLimiter_ALimitInAnotherCurrencyIsNotComparedBlindly(t *testing.T) {
 // summed from the first instant of the current UTC month to now.
 func TestDBLimiter_AsksForThisMonth(t *testing.T) {
 	store, l := newTestLimiter(t)
-	store.setLimit("tenant-a", 100, "USD")
+	store.setLimit("org-a", 100, "USD")
 	before := time.Now().UTC()
-	l.Allow(context.Background(), "tenant-a")
+	l.Allow(context.Background(), "org-a")
 	after := time.Now().UTC()
 
 	store.mu.Lock()
@@ -240,7 +240,7 @@ func TestDBLimiter_AsksForThisMonth(t *testing.T) {
 		t.Fatal("the month window was never asked")
 	}
 	sr := store.spendReqs[0]
-	id := store.scopes["tenant-a"]
+	id := store.scopes["org-a"]
 	if lr.GetScopeId() != id || sr.GetScopeId() != id {
 		t.Errorf("asked about scope %d / %d, want %d", lr.GetScopeId(), sr.GetScopeId(), id)
 	}
@@ -265,9 +265,9 @@ func TestDBLimiter_EveryWindowIsEnforced(t *testing.T) {
 	for _, w := range []pb.LimitWindow{pb.LimitWindow_LIMIT_WINDOW_DAY, pb.LimitWindow_LIMIT_WINDOW_TOTAL} {
 		t.Run(w.String(), func(t *testing.T) {
 			store, l := newTestLimiter(t)
-			store.setLimitIn("tenant-a", w, 100, "USD")
-			store.setSpend("tenant-a", usd(100))
-			if d := l.Allow(context.Background(), "tenant-a"); d.Allowed || d.Reason != reasonOverLimit {
+			store.setLimitIn("org-a", w, 100, "USD")
+			store.setSpend("org-a", usd(100))
+			if d := l.Allow(context.Background(), "org-a"); d.Allowed || d.Reason != reasonOverLimit {
 				t.Fatalf("decision = %+v, want the %v limit to refuse", d, w)
 			}
 			store.mu.Lock()
@@ -289,10 +289,10 @@ func TestDBLimiter_EveryWindowIsEnforced(t *testing.T) {
 // are not free.
 func TestDBLimiter_UnpricedSpendUnderACapFailsClosed(t *testing.T) {
 	store, l := newTestLimiter(t)
-	store.setLimit("tenant-a", 1_000_000, "USD")
-	store.setSpend("tenant-a", &pb.ScopeSpendLine{Model: "m", Calls: 4, OutputTokens: 900})
+	store.setLimit("org-a", 1_000_000, "USD")
+	store.setSpend("org-a", &pb.ScopeSpendLine{Model: "m", Calls: 4, OutputTokens: 900})
 	for i := 0; i < 5; i++ {
-		if d := l.Allow(context.Background(), "tenant-a"); d.Allowed || d.Reason != reasonUnpriced {
+		if d := l.Allow(context.Background(), "org-a"); d.Allowed || d.Reason != reasonUnpriced {
 			t.Fatalf("decision = %+v, want the unpriced refusal", d)
 		}
 	}
@@ -323,13 +323,13 @@ func TestDBLimiter_ABlankScopeIsNotCapped(t *testing.T) {
 func TestDBLimiter_SpendIsReReadAfterItsTTL(t *testing.T) {
 	store, l := newTestLimiter(t)
 	l.spend.ttl = 0 // every call re-reads
-	store.setLimit("tenant-a", 100, "USD")
-	store.setSpend("tenant-a", usd(10))
-	if !l.Allow(context.Background(), "tenant-a").Allowed {
+	store.setLimit("org-a", 100, "USD")
+	store.setSpend("org-a", usd(10))
+	if !l.Allow(context.Background(), "org-a").Allowed {
 		t.Fatal("refused under the cap")
 	}
-	store.setSpend("tenant-a", usd(10), usd(95))
-	if l.Allow(context.Background(), "tenant-a").Allowed {
+	store.setSpend("org-a", usd(10), usd(95))
+	if l.Allow(context.Background(), "org-a").Allowed {
 		t.Error("the new spend was never read")
 	}
 }
@@ -356,7 +356,7 @@ func TestSpendCacheExpires(t *testing.T) {
 func TestDBLimiter_ConcurrentCallers(t *testing.T) {
 	store, l := newTestLimiter(t)
 	for i := 0; i < 4; i++ {
-		s := "tenant-" + strconv.Itoa(i)
+		s := "org-" + strconv.Itoa(i)
 		store.setLimit(s, 100, "USD")
 		store.setSpend(s, usd(int64(i*50)))
 	}
@@ -364,7 +364,7 @@ func TestDBLimiter_ConcurrentCallers(t *testing.T) {
 	for g := 0; g < 16; g++ {
 		go func() {
 			for i := 0; i < 4; i++ {
-				s := "tenant-" + strconv.Itoa(i)
+				s := "org-" + strconv.Itoa(i)
 				want := i*50 < 100
 				if got := l.Allow(context.Background(), s).Allowed; got != want {
 					done <- s
@@ -388,20 +388,20 @@ func TestDBLimiter_ConcurrentCallers(t *testing.T) {
 func TestDBLimiter_TheScopeIDCacheIsBounded(t *testing.T) {
 	store, l := newTestLimiter(t)
 	l.ids.max = 3
-	store.setLimit("tenant-0", 0, "USD")
+	store.setLimit("org-0", 0, "USD")
 	for i := 0; i < 20; i++ {
-		l.Allow(context.Background(), "tenant-"+strconv.Itoa(i))
+		l.Allow(context.Background(), "org-"+strconv.Itoa(i))
 		if n := l.ids.len(); n > 6 {
 			t.Fatalf("after %d scopes the id cache holds %d, want at most 6 (two generations of 3)", i+1, n)
 		}
 	}
 	// Dropped by the generations rolling over, and still answered correctly.
-	if l.Allow(context.Background(), "tenant-0").Allowed {
+	if l.Allow(context.Background(), "org-0").Allowed {
 		t.Error("a scope re-interned after being dropped lost its cap")
 	}
 	// Within the cap the steady state still asks nothing.
 	before := store.count("InternScope")
-	l.Allow(context.Background(), "tenant-0")
+	l.Allow(context.Background(), "org-0")
 	if store.count("InternScope") != before {
 		t.Error("a cached scope was interned again")
 	}
@@ -433,7 +433,7 @@ func TestSpendCacheIsBounded(t *testing.T) {
 // The caches used to RESET at the cap: past it, every new key emptied the
 // whole map once per cap's worth of keys — and since the keys are the
 // callers', anyone sending random scopes could keep evicting every legitimate
-// tenant's entry, turning each of their calls into a database round trip.
+// organization's entry, turning each of their calls into a database round trip.
 func TestCaches_AHotKeySurvivesAFlood(t *testing.T) {
 	const max = 3
 	ids := &idCache[string]{max: max}

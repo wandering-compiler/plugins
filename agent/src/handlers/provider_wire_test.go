@@ -129,7 +129,7 @@ func TestComplete_OverTheWire_RecordsWhatTheProviderBilled(t *testing.T) {
 	sink := &syncSink{}
 	before := time.Now()
 	out, err := p.handler(t, sink, 0).Complete(context.Background(), &pb.CompleteReq{
-		UsageScope: "tenant-a", UsageLabels: map[string]string{"run": "r1"},
+		UsageScope: "org-a", UsageLabels: map[string]string{"run": "r1"},
 		Messages: []*pb.Message{{Role: pb.Role_ROLE_USER, Text: "q"}},
 	})
 	if err != nil {
@@ -148,7 +148,7 @@ func TestComplete_OverTheWire_RecordsWhatTheProviderBilled(t *testing.T) {
 		t.Fatalf("recorded %d events", len(evs))
 	}
 	ev := evs[0]
-	if ev.Scope != "tenant-a" || ev.Labels["run"] != "r1" || ev.Status != OutcomeOK {
+	if ev.Scope != "org-a" || ev.Labels["run"] != "r1" || ev.Status != OutcomeOK {
 		t.Errorf("attribution = %+v", ev)
 	}
 	if ev.Model != "gpt-4o-2024-08-06" {
@@ -166,7 +166,7 @@ func TestComplete_OverTheWire_RecordsWhatTheProviderBilled(t *testing.T) {
 // and tells the caller the provider's classification without its body. A
 // timeout and a malformed answer are failures too — with nothing to classify.
 func TestComplete_OverTheWire_ProviderFailures(t *testing.T) {
-	const prompt = "TENANT-A-PRIVATE-PROMPT"
+	const prompt = "ORG-A-PRIVATE-PROMPT"
 	errBody := func(code int, typ, param string) func(w http.ResponseWriter, _ *http.Request, _ int) {
 		return func(w http.ResponseWriter, _ *http.Request, _ int) {
 			providerJSON(w, code, map[string]any{"error": map[string]any{
@@ -204,7 +204,7 @@ func TestComplete_OverTheWire_ProviderFailures(t *testing.T) {
 			p := newProvider(t, tc.answer)
 			sink := &syncSink{}
 			_, err := p.handler(t, sink, tc.timeout).Complete(context.Background(), &pb.CompleteReq{
-				UsageScope: "tenant-a", Messages: []*pb.Message{{Role: pb.Role_ROLE_USER, Text: prompt}},
+				UsageScope: "org-a", Messages: []*pb.Message{{Role: pb.Role_ROLE_USER, Text: prompt}},
 			})
 			st, _ := status.FromError(err)
 			if st.Code() != codes.Unavailable {
@@ -227,8 +227,8 @@ func TestComplete_OverTheWire_ProviderFailures(t *testing.T) {
 				t.Errorf("nothing was logged for the operator:\n%s", logs.String())
 			}
 			evs := sink.all()
-			if len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].Scope != "tenant-a" {
-				t.Fatalf("recorded %+v, want one failed row for tenant-a", evs)
+			if len(evs) != 1 || evs[0].Status != OutcomeFailed || evs[0].Scope != "org-a" {
+				t.Fatalf("recorded %+v, want one failed row for org-a", evs)
 			}
 			// A failed response still REPORTS what it spent, and that is what
 			// the bill must say; the others reported nothing, and must say
@@ -312,7 +312,7 @@ func TestCompleteStream_OverTheWire_AFailedResponseIsAFailure(t *testing.T) {
 	})
 	sink := &syncSink{}
 	rec := &recorder{}
-	err := p.handler(t, sink, 0).CompleteStream(&pb.CompleteReq{UsageScope: "tenant-a"}, rec)
+	err := p.handler(t, sink, 0).CompleteStream(&pb.CompleteReq{UsageScope: "org-a"}, rec)
 	st, _ := status.FromError(err)
 	if st.Code() != codes.Unavailable || !strings.Contains(st.Message(), "server_error") {
 		t.Fatalf("err = %v, want Unavailable naming server_error", err)
@@ -335,7 +335,7 @@ func TestCompleteStream_OverTheWire_ADroppedStreamIsRecordedUnmeasured(t *testin
 		providerSSE(w, map[string]any{"type": "response.output_text.delta", "delta": "Half"})
 	})
 	sink := &syncSink{}
-	err := p.handler(t, sink, 0).CompleteStream(&pb.CompleteReq{UsageScope: "tenant-a"}, &recorder{})
+	err := p.handler(t, sink, 0).CompleteStream(&pb.CompleteReq{UsageScope: "org-a"}, &recorder{})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("err = %v", err)
 	}
@@ -355,7 +355,7 @@ func TestCompleteStream_AClientHangingUpIsNotAModelFailure(t *testing.T) {
 	sink := &syncSink{}
 	h := streamHandler(events)
 	h.Usage = sink
-	err := h.CompleteStream(&pb.CompleteReq{UsageScope: "tenant-a"}, &recorder{failAt: 1, sendErr: gone})
+	err := h.CompleteStream(&pb.CompleteReq{UsageScope: "org-a"}, &recorder{failAt: 1, sendErr: gone})
 	if err != gone {
 		t.Errorf("err = %v, want the transport's own error unchanged", err)
 	}
@@ -390,7 +390,7 @@ func TestCompleteStream_GuardAndRunawayAreRecorded(t *testing.T) {
 			sink := &syncSink{}
 			h := streamHandler(tc.events)
 			h.Usage = sink
-			_ = h.CompleteStream(&pb.CompleteReq{UsageScope: "tenant-a"}, &recorder{})
+			_ = h.CompleteStream(&pb.CompleteReq{UsageScope: "org-a"}, &recorder{})
 			evs := sink.all()
 			if len(evs) != 1 || evs[0].Status != tc.outcome || evs[0].Measured {
 				t.Errorf("recorded %+v, want one unmeasured row with outcome %v", evs, tc.outcome)

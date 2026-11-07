@@ -3,9 +3,6 @@ package handlers
 import (
 	"context"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	pb "github.com/wandering-compiler/plugins/auth/gen/pb"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
@@ -20,26 +17,8 @@ import (
 // compiled file. Standalone (the plugin author's own go test) always
 // compiles it, since gating happens at activation staging.
 
-// signupCreateUser creates the user during SignUp and returns its id.
-// The default below is the plain create; handlers/tenant.go overrides it
-// in init() when `tenant_scope` is staged, to resolve the request's
-// tenant first and stamp it on the same call.
-//
-// The body used to live in its own file, signup_tenantless.go, staged
-// only when the feature was OFF. That was forced: `tenant_scope` REMOVED
-// the baseline CreateUser rpc (the feature adds a NOT NULL
-// User.tenant_id that the fixed INSERT could not write), so a default
-// referencing it would not compile in a tenant-scoped bundle — the
-// override ran, but the dead code it replaced still had to compile.
-//
-// CreateUser now writes the column through a feature-gated SET
-// assignment, so it survives every activation and the default can come
-// home. Package-level var initialisation runs before any init(), so
-// tenant.go's assignment still wins where it is staged.
-//
-// tenant_scope without sign_up_turnkey stays unsupported: tenant.go's
-// override references this seam, which lives here under
-// sign_up_turnkey.
+// signupCreateUser creates the user during SignUp and returns its id. A
+// var so a test can stand in for the storage write.
 var signupCreateUser = func(ctx context.Context, h *AuthServiceHandler, _ *pb.SignUpReq, email, passwordHash string) (string, error) {
 	resp, err := h.Mutation.CreateUser(ctx, &pb.CreateUserReq{
 		Email:        email,
@@ -162,12 +141,6 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 // attempt's success row. Every storage call uses txCtx so all of them join
 // the one transaction.
 func (h *AuthServiceHandler) signUpTx(txCtx context.Context, req *pb.SignUpReq, hashed string, roles signupRoles, thumbprint string, attempt *signInAttempt, join *orgJoin) (*pb.SignUpResp, error) {
-	if signupCreateUser == nil {
-		// Neither create path staged — see the seam's declaration. This
-		// is a bundle-composition fault, not something a caller did, so
-		// it says which knob is wrong instead of panicking on a nil call.
-		return nil, status.Error(codes.Internal, "auth: no user-create path staged for this activation (sign_up_turnkey is on but neither the tenant-less nor the tenant_scope create was staged)")
-	}
 	userID, err := signupCreateUser(txCtx, h, req, normalizeEmail(req.GetEmail()), hashed)
 	if err != nil {
 		// The unique index on the address. Without this the caller read the

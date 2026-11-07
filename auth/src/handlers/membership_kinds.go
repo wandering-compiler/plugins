@@ -129,7 +129,7 @@ func orgBySlug(list []*pb.UserOrg, slug string) *pb.UserOrg {
 
 // resolveOrgScopeByKind is resolveOrgScope through a gateway that admits only
 // some kinds (resolveOrgScope calls it only then). The same order — an OAuth
-// token's organization, then what the request names by the audience's tenant
+// token's organization, then what the request names by the audience's organization
 // sources (chooseOrg), then the caller's sole organization — over the
 // memberships the audience admits. A membership of
 // another kind in the named organization is 403, not "not a member".
@@ -154,7 +154,7 @@ func resolveOrgScopeByKind(ctx context.Context, h *AuthServiceHandler, userID st
 		return oauthOrgScope(ctx, h, userID, orgID, headers, scopes, labels)
 	}
 
-	// The organization the request names — by the audience's tenant
+	// The organization the request names — by the audience's organization
 	// sources, or the selector — or the sole admitted one (chooseOrg).
 	pick, err := chooseOrg(ctx, h, headers, func() *pb.UserOrg {
 		if len(admitted) == 1 {

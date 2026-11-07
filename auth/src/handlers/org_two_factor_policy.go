@@ -24,7 +24,7 @@ import (
 //
 //   - a password sign-in: the one it arrives for, decided as Authenticate
 //     decides the active organization (chooseOrg) — the host bound to it
-//     through an audience that takes the tenant from the host, the W17-Org
+//     through an audience that takes the organization from the host, the W17-Org
 //     selector, or the person's only organization. The person's membership
 //     there gives the kind. Not a member of it, or no organization at all:
 //     the activation's default;
@@ -66,7 +66,7 @@ func orgTwoFactorPolicyOf(ctx context.Context, h *AuthServiceHandler, userID str
 func signInOrg(ctx context.Context, h *AuthServiceHandler, orgs []*pb.UserOrg) (*pb.UserOrg, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	headers := map[string]string{}
-	for _, k := range []string{tenantFromHeader, hostHeader} {
+	for _, k := range []string{orgFromHeader, hostHeader} {
 		// Gateway-owned keys: only a gateway writes `x-w17-*`.
 		if v := md.Get(k); len(v) > 0 && v[0] != "" {
 			headers[k] = v[0]

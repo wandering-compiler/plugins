@@ -21,7 +21,7 @@ import (
 
 // This file implements the `org_membership` feature — GitHub-style
 // multi-org membership (one identity belongs to MANY Organizations via
-// OrgMembership), the generalization of single-tenant tenant_scope.
+// OrgMembership).
 // Staged into a bundle only when the activation enables `org_membership`
 // (plugin.yaml maps the feature to this file via go_files). With the
 // feature off it is not staged, so the decorator below never registers and
@@ -180,11 +180,11 @@ func (m orgUnnamedMark) reaches(orgID string) bool { return m.anyOrg || m.orgs[o
 
 // markOrgUnnamed records, for this Authenticate, that the request could have
 // named an organization and did not: any of the caller's (admitted nil), or
-// one of admitted. An audience whose tenant sources omit DEFAULT takes no
+// one of admitted. An audience whose organization sources omit DEFAULT takes no
 // selector, so naming one would be refused there: nothing to tell the caller
 // to do, and nothing is marked.
 func markOrgUnnamed(ctx context.Context, headers map[string]string, admitted []*pb.UserOrg) {
-	if sources := tenantFromHeaders(headers); len(sources) > 0 && !slices.Contains(sources, tenantFromDefault) {
+	if sources := orgFromHeaders(headers); len(sources) > 0 && !slices.Contains(sources, orgFromDefault) {
 		return
 	}
 	memo := requestMemoOf(ctx)
@@ -400,15 +400,15 @@ var membershipKindOf = func(*pb.UserOrg) string { return "" }
 // kinds are staged (membership_kinds.go); nil without them.
 var orgScopeByKind func(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error
 
-// The keys an audience gateway writes for the tenant's sources and the host
-// (principal.TenantFromKey / principal.HostKey and the TenantFrom* values of
-// the SDK that ships tenant_from), spelled here so the plugin builds against
+// The keys an audience gateway writes for the organization's sources and the host
+// (principal.OrgFromKey / principal.HostKey and the OrgFrom* values of
+// the SDK that ships org_from), spelled here so the plugin builds against
 // an SDK from before them.
 const (
-	tenantFromHeader  = "x-w17-tenant-from"
-	hostHeader        = "x-w17-host"
-	tenantFromHost    = "host"
-	tenantFromDefault = "default"
+	orgFromHeader  = "x-w17-org-from"
+	hostHeader     = "x-w17-host"
+	orgFromHost    = "host"
+	orgFromDefault = "default"
 )
 
 // kindOfJoin stamps a membership's kind on a membership a registration
@@ -429,7 +429,7 @@ type pickOrg struct {
 }
 
 // chooseOrg decides which organization a request names, by the places its
-// audience takes the tenant from (x-w17-tenant-from, in order; the
+// audience takes the organization from (x-w17-org-from, in order; the
 // gateway writes it, never a client). sole is the caller's only membership
 // the request could act in, nil when there is not exactly one; it is asked
 // only where inferring is allowed.
@@ -468,7 +468,7 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 		}
 		return pickOrg{}, false
 	}
-	sources := tenantFromHeaders(headers)
+	sources := orgFromHeaders(headers)
 	if len(sources) == 0 {
 		if selector != "" {
 			return pickOrg{slug: selector}, nil
@@ -479,10 +479,10 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 	takesSelector := false
 	for _, src := range sources {
 		switch src {
-		case tenantFromHost:
+		case orgFromHost:
 			if orgSlugOfHost == nil {
 				return pickOrg{}, &notAdmittedError{err: status.Error(codes.FailedPrecondition,
-					"org_membership: the audience takes the tenant from the host, and org_hosts is not activated")}
+					"org_membership: the audience takes the organization from the host, and org_hosts is not activated")}
 			}
 			host := headerValue(headers, hostHeader)
 			if host == "" {
@@ -501,7 +501,7 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 					CodeOrgHostConflict, "", MsgOrgHostConflict, nil)}
 			}
 			return pickOrg{slug: slug}, nil
-		case tenantFromDefault:
+		case orgFromDefault:
 			takesSelector = true
 			if selector != "" {
 				return pickOrg{slug: selector}, nil
@@ -519,10 +519,10 @@ func chooseOrg(ctx context.Context, h *AuthServiceHandler, headers map[string]st
 	return pickOrg{}, nil
 }
 
-// tenantFromHeaders is the audience's tenant sources, in order; nil when its
+// orgFromHeaders is the audience's organization sources, in order; nil when its
 // gateway names none.
-func tenantFromHeaders(headers map[string]string) []string {
-	v := headerValue(headers, tenantFromHeader)
+func orgFromHeaders(headers map[string]string) []string {
+	v := headerValue(headers, orgFromHeader)
 	if v == "" {
 		return nil
 	}
@@ -561,8 +561,8 @@ func headerValue(headers map[string]string, key string) string {
 //     unless org_from_sole_membership is off (NoOrgFromSoleMembership).
 //     Unambiguous: there is no second org the request could have meant, and
 //     the value is still read from OrgMembership, never from the request.
-//   - through an audience that names where it takes the tenant from
-//     (tenant_from), that order decides instead — see chooseOrg.
+//   - through an audience that names where it takes the organization from
+//     (org_from), that order decides instead — see chooseOrg.
 //   - no header, and the caller belongs to none or to several → no org
 //     scope. Zero orgs has nothing to stamp; several is genuinely ambiguous
 //     and guessing would pick which org a write lands in. Both leave the
@@ -578,7 +578,7 @@ func headerValue(headers map[string]string, key string) string {
 //
 // org_id is the data-scope key: a project scoping its rows by
 // name: "org_id" then gets per-org isolation (auto-WHERE / owner-stamp)
-// with no hand-written facade, exactly like tenant_scope's tenant_id.
+// with no hand-written facade.
 func resolveOrgScope(ctx context.Context, h *AuthServiceHandler, userID string, headers, scopes, labels map[string]string) error {
 	// The admin plane is realm-wide: no organization is selected, so only
 	// realm-wide roles survive the narrowing (see AuthenticateAdmin).
