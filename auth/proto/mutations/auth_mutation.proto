@@ -549,6 +549,18 @@ message CreateMfaChallengeResp {
   MfaChallenge challenge = 1;
 }
 
+// CreateEnrolmentChallengeReq — the challenge of an account that enrols at
+// sign-in (two_factor_policy=enrol): no code, so nothing to hash or deliver.
+message CreateEnrolmentChallengeReq {
+  option (w17.contrib.plugin_feature) = "two_factor_enrolment";
+  string user_id = 1 [(w17.field) = { type: UUID }];
+  // The key that signed the sign-in; EnrollTotpAtSignIn and VerifyMfa must
+  // be signed by the same one.
+  string thumbprint = 2 [(w17.field) = { type: CHAR, max_len: 43 }];
+  // The sign-in asked for a public-computer session; VerifyMfa honours it.
+  bool public_computer = 3;
+}
+
 // SupersedePendingMfaChallengesReq — the user whose still-pending
 // challenges the issuer retires before minting a new one, so at most ONE
 // code is live at a time. The response is deliberately EMPTY: see the RPC.
@@ -3269,7 +3281,8 @@ service AuthMutation {
           "          created_at AS challenge.created_at, "
           "          attempts AS challenge.attempts, "
           "          thumbprint AS challenge.thumbprint, "
-          "          public_computer AS challenge.public_computer"
+          "          public_computer AS challenge.public_computer, "
+          "          enrol AS challenge.enrol"
       }
     };
     option (w17.event_emit) = {
@@ -3285,6 +3298,35 @@ service AuthMutation {
           { key: "expires_at",    value: "$request.expires_at" },
           { key: "device_id",     value: "$request.thumbprint" }
         ]
+      }
+    };
+  }
+
+  // CreateEnrolmentChallenge — INSERT the challenge of an account that sets
+  // up its authenticator at sign-in (enrol = TRUE, no code_hash). No
+  // MfaChallengeRequested: there is no code for a channel to deliver, and a
+  // subscriber reading totp_enrolled=false would send an empty one.
+  rpc CreateEnrolmentChallenge(CreateEnrolmentChallengeReq) returns (CreateMfaChallengeResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor_enrolment";
+    option (w17.db.method) = {
+      ops: {
+        name: "main"
+        dql:
+          "INSERT INTO @module.MfaChallenge SET "
+          "user_id = :user_id, "
+          "code_hash = '', "
+          "thumbprint = :thumbprint, "
+          "public_computer = :public_computer, "
+          "enrol = TRUE "
+          "RETURNING id AS challenge.id, "
+          "          user_id AS challenge.user_id, "
+          "          code_hash AS challenge.code_hash, "
+          "          consumed_at AS challenge.consumed_at, "
+          "          created_at AS challenge.created_at, "
+          "          attempts AS challenge.attempts, "
+          "          thumbprint AS challenge.thumbprint, "
+          "          public_computer AS challenge.public_computer, "
+          "          enrol AS challenge.enrol"
       }
     };
   }

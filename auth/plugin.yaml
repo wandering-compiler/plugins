@@ -33,7 +33,7 @@ env:
   - name: two_factor_policy
     type: string
     default: required
-    description: "Who signs in with a second factor (two_factor feature): required (every account is challenged; an account without a confirmed authenticator gets its code through MfaChallengeRequested, so without a hand-written SMS/e-mail channel it cannot sign in — required suits a project that enrols from the first account), optional (an account that confirmed an authenticator is challenged, the others sign in with the password — how 2FA is offered on a running product) or disabled (nobody is challenged and EnrollTotp is refused; an authenticator already confirmed stays stored and counts again when the policy changes). two_factor_scope says WHEN a challenged account is asked. The activation's default: with org_two_factor_policy an organization overrides it per kind of membership. Another value refuses the boot."
+    description: "Who signs in with a second factor (two_factor feature): required (every account is challenged; an account without a confirmed authenticator gets its code through MfaChallengeRequested, so without a hand-written SMS/e-mail channel it cannot sign in — required suits a project that enrols from the first account), enrol (every account is challenged too, and one without a confirmed authenticator sets it up at sign-in instead of getting a code — the policy of a project with no SMS/e-mail channel; needs the two_factor_enrolment feature and two_factor_totp=true, or the boot refuses it), optional (an account that confirmed an authenticator is challenged, the others sign in with the password — how 2FA is offered on a running product) or disabled (nobody is challenged and EnrollTotp is refused; an authenticator already confirmed stays stored and counts again when the policy changes). two_factor_scope says WHEN a challenged account is asked. The activation's default: with org_two_factor_policy an organization overrides it per kind of membership. Another value refuses the boot."
   - name: delivery_recipient
     type: string
     default: ""
@@ -278,7 +278,7 @@ features:
       # mfa.go names pb.SignInResp: the two-step sign-in RETURNS one
       # (mfa_required instead of a token). No sign-in, no build.
       - sign_in_turnkey
-    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (seed encrypted at rest, codes single-use) + UserRecoveryCode + MfaChallenge tables, the EnrollTotp (returns the otpauth URI and a QR code as SVG)/ConfirmTotp (returns ten recovery codes)/DisableTotp/GetMfaStatus/GenerateRecoveryCodes enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (an untrusted (account, device) pair only); policy required | optional | disabled (two_factor_policy: who is challenged at all), per organization with org_two_factor_policy. Off by default."
+    description: "Second-factor auth at sign-in. Built-in TOTP (RFC 6238) on by default, disable-able via env (two_factor_totp=false). Adds UserTotpSecret (seed encrypted at rest, codes single-use) + UserRecoveryCode + MfaChallenge tables, the EnrollTotp (returns the otpauth URI and a QR code as SVG)/ConfirmTotp (returns ten recovery codes)/DisableTotp/GetMfaStatus/GenerateRecoveryCodes enrollment RPCs, and the two-step sign-in: SignIn returns mfa_required + challenge_id instead of a token, VerifyMfa (dual-path: confirmed TOTP secret, else event-flow code) completes it. Every challenge emits MfaChallengeRequested carrying totp_enrolled so a hand-written subscriber can deliver a fallback code (SMS/e-mail). Scope all_logins | new_devices (an untrusted (account, device) pair only); policy required | enrol | optional | disabled (two_factor_policy: who is challenged at all; enrol is two_factor_enrolment's), per organization with org_two_factor_policy. Off by default."
     default: false
     go_files:
       - handlers/mfa.go
@@ -469,13 +469,20 @@ features:
     go_files:
       - handlers/org_hosts.go
   - name: org_two_factor_policy
-    description: "An organization's own second-factor policy (two_factor_policy: required | optional | disabled) per kind of membership, over the activation's default. Kind '' is the organization's own and covers every kind without a row of its own. The backoffice sets it realm-wide (SetOrgTwoFactorPolicy / ClearOrgTwoFactorPolicy / ListOrgTwoFactorPolicies — PUT / GET /auth/admin/orgs/{org_id}/two-factor-policies, POST …/clear; TWO_FACTOR_POLICIES_REALM_ONLY from inside an organization), the organization its own from inside it (SetMyOrgTwoFactorPolicy / ClearMyOrgTwoFactorPolicy / ListMyOrgTwoFactorPolicies — PUT / GET /auth/orgs/{org}/two-factor-policies, POST …/clear). Both are gated by the project's endpoint ACL and refuse a method the lock does not gate: who may switch an organization's second factor off is the project's decision, never every member's. A password sign-in reads the policy of the organization it arrives for — the host bound to it (org_hosts, through an audience that takes the tenant from the host), the W17-Org selector, or the person's only organization — for the kind of the person's membership there, then the organization's own, then the default; enrolling an authenticator reads the one of the organization the caller acts in. Nothing is deleted. Off by default; a migration adds the table."
+    description: "An organization's own second-factor policy (two_factor_policy: required | enrol | optional | disabled; enrol only with two_factor_enrolment and the built-in authenticator on) per kind of membership, over the activation's default. Kind '' is the organization's own and covers every kind without a row of its own. The backoffice sets it realm-wide (SetOrgTwoFactorPolicy / ClearOrgTwoFactorPolicy / ListOrgTwoFactorPolicies — PUT / GET /auth/admin/orgs/{org_id}/two-factor-policies, POST …/clear; TWO_FACTOR_POLICIES_REALM_ONLY from inside an organization), the organization its own from inside it (SetMyOrgTwoFactorPolicy / ClearMyOrgTwoFactorPolicy / ListMyOrgTwoFactorPolicies — PUT / GET /auth/orgs/{org}/two-factor-policies, POST …/clear). Both are gated by the project's endpoint ACL and refuse a method the lock does not gate: who may switch an organization's second factor off is the project's decision, never every member's. A password sign-in reads the policy of the organization it arrives for — the host bound to it (org_hosts, through an audience that takes the tenant from the host), the W17-Org selector, or the person's only organization — for the kind of the person's membership there, then the organization's own, then the default; enrolling an authenticator reads the one of the organization the caller acts in. Nothing is deleted. Off by default; a migration adds the table."
     default: false
     requires:
       - two_factor
       - org_membership
     go_files:
       - handlers/org_two_factor_policy.go
+  - name: two_factor_enrolment
+    description: "Enrolment at sign-in: the two_factor_policy value enrol, for the activation and (with org_two_factor_policy) per organization. Under it, a password sign-in of an account without a confirmed authenticator answers mfa_required + challenge_id + enrolment_required (SignInResp) and sends no code — no MfaChallengeRequested; the client sets up an authenticator on that challenge with AuthService.EnrollTotpAtSignIn (POST /auth/mfa/enrol, unauthenticated like VerifyMfa, signed by the key that passed the password; answers the secret, the otpauth URI and a QR code; called again it replaces the authenticator not yet confirmed) and completes the sign-in with VerifyMfa and that authenticator's first code, which confirms it, answers its ten recovery codes (VerifyMfaResp.recovery_codes) and issues the session, trusting the device. Every refusal of the enrolment is VerifyMfa's opaque one. An account with an authenticator is challenged for its code as under required. Needs two_factor_totp=true: enrol with the built-in authenticator off refuses the boot and an organization's policy. Nobody is locked out: a project switches its second factor on with enrol and every account enrols at its next sign-in. Off by default; a migration adds MfaChallenge.enrol (two_factor's)."
+    default: false
+    requires:
+      - two_factor
+    go_files:
+      - handlers/mfa_enrolment.go
   - name: org_signup
     description: "Registration on an organization's own host. Per organization and kind of membership, the backoffice sets whether people may register without an invitation and with which org-scoped role (SetOrgSignUpPolicy / ClearOrgSignUpPolicy / ListOrgSignUpPolicies — PUT / GET /auth/admin/orgs/{org_id}/signup-policies, POST /auth/admin/orgs/{org_id}/signup-policies/clear; realm-wide only, SIGNUP_POLICIES_REALM_ONLY from inside an organization). A registration without an invitation — SignUp, ConfirmSignUp, an OAuth sign-in that creates the account — arriving on a host bound to the organization (org_hosts), through an audience that takes the tenant from the host, of a kind the audience admits: an open policy makes the new account a member of that kind with that role in the same transaction, whatever invite_only says; a closed one refuses it (SIGNUP_NOT_INVITED); with no policy for the kind, invite_only decides as before and the account joins nothing. Two open kinds on one audience are a configuration error (SIGNUP_KIND_AMBIGUOUS), never a guess. An invitation still decides its own organization. GetHostOrg answers the open kinds, so a sign-up page knows whether to show its form. A registration page on the identity's own host (bound to no organization) names the host the person comes from (SignUpReq / OAuthExchangeReq `signup_host`): with no gateway host it decides exactly as a registration on that host would; a gateway host bound to an organization wins and a body host naming another is refused (SIGNUP_HOST_CONFLICT); an unbound gateway host (the identity's own) leaves the body host to decide. Nothing is deleted. Off by default; a migration adds the table."
     default: false
@@ -781,6 +788,9 @@ presets:
         description: "Two-factor: TOTP enrollment + challenge verification."
         endpoints:
           - { ref: AuthService.VerifyMfa,    method: POST,   path: /verify,       exclude_auth: true, public_limit: failed_only, feature: two_factor }
+          # An authenticator set up on a sign-in's enrolment challenge
+          # (two_factor_policy=enrol): no token yet either.
+          - { ref: AuthService.EnrollTotpAtSignIn, method: POST, path: /enrol, exclude_auth: true, public_limit: failed_only, feature: two_factor_enrolment }
           - { ref: AuthService.EnrollTotp,   method: POST,   path: /totp,                             feature: two_factor }
           - { ref: AuthService.ConfirmTotp,  method: POST,   path: /totp/confirm,                     feature: two_factor }
           - { ref: AuthService.DisableTotp,  method: DELETE, path: /totp,                             feature: two_factor }
@@ -1530,7 +1540,7 @@ msgids:
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Choose at least one permission for the role."
   - "Choose one of your organizations for this application."
-  - "Choose required, optional or disabled."
+  - "Choose required, enrol, optional or disabled."
   - "Choose the role people get when they register."
   - "Confirm it is you before creating a token."
   - "Confirm it is you with your authenticator app or the code we email you."
@@ -1550,6 +1560,7 @@ msgids:
   - "Registration is not open for this email address."
   - "Role {role} is not one this organization's teams can hold."
   - "Set up an authenticator app first. Recovery codes belong to it."
+  - "Setting up an authenticator at sign-in is not available here."
   - "Sign in to do this. An API token cannot create credentials."
   - "Signing in with the provider did not complete. Please start again."
   - "Someone still holds this role, directly or through a team. Give them another role first."

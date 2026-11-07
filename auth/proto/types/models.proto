@@ -1075,6 +1075,13 @@ message MfaChallenge {
   // public lifetime and the device is not trusted, even though the second
   // factor passed.
   bool public_computer = 8 [(w17.field) = { default_auto: FALSE }];
+  // enrol — the challenge of an account without a confirmed authenticator
+  // under two_factor_policy=enrol (two_factor_enrolment): no code was sent,
+  // the person sets up an authenticator on it (EnrollTotpAtSignIn) and
+  // VerifyMfa's code is that authenticator's first one, which confirms it.
+  // A column of two_factor's, so VerifyMfa can refuse such a challenge where
+  // the feature is off.
+  bool enrol = 9 [(w17.field) = { default_auto: FALSE }];
 }
 
 // PendingSignUp — a registration that has not yet proved its address

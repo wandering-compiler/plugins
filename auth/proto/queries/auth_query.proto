@@ -3551,7 +3551,8 @@ service AuthQuery {
           "       c.created_at AS challenge.created_at, "
           "       c.attempts AS challenge.attempts, "
           "       COALESCE(c.thumbprint, '') AS challenge.thumbprint, "
-          "       c.public_computer AS challenge.public_computer "
+          "       c.public_computer AS challenge.public_computer, "
+          "       c.enrol AS challenge.enrol "
           "FROM @module.MfaChallenge c WHERE c.id = :challenge_id"
       }
     };

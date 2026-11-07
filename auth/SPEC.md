@@ -49,6 +49,7 @@ It covers plugin version 0.1.0-rc.24.
 | `devices` | off | — | — |
 | `oauth` | off | `email_verification` | — |
 | `two_factor` | off | `sign_in_turnkey` | — |
+| `two_factor_enrolment` | off | `two_factor` | — |
 | `password_reset` | off | — | — |
 | `email_verification` | off | — | — |
 | `cli_login` | off | — | — |
@@ -531,12 +532,12 @@ The outcome is what the path set explicitly (an unknown address, a parked second
 **Purpose.** Adds a second factor to password sign-in. Built-in TOTP (RFC 6238) is on by default. An event-delivered numeric code is the fallback, and one-time recovery codes stand in for a lost authenticator. When a challenge fires, SignIn returns `mfa_required` + `challenge_id` instead of a token, and VerifyMfa completes the sign-in.
 
 **Adds.**
-- Tables: `UserTotpSecret` (one LIVE per user, unique `(user_id, ended_key)`; `seed` CRYPTED_SECRET; `last_step` replay guard; `stepup_attempts` / `stepup_locked_until`; `revoked_at`), `UserRecoveryCode` (SHA-256 of the normalised code, `used_at`, `revoked_at`), `MfaChallenge` (`code_hash` for the fallback path, `attempts`, `consumed_at`, `public_computer` — the challenged SignIn's choice, which VerifyMfa honours; expiry is computed as `created_at + mfa_code_ttl_seconds` and is not stored).
+- Tables: `UserTotpSecret` (one LIVE per user, unique `(user_id, ended_key)`; `seed` CRYPTED_SECRET; `last_step` replay guard; `stepup_attempts` / `stepup_locked_until`; `revoked_at`), `UserRecoveryCode` (SHA-256 of the normalised code, `used_at`, `revoked_at`), `MfaChallenge` (`code_hash` for the fallback path, `attempts`, `consumed_at`, `public_computer` — the challenged SignIn's choice, which VerifyMfa honours; `enrol` — an enrolment challenge of `two_factor_enrolment`, which VerifyMfa refuses where that feature is off; expiry is computed as `created_at + mfa_code_ttl_seconds` and is not stored).
 - Business RPCs: `EnrollTotp`, `ConfirmTotp`, `DisableTotp`, `GetMfaStatus`, `GenerateRecoveryCodes`, `VerifyMfa`. Also a SignIn seam (the challenge gate).
 - REST (`/auth/mfa`): `POST /verify` (**public, failed_only**), `POST /totp`, `POST /totp/confirm`, `DELETE /totp`, `GET /status`, `POST /recovery-codes`. All endpoints except `/verify` need a bearer.
 - Storage RPCs: `GetTotpSecret`, `CountRecoveryCodes`, `GetMfaChallenge`, `LockUserForIssuance` (SELECT … FOR UPDATE on the user row), `CountRecentMfaChallenges`; `CreateTotpSecret`, `ConfirmTotpSecret`, `MoveTotpSeed`, `ClaimTotpStep`, `RecordStepUpAttempt`, `LockStepUp`, `ResetStepUp`, `CreateRecoveryCode`, `RevokeRecoveryCodes`, `ConsumeRecoveryCode`, `RevokeTotpSecret`, `CreateMfaChallenge`, `ConsumeMfaChallenge`, `RecordMfaAttempt`, `SupersedePendingMfaChallenges`.
 - Events: `MfaChallengeRequested` (carries `totp_enrolled`, `email`, the **plaintext** fallback `code`, `expires_at`), `MfaVerified`, `TotpEnrolled`, `TotpConfirmed`, `TotpDisabled`, `RecoveryCodeUsed`.
-- Env knobs: `two_factor_totp` (default true), `two_factor_scope` (`all_logins` | `new_devices`), `two_factor_policy` (`required` | `optional` | `disabled`, default `required`; who is challenged at all — with `org_two_factor_policy`, per organization and kind), `mfa_code_ttl_seconds` (300), `mfa_max_challenges_per_window` (10), `mfa_challenge_window_seconds` (900), `totp_issuer`, `two_factor_secret_key` (legacy; only used to open seeds sealed by earlier releases).
+- Env knobs: `two_factor_totp` (default true), `two_factor_scope` (`all_logins` | `new_devices`), `two_factor_policy` (`required` | `enrol` | `optional` | `disabled`, default `required`; who is challenged at all — with `org_two_factor_policy`, per organization and kind; `enrol` is `two_factor_enrolment`'s and the boot refuses it without that feature or with `two_factor_totp=false`), `mfa_code_ttl_seconds` (300), `mfa_max_challenges_per_window` (10), `mfa_challenge_window_seconds` (900), `totp_issuer`, `two_factor_secret_key` (legacy; only used to open seeds sealed by earlier releases).
 - Constants: 5 attempts per challenge; ±1 time step of skew; 6 digits; 10 recovery codes of 10 characters from a 31-symbol alphabet (about 49.5 bits each); step-up locks for 15 min after 5 wrong codes.
 
 **Requires:** `sign_in_turnkey`. **Conflicts:** none. **Combined files:** none. `two_factor_scope=new_devices` needs no other feature (device identity is base tier).
@@ -909,7 +910,7 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 
 ### org_two_factor_policy
 
-**Purpose.** An organization's own second-factor policy — `required`, `optional` or `disabled` — per kind of membership, over the activation's `two_factor_policy`. One deployment can then require a second factor of an organization's staff, leave it to its clients, and switch it off for another organization altogether.
+**Purpose.** An organization's own second-factor policy — `required`, `enrol` (with `two_factor_enrolment`), `optional` or `disabled` — per kind of membership, over the activation's `two_factor_policy`. One deployment can then require a second factor of an organization's staff, leave it to its clients, and switch it off for another organization altogether.
 
 **Adds**
 - Table `OrgTwoFactorPolicy` (org_id, kind, policy, set_by/at, ended_by/at, ended_key): one live policy per (organization, kind); kind `''` is the organization's own; replacing or clearing ends the row; nothing is deleted.
@@ -927,7 +928,33 @@ A user with organizations names one for an MCP grant; a user with none grants wi
 | org_two_factor_policy/per-kind-then-org-then-default | The policy MUST be the row of the person's membership kind in the organization the request is for, else the organization's own (kind `''`), else the activation's default; no membership there (or no organization) MUST read the default. | Security | `TestTwoFactorPolicy_TheOrganizationOverridesPerKind`, `TestTwoFactorPolicy_NoMembershipThereIsTheDefault` |
 | org_two_factor_policy/org-as-authenticate | The organization of a sign-in MUST be the one Authenticate would choose (host, selector, sole membership); a selector conflicting with the host MUST refuse. | Security | `TestTwoFactorPolicy_TheOrganizationOverridesPerKind`, `TestTwoFactorPolicy_AConflictingSelectorRefuses` |
 | org_two_factor_policy/acl-gated | Every policy method MUST be refused unless the endpoint ACL gates it; the backoffice's MUST be refused from inside an organization; the organization's MUST act in the active organization only. | Security | `TestSetOrgTwoFactorPolicy`, `TestSetMyOrgTwoFactorPolicy` |
-| org_two_factor_policy/values | A policy MUST be one of required, optional, disabled; a kind MUST be `''` where memberships have no kinds. | Correctness | `TestSetOrgTwoFactorPolicy` |
+| org_two_factor_policy/values | A policy MUST be one of required, enrol, optional, disabled; enrol MUST be refused without `two_factor_enrolment` or with `two_factor_totp=false`; a kind MUST be `''` where memberships have no kinds. | Correctness | `TestSetOrgTwoFactorPolicy`, `TestEnrolAtSignIn_EnrolNeedsTheBuiltInAuthenticator`, `TestEnrolAtSignIn_WithoutTheFeatureEnrolDoesNotHold` |
+
+### two_factor_enrolment
+
+**Purpose.** Enrolment at sign-in. Under `two_factor_policy=enrol` every account is challenged, and one without a confirmed authenticator sets it up at its next sign-in instead of getting a code by message. A project with no SMS/e-mail channel can then require a second factor without locking out the accounts that have none yet.
+
+**Adds.**
+- The policy value `enrol`, for the activation and (with `org_two_factor_policy`) per organization and kind.
+- `SignInResp.enrolment_required`: with `mfa_required` + `challenge_id`, the challenge is an enrolment's and no code was sent.
+- Business RPC `EnrollTotpAtSignIn` (`POST /auth/mfa/enrol`, **public, failed_only**, like `/verify`): the authenticator set up on the challenge — secret, otpauth URI, QR code. Called again, it replaces the authenticator not yet confirmed.
+- `VerifyMfaResp.recovery_codes`: on an enrolment challenge, the code confirmed the authenticator, and these are its ten recovery codes, shown once.
+- Storage RPC `CreateEnrolmentChallenge` (`MfaChallenge.enrol = TRUE`, no `code_hash`, **no event**). The column is `two_factor`'s.
+
+**How it works.** The challenge stands in for the session the person does not have yet. It carries VerifyMfa's guarantees unchanged: bound to the key that passed the password, the TTL, the attempt budget, single use, the issuance cap and supersede. No token is issued before the second factor, so none has to be limited to the enrolment. An account with a confirmed authenticator is challenged for its code, as under `required`. An organization's `enrol` that cannot hold — the feature or the built-in authenticator switched off after the policy was set — challenges by message, as `required` does.
+
+**Requires:** `two_factor`. **Conflicts:** none. Go file: `handlers/mfa_enrolment.go`.
+
+| id | invariant | category | proof |
+|---|---|---|---|
+| two_factor_enrolment/no-code-no-event | A sign-in under `enrol` of an account without a confirmed authenticator MUST answer `mfa_required` + `enrolment_required` + `challenge_id` and no token. It MUST NOT generate a code or emit `MfaChallengeRequested`, and the challenge MUST be issued through the issuance seam (supersede, cap). | Security | `TestEnrolAtSignIn_AnUnenrolledAccountGetsAnEnrolmentChallenge` |
+| two_factor_enrolment/enrolled-gets-a-code-challenge | An account with a confirmed authenticator MUST be challenged for its code, as under `required`. | Security | `TestEnrolAtSignIn_AnEnrolledAccountIsAskedForItsCode` |
+| two_factor_enrolment/enrol-only-on-its-challenge | `EnrollTotpAtSignIn` MUST be signed by the challenged key and MUST refuse, with VerifyMfa's opaque answer, a code challenge, a consumed, expired or exhausted one, one read without its creation time, and one whose account has confirmed an authenticator since. A refused call MUST NOT replace the authenticator. | Security | `TestEnrolAtSignIn_TheEnrolmentRefusesWhatItIsNotFor` |
+| two_factor_enrolment/first-code-confirms | VerifyMfa on an enrolment challenge MUST accept only a code of the authenticator set up on it. It MUST confirm that authenticator, mint its recovery codes, consume the challenge and issue the session in one transaction. A wrong code MUST spend an attempt and confirm nothing, and VerifyMfa before any enrolment MUST refuse. | Security | `TestEnrolAtSignIn_EnrolThenVerifySignsIn`, `TestEnrolAtSignIn_AWrongCodeConfirmsNothing`, `TestEnrolAtSignIn_VerifyBeforeTheEnrolmentRefuses`, `TestEnrolAtSignIn_ASecondEnrolmentReplacesTheFirst` |
+| two_factor_enrolment/needs-the-authenticator | `enrol` MUST refuse the boot without this feature or with `two_factor_totp=false`, and an organization's `enrol` MUST be refused there. Where the feature is off, VerifyMfa MUST complete no enrolment challenge. | Correctness | `TestEnrolAtSignIn_EnrolNeedsTheBuiltInAuthenticator`, `TestEnrolAtSignIn_WithoutTheFeatureEnrolDoesNotHold`, `TestEnrolAtSignIn_TheEnrolmentNeedsTheAuthenticator` |
+
+**Gaps / suspected defects**
+1. Whoever holds the password of an account that has not enrolled yet can enrol their own authenticator. That is what `enrol` means: the password is the only factor the account has until then. A project whose accounts carry something worth more than that enrols them before switching to `enrol`, or uses `required` with a channel.
 
 ### org_signup
 

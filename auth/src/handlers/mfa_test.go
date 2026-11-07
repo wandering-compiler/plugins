@@ -73,6 +73,7 @@ type mfaMock struct {
 	chConsumed  bool
 	chAttempts  int64 // failed-attempt counter
 	chPublic    bool  // the challenged sign-in asked for a public-computer session
+	chEnrol     bool  // an enrolment challenge (two_factor_policy=enrol)
 	issuedReq   *pb.IssueTokenReq
 
 	userEmail string
@@ -87,6 +88,7 @@ type mfaMock struct {
 	// recorded
 	trustedDevice    *pb.TrustDeviceReq
 	createdChallenge *pb.CreateMfaChallengeReq
+	createdEnrolment *pb.CreateEnrolmentChallengeReq // two_factor_enrolment's
 	confirmedTotp    bool
 	revokedTotp      bool
 }
@@ -126,7 +128,7 @@ func (m *mfaMock) GetTotpSecret(ctx context.Context, in *pb.GetTotpSecretReq, _ 
 func (m *mfaMock) GetMfaChallenge(ctx context.Context, in *pb.GetMfaChallengeReq, _ ...grpc.CallOption) (*pb.GetMfaChallengeResp, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ch := &pb.MfaChallenge{Id: in.GetChallengeId(), UserId: m.chUserID, CodeHash: m.chCodeHash, CreatedAt: m.chCreatedAt, Attempts: m.chAttempts, Thumbprint: m.chThumb, PublicComputer: m.chPublic}
+	ch := &pb.MfaChallenge{Id: in.GetChallengeId(), UserId: m.chUserID, CodeHash: m.chCodeHash, CreatedAt: m.chCreatedAt, Attempts: m.chAttempts, Thumbprint: m.chThumb, PublicComputer: m.chPublic, Enrol: m.chEnrol}
 	if m.chConsumed {
 		ch.ConsumedAt = timestamppb.Now()
 	}
@@ -256,7 +258,23 @@ func (m *mfaMock) CreateMfaChallenge(ctx context.Context, in *pb.CreateMfaChalle
 	m.chCodeHash = in.GetCodeHash()
 	m.chCreatedAt = timestamppb.Now()
 	m.chConsumed = false
+	m.chEnrol = false
 	return &pb.CreateMfaChallengeResp{Challenge: &pb.MfaChallenge{Id: "ch-1", UserId: in.GetUserId(), CodeHash: in.GetCodeHash()}}, nil
+}
+
+// CreateEnrolmentChallenge: the INSERT with enrol = TRUE and no code_hash,
+// and no event.
+func (m *mfaMock) CreateEnrolmentChallenge(ctx context.Context, in *pb.CreateEnrolmentChallengeReq, _ ...grpc.CallOption) (*pb.CreateMfaChallengeResp, error) {
+	m.ops = append(m.ops, "create-enrolment")
+	m.createdEnrolment = in
+	m.chUserID = in.GetUserId()
+	m.chThumb = in.GetThumbprint()
+	m.chPublic = in.GetPublicComputer()
+	m.chCodeHash = ""
+	m.chCreatedAt = timestamppb.Now()
+	m.chConsumed = false
+	m.chEnrol = true
+	return &pb.CreateMfaChallengeResp{Challenge: &pb.MfaChallenge{Id: "ch-1", UserId: in.GetUserId(), Enrol: true}}, nil
 }
 func (m *mfaMock) ConsumeMfaChallenge(ctx context.Context, in *pb.ConsumeMfaChallengeReq, _ ...grpc.CallOption) (*pb.ConsumeMfaChallengeResp, error) {
 	m.mu.Lock()

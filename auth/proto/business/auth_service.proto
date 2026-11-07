@@ -227,6 +227,13 @@ message SignInResp {
   // public_computer — echoes the request's choice on a response that carries
   // a token: the client keeps a public-computer token in session storage only.
   bool public_computer = 6;
+
+  // enrolment_required — with mfa_required: the account has no authenticator
+  // and two_factor_policy is enrol, so no code was sent. The client sets one
+  // up on the challenge (EnrollTotpAtSignIn) and completes the sign-in with
+  // VerifyMfa and that authenticator's first code; VerifyMfa then answers the
+  // recovery codes too.
+  bool enrolment_required = 7 [(w17.contrib.plugin_feature_field) = "two_factor_enrolment"];
 }
 
 // SignUpReq / SignUpResp — canonical register-and-issue-token
@@ -722,6 +729,17 @@ message EnrollTotpResp {
   string qr_svg      = 3;
 }
 
+// EnrollTotpAtSignInReq — an authenticator set up on a sign-in's enrolment
+// challenge (SignInResp.enrolment_required), before the person has a session.
+// Unauthenticated like VerifyMfa: the challenge stands in for the token, and
+// the request must be signed by the key that passed the password. Answers
+// EnrollTotpResp; calling it again replaces the authenticator not yet
+// confirmed.
+message EnrollTotpAtSignInReq {
+  option (w17.contrib.plugin_feature) = "two_factor_enrolment";
+  string challenge_id = 1 [(w17.field) = { type: UUID }];
+}
+
 message ConfirmTotpReq {
   option (w17.contrib.plugin_feature) = "two_factor";
   string code = 1 [(w17.field) = { blank: true, sensitive: true }];
@@ -788,6 +806,10 @@ message VerifyMfaResp {
   // The challenged SignIn's public_computer, which this completion honoured
   // (VerifyMfa takes it from the challenge, never from its own request).
   bool   public_computer = 4;
+  // recovery_codes — on an enrolment challenge (SignInResp.enrolment_required)
+  // only: the code confirmed the authenticator set up on it, and these are its
+  // ten one-time recovery codes, shown ONCE (as ConfirmTotpResp's).
+  repeated string recovery_codes = 5 [(w17.field) = { sensitive: true }, (w17.contrib.plugin_feature_field) = "two_factor_enrolment"];
 }
 
 // ── devices: device/session management business surface ─────
@@ -2337,9 +2359,9 @@ service AuthService {
 
   // ── two_factor — enrollment + challenge verification ────────
   // EnrollTotp / ConfirmTotp / DisableTotp / GetMfaStatus ride the bearer
-  // middleware (manage your own factor). VerifyMfa is unauthenticated
-  // (challenge_id stands in for the not-yet-issued token). All gated
-  // two_factor.
+  // middleware (manage your own factor). VerifyMfa and EnrollTotpAtSignIn
+  // are unauthenticated (challenge_id stands in for the not-yet-issued
+  // token). All gated two_factor; EnrollTotpAtSignIn two_factor_enrolment.
   rpc EnrollTotp(EnrollTotpReq) returns (EnrollTotpResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
   }
@@ -2357,6 +2379,11 @@ service AuthService {
   }
   rpc VerifyMfa(VerifyMfaReq) returns (VerifyMfaResp) {
     option (w17.contrib.plugin_feature_rpc) = "two_factor";
+  }
+  // EnrollTotpAtSignIn — the authenticator of an account that enrols at
+  // sign-in (two_factor_policy=enrol); unauthenticated like VerifyMfa.
+  rpc EnrollTotpAtSignIn(EnrollTotpAtSignInReq) returns (EnrollTotpResp) {
+    option (w17.contrib.plugin_feature_rpc) = "two_factor_enrolment";
   }
 
   // ── devices management — list + log out one/others/all ──────

@@ -76,6 +76,11 @@ const (
 	// policyRequired challenges every account (the default): one without a
 	// confirmed authenticator gets its code through MfaChallengeRequested.
 	policyRequired = "required"
+	// policyEnrol challenges every account too, and one without a confirmed
+	// authenticator sets one up at sign-in instead of getting a code: the
+	// policy of a project with no SMS/e-mail channel. Needs the built-in
+	// authenticator (two_factor_totp).
+	policyEnrol = "enrol"
 	// policyOptional challenges an account that confirmed an authenticator;
 	// the others sign in with the password.
 	policyOptional = "optional"
@@ -83,9 +88,9 @@ const (
 	policyDisabled = "disabled"
 )
 
-// validTwoFactorPolicy reports whether p is one of the three.
+// validTwoFactorPolicy reports whether p is one of the four.
 func validTwoFactorPolicy(p string) bool {
-	return p == policyRequired || p == policyOptional || p == policyDisabled
+	return p == policyRequired || p == policyEnrol || p == policyOptional || p == policyDisabled
 }
 
 // defaultTwoFactorPolicy is the activation's two_factor_policy; empty is
@@ -97,14 +102,38 @@ func (h *AuthServiceHandler) defaultTwoFactorPolicy() string {
 	return h.TwoFactorPolicy
 }
 
-// checkTwoFactorPolicy refuses a two_factor_policy that is none of the three:
-// a typo must not quietly mean "required" — or anything else.
+// checkTwoFactorPolicy refuses a two_factor_policy that is none of the four:
+// a typo must not quietly mean "required" — or anything else. enrol without
+// the built-in authenticator has nothing to enrol in.
 func checkTwoFactorPolicy(h *AuthServiceHandler) error {
 	if h.TwoFactorPolicy != "" && !validTwoFactorPolicy(h.TwoFactorPolicy) {
-		return fmt.Errorf("two_factor_policy = %q is not one of required, optional, disabled", h.TwoFactorPolicy)
+		return fmt.Errorf("two_factor_policy = %q is not one of required, enrol, optional, disabled", h.TwoFactorPolicy)
+	}
+	if h.TwoFactorPolicy == policyEnrol {
+		if enrolmentChallenge == nil {
+			return fmt.Errorf("two_factor_policy = enrol is the two_factor_enrolment feature's, which this activation does not enable — enable it, or set two_factor_policy = required for codes by message")
+		}
+		if !h.TwoFactorTOTP {
+			return fmt.Errorf("two_factor_policy = enrol sets up the built-in authenticator at sign-in, and two_factor_totp = false switches it off — set two_factor_totp = true, or two_factor_policy = required for codes by message")
+		}
 	}
 	return nil
 }
+
+// enrolOffered reports whether enrol can hold here: the two_factor_enrolment
+// feature staged and the built-in authenticator on.
+func (h *AuthServiceHandler) enrolOffered() bool {
+	return enrolmentChallenge != nil && h.TwoFactorTOTP
+}
+
+// The two_factor_enrolment seams (mfa_enrolment.go), nil where the feature is
+// off. enrolmentChallenge answers the sign-in of an account without an
+// authenticator under enrol; confirmEnrolment is VerifyMfa's check of such a
+// challenge, inside its transaction, and answer adds what the response gets.
+var (
+	enrolmentChallenge func(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, public bool) (*pb.SignInResp, error)
+	confirmEnrolment   func(txCtx context.Context, h *AuthServiceHandler, userID, code, thumbprint string) (ok bool, answer func(*pb.VerifyMfaResp), err error)
+)
 
 // twoFactorPolicyOf is the policy that applies to userID on this request:
 // the activation's default, and with org_two_factor_policy the policy of the
@@ -369,7 +398,11 @@ func (h *AuthServiceHandler) enforceMfaChallengeBudget(ctx context.Context, user
 // So the delivery channel is handed a code only once the row it belongs to is
 // durable. Unwrap this and the message goes out on the insert, which is a code
 // a user can be sent for a challenge that was rolled back.
-func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.CreateMfaChallengeReq) (*pb.CreateMfaChallengeResp, error) {
+//
+// create inserts a challenge other than req's CreateMfaChallenge, inside the
+// transaction — an enrolment's (mfa_enrolment.go); nil is CreateMfaChallenge.
+func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.CreateMfaChallengeReq, create func(txCtx context.Context) (*pb.CreateMfaChallengeResp, error)) (*pb.CreateMfaChallengeResp, error) {
+	userID := req.GetUserId()
 	var tx *distx.TxHandle
 	txCtx := ctx
 	var err error
@@ -394,21 +427,26 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 	// there may be none yet, and a row that does not exist cannot be locked,
 	// which is precisely that case.
 	if _, err := h.Query.LockUserForIssuance(txCtx, &pb.LockUserForIssuanceReq{
-		UserId: req.GetUserId(),
+		UserId: userID,
 	}); err != nil {
 		return fail(err)
 	}
 	// INSIDE the lock, and only here: a second copy of this check outside it
 	// would pass on its own and hide that this one is the load-bearing one.
-	if err := h.enforceMfaChallengeBudget(txCtx, req.GetUserId()); err != nil {
+	if err := h.enforceMfaChallengeBudget(txCtx, userID); err != nil {
 		return fail(err)
 	}
 	if _, err := h.Mutation.SupersedePendingMfaChallenges(txCtx, &pb.SupersedePendingMfaChallengesReq{
-		UserId: req.GetUserId(),
+		UserId: userID,
 	}); err != nil {
 		return fail(err)
 	}
-	created, err := h.Mutation.CreateMfaChallenge(txCtx, req)
+	var created *pb.CreateMfaChallengeResp
+	if create != nil {
+		created, err = create(txCtx)
+	} else {
+		created, err = h.Mutation.CreateMfaChallenge(txCtx, req)
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -422,7 +460,8 @@ func (h *AuthServiceHandler) issueMfaChallenge(ctx context.Context, req *pb.Crea
 
 // mfaSignInGate is the two_factor SignIn seam. It decides whether a
 // challenge fires (scope), creates the MfaChallenge (which emits
-// MfaChallengeRequested), and returns the mfa_required response so SignIn
+// MfaChallengeRequested — an enrolment's sends nothing), and returns the
+// mfa_required response so SignIn
 // stops short of issuing a token. The challenge records the sign-in's key and
 // its public-computer choice, which VerifyMfa honours.
 func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, thumbprint string, deviceTrusted, public bool) (*pb.SignInResp, bool, error) {
@@ -444,8 +483,9 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, th
 	// Who is challenged at all (two_factor_policy): disabled — nobody;
 	// optional — an account with a confirmed authenticator, so 2FA can be
 	// offered on a running product where nobody has enrolled yet; required —
-	// everyone, an account without one getting its code by message. A policy
-	// that cannot be read refuses the sign-in, as the enrolment store does.
+	// everyone, an account without one getting its code by message; enrol —
+	// everyone, an account without one setting it up now. A policy that
+	// cannot be read refuses the sign-in, as the enrolment store does.
 	policy, err := twoFactorPolicyOf(ctx, h, user.GetId(), false)
 	if err != nil {
 		return nil, false, err
@@ -455,6 +495,16 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, th
 		return nil, false, nil
 	case policy == policyOptional && !(enrolled && h.TwoFactorTOTP):
 		return nil, false, nil
+	case policy == policyEnrol && !enrolled && h.enrolOffered():
+		// No code to send: the challenge is completed by the authenticator
+		// set up on it. An organization's enrol where it cannot hold (the
+		// authenticator or the feature switched off after the policy was set)
+		// falls to the code below, as required does.
+		resp, err := enrolmentChallenge(ctx, h, user, thumbprint, public)
+		if err != nil {
+			return nil, false, err
+		}
+		return resp, true, nil
 	}
 
 	// Code path: a confirmed authenticator with the built-in verifier on
@@ -489,7 +539,7 @@ func mfaSignInGate(ctx context.Context, h *AuthServiceHandler, user *pb.User, th
 		ExpiresAt:      expiresAt,
 		Thumbprint:     thumbprint,
 		PublicComputer: public,
-	})
+	}, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -551,6 +601,12 @@ func (h *AuthServiceHandler) EnrollTotp(ctx context.Context, req *pb.EnrollTotpR
 		return nil, err
 	}
 
+	return h.enrolmentOf(ctx, userID, secret)
+}
+
+// enrolmentOf is what an enrolment answers: the secret, its otpauth URI
+// (labelled with the account's address) and that URI as a QR code.
+func (h *AuthServiceHandler) enrolmentOf(ctx context.Context, userID, secret string) (*pb.EnrollTotpResp, error) {
 	account := userID
 	if u, err := h.Query.GetUserById(ctx, &pb.GetUserByIdReq{UserId: userID}); err == nil && u.GetUser().GetEmail() != "" {
 		account = u.GetUser().GetEmail()
@@ -805,8 +861,25 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	// consume (which announces MfaVerified) ran before the account check, so
 	// a disabled account was recorded as verified. A lost race or a refused
 	// account now rolls the spent code back.
+	// An enrolment challenge's code is the first of the authenticator set up
+	// on it, which confirms it and mints its recovery codes — in this same
+	// transaction, so a refused account or a lost race confirms nothing.
+	// Where two_factor_enrolment is off, such a challenge completes nothing.
+	var answer func(*pb.VerifyMfaResp)
 	err = h.inTx(ctx, func(txCtx context.Context) error {
-		if !h.verifyMfaCode(txCtx, userID, ch.GetCodeHash(), req.GetCode()) {
+		if ch.GetEnrol() {
+			if confirmEnrolment == nil {
+				return UnauthenticatedMfaCode(errMfaChallengeInvalid)
+			}
+			ok, add, err := confirmEnrolment(txCtx, h, userID, req.GetCode(), thumbprint)
+			if err != nil {
+				return Unauthenticated(err)
+			}
+			if !ok {
+				return UnauthenticatedMfaCode(errMfaChallengeInvalid)
+			}
+			answer = add
+		} else if !h.verifyMfaCode(txCtx, userID, ch.GetCodeHash(), req.GetCode()) {
 			return UnauthenticatedMfaCode(errMfaChallengeInvalid)
 		}
 		account, err := refuseUnsignableAccount(txCtx, h, userID)
@@ -845,7 +918,11 @@ func (h *AuthServiceHandler) VerifyMfa(ctx context.Context, req *pb.VerifyMfaReq
 	if err != nil {
 		return nil, Unauthenticated(err)
 	}
-	return &pb.VerifyMfaResp{UserId: userID, Token: token, PublicComputer: attempt.publicComputer}, nil
+	out := &pb.VerifyMfaResp{UserId: userID, Token: token, PublicComputer: attempt.publicComputer}
+	if answer != nil {
+		answer(out)
+	}
+	return out, nil
 }
 
 // verifyMfaCode is the dual-path check: a confirmed TOTP user (with the
