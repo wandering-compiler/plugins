@@ -24,7 +24,7 @@ func init() {
 // "no" there leaves the invitation for AcceptOrgInvite and the registration
 // whole: a link that names nothing (the gate already admitted the address
 // another way), an invitation bound to another address, an address below
-// the floor `email_proof_required` asks. Once the claim is made, a refusal —
+// the floor the organization asks (emailProofFloorOf). Once the claim is made, a refusal —
 // the role or the plan moved since the invitation — refuses the registration:
 // carrying on would commit an invitation spent with no membership behind it.
 //
@@ -48,10 +48,14 @@ func acceptInviteAtSignup(txCtx context.Context, h *AuthServiceHandler, userID, 
 	if invited != "" && invited != email {
 		return nil
 	}
-	if !proven && !reachesFloorAtSignup(h, invited != "") {
+	orgID := pending.GetOrgId()
+	floor, err := emailProofFloorOf(txCtx, h, orgID)
+	if err != nil {
+		return err
+	}
+	if !proven && !reachesFloorAtSignup(floor, invited != "") {
 		return nil
 	}
-	orgID := pending.GetOrgId()
 	if err := h.lockOrgRow(txCtx, orgID); err != nil {
 		return err
 	}
@@ -65,8 +69,8 @@ func acceptInviteAtSignup(txCtx context.Context, h *AuthServiceHandler, userID, 
 // own yet: `none` asks nothing, `derived` accepts a link bound to the address
 // (accepting it derives the address), `full` asks a proof a registration
 // without a confirmation does not have.
-func reachesFloorAtSignup(h *AuthServiceHandler, bound bool) bool {
-	switch normalizedFloor(h) {
+func reachesFloorAtSignup(floor string, bound bool) bool {
+	switch floor {
 	case "", emailProofNone:
 		return true
 	case emailProofDerived:

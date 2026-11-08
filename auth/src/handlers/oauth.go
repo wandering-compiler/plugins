@@ -684,7 +684,7 @@ func (h *AuthServiceHandler) createOAuthAccount(ctx context.Context, providerID,
 		return "", err
 	}
 	// The invitation, or the organization of the host it arrived on (org_signup).
-	join, err := signupGates(ctx, h, email, inviteToken, bodyHost)
+	join, err := signupGates(ctx, h, email, inviteToken, bodyHost, emailVerified)
 	if err != nil {
 		return "", err
 	}

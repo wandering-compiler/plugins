@@ -117,7 +117,7 @@ func TestEmailProofGate_DerivedFloorSeparatesBoundFromOpen(t *testing.T) {
 	t.Run("bound invitation passes with no prior proof", func(t *testing.T) {
 		m := &inviteTokenMock{accountEmail: "her@corp.example", accountProof: pb.EmailProof_UNPROVEN}
 		h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofDerived}
-		if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", true); err != nil {
+		if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", true); err != nil {
 			t.Fatalf("a bound invitation was refused at the derived floor — the corporate case now needs a round trip nobody asked for: %v", err)
 		}
 	})
@@ -125,7 +125,7 @@ func TestEmailProofGate_DerivedFloorSeparatesBoundFromOpen(t *testing.T) {
 	t.Run("open invitation is refused", func(t *testing.T) {
 		m := &inviteTokenMock{accountEmail: "anything@example.com", accountProof: pb.EmailProof_UNPROVEN}
 		h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofDerived}
-		err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", false)
+		err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", false)
 		if err == nil {
 			t.Fatal("an OPEN invitation satisfied the derived floor — authorisation was counted as address proof, which is the one thing this floor exists to refuse")
 		}
@@ -141,12 +141,12 @@ func TestEmailProofGate_AlreadyDerivedSatisfiesDerivedButNotFull(t *testing.T) {
 	m := &inviteTokenMock{accountEmail: "her@corp.example", accountProof: pb.EmailProof_DERIVED_FROM_INVITE}
 
 	h := &AuthServiceHandler{Query: m, Mutation: m, EmailProofRequired: emailProofDerived}
-	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", false); err != nil {
+	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", false); err != nil {
 		t.Errorf("an address derived on an earlier bound invitation was refused at its own floor: %v", err)
 	}
 
 	h.EmailProofRequired = emailProofFull
-	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", false); err == nil {
+	if err := inviteVerifiedEmailGateImpl(context.Background(), h, "u1", "", false); err == nil {
 		t.Error("a derived address satisfied the FULL floor — then the two modes are one mode, and the boolean this replaced was enough")
 	}
 }

@@ -2311,6 +2311,33 @@ message OrgTwoFactorPolicy {
   string ended_key = 9 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
 }
 
+// OrgEmailProofPolicy — how much proof an address needs before it becomes a
+// member of an organization (org_email_proof_policy): `none`, `derived` (an
+// address a bound invitation named, or one its owner proved) or `full` (only
+// an address its owner proved by a round trip). It holds on every way in: an
+// invitation's acceptance and a registration on the organization's host
+// (org_signup), where nothing was derived and only a proof the registration
+// made itself counts. Absent, the activation's email_proof_required decides.
+// One live row per organization; replacing or clearing it ends the row, and
+// nothing is deleted.
+message OrgEmailProofPolicy {
+  option (w17.db.table) = {
+    indexes: [ { unique: true, fields: [{ name: "org_id" }, { name: "ended_key" }] } ]
+  };
+  option (w17.contrib.plugin_feature) = "org_email_proof_policy";
+
+  string id      = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
+  string org_id  = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Organization", deletion_rule: BLOCK, index: true }];
+  // floor — none | derived | full.
+  string floor   = 3 [(w17.field) = { type: CHAR, max_len: 16 }];
+  string set_by  = 4 [(w17.field) = { type: UUID, null: true }];
+  google.protobuf.Timestamp set_at   = 5 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
+  google.protobuf.Timestamp ended_at = 6 [(w17.field) = { type: DATETIME, null: true }];
+  string ended_by  = 7 [(w17.field) = { type: UUID, null: true }];
+  // ended_key — '' while live, the row's own id once replaced or cleared.
+  string ended_key = 8 [(w17.field) = { type: CHAR, max_len: 36, blank: true, default_string: "" }];
+}
+
 // ProductRoleDef is a role the identity defines from its products'
 // permissions (product_roles): the backoffice's (org_id NULL — usable in every
 // organization, or realm-wide) or an organization's own (org_id set — under

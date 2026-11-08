@@ -5,7 +5,6 @@ import (
 	"errors"
 	distxpb "github.com/wandering-compiler/sdk/go/pb/common/distx"
 	"github.com/wandering-compiler/sdk/go/service/tx/distx"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -184,9 +183,12 @@ const MsgInviteNeedsVerifiedEmail = "Confirm your email address before accepting
 // Reads the knob at CALL time rather than at install time, the same way
 // invite_only is read: a deployment that turns it on should not have to
 // restart to mean it.
-func inviteVerifiedEmailGateImpl(ctx context.Context, h *AuthServiceHandler, userID string, inviteBindsAddress bool) error {
-	floor := strings.TrimSpace(strings.ToLower(h.EmailProofRequired))
-	if floor == "" || floor == emailProofNone {
+func inviteVerifiedEmailGateImpl(ctx context.Context, h *AuthServiceHandler, userID, orgID string, inviteBindsAddress bool) error {
+	floor, err := emailProofFloorOf(ctx, h, orgID)
+	if err != nil {
+		return err
+	}
+	if !floorAsksProof(floor) {
 		return nil
 	}
 

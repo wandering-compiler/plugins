@@ -758,7 +758,7 @@ func (h *AuthServiceHandler) AcceptOrgInvite(ctx context.Context, req *pb.Accept
 	if bound && invitedEmail != email {
 		return nil, errInviteInvalid
 	}
-	if err := inviteVerifiedEmailGate(ctx, h, userID, bound); err != nil {
+	if err := inviteVerifiedEmailGate(ctx, h, userID, pending.GetOrgId(), bound); err != nil {
 		return nil, err
 	}
 

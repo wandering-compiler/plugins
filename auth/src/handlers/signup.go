@@ -78,7 +78,9 @@ func (h *AuthServiceHandler) SignUp(ctx context.Context, req *pb.SignUpReq) (_ *
 		return nil, err
 	}
 	// The invitation, or the organization of the host it arrived on (org_signup).
-	join, err := signupGates(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken(), signupHost(req))
+	// Under sign_up_confirmation the account is created only by the code mailed
+	// to the address, so this registration proves it.
+	join, err := signupGates(ctx, h, normalizeEmail(req.GetEmail()), req.GetInviteToken(), signupHost(req), signUpConfirmation != nil)
 	if err != nil {
 		return nil, err
 	}

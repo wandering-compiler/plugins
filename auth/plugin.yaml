@@ -153,7 +153,7 @@ env:
   - name: email_proof_required
     type: string
     default: "none"
-    description: "How much proof an address needs before AcceptOrgInvite will admit it (org_invite). Three values, ordered weakest to strongest, and they read as a FLOOR on User.email_proof: 'none' asks nothing and is today's behaviour; 'derived' accepts an address a BOUND invitation named (the invitation said this address and the secret link reached whoever registered — no round trip asked of anybody), and also accepts a self-confirmed one; 'full' accepts only an address whose owner proved it by a round trip — the email_verification link, a sign_up_confirmation code, or an OAuth provider asserting email_verified=true (the provider made that round trip; the same assertion OAuth already relies on to link an existing account). ⚠️ Defaults to 'none' on purpose, which is NOT this plugin's usual 'the unsafe state is the one you opt into': every account that exists today is UNPROVEN, so a stricter default would refuse invitations those people were legitimately sent — a default that reads as safe and is really a breaking change is worse than an honest knob, which is the same reasoning the boolean this replaces carried. 'derived' is the setting most deployments want once they are past onboarding: it closes the address-guessing hole without asking anyone for a round trip, because an OPEN invitation cannot derive anything (the registrant picks the address) and is therefore refused by it. Replaces `invite_requires_verified_email`, a boolean that could not express 'derived' at all."
+    description: "How much proof an address needs before AcceptOrgInvite will admit it (org_invite). Three values, ordered weakest to strongest, and they read as a FLOOR on User.email_proof: 'none' asks nothing and is today's behaviour; 'derived' accepts an address a BOUND invitation named (the invitation said this address and the secret link reached whoever registered — no round trip asked of anybody), and also accepts a self-confirmed one; 'full' accepts only an address whose owner proved it by a round trip — the email_verification link, a sign_up_confirmation code, or an OAuth provider asserting email_verified=true (the provider made that round trip; the same assertion OAuth already relies on to link an existing account). ⚠️ Defaults to 'none' on purpose, which is NOT this plugin's usual 'the unsafe state is the one you opt into': every account that exists today is UNPROVEN, so a stricter default would refuse invitations those people were legitimately sent — a default that reads as safe and is really a breaking change is worse than an honest knob, which is the same reasoning the boolean this replaces carried. The floor holds on every way into an organization, not only an invitation: a registration on an organization's host (org_signup) joins under a floor above 'none' only with a proof the registration made itself (a sign_up_confirmation code, an OAuth provider's email_verified) — no invitation derived anything there — and is refused before anything is written otherwise (SIGNUP_EMAIL_PROOF_REQUIRED). With org_email_proof_policy an organization overrides it with a floor of its own. 'derived' is the setting most deployments want once they are past onboarding: it closes the address-guessing hole without asking anyone for a round trip, because an OPEN invitation cannot derive anything (the registrant picks the address) and is therefore refused by it. Replaces `invite_requires_verified_email`, a boolean that could not express 'derived' at all."
   - name: sign_up_allowlist
     type: string
     default: ""
@@ -458,6 +458,14 @@ features:
       - org_membership
     go_files:
       - handlers/org_two_factor_policy.go
+  - name: org_email_proof_policy
+    description: "An organization's own address-proof floor (none | derived | full, the values of email_proof_required) over the activation's default. It holds on every way into the organization: accepting an invitation (AcceptOrgInvite, AcceptMyOrgInvite, an invitation taken at registration) and registering on the organization's host (org_signup), where no invitation derives anything — a registration there joins only with a proof of its own (a sign_up_confirmation code, an OAuth provider's email_verified), and is refused before anything is written otherwise (SIGNUP_EMAIL_PROOF_REQUIRED). The backoffice sets it realm-wide (SetOrgEmailProof / ClearOrgEmailProof / GetOrgEmailProof — PUT / GET /auth/admin/orgs/{org_id}/email-proof, POST …/clear; EMAIL_PROOF_POLICIES_REALM_ONLY from inside an organization), the organization its own from inside it (SetMyOrgEmailProof / ClearMyOrgEmailProof / GetMyOrgEmailProof — PUT / GET /auth/orgs/{org}/email-proof, POST …/clear). Both are gated by the project's endpoint ACL and refuse a method the lock does not gate: who may lower an organization's floor is the project's decision, never every member's. Nothing is deleted. Off by default; a migration adds the table."
+    default: false
+    requires:
+      - email_verification
+      - org_membership
+    go_files:
+      - handlers/org_email_proof_policy.go
   - name: two_factor_enrolment
     description: "Enrolment at sign-in: the two_factor_policy value enrol, for the activation and (with org_two_factor_policy) per organization. Under it, a password sign-in of an account without a confirmed authenticator answers mfa_required + challenge_id + enrolment_required (SignInResp) and sends no code — no MfaChallengeRequested; the client sets up an authenticator on that challenge with AuthService.EnrollTotpAtSignIn (POST /auth/mfa/enrol, unauthenticated like VerifyMfa, signed by the key that passed the password; answers the secret, the otpauth URI and a QR code; called again it replaces the authenticator not yet confirmed) and completes the sign-in with VerifyMfa and that authenticator's first code, which confirms it, answers its ten recovery codes (VerifyMfaResp.recovery_codes) and issues the session, trusting the device. Every refusal of the enrolment is VerifyMfa's opaque one. An account with an authenticator is challenged for its code as under required. Needs two_factor_totp=true: enrol with the built-in authenticator off refuses the boot and an organization's policy. Nobody is locked out: a project switches its second factor on with enrol and every account enrols at its next sign-in. Off by default; a migration adds MfaChallenge.enrol (two_factor's)."
     default: false
@@ -871,6 +879,9 @@ presets:
           - { ref: AuthService.ListOrgTwoFactorPolicies, method: GET,  path: "/{org_id}/two-factor-policies",       feature: org_two_factor_policy }
           - { ref: AuthService.SetOrgTwoFactorPolicy,    method: PUT,  path: "/{org_id}/two-factor-policies",       feature: org_two_factor_policy }
           - { ref: AuthService.ClearOrgTwoFactorPolicy,  method: POST, path: "/{org_id}/two-factor-policies/clear", feature: org_two_factor_policy }
+          - { ref: AuthService.GetOrgEmailProof,   method: GET,  path: "/{org_id}/email-proof",       feature: org_email_proof_policy }
+          - { ref: AuthService.SetOrgEmailProof,   method: PUT,  path: "/{org_id}/email-proof",       feature: org_email_proof_policy }
+          - { ref: AuthService.ClearOrgEmailProof, method: POST, path: "/{org_id}/email-proof/clear", feature: org_email_proof_policy }
           - { ref: AuthService.ClearOrgSignUpPolicy,  method: POST, path: "/{org_id}/signup-policies/clear", feature: org_signup }
           - { ref: AuthService.ListOrgProductPlan, method: GET,  path: "/{org_id}/product-plan",        feature: product_plans }
           - { ref: AuthService.AllowOrgProduct,    method: PUT,  path: "/{org_id}/product-plan",        feature: product_plans }
@@ -997,6 +1008,10 @@ presets:
           - { ref: AuthService.ListMyOrgTwoFactorPolicies, method: GET,  path: /two-factor-policies,       feature: org_two_factor_policy }
           - { ref: AuthService.SetMyOrgTwoFactorPolicy,    method: PUT,  path: /two-factor-policies,       feature: org_two_factor_policy }
           - { ref: AuthService.ClearMyOrgTwoFactorPolicy,  method: POST, path: /two-factor-policies/clear, feature: org_two_factor_policy }
+          # How much proof an address needs to become a member here (handlers/org_email_proof_policy.go).
+          - { ref: AuthService.GetMyOrgEmailProof,   method: GET,  path: /email-proof,       feature: org_email_proof_policy }
+          - { ref: AuthService.SetMyOrgEmailProof,   method: PUT,  path: /email-proof,       feature: org_email_proof_policy }
+          - { ref: AuthService.ClearMyOrgEmailProof, method: POST, path: /email-proof/clear, feature: org_email_proof_policy }
           - { ref: AuthService.ListOrgTeams,        method: GET,    path: /teams,                               feature: teams }
           - { ref: AuthService.CreateOrgTeam,       method: POST,   path: /teams,                               feature: teams }
           - { ref: AuthService.UpdateOrgTeam,       method: PUT,    path: "/teams/{team_id}",                   feature: teams }
@@ -1507,6 +1522,7 @@ msgids:
   - "Authentication is temporarily unavailable. Please try again shortly."
   - "Authenticator apps are not available here. Your sign-in codes arrive by message instead."
   - "Choose at least one permission for the role."
+  - "Choose none, derived or full."
   - "Choose one of your organizations for this application."
   - "Choose required, enrol, optional or disabled."
   - "Choose the role people get when they register."
@@ -1514,6 +1530,7 @@ msgids:
   - "Confirm it is you with your authenticator app or the code we email you."
   - "Confirm your email address before accepting this invitation."
   - "Every organization has this package; it is not given or taken."
+  - "From inside an organization, change its email verification in the organization's own settings."
   - "From inside an organization, change its two-step sign-in in the organization's own settings."
   - "Give the public key of the program that will use this token."
   - "Give the role a name."
@@ -1570,6 +1587,7 @@ msgids:
   - "This machine account holds a role with permissions you do not hold, so you cannot issue a token for it."
   - "This member holds a role with permissions you do not have, so you cannot change or remove their membership."
   - "This membership belongs to another organization."
+  - "This organization admits only a confirmed email address, and this registration cannot confirm one."
   - "This organization already has a team named {name}."
   - "This part of the service is not open to you: none of your memberships is of a kind it admits."
   - "This password is too long. Use a shorter one."
