@@ -110,7 +110,7 @@ func noRowsErr() error {
 // stranded failed grants.
 func TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing(t *testing.T) {
 	r := newRig(t)
-	top := r.topUp("user-a", "20.00", "topup-1")
+	top := r.topUp("user-a", 200000, "topup-1")
 	body := eventJSON("evt_1", "payment_intent.succeeded", top.GetProviderPaymentId(), nil)
 
 	first, err := r.deliver(body)
@@ -130,8 +130,8 @@ func TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing(t *testing.T) {
 	if n := r.store.events("CreditApplied"); n != 1 {
 		t.Errorf("CreditApplied emitted %d times, want exactly 1 — redelivery granted again", n)
 	}
-	if got := r.store.balance(t, "user-a"); got != "20.0000" {
-		t.Errorf("balance = %s, want 20.0000 (granted once)", got)
+	if got := r.store.balance(t, "user-a"); got != 200000 {
+		t.Errorf("balance = %d, want 20.0000 (granted once)", got)
 	}
 }
 
@@ -147,7 +147,7 @@ func TestIngestStripe_Redelivery_RunsNoSideEffectAndEmitsNothing(t *testing.T) {
 // next delivery is acknowledged as a duplicate.
 func TestIngestStripe_UnknownProviderPayment_MustNotAcknowledge(t *testing.T) {
 	m := &fakeMutation{succeededErr: noRowsErr()}
-	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: "20.00"}} // no payment row
+	q := &fakeQuery{creditTopup: &pb.CreditTopup{ProviderPaymentId: "pi_42", UserId: "u1", Amount: 200000}} // no payment row
 	h := &PaymentServiceHandler{Mutation: m, Query: q, Backend: &fakeBackend{}, WebhookSecret: testWebhookSecret}
 	body := []byte(`{"id":"evt_new","type":"payment_intent.succeeded","data":{"object":{"id":"pi_42","metadata":{"w17_payment":"topup","w17_install":"` + backend.InstallID(testWebhookSecret) + `"}}}}`)
 

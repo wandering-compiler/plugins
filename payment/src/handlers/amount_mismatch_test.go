@@ -20,26 +20,26 @@ func succeededEvent(id, pi string, received int64, cur string) []byte {
 	return eventJSON(id, "payment_intent.succeeded", pi, map[string]any{"amount_received": received, "currency": cur})
 }
 
-func wantHeld(t *testing.T, r *rig, p *pb.Payment, amount, cur string) {
+func wantHeld(t *testing.T, r *rig, p *pb.Payment, amount int64, cur string) {
 	t.Helper()
 	r.store.mu.Lock()
 	row := clone(r.store.payments[p.GetId()])
 	r.store.mu.Unlock()
 	if row.GetStatus() != pb.Payment_AMOUNT_MISMATCH || row.GetReceivedAmount() != amount || row.GetReceivedCurrency() != cur {
-		t.Errorf("payment = %v received %s %s, want AMOUNT_MISMATCH received %s %s",
+		t.Errorf("payment = %v received %d %s, want AMOUNT_MISMATCH received %d %s",
 			row.GetStatus(), row.GetReceivedAmount(), row.GetReceivedCurrency(), amount, cur)
 	}
 }
 
 func TestMismatch_ATopUpPaidLessIsHeldAndGrantsNothing(t *testing.T) {
 	r := newRig(t)
-	p := r.topUp("user-a", "1000.00", "top-1")
+	p := r.topUp("user-a", 10000000, "top-1")
 	body := succeededEvent("evt_s", p.GetProviderPaymentId(), 1000, "usd") // 10.00 of 1000.00
 	for i := 0; i < 2; i++ {
 		deliverOK(t, r, body)
 	}
-	wantHeld(t, r, p, "10.0000", "usd")
-	wantBalance(t, r, "0.0000")
+	wantHeld(t, r, p, 100000, "usd")
+	wantBalance(t, r, 0)
 	wantEvents(t, r, map[string]int{"PaymentAmountMismatch": 1, "PaymentSucceeded": 0, "CreditApplied": 0})
 }
 
@@ -48,13 +48,13 @@ func TestMismatch_PaidMoreOrInAnotherCurrencyIsHeldToo(t *testing.T) {
 		name       string
 		received   int64
 		cur, want  string
-		wantAmount string
+		wantAmount int64
 	}{
-		{"more", 2000, "usd", "usd", "20.0000"},
-		{"another currency", 1000, "eur", "eur", "10.0000"},
+		{"more", 2000, "usd", "usd", 200000},
+		{"another currency", 1000, "eur", "eur", 100000},
 	} {
 		r := newRig(t)
-		p := r.charge("user-a", "10.00", "k")
+		p := r.charge("user-a", 100000, "k")
 		deliverOK(t, r, succeededEvent("evt_"+c.name, p.GetProviderPaymentId(), c.received, c.cur))
 		wantHeld(t, r, p, c.wantAmount, c.want)
 		wantEvents(t, r, map[string]int{"PaymentAmountMismatch": 1, "PaymentSucceeded": 0})
@@ -65,7 +65,7 @@ func TestMismatch_PaidMoreOrInAnotherCurrencyIsHeldToo(t *testing.T) {
 // another scale or case included.
 func TestMismatch_TheAskedAmountSucceeds(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	deliverOK(t, r, succeededEvent("evt_s", p.GetProviderPaymentId(), 1000, "USD"))
 	if st := r.store.paymentStatus(t, p.GetProviderPaymentId()); st != pb.Payment_SUCCEEDED {
 		t.Errorf("status = %v, want SUCCEEDED", st)
@@ -80,15 +80,15 @@ func TestMismatch_TheAskedAmountSucceeds(t *testing.T) {
 // read only for an event that does not.
 func TestMismatch_TheEventDecides_TheProviderOnlyWhenItIsSilent(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	r.stripe.changeIntent(p.GetProviderPaymentId(), 1000, "")                      // the provider agrees with the asked amount…
 	deliverOK(t, r, succeededEvent("evt_s", p.GetProviderPaymentId(), 500, "usd")) // …the event does not
-	wantHeld(t, r, p, "5.0000", "usd")
+	wantHeld(t, r, p, 50000, "usd")
 
-	q := r.charge("user-a", "10.00", "k2")
+	q := r.charge("user-a", 100000, "k2")
 	r.stripe.changeIntent(q.GetProviderPaymentId(), 300, "")
 	deliverOK(t, r, eventJSON("evt_q", "payment_intent.succeeded", q.GetProviderPaymentId(), nil)) // silent
-	wantHeld(t, r, q, "3.0000", "usd")
+	wantHeld(t, r, q, 30000, "usd")
 	if n := r.stripe.count("GET /v1/payment_intents/{id}"); n != 1 {
 		t.Errorf("provider reads = %d, want 1 (only for the silent event)", n)
 	}
@@ -98,7 +98,7 @@ func TestMismatch_TheEventDecides_TheProviderOnlyWhenItIsSilent(t *testing.T) {
 // is decided: the delivery fails and is redelivered.
 func TestMismatch_AnUncheckableSuccessIsNotTrusted(t *testing.T) {
 	be := &fakeBackend{getPaymentErr: errors.New("connection reset")}
-	q := &fakeQuery{paymentByProvider: &pb.Payment{Id: "pay-1", ProviderPaymentId: "pi_1", Amount: "10", Currency: "usd", Status: pb.Payment_REQUIRES_ACTION}}
+	q := &fakeQuery{paymentByProvider: &pb.Payment{Id: "pay-1", ProviderPaymentId: "pi_1", Amount: 100000, Currency: "usd", Status: pb.Payment_REQUIRES_ACTION}}
 	m := &fakeMutation{}
 	h := newHandler(q, m, be)
 	held, err := h.holdAmountMismatch(bg, stripeSucceeded("pi_1"))
@@ -111,7 +111,7 @@ func TestMismatch_AnUncheckableSuccessIsNotTrusted(t *testing.T) {
 	if held {
 		t.Error("held without knowing what was received")
 	}
-	be.received = backend.Money{Amount: "10.00", Currency: "usd"}
+	be.received = backend.Money{Amount: 100000, Currency: "usd"}
 	if held, err = h.holdAmountMismatch(bg, stripeSucceeded("pi_1")); err != nil || held {
 		t.Errorf("the provider reports the asked amount: held=%v err=%v", held, err)
 	}
@@ -120,24 +120,24 @@ func TestMismatch_AnUncheckableSuccessIsNotTrusted(t *testing.T) {
 // A held payment is the operator's: no later event moves it.
 func TestMismatch_NoLaterEventMovesAHeldPayment(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	pi := p.GetProviderPaymentId()
 	deliverOK(t, r, succeededEvent("evt_s", pi, 1, "usd"))
 	deliverOK(t, r, eventJSON("evt_f", "payment_intent.payment_failed", pi, nil))
 	deliverOK(t, r, eventJSON("evt_c", "payment_intent.canceled", pi, nil))
 	deliverOK(t, r, succeededEvent("evt_s2", pi, 1000, "usd")) // even one that now matches
-	wantHeld(t, r, p, "0.0100", "usd")
+	wantHeld(t, r, p, 100, "usd")
 	wantEvents(t, r, map[string]int{"PaymentAmountMismatch": 1, "PaymentSucceeded": 0, "PaymentFailed": 0, "PaymentCanceled": 0})
 }
 
 // The provider reconciliation checks what it finds the same way.
 func TestMismatch_TheReconciliationHoldsToo(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
 	r.stripe.changeIntent(p.GetProviderPaymentId(), 700, "")
 	r.reconcileAll()
-	wantHeld(t, r, p, "7.0000", "usd")
+	wantHeld(t, r, p, 70000, "usd")
 	if n := r.stripe.count("GET /v1/payment_intents/{id}"); n != 0 {
 		t.Errorf("provider reads = %d; the listing already said what was received", n)
 	}
@@ -147,17 +147,17 @@ func TestMismatch_TheReconciliationHoldsToo(t *testing.T) {
 // A held payment refunds what it took, in the currency it took, and no more.
 func TestMismatch_AHeldPaymentRefundsWhatItTook(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	r.stripe.changeIntent(p.GetProviderPaymentId(), 300, "")
 	deliverOK(t, r, succeededEvent("evt_s", p.GetProviderPaymentId(), 300, "usd"))
-	_, err := refund(r, p.GetId(), "3.01", "r-over")
+	_, err := refund(r, p.GetId(), 30100, "r-over")
 	wantCode(t, err, codes.InvalidArgument, "a refund past what the held payment took")
-	got, err := refund(r, p.GetId(), "", "r-full")
+	got, err := refund(r, p.GetId(), 0, "r-full")
 	if err != nil {
 		t.Fatalf("full refund of a held payment: %v", err)
 	}
-	if got.GetRefund().GetAmount() != "3.0000" || got.GetRefund().GetCurrency() != "usd" {
-		t.Errorf("full refund = %s %s, want what it took (3.0000 usd)", got.GetRefund().GetAmount(), got.GetRefund().GetCurrency())
+	if got.GetRefund().GetAmount() != 30000 || got.GetRefund().GetCurrency() != "usd" {
+		t.Errorf("full refund = %d %s, want what it took (3.0000 usd)", got.GetRefund().GetAmount(), got.GetRefund().GetCurrency())
 	}
 	if n := r.stripe.intent(p.GetProviderPaymentId()).refunded; n != 300 {
 		t.Errorf("provider refunded %d minor units, want 300", n)
@@ -165,7 +165,7 @@ func TestMismatch_AHeldPaymentRefundsWhatItTook(t *testing.T) {
 	// The provider's charge.refunded for it is settled, not redelivered for
 	// ever: a held payment never reads REFUNDED.
 	deliverOK(t, r, refundEvent("evt_cr", "charge.refunded", p.GetProviderPaymentId(), p.GetProviderPaymentId()))
-	wantHeld(t, r, p, "3.0000", "usd")
+	wantHeld(t, r, p, 30000, "usd")
 	wantNoLocksLeft(t, r)
 }
 
@@ -173,26 +173,26 @@ func TestMismatch_AHeldPaymentRefundsWhatItTook(t *testing.T) {
 // back no credit (the ungranted-top-up refusal is for a success on its way).
 func TestMismatch_AHeldTopUpRefundsWithoutTakingCredit(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: "5", IdempotencyKey: "g"}); err != nil {
+	if _, err := r.h.GrantCredit(bg, &pb.GrantCreditReq{UserId: "user-a", Amount: 50000, IdempotencyKey: "g"}); err != nil {
 		t.Fatal(err)
 	}
-	p := r.topUp("user-a", "100.00", "top-1")
+	p := r.topUp("user-a", 1000000, "top-1")
 	r.stripe.changeIntent(p.GetProviderPaymentId(), 1000, "")
 	deliverOK(t, r, succeededEvent("evt_s", p.GetProviderPaymentId(), 1000, "usd"))
-	if _, err := refund(r, p.GetId(), "", "r"); err != nil {
+	if _, err := refund(r, p.GetId(), 0, "r"); err != nil {
 		t.Fatalf("refund of a held top-up: %v", err)
 	}
-	wantBalance(t, r, "5.0000")
+	wantBalance(t, r, 50000)
 }
 
 // Before its webhook arrives, a payment the provider reports took another
 // amount is not refunded on the asked amount.
 func TestMismatch_ARefundBeforeTheHoldIsRefused(t *testing.T) {
 	r := erringRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	r.stripe.setIntentStatus(p.GetProviderPaymentId(), "succeeded", false)
 	r.stripe.changeIntent(p.GetProviderPaymentId(), 100, "")
-	_, err := refund(r, p.GetId(), "", "r")
+	_, err := refund(r, p.GetId(), 0, "r")
 	wantCode(t, err, codes.FailedPrecondition, "a full refund of the asked amount of a payment that took 1.00")
 	if n := r.stripe.count("/v1/refunds"); n != 0 {
 		t.Errorf("refunded at the provider (%d calls)", n)
@@ -203,11 +203,11 @@ func TestMismatch_ARefundBeforeTheHoldIsRefused(t *testing.T) {
 // intent.
 func TestMismatch_AChargeRetryIsAnsweredWithTheHeldPayment(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	deliverOK(t, r, succeededEvent("evt_s", p.GetProviderPaymentId(), 1, "usd"))
 	r.stripe.forgetKeys()
 	before := r.stripe.count("/v1/payment_intents")
-	again := r.charge("user-a", "10.00", "k")
+	again := r.charge("user-a", 100000, "k")
 	if again.GetId() != p.GetId() || again.GetStatus() != pb.Payment_AMOUNT_MISMATCH {
 		t.Errorf("retry answered %v (%v), want the held payment", again.GetId(), again.GetStatus())
 	}
@@ -228,15 +228,15 @@ func stripeSucceeded(pi string) stripe.Event {
 // failed for a redelivery that would wait for ever.
 func TestMismatch_AnOverpaidHeldPaymentRefundedInFullIsSettled(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10.00", "k")
+	p := r.charge("user-a", 100000, "k")
 	r.stripe.changeIntent(p.GetProviderPaymentId(), 2000, "")
 	deliverOK(t, r, succeededEvent("evt_s", p.GetProviderPaymentId(), 2000, "usd"))
-	if _, err := refund(r, p.GetId(), "", "r"); err != nil {
+	if _, err := refund(r, p.GetId(), 0, "r"); err != nil {
 		t.Fatalf("full refund: %v", err)
 	}
 	if n := r.stripe.intent(p.GetProviderPaymentId()).refunded; n != 2000 {
 		t.Errorf("provider refunded %d minor units, want 2000 (what it took)", n)
 	}
 	deliverOK(t, r, refundEvent("evt_cr", "charge.refunded", p.GetProviderPaymentId(), p.GetProviderPaymentId()))
-	wantHeld(t, r, p, "20.0000", "usd")
+	wantHeld(t, r, p, 200000, "usd")
 }

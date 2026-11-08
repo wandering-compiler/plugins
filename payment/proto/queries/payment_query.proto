@@ -45,20 +45,27 @@ message GetRefundByIdempotencyKeyReq  { string idempotency_key = 1 [(w17.field) 
 message GetRefundByIdempotencyKeyResp { Refund refund = 1; }
 
 message SumRefundsForPaymentReq  { string payment_id = 1 [(w17.field) = { type: UUID }]; }
-message SumRefundsForPaymentResp { string total = 1 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }]; }
+// currency: the refunds' currency (a payment's refunds are all in its
+// own), so the total renders as money; empty when there are none.
+message SumRefundsForPaymentResp {
+  int64  total    = 1 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
+  string currency = 2;
+}
 
 // LockPaymentForRefund — the payment's amount and status, read under a row
 // lock (see the rpc).
 message LockPaymentForRefundReq { string id = 1 [(w17.field) = { type: UUID }]; }
 message LockPaymentForRefundResp {
   string id                = 1;
-  string amount            = 2;
+  int64  amount            = 2 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   int32  status            = 3;
   // What the provider took, recorded only for a payment held at
   // AMOUNT_MISMATCH — NULL otherwise. refundAllowed refuses a mismatched
   // payment that records none rather than judge a refund against "".
-  string received_amount   = 4 [(w17.field) = { null: true }];
+  int64 received_amount   = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "received_currency", null: true }];
   string received_currency = 5 [(w17.field) = { null: true }];
+  // The payment's currency: what `amount` is in (its money format reads it).
+  string currency          = 6;
 }
 
 // LockCustomerForSubscribe — the customer row, locked (see the rpc).
@@ -119,7 +126,8 @@ message SumLostDisputesForPaymentReq {
 }
 message SumLostDisputesForPaymentResp {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
-  string total = 1 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
+  int64  total    = 1 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
+  string currency = 2;
 }
 
 // SumTopupCredit — the credit a top-up holds in the ledger: the sum of the
@@ -139,7 +147,7 @@ message SumTopupCreditReq {
 }
 message SumTopupCreditResp {
   option (w17.contrib.plugin_feature) = "prepaid";
-  string total = 1 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
+  int64 total = 1 [(w17.field) = { type: MONEY, scale: 4 }];
 }
 
 message GetCreditBalanceReq {
@@ -379,7 +387,7 @@ service PaymentQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT p.id AS id, p.amount AS amount, p.status AS status, p.received_amount AS received_amount, p.received_currency AS received_currency FROM @module.Payment p WHERE p.id = :id"
+        dql: "SELECT p.id AS id, p.amount AS amount, p.status AS status, p.received_amount AS received_amount, p.received_currency AS received_currency, p.currency AS currency FROM @module.Payment p WHERE p.id = :id"
       }
     };
     option (w17.db.lock) = {
@@ -398,7 +406,7 @@ service PaymentQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT COALESCE(SUM(r.amount), 0) AS total FROM @module.Refund r WHERE r.payment_id = :payment_id AND r.status <> 3 AND r.status <> 4"
+        dql: "SELECT COALESCE(SUM(r.amount), 0) AS total, COALESCE(MIN(r.currency), '') AS currency FROM @module.Refund r WHERE r.payment_id = :payment_id AND r.status <> 3 AND r.status <> 4"
       }
     };
   }
@@ -512,7 +520,7 @@ service PaymentQuery {
     option (w17.db.method) = {
       ops: {
         name: "main"
-        dql: "SELECT COALESCE(SUM(d.amount), 0) AS total FROM @module.Dispute d WHERE d.payment_id = :payment_id AND d.status = 6"
+        dql: "SELECT COALESCE(SUM(d.amount), 0) AS total, COALESCE(MIN(d.currency), '') AS currency FROM @module.Dispute d WHERE d.payment_id = :payment_id AND d.status = 6"
       }
     };
   }

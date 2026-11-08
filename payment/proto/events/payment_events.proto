@@ -25,6 +25,7 @@ import "google/protobuf/timestamp.proto";
 import "@self/types/models.proto";
 import "w17/contrib.proto";
 import "w17/event.proto";
+import "w17/field.proto";
 
 option go_package = "@project;@pkg";
 
@@ -40,7 +41,7 @@ message PaymentSucceeded {
   string                    payment_id          = 1;
   string                    customer_id         = 2;
   string                    provider_payment_id = 3;
-  string                    amount              = 4;
+  int64                    amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency            = 5;
   google.protobuf.Timestamp succeeded_at        = 6;
 }
@@ -69,7 +70,7 @@ message PaymentRefunded {
   string                    payment_id          = 1;
   string                    customer_id         = 2;
   string                    provider_payment_id = 3;
-  string                    amount              = 4;
+  int64                    amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency            = 5;
   google.protobuf.Timestamp refunded_at         = 6;
 }
@@ -86,7 +87,7 @@ message PaymentRefundReversed {
   string                    payment_id          = 1;
   string                    customer_id         = 2;
   string                    provider_payment_id = 3;
-  string                    amount              = 4;
+  int64                    amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency            = 5;
   google.protobuf.Timestamp reversed_at         = 6;
 }
@@ -117,9 +118,9 @@ message CreditApplied {
   option (w17.contrib.plugin_feature) = "prepaid";
 
   string                    user_id     = 1;
-  string                    delta       = 2;
+  int64                    delta       = 2 [(w17.field) = { type: MONEY, scale: 4 }];
   string                    reason      = 3;
-  string                    new_balance = 4;
+  int64                    new_balance = 4 [(w17.field) = { type: MONEY, scale: 4 }];
   google.protobuf.Timestamp applied_at  = 5;
 }
 
@@ -219,7 +220,7 @@ message PaymentCreated {
   string                    payment_id          = 1;
   string                    customer_id         = 2;
   string                    provider_payment_id = 3;
-  string                    amount              = 4;
+  int64                    amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency            = 5;
   Payment.Status            status              = 6;
   string                    description         = 7;
@@ -240,7 +241,7 @@ message RefundCreated {
   string                    refund_id          = 1;
   string                    payment_id         = 2;
   string                    provider_refund_id = 3;
-  string                    amount             = 4;
+  int64                    amount             = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency           = 5;
   Refund.Status             status             = 6;
   google.protobuf.Timestamp created_at         = 7;
@@ -261,7 +262,7 @@ message ProviderRefundRecorded {
   string                    refund_id          = 1;
   string                    payment_id         = 2;
   string                    provider_refund_id = 3;
-  string                    amount             = 4;
+  int64                    amount             = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency           = 5;
   Refund.Status             status             = 6;
   google.protobuf.Timestamp created_at         = 7;
@@ -279,7 +280,7 @@ message RefundStatusChanged {
   string        refund_id          = 1;
   string        payment_id         = 2;
   string        provider_refund_id = 3;
-  string        amount             = 4;
+  int64        amount             = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string        currency           = 5;
   Refund.Status status             = 6;
 }
@@ -299,7 +300,7 @@ message DisputeOpened {
   string                    dispute_id          = 1;
   string                    payment_id          = 2;
   string                    provider_dispute_id = 3;
-  string                    amount              = 4;
+  int64                    amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency            = 5;
   Dispute.Status            status              = 6;
   google.protobuf.Timestamp opened_at           = 7;
@@ -319,7 +320,7 @@ message DisputeClosed {
   string                    dispute_id          = 1;
   string                    payment_id          = 2;
   string                    provider_dispute_id = 3;
-  string                    amount              = 4;
+  int64                    amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency            = 5;
   Dispute.Status            status              = 6;
   google.protobuf.Timestamp closed_at           = 7;
@@ -339,9 +340,9 @@ message PaymentAmountMismatch {
   string                    payment_id          = 1;
   string                    customer_id         = 2;
   string                    provider_payment_id = 3;
-  string                    amount              = 4;
+  int64                    amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency" }];
   string                    currency            = 5;
-  string                    received_amount     = 6;
+  int64                    received_amount     = 6 [(w17.field) = { type: MONEY, scale: 4, currency_field: "received_currency" }];
   string                    received_currency   = 7;
   google.protobuf.Timestamp detected_at         = 8;
 }

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -166,124 +165,71 @@ var errNoLocalRecord = errors.New("no local record for the provider object")
 // `make check-stage` catches this class: it only breaks a feature combination
 // that the module's own build, which has every file at once, never sees.
 
-// Every monetary column is DECIMAL(20, 4) (models.proto): 16 integer
-// digits, 4 fractional.
-const (
-	amountMaxIntDigits  = 16
-	amountMaxFracDigits = 4
-)
+// Every monetary column is int64 MONEY at scale 4 (models.proto): an
+// amount counts ten-thousandths of the major unit (19.99 is 199900), and
+// every sum or difference of amounts is integer arithmetic that refuses to
+// wrap. The helpers below are that arithmetic; a caller whose result would
+// not fit an int64 refuses the operation instead of storing a wrapped value.
 
-// isPositiveDecimal reports whether s is a non-zero, non-negative
-// decimal string (digits + at most one dot) that the DECIMAL(20, 4)
-// money columns hold EXACTLY. Grant/spend take an unsigned amount; the
-// sign is the handler's to apply.
-//
-// The column bounds are part of "valid": a fifth fractional digit was
-// accepted and then silently ROUNDED by the database (a grant of
-// "0.00004" stored a zero-delta ledger row; "1.00005" became 1.0001),
-// and an integer part past 16 digits passed validation, reached the
-// provider, and only then failed the local INSERT — after the charge
-// object existed.
-func isPositiveDecimal(s string) bool {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return false
+// isPositiveAmount reports whether an amount is a valid unsigned money
+// input: grant / spend / charge / refund / plan amounts are strictly
+// positive (the sign of a ledger delta is the handler's to apply).
+func isPositiveAmount(n int64) bool { return n > 0 }
+
+// addAmounts is a + b, and false when the sum does not fit an int64.
+func addAmounts(a, b int64) (int64, bool) {
+	c := a + b
+	if (b > 0 && c < a) || (b < 0 && c > a) {
+		return 0, false
 	}
-	intPart, fracPart, hasDot := strings.Cut(s, ".")
-	if hasDot && strings.Contains(fracPart, ".") {
-		return false
-	}
-	nonZero := false
-	for _, r := range intPart + fracPart {
-		switch {
-		case r >= '1' && r <= '9':
-			nonZero = true
-		case r == '0':
-		default:
-			return false
-		}
-	}
-	if len(fracPart) > amountMaxFracDigits {
-		return false
-	}
-	if len(strings.TrimLeft(intPart, "0")) > amountMaxIntDigits {
-		return false
-	}
-	return nonZero
+	return c, true
 }
 
-// sameDecimal compares two non-negative decimal strings by value, so the
-// DECIMAL(20, 4) column's "29.0000" equals a request's "29" / "29.00". Here,
-// not in subscriptions.go: RefundPayment (always staged) reads it too.
-func sameDecimal(a, b string) bool {
-	norm := func(s string) string {
-		i, f, _ := strings.Cut(strings.TrimSpace(s), ".")
-		return strings.TrimLeft(i, "0") + "." + strings.TrimRight(f, "0")
+// subAmounts is a - b, and false when the difference does not fit an int64.
+func subAmounts(a, b int64) (int64, bool) {
+	c := a - b
+	if (b > 0 && c > a) || (b < 0 && c < a) {
+		return 0, false
 	}
-	return norm(a) == norm(b)
+	return c, true
 }
 
-// decimalAtLeast reports a >= b for two decimal strings; false when either
-// does not parse.
-func decimalAtLeast(a, b string) bool {
-	x, ok1 := new(big.Rat).SetString(strings.TrimSpace(a))
-	y, ok2 := new(big.Rat).SetString(strings.TrimSpace(b))
-	return ok1 && ok2 && x.Cmp(y) >= 0
+// minAmount is the smaller of two amounts.
+func minAmount(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
-// decimalSum is a + b for two decimal strings, at the columns' scale; a value
-// that does not parse counts as zero (the provider's amounts always parse).
-func decimalSum(a, b string) string {
-	x, _ := new(big.Rat).SetString(strings.TrimSpace(a))
-	y, _ := new(big.Rat).SetString(strings.TrimSpace(b))
-	if x == nil {
-		x = new(big.Rat)
-	}
-	if y == nil {
-		y = new(big.Rat)
-	}
-	return new(big.Rat).Add(x, y).FloatString(amountMaxFracDigits)
-}
-
-// decimalSub is a - b for two decimal strings, at the columns' scale; a value
-// that does not parse counts as zero.
-func decimalSub(a, b string) string {
-	x, _ := new(big.Rat).SetString(strings.TrimSpace(a))
-	y, _ := new(big.Rat).SetString(strings.TrimSpace(b))
-	if x == nil {
-		x = new(big.Rat)
-	}
-	if y == nil {
-		y = new(big.Rat)
-	}
-	return new(big.Rat).Sub(x, y).FloatString(amountMaxFracDigits)
-}
-
-// decimalSign is -1, 0 or +1 for a decimal string; one that does not parse
-// is 0.
-func decimalSign(a string) int {
-	x, ok := new(big.Rat).SetString(strings.TrimSpace(a))
+// shortfall is amount - taken, never below zero; false when the difference
+// does not fit an int64.
+func shortfall(amount, taken int64) (int64, bool) {
+	d, ok := subAmounts(amount, taken)
 	if !ok {
-		return 0
+		return 0, false
 	}
-	return x.Sign()
+	if d < 0 {
+		return 0, true
+	}
+	return d, true
 }
 
-// decimalMin is the smaller of two decimal strings, at the columns' scale;
-// a value that does not parse counts as zero.
-func decimalMin(a, b string) string {
-	if decimalAtLeast(a, b) {
-		return decimalSum(b, "0")
+// fmtAmount renders an amount (ten-thousandths of the major unit) as a
+// decimal for a message: 199900 is "19.9900".
+func fmtAmount(n int64) string {
+	sign := ""
+	u := uint64(n)
+	if n < 0 {
+		sign, u = "-", uint64(-(n+1))+1
 	}
-	return decimalSum(a, "0")
+	return fmt.Sprintf("%s%d.%04d", sign, u/10000, u%10000)
 }
 
-// decimalShortfall is amount - taken, never below zero.
-func decimalShortfall(amount, taken string) string {
-	if d := decimalSub(amount, taken); decimalSign(d) > 0 {
-		return d
-	}
-	return "0"
+// errAmountOverflow is the refusal of an amount computation whose result
+// does not fit the int64 MONEY columns.
+func errAmountOverflow(what string) error {
+	return status.Errorf(codes.InvalidArgument, "payment: %s overflows the amount range", what)
 }
 
 // isCurrencyCode reports whether c (already trimmed + lowercased) has

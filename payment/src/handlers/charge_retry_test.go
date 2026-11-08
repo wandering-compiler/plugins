@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -14,19 +15,19 @@ import (
 // orphan) and answer AlreadyExists instead of the payment the key recorded.
 func TestFlow_ChargeRetriedAfterTheProviderForgotTheKey_IsTheRecordedPayment(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "order-1")
+	p := r.charge("user-a", 100000, "order-1")
 	if _, err := r.deliver(eventJSON("evt_ok", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatal(err)
 	}
 	r.stripe.forgetKeys() // a day later
 	before := r.stripe.count("/v1/payment_intents")
-	for _, amount := range []string{"10", "10.00"} {
+	for _, amount := range []int64{100000} {
 		resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: amount, Currency: "usd", IdempotencyKey: "order-1"})
 		if err != nil {
-			t.Fatalf("retry of a succeeded charge as %s: %v", amount, err)
+			t.Fatalf("retry of a succeeded charge as %d: %v", amount, err)
 		}
 		if resp.GetPayment().GetId() != p.GetId() || resp.GetPayment().GetStatus() != pb.Payment_SUCCEEDED {
-			t.Errorf("retry as %s answered %v, want the recorded payment %s", amount, resp.GetPayment(), p.GetId())
+			t.Errorf("retry as %d answered %v, want the recorded payment %s", amount, resp.GetPayment(), p.GetId())
 		}
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != before {
@@ -41,18 +42,18 @@ func TestFlow_ChargeRetriedAfterTheProviderForgotTheKey_IsTheRecordedPayment(t *
 // it, after the provider's window as within it.
 func TestFlow_ChargeKeyReusedForADifferentPayment_IsRefusedLocally(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "order-1")
+	p := r.charge("user-a", 100000, "order-1")
 	if _, err := r.deliver(eventJSON("evt_ok", "payment_intent.succeeded", p.GetProviderPaymentId(), nil)); err != nil {
 		t.Fatal(err)
 	}
 	r.stripe.forgetKeys()
 	before := r.stripe.count("/v1/payment_intents")
 	for _, req := range []*pb.ChargeReq{
-		{UserId: "user-a", Amount: "11", Currency: "usd", IdempotencyKey: "order-1"},
-		{UserId: "user-a", Amount: "10", Currency: "eur", IdempotencyKey: "order-1"},
+		{UserId: "user-a", Amount: 110000, Currency: "usd", IdempotencyKey: "order-1"},
+		{UserId: "user-a", Amount: 100000, Currency: "eur", IdempotencyKey: "order-1"},
 	} {
 		_, err := r.h.CreatePayment(bg, req)
-		wantCode(t, err, codes.AlreadyExists, req.GetAmount()+" "+req.GetCurrency()+" under the key of 10 usd")
+		wantCode(t, err, codes.AlreadyExists, fmt.Sprint(req.GetAmount(), " ", req.GetCurrency(), " under the key of 10 usd"))
 	}
 	if n := r.stripe.count("/v1/payment_intents"); n != before {
 		t.Errorf("a refused retry reached the provider (%d → %d intents)", before, n)
@@ -64,11 +65,11 @@ func TestFlow_ChargeKeyReusedForADifferentPayment_IsRefusedLocally(t *testing.T)
 // the client needs, and nothing stores that secret here.
 func TestFlow_ChargeRetriedBeforeConfirmation_StillGetsTheClientSecret(t *testing.T) {
 	r := newRig(t)
-	p := r.charge("user-a", "10", "order-1")
+	p := r.charge("user-a", 100000, "order-1")
 	if p.GetStatus() != pb.Payment_REQUIRES_ACTION {
 		t.Fatalf("a new charge is %v, want REQUIRES_ACTION", p.GetStatus())
 	}
-	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "10", Currency: "usd", IdempotencyKey: "order-1"})
+	resp, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 100000, Currency: "usd", IdempotencyKey: "order-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,14 +82,14 @@ func TestFlow_ChargeRetriedBeforeConfirmation_StillGetsTheClientSecret(t *testin
 // must not answer it from anything.
 func TestFlow_ChargeWithoutAKey_IsNeverAnsweredLocally(t *testing.T) {
 	r := newRig(t)
-	resp1, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "10", Currency: "usd"})
+	resp1, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 100000, Currency: "usd"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.deliver(eventJSON("evt_ok", "payment_intent.succeeded", resp1.GetPayment().GetProviderPaymentId(), nil)); err != nil {
 		t.Fatal(err)
 	}
-	resp2, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: "10", Currency: "usd"})
+	resp2, err := r.h.CreatePayment(bg, &pb.ChargeReq{UserId: "user-a", Amount: 100000, Currency: "usd"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestFlow_CustomerAndPlanCreatesCarryAnIdempotencyKey(t *testing.T) {
 		t.Errorf("provider customers = %d after a create with another address, want 2", n)
 	}
 
-	plan := &pb.DefinePlanReq{Slug: "pro", Name: "Pro", Amount: "9", Currency: "usd", Interval: "month"}
+	plan := &pb.DefinePlanReq{Slug: "pro", Name: "Pro", Amount: 90000, Currency: "usd", Interval: "month"}
 	if _, err := r.h.CreatePlan(bg, plan); err != nil {
 		t.Fatal(err)
 	}

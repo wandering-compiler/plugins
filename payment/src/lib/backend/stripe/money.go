@@ -3,7 +3,6 @@ package stripe
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/wandering-compiler/plugins/payment/lib/backend"
@@ -13,9 +12,9 @@ import (
 // no minor unit (the amount is already an integer of the major unit): the
 // whole of Stripe's documented zero-decimal list, less ISK and UGX, which it
 // takes as two-decimal values (wholeUnitsSentAsCents). Every other currency
-// Stripe charges is two-decimal, except the three-decimal ones refused below,
-// so a currency absent from all three tables is two-decimal by Stripe's own
-// rule, not by a guess (TestZeroDecimalTable_IsStripesList pins the list).
+// Stripe charges is two-decimal, except the three-decimal ones below, so a
+// currency absent from all three tables is two-decimal by Stripe's own rule,
+// not by a guess (TestZeroDecimalTable_IsStripesList pins the list).
 var zeroDecimalCurrencies = map[string]bool{
 	"bif": true, "clp": true, "djf": true, "gnf": true, "jpy": true,
 	"kmf": true, "krw": true, "mga": true, "pyg": true, "rwf": true,
@@ -29,12 +28,11 @@ var zeroDecimalCurrencies = map[string]bool{
 // table, so "5" ugx went out as 5 — a hundredth of what was asked.
 var wholeUnitsSentAsCents = map[string]bool{"isk": true, "ugx": true}
 
-// unsupportedCurrencies are the three-decimal currencies. Their scale and
-// rounding on the provider's side is not something this driver can state with
-// certainty, and getting it wrong charges ten times too little or too much —
-// they used to be treated as two-decimal, "5.00" kwd going out as 0.500 KWD.
-// Refused until that is settled, rather than guessed.
-var unsupportedCurrencies = map[string]bool{"bhd": true, "jod": true, "kwd": true, "omr": true, "tnd": true}
+// threeDecimalCurrencies are the three-decimal currencies. Stripe takes them
+// in their own minor unit (5.120 KWD is 5120 fils) and requires the amount
+// to be a multiple of ten — its last digit 0 — so an amount that is not is
+// refused here rather than rounded on either side.
+var threeDecimalCurrencies = map[string]bool{"bhd": true, "jod": true, "kwd": true, "omr": true, "tnd": true}
 
 // invalidAmount is the error every amount refusal carries: the request
 // cannot succeed as written, so it is a backend.InputError (which matches
@@ -44,84 +42,57 @@ func invalidAmount(format string, args ...any) error {
 	return &backend.InputError{Msg: fmt.Sprintf(format, args...)}
 }
 
-// toMinorUnits converts a decimal-string amount ("19.99") to the
-// integer minor units Stripe's API expects (1999 for a 2-decimal
-// currency, 19 for a zero-decimal one). It is exact — no float64 — and
-// REFUSES more fractional digits than the currency allows rather than
-// silently dropping cents.
-//
-// It also refuses an amount whose minor units do not fit an int64. The
-// accumulation used to wrap silently: "184467440737095516.17" usd is
-// 2^64+1 cents and went out as amount=1 — the provider charged (or
-// refunded) one cent while the caller, and the local row, held the
-// amount it asked for.
-func toMinorUnits(amount, currency string) (int64, error) {
-	cur := strings.ToLower(strings.TrimSpace(currency))
-	if unsupportedCurrencies[cur] {
-		return 0, invalidAmount("%s is a three-decimal currency, which this driver does not charge", cur)
-	}
-	scale, wire := 2, int64(1)
+// wireShape is how one currency travels to Stripe, from the plugin's
+// scale-4 amount (ten-thousandths of the major unit): divide by `div`
+// (which must leave no remainder), then multiply by `mul`, and the result
+// must be a multiple of `step`.
+type wireShape struct {
+	div, mul, step int64
+}
+
+func shapeOf(cur string) wireShape {
 	switch {
 	case zeroDecimalCurrencies[cur]:
-		scale = 0
+		return wireShape{div: 10000, mul: 1, step: 1}
 	case wholeUnitsSentAsCents[cur]:
-		scale, wire = 0, 100
+		return wireShape{div: 10000, mul: 100, step: 1}
+	case threeDecimalCurrencies[cur]:
+		return wireShape{div: 10, mul: 1, step: 10}
 	}
-	s := strings.TrimSpace(amount)
-	if s == "" {
-		return 0, invalidAmount("empty amount")
+	return wireShape{div: 100, mul: 1, step: 1}
+}
+
+// formatAmount renders a scale-4 amount for an error message ("19.9901").
+func formatAmount(n int64) string {
+	sign := ""
+	u := uint64(n)
+	if n < 0 {
+		sign, u = "-", uint64(-(n+1))+1
 	}
-	neg := false
-	switch s[0] {
-	case '+':
-		s = s[1:]
-	case '-':
-		neg = true
-		s = s[1:]
+	return fmt.Sprintf("%s%d.%04d", sign, u/10000, u%10000)
+}
+
+// toMinorUnits converts an amount of ten-thousandths of the major unit
+// (backend.Money.Amount, scale 4) to the integer minor units Stripe's API
+// expects: 199900 usd is 1999, 150000 jpy is 15, 51200 kwd is 5120 fils,
+// 50000 ugx is 500. It is exact — integer arithmetic only — and REFUSES an
+// amount the currency cannot represent (199901 usd is 19.9901, a fraction of
+// a cent) rather than rounding it, and a three-decimal amount Stripe would
+// not take (not a multiple of ten fils). A result that does not fit an int64
+// is refused too.
+func toMinorUnits(amount int64, currency string) (int64, error) {
+	cur := strings.ToLower(strings.TrimSpace(currency))
+	sh := shapeOf(cur)
+	if amount%sh.div != 0 {
+		return 0, invalidAmount("amount %s has more fractional digits than %s allows", formatAmount(amount), cur)
 	}
-	if s == "" {
-		return 0, invalidAmount("invalid amount %q", amount)
+	n := amount / sh.div
+	if n > math.MaxInt64/sh.mul || n < math.MinInt64/sh.mul {
+		return 0, invalidAmount("amount %s overflows the provider's integer minor units", formatAmount(amount))
 	}
-	intPart, fracPart := s, ""
-	if dot := strings.IndexByte(s, '.'); dot >= 0 {
-		intPart, fracPart = s[:dot], s[dot+1:]
-	}
-	if intPart == "" {
-		intPart = "0"
-	}
-	// Trailing zeros past the scale carry no value: "12.3400" IS 12.34.
-	// The DECIMAL(20, 4) columns hand every amount back in that form, so
-	// refusing them refused every amount read back from storage — a full
-	// refund (which sends the stored payment amount) failed for every
-	// payment, on every 2-decimal and 0-decimal currency.
-	for len(fracPart) > scale && fracPart[len(fracPart)-1] == '0' {
-		fracPart = fracPart[:len(fracPart)-1]
-	}
-	if len(fracPart) > scale {
-		return 0, invalidAmount("amount %q has more fractional digits than %s allows (scale %d)", amount, cur, scale)
-	}
-	for len(fracPart) < scale {
-		fracPart += "0"
-	}
-	digits := intPart + fracPart
-	var n int64
-	for i := 0; i < len(digits); i++ {
-		c := digits[i]
-		if c < '0' || c > '9' {
-			return 0, invalidAmount("invalid amount %q", amount)
-		}
-		d := int64(c - '0')
-		if n > (math.MaxInt64-d)/10 {
-			return 0, invalidAmount("amount %q overflows the provider's integer minor units", amount)
-		}
-		n = n*10 + d
-	}
-	if n > math.MaxInt64/wire {
-		return 0, invalidAmount("amount %q overflows the provider's integer minor units", amount)
-	}
-	n *= wire
-	if neg {
-		n = -n
+	n *= sh.mul
+	if n%sh.step != 0 {
+		return 0, invalidAmount("amount %s %s must be a multiple of 0.010: the provider charges a three-decimal currency in tens of its minor unit", formatAmount(amount), cur)
 	}
 	return n, nil
 }
@@ -131,27 +102,36 @@ func toMinorUnits(amount, currency string) (int64, error) {
 // PaymentIntent / refund / unit_amount is never what a caller meant, and
 // a zero one is meaningless — refuse it here too, so the driver does not
 // depend on every caller having validated first.
-func positiveMinorUnits(amount, currency string) (int64, error) {
-	n, err := toMinorUnits(amount, currency)
-	if err != nil {
-		return 0, err
+func positiveMinorUnits(amount int64, currency string) (int64, error) {
+	if amount <= 0 {
+		return 0, invalidAmount("amount %s must be positive", formatAmount(amount))
 	}
-	if n <= 0 {
-		return 0, invalidAmount("amount %q must be positive", amount)
-	}
-	return n, nil
+	return toMinorUnits(amount, currency)
 }
 
 // fromMinorUnits is toMinorUnits reversed, for an amount the provider
-// reports: 1999 usd is "19.99", 500 jpy is "500", 500 ugx is "5.00" (the
-// whole-unit currencies travel as two-decimal values).
-func fromMinorUnits(n int64, currency string) string {
-	if zeroDecimalCurrencies[strings.ToLower(strings.TrimSpace(currency))] {
-		return strconv.FormatInt(n, 10)
+// reports: 1999 usd is 199900, 500 jpy is 5000000, 500 ugx is 50000, 5120 kwd
+// is 51200. It refuses (an error, never a wrapped value) an amount whose
+// scale-4 form does not fit an int64, and a whole-unit currency's amount that
+// is not whole (Stripe sends those as two-decimal values ending in 00).
+func fromMinorUnits(n int64, currency string) (int64, error) {
+	cur := strings.ToLower(strings.TrimSpace(currency))
+	sh := shapeOf(cur)
+	if n%sh.mul != 0 {
+		return 0, fmt.Errorf("stripe: amount %d %s is not a whole number of units", n, cur)
 	}
-	sign := ""
-	if n < 0 {
-		sign, n = "-", -n
+	n /= sh.mul
+	if n > math.MaxInt64/sh.div || n < math.MinInt64/sh.div {
+		return 0, fmt.Errorf("stripe: amount %d %s overflows the plugin's amount range", n, cur)
 	}
-	return fmt.Sprintf("%s%d.%02d", sign, n/100, n%100)
+	return n * sh.div, nil
+}
+
+// moneyFrom is fromMinorUnits as a backend.Money.
+func moneyFrom(n int64, currency string) (backend.Money, error) {
+	a, err := fromMinorUnits(n, currency)
+	if err != nil {
+		return backend.Money{}, err
+	}
+	return backend.Money{Amount: a, Currency: currency}, nil
 }

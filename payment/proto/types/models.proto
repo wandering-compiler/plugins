@@ -14,11 +14,17 @@ syntax = "proto3";
 // and bind to the project's default connection (no explicit
 // (w17.module).connection — same as the auth plugin's v1 default).
 //
-// Money — every monetary column is `type: DECIMAL` (string carrier,
-// NUMERIC(precision, scale)), NOT the double-carried MONEY preset:
-// floating-point is lossy for currency. precision 20 / scale 4 covers
-// any real currency amount exactly. Provider object ids are opaque
-// CHAR columns — no provider name leaks into the wire contract.
+// Money — every monetary column is `int64` with `type: MONEY, scale: 4`:
+// an exact count of ten-thousandths of the major unit (12.3456 is
+// 123456), stored as BIGINT, with no float anywhere. Scale 4 is finer than
+// any currency's own minor unit, so an amount in any currency (JPY 0
+// decimals, USD 2, KWD 3) is held exactly; the provider driver converts to
+// the currency's own minor units and refuses an amount that would not
+// convert exactly. A column whose row carries its currency names it with
+// `currency_field`, so every surface renders the amount as money in it;
+// the credit tables carry no currency and render as a plain number.
+// Provider object ids are opaque CHAR columns — no provider name leaks
+// into the wire contract.
 
 package w17.contrib.payment;
 
@@ -82,7 +88,7 @@ message Payment {
   string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string customer_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Customer", deletion_rule: BLOCK }];
   string provider_payment_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
-  string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency            = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
   Status status              = 6 [(w17.field) = { type: ENUM }];
   string idempotency_key     = 7 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
@@ -91,7 +97,7 @@ message Payment {
   google.protobuf.Timestamp updated_at = 10 [(w17.field) = { type: DATETIME, default_auto: NOW }];
   // What the provider reported received, set only with AMOUNT_MISMATCH (NULL
   // otherwise): the amount the payment actually took, in its currency.
-  string received_amount     = 11 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0, null: true }];
+  int64 received_amount     = 11 [(w17.field) = { type: MONEY, scale: 4, currency_field: "received_currency", gte: 0, null: true }];
   string received_currency   = 12 [(w17.field) = { type: CHAR, max_len: 3, null: true }];
 }
 
@@ -121,7 +127,7 @@ message Refund {
   // Indexed: SumRefundsForPayment totals a payment's refunds on every refund.
   string payment_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Payment", deletion_rule: BLOCK, index: true }];
   string provider_refund_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
-  string amount             = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount             = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency           = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   // The caller's refund key, hashed ("v2:" + sha256; see refundKey). One key
@@ -158,7 +164,7 @@ message Dispute {
   string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string payment_id          = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { fk: "@module.Payment", deletion_rule: BLOCK, index: true }];
   string provider_dispute_id = 3 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
-  string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount              = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency            = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
   Status status              = 6 [(w17.field) = { type: ENUM }];
   // When the provider created the last event applied to this row. Events
@@ -207,7 +213,7 @@ message CreditLedger {
 
   string id              = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string user_id         = 2 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  string delta           = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }];
+  int64 delta           = 3 [(w17.field) = { type: MONEY, scale: 4 }];
   string reason          = 4 [(w17.field) = { type: SLUG, max_len: 64 }];   // grant|spend (or the caller's slug)|topup|topup-refund|topup-refund-refused|topup-reconcile
   string ref             = 5 [(w17.field) = { type: CHAR, max_len: 255, blank: true }]; // payment id / order id / …
   string idempotency_key = 6 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
@@ -228,7 +234,7 @@ message CreditBalance {
   option (w17.contrib.plugin_feature) = "prepaid";
 
   string user_id = 1 [(w17.field) = { type: UUID, pk: true }];
-  string balance = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 balance = 2 [(w17.field) = { type: MONEY, scale: 4, gte: 0 }];
   google.protobuf.Timestamp updated_at = 3 [(w17.field) = { type: DATETIME, default_auto: NOW }];
 }
 
@@ -249,14 +255,14 @@ message CreditTopup {
   string id                  = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string provider_payment_id = 2 [(w17.field) = { type: CHAR, max_len: 255, unique: true }];
   string user_id             = 3 [(w17.field) = { type: UUID }, (w17.db.column) = { index: true }];
-  string amount              = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount              = 4 [(w17.field) = { type: MONEY, scale: 4, gte: 0 }];
   google.protobuf.Timestamp granted_at = 5 [(w17.field) = { type: DATETIME, null: true }];
   google.protobuf.Timestamp created_at = 6 [(w17.field) = { type: DATETIME, default_auto: NOW, immutable: true }];
   // Credit the owner spent that a refund or a lost dispute took back from
   // this top-up — what the owner owes. NULL or 0: nothing. A later
   // reconciliation that can take more (the balance grew) or needs less (a
   // refund failed) lowers it first.
-  string credit_owed = 7 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0, null: true }];
+  int64 credit_owed = 7 [(w17.field) = { type: MONEY, scale: 4, gte: 0, null: true }];
   // The last reconciliation step whose credit_owed is written here; the
   // ledger rows of the steps are keyed by (payment, step), so a stale
   // reconciliation never overwrites a newer one's answer.
@@ -329,8 +335,8 @@ message UsageMeter {
 // MarkSubscriptionStatus mutation is ready for it). Both gated
 // `subscriptions`.
 
-// Plan — a recurring offer. slug is the stable local key; amount is a
-// decimal string; interval is "month" | "year". provider_price_id is
+// Plan — a recurring offer. slug is the stable local key; amount is
+// MONEY at scale 4 (ten-thousandths); interval is "month" | "year". provider_price_id is
 // stamped after the push to the provider.
 message Plan {
   option (w17.db.table) = {};
@@ -339,7 +345,7 @@ message Plan {
   string id                = 1 [(w17.field) = { type: UUID, pk: true, default_auto: UUID_V7 }];
   string slug              = 2 [(w17.field) = { type: SLUG, max_len: 64, unique: true }];
   string name              = 3 [(w17.field) = { type: CHAR, max_len: 128 }];
-  string amount            = 4 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount            = 4 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency          = 5 [(w17.field) = { type: CHAR, max_len: 3 }];
   string interval          = 6 [(w17.field) = { type: SLUG, max_len: 16 }];   // month | year
   string provider_price_id = 7 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];

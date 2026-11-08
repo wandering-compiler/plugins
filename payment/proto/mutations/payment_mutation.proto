@@ -32,7 +32,7 @@ message CreateCustomerResp { Customer customer = 1; }
 message CreatePaymentReq {
   string customer_id         = 1 [(w17.field) = { type: UUID }];
   string provider_payment_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string amount              = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount              = 3 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency            = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   // Payment.Status numeric value the handler stamps at intent time
   // (REQUIRES_ACTION / PROCESSING). Plain int — the fixed INSERT DQL
@@ -58,7 +58,7 @@ message MarkPaymentCanceledResp { Payment payment = 1; }
 
 message MarkPaymentAmountMismatchReq {
   string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string received_amount     = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 received_amount     = 2 [(w17.field) = { type: MONEY, scale: 4, currency_field: "received_currency", gte: 0 }];
   string received_currency   = 3 [(w17.field) = { type: CHAR, max_len: 3 }];
 }
 message MarkPaymentAmountMismatchResp { Payment payment = 1; }
@@ -66,7 +66,7 @@ message MarkPaymentAmountMismatchResp { Payment payment = 1; }
 message CreateRefundReq {
   string payment_id         = 1 [(w17.field) = { type: UUID }];
   string provider_refund_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string amount             = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount             = 3 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency           = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   string idempotency_key    = 5 [(w17.field) = { type: CHAR, max_len: 255 }];
   // Refund.Status numeric value (the provider's outcome). Plain int — the
@@ -79,7 +79,7 @@ message CreateRefundResp { Refund refund = 1; }
 message RecordProviderRefundReq {
   string payment_id         = 1 [(w17.field) = { type: UUID }];
   string provider_refund_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string amount             = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount             = 3 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency           = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   int32  status             = 5;
 }
@@ -103,7 +103,7 @@ message CreateDisputeReq {
   option (w17.contrib.plugin_feature) = "stripe_webhooks";
   string                    payment_id          = 1 [(w17.field) = { type: UUID }];
   string                    provider_dispute_id = 2 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string                    amount              = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64                    amount              = 3 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string                    currency            = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   int32                     status              = 5;
   google.protobuf.Timestamp provider_event_at   = 6;
@@ -147,7 +147,7 @@ message MarkWebhookProcessedResp {
 message ApplyCreditReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string user_id         = 1 [(w17.field) = { type: UUID }];
-  string delta           = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4 }]; // signed
+  int64 delta           = 2 [(w17.field) = { type: MONEY, scale: 4 }]; // signed
   string reason          = 3 [(w17.field) = { type: SLUG, max_len: 64 }];
   string ref             = 4 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
   string idempotency_key = 5 [(w17.field) = { type: CHAR, max_len: 255 }];
@@ -155,7 +155,7 @@ message ApplyCreditReq {
 message ApplyCreditResp {
   option (w17.contrib.plugin_feature) = "prepaid";
   string                    user_id    = 1;
-  string                    balance    = 2;
+  int64                    balance    = 2 [(w17.field) = { type: MONEY, scale: 4 }];
   google.protobuf.Timestamp updated_at = 3;
 }
 
@@ -163,7 +163,7 @@ message CreateCreditTopupReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
   string user_id             = 2 [(w17.field) = { type: UUID }];
-  string amount              = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount              = 3 [(w17.field) = { type: MONEY, scale: 4, gte: 0 }];
 }
 message CreateCreditTopupResp {
   option (w17.contrib.plugin_feature) = "prepaid";
@@ -182,7 +182,7 @@ message MarkTopupGrantedResp {
 message SetTopupCreditOwedReq {
   option (w17.contrib.plugin_feature) = "prepaid";
   string provider_payment_id = 1 [(w17.field) = { type: CHAR, max_len: 255 }];
-  string credit_owed         = 2 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 credit_owed         = 2 [(w17.field) = { type: MONEY, scale: 4, gte: 0 }];
   int64  reconciled_step     = 3 [(w17.field) = { type: NUMBER, gte: 0 }];
 }
 message SetTopupCreditOwedResp {
@@ -215,7 +215,7 @@ message CreatePlanReq {
   option (w17.contrib.plugin_feature) = "subscriptions";
   string slug              = 1 [(w17.field) = { type: SLUG, max_len: 64 }];
   string name              = 2 [(w17.field) = { type: CHAR, max_len: 128 }];
-  string amount            = 3 [(w17.field) = { type: DECIMAL, precision: 20, scale: 4, gte: 0 }];
+  int64 amount            = 3 [(w17.field) = { type: MONEY, scale: 4, currency_field: "currency", gte: 0 }];
   string currency          = 4 [(w17.field) = { type: CHAR, max_len: 3 }];
   string interval          = 5 [(w17.field) = { type: SLUG, max_len: 16 }];
   string provider_price_id = 6 [(w17.field) = { type: CHAR, max_len: 255, blank: true }];
